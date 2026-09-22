@@ -43,7 +43,16 @@ For any prior adjustments, enter the prepaid balance actually booked through clo
 - Same target, booked $10: debit prepaid / credit expense $11.60.
 - Same target, booked $21.60: no entry.
 
-Confirm that net invoice cost is recorded between the selected expense/prepaid accounts and that the balance includes all prior entries. The calculator does not independently read or certify the ledger. Multiple credits, negative balances, retrospective restatements, mid-month cancellation and tax/foreign-currency effects remain unsupported; request explicit review rather than netting them silently.
+Confirm that net invoice cost is recorded between the selected expense/prepaid accounts and that the balance includes all prior entries. The calculator does not independently read or certify the ledger. Multiple credits, negative balances, retrospective restatements, mid-month cancellation and tax/foreign-currency effects remain unsupported; request explicit review rather than netting them silently. The separate month-boundary cancellation treatments below do not change earlier expense.
+
+## Month-boundary cancellation
+
+The accountant chooses one of two explicit treatments for the effective close month. Both require a cancellation source, the current booked prepaid debit balance and ledger/cutoff reference. For a full refund, supply the balance after the refund entry; for no refund, supply the balance before any proposed write-off (or zero if already written off). They cannot be combined with a credit in one workpaper. Mid-month cancellation and corrections to earlier closes require separate review.
+
+- **Full refund of the unamortized balance:** The schedule shows the remaining balance as a refund in the effective month and zero expense afterward. The refund must already be booked against prepaid, so the confirmed booked prepaid balance must be zero. This calculator does not create a cash or receivable entry.
+- **No refund:** The schedule expenses the unamortized balance in the effective month and shows zero prepaid afterward. The booked balance must equal that entire unamortized balance (draft debit expense / credit prepaid) or be zero after an already-booked write-off. Partial prior write-offs need separate review; the calculator will not guess their period or treatment.
+
+Synthetic example: $100 allocated equally over January–March 2028 produces January expense $33.33. A February full refund shows $66.67 refunded, February expense $0 and prepaid $0. A February cancellation without refund shows February expense $66.67 and prepaid $0; if the booked prepaid debit balance is $66.67, the proposed write-off is $66.67. Both examples require client-accountant approval before use.
 
 ## Fixed incurred accruals
 
@@ -59,7 +68,7 @@ The local agent recognizes exact labeled facts. To propose an accrual locally, p
 
 Saved drafts retain method, example confirmation, credit/balance references, selected evidence revisions and any reversal proposal. The ZIP package includes their inputs and calculation outputs; prepaid CSV adds a credit column. Source changes invalidate reviews through the same existing path.
 
-Reviewed prepaid schedules can carry forward as schedules only. They retain source lineage, clear confirmations and never claim a fresh ledger balance or propose a carried journal. Accruals do not auto-carry or execute reversals. New daily/credit/balance-adjusted prepaid methods and all accruals are draft/review only; the existing full-month sandbox posting path is not extended to them.
+Reviewed prepaid schedules can carry forward as schedules only. They retain source lineage, clear confirmations and never claim a fresh ledger balance or propose a carried journal. Accruals do not auto-carry or execute reversals. New daily/credit/balance-adjusted/cancellation prepaid methods and all accruals are draft/review only; the existing full-month sandbox posting path is not extended to them.
 
 ## Focused checks
 

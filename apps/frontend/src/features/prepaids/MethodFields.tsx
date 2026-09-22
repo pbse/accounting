@@ -10,7 +10,15 @@ export function PrepaidMethodFields({values={}}: {values?: Record<string,string>
         <tr><td>$100, January 16–March 15, 2028, actual days (16 / 29 / 15 days)</td><td>$26.66 / $48.33 / $25.01</td></tr>
         <tr><td>Same daily schedule, $10 credit effective February</td><td>January stays $26.66; February $41.74; March $21.60. Total expense $90.</td></tr>
         <tr><td>February target $21.60; ledger prepaid $30 after all entries</td><td>Debit expense / credit prepaid $8.40. If already $21.60, no adjustment.</td></tr>
+        <tr><td>$100 January–March 2028 equal full months, cancel February with full refund</td><td>January expense $33.33; February refund $66.67; remaining prepaid zero. Confirm the refund was booked before preparing.</td></tr>
+        <tr><td>Same cancellation, no refund</td><td>January expense $33.33; February write-off expense $66.67; remaining prepaid zero. Confirm the booked balance before the proposed write-off.</td></tr>
       </tbody></table>
+    </details>
+    <details><summary>Cancellation at a month boundary (optional)</summary>
+      <p>Choose one reviewed treatment. Full refund assumes the remaining prepaid was refunded and booked; enter the balance after that entry (zero). No refund expenses the remaining prepaid in the cancellation month; enter the balance before any proposed write-off, or zero if already written off. Both require a ledger and cancellation source reference. Credits cannot be combined with a cancellation.</p>
+      <label>Treatment<select name="cancellation_method" defaultValue={values.cancellation_method ?? ""}><option value="">No cancellation</option><option value="full_refund_month_boundary_v1">Full refund of remaining prepaid</option><option value="no_refund_month_boundary_v1">No refund; write off remaining prepaid</option></select></label>
+      <label>Effective cancellation month<input name="cancellation_period" type="month" defaultValue={values.cancellation_period ?? ""} /></label>
+      <label>Cancellation/refund evidence and treatment reference<input name="cancellation_reference" maxLength={200} defaultValue={values.cancellation_reference ?? ""} /></label>
     </details>
     <label><input name="examples_confirmed" type="checkbox" required /> I reviewed these synthetic examples and the client's approved treatment. This confirms a draft method, not final workpaper or posting approval.</label>
     <details><summary>Credits and prior adjustments (optional)</summary>

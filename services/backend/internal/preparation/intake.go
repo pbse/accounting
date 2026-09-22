@@ -36,6 +36,7 @@ type Proposal struct {
 	OutputTokens    int      `json:"output_tokens,omitempty"`
 	Facts           []Fact   `json:"facts"`
 	Sources         []Source `json:"sources"`
+	Unselected      []Source `json:"unselected,omitempty"`
 }
 type IntakeSource struct {
 	Source
@@ -58,7 +59,7 @@ func Propose(sources []IntakeSource) Proposal {
 		{"expense_account", "Expense account", "Which expense account contains the original invoice booking?"},
 		{"prepaid_account", "Prepaid account", "Which prepaid asset account should receive the remaining balance?"},
 	}
-	for _, field := range []string{"credit_amount", "credit_period", "credit_reference", "booked_balance", "booking_reference"} {
+	for _, field := range []string{"credit_amount", "credit_period", "credit_reference", "booked_balance", "booking_reference", "cancellation_period", "cancellation_reference"} {
 		definitions = append(definitions, struct{ field, label, question string }{field, strings.ReplaceAll(field, "_", " "), ""})
 	}
 	for _, source := range sources {

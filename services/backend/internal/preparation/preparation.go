@@ -59,21 +59,13 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 		if strings.TrimSpace(in.Entity) != entity || in.ClosePeriod != period {
 			return nil, fmt.Errorf("Client and period must match this close")
 		}
+		prepare := prepaids.Prepare
 		if p.CarryForward != nil {
-			// Calculate the existing schedule, without asserting current ledger booking.
-			in.ExamplesConfirmed = true
-			in.MethodConfirmed = true
-			in.BookingConfirmed = true
+			prepare = prepaids.ScheduleOnly
 		}
-		paper, err := prepaids.Prepare(in)
+		paper, err := prepare(in)
 		if err != nil {
 			return nil, err
-		}
-		if p.CarryForward != nil {
-			paper.Proposal = nil
-			paper.Input.ExamplesConfirmed = false
-			paper.Input.MethodConfirmed = false
-			paper.Input.BookingConfirmed = false
 		}
 		value = paper
 	case "accrual":

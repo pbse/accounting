@@ -10,27 +10,32 @@ import (
 
 const Method = "equal_full_months_v1"
 const DailyMethod = "actual_days_v1"
+const FullRefundCancellation = "full_refund_month_boundary_v1"
+const NoRefundCancellation = "no_refund_month_boundary_v1"
 
 type Input struct {
-	ExamplesConfirmed bool   `json:"examples_confirmed,omitempty"`
-	CreditAmount      string `json:"credit_amount,omitempty"`
-	CreditPeriod      string `json:"credit_period,omitempty"`
-	CreditReference   string `json:"credit_reference,omitempty"`
-	BookedBalance     string `json:"booked_balance,omitempty"`
-	BookingReference  string `json:"booking_reference,omitempty"`
-	Entity            string `json:"entity"`
-	SourceReference   string `json:"source_reference"`
-	Amount            string `json:"amount"`
-	ServiceStart      string `json:"service_start"`
-	ServiceEnd        string `json:"service_end"`
-	ClosePeriod       string `json:"close_period"`
-	Currency          string `json:"currency"`
-	Basis             string `json:"basis"`
-	ExpenseAccount    string `json:"expense_account"`
-	PrepaidAccount    string `json:"prepaid_account"`
-	Method            string `json:"method"`
-	MethodConfirmed   bool   `json:"method_confirmed"`
-	BookingConfirmed  bool   `json:"booking_confirmed"`
+	ExamplesConfirmed     bool   `json:"examples_confirmed,omitempty"`
+	CreditAmount          string `json:"credit_amount,omitempty"`
+	CreditPeriod          string `json:"credit_period,omitempty"`
+	CreditReference       string `json:"credit_reference,omitempty"`
+	CancellationMethod    string `json:"cancellation_method,omitempty"`
+	CancellationPeriod    string `json:"cancellation_period,omitempty"`
+	CancellationReference string `json:"cancellation_reference,omitempty"`
+	BookedBalance         string `json:"booked_balance,omitempty"`
+	BookingReference      string `json:"booking_reference,omitempty"`
+	Entity                string `json:"entity"`
+	SourceReference       string `json:"source_reference"`
+	Amount                string `json:"amount"`
+	ServiceStart          string `json:"service_start"`
+	ServiceEnd            string `json:"service_end"`
+	ClosePeriod           string `json:"close_period"`
+	Currency              string `json:"currency"`
+	Basis                 string `json:"basis"`
+	ExpenseAccount        string `json:"expense_account"`
+	PrepaidAccount        string `json:"prepaid_account"`
+	Method                string `json:"method"`
+	MethodConfirmed       bool   `json:"method_confirmed"`
+	BookingConfirmed      bool   `json:"booking_confirmed"`
 }
 
 type Row struct {
@@ -131,7 +136,7 @@ func Prepare(input Input) (Workpaper, error) {
 	}
 	var credit, booked int64
 	var effective time.Time
-	extended := input.Method == DailyMethod || input.CreditAmount != "" || input.BookedBalance != ""
+	extended := input.Method == DailyMethod || input.CreditAmount != "" || input.BookedBalance != "" || input.CancellationMethod != ""
 	if extended && !input.ExamplesConfirmed {
 		return empty, &InputError{"POLICY_REQUIRED", "examples_confirmed", "Review the synthetic examples and confirm the chosen method before preparing."}
 	}
@@ -166,6 +171,25 @@ func Prepare(input Input) (Workpaper, error) {
 	} else if input.CreditPeriod != "" || input.CreditReference != "" {
 		return empty, invalid("credit_amount", "Supply the documented credit amount or clear all credit fields.")
 	}
+	var cancellation time.Time
+	if input.CancellationMethod != "" {
+		if input.CancellationMethod != FullRefundCancellation && input.CancellationMethod != NoRefundCancellation {
+			return empty, invalid("cancellation_method", "Choose full refund or no refund at a service-month boundary.")
+		}
+		if input.CreditAmount != "" {
+			return empty, invalid("cancellation_method", "Combined credits and cancellation require separate accountant review.")
+		}
+		cancellation, err = time.Parse("2006-01", input.CancellationPeriod)
+		if err != nil || !cancellation.Equal(period) {
+			return empty, invalid("cancellation_period", "Prepare cancellation in its effective close month; it starts on that service month's first day (or service start). Prior-period correction needs separate review.")
+		}
+		input.CancellationReference = strings.TrimSpace(input.CancellationReference)
+		if input.CancellationReference == "" || len(input.CancellationReference) > 200 || input.BookedBalance == "" {
+			return empty, invalid("cancellation_reference", "Cite the cancellation and provide the current booked prepaid balance: after a full refund, or before any proposed no-refund write-off (explicit zero is allowed).")
+		}
+	} else if input.CancellationPeriod != "" || input.CancellationReference != "" {
+		return empty, invalid("cancellation_method", "Choose a cancellation treatment or clear its period and reference.")
+	}
 	result := Workpaper{Status: "draft", Input: input, Schedule: make([]Row, 0, months)}
 	remaining, recognized, base := total, int64(0), total
 	first := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -183,6 +207,31 @@ func Prepare(input Input) (Workpaper, error) {
 			to = end
 		}
 		rowCredit := ""
+		if !cancellation.IsZero() && month.Equal(cancellation) {
+			if booked > remaining {
+				return empty, invalid("booked_balance", "Booked prepaid exceeds the unamortized amount at cancellation. Resolve the ledger difference separately.")
+			}
+			if input.CancellationMethod == FullRefundCancellation {
+				rowCredit = Money(remaining)
+				if booked != 0 {
+					return empty, invalid("booked_balance", "Record the full refund against prepaid and confirm a zero booked balance; a refund journal is outside this calculator.")
+				}
+			} else {
+				if booked != 0 && booked != remaining {
+					return empty, invalid("booked_balance", "No-refund cancellation supports the full remaining prepaid balance or an already-booked zero balance. Investigate partial prior write-offs separately.")
+				}
+				result.Schedule = append(result.Schedule, Row{Period: month.Format("2006-01"), Expense: Money(remaining), Remaining: "0.00"})
+				recognized += remaining
+				result.PeriodExpense, result.RecognizedExpense, result.PrepaidBalance = Money(remaining), Money(recognized), "0.00"
+				if booked > 0 {
+					result.Proposal = &Adjustment{period.AddDate(0, 1, -1).Format("2006-01-02"), input.ExpenseAccount, input.PrepaidAccount, Money(booked)}
+				}
+				remaining = 0
+				continue
+			}
+			remaining = 0
+			base = 0
+		}
 		if credit > 0 && month.Equal(effective) {
 			if credit > remaining {
 				return empty, invalid("credit_amount", "Credit exceeds the unamortized balance at its effective month. Retrospective corrections require separate review.")
@@ -203,6 +252,9 @@ func Prepare(input Input) (Workpaper, error) {
 		if i == months-1 {
 			amount = remaining
 		}
+		if !cancellation.IsZero() && !month.Before(cancellation) {
+			amount = 0
+		}
 		remaining -= amount
 		recognized += amount
 		result.Schedule = append(result.Schedule, Row{Period: month.Format("2006-01"), Expense: Money(amount), Remaining: Money(remaining), Credit: rowCredit})
@@ -220,6 +272,25 @@ func Prepare(input Input) (Workpaper, error) {
 		}
 	}
 	return result, nil
+}
+
+// ScheduleOnly calculates a carried schedule without asserting a new month's
+// ledger balance or proposing an entry. A historical credit still affects the
+// schedule; its prior booked-balance confirmation is deliberately not reused.
+func ScheduleOnly(input Input) (Workpaper, error) {
+	input.BookedBalance, input.BookingReference = "", ""
+	if input.CreditAmount != "" {
+		input.BookedBalance, input.BookingReference = "0.00", "Schedule-only historical credit"
+	}
+	input.MethodConfirmed, input.BookingConfirmed, input.ExamplesConfirmed = true, true, true
+	paper, err := Prepare(input)
+	if err != nil {
+		return Workpaper{}, err
+	}
+	paper.Input.BookedBalance, paper.Input.BookingReference = "", ""
+	paper.Input.MethodConfirmed, paper.Input.BookingConfirmed, paper.Input.ExamplesConfirmed = false, false, false
+	paper.Proposal = nil
+	return paper, nil
 }
 
 // Amount accepts bounded nonnegative exact cents, shared by supported schedules.

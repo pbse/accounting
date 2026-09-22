@@ -37,18 +37,27 @@ type Match struct {
 	LedgerID    string `json:"ledger_id"`
 	Reason      string `json:"reason"`
 }
+type Exception struct {
+	Side           string   `json:"side"`
+	ID             string   `json:"id"`
+	Kind           string   `json:"kind"`
+	CandidateIDs   []string `json:"candidate_ids"`
+	CandidateCount int      `json:"candidate_count"`
+	Question       string   `json:"question"`
+}
 type Workpaper struct {
-	Status                         string   `json:"status"`
-	Method                         string   `json:"method"`
-	Input                          Input    `json:"input"`
-	Matches                        []Match  `json:"matches"`
-	UnmatchedStatement             []Line   `json:"unmatched_statement"`
-	UnmatchedLedger                []Line   `json:"unmatched_ledger"`
-	Blockers                       []string `json:"blockers"`
-	StatementRollForwardDifference string   `json:"statement_roll_forward_difference"`
-	LedgerRollForwardDifference    string   `json:"ledger_roll_forward_difference"`
-	OpeningDifference              string   `json:"opening_difference"`
-	ClosingDifference              string   `json:"closing_difference"`
+	Status                         string      `json:"status"`
+	Method                         string      `json:"method"`
+	Input                          Input       `json:"input"`
+	Matches                        []Match     `json:"matches"`
+	UnmatchedStatement             []Line      `json:"unmatched_statement"`
+	UnmatchedLedger                []Line      `json:"unmatched_ledger"`
+	Exceptions                     []Exception `json:"exceptions"`
+	Blockers                       []string    `json:"blockers"`
+	StatementRollForwardDifference string      `json:"statement_roll_forward_difference"`
+	LedgerRollForwardDifference    string      `json:"ledger_roll_forward_difference"`
+	OpeningDifference              string      `json:"opening_difference"`
+	ClosingDifference              string      `json:"closing_difference"`
 }
 
 var amountPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$`)
@@ -114,7 +123,7 @@ func lines(source, period string) ([]Line, int64, error) {
 	return result, total, nil
 }
 func Prepare(input Input) (Workpaper, error) {
-	result := Workpaper{Status: "draft", Method: "exact_bank_month_v1", Input: input, Matches: []Match{}, UnmatchedStatement: []Line{}, UnmatchedLedger: []Line{}, Blockers: []string{}}
+	result := Workpaper{Status: "draft", Method: "exact_bank_month_v1", Input: input, Matches: []Match{}, UnmatchedStatement: []Line{}, UnmatchedLedger: []Line{}, Exceptions: []Exception{}, Blockers: []string{}}
 	fail := func(message string) (Workpaper, error) { return Workpaper{}, fmt.Errorf("%s", message) }
 	for _, value := range []string{input.Entity, input.Account, input.StatementReference, input.LedgerReference} {
 		if strings.TrimSpace(value) == "" || len(value) > 200 {
@@ -204,8 +213,39 @@ func Prepare(input Input) (Workpaper, error) {
 			result.UnmatchedLedger = append(result.UnmatchedLedger, line)
 		}
 	}
+	result.Exceptions = append(result.Exceptions, investigate("statement", result.UnmatchedStatement, result.UnmatchedLedger)...)
+	result.Exceptions = append(result.Exceptions, investigate("ledger", result.UnmatchedLedger, result.UnmatchedStatement)...)
 	if len(result.UnmatchedStatement)+len(result.UnmatchedLedger) > 0 {
 		result.Blockers = append(result.Blockers, "Unmatched or ambiguous transactions remain. No timing classification or balancing entry has been inferred.")
 	}
 	return result, nil
+}
+
+// These hints identify rows worth comparing; they never turn them into matches.
+func investigate(side string, lines, peers []Line) []Exception {
+	byExact, byAmount, byDate := map[string][]string{}, map[string][]string{}, map[string][]string{}
+	for _, peer := range peers {
+		byExact[peer.Date+"/"+peer.Amount] = append(byExact[peer.Date+"/"+peer.Amount], peer.ID)
+		byAmount[peer.Amount] = append(byAmount[peer.Amount], peer.ID)
+		byDate[peer.Date] = append(byDate[peer.Date], peer.ID)
+	}
+	result := make([]Exception, 0, len(lines))
+	for _, line := range lines {
+		item := Exception{Side: side, ID: line.ID, Kind: "no_counterpart", CandidateIDs: []string{}, Question: "Find the supporting transaction or document; determine whether this item belongs in the close period."}
+		candidates := byExact[line.Date+"/"+line.Amount]
+		if len(candidates) > 0 {
+			item.Kind, item.Question = "ambiguous_exact", "The exact date and amount is not unique across the imported rows. Check transaction identity before choosing a match."
+		} else if candidates = byAmount[line.Amount]; len(candidates) > 0 {
+			item.Kind, item.Question = "same_amount_other_date", "Same signed amount appears on another date. Check timing and transaction identity; do not assume a match."
+		} else if candidates = byDate[line.Date]; len(candidates) > 0 {
+			item.Kind, item.Question = "same_date_other_amount", "Another amount appears on this date. Check source amounts and transaction identity; do not assume a correction."
+		}
+		item.CandidateCount = len(candidates)
+		if len(candidates) > 5 {
+			candidates = candidates[:5]
+		}
+		item.CandidateIDs = append(item.CandidateIDs, candidates...)
+		result = append(result, item)
+	}
+	return result
 }

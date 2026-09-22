@@ -55,6 +55,7 @@ export function ReconciliationResult({
 }: {
   result: ReconciliationWorkpaper;
 }) {
+  const exceptions = result.exceptions ?? [];
   return (
     <>
       <p className="note">
@@ -123,6 +124,22 @@ export function ReconciliationResult({
         lines={result.unmatched_statement}
       />
       <Lines title="Unmatched ledger items" lines={result.unmatched_ledger} />
+      {exceptions.length > 0 && (
+        <section>
+          <h3>Investigate these items · {exceptions.length}</h3>
+          <p>These are possible leads from imported rows, not confirmed matches or accounting treatments. Check the cited source rows before resolving an item.</p>
+          <table>
+            <thead><tr><th>Source row</th><th>Possible related rows</th><th>Question</th></tr></thead>
+            <tbody>{exceptions.map((item) => (
+              <tr key={`${item.side}-${item.id}`}>
+                <th>{item.side} {item.id}</th>
+                <td>{item.candidate_count === 0 ? "None in imported rows" : `${item.candidate_ids.join(", ")}${item.candidate_count > item.candidate_ids.length ? ` and ${item.candidate_count - item.candidate_ids.length} more` : ""}`}</td>
+                <td>{item.question}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </section>
+      )}
     </>
   );
 }

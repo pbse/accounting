@@ -93,3 +93,24 @@ func TestAccrualAndCreditFactsRemainProposals(t *testing.T) {
 		t.Fatal("credit fact omitted")
 	}
 }
+
+func TestLargeInventorySelectionIsBoundedAndReviewable(t *testing.T) {
+	sources := make([]IntakeSource, 21)
+	for i := range sources {
+		sources[i] = IntakeSource{Source: Source{ID: string(rune('A' + i)), Name: "source.txt", Digest: "digest", Role: "evidence"}, Content: "Amount: 100.00"}
+	}
+	client := &http.Client{Transport: agentRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "primary_source_id") || !strings.Contains(string(body), "content bytes") {
+			t.Fatal("selection lacked inventory or size bound")
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"selected_ids\":[\"A\",\"B\"]}"}]}]}`)), Header: http.Header{}}, nil
+	})}
+	selected, err := selectEvidence(context.Background(), client, "fixture-key", "fixture-model", "A", sources)
+	if err != nil || len(selected) != 2 || selected[0].ID != "A" || selected[1].ID != "B" {
+		t.Fatalf("selection: %d %v", len(selected), err)
+	}
+	if _, err = selectEvidence(context.Background(), client, "fixture-key", "fixture-model", "C", sources); err == nil {
+		t.Fatal("model omitted primary without a blocker")
+	}
+}

@@ -165,7 +165,8 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 	if state != "needs_confirmation" || calls != 3 {
 		t.Fatal("Same job did not resume", state, calls)
 	}
-	call("POST", action+"/confirm", map[string]any{"revision": revision, "facts_confirmed": true, "input": input}, 200)
+	call("POST", action+"/confirm", map[string]any{"revision": revision, "facts_confirmed": true, "input": input}, 409)
+	call("POST", action+"/confirm", map[string]any{"revision": revision, "facts_confirmed": true, "inventory_confirmed": true, "input": input}, 200)
 	if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
 		t.Fatal(e)
 	}
@@ -212,7 +213,7 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 	if state != "needs_confirmation" {
 		t.Fatal(state)
 	}
-	call("POST", base+"/work/"+job+"/confirm", map[string]any{"revision": revision, "facts_confirmed": true, "input": map[string]any{"account": "Cash", "currency": "USD", "statement_opening": "100.00", "statement_closing": "105.00", "ledger_opening": "100.00", "ledger_closing": "105.00", "expected_pages": 1, "pages": []int{1}, "policy_confirmed": true}}, 200)
+	call("POST", base+"/work/"+job+"/confirm", map[string]any{"revision": revision, "facts_confirmed": true, "inventory_confirmed": true, "input": map[string]any{"account": "Cash", "currency": "USD", "statement_opening": "100.00", "statement_closing": "105.00", "ledger_opening": "100.00", "ledger_closing": "105.00", "expected_pages": 1, "pages": []int{1}, "policy_confirmed": true}}, 200)
 	if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
 		t.Fatal(e)
 	}

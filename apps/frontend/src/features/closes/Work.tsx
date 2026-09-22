@@ -43,6 +43,7 @@ type WorkItem = {
     engine?: string;
     summary?: string;
     questions?: string[];
+    unselected?: Source[];
   };
   requests: {
     consolidated?: boolean;
@@ -237,6 +238,7 @@ export function Work({
               </button>
             </p>
           )}
+          {!closeId && <PortfolioStop key={`${filter}:${clientSearch}`} items={items} onChange={() => setRefresh((n) => n + 1)} />}
           <fieldset disabled={!!error}>
             {items.map((item) => (
               <details
@@ -272,6 +274,50 @@ export function Work({
       )}
     </section>
   );
+}
+
+function PortfolioStop({items,onChange}:{items:WorkItem[];onChange:()=>void}) {
+  const closes = [...new Map(items.filter(i=>!["completed","cancelled"].includes(i.state)).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`}])).values()];
+  const [selected,setSelected] = useState<string[]>([]);
+  const [preview,setPreview] = useState<{id:string;label:string;count:number;digest:string}[]>();
+  const [reason,setReason] = useState("");
+  const [busy,setBusy] = useState(false);
+  const [error,setError] = useState("");
+  const [outcomes,setOutcomes] = useState<string[]>([]);
+  async function inspect() {
+    setBusy(true);setError("");setOutcomes([]);
+    try {
+      const next = [];
+      for (const close of closes.filter(c=>selected.includes(c.id))) {
+        const status = await workspaceRequest(`/${close.id}/prepare-close`);
+        next.push({...close,count:status.stop.count as number,digest:status.stop.digest as string});
+      }
+      setPreview(next);
+    } catch(e) { setPreview(undefined);setError(e instanceof Error?e.message:"Could not inspect selected closes."); }
+    finally { setBusy(false); }
+  }
+  async function stop() {
+    if(!preview?.length || !reason.trim()) return;
+    setBusy(true);setError("");
+    const results:string[]=[];
+    for(const close of preview) {
+      if(close.count===0) { results.push(`${close.label}: no unresolved jobs to stop.`); continue; }
+      try {
+        await workspaceRequest(`/${close.id}/prepare-close/cancel`,{digest:close.digest,reason:reason.trim(),confirmed:true});
+        results.push(`${close.label}: stopped ${close.count} unresolved job${close.count===1?"":"s"}.`);
+      } catch(e) { results.push(`${close.label}: ${e instanceof Error?e.message:"Stop failed"}. Inspect this close before another attempt.`); }
+    }
+    setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
+  }
+  if(!closes.length) return null;
+  return <details><summary>Portfolio command · stop unresolved work in selected closes</summary>
+    <p>Select up to 10 visible closes. Preview counts before stopping. Each close is checked again when submitted; messages already sent and prepared drafts remain in history.</p>
+    {closes.map(close=><label key={close.id}><input type="checkbox" checked={selected.includes(close.id)} disabled={busy || (!selected.includes(close.id) && selected.length>=10)} onChange={e=>{setPreview(undefined);setOutcomes([]);setSelected(current=>e.target.checked?[...current,close.id]:current.filter(id=>id!==close.id));}} /> {close.label}</label>)}
+    <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect()}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
+    {preview && <div><h3>Exact stop preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} unresolved job{close.count===1?"":"s"}</li>)}</ul><label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label><button type="button" disabled={busy || !reason.trim() || preview.every(close=>close.count===0)} onClick={()=>void stop()}>Stop listed work in selected closes</button></div>}
+    {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
+    {error && <p role="alert">{error}</p>}
+  </details>;
 }
 
 function WorkDetails({
@@ -343,10 +389,10 @@ function WorkDetails({
         method_confirmed: data.has("method_confirmed"),
         booking_confirmed: data.has("booking_confirmed"),
         examples_confirmed:data.has("examples_confirmed"),
-        ...(kind==="accrual" ? {reverse_next_month:data.get("reverse_next_month")==="true"} : Object.fromEntries(["credit_amount","credit_period","credit_reference","booked_balance","booking_reference"].map(key=>[key,String(data.get(key)??"")]))),
+        ...(kind==="accrual" ? {reverse_next_month:data.get("reverse_next_month")==="true"} : Object.fromEntries(["credit_amount","credit_period","credit_reference","booked_balance","booking_reference","cancellation_method","cancellation_period","cancellation_reference"].map(key=>[key,String(data.get(key)??"")]))),
       });
     }
-    void act("confirm", { input, facts_confirmed: data.has("facts") });
+    void act("confirm", { input, facts_confirmed: data.has("facts"), inventory_confirmed:data.has("inventory") });
   }
   return (
     <div>
@@ -503,6 +549,7 @@ function WorkDetails({
                   contradictions, and confirmed this evidence belongs to{" "}
                   {item.entity}.
                 </label>
+                {!!item.proposal.unselected?.length && <details open><summary>{item.proposal.unselected.length} sources not cited by this proposal</summary><p>The agent did not cite these files; on large closes it may not have read their full text. Inspect them before confirming that none changes this work:</p><ul>{item.proposal.unselected.map(s=><li key={s.id}>Evidence #{s.id}: {s.name}</li>)}</ul><label><input name="inventory" type="checkbox" required /> I reviewed the uncited evidence for this work.</label></details>}
                 {kind==="reconciliation" ? <label><input name="method" type="checkbox" required /> Confirm USD, complete page inventory, exact-date/signed-amount matching; ambiguous transactions stay unresolved.</label> : kind==="accrual" ? <AccrualConfirmations /> : <>
                   {facts.filter(f=>f.optional && f.candidates.length>0).map(f=><p key={f.field}>{f.label}: {f.candidates.map(c=>`${c.value} · evidence #${c.source_id} ${c.location}: ${c.quote}`).join("; ")}{f.question}</p>)}
                   <PrepaidMethodFields values={Object.fromEntries(facts.map(f=>[f.field,f.value]))} />
@@ -763,12 +810,14 @@ function WorkDetails({
         </section>
       )}
       {item.coordinated &&
-        ["failed", "needs_confirmation", "waiting_client"].includes(
+        ["failed", "needs_confirmation", "waiting_client", "cancelled"].includes(
           item.state,
         ) &&
         !item.stale && (
           <button disabled={busy} onClick={() => void act("retry")}>
-            {item.state === "waiting_client"
+            {item.state === "cancelled"
+              ? "Restart this stopped job"
+              : item.state === "waiting_client"
               ? "Withdraw request and recheck evidence"
               : "Recheck evidence and proposals"}
           </button>

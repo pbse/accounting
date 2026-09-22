@@ -23,6 +23,14 @@ export type ReconciliationWorkpaper = {
   matches: { statement_id: string; ledger_id: string; reason: string }[];
   unmatched_statement: ReconciliationLine[];
   unmatched_ledger: ReconciliationLine[];
+  exceptions?: {
+    side: "statement" | "ledger";
+    id: string;
+    kind: "ambiguous_exact" | "same_amount_other_date" | "same_date_other_amount" | "no_counterpart";
+    candidate_ids: string[];
+    candidate_count: number;
+    question: string;
+  }[];
   blockers: string[];
   statement_roll_forward_difference: string;
   ledger_roll_forward_difference: string;

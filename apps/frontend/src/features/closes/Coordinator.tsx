@@ -21,6 +21,7 @@ type Status = {
 
   inventory: { job_id: string; source_id: string; name: string }[];
   inventory_digest: string;
+  stop: { count: number; digest: string };
   run: null | {
     id: string;
     inventory_digest: string;
@@ -34,6 +35,8 @@ export function Coordinator({ closeId }: { closeId: string }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [stopConfirmed, setStopConfirmed] = useState(false);
+  const [stopReason, setStopReason] = useState("");
   const [version, setVersion] = useState(0);
   useEffect(() => {
     let live = true;
@@ -63,6 +66,8 @@ export function Coordinator({ closeId }: { closeId: string }) {
     };
   }, [closeId, version]);
   useEffect(() => setConfirmed(false), [status?.inventory_digest]);
+  useEffect(() => setStopConfirmed(false), [status?.stop.digest]);
+  useEffect(() => setStopReason(""), [closeId]);
   async function start() {
     if (!status) return;
     setBusy(true);
@@ -82,24 +87,51 @@ export function Coordinator({ closeId }: { closeId: string }) {
       setBusy(false);
     }
   }
+  async function stopRemaining() {
+    if (!status) return;
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/prepare-close/cancel`, {
+        digest: status.stop.digest,
+        reason: stopReason.trim(),
+        confirmed: stopConfirmed,
+      });
+      setStopReason("");
+      setStopConfirmed(false);
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not stop work.");
+    } finally {
+      setBusy(false);
+    }
+  }
   const run = status?.run;
   const changed = run && run.inventory_digest !== status?.inventory_digest;
   const items = run?.items ?? [];
+  const stopped = items.filter((i) => i.state === "cancelled").length;
   const blocked = items.filter(
     (i) =>
-      i.stale ||
-      ["failed", "cancelled", "missing"].includes(i.state) ||
-      i.proposal?.kind === "unsupported" ||
-      i.reviews.some(
-        (r) =>
-          ["source_changed", "changes_requested"].includes(r.state) ||
-          (r.blockers?.length ?? 0) > 0,
+      i.state !== "cancelled" && (
+        i.stale ||
+        ["failed", "missing"].includes(i.state) ||
+        i.proposal?.kind === "unsupported" ||
+        i.reviews.some(
+          (r) =>
+            ["source_changed", "changes_requested"].includes(r.state) ||
+            (r.blockers?.length ?? 0) > 0,
+        )
       ),
   );
   const complete =
     items.length > 0 &&
     items.every((i) => i.state === "completed") &&
-    blocked.length === 0;
+    blocked.length === 0 && stopped === 0;
+  const proposed = items.reduce<Record<string, number>>((counts, item) => {
+    const kind = item.proposal?.kind || "awaiting interpretation";
+    counts[kind] = (counts[kind] ?? 0) + 1;
+    return counts;
+  }, {});
   const questions = new Map<string, { text: string; jobs: Item[] }>();
   for (const item of items) {
     if (!["needs_confirmation", "waiting_client"].includes(item.state))
@@ -175,12 +207,21 @@ export function Coordinator({ closeId }: { closeId: string }) {
           )}
           {run && (
             <>
+              <h3>Proposed work from this run</h3>
+              <p>
+                {Object.entries(proposed).map(([kind, count]) => `${count} ${kind.replaceAll("_", " ")}`).join(" · ")}. {status.coverage === null
+                  ? "No ledger coverage report is linked."
+                  : status.coverage.stale
+                    ? "Ledger coverage has changed and needs recapture."
+                    : `${status.coverage.items.length} ledger account coverage proposals need review.`}
+              </p>
+              <p>These proposals cover the uploaded sources below. Check the client’s full account and document inventory before defining the final close scope.</p>
               <p role="status">
                 Run #{run.id} ·{" "}
                 {changed
                   ? "scope changed"
-                  : blocked.length
-                    ? `${blocked.length} blocked items`
+                  : blocked.length || stopped
+                    ? `${blocked.length} blocked · ${stopped} stopped`
                     : complete
                       ? "drafts prepared — review required"
                       : `${items.filter((i) => i.state === "completed").length} of ${items.length} items prepared`}
@@ -193,7 +234,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
                 {items.map((i) => (
                   <li key={i.job_id}>
                     <a href={`#work-${i.job_id}`}>{i.name}</a> ·{" "}
-                    {i.state.replaceAll("_", " ")}
+                    {i.proposal?.kind ? `${i.proposal.kind.replaceAll("_", " ")} · ` : ""}{i.state.replaceAll("_", " ")}
                     {i.stale ? " · source changed" : ""}
                     {i.error ? ` · ${i.error}` : ""}
                     {i.proposal?.kind === "unsupported"
@@ -241,6 +282,15 @@ export function Coordinator({ closeId }: { closeId: string }) {
                 . Approved replies resume the same durable jobs automatically.
               </p>
             </>
+          )}
+          {status.stop.count > 0 && (
+            <details>
+              <summary>Stop {status.stop.count} unresolved evidence job{status.stop.count === 1 ? "" : "s"} in this close</summary>
+              <p>Pending preparation will stop and unused client reply links will be revoked. Prepared drafts and messages already sent remain in their history. Each stopped job can be restarted from Work.</p>
+              <label>Reason for stopping<textarea value={stopReason} maxLength={500} onChange={(e) => setStopReason(e.target.value)} /></label>
+              <label><input type="checkbox" checked={stopConfirmed} onChange={(e) => setStopConfirmed(e.target.checked)} /> I reviewed this close and intend to stop all unresolved evidence jobs.</label>
+              <button type="button" disabled={busy || !stopConfirmed || !stopReason.trim()} onClick={() => void stopRemaining()}>{busy ? "Stopping…" : "Stop remaining work"}</button>
+            </details>
           )}
         </>
       )}

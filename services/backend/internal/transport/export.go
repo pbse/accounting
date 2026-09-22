@@ -30,11 +30,16 @@ type packageEvidence struct {
 	SupersededBy      *string `json:"superseded_by"`
 	ReplacementReason *string `json:"replacement_reason"`
 }
+type packageLedger struct {
+	ID      string
+	Payload []byte
+}
 type closePackage struct {
 	RecordedDecisions json.RawMessage   `json:"recorded_decisions"`
 	ScopeHistory      json.RawMessage   `json:"scope_history"`
 	Readiness         *readiness        `json:"readiness,omitempty"`
 	Evidence          []packageEvidence `json:"evidence"`
+	LedgerSnapshots   []packageLedger   `json:"-"`
 
 	Version         string          `json:"version"`
 	Close           savedClose      `json:"close"`
@@ -64,7 +69,7 @@ func exportClose(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		defer tx.Rollback()
-		pack := closePackage{Version: "close_package_v1", Scope: "Saved prepaid, accrued-expense and statement-reconciliation drafts only. Includes uploaded originals and available PDF extraction. Latest 20 request draft revisions are included in the manifest; these are not sent messages. Production ledger state is not independently verified. Supported-scope decisions, when present, are recorded separately.", SignOff: "not signed off", Workpapers: []savedPaper{}}
+		pack := closePackage{Version: "close_package_v1", Scope: "Saved prepaid, accrued-expense and statement-reconciliation drafts only. Includes uploaded originals, available PDF extraction and captured QuickBooks report JSON. Latest 20 request draft revisions are included in the manifest; these are not sent messages. Captured reports are sequential reads, not independently verified current ledger state. Supported-scope decisions, when present, are recorded separately.", SignOff: "not signed off", Workpapers: []savedPaper{}}
 		err = tx.QueryRowContext(ctx, `SELECT id::text,entity,period,transaction_timestamp() FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&pack.Close.ID, &pack.Close.Entity, &pack.Close.Period, &pack.DataCutAt)
 		if err == sql.ErrNoRows {
 			problem(w, 404, "Close not found.")
@@ -143,7 +148,7 @@ func exportClose(db *sql.DB) http.HandlerFunc {
             'intakes',COALESCE((SELECT jsonb_agg(to_jsonb(i) ORDER BY i.job_id) FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id WHERE j.close_id=$1),'[]'::jsonb),
             'requests',COALESCE((SELECT jsonb_agg(to_jsonb(q)||jsonb_build_object('body',d.body) ORDER BY q.id) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'::jsonb),
             'request_links',COALESCE((SELECT jsonb_agg(jsonb_build_object('request_id',l.request_id,'issued_by',l.issued_by,'issued_at',l.issued_at,'expires_at',l.expires_at,'revoked_at',l.revoked_at,'used_at',l.used_at) ORDER BY l.issued_at) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'::jsonb),
-            'quickbooks_snapshots',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'actor',s.actor,'scope','Account records only; download the separately stored JSON snapshot for full content.') ORDER BY s.id) FROM quickbooks_snapshots s WHERE s.close_id=$1),'[]'::jsonb),
+            'quickbooks_snapshots',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'actor',s.actor,'file','ledger/snapshot-'||s.id::text||'.json') ORDER BY s.id) FROM quickbooks_snapshots s WHERE s.close_id=$1),'[]'::jsonb),
             'coverage_bindings',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=$1),'[]'),
             'request_targets',COALESCE((SELECT jsonb_agg(to_jsonb(t)) FROM work_request_targets t JOIN work_requests q ON q.id=t.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'),
             'client_attachments',COALESCE((SELECT jsonb_agg(to_jsonb(a)-'body'-'claim' ORDER BY a.id) FROM client_attachments a WHERE a.close_id=$1),'[]'),
@@ -156,6 +161,36 @@ func exportClose(db *sql.DB) http.HandlerFunc {
 		}
 		if len(pack.WorkHistory) > 16*1024*1024 {
 			problem(w, 413, "Work history exceeds the 16 MiB export limit; nothing was omitted.")
+			return
+		}
+		ledgerRows, err := tx.QueryContext(ctx, `SELECT id::text,payload::text,digest FROM quickbooks_snapshots WHERE close_id=$1 ORDER BY id LIMIT 21`, pack.Close.ID)
+		if err != nil {
+			problem(w, 503, "Could not read captured ledger reports.")
+			return
+		}
+		ledgerBytes := 0
+		for ledgerRows.Next() {
+			var snapshot packageLedger
+			var digest string
+			if err = ledgerRows.Scan(&snapshot.ID, &snapshot.Payload, &digest); err != nil {
+				break
+			}
+			if preparation.Digest(snapshot.Payload) != digest {
+				ledgerRows.Close()
+				problem(w, 409, "Captured ledger report digest does not match its stored content. Investigate before exporting.")
+				return
+			}
+			ledgerBytes += len(snapshot.Payload)
+			pack.LedgerSnapshots = append(pack.LedgerSnapshots, snapshot)
+		}
+		readErr := ledgerRows.Err()
+		ledgerRows.Close()
+		if err != nil || readErr != nil {
+			problem(w, 503, "Could not finish the ledger snapshot.")
+			return
+		}
+		if len(pack.LedgerSnapshots) > 20 || ledgerBytes > 16*1024*1024 {
+			problem(w, 413, "Captured ledger reports exceed the export limit; nothing was omitted.")
 			return
 		}
 
@@ -236,6 +271,11 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			return nil, err
 		}
 	}
+	for _, snapshot := range pack.LedgerSnapshots {
+		if err = write("ledger/snapshot-"+snapshot.ID+".json", snapshot.Payload); err != nil {
+			return nil, err
+		}
+	}
 	papers := []reviewPaper{}
 	for _, saved := range pack.Workpapers {
 		root := "workpapers/" + saved.ID
@@ -303,6 +343,13 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 				if err = csvFile(root+"-unmatched-"+source.name+".csv", records); err != nil {
 					return nil, err
 				}
+			}
+			records = [][]string{{"Side", "Source ID", "Lead", "Candidate IDs (first 5)", "Candidate count", "Question"}}
+			for _, item := range paper.Exceptions {
+				records = append(records, []string{item.Side, csvText(item.ID), item.Kind, csvText(strings.Join(item.CandidateIDs, "; ")), fmt.Sprint(item.CandidateCount), csvText(item.Question)})
+			}
+			if err = csvFile(root+"-exceptions.csv", records); err != nil {
+				return nil, err
 			}
 		default:
 			return nil, fmt.Errorf("unsupported workpaper kind")

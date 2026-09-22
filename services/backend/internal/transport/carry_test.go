@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"slices"
+	"strings"
 	"testing"
 
 	"close.local/backend/internal/prepaids"
@@ -30,12 +32,15 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, table := range []string{"preparation_jobs", "workpapers", "evidence"} {
+		for _, table := range []string{"preparation_jobs", "workpapers", "evidence", "close_scopes"} {
 			if _, e := db.Exec("DELETE FROM "+table+" WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)", entity); e != nil {
 				t.Error(e)
 			}
 		}
 		if _, e := db.Exec("DELETE FROM client_closes WHERE entity=$1", entity); e != nil {
+			t.Error(e)
+		}
+		if _, e := db.Exec("DELETE FROM procedure_versions WHERE lower(client_entity)=lower($1)", entity); e != nil {
 			t.Error(e)
 		}
 	}()
@@ -52,7 +57,7 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 		}
 		sources = append(sources, preparation.Source{ID: id, Digest: digest, Name: name, Role: role, Location: "line 1"})
 	}
-	input := prepaids.Input{Entity: entity, SourceReference: "Synthetic annual terms", Amount: "100.01", ServiceStart: "2026-12-01", ServiceEnd: "2027-02-28", ClosePeriod: "2026-12", Currency: "USD", Basis: "accrual", ExpenseAccount: "Insurance", PrepaidAccount: "Prepaid insurance", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true}
+	input := prepaids.Input{Entity: entity, SourceReference: "Synthetic annual terms", Amount: "100.01", ServiceStart: "2026-12-01", ServiceEnd: "2027-02-28", ClosePeriod: "2026-12", Currency: "USD", Basis: "accrual", ExpenseAccount: "Insurance", PrepaidAccount: "Prepaid insurance", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true, BookedBalance: "100.01", BookingReference: "December ledger"}
 	raw, _ := json.Marshal(input)
 	body, err := preparation.Calculate(preparation.Plan{Kind: "prepaid", Input: raw, Sources: sources}, entity, "2026-12")
 	if err != nil {
@@ -95,6 +100,13 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 	if preview(origin)[0].Eligible {
 		t.Fatal("Unreviewed schedule eligible")
 	}
+	var pendingPreview struct {
+		Unresolved []unresolvedCarryItem `json:"unresolved"`
+	}
+	json.Unmarshal(call("GET", "/v1/closes/"+origin+"/carry-forward", nil, 200), &pendingPreview)
+	if len(pendingPreview.Unresolved) != 1 || pendingPreview.Unresolved[0].Kind != "draft" || pendingPreview.Unresolved[0].ID != first {
+		t.Fatal("Unreviewed draft absent from carry-over preview")
+	}
 	approve(origin, first, "approved")
 	selected := preview(origin)
 	apply := func(closeID string, items []carryItem) (string, string) {
@@ -110,6 +122,58 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 		return result.CloseID, result.Jobs[0]
 	}
 	january, job := apply(origin, selected)
+	var procedureID string
+	if err = db.QueryRow("INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor) SELECT organization_id,entity,'prepaid','Synthetic current procedure',true,'Synthetic approval','fixture' FROM client_closes WHERE id=$1 RETURNING id::text", origin).Scan(&procedureID); err != nil {
+		t.Fatal(err)
+	}
+	var procedurePreview struct {
+		Procedures []preparation.Procedure `json:"procedures"`
+	}
+	json.Unmarshal(call("GET", "/v1/closes/"+origin+"/carry-forward", nil, 200), &procedurePreview)
+	if len(procedurePreview.Procedures) == 0 || procedurePreview.Procedures[0].ID != procedureID {
+		t.Fatal("Current approved procedure absent from preview")
+	}
+	call("POST", "/v1/closes/"+origin+"/carry-forward", map[string]any{"confirmed": true, "items": selected, "procedure_ids": []string{procedureID}}, 422)
+	call("POST", "/v1/closes/"+origin+"/carry-forward", map[string]any{"confirmed": true, "procedure_ids": []string{procedureID}}, 200)
+	call("POST", "/v1/closes/"+origin+"/carry-forward", map[string]any{"confirmed": true, "procedure_ids": []string{procedureID}}, 200)
+	var applied int
+	if err = db.QueryRow("SELECT count(*) FROM evidence WHERE close_id=$1 AND procedure_id::text=$2 AND superseded_by IS NULL", january, procedureID).Scan(&applied); err != nil || applied != 1 {
+		t.Fatal("Procedure not applied exactly once", applied, err)
+	}
+	var unresolvedJob string
+	if err = db.QueryRow("INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','failed','fixture') RETURNING id::text", origin, "unresolved:"+rand.Text()).Scan(&unresolvedJob); err != nil {
+		t.Fatal(err)
+	}
+	var unresolvedPreview struct {
+		Items  []unresolvedCarryItem `json:"unresolved"`
+		Digest string                `json:"unresolved_digest"`
+	}
+	json.Unmarshal(call("GET", "/v1/closes/"+origin+"/carry-forward", nil, 200), &unresolvedPreview)
+	if len(unresolvedPreview.Items) != 1 || unresolvedPreview.Items[0].ID != unresolvedJob {
+		t.Fatal("Unresolved source work missing from preview", unresolvedPreview.Items)
+	}
+	carryTasks := map[string]any{"confirmed": true, "carry_unresolved": true, "unresolved_digest": unresolvedPreview.Digest}
+	call("POST", "/v1/closes/"+origin+"/carry-forward", carryTasks, 200)
+	call("POST", "/v1/closes/"+origin+"/carry-forward", carryTasks, 200)
+	var scopeVersions int
+	var scopeRaw []byte
+	if err = db.QueryRow("SELECT count(*) FROM close_scopes WHERE close_id=$1", january).Scan(&scopeVersions); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow("SELECT scope FROM close_scopes WHERE close_id=$1 ORDER BY id DESC LIMIT 1", january).Scan(&scopeRaw); err != nil {
+		t.Fatal(err)
+	}
+	var scope closeScope
+	if json.Unmarshal(scopeRaw, &scope) != nil || scopeVersions != 1 || len(scope.ExternalSteps) != 1 || scope.ExternalSteps[0].Complete {
+		t.Fatal("Carried unresolved work was duplicated or marked complete", scopeVersions, scope)
+	}
+	var readiness struct {
+		Blockers []string `json:"blockers"`
+	}
+	json.Unmarshal(call("GET", "/v1/closes/"+january+"/readiness", nil, 200), &readiness)
+	if !slices.ContainsFunc(readiness.Blockers, func(value string) bool { return strings.Contains(value, scope.ExternalSteps[0].Name) }) {
+		t.Fatal("Carried unresolved step did not block sign-off", readiness.Blockers)
+	}
 	retryClose, retryJob := apply(origin, selected)
 	if january != retryClose || job != retryJob {
 		t.Fatal("Retry duplicated work")
@@ -129,7 +193,7 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 		}
 		var paper prepaids.Workpaper
 		json.Unmarshal(raw, &paper)
-		if paper.Proposal != nil || paper.Input.BookingConfirmed || paper.Input.MethodConfirmed {
+		if paper.Proposal != nil || paper.Input.BookingConfirmed || paper.Input.MethodConfirmed || paper.Input.BookedBalance != "" || paper.Input.BookingReference != "" {
 			t.Fatal("Carry-forward asserted posting authority")
 		}
 		var linked struct {

@@ -84,7 +84,7 @@ func (s Sandbox) request(ctx context.Context, method, path string, body any, res
 	return nil
 }
 func (s Sandbox) Prepare(ctx context.Context, paper prepaids.Workpaper) (Journal, error) {
-	if paper.Input.Method != prepaids.Method || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" {
+	if paper.Input.Method != prepaids.Method || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" || paper.Input.CancellationMethod != "" {
 		return Journal{}, errors.New("This accounting method supports draft review only; sandbox posting has not been enabled for it")
 	}
 	if !s.Ready() || paper.Proposal == nil || paper.Input.Entity != s.Entity {

@@ -14,6 +14,9 @@ export type PrepaidInput = {
   credit_amount?: string;
   credit_period?: string;
   credit_reference?: string;
+  cancellation_method?: "" | "full_refund_month_boundary_v1" | "no_refund_month_boundary_v1";
+  cancellation_period?: string;
+  cancellation_reference?: string;
   booked_balance?: string;
   booking_reference?: string;
   method_confirmed: boolean;
