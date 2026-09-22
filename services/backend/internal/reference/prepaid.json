@@ -1,0 +1,93 @@
+{
+  "mode": "synthetic",
+  "entity": "Acme Services (synthetic)",
+  "period": "2026-09",
+  "basis": "Accrual",
+  "currency": "USD",
+  "invoice": {
+    "id": "SYN-INVOICE-001",
+    "page": 1,
+    "amount": "12000.00",
+    "service_start": "2026-09-01",
+    "service_end": "2027-08-31"
+  },
+  "policy": {
+    "id": "SYN-EQUAL-MONTHS",
+    "version": 1,
+    "method": "Equal monthly allocation over 12 full months; no tax, credit, cancellation, or prior adjustment."
+  },
+  "ledger": {
+    "id": "SYN-LEDGER-001",
+    "revision": "1",
+    "account": "Software expense",
+    "booked_amount": "12000.00"
+  },
+  "schedule": [
+    {
+      "period": "2026-09",
+      "expense": "1000.00",
+      "remaining": "11000.00"
+    },
+    {
+      "period": "2026-10",
+      "expense": "1000.00",
+      "remaining": "10000.00"
+    },
+    {
+      "period": "2026-11",
+      "expense": "1000.00",
+      "remaining": "9000.00"
+    },
+    {
+      "period": "2026-12",
+      "expense": "1000.00",
+      "remaining": "8000.00"
+    },
+    {
+      "period": "2027-01",
+      "expense": "1000.00",
+      "remaining": "7000.00"
+    },
+    {
+      "period": "2027-02",
+      "expense": "1000.00",
+      "remaining": "6000.00"
+    },
+    {
+      "period": "2027-03",
+      "expense": "1000.00",
+      "remaining": "5000.00"
+    },
+    {
+      "period": "2027-04",
+      "expense": "1000.00",
+      "remaining": "4000.00"
+    },
+    {
+      "period": "2027-05",
+      "expense": "1000.00",
+      "remaining": "3000.00"
+    },
+    {
+      "period": "2027-06",
+      "expense": "1000.00",
+      "remaining": "2000.00"
+    },
+    {
+      "period": "2027-07",
+      "expense": "1000.00",
+      "remaining": "1000.00"
+    },
+    {
+      "period": "2027-08",
+      "expense": "1000.00",
+      "remaining": "0.00"
+    }
+  ],
+  "proposal": {
+    "debit_account": "Prepaid expense",
+    "credit_account": "Software expense",
+    "amount": "11000.00",
+    "status": "prepared"
+  }
+}

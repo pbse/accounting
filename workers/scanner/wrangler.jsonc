@@ -1,0 +1,11 @@
+{
+ "$schema": "../../node_modules/wrangler/config-schema.json",
+ "name": "close-upload-scanner-staging",
+ "main": "src/index.ts",
+ "compatibility_date": "2026-09-21",
+ "workers_dev": true,
+ "preview_urls": false,
+ "containers": [{"class_name":"TextScanner","image":"../../services/scanner/Dockerfile","image_build_context":"../..","max_instances":1,"instance_type":"standard-2"}],
+ "durable_objects":{"bindings":[{"name":"SCANNER","class_name":"TextScanner"}]},
+ "migrations":[{"tag":"v1","new_sqlite_classes":["TextScanner"]}]
+}

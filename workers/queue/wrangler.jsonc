@@ -1,0 +1,17 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "close-queue-staging",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-21",
+  "workers_dev": false,
+  "preview_urls": false,
+  "triggers": {"crons": ["* * * * *"]},
+  "containers": [{
+    "class_name": "PreparationWorker",
+    "image": "../../services/backend/Dockerfile",
+    "max_instances": 1
+  }],
+  "durable_objects": {"bindings": [{"name": "WORKER", "class_name": "PreparationWorker"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["PreparationWorker"]}]
+  // Postgres holds jobs; cron wakes the container. No queue consumer is required.
+}

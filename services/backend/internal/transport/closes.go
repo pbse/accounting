@@ -1,0 +1,288 @@
+package transport
+
+import (
+	"crypto/sha256"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"close.local/backend/internal/accruals"
+	"close.local/backend/internal/auth"
+	"close.local/backend/internal/prepaids"
+	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/reconciliation"
+	_ "github.com/jackc/pgx/v5/stdlib"
+)
+
+type savedClose struct {
+	ID     string `json:"id"`
+	Entity string `json:"entity"`
+	Period string `json:"period"`
+}
+type savedPaper struct {
+	Digest      string `json:"digest"`
+	ReviewState string `json:"review_state"`
+	ReviewID    string `json:"review_id"`
+
+	ID        string          `json:"id"`
+	Kind      string          `json:"kind"`
+	CreatedAt time.Time       `json:"created_at"`
+	Paper     json.RawMessage `json:"paper"`
+}
+
+func jsonReply(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(value)
+}
+func problem(w http.ResponseWriter, status int, message string) {
+	jsonReply(w, status, map[string]string{"message": message})
+}
+func decode(w http.ResponseWriter, r *http.Request, value any) bool {
+	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || media != "application/json" {
+		problem(w, 415, "Send application/json.")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 512*1024)
+	d := json.NewDecoder(r.Body)
+	d.DisallowUnknownFields()
+	if d.Decode(value) != nil || d.Decode(new(any)) != io.EOF {
+		problem(w, 400, "Send one valid JSON object, at most 512 KiB, with only supported fields.")
+		return false
+	}
+	return true
+}
+func prepareReconciliation(w http.ResponseWriter, r *http.Request) {
+	var input reconciliation.Input
+	if !decode(w, r, &input) {
+		return
+	}
+	paper, err := reconciliation.Prepare(input)
+	if err != nil {
+		problem(w, 422, err.Error())
+		return
+	}
+	jsonReply(w, 200, paper)
+}
+
+// The authenticated organization owns every close and its child records.
+func savedCloses(db *sql.DB, token string) http.Handler {
+	verifier := workspaceVerifier()
+	mux := http.NewServeMux()
+	registerPosting(mux, db)
+	registerEvidence(mux, db)
+	registerReview(mux, db)
+	registerRequests(mux, db)
+	registerWork(mux, db)
+	registerCarry(mux, db)
+	registerReadiness(mux, db)
+	registerProcedures(mux, db)
+	registerAccess(mux, db)
+	registerEmail(mux, db)
+	registerCoordinator(mux, db)
+	registerCoverage(mux, db)
+	registerAttachments(mux, db)
+	registerQuickBooks(mux, db)
+	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db))
+	mux.HandleFunc("GET /v1/closes", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)) ORDER BY period DESC,id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r))
+		if err != nil {
+			problem(w, 503, "Saved closes are unavailable.")
+			return
+		}
+		defer rows.Close()
+		items := []savedClose{}
+		for rows.Next() {
+			var item savedClose
+			if rows.Scan(&item.ID, &item.Entity, &item.Period) != nil {
+				problem(w, 503, "Could not read saved closes.")
+				return
+			}
+			items = append(items, item)
+		}
+		if rows.Err() != nil {
+			problem(w, 503, "Could not read saved closes.")
+			return
+		}
+		more := len(items) > 100
+		if more {
+			items = items[:100]
+		}
+		jsonReply(w, 200, map[string]any{"closes": items, "has_more": more})
+	})
+	mux.HandleFunc("POST /v1/closes", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Entity string `json:"entity"`
+			Period string `json:"period"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		input.Entity = strings.TrimSpace(input.Entity)
+		if _, err := time.Parse("2006-01", input.Period); err != nil || len(input.Entity) < 1 || len(input.Entity) > 200 {
+			problem(w, 422, "Enter a client name (1–200 characters) and valid close month.")
+			return
+		}
+		allowed, accessErr := clientAccess(db, r, input.Entity)
+		if accessErr != nil {
+			problem(w, 503, "Client access unavailable.")
+			return
+		}
+		if !allowed {
+			problem(w, 403, "You are not assigned to this client.")
+			return
+		}
+		var item savedClose
+		err := db.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT (organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity,period`, input.Entity, input.Period, organization(r)).Scan(&item.ID, &item.Entity, &item.Period)
+		if err != nil {
+			problem(w, 503, "Could not save the close. Retry safely with the same client and month.")
+			return
+		}
+		jsonReply(w, 200, item)
+	})
+	mux.HandleFunc("GET /v1/closes/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var item savedClose
+		err := db.QueryRowContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&item.ID, &item.Entity, &item.Period)
+		if err == sql.ErrNoRows {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "Could not open the close.")
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE close_id=$1 ORDER BY id DESC LIMIT 101`, item.ID)
+		if err != nil {
+			problem(w, 503, "Could not open workpapers.")
+			return
+		}
+		defer rows.Close()
+		papers := []savedPaper{}
+		for rows.Next() {
+			var paper savedPaper
+			if rows.Scan(&paper.ID, &paper.Kind, &paper.CreatedAt, &paper.Paper, &paper.Digest, &paper.ReviewState, &paper.ReviewID) != nil {
+				problem(w, 503, "Could not read workpapers.")
+				return
+			}
+			papers = append(papers, paper)
+		}
+		if rows.Err() != nil {
+			problem(w, 503, "Could not read workpapers.")
+			return
+		}
+		more := len(papers) > 100
+		if more {
+			papers = papers[:100]
+		}
+		jsonReply(w, 200, map[string]any{"close": item, "workpapers": papers, "has_more": more})
+	})
+	mux.HandleFunc("POST /v1/closes/{id}/workpapers", func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Kind  string          `json:"kind"`
+			Input json.RawMessage `json:"input"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		var paper any
+		var entity, period string
+		var err error
+		switch input.Kind {
+		case "prepaid":
+			var value prepaids.Input
+			err = preparation.Strict(input.Input, &value)
+			if err == nil {
+				paper, err = prepaids.Prepare(value)
+			}
+			entity = strings.TrimSpace(value.Entity)
+			period = value.ClosePeriod
+		case "accrual":
+			var value accruals.Input
+			err = preparation.Strict(input.Input, &value)
+			if err == nil {
+				paper, err = accruals.Prepare(value)
+			}
+			entity = strings.TrimSpace(value.Entity)
+			period = value.ClosePeriod
+		case "reconciliation":
+			var value reconciliation.Input
+			err = preparation.Strict(input.Input, &value)
+			if err == nil {
+				paper, err = reconciliation.Prepare(value)
+			}
+			entity = strings.TrimSpace(value.Entity)
+			period = value.ClosePeriod
+		default:
+			problem(w, 422, "Unsupported workpaper kind.")
+			return
+		}
+		if err != nil {
+			problem(w, 422, err.Error())
+			return
+		}
+		body, err := json.Marshal(paper)
+		if err != nil {
+			problem(w, 500, "Could not encode the workpaper.")
+			return
+		}
+		digest := fmt.Sprintf("%x", sha256.Sum256(body))
+		var saved savedPaper
+		err = db.QueryRowContext(r.Context(), `INSERT INTO workpapers(close_id,kind,digest,paper) SELECT id,$2,$3,$4 FROM client_closes WHERE id::text=$1 AND entity=$5 AND period=$6 ON CONFLICT(close_id,kind,digest) DO UPDATE SET digest=workpapers.digest RETURNING id::text,kind,created_at,paper`, r.PathValue("id"), input.Kind, digest, string(body), entity, period).Scan(&saved.ID, &saved.Kind, &saved.CreatedAt, &saved.Paper)
+		if err == sql.ErrNoRows {
+			problem(w, 409, "The workpaper client and month must match the selected close.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "Save could not be confirmed. Retry the same draft safely.")
+			return
+		}
+		jsonReply(w, 200, saved)
+	})
+	scoped := organizationBoundary(db, mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if (len(token) < 32 && verifier.ClientID == "") || db == nil {
+			problem(w, 503, "Saved closes require a configured database and workspace authentication.")
+			return
+		}
+		actor, err := verifier.Authenticate(r, token)
+		if err != nil {
+			problem(w, 401, "Sign in with an authorized workspace account, or unlock local development access.")
+			return
+		}
+		r = r.WithContext(auth.WithActor(r.Context(), actor))
+		scoped.ServeHTTP(w, r)
+	})
+}
+func ConfiguredAPI() (http.Handler, func(), error) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		return API(), func() {}, nil
+	}
+	if os.Getenv("WORKOS_CLIENT_ID") != "" {
+		if !strings.HasPrefix(os.Getenv("WORKOS_ISSUER"), "https://") {
+			return nil, nil, fmt.Errorf("WorkOS requires an exact HTTPS token issuer")
+		}
+	} else if len(os.Getenv("WORKSPACE_TOKEN")) < 32 {
+		return nil, nil, fmt.Errorf("WORKSPACE_TOKEN must contain at least 32 characters when DATABASE_URL is set")
+	}
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid database configuration")
+	}
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	return apiWithStore(db, os.Getenv("WORKSPACE_TOKEN")), func() { db.Close() }, nil
+}
+
+func workspaceVerifier() *auth.Verifier {
+	return &auth.Verifier{ClientID: os.Getenv("WORKOS_CLIENT_ID"), Organization: os.Getenv("WORKOS_ORGANIZATION_ID"), Issuer: os.Getenv("WORKOS_ISSUER")}
+}

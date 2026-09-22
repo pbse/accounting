@@ -1,0 +1,87 @@
+name: close-preparation
+services:
+  frontend:
+    image: node:24-bookworm-slim
+    working_dir: /workspace
+    command: sh -c 'npm ci && npm run dev -w @close/frontend -- --host 0.0.0.0'
+    environment:
+      API_ORIGIN: http://api:8080
+      VITE_WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
+      VITE_WORKOS_API_HOSTNAME: ${WORKOS_API_HOSTNAME:-}
+    ports: ["127.0.0.1:5173:5173"]
+    volumes:
+      - .:/workspace
+      - node_modules:/workspace/node_modules
+    depends_on: [api]
+  api:
+    build: ./services/backend
+    environment:
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-}
+      UPLOAD_SCAN_KEY: ${UPLOAD_SCAN_KEY:-}
+      TEXT_SCANNER_URL: http://scanner:8080/scan
+      DATABASE_URL: postgres://close:local-development-only@postgres:5432/close?sslmode=disable
+      WORKSPACE_TOKEN: ${WORKSPACE_TOKEN:-}
+      SECRETS_KEY: ${SECRETS_KEY:-}
+      QBO_CLIENT_ID: ${QBO_CLIENT_ID:-}
+      QBO_CLIENT_SECRET: ${QBO_CLIENT_SECRET:-}
+      QBO_REDIRECT_URI: ${QBO_REDIRECT_URI:-}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+      WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
+      WORKOS_ORGANIZATION_ID: ${WORKOS_ORGANIZATION_ID:-}
+      WORKOS_ISSUER: ${WORKOS_ISSUER:-}
+      QBO_SANDBOX_REALM_ID: ${QBO_SANDBOX_REALM_ID:-}
+      QBO_SANDBOX_ACCESS_TOKEN: ${QBO_SANDBOX_ACCESS_TOKEN:-}
+      QBO_SANDBOX_ENTITY: ${QBO_SANDBOX_ENTITY:-}
+      QBO_SANDBOX_PREPAID_ACCOUNT_ID: ${QBO_SANDBOX_PREPAID_ACCOUNT_ID:-}
+      QBO_SANDBOX_EXPENSE_ACCOUNT_ID: ${QBO_SANDBOX_EXPENSE_ACCOUNT_ID:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["127.0.0.1:8080:8080"]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./services/backend
+  worker:
+    build: ./services/backend
+    entrypoint: ["/worker"]
+    environment:
+      SECRETS_KEY: ${SECRETS_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      DATABASE_URL: postgres://close:local-development-only@postgres:5432/close?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["127.0.0.1:8081:8080"]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./services/backend
+  scanner:
+    build:
+      context: .
+      dockerfile: services/scanner/Dockerfile
+    environment:
+      UPLOAD_SCAN_KEY: ${UPLOAD_SCAN_KEY:-}
+    # Only the HTTP listener stays resident; the engine starts per scan.
+    # No host port, database or model credentials.
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: close
+      POSTGRES_USER: close
+      POSTGRES_PASSWORD: local-development-only
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./infra/postgres/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U close -d close"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  node_modules:
+  postgres:

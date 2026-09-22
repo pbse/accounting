@@ -1,0 +1,21 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "close-staging",
+  "workers_dev": false,
+  "preview_urls": false,
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-21",
+  "assets": {
+    "directory": "../../apps/frontend/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/v1/*", "/healthz", "/readyz", "/internal/*", "/mcp"]
+  },
+  "containers": [{
+    "class_name": "CapabilityAPI",
+    "image": "../../services/backend/Dockerfile",
+    "max_instances": 1
+  }],
+  "durable_objects": {"bindings": [{"name": "API", "class_name": "CapabilityAPI"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["CapabilityAPI"]}]
+}

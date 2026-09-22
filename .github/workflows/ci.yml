@@ -1,0 +1,55 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: close
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: close_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U close -d close_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://close:test-only@127.0.0.1:5432/close_test?sslmode=disable
+      WORKSPACE_TOKEN: ci-configuration-validation-only-00000000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/backend/go.mod
+          cache: false
+      - run: npm ci
+      - run: npm run check && npm test && npm run build
+      - name: Validate Worker bundles without publishing
+        run: |
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/scanner/wrangler.jsonc
+        env:
+          WRANGLER_SEND_METRICS: "false"
+      - run: |
+          for migration in infra/postgres/migrations/*.sql; do
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+          done
+      - run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng
+      - run: npm run check:go
+      - run: test -z "$(gofmt -l services/backend)"
+      - run: docker compose config --quiet
+      - run: docker build -t close-backend services/backend
+      - run: docker build -t close-text-scanner -f services/scanner/Dockerfile .

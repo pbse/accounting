@@ -1,0 +1,11 @@
+{
+  "name": "@close/edge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "0.3.7"
+  }
+}

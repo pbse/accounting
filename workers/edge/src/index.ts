@@ -1,0 +1,77 @@
+import { Container } from "@cloudflare/containers";
+import { uploadScanRequest } from "./upload-scan";
+
+export class CapabilityAPI extends Container<Env> {
+  defaultPort = 8080;
+  envVars = {
+    UPLOAD_SCAN_KEY: this.env.UPLOAD_SCAN_KEY ?? "",
+    TEXT_SCANNER_URL: this.env.TEXT_SCANNER_URL ?? "",
+    FRONTEND_ORIGIN: this.env.FRONTEND_ORIGIN ?? "",
+    DATABASE_URL: this.env.DATABASE_URL ?? "",
+    SECRETS_KEY: this.env.SECRETS_KEY ?? "",
+    QBO_CLIENT_ID: this.env.QBO_CLIENT_ID ?? "",
+    QBO_CLIENT_SECRET: this.env.QBO_CLIENT_SECRET ?? "",
+    QBO_REDIRECT_URI: this.env.QBO_REDIRECT_URI ?? "",
+    PUBLIC_APP_URL: this.env.PUBLIC_APP_URL ?? "",
+    WORKOS_CLIENT_ID: this.env.WORKOS_CLIENT_ID ?? "",
+    WORKOS_ORGANIZATION_ID: this.env.WORKOS_ORGANIZATION_ID ?? "",
+    WORKOS_ISSUER: this.env.WORKOS_ISSUER ?? "",
+    QBO_SANDBOX_REALM_ID: this.env.QBO_SANDBOX_REALM_ID ?? "",
+    QBO_SANDBOX_ACCESS_TOKEN: this.env.QBO_SANDBOX_ACCESS_TOKEN ?? "",
+    QBO_SANDBOX_ENTITY: this.env.QBO_SANDBOX_ENTITY ?? "",
+    QBO_SANDBOX_PREPAID_ACCOUNT_ID:
+      this.env.QBO_SANDBOX_PREPAID_ACCOUNT_ID ?? "",
+    QBO_SANDBOX_EXPENSE_ACCOUNT_ID:
+      this.env.QBO_SANDBOX_EXPENSE_ACCOUNT_ID ?? "",
+  };
+  sleepAfter = "5m";
+}
+
+interface Env {
+  TEXT_SCANNER_URL?: string;
+  UPLOAD_SCAN_HOST?: string;
+  UPLOAD_SCAN_KEY?: string;
+  FRONTEND_ORIGIN?: string;
+  DATABASE_URL?: string;
+  SECRETS_KEY?: string;
+  PUBLIC_APP_URL?: string;
+  QBO_CLIENT_ID?: string;
+  QBO_CLIENT_SECRET?: string;
+  QBO_REDIRECT_URI?: string;
+  WORKOS_CLIENT_ID?: string;
+  WORKOS_ORGANIZATION_ID?: string;
+  WORKOS_ISSUER?: string;
+  QBO_SANDBOX_REALM_ID?: string;
+  QBO_SANDBOX_ACCESS_TOKEN?: string;
+  QBO_SANDBOX_ENTITY?: string;
+  QBO_SANDBOX_PREPAID_ACCOUNT_ID?: string;
+  QBO_SANDBOX_EXPENSE_ACCOUNT_ID?: string;
+  API: DurableObjectNamespace<CapabilityAPI>;
+  ASSETS: Fetcher;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    if (path === "/healthz" || path === "/readyz" || path.startsWith("/v1/")) {
+      if (
+        (path.startsWith("/v1/") || path === "/readyz") &&
+        path !== "/v1/reference/prepaid" &&
+        (!env.WORKOS_CLIENT_ID || !env.WORKOS_ISSUER)
+      ) {
+        return new Response(
+          "Hosted workspace authentication is not configured",
+          { status: 503 },
+        );
+      }
+      // ponytail: one API container; add bounded pooling after load measurement.
+      const forwarded = uploadScanRequest(request, env.UPLOAD_SCAN_HOST, env.UPLOAD_SCAN_KEY);
+      if (forwarded instanceof Response) return forwarded;
+      return env.API.getByName("reference-api").fetch(forwarded);
+    }
+    if (path.startsWith("/internal/") || path === "/mcp") {
+      return new Response("Not found", { status: 404 });
+    }
+    return env.ASSETS.fetch(request);
+  },
+} satisfies ExportedHandler<Env>;
