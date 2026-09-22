@@ -109,3 +109,59 @@ func TestActualDaysCreditsAndBookedBalance(t *testing.T) {
 		t.Fatal("one-day allocation", err)
 	}
 }
+
+func TestMonthBoundaryCancellationTreatments(t *testing.T) {
+	in := example()
+	in.Amount = "100.00"
+	in.ServiceEnd = "2026-11-30"
+	in.ClosePeriod = "2026-10"
+	in.CancellationPeriod = "2026-10"
+	in.CancellationReference = "Approved cancellation and refund evidence"
+	in.BookingReference = "October ledger after cancellation"
+	in.ExamplesConfirmed = true
+	in.CancellationMethod = FullRefundCancellation
+	in.BookedBalance = "0.00"
+	p, err := Prepare(in)
+	if err != nil || p.Schedule[0].Expense != "33.33" || p.Schedule[1].Credit != "66.67" || p.Schedule[1].Expense != "0.00" || p.Schedule[2].Expense != "0.00" || p.PrepaidBalance != "0.00" || p.Proposal != nil {
+		t.Fatalf("full-refund cancellation: %+v %v", p, err)
+	}
+	in.CancellationMethod = NoRefundCancellation
+	in.BookedBalance = "66.67"
+	p, err = Prepare(in)
+	if err != nil || p.Schedule[1].Expense != "66.67" || p.Schedule[1].Remaining != "0.00" || p.Schedule[2].Expense != "0.00" || p.Proposal == nil || p.Proposal.Amount != "66.67" || p.Proposal.DebitAccount != in.ExpenseAccount {
+		t.Fatalf("no-refund write-off: %+v %v", p, err)
+	}
+	in.CancellationMethod = FullRefundCancellation
+	if _, err = Prepare(in); err == nil {
+		t.Fatal("refund with outstanding booked balance must block")
+	}
+	in.CancellationMethod = NoRefundCancellation
+	in.BookedBalance = "50.00"
+	if _, err = Prepare(in); err == nil {
+		t.Fatal("partial prior write-off must block")
+	}
+	in.BookedBalance = "66.67"
+	in.CreditAmount, in.CreditPeriod, in.CreditReference = "1.00", "2026-10", "credit"
+	if _, err = Prepare(in); err == nil {
+		t.Fatal("combined cancellation and credit must block")
+	}
+}
+
+func TestCarryScheduleDropsHistoricalBookedBalance(t *testing.T) {
+	in := example()
+	in.Amount = "100.00"
+	in.ServiceEnd = "2026-11-30"
+	in.ClosePeriod = "2026-10"
+	in.CreditAmount, in.CreditPeriod, in.CreditReference = "10.00", "2026-10", "October credit"
+	in.BookedBalance, in.BookingReference = "25.00", "October ledger"
+	p, err := ScheduleOnly(in)
+	if err != nil || p.Input.BookedBalance != "" || p.Input.BookingReference != "" || p.Proposal != nil || p.Schedule[1].Credit != "10.00" {
+		t.Fatalf("historical booked balance leaked into carried schedule: %+v %v", p, err)
+	}
+	in = p.Input
+	in.ClosePeriod = "2026-11"
+	p, err = ScheduleOnly(in)
+	if err != nil || p.Input.BookedBalance != "" || p.Proposal != nil || p.PrepaidBalance != "0.00" {
+		t.Fatalf("second-generation carry lost credit or repeated booking: %+v %v", p, err)
+	}
+}

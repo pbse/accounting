@@ -20,3 +20,23 @@ func TestPreparationPreservesDifferencesAndAmbiguity(t *testing.T) {
 		t.Fatal("accepted fractional cents")
 	}
 }
+
+func TestInvestigationHintsKeepAmbiguousRowsUnmatched(t *testing.T) {
+	input := Input{Entity: "Example", Account: "Bank", ClosePeriod: "2026-09", Currency: "USD", StatementReference: "Statement", LedgerReference: "Ledger", ExpectedPages: 1, Pages: []int{1}, StatementOpening: "0", StatementClosing: "0", LedgerOpening: "0", LedgerClosing: "0", PolicyConfirmed: true,
+		StatementCSV: "id,date,amount\nS1,2026-09-02,200\nS2,2026-09-05,-50\nS3,2026-09-05,-50\nS4,2026-09-10,75\nS5,2026-09-11,-12\nS6,2026-09-12,99",
+		LedgerCSV:    "id,date,amount\nL1,2026-09-02,200\nL2,2026-09-05,-50\nL3,2026-09-15,75\nL4,2026-09-11,-13"}
+	result, err := Prepare(input)
+	if err != nil || len(result.Matches) != 1 || len(result.UnmatchedStatement) != 5 || len(result.UnmatchedLedger) != 3 || len(result.Exceptions) != 8 {
+		t.Fatalf("investigation altered matching: %+v %v", result, err)
+	}
+	want := map[string]string{"S2": "ambiguous_exact", "S3": "ambiguous_exact", "S4": "same_amount_other_date", "S5": "same_date_other_amount", "S6": "no_counterpart", "L2": "ambiguous_exact", "L3": "same_amount_other_date", "L4": "same_date_other_amount"}
+	for _, item := range result.Exceptions {
+		if item.Kind != want[item.ID] {
+			t.Fatalf("unexpected hint for %s: %+v", item.ID, item)
+		}
+		delete(want, item.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing hints: %v", want)
+	}
+}

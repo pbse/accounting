@@ -38,7 +38,7 @@ Compose is the supported no-Go-install path. For native setup use the README, in
 5. Replace changed evidence explicitly, then prepare the revised draft. Earlier reviews remain in history and cannot approve changed evidence.
 6. Export the close review package. It contains saved work and available originals, not an assertion that all books are complete.
 
-Supported prepaids currently require USD, accrual basis, equal full-month allocation and confirmed initial expense booking. Unsupported terms remain blocked. CSV reconciliation matches only unique exact dates and signed amounts; the ledger is not independently verified by importing a CSV.
+Supported prepaids require USD and accrual basis; the reviewer explicitly selects equal full months or inclusive actual days and confirms booking assumptions. One prospective credit, confirmed booked-balance adjustments, and separately reviewed full-refund or no-refund month-boundary cancellations are supported as draft methods. Fixed incurred accruals are also drafts; see [accounting methods](accounting-methods.md). CSV reconciliation matches only unique exact dates and signed amounts, while unmatched-row hints remain questions; the ledger is not independently verified by importing a CSV. On a large evidence inventory, model selection narrows the sources for each proposal; the reviewer sees files the proposal did not cite and must acknowledge them before confirmation.
 
 ## Ask a client and resume work
 
@@ -46,7 +46,7 @@ Review the consolidated request wording and recipient. Approve the request, gene
 
 ## Carry into the following month
 
-From a close with current approved prepaid schedules, preview carry-forward, select eligible schedules and confirm the scope. Open the new month and review its new drafts. Sources and predecessor approvals remain linked. Changing a predecessor invalidates dependent work. The opening amount is a scheduled balance; no opening ledger balance or new posting is inferred.
+Preview carry-forward, then select current approved prepaid schedules or approved procedures in separate actions. Unresolved prior jobs and unapproved drafts can also become incomplete follow-up steps in the next close; they do not automatically resume as new-month jobs. Open the next close and review fresh drafts, evidence and readiness. Carried schedule sources and predecessor approvals remain linked. Changing a predecessor invalidates dependent work. The opening amount is a scheduled balance; historical booked balances are cleared, so a new-month ledger balance and posting must be independently confirmed.
 
 ## Onboard a hosted firm
 
@@ -70,7 +70,7 @@ Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-stag
 
 Before admitting client data, verify with **two** hosted organizations: sign-in, same-named client/month creation, denied cross-firm URLs, isolated Work, upload/extraction, preparation, review, client reply, carry-forward and export. Restart the worker mid-job and verify one durable outcome. Then rehearse database restore and verify access isolation again. Local mocks and a successful deployment are not substitutes for these checks.
 
-Current controls are application-enforced organization ownership, authenticated roles for review/posting, same-close source validation and durable job identities. PostgreSQL row-level security, malware scanning, contractual retention/deletion, operational alerting and full recovery verification remain outstanding. Do not treat this guide or the existing code as enterprise certification.
+Current controls are application-enforced organization ownership, authenticated roles for review/posting, same-close source validation, durable job identities and required malware-scanning gates for client attachments. PostgreSQL row-level security, contractual retention/deletion, operational alerting and full hosted recovery verification remain outstanding. Do not treat this guide or the existing code as enterprise certification.
 
 ## Troubleshooting
 
@@ -86,7 +86,7 @@ For detailed feature behavior follow the README links. For what remains and its 
 
 ## Define readiness and sign off a supported scope
 
-On a client close, open **Close readiness → Define or update scope**. Describe the included work and exclusions, select exact required drafts, and list external steps such as an independently performed ledger tie-out. Mark an external step done only with its completion reference. Save the scope revision.
+On a client close, open **Close readiness → Define or update scope**. Describe the included work and exclusions, select exact required drafts, and list external steps such as an independently performed ledger tie-out or prior-month follow-up. A scope containing only external steps is permitted. Mark an external step done only with its completion reference. Save the scope revision.
 
 Readiness explains unresolved reviews/calculation blockers, active or failed work, outstanding client jobs and uncertain sandbox attempts. Resolve or explicitly cancel work as appropriate; cancellation does not establish source completeness. Refresh readiness before deciding. A hosted signer needs both `workpapers:review` and `close:signoff`. Review the defined scope, record your reason, affirm your authority and choose **Sign off supported scope**.
 
@@ -106,4 +106,4 @@ Client-specific sandbox OAuth, period reports, linked evidence and coverage plan
 
 For automatic coverage status, multi-job requests, mandatory scanning and attachment release, follow [Coverage and client evidence](coverage-requests.md).
 
-For partial-month prepaids, prospective credits, prior-balance adjustments and fixed incurred accruals, follow [accounting methods and accountant acceptance](accounting-methods.md).
+For partial-month prepaids, prospective credits, prior-balance adjustments, month-boundary cancellations and fixed incurred accruals, follow [accounting methods and accountant acceptance](accounting-methods.md).

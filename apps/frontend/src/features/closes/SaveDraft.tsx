@@ -31,7 +31,7 @@ export function SaveDraft({
         .then(setFiles)
         .catch((e) => setStatus(e.message));
   }, [close]);
-  const roles = kind === "reconciliation" ? ["statement","ledger"] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) ? ["invoice","support"] : ["invoice"];
+  const roles = kind === "reconciliation" ? ["statement","ledger"] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
   if (!close)
     return (
       <p>

@@ -44,6 +44,8 @@ func ValidateCarry(ctx context.Context, tx *sql.Tx, p Plan, targetID, entity, pe
 	expected := prior.Input
 	expected.Entity = entity
 	expected.ClosePeriod = period
+	expected.BookedBalance = ""
+	expected.BookingReference = ""
 	expected.ExamplesConfirmed = false
 	expected.MethodConfirmed = false
 	expected.BookingConfirmed = false

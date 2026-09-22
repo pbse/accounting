@@ -228,8 +228,8 @@ func registerReadiness(mux *http.ServeMux, db *sql.DB) {
 				s.ExternalSteps = []externalStep{}
 			}
 			s.Description = strings.TrimSpace(s.Description)
-			if len(s.Description) < 1 || len(s.Description) > 2000 || len(s.RequiredPapers) < 1 || len(s.RequiredPapers) > 100 || len(s.ExternalSteps) > 20 {
-				problem(w, 422, "Describe the supported scope, select 1–100 required drafts and at most 20 external steps.")
+			if len(s.Description) < 1 || len(s.Description) > 2000 || (len(s.RequiredPapers) == 0 && len(s.ExternalSteps) == 0) || len(s.RequiredPapers) > 100 || len(s.ExternalSteps) > 20 {
+				problem(w, 422, "Describe the supported scope and select at least one draft or external step (up to 100 drafts and 20 steps).")
 				return
 			}
 			seen := map[string]bool{}

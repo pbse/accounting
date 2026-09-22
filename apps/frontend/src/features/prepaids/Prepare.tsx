@@ -42,7 +42,7 @@ export default function Prepare() {
       source_reference: "Example invoice 001, page 1",
       amount: "12000.00",
       method: "equal_full_months_v1",
-      booked_balance:"", booking_reference:"", credit_amount:"", credit_period:"", credit_reference:"",
+      booked_balance:"", booking_reference:"", credit_amount:"", credit_period:"", credit_reference:"", cancellation_method:"", cancellation_period:"", cancellation_reference:"",
       service_start: "2026-09-01",
       service_end: "2027-08-31",
       close_period: params.get("period") ?? "2026-09",
@@ -51,6 +51,7 @@ export default function Prepare() {
     };
     if(mode!=="full") Object.assign(example,{amount:"100.00",method:"actual_days_v1",source_reference:"Synthetic actual-day example v1",service_start:"2028-01-16",service_end:"2028-03-15",close_period:"2028-02"});
     if(mode==="credit") Object.assign(example,{credit_amount:"10.00",credit_period:"2028-02",credit_reference:"Synthetic credit example v1",booked_balance:"30.00",booking_reference:"Synthetic ledger after credit"});
+    if(mode==="refund" || mode==="writeoff") Object.assign(example,{method:"equal_full_months_v1",service_start:"2028-01-01",service_end:"2028-03-31",close_period:"2028-02",cancellation_method:mode==="refund"?"full_refund_month_boundary_v1":"no_refund_month_boundary_v1",cancellation_period:"2028-02",cancellation_reference:"Synthetic cancellation evidence",booked_balance:mode==="refund"?"0.00":"66.67",booking_reference:"Synthetic February ledger"});
     for (const [name, value] of Object.entries(example)) {
       (form.current!.elements.namedItem(name) as HTMLInputElement).value =
         value;
@@ -82,6 +83,7 @@ export default function Prepare() {
       examples_confirmed: data.has("examples_confirmed"),
       booked_balance:text("booked_balance"), booking_reference:text("booking_reference"),
       credit_amount:text("credit_amount"),credit_period:text("credit_period"),credit_reference:text("credit_reference"),
+      cancellation_method:text("cancellation_method") as PrepaidInput["cancellation_method"],cancellation_period:text("cancellation_period"),cancellation_reference:text("cancellation_reference"),
       method_confirmed: data.get("method_confirmed") === "on",
       booking_confirmed: data.get("booking_confirmed") === "on",
     };
@@ -180,6 +182,8 @@ export default function Prepare() {
             </button>
             <button type="button" onClick={()=>loadExample("daily")}>Use synthetic actual-day example</button>
             <button type="button" onClick={()=>loadExample("credit")}>Use synthetic credit and prior-balance example</button>
+            <button type="button" onClick={()=>loadExample("refund")}>Use synthetic full-refund cancellation</button>
+            <button type="button" onClick={()=>loadExample("writeoff")}>Use synthetic no-refund cancellation</button>
             <div className="form-grid">
               <label>
                 Client / entity
@@ -301,6 +305,7 @@ export default function Prepare() {
                 </dd>
                 <dt>Method</dt>
                 <dd>{result.input.method} · residual in final month.</dd>
+                {result.input.cancellation_method && <><dt>Cancellation</dt><dd>{result.input.cancellation_method} effective {result.input.cancellation_period} · {result.input.cancellation_reference}</dd></>}
                 <dt>Booking assumption</dt>
                 <dd>{result.input.booked_balance ? `Ledger prepaid: $${result.input.booked_balance} · ${result.input.booking_reference}` : "Fully expensed; no prior adjustments or credits."}</dd>
               </dl>
@@ -358,7 +363,7 @@ export default function Prepare() {
             <h3>Full schedule · {result.schedule.length} months</h3>
             <table>
               <caption>
-                {result.input.method} · credit reduces the balance in its effective month
+                {result.input.method} · credits and full refunds reduce prepaid in their effective month
               </caption>
               <thead>
                 <tr>
@@ -401,7 +406,7 @@ export default function Prepare() {
               onClick={() =>
                 download(
                   [
-                    "Period,Expense USD,Remaining USD,Credit USD",
+                    "Period,Expense USD,Remaining USD,Credit or refund USD",
                     ...result.schedule.map(
                       (row) => `${row.period},${row.expense},${row.remaining},${row.credit ?? "0.00"}`,
                     ),

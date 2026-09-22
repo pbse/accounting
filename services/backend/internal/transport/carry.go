@@ -1,8 +1,10 @@
 package transport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -25,12 +27,45 @@ type carryItem struct {
 		Sources []preparation.Source `json:"sources"`
 	}
 }
+type unresolvedCarryItem struct {
+	Kind  string `json:"kind"`
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+func unresolvedCarry(ctx context.Context, tx *sql.Tx, closeID string) ([]unresolvedCarryItem, string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT kind,id,state FROM (
+	 SELECT 'job' kind,j.id::text id,j.state FROM preparation_jobs j WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled')
+	 UNION ALL
+	 SELECT 'draft',w.id::text,w.review_state FROM workpaper_review_state w WHERE w.close_id=$1 AND (w.review_state<>'approved' OR jsonb_array_length(COALESCE(w.paper->'blockers','[]'::jsonb))>0)
+	) pending ORDER BY kind,id::bigint LIMIT 21`, closeID)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	items := []unresolvedCarryItem{}
+	for rows.Next() {
+		var item unresolvedCarryItem
+		if err = rows.Scan(&item.Kind, &item.ID, &item.State); err != nil {
+			return nil, "", err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, "", err
+	}
+	raw, _ := json.Marshal(items)
+	return items, preparation.Digest(raw), nil
+}
 
 func registerCarry(mux *http.ServeMux, db *sql.DB) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Items     []carryItem `json:"items"`
-			Confirmed bool        `json:"confirmed"`
+			Items            []carryItem `json:"items"`
+			ProcedureIDs     []string    `json:"procedure_ids"`
+			CarryUnresolved  bool        `json:"carry_unresolved"`
+			UnresolvedDigest string      `json:"unresolved_digest"`
+			Confirmed        bool        `json:"confirmed"`
 		}
 		actor := ""
 		if r.Method == "POST" {
@@ -41,8 +76,8 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 			if !decode(w, r, &in) {
 				return
 			}
-			if !in.Confirmed || len(in.Items) < 1 || len(in.Items) > 20 {
-				problem(w, 422, "Confirm 1–20 reviewed schedules to carry forward.")
+			if !in.Confirmed || (len(in.Items) == 0 && len(in.ProcedureIDs) == 0 && !in.CarryUnresolved) || len(in.Items) > 20 || len(in.ProcedureIDs) > 3 || (len(in.Items) > 0 && len(in.ProcedureIDs) > 0) {
+				problem(w, 422, "Choose either reviewed schedules or current approved procedures in one action. Applying a new procedure can invalidate a carried schedule.")
 				return
 			}
 		}
@@ -101,10 +136,7 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 			default:
 				check := item.paper.Input
 				check.ClosePeriod = next
-				check.ExamplesConfirmed = true
-				check.MethodConfirmed = true
-				check.BookingConfirmed = true
-				if _, e := prepaids.Prepare(check); e != nil {
+				if _, e := prepaids.ScheduleOnly(check); e != nil {
 					item.Reason = e.Error()
 				} else {
 					item.Eligible = true
@@ -122,13 +154,38 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "This close exceeds the 100-schedule carry-forward limit.")
 			return
 		}
+		unresolved, unresolvedDigest, err := unresolvedCarry(r.Context(), tx, closeID)
+		if err != nil {
+			problem(w, 503, "Could not inspect unresolved prior work.")
+			return
+		}
+		if len(unresolved) > 20 && r.Method == "POST" && in.CarryUnresolved {
+			problem(w, 422, "This close has more than 20 unresolved items. Resolve or narrow the prior scope before carrying them.")
+			return
+		}
+		if r.Method == "POST" && in.CarryUnresolved && (len(unresolved) == 0 || in.UnresolvedDigest != unresolvedDigest) {
+			problem(w, 409, "Unresolved prior work changed. Refresh the preview.")
+			return
+		}
+		procedures := []preparation.Procedure{}
+		for _, kind := range []string{"prepaid", "reconciliation", "accrual"} {
+			p, e := preparation.CurrentProcedure(r.Context(), tx, closeID, kind)
+			if e == sql.ErrNoRows {
+				continue
+			}
+			if e != nil {
+				problem(w, 503, "Could not inspect approved procedures.")
+				return
+			}
+			procedures = append(procedures, p)
+		}
 		if r.Method == "GET" {
 			var existing string
 			if e := tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM client_closes WHERE organization_id=$3 AND lower(entity)=lower($1) AND period=$2),'')`, entity, next, organization(r)).Scan(&existing); e != nil {
 				problem(w, 503, "Could not inspect the next close.")
 				return
 			}
-			jsonReply(w, 200, map[string]any{"period": next, "items": items, "close_id": existing})
+			jsonReply(w, 200, map[string]any{"period": next, "items": items, "procedures": procedures, "unresolved": unresolved, "unresolved_more": len(unresolved) > 20, "unresolved_digest": unresolvedDigest, "close_id": existing})
 			return
 		}
 		selected := []carryItem{}
@@ -148,11 +205,80 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		selectedProcedures := []preparation.Procedure{}
+		seenProcedure := map[string]bool{}
+		for _, id := range in.ProcedureIDs {
+			found := false
+			for _, p := range procedures {
+				if p.ID == id && p.Enabled && !seenProcedure[id] {
+					selectedProcedures = append(selectedProcedures, p)
+					seenProcedure[id] = true
+					found = true
+					break
+				}
+			}
+			if !found {
+				problem(w, 409, "A selected procedure changed or is disabled. Refresh the preview.")
+				return
+			}
+		}
 		var target, targetEntity string
 		err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity`, entity, next, organization(r)).Scan(&target, &targetEntity)
 		if err != nil {
 			problem(w, 503, "Could not create the next close.")
 			return
+		}
+		var lastDecision string
+		e = tx.QueryRowContext(r.Context(), `SELECT decision FROM close_signoffs WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, target).Scan(&lastDecision)
+		if e != nil && e != sql.ErrNoRows {
+			problem(w, 503, "Could not inspect next-month sign-off.")
+			return
+		}
+		if lastDecision == "signed_off" {
+			problem(w, 409, "Explicitly reopen the next-month close before changing its work.")
+			return
+		}
+		for _, p := range selectedProcedures {
+			if _, e := preparation.AttachProcedure(r.Context(), tx, target, p, true, actor); e != nil {
+				problem(w, 409, "Could not apply procedure "+p.Kind+": "+e.Error())
+				return
+			}
+		}
+		if in.CarryUnresolved {
+			scope := closeScope{Description: fmt.Sprintf("Carry-over follow-up from %s %s. This scope does not certify the new month's ledger or accounting work.", entity, period), RequiredPapers: []string{}, ExternalSteps: []externalStep{}}
+			var prior []byte
+			e = tx.QueryRowContext(r.Context(), `SELECT scope FROM close_scopes WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, target).Scan(&prior)
+			if e != nil && e != sql.ErrNoRows {
+				problem(w, 503, "Could not inspect next-month scope.")
+				return
+			}
+			if e == nil && json.Unmarshal(prior, &scope) != nil {
+				problem(w, 503, "Next-month scope is invalid.")
+				return
+			}
+			seen := map[string]bool{}
+			for _, step := range scope.ExternalSteps {
+				seen[step.Name] = true
+			}
+			added := false
+			for _, item := range unresolved {
+				name := fmt.Sprintf("Resolve close #%s %s #%s", closeID, item.Kind, item.ID)
+				if !seen[name] {
+					scope.ExternalSteps = append(scope.ExternalSteps, externalStep{Name: name})
+					added = true
+				}
+			}
+			if len(scope.ExternalSteps) > 20 {
+				problem(w, 422, "Next-month scope cannot hold all unresolved items (20-step limit).")
+				return
+			}
+			if added {
+				body, _ := json.Marshal(scope)
+				if _, e = tx.ExecContext(r.Context(), `INSERT INTO close_scopes(close_id,scope,actor) VALUES($1,$2,$3)`, target, string(body), actor); e != nil {
+					problem(w, 503, "Could not record next-month unresolved work.")
+					return
+				}
+			}
 		}
 		jobs := []string{}
 		for _, item := range selected {
@@ -163,6 +289,8 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 			input := item.paper.Input
 			input.Entity = targetEntity
 			input.ClosePeriod = next
+			input.BookedBalance = ""
+			input.BookingReference = ""
 			input.ExamplesConfirmed = false
 			input.MethodConfirmed = false
 			input.BookingConfirmed = false

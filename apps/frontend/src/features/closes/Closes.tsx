@@ -403,7 +403,7 @@ export default function Closes() {
                       </section>
                     ) : (
                       <p>
-                        Method: {saved.paper.input.method}, final-month rounding. {saved.paper.input.booked_balance ? `Booked prepaid $${saved.paper.input.booked_balance} · ${saved.paper.input.booking_reference}.` : "Fully expensed with no prior adjustments."} {saved.paper.input.credit_amount ? `Credit $${saved.paper.input.credit_amount} effective ${saved.paper.input.credit_period} · ${saved.paper.input.credit_reference}.` : ""}
+                        Method: {saved.paper.input.method}, final-month rounding. {saved.paper.input.booked_balance ? `Booked prepaid $${saved.paper.input.booked_balance} · ${saved.paper.input.booking_reference}.` : "Fully expensed with no prior adjustments."} {saved.paper.input.credit_amount ? `Credit $${saved.paper.input.credit_amount} effective ${saved.paper.input.credit_period} · ${saved.paper.input.credit_reference}.` : ""} {saved.paper.input.cancellation_method ? `Cancellation ${saved.paper.input.cancellation_method} effective ${saved.paper.input.cancellation_period} · ${saved.paper.input.cancellation_reference}.` : ""}
                       </p>
                     )}
                     <p>
@@ -437,7 +437,7 @@ export default function Closes() {
                     </table>
                   </>
                 )}
-                {saved.kind === "prepaid" && !saved.paper.carry_forward && saved.paper.input.method==="equal_full_months_v1" && !saved.paper.input.credit_amount && !saved.paper.input.booked_balance && (
+                {saved.kind === "prepaid" && !saved.paper.carry_forward && saved.paper.input.method==="equal_full_months_v1" && !saved.paper.input.credit_amount && !saved.paper.input.booked_balance && !saved.paper.input.cancellation_method && (
                   <Posting closeId={close.id} paperId={saved.id} />
                 )}
                 <details>

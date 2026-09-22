@@ -93,15 +93,16 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/work", read)
 	mux.HandleFunc("POST /v1/closes/{id}/work/{job}/{action}", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Revision          int             `json:"revision"`
-			Input             json.RawMessage `json:"input"`
-			FactsConfirmed    bool            `json:"facts_confirmed"`
-			Recipient         string          `json:"recipient"`
-			Body              string          `json:"body"`
-			DraftID           string          `json:"draft_id"`
-			RequestID         string          `json:"request_id"`
-			DeliveryReference string          `json:"delivery_reference"`
-			ReceivedFrom      string          `json:"received_from"`
+			Revision           int             `json:"revision"`
+			Input              json.RawMessage `json:"input"`
+			FactsConfirmed     bool            `json:"facts_confirmed"`
+			InventoryConfirmed bool            `json:"inventory_confirmed"`
+			Recipient          string          `json:"recipient"`
+			Body               string          `json:"body"`
+			DraftID            string          `json:"draft_id"`
+			RequestID          string          `json:"request_id"`
+			DeliveryReference  string          `json:"delivery_reference"`
+			ReceivedFrom       string          `json:"received_from"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -134,7 +135,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		action := r.PathValue("action")
-		if state == "completed" || state == "cancelled" || state == "queued" {
+		if state == "completed" || state == "queued" || (state == "cancelled" && action != "retry") {
 			problem(w, 409, "This work is already preparing or finished. Refresh its status.")
 			return
 		}
@@ -174,8 +175,8 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		linkToken := ""
 		switch action {
 		case "confirm":
-			if state != "needs_confirmation" || !in.FactsConfirmed {
-				problem(w, 409, "Review the proposed facts, client replies, and entity before confirming.")
+			if state != "needs_confirmation" || !in.FactsConfirmed || (len(proposed.Unselected) > 0 && !in.InventoryConfirmed) {
+				problem(w, 409, "Review the proposed facts, client replies, entity and any uncited evidence before confirming.")
 				return
 			}
 			if proposed.Engine == "openai" && len(proposed.Questions) > 0 {
@@ -350,8 +351,8 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			}
 
 		case "retry":
-			if state != "failed" && state != "needs_confirmation" && state != "waiting_client" {
-				problem(w, 409, "Only failed work, unconfirmed proposals or unanswered requests can be rechecked.")
+			if state != "failed" && state != "needs_confirmation" && state != "waiting_client" && state != "cancelled" {
+				problem(w, 409, "Only stopped or unresolved work can be rechecked.")
 				return
 			}
 			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND used_at IS NULL AND revoked_at IS NULL`, jobID)
