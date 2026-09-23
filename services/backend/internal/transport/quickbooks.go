@@ -32,8 +32,8 @@ func quickbooksReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 422, "QuickBooks authorization was cancelled or invalid. Return to your close and reconnect.")
 		return
 	}
-	var closeID string
-	err := db.QueryRowContext(r.Context(), `SELECT x.close_id::text FROM quickbooks_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&closeID)
+	var closeID, environment string
+	err := db.QueryRowContext(r.Context(), `SELECT x.close_id::text,x.environment FROM quickbooks_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.oauth_digest=$1 AND x.state='authorizing' AND x.oauth_expires_at>now() AND o.enabled`, preparation.Digest([]byte(q.Get("state")))).Scan(&closeID, &environment)
 	if err != nil {
 		problem(w, 410, "Connection attempt expired or unavailable. Start again from your close.")
 		return
@@ -44,7 +44,7 @@ func quickbooksReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	origin.Path = "/dashboard/closes/" + closeID
-	origin.Fragment = url.Values{"qbo_code": {q.Get("code")}, "qbo_state": {q.Get("state")}, "qbo_realm": {q.Get("realmId")}}.Encode()
+	origin.Fragment = url.Values{"qbo_code": {q.Get("code")}, "qbo_state": {q.Get("state")}, "qbo_realm": {q.Get("realmId")}, "qbo_env": {environment}}.Encode()
 	http.Redirect(w, r, origin.String(), http.StatusSeeOther)
 }
 func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
@@ -142,12 +142,12 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST "+path+"/snapshots/{snapshot}/ledger", func(w http.ResponseWriter, r *http.Request) { ledgerPage(w, r, true) })
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
-		err := db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'realm',x.realm,'company_name',x.company_name,'confirmed_by',x.confirmed_by,'confirmed_at',x.confirmed_at,'error',x.error,'updated_at',x.updated_at) FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'), 'snapshots',COALESCE((SELECT jsonb_agg(v ORDER BY (v->>'id')::bigint DESC) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'account_count',jsonb_array_length(s.payload->'accounts'),'actor',s.actor,'period',s.payload->>'period','source_id',s.payload->>'source_id') v FROM quickbooks_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 20) recent),'[]'::jsonb)) FROM client_closes c WHERE c.id::text=$1`, r.PathValue("id")).Scan(&raw)
+		err := db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'realm',x.realm,'company_name',x.company_name,'confirmed_by',x.confirmed_by,'confirmed_at',x.confirmed_at,'error',x.error,'updated_at',x.updated_at) FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.environment='sandbox' AND x.state<>'disconnected'), 'production_connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error) FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.environment='production' AND x.state<>'disconnected'), 'snapshots',COALESCE((SELECT jsonb_agg(v ORDER BY (v->>'id')::bigint DESC) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'account_count',jsonb_array_length(s.payload->'accounts'),'actor',s.actor,'period',s.payload->>'period','source_id',s.payload->>'source_id') v FROM quickbooks_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 20) recent),'[]'::jsonb)) FROM client_closes c WHERE c.id::text=$1`, r.PathValue("id")).Scan(&raw)
 		if err != nil {
 			problem(w, 503, "QuickBooks status unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"configured": quickbooks.OAuthConfigured(), "hosted": auth.Actor(r.Context()).Organization != "", "data": raw})
+		jsonReply(w, 200, map[string]any{"configured": quickbooks.OAuthConfigured(), "production_configured": quickbooks.OAuthConfiguredFor("production"), "hosted": auth.Actor(r.Context()).Organization != "", "data": raw})
 	})
 	mux.HandleFunc("GET "+path+"/snapshots/{snapshot}", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
@@ -168,12 +168,13 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var in struct {
-			Action    string `json:"action"`
-			ID        string `json:"connection_id"`
-			Confirmed bool   `json:"confirmed"`
-			Code      string `json:"code"`
-			State     string `json:"state"`
-			Realm     string `json:"realm"`
+			Action      string `json:"action"`
+			ID          string `json:"connection_id"`
+			Confirmed   bool   `json:"confirmed"`
+			Code        string `json:"code"`
+			State       string `json:"state"`
+			Realm       string `json:"realm"`
+			Environment string `json:"environment"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -194,8 +195,11 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if in.Action == "connect" {
-			if !quickbooks.OAuthConfigured() {
-				problem(w, 503, "Configure the sandbox OAuth application first.")
+			if in.Environment == "" {
+				in.Environment = "sandbox"
+			}
+			if !quickbooks.OAuthConfiguredFor(in.Environment) {
+				problem(w, 503, "Configure the selected QuickBooks OAuth application first.")
 				return
 			}
 			if _, err := secrets.Seal(a.Organization+"/qbo-check", nil); err != nil {
@@ -204,18 +208,18 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			}
 			token := rand.Text()
 			var id string
-			err := db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at) VALUES($1,$2,$3,$4,'authorizing',$5,now()+interval '10 minutes') ON CONFLICT DO NOTHING RETURNING id::text`, r.PathValue("id"), a.Organization, entity, a.Subject, preparation.Digest([]byte(token))).Scan(&id)
+			err := db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment) VALUES($1,$2,$3,$4,'authorizing',$5,now()+interval '10 minutes',$6) ON CONFLICT DO NOTHING RETURNING id::text`, r.PathValue("id"), a.Organization, entity, a.Subject, preparation.Digest([]byte(token)), in.Environment).Scan(&id)
 			if err != nil {
 				problem(w, 409, "A connection or attempt already exists. Refresh; disconnect the old attempt before reconnecting.")
 				return
 			}
-			jsonReply(w, 200, map[string]string{"id": id, "url": quickbooks.AuthorizationURL(token)})
+			jsonReply(w, 200, map[string]string{"id": id, "url": quickbooks.AuthorizationURLFor(in.Environment, token)})
 			return
 		}
-		var id, state, realm, company string
+		var id, state, realm, company, environment string
 		var encrypted []byte
 		var expires sql.NullTime
-		err := db.QueryRowContext(ctx, `SELECT id::text,state,realm,company_name,credential,access_expires_at FROM quickbooks_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND state<>'disconnected'`, in.ID, a.Organization, entity).Scan(&id, &state, &realm, &company, &encrypted, &expires)
+		err := db.QueryRowContext(ctx, `SELECT id::text,state,realm,company_name,credential,access_expires_at,environment FROM quickbooks_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND state<>'disconnected'`, in.ID, a.Organization, entity).Scan(&id, &state, &realm, &company, &encrypted, &expires, &environment)
 		if err != nil {
 			problem(w, 404, "Connection not found for this client.")
 			return
@@ -251,12 +255,12 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Authorization expired, belongs to another user, or was already consumed. Refresh connection status.")
 				return
 			}
-			credentials, e := quickbooks.Exchange(ctx, in.Code)
+			credentials, e := quickbooks.ExchangeFor(ctx, environment, in.Code)
 			if e != nil {
 				fail(e.Error())
 				return
 			}
-			company, e = quickbooks.Company(ctx, in.Realm, credentials.Access)
+			company, e = quickbooks.CompanyFor(ctx, environment, in.Realm, credentials.Access)
 			if e != nil {
 				fail(e.Error())
 				return
@@ -287,9 +291,13 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 					err = fmt.Errorf("connection changed")
 				}
 			}
-		case "snapshot", "period_snapshot":
+		case "refresh", "snapshot", "period_snapshot":
 			if state != "active" {
 				problem(w, 409, "Confirm an active company before reading accounts. Incomplete token attempts require reconnecting.")
+				return
+			}
+			if environment != "sandbox" && in.Action != "refresh" {
+				problem(w, 422, "Production connections are reserved for reviewed posting; capture ledger evidence from sandbox separately.")
 				return
 			}
 			raw, e := secrets.Open(aad, encrypted)
@@ -298,7 +306,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Encrypted connection unavailable; check the server key.")
 				return
 			}
-			if !expires.Valid || time.Until(expires.Time) < time.Minute {
+			if !expires.Valid || time.Until(expires.Time) < 2*time.Minute {
 				result, e := db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='refreshing',updated_at=now() WHERE id=$1 AND state='active' AND access_expires_at IS NOT DISTINCT FROM $2`, id, expires)
 				if e != nil {
 					problem(w, 503, "Refresh storage unavailable.")
@@ -309,7 +317,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 					problem(w, 409, "Another request changed the connection. Refresh status.")
 					return
 				}
-				credentials, e = quickbooks.Refresh(ctx, credentials.Refresh)
+				credentials, e = quickbooks.RefreshFor(ctx, environment, credentials.Refresh)
 				if e != nil {
 					fail(e.Error())
 					return
@@ -330,6 +338,10 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 					problem(w, 409, "Connection changed during refresh.")
 					return
 				}
+			}
+			if in.Action == "refresh" {
+				jsonReply(w, 200, map[string]string{"state": "active"})
+				return
 			}
 			started := time.Now()
 			name, e := quickbooks.Company(ctx, realm, credentials.Access)

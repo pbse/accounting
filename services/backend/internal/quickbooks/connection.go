@@ -22,23 +22,48 @@ type Credentials struct {
 }
 
 func OAuthConfigured() bool {
-	u, e := url.Parse(os.Getenv("QBO_REDIRECT_URI"))
+	return OAuthConfiguredFor("sandbox")
+}
+func envPrefix(environment string) string {
+	switch environment {
+	case "sandbox":
+		return "QBO_"
+	case "production":
+		return "QBO_PRODUCTION_"
+	default:
+		return ""
+	}
+}
+func OAuthConfiguredFor(environment string) bool {
+	prefix := envPrefix(environment)
+	if prefix == "" {
+		return false
+	}
+	u, e := url.Parse(os.Getenv(prefix + "REDIRECT_URI"))
 	app, appErr := url.Parse(os.Getenv("PUBLIC_APP_URL"))
 	if appErr != nil || app.Scheme != "https" || app.Host == "" || app.User != nil || app.RawQuery != "" || app.Fragment != "" || (app.Path != "" && app.Path != "/") {
 		return false
 	}
-	return os.Getenv("QBO_CLIENT_ID") != "" && os.Getenv("QBO_CLIENT_SECRET") != "" && e == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.Path == "/v1/quickbooks/callback"
+	return os.Getenv(prefix+"CLIENT_ID") != "" && os.Getenv(prefix+"CLIENT_SECRET") != "" && e == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.Path == "/v1/quickbooks/callback"
 }
 func AuthorizationURL(state string) string {
-	return "https://appcenter.intuit.com/connect/oauth2?" + url.Values{"client_id": {os.Getenv("QBO_CLIENT_ID")}, "redirect_uri": {os.Getenv("QBO_REDIRECT_URI")}, "response_type": {"code"}, "scope": {"com.intuit.quickbooks.accounting"}, "state": {state}}.Encode()
+	return AuthorizationURLFor("sandbox", state)
 }
-func exchange(ctx context.Context, values url.Values) (Credentials, error) {
-	var result Credentials
-	if !OAuthConfigured() {
-		return result, errors.New("Configure the sandbox Intuit app and exact HTTPS callback first")
+func AuthorizationURLFor(environment, state string) string {
+	prefix := envPrefix(environment)
+	if prefix == "" {
+		return ""
 	}
+	return "https://appcenter.intuit.com/connect/oauth2?" + url.Values{"client_id": {os.Getenv(prefix + "CLIENT_ID")}, "redirect_uri": {os.Getenv(prefix + "REDIRECT_URI")}, "response_type": {"code"}, "scope": {"com.intuit.quickbooks.accounting"}, "state": {state}}.Encode()
+}
+func exchange(ctx context.Context, environment string, values url.Values) (Credentials, error) {
+	var result Credentials
+	if !OAuthConfiguredFor(environment) {
+		return result, errors.New("Configure the Intuit app and exact HTTPS callback first")
+	}
+	prefix := envPrefix(environment)
 	req, _ := http.NewRequestWithContext(ctx, "POST", "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", strings.NewReader(values.Encode()))
-	req.SetBasicAuth(os.Getenv("QBO_CLIENT_ID"), os.Getenv("QBO_CLIENT_SECRET"))
+	req.SetBasicAuth(os.Getenv(prefix+"CLIENT_ID"), os.Getenv(prefix+"CLIENT_SECRET"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	raw, err := readResponse(req, 128*1024)
 	if err != nil {
@@ -50,10 +75,16 @@ func exchange(ctx context.Context, values url.Values) (Credentials, error) {
 	return result, nil
 }
 func Exchange(ctx context.Context, code string) (Credentials, error) {
-	return exchange(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {os.Getenv("QBO_REDIRECT_URI")}})
+	return ExchangeFor(ctx, "sandbox", code)
+}
+func ExchangeFor(ctx context.Context, environment, code string) (Credentials, error) {
+	return exchange(ctx, environment, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {os.Getenv(envPrefix(environment) + "REDIRECT_URI")}})
 }
 func Refresh(ctx context.Context, token string) (Credentials, error) {
-	return exchange(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {token}})
+	return RefreshFor(ctx, "sandbox", token)
+}
+func RefreshFor(ctx context.Context, environment, token string) (Credentials, error) {
+	return exchange(ctx, environment, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {token}})
 }
 func readResponse(req *http.Request, limit int64) ([]byte, error) {
 	req.Header.Set("Accept", "application/json")
@@ -93,7 +124,22 @@ func readSandboxLimit(ctx context.Context, realm, token, path string, limit int6
 	return readResponse(req, limit)
 }
 func Company(ctx context.Context, realm, token string) (string, error) {
-	raw, err := readSandbox(ctx, realm, token, "/companyinfo/"+realm)
+	return CompanyFor(ctx, "sandbox", realm, token)
+}
+func CompanyFor(ctx context.Context, environment, realm, token string) (string, error) {
+	if environment != "sandbox" && environment != "production" {
+		return "", errors.New("Invalid QuickBooks environment")
+	}
+	host := "sandbox-quickbooks.api.intuit.com"
+	if environment == "production" {
+		host = "quickbooks.api.intuit.com"
+	}
+	if !ValidRealm(realm) {
+		return "", errors.New("Invalid company identifier")
+	}
+	req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+host+"/v3/company/"+realm+"/companyinfo/"+realm, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	raw, err := readResponse(req, 2*1024*1024)
 	if err != nil {
 		return "", err
 	}

@@ -17,3 +17,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `020_accruals.sql` permits accrued-expense drafts and procedure versions. Apply after 019 with API/worker stopped. No existing workpaper or policy is rewritten. See `docs/accounting-methods.md`.
 
 `021_ledger_selections.sql` records immutable account-scoped General Ledger pages. `022_ledger_search.sql` adds the search term to their identity, so two distinct searches at the same offset cannot reuse the wrong evidence. Apply both in order with API/worker stopped before deploying ledger search.
+
+`023_production_posting.sql` separates production OAuth connections from sandbox connections and adds client-specific grants plus durable one-attempt production intents. Apply after 022 with API/worker stopped. No live grant or credential is created by the migration; see [production posting](../../../docs/production-posting.md).

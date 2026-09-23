@@ -41,23 +41,24 @@ type closePackage struct {
 	Evidence          []packageEvidence `json:"evidence"`
 	LedgerSnapshots   []packageLedger   `json:"-"`
 
-	Version         string          `json:"version"`
-	Close           savedClose      `json:"close"`
-	DataCutAt       time.Time       `json:"data_cut_at"`
-	Scope           string          `json:"scope"`
-	SignOff         string          `json:"sign_off"`
-	Workpapers      []savedPaper    `json:"workpapers"`
-	SandboxPostings json.RawMessage `json:"sandbox_postings"`
-	Reviews         json.RawMessage `json:"reviews"`
-	WorkHistory     json.RawMessage `json:"work_history"`
-	RequestDrafts   json.RawMessage `json:"request_drafts_latest_20"`
+	Version            string          `json:"version"`
+	Close              savedClose      `json:"close"`
+	DataCutAt          time.Time       `json:"data_cut_at"`
+	Scope              string          `json:"scope"`
+	SignOff            string          `json:"sign_off"`
+	Workpapers         []savedPaper    `json:"workpapers"`
+	SandboxPostings    json.RawMessage `json:"sandbox_postings"`
+	ProductionPostings json.RawMessage `json:"production_postings"`
+	Reviews            json.RawMessage `json:"reviews"`
+	WorkHistory        json.RawMessage `json:"work_history"`
+	RequestDrafts      json.RawMessage `json:"request_drafts_latest_20"`
 }
 type reviewPaper struct {
 	ID, Kind, Source, Method string
 	Issues                   []string
 }
 
-var packageHTML = template.Must(template.New("review").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Close review package</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}section{border-top:1px solid #ccc;margin-top:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:.6rem}@media print{button{display:none}section{break-inside:avoid}}</style><h1>{{.Package.Close.Entity}} · {{.Package.Close.Period}}</h1><p>Saved-work snapshot: {{.Package.DataCutAt}}</p><p>{{.Package.Scope}}</p><p><strong>Firm sign-off: {{.Package.SignOff}}</strong></p>{{if .Package.Readiness}}<h2>Supported scope</h2><p>{{.Package.Readiness.Scope.Description}}</p><p>Required draft IDs: {{.Package.Readiness.Scope.RequiredPapers}}</p><ul>{{range .Package.Readiness.Scope.ExternalSteps}}<li>{{.Name}} · complete: {{.Complete}} · {{.Reference}}</li>{{end}}{{range .Package.Readiness.Blockers}}<li>{{.}}</li>{{end}}</ul><p>Decision history and the exact snapshot are preserved in manifest.json. Local development decisions are not verified individual firm identities.</p>{{end}}<p>All saved versions are included. Versions are not additive; do not sum alternative drafts. Source references are user-supplied, not verified attachments. Originals are in evidence/{id}.txt or .pdf; PDF extraction is in evidence/{id}-extracted.txt; no documents outside these uploads are included.</p><p>Use your browser’s Print / Save as PDF command to retain this review summary as a PDF.</p><h2>Workpapers · {{len .Papers}}</h2>{{if not .Papers}}<p>No saved workpapers. This close has no prepared evidence in this package.</p>{{end}}{{range .Papers}}<section><h3>{{.Kind}} · draft #{{.ID}}</h3><p>Source: {{.Source}}</p><p>Method: {{.Method}}</p><ul>{{range .Issues}}<li>{{.}}</li>{{end}}</ul><p>Full inputs and calculations: workpapers/{{.ID}}.json. Tables are in the same directory.</p></section>{{end}}<h2>Sandbox posting receipts</h2><p>These are stored sandbox states at export time, not a new provider readback. Executing or unknown means unresolved. Sandbox verification does not imply production posting or close sign-off.</p><pre>{{.Receipts}}</pre><h2>Review still required</h2><ul><li>Verify source completeness and ledger freshness independently.</li><li>Review accounting assumptions, alternative draft versions and unresolved items.</li><li>Resolve uncertain sandbox attempts without blindly retrying a write.</li><li>Confirm that recorded sign-off covers your intended scope; unlisted work is not certified.</li></ul></html>`))
+var packageHTML = template.Must(template.New("review").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Close review package</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}section{border-top:1px solid #ccc;margin-top:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:.6rem}@media print{button{display:none}section{break-inside:avoid}}</style><h1>{{.Package.Close.Entity}} · {{.Package.Close.Period}}</h1><p>Saved-work snapshot: {{.Package.DataCutAt}}</p><p>{{.Package.Scope}}</p><p><strong>Firm sign-off: {{.Package.SignOff}}</strong></p>{{if .Package.Readiness}}<h2>Supported scope</h2><p>{{.Package.Readiness.Scope.Description}}</p><p>Required draft IDs: {{.Package.Readiness.Scope.RequiredPapers}}</p><ul>{{range .Package.Readiness.Scope.ExternalSteps}}<li>{{.Name}} · complete: {{.Complete}} · {{.Reference}}</li>{{end}}{{range .Package.Readiness.Blockers}}<li>{{.}}</li>{{end}}</ul><p>Decision history and the exact snapshot are preserved in manifest.json. Local development decisions are not verified individual firm identities.</p>{{end}}<p>All saved versions are included. Versions are not additive; do not sum alternative drafts. Source references are user-supplied, not verified attachments. Originals are in evidence/{id}.txt or .pdf; PDF extraction is in evidence/{id}-extracted.txt; no documents outside these uploads are included.</p><p>Use your browser’s Print / Save as PDF command to retain this review summary as a PDF.</p><h2>Workpapers · {{len .Papers}}</h2>{{if not .Papers}}<p>No saved workpapers. This close has no prepared evidence in this package.</p>{{end}}{{range .Papers}}<section><h3>{{.Kind}} · draft #{{.ID}}</h3><p>Source: {{.Source}}</p><p>Method: {{.Method}}</p><ul>{{range .Issues}}<li>{{.}}</li>{{end}}</ul><p>Full inputs and calculations: workpapers/{{.ID}}.json. Tables are in the same directory.</p></section>{{end}}<h2>Sandbox posting receipts</h2><p>These are stored sandbox states at export time, not a new provider readback. Executing or unknown means unresolved. Sandbox verification does not imply production posting or close sign-off.</p><pre>{{.Receipts}}</pre><h2>Production posting receipts</h2><p>Stored attempts and canonical readback at verification time; export does not perform a new QuickBooks read. Unknown outcomes need investigation.</p><pre>{{.Package.ProductionPostings}}</pre><h2>Review still required</h2><ul><li>Verify source completeness and ledger freshness independently.</li><li>Review accounting assumptions, alternative draft versions and unresolved items.</li><li>Resolve uncertain sandbox attempts without blindly retrying a write.</li><li>Confirm that recorded sign-off covers your intended scope; unlisted work is not certified.</li></ul></html>`))
 
 func exportClose(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +130,11 @@ func exportClose(db *sql.DB) http.HandlerFunc {
 		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.id),'[]'::jsonb) FROM sandbox_postings p WHERE close_id=$1`, pack.Close.ID).Scan(&pack.SandboxPostings)
 		if err != nil {
 			problem(w, 503, "Could not read sandbox posting receipts.")
+			return
+		}
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.id),'[]'::jsonb) FROM production_postings p WHERE close_id=$1`, pack.Close.ID).Scan(&pack.ProductionPostings)
+		if err != nil {
+			problem(w, 503, "Could not read production posting receipts.")
 			return
 		}
 		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb) FROM workpaper_reviews r JOIN workpapers w ON w.id=r.workpaper_id WHERE w.close_id=$1`, pack.Close.ID).Scan(&pack.Reviews)

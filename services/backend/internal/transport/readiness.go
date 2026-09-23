@@ -46,6 +46,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
  'evidence',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',e.id::text,'digest',e.digest,'superseded_by',e.superseded_by,'extraction_state',e.extraction_state,'extraction_started_at',e.extraction_started_at) ORDER BY e.id) FROM evidence e WHERE e.close_id=c.id),'[]'),
  'jobs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',j.id::text,'state',j.state,'digest',j.digest,'finished_at',j.finished_at,'plans',j.plans,'revision',i.revision) ORDER BY j.id) FROM preparation_jobs j LEFT JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=c.id),'[]'),
  'postings',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM sandbox_postings p WHERE p.close_id=c.id),'[]'),
+ 'production_postings',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM production_postings p WHERE p.close_id=c.id),'[]'),
  'email',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'provider_id',m.provider_id,'attempts',m.attempts) ORDER BY m.id) FROM email_delivery m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id),'[]'),
  'coverage',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=c.id),'[]'),
  'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'digest',a.digest,'state',a.state,'source_id',a.source_id,'scan_version',a.scan_version,'decision_note',a.decision_note) ORDER BY a.id) FROM client_attachments a WHERE a.close_id=c.id),'[]'),
@@ -100,6 +101,10 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 			ID    int64  `json:"id"`
 			State string `json:"state"`
 		} `json:"postings"`
+		ProductionPostings []struct {
+			ID    int64  `json:"id"`
+			State string `json:"state"`
+		} `json:"production_postings"`
 	}
 	if err = json.Unmarshal(raw, &snapshot); err != nil {
 		return out, err
@@ -150,6 +155,11 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	for _, p := range snapshot.Postings {
 		if p.State == "executing" || p.State == "unknown" {
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Sandbox attempt #%d must be resolved.", p.ID))
+		}
+	}
+	for _, p := range snapshot.ProductionPostings {
+		if p.State == "executing" || p.State == "unknown" {
+			out.Blockers = append(out.Blockers, fmt.Sprintf("Production attempt #%d requires canonical readback or investigation.", p.ID))
 		}
 	}
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',s.id::text,'decision',s.decision,'snapshot_digest',s.snapshot_digest,'note',s.note,'actor',s.actor,'created_at',s.created_at) ORDER BY s.id DESC),'[]') FROM close_signoffs s WHERE s.close_id::text=$1`, id).Scan(&out.History)

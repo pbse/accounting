@@ -39,7 +39,7 @@ The screen shows account count, company realm and capture time. Download the imm
 - Losing `SECRETS_KEY` prevents decryption; restore the matching key. Do not substitute a new key and expect old ciphertext to work. Follow the [recovery runbook](operations.md).
 - OAuth callback URLs carry short-lived codes: redact query strings in infrastructure access logs and disable analytics on callback paths. No application log intentionally records these values.
 
-Live provider activation remains a separate, authorized sandbox exercise. Production OAuth, automatic refresh scheduling and OAuth-backed posting remain pending. Period report evidence is described below.
+Live provider activation remains a separate, authorized sandbox exercise. Production OAuth and reviewed posting have their own setup in [production posting](production-posting.md); they never reuse the sandbox connection. Period report evidence is described below.
 
 Primary protocol references: [Intuit OAuth client source](https://github.com/intuit/oauth-jsclient), [Intuit query builder](https://github.com/intuit/QuickBooks-V3-PHP-SDK/blob/master/src/QueryFilter/QueryMessage.php), [CompanyInfo entity identity](https://static.developer.intuit.com/sdkdocs/qbv3doc/ippdotnetdevkitv3/html/c3f4bf10-4ba7-c032-b2f0-db7deb1592f4.htm). CompanyInfo's object ID is distinct from the OAuth realm ID; access is addressed through the confirmed realm's API path.
 
