@@ -383,9 +383,13 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 					return nil, err
 				}
 			}
-			records = [][]string{{"Side", "Source ID", "Lead", "Candidate IDs (first 5)", "Candidate count", "Question"}}
+			records = [][]string{{"Side", "Source ID", "Lead", "Candidate IDs (first 5)", "Candidate count", "Exact groups (first 5)", "Group count", "Question"}}
 			for _, item := range paper.Exceptions {
-				records = append(records, []string{item.Side, csvText(item.ID), item.Kind, csvText(strings.Join(item.CandidateIDs, "; ")), fmt.Sprint(item.CandidateCount), csvText(item.Question)})
+				groups := make([]string, 0, len(item.CandidateGroups))
+				for _, group := range item.CandidateGroups {
+					groups = append(groups, strings.Join(group, " + "))
+				}
+				records = append(records, []string{item.Side, csvText(item.ID), item.Kind, csvText(strings.Join(item.CandidateIDs, "; ")), fmt.Sprint(item.CandidateCount), csvText(strings.Join(groups, "; ")), fmt.Sprint(item.GroupCount), csvText(item.Question)})
 			}
 			if err = csvFile(root+"-exceptions.csv", records); err != nil {
 				return nil, err

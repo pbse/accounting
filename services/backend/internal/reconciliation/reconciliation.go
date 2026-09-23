@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,12 +39,14 @@ type Match struct {
 	Reason      string `json:"reason"`
 }
 type Exception struct {
-	Side           string   `json:"side"`
-	ID             string   `json:"id"`
-	Kind           string   `json:"kind"`
-	CandidateIDs   []string `json:"candidate_ids"`
-	CandidateCount int      `json:"candidate_count"`
-	Question       string   `json:"question"`
+	Side            string     `json:"side"`
+	ID              string     `json:"id"`
+	Kind            string     `json:"kind"`
+	CandidateIDs    []string   `json:"candidate_ids"`
+	CandidateGroups [][]string `json:"candidate_groups,omitempty"`
+	CandidateCount  int        `json:"candidate_count"`
+	GroupCount      int        `json:"group_count,omitempty"`
+	Question        string     `json:"question"`
 }
 type Workpaper struct {
 	Status                         string      `json:"status"`
@@ -224,11 +227,24 @@ func Prepare(input Input) (Workpaper, error) {
 // These hints identify rows worth comparing; they never turn them into matches.
 func investigate(side string, lines, peers []Line) []Exception {
 	byExact, byAmount, byDate, byID := map[string][]string{}, map[string][]string{}, map[string][]string{}, map[string][]string{}
+	type amountRow struct {
+		ID     string
+		Amount int64
+	}
+	dayRows := map[string][]amountRow{}
+	dayAmounts := map[string]map[int64][]int{}
 	for _, peer := range peers {
 		byExact[peer.Date+"/"+peer.Amount] = append(byExact[peer.Date+"/"+peer.Amount], peer.ID)
 		byAmount[peer.Amount] = append(byAmount[peer.Amount], peer.ID)
 		byDate[peer.Date] = append(byDate[peer.Date], peer.ID)
 		byID[peer.ID] = append(byID[peer.ID], peer.ID)
+		if amount, err := cents(peer.Amount); err == nil {
+			if dayAmounts[peer.Date] == nil {
+				dayAmounts[peer.Date] = map[int64][]int{}
+			}
+			dayAmounts[peer.Date][amount] = append(dayAmounts[peer.Date][amount], len(dayRows[peer.Date]))
+			dayRows[peer.Date] = append(dayRows[peer.Date], amountRow{peer.ID, amount})
+		}
 	}
 	result := make([]Exception, 0, len(lines))
 	for _, line := range lines {
@@ -252,6 +268,28 @@ func investigate(side string, lines, peers []Line) []Exception {
 			candidates = candidates[:5]
 		}
 		item.CandidateIDs = append(item.CandidateIDs, candidates...)
+		if target, err := cents(line.Amount); err == nil && target != 0 {
+			// ponytail: the 2,000-row source limit bounds this pair search; index larger sources if the limit grows.
+			for i, peer := range dayRows[line.Date] {
+				amount := peer.Amount
+				if amount == 0 || (target > 0 && (amount < 0 || amount >= target)) || (target < 0 && (amount > 0 || amount <= target)) {
+					continue
+				}
+				indices := dayAmounts[line.Date][target-amount]
+				start := sort.SearchInts(indices, i+1)
+				item.GroupCount += len(indices) - start
+				for _, j := range indices[start:] {
+					if len(item.CandidateGroups) == 5 {
+						break
+					}
+					item.CandidateGroups = append(item.CandidateGroups, []string{peer.ID, dayRows[line.Date][j].ID})
+				}
+			}
+			if item.GroupCount > 0 && item.Kind == "same_date_other_amount" {
+				item.Kind = "grouped_exact"
+				item.Question = "Two same-date, same-sign rows sum to this amount. Inspect all original transactions before relying on a grouping; no match is confirmed."
+			}
+		}
 		result = append(result, item)
 	}
 	return result

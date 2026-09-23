@@ -25,6 +25,35 @@ Scope not to change: supported calculation methods without accountant-approved a
 | 11 | Agent capability access and final binder — binder implemented, MCP blocked | A release-gated ZIP captures current accountant sign-off, source files, report captures, receipts, decision history and SHA-256 manifest. It is limited to the supported scope and is not an audit opinion. Network-facing MCP access remains pending a specifically approved destination and data scope. |
 | 12 | Cloud activation and pilot | GitHub repository/actions, Cloudflare, AuthKit, OpenAI and QBO sandbox configured; run the same supported flows on staging and an accountant-reviewed pilot. |
 
+## Code-completion gaps after enterprise controls
+
+The table above records delivered slices, not full PRD coverage. The remaining **first commercial release (R0–R2)** code is:
+
+| PRD area | Remaining behavior |
+| --- | --- |
+| CTX-01, Appendix A | Sync bounded QuickBooks transaction entities and company settings with provider IDs, revisions, completeness windows and change polling/webhook recovery. Today's period reports are source evidence, not an entity read model or complete ledger sync. |
+| EVD-01/02 | Controlled forwarded-document intake, selected-file cloud-drive access when permitted, copy-versus-revision deduplication and source-location checks for incomplete/contradictory documents. Keep unsupported formats or ambiguous entity routing blocked. |
+| REC-01/02/03 | Reviewer-selected exact groups and split settlements, approved date/amount tolerances, transfer pairs, prior-period outstanding-item roll-forward and native reconciliation status where supported. Current exact one-to-one candidates and two-row group suggestions do not confirm matches. |
+| POL-01, §5.4 | Show affected work before applying a new approved procedure version; preview each proposed entry against a versioned balance and flag item-level conflicts. Existing procedures are entered and approved manually. |
+| EXC-01, SCH-02 | Complete supported uncategorized/clearing/owner-related investigations and additional approved accrual methods using accountant-owned examples. A journal entry is not a substitute for correcting a bill or payment. |
+| COM-01/02 | Governed inbound email/forward attribution and unauthorized-sender review if email replies are offered; current secure request links and replies cover the scoped baseline. |
+| ACT-01/02, PKG-01/02 | Add only accountant-approved native correction operations beyond the first full-month prepaid journal, and refresh other eligible schedules; emit actual portable PDF workpapers alongside the existing HTML, CSV and manifest. |
+| §7, §15, Appendix C | Persistent natural-language command shortcut over the same durable jobs, operation budgets and checkpoints, and a scoped MCP adapter over existing authorization/capabilities. Current portfolio controls are direct actions. |
+| Appendix E | External alert routing, key rotation/re-encryption, database row-level isolation and code-backed backup/restore verification. Current operations view and local restore rehearsal are not hosted monitoring or recovery proof. |
+
+The later **R3** code remains:
+
+| PRD area | Remaining behavior |
+| --- | --- |
+| §§5.1–5.2, REV-03 | More precise dependency refresh and portfolio-scale change review groups, with prior approvals retained only for unchanged independent work. |
+| §5.4, SCH-03 | Portfolio/dependency-aware close rehearsal; reviewed loan and recurring schedules with explicit supported interest and payment conventions. |
+| REC-04, Appendices A–B | Processor settlement reconciliation with charge, fee, refund, dispute and payout lineage; Xero tenant/account/report/journal support with its own permission and model-use rules. |
+| §5.5, §15 | Accountant-reviewed procedure drafting from firm documents, suggested improvements from edits, affected-client preview and regression examples before activation. |
+
+The **R4** code remains three separate product flows: Daily Books' continuous evidence and exception preparation, a Year-End Handoff of schedules/roll-forwards/open questions, and Cash Operations' receivable, payable and settlement preparation. Payment execution, bank changes and collections need separate authority and are not implied by those preparation flows. Optional Gmail, Graph, Drive, Slack and Plaid connectors are not launch prerequisites merely because they appear in the PRD.
+
+Provider credentials, hosted resources, real-data/accountant acceptance, and production activation remain a separate configuration and verification phase. Code completion cannot establish those outcomes. For MCP, specify the client/destination and allowed data categories before enabling network access.
+
 ## Already implemented locally
 
 Saved closes, exact-cent full-month prepaids, conservative CSV reconciliation, TXT/CSV/PDF evidence and OCR, source-linked review and recalculation, durable evidence-to-preparation jobs, live Work inbox, scoped text reply links, next-month prepaid schedule carry-forward and ZIP review packages. AuthKit, OpenAI and sandbox-posting integrations have code and synthetic/provider mocks; live activation is not claimed.
