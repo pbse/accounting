@@ -91,8 +91,10 @@ type Exception struct {
 	Kind            string     `json:"kind"`
 	CandidateIDs    []string   `json:"candidate_ids"`
 	CandidateGroups [][]string `json:"candidate_groups,omitempty"`
+	SplitGroups     [][]string `json:"split_groups,omitempty"`
 	CandidateCount  int        `json:"candidate_count"`
 	GroupCount      int        `json:"group_count,omitempty"`
+	SplitCount      int        `json:"split_count,omitempty"`
 	Question        string     `json:"question"`
 }
 type Workpaper struct {
@@ -193,22 +195,29 @@ func reviewMatches(input []ReviewedMatch, statement, ledger []Line) ([]Confirmed
 		if len(match.StatementIDs) < 1 || len(match.StatementIDs) > 5 || len(match.LedgerIDs) < 1 || len(match.LedgerIDs) > 5 || len(strings.TrimSpace(match.Reason)) < 5 || len(match.Reason) > 500 {
 			return nil, nil, nil, fmt.Errorf("Each reviewed match needs 1–5 IDs per side and a 5–500 character reason.")
 		}
-		if match.Method != "exact" && match.Method != "tolerance" {
-			return nil, nil, nil, fmt.Errorf("Choose an exact or accountant-approved tolerance method.")
+		if match.Method != "exact" && match.Method != "tolerance" && match.Method != "split" {
+			return nil, nil, nil, fmt.Errorf("Choose an exact group, net split, or accountant-approved tolerance method.")
 		}
+		grouped := len(match.StatementIDs) > 1 || len(match.LedgerIDs) > 1
+		approvedRule := len(strings.TrimSpace(match.PolicyReference)) >= 5 && len(match.PolicyReference) <= 200
 		var tolerance int64
 		if match.Method == "tolerance" {
 			var err error
 			tolerance, err = cents(match.AmountTolerance)
-			if err != nil || tolerance < 0 || tolerance > 99999 || match.DateWindowDays < 0 || match.DateWindowDays > 31 || (tolerance == 0 && match.DateWindowDays == 0) || len(strings.TrimSpace(match.PolicyReference)) < 5 || len(match.PolicyReference) > 200 {
+			if err != nil || tolerance < 0 || tolerance > 99999 || match.DateWindowDays < 0 || match.DateWindowDays > 31 || (tolerance == 0 && match.DateWindowDays == 0) || !approvedRule {
 				return nil, nil, nil, fmt.Errorf("Tolerance needs an approved rule reference, a date window of at most 31 days and an amount ceiling of at most $999.99.")
 			}
-		} else if match.DateWindowDays != 0 || match.AmountTolerance != "" || match.PolicyReference != "" {
-			return nil, nil, nil, fmt.Errorf("Exact matching cannot carry tolerance settings.")
+		} else if match.Method == "split" {
+			if !approvedRule || match.AmountTolerance != "" || match.DateWindowDays < 0 || match.DateWindowDays > 31 || !((len(match.StatementIDs) == 1 && len(match.LedgerIDs) > 1) || (len(match.LedgerIDs) == 1 && len(match.StatementIDs) > 1)) {
+				return nil, nil, nil, fmt.Errorf("A net split needs one row against 2–5 components, an approved rule, exact net cents and a date window of at most 31 days.")
+			}
+		} else if match.DateWindowDays != 0 || match.AmountTolerance != "" || (grouped && !approvedRule) || (!grouped && match.PolicyReference != "") {
+			return nil, nil, nil, fmt.Errorf("A grouped exact match needs an approved rule; exact matches cannot carry tolerance settings.")
 		}
 		var statementTotal, ledgerTotal int64
 		var first, last time.Time
 		var sign int64
+		var componentPositive, componentNegative bool
 		for _, side := range []struct {
 			ids   []string
 			rows  map[string]Line
@@ -222,8 +231,12 @@ func reviewMatches(input []ReviewedMatch, statement, ledger []Line) ([]Confirmed
 				}
 				side.used[id] = true
 				amount, _ := cents(row.Amount)
-				if amount == 0 || (sign != 0 && (amount > 0) != (sign > 0)) {
+				if amount == 0 || (match.Method != "split" && sign != 0 && (amount > 0) != (sign > 0)) {
 					return nil, nil, nil, fmt.Errorf("Reviewed groups must use one nonzero cash direction. Inspect transfers separately.")
+				}
+				if match.Method == "split" && len(side.ids) > 1 {
+					componentPositive = componentPositive || amount > 0
+					componentNegative = componentNegative || amount < 0
 				}
 				sign = amount
 				*side.total += amount
@@ -237,6 +250,9 @@ func reviewMatches(input []ReviewedMatch, statement, ledger []Line) ([]Confirmed
 			}
 		}
 		difference := statementTotal - ledgerTotal
+		if match.Method == "split" && (!componentPositive || !componentNegative || statementTotal == 0 || ledgerTotal == 0) {
+			return nil, nil, nil, fmt.Errorf("A net split needs both gross and opposite-sign adjustment components with a nonzero net.")
+		}
 		if difference < 0 {
 			difference = -difference
 		}
@@ -376,6 +392,50 @@ func reviewTiming(input Input, statement, ledger []Line, usedStatement, usedLedg
 		return 0, 0, fmt.Errorf("Cite the source for the observed native reconciliation status.")
 	}
 	return opening, closing, nil
+}
+
+func CarryForwardItems(prior Workpaper, source string) ([]PriorItem, error) {
+	if prior.Method != "exact_bank_month_v1" || len(prior.Blockers) != 0 || len(strings.TrimSpace(source)) < 5 || len(source) > 200 {
+		return nil, fmt.Errorf("Choose an approved, complete prior reconciliation and cite its workpaper.")
+	}
+	statement, _, err := lines(prior.Input.StatementCSV, prior.Input.ClosePeriod)
+	if err != nil {
+		return nil, err
+	}
+	ledger, _, err := lines(prior.Input.LedgerCSV, prior.Input.ClosePeriod)
+	if err != nil {
+		return nil, err
+	}
+	rows := map[string]map[string]Line{"statement": {}, "ledger": {}}
+	for _, row := range statement {
+		rows["statement"][row.ID] = row
+	}
+	for _, row := range ledger {
+		rows["ledger"][row.ID] = row
+	}
+	items := []PriorItem{}
+	seen := map[string]bool{}
+	for _, item := range prior.Input.PriorOutstanding {
+		if item.ClearedBy != "" {
+			continue
+		}
+		key := item.Side + "/" + item.ID
+		if seen[key] {
+			return nil, fmt.Errorf("Prior outstanding IDs overlap; review them before carry-forward.")
+		}
+		seen[key] = true
+		items = append(items, item)
+	}
+	for _, item := range prior.Input.CurrentOutstanding {
+		key := item.Side + "/" + item.ID
+		row, ok := rows[item.Side][item.ID]
+		if !ok || seen[key] {
+			return nil, fmt.Errorf("Current outstanding row changed or overlaps a prior item.")
+		}
+		seen[key] = true
+		items = append(items, PriorItem{Side: item.Side, ID: item.ID, Amount: row.Amount, SourceReference: source, PolicyReference: item.PolicyReference, Reason: "Carried from approved prior close; confirm whether it cleared this month."})
+	}
+	return items, nil
 }
 func Prepare(input Input) (Workpaper, error) {
 	result := Workpaper{Status: "draft", Method: "exact_bank_month_v1", Input: input, Matches: []Match{}, ReviewedMatches: []ConfirmedMatch{}, UnmatchedStatement: []Line{}, UnmatchedLedger: []Line{}, Exceptions: []Exception{}, Blockers: []string{}}
@@ -548,22 +608,38 @@ func investigate(side string, lines, peers []Line) []Exception {
 			// ponytail: the 2,000-row source limit bounds this pair search; index larger sources if the limit grows.
 			for i, peer := range dayRows[line.Date] {
 				amount := peer.Amount
-				if amount == 0 || (target > 0 && (amount < 0 || amount >= target)) || (target < 0 && (amount > 0 || amount <= target)) {
+				other := target - amount
+				if amount == 0 || other == 0 {
 					continue
 				}
-				indices := dayAmounts[line.Date][target-amount]
+				group := (amount > 0) == (other > 0)
+				indices := dayAmounts[line.Date][other]
 				start := sort.SearchInts(indices, i+1)
-				item.GroupCount += len(indices) - start
+				if group {
+					item.GroupCount += len(indices) - start
+				} else {
+					item.SplitCount += len(indices) - start
+				}
 				for _, j := range indices[start:] {
-					if len(item.CandidateGroups) == 5 {
-						break
+					if group {
+						if len(item.CandidateGroups) == 5 {
+							break
+						}
+						item.CandidateGroups = append(item.CandidateGroups, []string{peer.ID, dayRows[line.Date][j].ID})
+					} else {
+						if len(item.SplitGroups) == 5 {
+							break
+						}
+						item.SplitGroups = append(item.SplitGroups, []string{peer.ID, dayRows[line.Date][j].ID})
 					}
-					item.CandidateGroups = append(item.CandidateGroups, []string{peer.ID, dayRows[line.Date][j].ID})
 				}
 			}
 			if item.GroupCount > 0 && item.Kind == "same_date_other_amount" {
 				item.Kind = "grouped_exact"
 				item.Question = "Two same-date, same-sign rows sum to this amount. Inspect all original transactions before relying on a grouping; no match is confirmed."
+			} else if item.SplitCount > 0 && item.Kind == "same_date_other_amount" {
+				item.Kind = "split_settlement"
+				item.Question = "Gross and opposite-sign adjustment rows net to this amount. Inspect the settlement and fee records under an approved rule; no match is confirmed."
 			}
 		}
 		result = append(result, item)

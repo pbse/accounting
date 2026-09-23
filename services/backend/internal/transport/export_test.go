@@ -18,7 +18,7 @@ import (
 
 func TestPackagePreservesBothWorkpapersAndEscapesSources(t *testing.T) {
 	prepaid, _ := json.Marshal(prepaids.Workpaper{Input: prepaids.Input{SourceReference: "<script>alert(1)</script>", Method: prepaids.Method}, Schedule: []prepaids.Row{{Period: "2026-09", Expense: "50.00", Remaining: "50.00"}, {Period: "2026-10", Expense: "50.00", Remaining: "0.00"}}})
-	recon, _ := json.Marshal(reconciliation.Workpaper{Method: "exact_bank_month_v1", Blockers: []string{"Statement page 2 is missing."}, Matches: []reconciliation.Match{{StatementID: "=1+1", LedgerID: "L1", Reason: "Exact candidate"}}, UnmatchedLedger: []reconciliation.Line{{ID: "L2", Date: "2026-09-30", Amount: "-50.00"}}, Exceptions: []reconciliation.Exception{{Side: "ledger", ID: "=row", Kind: "grouped_exact", CandidateIDs: []string{"@candidate", "L3"}, CandidateCount: 2, CandidateGroups: [][]string{{"=group", "L3"}}, GroupCount: 1, Question: "Check both source rows."}}})
+	recon, _ := json.Marshal(reconciliation.Workpaper{Method: "exact_bank_month_v1", Blockers: []string{"Statement page 2 is missing."}, Matches: []reconciliation.Match{{StatementID: "=1+1", LedgerID: "L1", Reason: "Exact candidate"}}, UnmatchedLedger: []reconciliation.Line{{ID: "L2", Date: "2026-09-30", Amount: "-50.00"}}, Exceptions: []reconciliation.Exception{{Side: "ledger", ID: "=row", Kind: "grouped_exact", CandidateIDs: []string{"@candidate", "L3"}, CandidateCount: 2, CandidateGroups: [][]string{{"=group", "L3"}}, GroupCount: 1, SplitGroups: [][]string{{"=gross", "-fee"}}, SplitCount: 1, Question: "Check both source rows."}}})
 	data, err := buildClosePackage(closePackage{Close: savedClose{ID: "1", Entity: "Example", Period: "2026-09"}, Workpapers: []savedPaper{{ID: "1", Kind: "prepaid", Paper: prepaid}, {ID: "2", Kind: "reconciliation", Paper: recon}}, LedgerSnapshots: []packageLedger{{ID: "7", Payload: []byte(`{"period":"2026-09","accounts":[]}`)}, {ID: "8", Payload: []byte(`{"period":"2026-09","reports":{}}`)}}, SandboxPostings: json.RawMessage(`[{"state":"unknown","external_id":"123"}]`)})
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestPackagePreservesBothWorkpapersAndEscapesSources(t *testing.T) {
 	if !strings.Contains(files["workpapers/2-unmatched-ledger.csv"], "-50.00") {
 		t.Fatal("unmatched negative amount lost")
 	}
-	if !strings.Contains(files["workpapers/2-exceptions.csv"], "'=row") || !strings.Contains(files["workpapers/2-exceptions.csv"], "'@candidate") || !strings.Contains(files["workpapers/2-exceptions.csv"], "'=group + L3") {
+	if !strings.Contains(files["workpapers/2-exceptions.csv"], "'=row") || !strings.Contains(files["workpapers/2-exceptions.csv"], "'@candidate") || !strings.Contains(files["workpapers/2-exceptions.csv"], "'=group + L3") || !strings.Contains(files["workpapers/2-exceptions.csv"], "'=gross + -fee") {
 		t.Fatal("exception leads were lost or unsafe for spreadsheets")
 	}
 	if !strings.Contains(files["ledger/snapshot-7.json"], `"accounts":[]`) || !strings.Contains(files["ledger/snapshot-8.json"], `"reports":{}`) {

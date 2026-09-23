@@ -191,7 +191,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Use the reviewed next-month carry-forward action.")
 			return
 		}
-		if len(p.Sources) < 1 || len(p.Sources) > 5 {
+		if len(p.Sources) < 1 || len(p.Sources) > 6 {
 			problem(w, 422, "Link source evidence and the ledger/credit support for the selected method.")
 			return
 		}
@@ -224,7 +224,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			selectedIDs[s.ID] = true
-			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "other_statement" && s.Role != "other_ledger") {
+			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") {
 				problem(w, 422, "Unsupported source role.")
 				return
 			}
@@ -254,6 +254,10 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Link both account records before preparing a transfer pair.")
 				return
 			}
+			if (in.NativeStatus == "reconciled" || in.NativeStatus == "unreconciled") && content["native_status"] == "" {
+				problem(w, 422, "Link the QuickBooks reconciliation-status report before recording its observed status.")
+				return
+			}
 			in.StatementCSV = content["statement"]
 			in.LedgerCSV = content["ledger"]
 			in.OtherStatementCSV = content["other_statement"]
@@ -267,6 +271,8 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 					in.OtherStatementRef = s.Name + " · " + s.Location
 				} else if s.Role == "other_ledger" {
 					in.OtherLedgerRef = s.Name + " · " + s.Location
+				} else if s.Role == "native_status" {
+					in.NativeStatusRef = s.Name + " · " + s.Location
 				}
 			}
 			p.Input, _ = json.Marshal(in)
