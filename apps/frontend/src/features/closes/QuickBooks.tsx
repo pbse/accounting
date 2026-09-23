@@ -24,6 +24,17 @@ type Status = {
   hosted: boolean;
   data: { connection: Connection | null; snapshots: Snapshot[] };
 };
+type TransactionSync = {
+  id: string;
+  period: string;
+  state: string;
+  attempts: number;
+  error: string;
+  digest?: string;
+  evidence_id?: string;
+  counts?: Record<string, number>;
+  finished_at?: string;
+};
 export function QuickBooks({
   closeId,
   entity,
@@ -32,6 +43,7 @@ export function QuickBooks({
   entity: string;
 }) {
   const [status, setStatus] = useState<Status>();
+  const [syncs, setSyncs] = useState<TransactionSync[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -48,7 +60,13 @@ export function QuickBooks({
   }, [callback]);
   async function load() {
     try {
-      setStatus(await workspaceRequest(`/${closeId}/quickbooks`));
+      const [connection, transactions] = await Promise.all([
+        workspaceRequest(`/${closeId}/quickbooks`),
+        workspaceRequest(`/${closeId}/quickbooks/entities`),
+      ]);
+      setStatus(connection);
+      setSyncs(transactions);
+      setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Connection unavailable.");
     }
@@ -56,6 +74,27 @@ export function QuickBooks({
   useEffect(() => {
     void load();
   }, [closeId]);
+  useEffect(() => {
+    if (!syncs.some((s) => s.state === "queued" || s.state === "running")) return;
+    const timer = window.setInterval(() => void load(), 5000);
+    return () => window.clearInterval(timer);
+  }, [closeId, syncs]);
+  async function captureTransactions() {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/quickbooks/entities`, {
+        connection_id: status?.data.connection?.id,
+        confirmed,
+      });
+      setConfirmed(false);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Transaction refresh could not be queued.");
+    } finally {
+      setBusy(false);
+    }
+  }
   async function action(name: string) {
     setBusy(true);
     setError("");
@@ -89,20 +128,20 @@ export function QuickBooks({
       setBusy(false);
     }
   }
-  async function download(id: string) {
+  async function download(id: string, transactions = false) {
     setError("");
     try {
       const blob = await workspaceRequest(
-        `/${closeId}/quickbooks/snapshots/${id}`,
+        transactions ? `/${closeId}/quickbooks/entities/${id}` : `/${closeId}/quickbooks/snapshots/${id}`,
         undefined,
         true,
       );
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `quickbooks-snapshot-${id}.json`;
+      a.download = `quickbooks-${transactions ? "transactions" : "snapshot"}-${id}.json`;
       a.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download failed.");
     }
@@ -212,6 +251,11 @@ export function QuickBooks({
                   {busy ? "Reading period evidence…" : "Capture this month’s accrual reports and plan coverage"}
                 </button>
               )}
+              {c?.state === "active" && (
+                <button disabled={!confirmed} onClick={() => void captureTransactions()}>
+                  Refresh this month’s transactions in background
+                </button>
+              )}
               {c && (
                 <button
                   disabled={!confirmed}
@@ -227,6 +271,14 @@ export function QuickBooks({
             app in Intuit as well to remove provider authorization.
           </p>
           <h3>Captured ledger evidence</h3>
+          <p>Transaction refresh runs in the background. It captures provider IDs and revisions for this close month. A partial or failed read is never offered as evidence; review the completed JSON and linked source before using proposed facts.</p>
+          {syncs.length === 0 ? <p>No transaction capture requested.</p> : (
+            <ul>{syncs.map((s) => <li key={s.id}>
+              {s.period} transactions · {s.state.replaceAll("_", " ")} · attempt {s.attempts}/3
+              {s.state === "completed" && <> · evidence #{s.evidence_id} · {Object.values(s.counts ?? {}).reduce((n, count) => n + count, 0)} records · {s.finished_at && new Date(s.finished_at).toLocaleString()} <button onClick={() => void download(s.id, true)}>Download transactions</button></>}
+              {s.error && <span role="alert"> · {s.error}</span>}
+            </li>)}</ul>
+          )}
           <p>Period capture reads Transaction List, General Ledger, Trial Balance and Profit and Loss for this close month on the accrual basis. It links immutable evidence and proposes coverage in Prepare this close. Confirm accrual is appropriate for this client. No facts, exclusions or methods are approved automatically.</p>
           <p>
             These are dated reads of the account directory, including inactive

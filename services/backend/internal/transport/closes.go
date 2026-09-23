@@ -87,6 +87,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerPosting(mux, db)
 	registerProductionPosting(mux, db)
 	registerEvidence(mux, db)
+	registerForwardedEvidence(mux, db)
 	registerReview(mux, db)
 	registerRequests(mux, db)
 	registerWork(mux, db)
@@ -104,6 +105,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerCoverage(mux, db)
 	registerAttachments(mux, db)
 	registerQuickBooks(mux, db)
+	registerQuickBooksEntities(mux, db)
 	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
 	mux.HandleFunc("GET /v1/closes/{id}/binder", exportClose(db, true))
 	mux.HandleFunc("GET /v1/closes", func(w http.ResponseWriter, r *http.Request) {

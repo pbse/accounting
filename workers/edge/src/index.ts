@@ -13,6 +13,8 @@ export class CapabilityAPI extends Container<Env> {
     QBO_CLIENT_SECRET: this.env.QBO_CLIENT_SECRET ?? "",
     QBO_REDIRECT_URI: this.env.QBO_REDIRECT_URI ?? "",
     PUBLIC_APP_URL: this.env.PUBLIC_APP_URL ?? "",
+    EMAIL_INTAKE_ADDRESS: this.env.EMAIL_INTAKE_ADDRESS ?? "",
+    EMAIL_INTAKE_KEY: this.env.EMAIL_INTAKE_KEY ?? "",
     WORKOS_CLIENT_ID: this.env.WORKOS_CLIENT_ID ?? "",
     WORKOS_ORGANIZATION_ID: this.env.WORKOS_ORGANIZATION_ID ?? "",
     WORKOS_ISSUER: this.env.WORKOS_ISSUER ?? "",
@@ -35,6 +37,8 @@ interface Env {
   DATABASE_URL?: string;
   SECRETS_KEY?: string;
   PUBLIC_APP_URL?: string;
+  EMAIL_INTAKE_ADDRESS?: string;
+  EMAIL_INTAKE_KEY?: string;
   QBO_CLIENT_ID?: string;
   QBO_CLIENT_SECRET?: string;
   QBO_REDIRECT_URI?: string;
@@ -51,6 +55,24 @@ interface Env {
 }
 
 export default {
+  async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
+    const [base, domain] = (env.EMAIL_INTAKE_ADDRESS ?? "").toLowerCase().split("@");
+    const recipient = message.to.toLowerCase();
+    if (!base || !domain || !recipient.startsWith(`${base}+`) || !recipient.endsWith(`@${domain}`) || message.rawSize < 1 || message.rawSize > 6 * 1024 * 1024 || !env.EMAIL_INTAKE_KEY || env.EMAIL_INTAKE_KEY.length < 32) {
+      message.setReject("Evidence intake address or message size is invalid");
+      return;
+    }
+    const response = await env.API.getByName("reference-api").fetch(new Request("http://api/internal/forwarded-email", {
+      method: "POST",
+      headers: { "X-Close-Email-Key": env.EMAIL_INTAKE_KEY, "X-Close-Envelope-From": message.from, "X-Close-Envelope-To": message.to, "Content-Type": "message/rfc822" },
+      body: await new Response(message.raw).arrayBuffer(),
+    }));
+    if (response.status === 413 || response.status === 422) {
+      message.setReject("Evidence message cannot be accepted; check the address and supported attachments");
+      return;
+    }
+    if (!response.ok) throw new Error("Durable evidence intake unavailable");
+  },
   async fetch(request: Request, env: Env): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path === "/healthz" || path === "/readyz" || path.startsWith("/v1/")) {

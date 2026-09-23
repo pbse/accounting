@@ -7,6 +7,12 @@ export class PreparationWorker extends Container<Env> {
     SECRETS_KEY: this.env.SECRETS_KEY ?? "",
     OPENAI_API_KEY: this.env.OPENAI_API_KEY ?? "",
     OPENAI_MODEL: this.env.OPENAI_MODEL ?? "",
+    QBO_CLIENT_ID: this.env.QBO_CLIENT_ID ?? "",
+    QBO_CLIENT_SECRET: this.env.QBO_CLIENT_SECRET ?? "",
+    QBO_REDIRECT_URI: this.env.QBO_REDIRECT_URI ?? "",
+    PUBLIC_APP_URL: this.env.PUBLIC_APP_URL ?? "",
+    UPLOAD_SCAN_KEY: this.env.UPLOAD_SCAN_KEY ?? "",
+    TEXT_SCANNER_URL: this.env.TEXT_SCANNER_URL ?? "",
   };
   defaultPort = 8080;
   sleepAfter = "5m";
@@ -18,6 +24,12 @@ interface Env {
   SECRETS_KEY?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
+  QBO_CLIENT_ID?: string;
+  QBO_CLIENT_SECRET?: string;
+  QBO_REDIRECT_URI?: string;
+  PUBLIC_APP_URL?: string;
+  UPLOAD_SCAN_KEY?: string;
+  TEXT_SCANNER_URL?: string;
   WORKER: DurableObjectNamespace<PreparationWorker>;
 }
 

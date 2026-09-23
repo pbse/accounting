@@ -13,6 +13,12 @@ type Version = {
   actor: string;
   created_at: string;
 };
+type Impact = {
+  version_id: string;
+  source_id: string;
+  impact_digest: string;
+  affected_drafts: { id: string; kind: string; review_state: string }[];
+};
 export function Procedures({
   closeId,
   entity,
@@ -31,12 +37,14 @@ export function Procedures({
   const [editing, setEditing] = useState(false);
   const [applyConfirmed, setApplyConfirmed] = useState(false);
   const [message, setMessage] = useState("");
+  const [impact, setImpact] = useState<Impact>();
   async function load() {
     setBusy(true);
     setError("");
     try {
       const data = await workspaceRequest("/procedures");
       setVersions(data.versions);
+      setImpact(undefined);
       setLoaded(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Procedures unavailable.");
@@ -85,13 +93,28 @@ export function Procedures({
       await workspaceRequest(`/${closeId}/procedures/apply`, {
         kind: v.kind,
         version_id: v.id,
+        impact_digest: impact?.impact_digest,
         confirmed: applyConfirmed,
       });
+      setImpact(undefined);
       onApplied();
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Procedure could not be applied.",
       );
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function preview(v: Version) {
+    setBusy(true);
+    setError("");
+    setImpact(undefined);
+    setApplyConfirmed(false);
+    try {
+      setImpact(await workspaceRequest(`/${closeId}/procedures/impact?kind=${v.kind}`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Impact preview unavailable.");
     } finally {
       setBusy(false);
     }
@@ -128,9 +151,7 @@ export function Procedures({
             return (
               <section key={k}>
                 <h4>
-                  {k === "prepaid"
-                    ? "Prepaid preparation"
-                    : "Statement reconciliation"}
+                  {k === "prepaid" ? "Prepaid preparation" : k === "accrual" ? "Accrual preparation" : "Statement reconciliation"}
                 </h4>
                 {!v ? (
                   <p>
@@ -157,14 +178,14 @@ export function Procedures({
                       Approval record: {v.reason} · {v.actor} ·{" "}
                       {new Date(v.created_at).toLocaleString()}
                     </p>
-                    {v.enabled && (
-                      <button
-                        disabled={busy || !applyConfirmed}
-                        onClick={() => void apply(v)}
-                      >
-                        Apply version #{v.id} to this close
-                      </button>
-                    )}
+                    {v.enabled && <>
+                      <button disabled={busy} onClick={() => void preview(v)}>Preview affected work</button>
+                      {impact?.version_id === v.id && <>
+                        <p>Current pinned procedure source: {impact.source_id ? `#${impact.source_id}` : "none"}. Applying this version changes the cited context for {impact.affected_drafts.length} workpaper(s); their review may become stale.</p>
+                        {impact.affected_drafts.length > 0 && <ul>{impact.affected_drafts.map((draft) => <li key={draft.id}>Draft #{draft.id} · {draft.kind} · {draft.review_state}</li>)}</ul>}
+                        <button disabled={busy || !applyConfirmed} onClick={() => void apply(v)}>Apply version #{v.id} to this close</button>
+                      </>}
+                    </>}
                   </>
                 )}
               </section>

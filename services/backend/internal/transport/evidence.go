@@ -174,7 +174,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Use the reviewed next-month carry-forward action.")
 			return
 		}
-		if len(p.Sources) < 1 || len(p.Sources) > 4 {
+		if len(p.Sources) < 1 || len(p.Sources) > 5 {
 			problem(w, 422, "Link source evidence and the ledger/credit support for the selected method.")
 			return
 		}
@@ -198,14 +198,16 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		content := map[string]string{}
+		selectedIDs := map[string]bool{}
 		for i := range p.Sources {
 			s := &p.Sources[i]
 			s.Location = strings.TrimSpace(s.Location)
-			if s.Location == "" || len(s.Location) > 200 || content[s.Role] != "" {
+			if s.Location == "" || len(s.Location) > 200 || content[s.Role] != "" || selectedIDs[s.ID] {
 				problem(w, 422, "Supply a unique source role and a location (lines or section) for each source.")
 				return
 			}
-			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger") {
+			selectedIDs[s.ID] = true
+			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "other_statement" && s.Role != "other_ledger") {
 				problem(w, 422, "Unsupported source role.")
 				return
 			}
@@ -218,7 +220,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			content[s.Role] = text
 		}
 		if p.Kind == "reconciliation" {
-			if content["statement"] == "" || content["ledger"] == "" || p.Sources[0].ID == p.Sources[1].ID {
+			if content["statement"] == "" || content["ledger"] == "" {
 				problem(w, 422, "Choose separate statement and ledger evidence.")
 				return
 			}
@@ -227,13 +229,27 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, err.Error())
 				return
 			}
+			if len(in.PriorOutstanding) > 0 && content["support"] == "" {
+				problem(w, 422, "Link reviewed prior-period evidence before preparing outstanding items.")
+				return
+			}
+			if len(in.Transfers) > 0 && (content["other_statement"] == "" || content["other_ledger"] == "") {
+				problem(w, 422, "Link both account records before preparing a transfer pair.")
+				return
+			}
 			in.StatementCSV = content["statement"]
 			in.LedgerCSV = content["ledger"]
+			in.OtherStatementCSV = content["other_statement"]
+			in.OtherLedgerCSV = content["other_ledger"]
 			for _, s := range p.Sources {
 				if s.Role == "statement" {
 					in.StatementReference = s.Name + " · " + s.Location
-				} else {
+				} else if s.Role == "ledger" {
 					in.LedgerReference = s.Name + " · " + s.Location
+				} else if s.Role == "other_statement" {
+					in.OtherStatementRef = s.Name + " · " + s.Location
+				} else if s.Role == "other_ledger" {
+					in.OtherLedgerRef = s.Name + " · " + s.Location
 				}
 			}
 			p.Input, _ = json.Marshal(in)
@@ -271,7 +287,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				for _, chosen := range p.Sources {
 					found := false
 					for _, selected := range proposal.Sources {
-						if chosen.ID == selected.ID && chosen.Role == selected.Role {
+						if chosen.ID == selected.ID && (chosen.Role == selected.Role || (selected.Role == "support" && (chosen.Role == "other_statement" || chosen.Role == "other_ledger"))) {
 							found = true
 						}
 					}

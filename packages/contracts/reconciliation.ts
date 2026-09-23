@@ -14,6 +14,26 @@ export type ReconciliationInput = {
   statement_csv: string;
   ledger_csv: string;
   policy_confirmed: boolean;
+  reviewed_matches?: ReviewedMatch[];
+  prior_outstanding?: { side: "statement" | "ledger"; id: string; amount: string; source_reference: string; policy_reference: string; cleared_by?: string; reason: string }[];
+  current_outstanding?: { side: "statement" | "ledger"; id: string; policy_reference: string; reason: string }[];
+  transfers?: { statement_id: string; ledger_id: string; other_statement_id: string; other_ledger_id: string; policy_reference: string; reason: string }[];
+  other_account?: string;
+  other_statement_csv?: string;
+  other_ledger_csv?: string;
+  other_statement_reference?: string;
+  other_ledger_reference?: string;
+  native_status?: "unverified" | "reconciled" | "unreconciled";
+  native_status_reference?: string;
+};
+export type ReviewedMatch = {
+  statement_ids: string[];
+  ledger_ids: string[];
+  method: "exact" | "tolerance";
+  reason: string;
+  policy_reference?: string;
+  date_window_days?: number;
+  amount_tolerance?: string;
 };
 export type ReconciliationLine = { id: string; date: string; amount: string };
 export type ReconciliationWorkpaper = {
@@ -21,6 +41,7 @@ export type ReconciliationWorkpaper = {
   method: "exact_bank_month_v1";
   input: ReconciliationInput;
   matches: { statement_id: string; ledger_id: string; reason: string }[];
+  reviewed_matches: (ReviewedMatch & { amount_difference: string })[];
   unmatched_statement: ReconciliationLine[];
   unmatched_ledger: ReconciliationLine[];
   exceptions?: {
@@ -38,4 +59,6 @@ export type ReconciliationWorkpaper = {
   ledger_roll_forward_difference: string;
   opening_difference: string;
   closing_difference: string;
+  opening_bridge_difference: string;
+  closing_bridge_difference: string;
 };

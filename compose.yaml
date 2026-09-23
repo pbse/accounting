@@ -19,6 +19,8 @@ services:
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-}
       UPLOAD_SCAN_KEY: ${UPLOAD_SCAN_KEY:-}
       TEXT_SCANNER_URL: http://scanner:8080/scan
+      EMAIL_INTAKE_ADDRESS: ${EMAIL_INTAKE_ADDRESS:-}
+      EMAIL_INTAKE_KEY: ${EMAIL_INTAKE_KEY:-}
       DATABASE_URL: postgres://close:local-development-only@postgres:5432/close?sslmode=disable
       WORKSPACE_TOKEN: ${WORKSPACE_TOKEN:-}
       SECRETS_KEY: ${SECRETS_KEY:-}
@@ -47,8 +49,14 @@ services:
     entrypoint: ["/worker"]
     environment:
       SECRETS_KEY: ${SECRETS_KEY:-}
+      UPLOAD_SCAN_KEY: ${UPLOAD_SCAN_KEY:-}
+      TEXT_SCANNER_URL: http://scanner:8080/scan
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
+      QBO_CLIENT_ID: ${QBO_CLIENT_ID:-}
+      QBO_CLIENT_SECRET: ${QBO_CLIENT_SECRET:-}
+      QBO_REDIRECT_URI: ${QBO_REDIRECT_URI:-}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
       DATABASE_URL: postgres://close:local-development-only@postgres:5432/close?sslmode=disable
     depends_on:
       postgres:

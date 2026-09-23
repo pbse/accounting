@@ -1,0 +1,187 @@
+package quickbooks
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	"close.local/backend/internal/secrets"
+)
+
+type syncClaim struct {
+	id, closeID, connectionID, period, realm, token string
+	attempts                                        int
+}
+
+func claimSync(ctx context.Context, db *sql.DB) (syncClaim, error) {
+	var job syncClaim
+	job.token = rand.Text()
+	if _, err := db.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET state='failed',claim=NULL,finished_at=now(),error='Transaction capture exhausted retries after a worker interruption' WHERE state='running' AND claimed_at<now()-interval '8 minutes' AND attempts>=3`); err != nil {
+		return job, err
+	}
+	err := db.QueryRowContext(ctx, `UPDATE quickbooks_entity_syncs s SET state='running',claim=$1,claimed_at=now(),started_at=COALESCE(started_at,now()),attempts=attempts+1,error=''
+ WHERE s.id=(SELECT id FROM quickbooks_entity_syncs WHERE attempts<3 AND ((state='queued' AND next_attempt_at<=now()) OR (state='running' AND claimed_at<now()-interval '8 minutes')) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
+ RETURNING s.id::text,s.close_id::text,s.connection_id::text,s.period,s.attempts`, job.token).Scan(&job.id, &job.closeID, &job.connectionID, &job.period, &job.attempts)
+	return job, err
+}
+
+func syncCredentials(ctx context.Context, db *sql.DB, job syncClaim) (string, string, error) {
+	var organization, realm, environment, state string
+	var encrypted []byte
+	var expires sql.NullTime
+	err := db.QueryRowContext(ctx, `SELECT x.organization_id,x.realm,x.environment,x.state,x.credential,x.access_expires_at
+ FROM quickbooks_connections x JOIN client_closes c ON c.id=$1 AND c.organization_id=x.organization_id AND lower(c.entity)=lower(x.client_entity) JOIN organizations o ON o.id=x.organization_id AND o.enabled
+ WHERE x.id=$2 AND c.period=$3`, job.closeID, job.connectionID, job.period).Scan(&organization, &realm, &environment, &state, &encrypted, &expires)
+	if err != nil || state != "active" || environment != "sandbox" || len(encrypted) == 0 {
+		return "", "", errors.New("Connected sandbox company or firm is no longer active")
+	}
+	aad := organization + "/qbo/" + job.connectionID
+	raw, err := secrets.Open(aad, encrypted)
+	var credentials Credentials
+	if err != nil || json.Unmarshal(raw, &credentials) != nil || credentials.Access == "" || credentials.Refresh == "" {
+		return "", "", errors.New("Encrypted QuickBooks credentials are unavailable")
+	}
+	if !expires.Valid || time.Until(expires.Time) < 2*time.Minute {
+		result, err := db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='refreshing',updated_at=now() WHERE id=$1 AND state='active' AND access_expires_at IS NOT DISTINCT FROM $2`, job.connectionID, expires)
+		if err != nil {
+			return "", "", err
+		}
+		n, _ := result.RowsAffected()
+		if n != 1 {
+			return "", "", errors.New("QuickBooks connection changed during refresh")
+		}
+		credentials, err = RefreshFor(ctx, environment, credentials.Refresh)
+		if err != nil {
+			_, _ = db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='reconnect_required',error='Token refresh did not complete; reconnect before syncing',updated_at=now() WHERE id=$1 AND state='refreshing'`, job.connectionID)
+			return "", "", errors.New("QuickBooks token refresh did not complete; reconnect")
+		}
+		raw, _ = json.Marshal(credentials)
+		encrypted, err = secrets.Seal(aad, raw)
+		if err == nil {
+			var saved sql.Result
+			saved, err = db.ExecContext(ctx, `UPDATE quickbooks_connections SET credential=$2,access_expires_at=$3,state='active',updated_at=now() WHERE id=$1 AND state='refreshing'`, job.connectionID, encrypted, time.Now().Add(time.Duration(credentials.Expires)*time.Second))
+			if err == nil {
+				var n int64
+				n, err = saved.RowsAffected()
+				if err == nil && n != 1 {
+					err = errors.New("QuickBooks connection changed during token refresh")
+				}
+			}
+		}
+		if err != nil {
+			_, _ = db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='reconnect_required',error='Rotated token could not be persisted; reconnect',updated_at=now() WHERE id=$1 AND state='refreshing'`, job.connectionID)
+			return "", "", errors.New("Rotated QuickBooks token could not be persisted; reconnect")
+		}
+	}
+	return realm, credentials.Access, nil
+}
+
+func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture EntityCapture) error {
+	raw, err := json.Marshal(capture)
+	if err != nil {
+		return err
+	}
+	if len(raw) > 12*1024*1024 {
+		return errors.New("Transaction capture exceeds the 12 MiB per-close limit")
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var canonical string
+	if err = tx.QueryRowContext(ctx, `SELECT $1::jsonb::text`, string(raw)).Scan(&canonical); err != nil {
+		return err
+	}
+	captureDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(canonical)))
+	index, _ := json.Marshal(map[string]any{"source": "quickbooks_transactions", "period": job.period, "counts": capture.Counts, "capture_digest": captureDigest})
+	if len(index) > 512*1024 {
+		return errors.New("Transaction evidence index exceeds the supported size")
+	}
+	var valid bool
+	err = tx.QueryRowContext(ctx, `SELECT s.state='running' AND s.claim=$2 AND c.period=s.period AND x.state='active' AND x.environment='sandbox' AND x.realm=$3 AND o.enabled
+ FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) JOIN organizations o ON o.id=c.organization_id WHERE s.id=$1 FOR UPDATE OF s,c,x`, job.id, job.token, job.realm).Scan(&valid)
+	if err != nil || !valid {
+		return errors.New("Connection, close, or job changed during transaction capture")
+	}
+	var sourceID string
+	digest := fmt.Sprintf("%x", sha256.Sum256(index))
+	err = tx.QueryRowContext(ctx, `SELECT id::text FROM evidence WHERE close_id=$1 AND digest=$2`, job.closeID, digest).Scan(&sourceID)
+	if err == sql.ErrNoRows {
+		var count, size int
+		err = tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, job.closeID).Scan(&count, &size)
+		if err != nil || count >= 100 || size+len(index) > 20*1024*1024 {
+			return errors.New("Close evidence capacity is full")
+		}
+		err = tx.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, job.closeID, "QuickBooks transactions "+job.period, digest, string(index), "quickbooks-sync").Scan(&sourceID)
+	}
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET state='completed',payload=$3,digest=$4,evidence_id=$5,finished_at=now(),claim=NULL,error='' WHERE id=$1 AND claim=$2 AND state='running'`, job.id, job.token, canonical, captureDigest, sourceID)
+	if err != nil {
+		return err
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return errors.New("Transaction sync claim expired")
+	}
+	return tx.Commit()
+}
+
+func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
+	job, err := claimSync(ctx, db)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	work, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	defer cancel()
+	realm, token, err := syncCredentials(work, db, job)
+	job.realm = realm
+	if err == nil {
+		var capture EntityCapture
+		capture, err = PeriodEntities(work, realm, token, job.period)
+		if err == nil {
+			err = completeSync(work, db, job, capture)
+		}
+	}
+	if err != nil {
+		state := "queued"
+		if job.attempts >= 3 {
+			state = "failed"
+		}
+		message := err.Error()
+		if len(message) > 400 {
+			message = message[:400]
+		}
+		_, saveErr := db.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET state=$3,error=$4,claim=NULL,next_attempt_at=now()+interval '5 minutes',finished_at=CASE WHEN $3='failed' THEN now() ELSE NULL END WHERE id=$1 AND claim=$2 AND state='running'`, job.id, job.token, state, message)
+		return true, saveErr
+	}
+	return true, nil
+}
+
+func RunSync(ctx context.Context, db *sql.DB) {
+	for ctx.Err() == nil {
+		worked, err := ProcessSync(ctx, db)
+		if err != nil && ctx.Err() == nil {
+			log.Print("Transaction sync worker could not update durable state")
+		}
+		if worked && err == nil {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+}

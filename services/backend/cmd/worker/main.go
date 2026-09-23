@@ -2,7 +2,9 @@ package main
 
 import (
 	"close.local/backend/internal/delivery"
+	"close.local/backend/internal/forwarded"
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/transport"
 	"context"
 	"database/sql"
@@ -27,5 +29,7 @@ func main() {
 	defer cancel()
 	go preparation.Run(ctx, db)
 	go delivery.Run(ctx, db)
+	go forwarded.Run(ctx, db)
+	go quickbooks.RunSync(ctx, db)
 	transport.Run(transport.Worker())
 }

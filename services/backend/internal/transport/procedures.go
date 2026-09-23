@@ -1,7 +1,9 @@
 package transport
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -10,7 +12,56 @@ import (
 	"close.local/backend/internal/preparation"
 )
 
+type procedureImpact struct {
+	VersionID    string          `json:"version_id"`
+	SourceID     string          `json:"source_id"`
+	Affected     json.RawMessage `json:"affected_drafts"`
+	ImpactDigest string          `json:"impact_digest"`
+}
+
+func readProcedureImpact(ctx context.Context, tx *sql.Tx, closeID, kind string) (procedureImpact, error) {
+	var out procedureImpact
+	p, err := preparation.CurrentProcedure(ctx, tx, closeID, kind)
+	if err != nil {
+		return out, err
+	}
+	out.VersionID = p.ID
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT e.id::text FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),'')`, closeID, kind).Scan(&out.SourceID)
+	if err != nil {
+		return out, err
+	}
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',w.id::text,'kind',w.kind,'review_state',w.review_state,'digest',w.digest) ORDER BY w.id),'[]'::jsonb) FROM workpaper_review_state w WHERE w.close_id::text=$1 AND w.kind=$2 AND $3<>'' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',$3::text))`, closeID, kind, out.SourceID).Scan(&out.Affected)
+	if err != nil {
+		return out, err
+	}
+	out.ImpactDigest = preparation.Digest([]byte(out.VersionID + "/" + out.SourceID + "/" + string(out.Affected)))
+	return out, nil
+}
+
 func registerProcedures(mux *http.ServeMux, db *sql.DB) {
+	mux.HandleFunc("GET /v1/closes/{id}/procedures/impact", func(w http.ResponseWriter, r *http.Request) {
+		kind := r.URL.Query().Get("kind")
+		if kind != "prepaid" && kind != "reconciliation" && kind != "accrual" {
+			problem(w, 422, "Choose supported work to preview.")
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			problem(w, 503, "Procedure impact unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		impact, err := readProcedureImpact(r.Context(), tx, r.PathValue("id"), kind)
+		if err == sql.ErrNoRows {
+			problem(w, 404, "No approved procedure for this work.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "Procedure impact unavailable.")
+			return
+		}
+		jsonReply(w, 200, impact)
+	})
 	mux.HandleFunc("GET /v1/closes/procedures", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) ORDER BY id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r))
 		if err != nil {
@@ -113,9 +164,10 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var in struct {
-			Kind      string `json:"kind"`
-			VersionID string `json:"version_id"`
-			Confirmed bool   `json:"confirmed"`
+			Kind         string `json:"kind"`
+			VersionID    string `json:"version_id"`
+			ImpactDigest string `json:"impact_digest"`
+			Confirmed    bool   `json:"confirmed"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -138,6 +190,11 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		p, err := preparation.CurrentProcedure(r.Context(), tx, closeID, in.Kind)
 		if err != nil || !p.Enabled || p.ID != in.VersionID {
 			problem(w, 409, "The effective procedure changed or is disabled. Refresh before applying it.")
+			return
+		}
+		impact, err := readProcedureImpact(r.Context(), tx, closeID, in.Kind)
+		if err != nil || in.ImpactDigest == "" || in.ImpactDigest != impact.ImpactDigest {
+			problem(w, 409, "Affected work changed. Refresh the impact preview before applying this procedure.")
 			return
 		}
 		source, err := preparation.AttachProcedure(r.Context(), tx, closeID, p, true, actor)

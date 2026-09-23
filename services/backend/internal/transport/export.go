@@ -72,7 +72,7 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 			return
 		}
 		defer tx.Rollback()
-		pack := closePackage{Version: "close_package_v2", Scope: "Saved prepaid, accrued-expense and statement-reconciliation work within the recorded supported scope. Includes uploaded originals, available PDF extraction, captured QuickBooks report JSON and request draft history. Captured reports are sequential reads, not independently verified current ledger state.", SignOff: "not signed off", Workpapers: []savedPaper{}}
+		pack := closePackage{Version: "close_package_v2", Scope: "Saved prepaid, accrued-expense and statement-reconciliation work within the recorded supported scope. Includes uploaded originals, available PDF extraction, captured QuickBooks report JSON, transaction capture digests and request draft history. Full transaction captures are separately downloadable from their close. Captured reports are sequential reads, not independently verified current ledger state.", SignOff: "not signed off", Workpapers: []savedPaper{}}
 		err = tx.QueryRowContext(ctx, `SELECT id::text,entity,period,transaction_timestamp() FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&pack.Close.ID, &pack.Close.Entity, &pack.Close.Period, &pack.DataCutAt)
 		if err == sql.ErrNoRows {
 			problem(w, 404, "Close not found.")
@@ -173,6 +173,9 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
             'requests',COALESCE((SELECT jsonb_agg(to_jsonb(q)||jsonb_build_object('body',d.body) ORDER BY q.id) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'::jsonb),
             'request_links',COALESCE((SELECT jsonb_agg(jsonb_build_object('request_id',l.request_id,'issued_by',l.issued_by,'issued_at',l.issued_at,'expires_at',l.expires_at,'revoked_at',l.revoked_at,'used_at',l.used_at) ORDER BY l.issued_at) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'::jsonb),
             'quickbooks_snapshots',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'actor',s.actor,'file','ledger/snapshot-'||s.id::text||'.json') ORDER BY s.id) FROM quickbooks_snapshots s WHERE s.close_id=$1),'[]'::jsonb),
+            'quickbooks_entity_syncs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'period',s.period,'state',s.state,'attempts',s.attempts,'digest',s.digest,'evidence_id',s.evidence_id::text,'counts',s.payload->'counts','created_at',s.created_at,'finished_at',s.finished_at) ORDER BY s.id) FROM quickbooks_entity_syncs s WHERE s.close_id=$1),'[]'::jsonb),
+            'forwarded_files',COALESCE((SELECT jsonb_agg(to_jsonb(f)-'body'-'claim' ORDER BY f.id) FROM forwarded_files f WHERE f.close_id=$1),'[]'::jsonb),
+            'forwarding_links',COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.issued_at) FROM forwarding_links l WHERE l.close_id=$1),'[]'::jsonb),
             'coverage_bindings',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=$1),'[]'),
             'request_targets',COALESCE((SELECT jsonb_agg(to_jsonb(t)) FROM work_request_targets t JOIN work_requests q ON q.id=t.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'),
             'client_attachments',COALESCE((SELECT jsonb_agg(to_jsonb(a)-'body'-'claim' ORDER BY a.id) FROM client_attachments a WHERE a.close_id=$1),'[]'),

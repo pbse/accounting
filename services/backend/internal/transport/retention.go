@@ -26,20 +26,22 @@ func canManageData(r *http.Request) bool {
 
 func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retentionStatus, error) {
 	out := retentionStatus{Blockers: []string{}}
-	var due, jobs, postings, mail, links, attachments, connection, grants, shared, unmapped bool
+	var due, jobs, syncs, postings, mail, links, attachments, forwarding, connection, grants, shared, unmapped bool
 	err := tx.QueryRowContext(ctx, `SELECT COALESCE(c.retain_until::text,''),c.legal_hold,c.retention_version,COALESCE(c.retain_until<=CURRENT_DATE,false),
  EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id AND j.state IN ('queued','waiting_evidence','interpreting','needs_confirmation','waiting_client')),
+ EXISTS(SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('queued','running')),
  EXISTS(SELECT 1 FROM sandbox_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')),
  EXISTS(SELECT 1 FROM email_outbox m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND m.state IN ('queued','sending','unknown')),
  EXISTS(SELECT 1 FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now()),
  EXISTS(SELECT 1 FROM client_attachments a WHERE a.close_id=c.id AND a.state NOT IN ('released','rejected')),
+ EXISTS(SELECT 1 FROM forwarding_links l WHERE l.close_id=c.id AND l.revoked_at IS NULL AND l.expires_at>now()) OR EXISTS(SELECT 1 FROM forwarded_files f WHERE f.close_id=c.id AND f.state NOT IN ('released','rejected')),
  EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.close_id=c.id AND x.state<>'disconnected'),
  EXISTS(SELECT 1 FROM production_posting_grants g JOIN quickbooks_connections x ON x.id=g.connection_id WHERE x.close_id=c.id AND g.revoked_at IS NULL),
- EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.close_id=c.id AND (EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.connection_id=x.id AND s.close_id<>c.id) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.connection_id=x.id AND p.close_id<>c.id))),
+ EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.close_id=c.id AND (EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.connection_id=x.id AND s.close_id<>c.id) OR EXISTS(SELECT 1 FROM quickbooks_entity_syncs q WHERE q.connection_id=x.id AND q.close_id<>c.id) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.connection_id=x.id AND p.close_id<>c.id))),
  EXISTS(SELECT 1 FROM email_delivery_events e JOIN email_outbox m ON m.connection_id=e.connection_id AND m.provider_id=e.provider_id
   JOIN work_requests q ON q.id=m.request_id AND lower(q.recipient)=lower(e.recipient)
   JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND e.close_id IS NULL)
- FROM client_closes c WHERE c.id::text=$1 AND c.organization_id=$2`, closeID, org).Scan(&out.RetainUntil, &out.LegalHold, &out.Version, &due, &jobs, &postings, &mail, &links, &attachments, &connection, &grants, &shared, &unmapped)
+ FROM client_closes c WHERE c.id::text=$1 AND c.organization_id=$2`, closeID, org).Scan(&out.RetainUntil, &out.LegalHold, &out.Version, &due, &jobs, &syncs, &postings, &mail, &links, &attachments, &forwarding, &connection, &grants, &shared, &unmapped)
 	if err != nil {
 		return out, err
 	}
@@ -56,10 +58,12 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
 		message string
 	}{
 		{jobs, "Preparation or client follow-up work remains active."},
+		{syncs, "A QuickBooks transaction refresh remains active."},
 		{postings, "A posting attempt needs canonical resolution."},
 		{mail, "Email delivery has an in-flight or unknown outcome."},
 		{links, "An active client request link must expire or be revoked."},
 		{attachments, "A client attachment still needs scanning or disposition."},
+		{forwarding, "A forwarded evidence address or attachment remains active."},
 		{connection, "Disconnect QuickBooks connections opened from this close."},
 		{grants, "Revoke production posting grants opened from this close."},
 		{shared, "A QuickBooks connection opened here is used by another close."},
@@ -188,7 +192,10 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM production_postings WHERE close_id=$1`,
 			`DELETE FROM sandbox_postings WHERE close_id=$1`,
 			`DELETE FROM workpapers WHERE close_id=$1`,
+			`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`,
 			`DELETE FROM quickbooks_snapshots WHERE close_id=$1`,
+			`DELETE FROM forwarded_files WHERE close_id=$1`,
+			`DELETE FROM forwarding_links WHERE close_id=$1`,
 			`DELETE FROM production_posting_grants WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
 			`DELETE FROM quickbooks_connections WHERE close_id=$1`,
 			`DELETE FROM client_attachments WHERE close_id=$1`,

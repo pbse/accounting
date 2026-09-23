@@ -12,21 +12,68 @@ import (
 )
 
 type Input struct {
-	Entity             string `json:"entity"`
-	Account            string `json:"account"`
-	ClosePeriod        string `json:"close_period"`
-	Currency           string `json:"currency"`
-	StatementReference string `json:"statement_reference"`
-	LedgerReference    string `json:"ledger_reference"`
-	ExpectedPages      int    `json:"expected_pages"`
-	Pages              []int  `json:"pages"`
-	StatementOpening   string `json:"statement_opening"`
-	StatementClosing   string `json:"statement_closing"`
-	LedgerOpening      string `json:"ledger_opening"`
-	LedgerClosing      string `json:"ledger_closing"`
-	StatementCSV       string `json:"statement_csv"`
-	LedgerCSV          string `json:"ledger_csv"`
-	PolicyConfirmed    bool   `json:"policy_confirmed"`
+	Entity             string          `json:"entity"`
+	Account            string          `json:"account"`
+	ClosePeriod        string          `json:"close_period"`
+	Currency           string          `json:"currency"`
+	StatementReference string          `json:"statement_reference"`
+	LedgerReference    string          `json:"ledger_reference"`
+	ExpectedPages      int             `json:"expected_pages"`
+	Pages              []int           `json:"pages"`
+	StatementOpening   string          `json:"statement_opening"`
+	StatementClosing   string          `json:"statement_closing"`
+	LedgerOpening      string          `json:"ledger_opening"`
+	LedgerClosing      string          `json:"ledger_closing"`
+	StatementCSV       string          `json:"statement_csv"`
+	LedgerCSV          string          `json:"ledger_csv"`
+	PolicyConfirmed    bool            `json:"policy_confirmed"`
+	ReviewedMatches    []ReviewedMatch `json:"reviewed_matches,omitempty"`
+	PriorOutstanding   []PriorItem     `json:"prior_outstanding,omitempty"`
+	CurrentOutstanding []CurrentItem   `json:"current_outstanding,omitempty"`
+	Transfers          []TransferPair  `json:"transfers,omitempty"`
+	OtherAccount       string          `json:"other_account,omitempty"`
+	OtherStatementCSV  string          `json:"other_statement_csv,omitempty"`
+	OtherLedgerCSV     string          `json:"other_ledger_csv,omitempty"`
+	OtherStatementRef  string          `json:"other_statement_reference,omitempty"`
+	OtherLedgerRef     string          `json:"other_ledger_reference,omitempty"`
+	NativeStatus       string          `json:"native_status,omitempty"`
+	NativeStatusRef    string          `json:"native_status_reference,omitempty"`
+}
+type PriorItem struct {
+	Side            string `json:"side"`
+	ID              string `json:"id"`
+	Amount          string `json:"amount"`
+	SourceReference string `json:"source_reference"`
+	PolicyReference string `json:"policy_reference"`
+	ClearedBy       string `json:"cleared_by,omitempty"`
+	Reason          string `json:"reason"`
+}
+type CurrentItem struct {
+	Side            string `json:"side"`
+	ID              string `json:"id"`
+	PolicyReference string `json:"policy_reference"`
+	Reason          string `json:"reason"`
+}
+type TransferPair struct {
+	StatementID      string `json:"statement_id"`
+	LedgerID         string `json:"ledger_id"`
+	OtherStatementID string `json:"other_statement_id"`
+	OtherLedgerID    string `json:"other_ledger_id"`
+	PolicyReference  string `json:"policy_reference"`
+	Reason           string `json:"reason"`
+}
+type ReviewedMatch struct {
+	StatementIDs    []string `json:"statement_ids"`
+	LedgerIDs       []string `json:"ledger_ids"`
+	Method          string   `json:"method"`
+	Reason          string   `json:"reason"`
+	PolicyReference string   `json:"policy_reference,omitempty"`
+	DateWindowDays  int      `json:"date_window_days,omitempty"`
+	AmountTolerance string   `json:"amount_tolerance,omitempty"`
+}
+type ConfirmedMatch struct {
+	ReviewedMatch
+	AmountDifference string `json:"amount_difference"`
 }
 type Line struct {
 	ID     string `json:"id"`
@@ -49,18 +96,21 @@ type Exception struct {
 	Question        string     `json:"question"`
 }
 type Workpaper struct {
-	Status                         string      `json:"status"`
-	Method                         string      `json:"method"`
-	Input                          Input       `json:"input"`
-	Matches                        []Match     `json:"matches"`
-	UnmatchedStatement             []Line      `json:"unmatched_statement"`
-	UnmatchedLedger                []Line      `json:"unmatched_ledger"`
-	Exceptions                     []Exception `json:"exceptions"`
-	Blockers                       []string    `json:"blockers"`
-	StatementRollForwardDifference string      `json:"statement_roll_forward_difference"`
-	LedgerRollForwardDifference    string      `json:"ledger_roll_forward_difference"`
-	OpeningDifference              string      `json:"opening_difference"`
-	ClosingDifference              string      `json:"closing_difference"`
+	Status                         string           `json:"status"`
+	Method                         string           `json:"method"`
+	Input                          Input            `json:"input"`
+	Matches                        []Match          `json:"matches"`
+	ReviewedMatches                []ConfirmedMatch `json:"reviewed_matches"`
+	UnmatchedStatement             []Line           `json:"unmatched_statement"`
+	UnmatchedLedger                []Line           `json:"unmatched_ledger"`
+	Exceptions                     []Exception      `json:"exceptions"`
+	Blockers                       []string         `json:"blockers"`
+	StatementRollForwardDifference string           `json:"statement_roll_forward_difference"`
+	LedgerRollForwardDifference    string           `json:"ledger_roll_forward_difference"`
+	OpeningDifference              string           `json:"opening_difference"`
+	ClosingDifference              string           `json:"closing_difference"`
+	OpeningBridgeDifference        string           `json:"opening_bridge_difference"`
+	ClosingBridgeDifference        string           `json:"closing_bridge_difference"`
 }
 
 var amountPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$`)
@@ -125,8 +175,210 @@ func lines(source, period string) ([]Line, int64, error) {
 	}
 	return result, total, nil
 }
+
+func reviewMatches(input []ReviewedMatch, statement, ledger []Line) ([]ConfirmedMatch, map[string]bool, map[string]bool, error) {
+	selected := []ConfirmedMatch{}
+	usedStatement, usedLedger := map[string]bool{}, map[string]bool{}
+	byStatement, byLedger := map[string]Line{}, map[string]Line{}
+	for _, row := range statement {
+		byStatement[row.ID] = row
+	}
+	for _, row := range ledger {
+		byLedger[row.ID] = row
+	}
+	if len(input) > 100 {
+		return nil, nil, nil, fmt.Errorf("Review at most 100 match groups per workpaper.")
+	}
+	for _, match := range input {
+		if len(match.StatementIDs) < 1 || len(match.StatementIDs) > 5 || len(match.LedgerIDs) < 1 || len(match.LedgerIDs) > 5 || len(strings.TrimSpace(match.Reason)) < 5 || len(match.Reason) > 500 {
+			return nil, nil, nil, fmt.Errorf("Each reviewed match needs 1–5 IDs per side and a 5–500 character reason.")
+		}
+		if match.Method != "exact" && match.Method != "tolerance" {
+			return nil, nil, nil, fmt.Errorf("Choose an exact or accountant-approved tolerance method.")
+		}
+		var tolerance int64
+		if match.Method == "tolerance" {
+			var err error
+			tolerance, err = cents(match.AmountTolerance)
+			if err != nil || tolerance < 0 || tolerance > 99999 || match.DateWindowDays < 0 || match.DateWindowDays > 31 || (tolerance == 0 && match.DateWindowDays == 0) || len(strings.TrimSpace(match.PolicyReference)) < 5 || len(match.PolicyReference) > 200 {
+				return nil, nil, nil, fmt.Errorf("Tolerance needs an approved rule reference, a date window of at most 31 days and an amount ceiling of at most $999.99.")
+			}
+		} else if match.DateWindowDays != 0 || match.AmountTolerance != "" || match.PolicyReference != "" {
+			return nil, nil, nil, fmt.Errorf("Exact matching cannot carry tolerance settings.")
+		}
+		var statementTotal, ledgerTotal int64
+		var first, last time.Time
+		var sign int64
+		for _, side := range []struct {
+			ids   []string
+			rows  map[string]Line
+			used  map[string]bool
+			total *int64
+		}{{match.StatementIDs, byStatement, usedStatement, &statementTotal}, {match.LedgerIDs, byLedger, usedLedger, &ledgerTotal}} {
+			for _, id := range side.ids {
+				row, ok := side.rows[id]
+				if !ok || side.used[id] {
+					return nil, nil, nil, fmt.Errorf("A reviewed ID is missing or selected more than once. Refresh both sources.")
+				}
+				side.used[id] = true
+				amount, _ := cents(row.Amount)
+				if amount == 0 || (sign != 0 && (amount > 0) != (sign > 0)) {
+					return nil, nil, nil, fmt.Errorf("Reviewed groups must use one nonzero cash direction. Inspect transfers separately.")
+				}
+				sign = amount
+				*side.total += amount
+				date, _ := time.Parse("2006-01-02", row.Date)
+				if first.IsZero() || date.Before(first) {
+					first = date
+				}
+				if last.IsZero() || date.After(last) {
+					last = date
+				}
+			}
+		}
+		difference := statementTotal - ledgerTotal
+		if difference < 0 {
+			difference = -difference
+		}
+		if difference > tolerance || int(last.Sub(first).Hours()/24) > match.DateWindowDays {
+			return nil, nil, nil, fmt.Errorf("Reviewed group exceeds its exact or approved tolerance limits.")
+		}
+		selected = append(selected, ConfirmedMatch{match, money(statementTotal - ledgerTotal)})
+	}
+	return selected, usedStatement, usedLedger, nil
+}
+func reviewTiming(input Input, statement, ledger []Line, usedStatement, usedLedger map[string]bool) (int64, int64, error) {
+	if len(input.PriorOutstanding)+len(input.CurrentOutstanding)+len(input.Transfers) > 100 {
+		return 0, 0, fmt.Errorf("Review at most 100 outstanding items and transfers per workpaper.")
+	}
+	statementRows, ledgerRows := map[string]Line{}, map[string]Line{}
+	for _, row := range statement {
+		statementRows[row.ID] = row
+	}
+	for _, row := range ledger {
+		ledgerRows[row.ID] = row
+	}
+	choose := func(side, id string) (Line, error) {
+		rows, used := statementRows, usedStatement
+		if side == "ledger" {
+			rows, used = ledgerRows, usedLedger
+		} else if side != "statement" {
+			return Line{}, fmt.Errorf("Choose statement or ledger for each outstanding item.")
+		}
+		row, ok := rows[id]
+		if !ok || used[id] {
+			return Line{}, fmt.Errorf("A reviewed outstanding or transfer ID is missing or already selected. Refresh the sources.")
+		}
+		used[id] = true
+		return row, nil
+	}
+	var opening, closing int64
+	priorIDs := map[string]bool{}
+	for _, item := range input.PriorOutstanding {
+		amount, err := cents(item.Amount)
+		if err != nil || amount == 0 || (item.Side != "statement" && item.Side != "ledger") || strings.TrimSpace(item.ID) == "" || priorIDs[item.Side+"/"+item.ID] || len(strings.TrimSpace(item.SourceReference)) < 5 || len(item.SourceReference) > 200 || len(strings.TrimSpace(item.PolicyReference)) < 5 || len(item.PolicyReference) > 200 || len(strings.TrimSpace(item.Reason)) < 5 || len(item.Reason) > 500 {
+			return 0, 0, fmt.Errorf("Each prior item needs a unique ID, signed amount, cited source, approved rule and reviewer reason.")
+		}
+		priorIDs[item.Side+"/"+item.ID] = true
+		if item.Side == "statement" {
+			amount = -amount
+		}
+		opening += amount
+		if item.ClearedBy == "" {
+			closing += amount
+			continue
+		}
+		clearingSide := "statement"
+		if item.Side == "statement" {
+			clearingSide = "ledger"
+		}
+		row, err := choose(clearingSide, item.ClearedBy)
+		if err != nil {
+			return 0, 0, err
+		}
+		clearingAmount, _ := cents(row.Amount)
+		original, _ := cents(item.Amount)
+		if clearingAmount != original {
+			return 0, 0, fmt.Errorf("Prior item clearing row must have the same signed amount as the cited prior item.")
+		}
+	}
+	for _, item := range input.CurrentOutstanding {
+		if len(strings.TrimSpace(item.PolicyReference)) < 5 || len(item.PolicyReference) > 200 || len(strings.TrimSpace(item.Reason)) < 5 || len(item.Reason) > 500 {
+			return 0, 0, fmt.Errorf("Each current outstanding item needs an approved rule reference and reviewer reason.")
+		}
+		row, err := choose(item.Side, item.ID)
+		if err != nil {
+			return 0, 0, err
+		}
+		amount, _ := cents(row.Amount)
+		if amount == 0 {
+			return 0, 0, fmt.Errorf("A zero-amount row cannot be classified as outstanding.")
+		}
+		if item.Side == "statement" {
+			amount = -amount
+		}
+		closing += amount
+	}
+	if len(input.Transfers) > 0 {
+		if strings.TrimSpace(input.OtherAccount) == "" || strings.EqualFold(strings.TrimSpace(input.OtherAccount), strings.TrimSpace(input.Account)) || len(input.OtherAccount) > 200 || len(strings.TrimSpace(input.OtherStatementRef)) < 5 || len(input.OtherStatementRef) > 200 || len(strings.TrimSpace(input.OtherLedgerRef)) < 5 || len(input.OtherLedgerRef) > 200 {
+			return 0, 0, fmt.Errorf("Transfers need a different account and both of its source references.")
+		}
+		otherStatement, _, err := lines(input.OtherStatementCSV, input.ClosePeriod)
+		if err != nil {
+			return 0, 0, fmt.Errorf("Other account statement: %w", err)
+		}
+		otherLedger, _, err := lines(input.OtherLedgerCSV, input.ClosePeriod)
+		if err != nil {
+			return 0, 0, fmt.Errorf("Other account ledger: %w", err)
+		}
+		otherS, otherL := map[string]Line{}, map[string]Line{}
+		for _, row := range otherStatement {
+			otherS[row.ID] = row
+		}
+		for _, row := range otherLedger {
+			otherL[row.ID] = row
+		}
+		usedOtherS, usedOtherL := map[string]bool{}, map[string]bool{}
+		for _, pair := range input.Transfers {
+			if len(strings.TrimSpace(pair.PolicyReference)) < 5 || len(pair.PolicyReference) > 200 || len(strings.TrimSpace(pair.Reason)) < 5 || len(pair.Reason) > 500 {
+				return 0, 0, fmt.Errorf("Transfer pairs need an approved rule reference and reviewer reason.")
+			}
+			if usedOtherS[pair.OtherStatementID] || usedOtherL[pair.OtherLedgerID] {
+				return 0, 0, fmt.Errorf("A counterpart transfer row was selected more than once.")
+			}
+			os, okS := otherS[pair.OtherStatementID]
+			ol, okL := otherL[pair.OtherLedgerID]
+			if !okS || !okL {
+				return 0, 0, fmt.Errorf("Transfer pair needs both counterpart statement and ledger rows.")
+			}
+			currentS, err := choose("statement", pair.StatementID)
+			if err != nil {
+				return 0, 0, err
+			}
+			currentL, err := choose("ledger", pair.LedgerID)
+			if err != nil {
+				return 0, 0, err
+			}
+			a, _ := cents(currentS.Amount)
+			b, _ := cents(currentL.Amount)
+			c, _ := cents(os.Amount)
+			d, _ := cents(ol.Amount)
+			if a == 0 || a != b || a != -c || c != d {
+				return 0, 0, fmt.Errorf("All four transfer rows must carry the same absolute amount with opposite account signs.")
+			}
+			usedOtherS[pair.OtherStatementID], usedOtherL[pair.OtherLedgerID] = true, true
+		}
+	}
+	if input.NativeStatus != "" && input.NativeStatus != "unverified" && input.NativeStatus != "reconciled" && input.NativeStatus != "unreconciled" {
+		return 0, 0, fmt.Errorf("Choose a valid native reconciliation status.")
+	}
+	if input.NativeStatus != "" && input.NativeStatus != "unverified" && (len(strings.TrimSpace(input.NativeStatusRef)) < 5 || len(input.NativeStatusRef) > 200) {
+		return 0, 0, fmt.Errorf("Cite the source for the observed native reconciliation status.")
+	}
+	return opening, closing, nil
+}
 func Prepare(input Input) (Workpaper, error) {
-	result := Workpaper{Status: "draft", Method: "exact_bank_month_v1", Input: input, Matches: []Match{}, UnmatchedStatement: []Line{}, UnmatchedLedger: []Line{}, Exceptions: []Exception{}, Blockers: []string{}}
+	result := Workpaper{Status: "draft", Method: "exact_bank_month_v1", Input: input, Matches: []Match{}, ReviewedMatches: []ConfirmedMatch{}, UnmatchedStatement: []Line{}, UnmatchedLedger: []Line{}, Exceptions: []Exception{}, Blockers: []string{}}
 	fail := func(message string) (Workpaper, error) { return Workpaper{}, fmt.Errorf("%s", message) }
 	for _, value := range []string{input.Entity, input.Account, input.StatementReference, input.LedgerReference} {
 		if strings.TrimSpace(value) == "" || len(value) > 200 {
@@ -170,39 +422,63 @@ func Prepare(input Input) (Workpaper, error) {
 	if err != nil {
 		return fail("Ledger: " + err.Error())
 	}
+	confirmed, usedStatement, usedLedger, err := reviewMatches(input.ReviewedMatches, statement, ledger)
+	if err != nil {
+		return fail(err.Error())
+	}
+	result.ReviewedMatches = confirmed
+	for _, match := range confirmed {
+		if match.AmountDifference != "0.00" {
+			result.Blockers = append(result.Blockers, "A reviewed tolerance group still has a signed amount difference; investigate or prepare an authorized correction.")
+		}
+	}
+	openingItems, closingItems, err := reviewTiming(input, statement, ledger, usedStatement, usedLedger)
+	if err != nil {
+		return fail(err.Error())
+	}
 	sd := balances[0] + stotal - balances[1]
 	ld := balances[2] + ltotal - balances[3]
 	result.StatementRollForwardDifference = money(sd)
 	result.LedgerRollForwardDifference = money(ld)
 	result.OpeningDifference = money(balances[0] - balances[2])
 	result.ClosingDifference = money(balances[1] - balances[3])
+	result.OpeningBridgeDifference = money(balances[0] + openingItems - balances[2])
+	result.ClosingBridgeDifference = money(balances[1] + closingItems - balances[3])
 	if sd != 0 {
 		result.Blockers = append(result.Blockers, "Statement opening balance plus imported movement does not equal its closing balance.")
 	}
 	if ld != 0 {
 		result.Blockers = append(result.Blockers, "Ledger opening balance plus imported movement does not equal its closing balance.")
 	}
-	if balances[0] != balances[2] {
-		result.Blockers = append(result.Blockers, "Opening balances differ; prior-period outstanding items require review.")
+	if balances[0]+openingItems != balances[2] {
+		result.Blockers = append(result.Blockers, "Opening bridge does not tie; inspect cited prior outstanding items.")
 	}
-	if balances[1] != balances[3] {
-		result.Blockers = append(result.Blockers, "Closing balances differ; investigate unmatched items and timing differences.")
+	if balances[1]+closingItems != balances[3] {
+		result.Blockers = append(result.Blockers, "Closing bridge does not tie; inspect current and uncleared prior items.")
 	}
 	key := func(line Line) string { return line.Date + "/" + line.Amount }
 	scount := map[string]int{}
 	lcount := map[string]int{}
 	lindex := map[string]Line{}
 	for _, line := range statement {
+		if usedStatement[line.ID] {
+			continue
+		}
 		scount[key(line)]++
 	}
 	for _, line := range ledger {
+		if usedLedger[line.ID] {
+			continue
+		}
 		lcount[key(line)]++
 		lindex[key(line)] = line
 	}
 	used := map[string]bool{}
 	for _, line := range statement {
+		if usedStatement[line.ID] {
+			continue
+		}
 		k := key(line)
-		// ponytail: unique exact candidates only; grouping and date tolerances need a separately confirmed policy.
 		if scount[k] == 1 && lcount[k] == 1 {
 			peer := lindex[k]
 			result.Matches = append(result.Matches, Match{line.ID, peer.ID, "Unique same-date, same signed amount; candidate requires review."})
@@ -212,7 +488,7 @@ func Prepare(input Input) (Workpaper, error) {
 		}
 	}
 	for _, line := range ledger {
-		if !used[line.ID] {
+		if !used[line.ID] && !usedLedger[line.ID] {
 			result.UnmatchedLedger = append(result.UnmatchedLedger, line)
 		}
 	}
