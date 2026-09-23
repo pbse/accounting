@@ -26,7 +26,7 @@ export type ReconciliationWorkpaper = {
   exceptions?: {
     side: "statement" | "ledger";
     id: string;
-    kind: "ambiguous_exact" | "same_amount_other_date" | "same_date_other_amount" | "no_counterpart";
+    kind: "ambiguous_exact" | "same_id_different_detail" | "same_amount_other_date" | "opposite_sign" | "same_date_other_amount" | "no_counterpart";
     candidate_ids: string[];
     candidate_count: number;
     question: string;

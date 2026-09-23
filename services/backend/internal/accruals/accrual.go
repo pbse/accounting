@@ -8,32 +8,38 @@ import (
 )
 
 const Method = "fixed_incurred_amount_v1"
+const ActualMethod = "actual_invoice_true_up_v1"
 
 type Input struct {
-	Entity            string `json:"entity"`
-	SourceReference   string `json:"source_reference"`
-	ClosePeriod       string `json:"close_period"`
-	ServiceStart      string `json:"service_start"`
-	ServiceEnd        string `json:"service_end"`
-	Amount            string `json:"amount"`
-	BookedBalance     string `json:"booked_balance"`
-	BookingReference  string `json:"booking_reference"`
-	EstimationBasis   string `json:"estimation_basis"`
-	ExpenseAccount    string `json:"expense_account"`
-	LiabilityAccount  string `json:"liability_account"`
-	Currency          string `json:"currency"`
-	Basis             string `json:"basis"`
-	Method            string `json:"method"`
-	MethodConfirmed   bool   `json:"method_confirmed"`
-	BookingConfirmed  bool   `json:"booking_confirmed"`
-	ExamplesConfirmed bool   `json:"examples_confirmed"`
-	ReverseNextMonth  bool   `json:"reverse_next_month"`
+	Entity                  string `json:"entity"`
+	SourceReference         string `json:"source_reference"`
+	ClosePeriod             string `json:"close_period"`
+	ServiceStart            string `json:"service_start"`
+	ServiceEnd              string `json:"service_end"`
+	Amount                  string `json:"amount"`
+	BookedBalance           string `json:"booked_balance"`
+	BookingReference        string `json:"booking_reference"`
+	EstimationBasis         string `json:"estimation_basis"`
+	EstimateAmount          string `json:"estimate_amount,omitempty"`
+	EstimateReference       string `json:"estimate_reference,omitempty"`
+	ActualReference         string `json:"actual_reference,omitempty"`
+	AccountantRuleReference string `json:"accountant_rule_reference,omitempty"`
+	ExpenseAccount          string `json:"expense_account"`
+	LiabilityAccount        string `json:"liability_account"`
+	Currency                string `json:"currency"`
+	Basis                   string `json:"basis"`
+	Method                  string `json:"method"`
+	MethodConfirmed         bool   `json:"method_confirmed"`
+	BookingConfirmed        bool   `json:"booking_confirmed"`
+	ExamplesConfirmed       bool   `json:"examples_confirmed"`
+	ReverseNextMonth        bool   `json:"reverse_next_month"`
 }
 type Workpaper struct {
-	Status   string               `json:"status"`
-	Input    Input                `json:"input"`
-	Proposal *prepaids.Adjustment `json:"proposal"`
-	Reversal *prepaids.Adjustment `json:"reversal"`
+	Status           string               `json:"status"`
+	Input            Input                `json:"input"`
+	Proposal         *prepaids.Adjustment `json:"proposal"`
+	Reversal         *prepaids.Adjustment `json:"reversal"`
+	EstimateVariance string               `json:"estimate_variance,omitempty"`
 }
 
 func Prepare(in Input) (Workpaper, error) {
@@ -47,8 +53,8 @@ func Prepare(in Input) (Workpaper, error) {
 	if strings.EqualFold(in.ExpenseAccount, in.LiabilityAccount) {
 		return empty, fmt.Errorf("Expense and liability accounts must differ")
 	}
-	if in.Method != Method || in.Currency != "USD" || in.Basis != "accrual" || !in.MethodConfirmed || !in.BookingConfirmed || !in.ExamplesConfirmed {
-		return empty, fmt.Errorf("Select the fixed incurred-amount method; confirm USD accrual, supporting evidence, booked liability, synthetic examples and the explicit reversal choice")
+	if (in.Method != Method && in.Method != ActualMethod) || in.Currency != "USD" || in.Basis != "accrual" || !in.MethodConfirmed || !in.BookingConfirmed || !in.ExamplesConfirmed {
+		return empty, fmt.Errorf("Select and confirm a supported USD accrual method, booked liability, synthetic examples and reversal choice")
 	}
 	period, err := time.Parse("2006-01", in.ClosePeriod)
 	if err != nil || period.Year() < 1000 || period.Year() > 9998 {
@@ -70,6 +76,23 @@ func Prepare(in Input) (Workpaper, error) {
 	in.Amount = prepaids.Money(amount)
 	in.BookedBalance = prepaids.Money(booked)
 	result := Workpaper{Status: "draft", Input: in}
+	if in.Method == ActualMethod {
+		in.EstimateReference, in.ActualReference, in.AccountantRuleReference = strings.TrimSpace(in.EstimateReference), strings.TrimSpace(in.ActualReference), strings.TrimSpace(in.AccountantRuleReference)
+		estimate, estimateErr := prepaids.Amount(in.EstimateAmount)
+		if estimateErr != nil || estimate == 0 || in.EstimateReference == "" || len(in.EstimateReference) > 200 || in.ActualReference == "" || len(in.ActualReference) > 200 || in.EstimateReference == in.ActualReference || in.AccountantRuleReference == "" || len(in.AccountantRuleReference) > 200 {
+			return empty, fmt.Errorf("Cite a distinct prior estimate, actual invoice, client accountant-approved rule, and positive estimate amount")
+		}
+		in.EstimateAmount = prepaids.Money(estimate)
+		variance := amount - estimate
+		if variance < 0 {
+			result.EstimateVariance = "-" + prepaids.Money(-variance)
+		} else {
+			result.EstimateVariance = prepaids.Money(variance)
+		}
+	} else if in.EstimateAmount != "" || in.EstimateReference != "" || in.ActualReference != "" || in.AccountantRuleReference != "" {
+		return empty, fmt.Errorf("Estimate-to-actual references require the actual invoice true-up method")
+	}
+	result.Input = in
 	delta := amount - booked
 	if delta != 0 {
 		debit, credit := in.ExpenseAccount, in.LiabilityAccount

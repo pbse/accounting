@@ -28,3 +28,20 @@ func TestFixedAccrualDifferenceAndReversal(t *testing.T) {
 		t.Fatal("unconfirmed method accepted")
 	}
 }
+
+func TestActualInvoiceLinksEstimateAndOnlyReversesNewDifference(t *testing.T) {
+	in := Input{Entity: "Synthetic", SourceReference: "Actual invoice", ClosePeriod: "2026-09", ServiceStart: "2026-09-01", ServiceEnd: "2026-09-30", Amount: "1250.00", BookedBalance: "1200.00", BookingReference: "Liability ledger", EstimationBasis: "Actual invoice confirmed incurred", ExpenseAccount: "Consulting expense", LiabilityAccount: "Accrued liabilities", Currency: "USD", Basis: "accrual", Method: ActualMethod, MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true, ReverseNextMonth: true, EstimateAmount: "1200.00", EstimateReference: "Approved estimate #12", ActualReference: "Invoice #18", AccountantRuleReference: "Client accountant rule v2"}
+	p, err := Prepare(in)
+	if err != nil || p.EstimateVariance != "50.00" || p.Proposal == nil || p.Proposal.Amount != "50.00" || p.Reversal == nil || p.Reversal.Amount != "50.00" {
+		t.Fatalf("actual true-up: %+v %v", p, err)
+	}
+	in.BookedBalance = "1250.00"
+	p, err = Prepare(in)
+	if err != nil || p.Proposal != nil || p.Reversal != nil {
+		t.Fatalf("already booked actual proposed twice: %+v %v", p, err)
+	}
+	in.AccountantRuleReference = ""
+	if _, err = Prepare(in); err == nil {
+		t.Fatal("unapproved method accepted")
+	}
+}

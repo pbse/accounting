@@ -40,3 +40,10 @@ func TestInvestigationHintsKeepAmbiguousRowsUnmatched(t *testing.T) {
 		t.Fatalf("missing hints: %v", want)
 	}
 }
+
+func TestInvestigationFlagsIDAndOppositeSignWithoutMatching(t *testing.T) {
+	got := investigate("statement", []Line{{"shared", "2026-09-02", "10.00"}, {"reverse", "2026-09-03", "5.00"}}, []Line{{"shared", "2026-09-04", "11.00"}, {"other", "2026-09-05", "-5.00"}})
+	if len(got) != 2 || got[0].Kind != "same_id_different_detail" || got[1].Kind != "opposite_sign" || got[0].CandidateIDs[0] != "shared" || got[1].CandidateIDs[0] != "other" {
+		t.Fatalf("lost reconciliation investigation hints: %+v", got)
+	}
+}

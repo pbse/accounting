@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -49,7 +50,7 @@ func ValidateCarry(ctx context.Context, tx *sql.Tx, p Plan, targetID, entity, pe
 	expected.ExamplesConfirmed = false
 	expected.MethodConfirmed = false
 	expected.BookingConfirmed = false
-	if input != expected || c.OpeningBalance != prior.PrepaidBalance || len(prior.Sources) == 0 || len(prior.Sources) != len(p.Sources) || len(c.SourceIDs) != len(p.Sources) {
+	if !reflect.DeepEqual(input, expected) || c.OpeningBalance != prior.PrepaidBalance || len(prior.Sources) == 0 || len(prior.Sources) != len(p.Sources) || len(c.SourceIDs) != len(p.Sources) {
 		return fmt.Errorf("Carry-forward no longer matches the reviewed schedule.")
 	}
 	for i, s := range p.Sources {

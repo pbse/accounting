@@ -13,29 +13,38 @@ const DailyMethod = "actual_days_v1"
 const FullRefundCancellation = "full_refund_month_boundary_v1"
 const NoRefundCancellation = "no_refund_month_boundary_v1"
 
+type Credit struct {
+	Amount          string `json:"amount"`
+	EffectivePeriod string `json:"effective_period"`
+	RecordedPeriod  string `json:"recorded_period"`
+	Reference       string `json:"reference"`
+}
+
 type Input struct {
-	ExamplesConfirmed     bool   `json:"examples_confirmed,omitempty"`
-	CreditAmount          string `json:"credit_amount,omitempty"`
-	CreditPeriod          string `json:"credit_period,omitempty"`
-	CreditReference       string `json:"credit_reference,omitempty"`
-	CancellationMethod    string `json:"cancellation_method,omitempty"`
-	CancellationPeriod    string `json:"cancellation_period,omitempty"`
-	CancellationReference string `json:"cancellation_reference,omitempty"`
-	BookedBalance         string `json:"booked_balance,omitempty"`
-	BookingReference      string `json:"booking_reference,omitempty"`
-	Entity                string `json:"entity"`
-	SourceReference       string `json:"source_reference"`
-	Amount                string `json:"amount"`
-	ServiceStart          string `json:"service_start"`
-	ServiceEnd            string `json:"service_end"`
-	ClosePeriod           string `json:"close_period"`
-	Currency              string `json:"currency"`
-	Basis                 string `json:"basis"`
-	ExpenseAccount        string `json:"expense_account"`
-	PrepaidAccount        string `json:"prepaid_account"`
-	Method                string `json:"method"`
-	MethodConfirmed       bool   `json:"method_confirmed"`
-	BookingConfirmed      bool   `json:"booking_confirmed"`
+	ExamplesConfirmed       bool     `json:"examples_confirmed,omitempty"`
+	CreditAmount            string   `json:"credit_amount,omitempty"`
+	CreditPeriod            string   `json:"credit_period,omitempty"`
+	CreditReference         string   `json:"credit_reference,omitempty"`
+	Credits                 []Credit `json:"credits,omitempty"`
+	AccountantRuleReference string   `json:"accountant_rule_reference,omitempty"`
+	CancellationMethod      string   `json:"cancellation_method,omitempty"`
+	CancellationPeriod      string   `json:"cancellation_period,omitempty"`
+	CancellationReference   string   `json:"cancellation_reference,omitempty"`
+	BookedBalance           string   `json:"booked_balance,omitempty"`
+	BookingReference        string   `json:"booking_reference,omitempty"`
+	Entity                  string   `json:"entity"`
+	SourceReference         string   `json:"source_reference"`
+	Amount                  string   `json:"amount"`
+	ServiceStart            string   `json:"service_start"`
+	ServiceEnd              string   `json:"service_end"`
+	ClosePeriod             string   `json:"close_period"`
+	Currency                string   `json:"currency"`
+	Basis                   string   `json:"basis"`
+	ExpenseAccount          string   `json:"expense_account"`
+	PrepaidAccount          string   `json:"prepaid_account"`
+	Method                  string   `json:"method"`
+	MethodConfirmed         bool     `json:"method_confirmed"`
+	BookingConfirmed        bool     `json:"booking_confirmed"`
 }
 
 type Row struct {
@@ -136,7 +145,7 @@ func Prepare(input Input) (Workpaper, error) {
 	}
 	var credit, booked int64
 	var effective time.Time
-	extended := input.Method == DailyMethod || input.CreditAmount != "" || input.BookedBalance != "" || input.CancellationMethod != ""
+	extended := input.Method == DailyMethod || input.CreditAmount != "" || len(input.Credits) > 0 || input.BookedBalance != "" || input.CancellationMethod != ""
 	if extended && !input.ExamplesConfirmed {
 		return empty, &InputError{"POLICY_REQUIRED", "examples_confirmed", "Review the synthetic examples and confirm the chosen method before preparing."}
 	}
@@ -170,6 +179,26 @@ func Prepare(input Input) (Workpaper, error) {
 		input.CreditAmount = Money(credit)
 	} else if input.CreditPeriod != "" || input.CreditReference != "" {
 		return empty, invalid("credit_amount", "Supply the documented credit amount or clear all credit fields.")
+	}
+	if len(input.Credits) > 20 || (len(input.Credits) > 0 && (input.CreditAmount != "" || input.CancellationMethod != "" || input.BookedBalance == "")) {
+		return empty, invalid("credits", "Use up to 20 separately documented credits with a confirmed booked balance; do not combine with a legacy credit or cancellation.")
+	}
+	input.AccountantRuleReference = strings.TrimSpace(input.AccountantRuleReference)
+	if len(input.Credits) > 0 && (input.AccountantRuleReference == "" || len(input.AccountantRuleReference) > 200) {
+		return empty, &InputError{"POLICY_REQUIRED", "accountant_rule_reference", "Cite the client accountant's approved rule for multiple or retrospective credits."}
+	}
+	creditsByMonth := map[string]int64{}
+	for i := range input.Credits {
+		c := &input.Credits[i]
+		amount, amountErr := Amount(c.Amount)
+		effectiveMonth, effectiveErr := time.Parse("2006-01", c.EffectivePeriod)
+		recordedMonth, recordedErr := time.Parse("2006-01", c.RecordedPeriod)
+		c.Reference = strings.TrimSpace(c.Reference)
+		if amountErr != nil || amount == 0 || effectiveErr != nil || recordedErr != nil || effectiveMonth.Before(time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)) || effectiveMonth.After(period) || recordedMonth.Before(effectiveMonth) || recordedMonth.After(period) || c.Reference == "" || len(c.Reference) > 200 {
+			return empty, invalid("credits", "Each credit needs a positive amount, service-month effective date, booked month no earlier than effective and no later than this close, and a source reference.")
+		}
+		c.Amount = Money(amount)
+		creditsByMonth[c.EffectivePeriod] += amount
 	}
 	var cancellation time.Time
 	if input.CancellationMethod != "" {
@@ -244,6 +273,18 @@ func Prepare(input Input) (Workpaper, error) {
 			}
 			rowCredit = Money(credit)
 		}
+		if extra := creditsByMonth[month.Format("2006-01")]; extra > 0 {
+			if extra > remaining {
+				return empty, invalid("credits", "Credits exceed the unamortized balance at their effective month. Resolve the excess separately.")
+			}
+			remaining -= extra
+			base = remaining
+			denominator = int64(months - i)
+			if input.Method == DailyMethod {
+				denominator = int64(end.Sub(from).Hours()/24) + 1
+			}
+			rowCredit = Money(extra)
+		}
 		weight := int64(1)
 		if input.Method == DailyMethod {
 			weight = int64(to.Sub(from).Hours()/24) + 1
@@ -279,7 +320,7 @@ func Prepare(input Input) (Workpaper, error) {
 // schedule; its prior booked-balance confirmation is deliberately not reused.
 func ScheduleOnly(input Input) (Workpaper, error) {
 	input.BookedBalance, input.BookingReference = "", ""
-	if input.CreditAmount != "" {
+	if input.CreditAmount != "" || len(input.Credits) > 0 {
 		input.BookedBalance, input.BookingReference = "0.00", "Schedule-only historical credit"
 	}
 	input.MethodConfirmed, input.BookingConfirmed, input.ExamplesConfirmed = true, true, true

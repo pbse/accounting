@@ -223,20 +223,27 @@ func Prepare(input Input) (Workpaper, error) {
 
 // These hints identify rows worth comparing; they never turn them into matches.
 func investigate(side string, lines, peers []Line) []Exception {
-	byExact, byAmount, byDate := map[string][]string{}, map[string][]string{}, map[string][]string{}
+	byExact, byAmount, byDate, byID := map[string][]string{}, map[string][]string{}, map[string][]string{}, map[string][]string{}
 	for _, peer := range peers {
 		byExact[peer.Date+"/"+peer.Amount] = append(byExact[peer.Date+"/"+peer.Amount], peer.ID)
 		byAmount[peer.Amount] = append(byAmount[peer.Amount], peer.ID)
 		byDate[peer.Date] = append(byDate[peer.Date], peer.ID)
+		byID[peer.ID] = append(byID[peer.ID], peer.ID)
 	}
 	result := make([]Exception, 0, len(lines))
 	for _, line := range lines {
 		item := Exception{Side: side, ID: line.ID, Kind: "no_counterpart", CandidateIDs: []string{}, Question: "Find the supporting transaction or document; determine whether this item belongs in the close period."}
 		candidates := byExact[line.Date+"/"+line.Amount]
-		if len(candidates) > 0 {
+		if len(byID[line.ID]) > 0 && len(candidates) == 0 {
+			candidates = byID[line.ID]
+			item.Kind, item.Question = "same_id_different_detail", "The same transaction ID has a different date or amount. Compare the original records before resolving it."
+		} else if len(candidates) > 0 {
 			item.Kind, item.Question = "ambiguous_exact", "The exact date and amount is not unique across the imported rows. Check transaction identity before choosing a match."
 		} else if candidates = byAmount[line.Amount]; len(candidates) > 0 {
 			item.Kind, item.Question = "same_amount_other_date", "Same signed amount appears on another date. Check timing and transaction identity; do not assume a match."
+		} else if amount, err := cents(line.Amount); err == nil && amount != 0 && len(byAmount[money(-amount)]) > 0 {
+			candidates = byAmount[money(-amount)]
+			item.Kind, item.Question = "opposite_sign", "The amount appears with the opposite sign. Check sign convention, reversal and source identity; do not assume an offset."
 		} else if candidates = byDate[line.Date]; len(candidates) > 0 {
 			item.Kind, item.Question = "same_date_other_amount", "Another amount appears on this date. Check source amounts and transaction identity; do not assume a correction."
 		}

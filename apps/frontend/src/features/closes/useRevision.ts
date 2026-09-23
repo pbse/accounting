@@ -11,10 +11,12 @@ export function useRevision(form: RefObject<HTMLFormElement | null>) {
   const [ready, setReady] = useState(!paper);
   const [error, setError] = useState("");
   const [sources, setSources] = useState<Source[]>([]);
+  const [savedInput, setSavedInput] = useState<Record<string, unknown>>();
   useEffect(() => {
     if (!paper || !close) return;
     let cancelled = false;
     setReady(false);
+    setSavedInput(undefined);
     Promise.all([
       workspaceRequest(`/${close}/workpapers/${paper}`),
       workspaceRequest(`/${close}/evidence`),
@@ -65,6 +67,7 @@ export function useRevision(form: RefObject<HTMLFormElement | null>) {
                 : String(value);
           }
           setSources(updated);
+          setSavedInput(input);
           setReady(true);
         },
       )
@@ -75,5 +78,5 @@ export function useRevision(form: RefObject<HTMLFormElement | null>) {
       cancelled = true;
     };
   }, [close, paper, form]);
-  return { ready, error, sources, paper, close };
+  return { ready, error, sources, paper, close, savedInput };
 }

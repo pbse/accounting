@@ -37,3 +37,19 @@ func TestSelectLedgerKeepsExactAccountAndPages(t *testing.T) {
 		t.Fatalf("nested foreign account was selected: %+v %v", page, err)
 	}
 }
+
+func TestSearchLedgerKeepsAccountAndOriginalLocations(t *testing.T) {
+	accounts := json.RawMessage(`[{"Id":"7"},{"Id":"8"}]`)
+	report := json.RawMessage(`{"Columns":{"Column":[{"ColTitle":"Account"}]},"Rows":{"Row":[{"ColData":[{"id":"8","value":"INV-42"}]},{"ColData":[{"id":"7","value":"other"}]},{"ColData":[{"id":"7","value":"INV-42"}]}]}}`)
+	p, err := SearchLedger(accounts, report, "7", "inv-42", 0)
+	if err != nil || p.Total != 1 || len(p.Rows) != 1 || p.Rows[0].Location != "reports.GeneralLedger.Rows.Row[2]" {
+		t.Fatalf("unsafe search result: %+v %v", p, err)
+	}
+	if _, err = SearchLedger(accounts, report, "7", "x", 0); err == nil {
+		t.Fatal("unbounded query accepted")
+	}
+	p, err = SearchLedger(accounts, report, "7", "value", 0)
+	if err != nil || p.Total != 0 {
+		t.Fatalf("JSON field names must not become search matches: %+v %v", p, err)
+	}
+}
