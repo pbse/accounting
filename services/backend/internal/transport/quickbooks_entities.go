@@ -13,7 +13,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 	path := "/v1/closes/{id}/quickbooks/entities"
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(item ORDER BY (item->>'id')::bigint DESC),'[]'::jsonb) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'period',s.period,'state',s.state,'attempts',s.attempts,'error',s.error,'created_at',s.created_at,'finished_at',s.finished_at,'digest',s.digest,'evidence_id',s.evidence_id::text,'counts',e.content::jsonb->'counts') item FROM quickbooks_entity_syncs s LEFT JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 ORDER BY s.id DESC LIMIT 20) recent`, r.PathValue("id")).Scan(&raw)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(item ORDER BY (item->>'id')::bigint DESC),'[]'::jsonb) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'period',s.period,'state',s.state,'attempts',s.attempts,'error',s.error,'created_at',s.created_at,'finished_at',s.finished_at,'digest',s.digest,'evidence_id',s.evidence_id::text,'counts',s.payload->'counts','started_at',s.payload->'started_at','completeness',s.payload->>'completeness','latest',s.id=(SELECT max(n.id) FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.state='completed')) item FROM quickbooks_entity_syncs s WHERE s.close_id::text=$1 ORDER BY s.id DESC LIMIT 20) recent`, r.PathValue("id")).Scan(&raw)
 		if err != nil {
 			problem(w, 503, "Transaction capture status unavailable.")
 			return

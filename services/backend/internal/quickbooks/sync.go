@@ -95,12 +95,13 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 		return err
 	}
 	defer tx.Rollback()
-	var canonical string
-	if err = tx.QueryRowContext(ctx, `SELECT $1::jsonb::text`, string(raw)).Scan(&canonical); err != nil {
+	var canonical, stable string
+	if err = tx.QueryRowContext(ctx, `SELECT $1::jsonb::text,($1::jsonb-'started_at'-'finished_at'-'completeness')::text`, string(raw)).Scan(&canonical, &stable); err != nil {
 		return err
 	}
-	captureDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(canonical)))
-	index, _ := json.Marshal(map[string]any{"source": "quickbooks_transactions", "period": job.period, "counts": capture.Counts, "capture_digest": captureDigest})
+	captureDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(stable)))
+	indexFields := map[string]any{"source": "quickbooks_transactions", "period": job.period, "realm": job.realm, "counts": capture.Counts, "capture_digest": captureDigest}
+	index, _ := json.Marshal(indexFields)
 	if len(index) > 512*1024 {
 		return errors.New("Transaction evidence index exceeds the supported size")
 	}
@@ -112,7 +113,14 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	}
 	var sourceID string
 	digest := fmt.Sprintf("%x", sha256.Sum256(index))
-	err = tx.QueryRowContext(ctx, `SELECT id::text FROM evidence WHERE close_id=$1 AND digest=$2`, job.closeID, digest).Scan(&sourceID)
+	var replaced bool
+	err = tx.QueryRowContext(ctx, `SELECT id::text,superseded_by IS NOT NULL FROM evidence WHERE close_id=$1 AND digest=$2`, job.closeID, digest).Scan(&sourceID, &replaced)
+	if err == nil && replaced {
+		indexFields["recaptured_after_revision"] = job.id
+		index, _ = json.Marshal(indexFields)
+		digest = fmt.Sprintf("%x", sha256.Sum256(index))
+		err = sql.ErrNoRows
+	}
 	if err == sql.ErrNoRows {
 		var count, size int
 		err = tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, job.closeID).Scan(&count, &size)
@@ -121,6 +129,34 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 		}
 		err = tx.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, job.closeID, "QuickBooks transactions "+job.period, digest, string(index), "quickbooks-sync").Scan(&sourceID)
 	}
+	if err != nil {
+		return err
+	}
+	var uncertain bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM quickbooks_entity_syncs old JOIN evidence e ON e.id=old.evidence_id JOIN workpapers w ON w.close_id=old.close_id JOIN sandbox_postings p ON p.workpaper_id=w.id WHERE old.close_id=$1 AND old.state='completed' AND e.id::text<>$2 AND e.superseded_by IS NULL AND p.state IN ('executing','unknown') AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text))) OR EXISTS(SELECT 1 FROM quickbooks_entity_syncs old JOIN evidence e ON e.id=old.evidence_id JOIN vendor_credit_postings p ON p.close_id=old.close_id JOIN workpapers w ON w.id=p.workpaper_id WHERE old.close_id=$1 AND old.state='completed' AND e.id::text<>$2 AND e.superseded_by IS NULL AND p.state IN ('executing','unknown') AND (p.evidence_id=e.id OR w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text))) )`, job.closeID, sourceID).Scan(&uncertain)
+	if err != nil {
+		return err
+	}
+	if uncertain {
+		return errors.New("Resolve uncertain posting attempts before replacing transaction evidence")
+	}
+	var productionPending bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM quickbooks_entity_syncs old JOIN evidence e ON e.id=old.evidence_id JOIN workpapers w ON w.close_id=old.close_id JOIN production_postings p ON p.workpaper_id=w.id WHERE old.close_id=$1 AND old.state='completed' AND e.id::text<>$2 AND e.superseded_by IS NULL AND (p.state IN ('executing','unknown') OR (p.state='approved' AND p.approval_expires_at>now())) AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text)))`, job.closeID, sourceID).Scan(&productionPending)
+	if err != nil {
+		return err
+	}
+	if productionPending {
+		return errors.New("Resolve the linked production posting approval or attempt before replacing transaction evidence")
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE evidence e SET superseded_by=$2,replacement_reason='New QuickBooks transaction capture',replaced_by='quickbooks-sync',replaced_at=now() WHERE e.close_id=$1 AND e.id::text<>$2 AND e.superseded_by IS NULL AND e.id IN (SELECT old.evidence_id FROM quickbooks_entity_syncs old WHERE old.close_id=$1 AND old.state='completed' AND old.evidence_id IS NOT NULL)`, job.closeID, sourceID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE sandbox_postings p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id=$1 AND p.state='approved' AND EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=$1 AND e.superseded_by::text=$2 AND e.replaced_by='quickbooks-sync' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text)))`, job.closeID, sourceID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE vendor_credit_postings p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id=$1 AND p.state='approved' AND EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=$1 AND e.superseded_by::text=$2 AND e.replaced_by='quickbooks-sync' AND (p.evidence_id=e.id OR w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text))))`, job.closeID, sourceID)
 	if err != nil {
 		return err
 	}

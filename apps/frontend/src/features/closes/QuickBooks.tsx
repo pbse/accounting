@@ -34,6 +34,9 @@ type TransactionSync = {
   evidence_id?: string;
   counts?: Record<string, number>;
   finished_at?: string;
+  started_at?: string;
+  completeness?: string;
+  latest?: boolean;
 };
 export function QuickBooks({
   closeId,
@@ -275,11 +278,11 @@ export function QuickBooks({
           {syncs.length === 0 ? <p>No transaction capture requested.</p> : (
             <ul>{syncs.map((s) => <li key={s.id}>
               {s.period} transactions · {s.state.replaceAll("_", " ")} · attempt {s.attempts}/3
-              {s.state === "completed" && <> · evidence #{s.evidence_id} · {Object.values(s.counts ?? {}).reduce((n, count) => n + count, 0)} records · {s.finished_at && new Date(s.finished_at).toLocaleString()} <button onClick={() => void download(s.id, true)}>Download transactions</button></>}
+              {s.state === "completed" && <> · {s.latest ? "latest completed" : "historical"} · evidence #{s.evidence_id} · {Object.values(s.counts ?? {}).reduce((n, count) => n + count, 0)} records · {s.started_at ? `${new Date(s.started_at).toLocaleString()} to ` : ""}{s.finished_at && new Date(s.finished_at).toLocaleString()} · {s.completeness ? "provider counts checked before and after each type" : "legacy capture; count completeness unverified"} <button onClick={() => void download(s.id, true)}>Download transactions</button></>}
               {s.error && <span role="alert"> · {s.error}</span>}
             </li>)}</ul>
           )}
-          <p>Period capture reads Transaction List, General Ledger, Trial Balance and Profit and Loss for this close month on the accrual basis. It links immutable evidence and proposes coverage in Prepare this close. Confirm accrual is appropriate for this client. No facts, exclusions or methods are approved automatically.</p>
+          <p>Counts and company settings are checked during each transaction capture, but QuickBooks reads are sequential. A later change can make a completed capture stale; refresh before relying on it. Period capture reads Transaction List, General Ledger, Trial Balance and Profit and Loss for this close month on the accrual basis. It links immutable evidence and proposes coverage in Prepare this close. Confirm accrual is appropriate for this client. No facts, exclusions or methods are approved automatically.</p>
           <p>
             These are dated reads of the account directory, including inactive
             accounts. Current balances are not month-end balances, and

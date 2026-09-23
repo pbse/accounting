@@ -19,12 +19,27 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 	prior := http.DefaultTransport
 	defer func() { http.DefaultTransport = prior }()
 	duplicate := false
+	changingCount := false
+	countReads := 0
 	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		body := `{ "Preferences": {"Id":"1","SyncToken":"3"} }`
 		if req.URL.Path != "/v3/company/123/preferences" {
 			query, _ := url.QueryUnescape(req.URL.Query().Get("query"))
 			var kind string
-			fmt.Sscanf(query, "SELECT * FROM %s", &kind)
+			if strings.HasPrefix(query, "SELECT COUNT(*)") {
+				fmt.Sscanf(strings.TrimPrefix(query, "SELECT COUNT(*) FROM "), "%s", &kind)
+				count := 0
+				if kind == "Bill" {
+					count = 502
+					countReads++
+					if changingCount && countReads == 2 {
+						count++
+					}
+				}
+				body = fmt.Sprintf(`{"QueryResponse":{"totalCount":%d}}`, count)
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			}
+			fmt.Sscanf(strings.TrimPrefix(query, "SELECT * FROM "), "%s", &kind)
 			kind = strings.TrimSpace(kind)
 			page := []map[string]any{}
 			start := 1
@@ -50,11 +65,17 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})
 	capture, err := PeriodEntities(context.Background(), "123", "synthetic", "2026-09")
-	if err != nil || capture.Counts["Bill"] != 502 || len(capture.Records["Bill"]) != 502 {
+	if err != nil || capture.Counts["Bill"] != 502 || len(capture.Records["Bill"]) != 502 || capture.Limits["records_per_type"] != 2500 {
 		t.Fatalf("complete paged capture: count=%d err=%v", capture.Counts["Bill"], err)
 	}
 	duplicate = true
 	if _, err := PeriodEntities(context.Background(), "123", "synthetic", "2026-09"); err == nil || !strings.Contains(err.Error(), "revision or period") {
 		t.Fatalf("duplicate provider ID must block complete capture: %v", err)
+	}
+	duplicate = false
+	changingCount = true
+	countReads = 0
+	if _, err := PeriodEntities(context.Background(), "123", "synthetic", "2026-09"); err == nil || !strings.Contains(err.Error(), "count changed") {
+		t.Fatalf("changed provider count must block capture: %v", err)
 	}
 }
