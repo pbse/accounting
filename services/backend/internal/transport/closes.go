@@ -83,6 +83,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerRequests(mux, db)
 	registerWork(mux, db)
 	registerCarry(mux, db)
+	registerRecurring(mux, db)
 	registerReadiness(mux, db)
 	registerProcedures(mux, db)
 	registerAccess(mux, db)

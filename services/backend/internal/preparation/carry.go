@@ -50,14 +50,33 @@ func ValidateCarry(ctx context.Context, tx *sql.Tx, p Plan, targetID, entity, pe
 	expected.ExamplesConfirmed = false
 	expected.MethodConfirmed = false
 	expected.BookingConfirmed = false
-	if !reflect.DeepEqual(input, expected) || c.OpeningBalance != prior.PrepaidBalance || len(prior.Sources) == 0 || len(prior.Sources) != len(p.Sources) || len(c.SourceIDs) != len(p.Sources) {
+	expectedSources := len(prior.Sources)
+	if p.Revises != "" {
+		expectedSources++
+		var revised struct {
+			prepaids.Workpaper
+			CarryForward CarryForward `json:"carry_forward"`
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT w.paper FROM workpapers w WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind='prepaid' AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)`, p.Revises, targetID).Scan(&raw); err != nil || json.Unmarshal(raw, &revised) != nil || revised.CarryForward.PaperID != c.PaperID || revised.CarryForward.ReviewID != c.ReviewID {
+			return fmt.Errorf("The carried draft changed. Refresh recurring review.")
+		}
+		if input.BookedBalance == "" || input.BookingReference == "" || !input.BookingConfirmed || !input.MethodConfirmed || !input.ExamplesConfirmed {
+			return fmt.Errorf("Confirm the current booked balance and supported method.")
+		}
+		expected.BookedBalance, expected.BookingReference = input.BookedBalance, input.BookingReference
+		expected.BookingConfirmed, expected.MethodConfirmed, expected.ExamplesConfirmed = true, true, true
+	}
+	if !reflect.DeepEqual(input, expected) || c.OpeningBalance != prior.PrepaidBalance || len(prior.Sources) == 0 || expectedSources != len(p.Sources) || len(c.SourceIDs) != len(prior.Sources) {
 		return fmt.Errorf("Carry-forward no longer matches the reviewed schedule.")
 	}
-	for i, s := range p.Sources {
+	for i, s := range p.Sources[:len(prior.Sources)] {
 		old := prior.Sources[i]
 		if c.SourceIDs[s.ID] != old.ID || s.Digest != old.Digest || s.Role != old.Role {
 			return fmt.Errorf("Carry-forward source lineage changed.")
 		}
+	}
+	if p.Revises != "" && (p.Sources[len(prior.Sources)].Role != "period_ledger" || p.Sources[len(prior.Sources)].Location == "") {
+		return fmt.Errorf("Current-period ledger evidence is missing.")
 	}
 	return nil
 }

@@ -60,7 +60,7 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 			return nil, fmt.Errorf("Client and period must match this close")
 		}
 		prepare := prepaids.Prepare
-		if p.CarryForward != nil {
+		if p.CarryForward != nil && p.Revises == "" {
 			prepare = prepaids.ScheduleOnly
 		}
 		paper, err := prepare(in)

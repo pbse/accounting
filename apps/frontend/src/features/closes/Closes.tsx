@@ -7,6 +7,7 @@ import { ClientAccess } from "./ClientAccess";
 import { Procedures } from "./Procedures";
 import { Readiness } from "./Readiness";
 import { CarryForward } from "./CarryForward";
+import { Recurring } from "./Recurring";
 import { Work } from "./Work";
 import { Requests } from "./Requests";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -228,6 +229,7 @@ export default function Closes() {
             closeId={close.id}
             entity={close.entity}
           />
+          <Recurring key={`recurring-${close.id}`} closeId={close.id} onPrepared={() => void load()} />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work
             key={`work-${close.id}`}
