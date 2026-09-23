@@ -114,3 +114,20 @@ func TestLargeInventorySelectionIsBoundedAndReviewable(t *testing.T) {
 		t.Fatal("model omitted primary without a blocker")
 	}
 }
+
+func TestSelectionCheckpointOnlyResumesSameBoundedInventory(t *testing.T) {
+	sources := []IntakeSource{{Source: Source{ID: "1"}, Content: "primary"}, {Source: Source{ID: "2"}, Content: "support"}}
+	checkpoint := []byte(`{"inventory_digest":"snapshot-a","selected_ids":["1","2"]}`)
+	if selected, ok := resumeSelection(checkpoint, "snapshot-a", "1", sources); !ok || len(selected) != 2 {
+		t.Fatal("valid checkpoint was lost")
+	}
+	if _, ok := resumeSelection(checkpoint, "snapshot-b", "1", sources); ok {
+		t.Fatal("stale checkpoint reused")
+	}
+	if _, ok := resumeSelection([]byte(`{"inventory_digest":"snapshot-a","selected_ids":["1","1"]}`), "snapshot-a", "1", sources); ok {
+		t.Fatal("duplicate selection reused")
+	}
+	if _, ok := resumeSelection([]byte(`{"inventory_digest":"snapshot-a","selected_ids":["2"]}`), "snapshot-a", "1", sources); ok {
+		t.Fatal("checkpoint omitted primary")
+	}
+}

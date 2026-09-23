@@ -18,6 +18,8 @@ import (
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/reconciliation"
+	"github.com/signintech/gopdf"
+	"golang.org/x/image/font/gofont/goregular"
 )
 
 type packageEvidence struct {
@@ -50,6 +52,7 @@ type closePackage struct {
 	SignOff            string          `json:"sign_off"`
 	Workpapers         []savedPaper    `json:"workpapers"`
 	SandboxPostings    json.RawMessage `json:"sandbox_postings"`
+	VendorCredits      json.RawMessage `json:"vendor_credits"`
 	ProductionPostings json.RawMessage `json:"production_postings"`
 	Reviews            json.RawMessage `json:"reviews"`
 	WorkHistory        json.RawMessage `json:"work_history"`
@@ -60,7 +63,7 @@ type reviewPaper struct {
 	Issues                   []string
 }
 
-var packageHTML = template.Must(template.New("review").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>{{if .Package.ReleaseReady}}Accountant binder{{else}}Close review package{{end}}</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}section{border-top:1px solid #ccc;margin-top:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:.6rem}@media print{button{display:none}section{break-inside:avoid}}</style><h1>{{.Package.Close.Entity}} · {{.Package.Close.Period}}</h1><p>Saved-work snapshot: {{.Package.DataCutAt}}</p><p>{{.Package.Scope}}</p><p><strong>Firm sign-off: {{.Package.SignOff}}</strong></p>{{if .Package.ReleaseReady}}<p>Accountant binder for the signed-off supported scope. Decision #{{.Package.Readiness.DecisionID}} binds snapshot digest {{.Package.Readiness.Digest}}. This is not an audit or assurance opinion. Verify current provider facts before external reliance.</p>{{end}}{{if .Package.Readiness}}<h2>Supported scope</h2><p>{{.Package.Readiness.Scope.Description}}</p><p>Required draft IDs: {{.Package.Readiness.Scope.RequiredPapers}}</p><ul>{{range .Package.Readiness.Scope.ExternalSteps}}<li>{{.Name}} · complete: {{.Complete}} · {{.Reference}}</li>{{end}}{{range .Package.Readiness.Blockers}}<li>{{.}}</li>{{end}}</ul><p>Decision history and the exact snapshot are preserved in manifest.json. Local development decisions are not verified individual firm identities.</p>{{end}}<p>All saved versions are included. Versions are not additive; do not sum alternative drafts. Source references are user-supplied, not verified attachments. Originals are in evidence/{id}.txt or .pdf; PDF extraction is in evidence/{id}-extracted.txt; no documents outside these uploads are included.</p><p>Use your browser’s Print / Save as PDF command to retain this review summary as a PDF.</p><h2>Workpapers · {{len .Papers}}</h2>{{if not .Papers}}<p>No saved workpapers. This close has no prepared evidence in this package.</p>{{end}}{{range .Papers}}<section><h3>{{.Kind}} · draft #{{.ID}}</h3><p>Source: {{.Source}}</p><p>Method: {{.Method}}</p><ul>{{range .Issues}}<li>{{.}}</li>{{end}}</ul><p>Full inputs and calculations: workpapers/{{.ID}}.json. Tables are in the same directory.</p></section>{{end}}<h2>Sandbox posting receipts</h2><p>These are stored sandbox states at export time, not a new provider readback. Executing or unknown means unresolved. Sandbox verification does not imply production posting or close sign-off.</p><pre>{{.Receipts}}</pre><h2>Production posting receipts</h2><p>Stored attempts and canonical readback at verification time; export does not perform a new QuickBooks read. Unknown outcomes need investigation.</p><pre>{{.Package.ProductionPostings}}</pre><h2>Review still required</h2><ul><li>Verify source completeness and ledger freshness independently.</li><li>Review accounting assumptions, alternative draft versions and unresolved items.</li><li>Resolve uncertain sandbox attempts without blindly retrying a write.</li><li>Confirm that recorded sign-off covers your intended scope; unlisted work is not certified.</li></ul></html>`))
+var packageHTML = template.Must(template.New("review").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>{{if .Package.ReleaseReady}}Accountant binder{{else}}Close review package{{end}}</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}section{border-top:1px solid #ccc;margin-top:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:.6rem}@media print{button{display:none}section{break-inside:avoid}}</style><h1>{{.Package.Close.Entity}} · {{.Package.Close.Period}}</h1><p>Saved-work snapshot: {{.Package.DataCutAt}}</p><p>{{.Package.Scope}}</p><p><strong>Firm sign-off: {{.Package.SignOff}}</strong></p>{{if .Package.ReleaseReady}}<p>Accountant binder for the signed-off supported scope. Decision #{{.Package.Readiness.DecisionID}} binds snapshot digest {{.Package.Readiness.Digest}}. This is not an audit or assurance opinion. Verify current provider facts before external reliance.</p>{{end}}{{if .Package.Readiness}}<h2>Supported scope</h2><p>{{.Package.Readiness.Scope.Description}}</p><p>Required draft IDs: {{.Package.Readiness.Scope.RequiredPapers}}</p><ul>{{range .Package.Readiness.Scope.ExternalSteps}}<li>{{.Name}} · complete: {{.Complete}} · {{.Reference}}</li>{{end}}{{range .Package.Readiness.Blockers}}<li>{{.}}</li>{{end}}</ul><p>Decision history and the exact snapshot are preserved in manifest.json. Local development decisions are not verified individual firm identities.</p>{{end}}<p>All saved versions are included. Versions are not additive; do not sum alternative drafts. Source references are user-supplied, not verified attachments. Originals are in evidence/{id}.txt or .pdf; PDF extraction is in evidence/{id}-extracted.txt; no documents outside these uploads are included.</p><p>Portable workpapers.pdf contains every saved draft. The JSON files and checksums preserve exact calculations and provenance.</p><h2>Workpapers · {{len .Papers}}</h2>{{if not .Papers}}<p>No saved workpapers. This close has no prepared evidence in this package.</p>{{end}}{{range .Papers}}<section><h3>{{.Kind}} · draft #{{.ID}}</h3><p>Source: {{.Source}}</p><p>Method: {{.Method}}</p><ul>{{range .Issues}}<li>{{.}}</li>{{end}}</ul><p>Full inputs and calculations: workpapers/{{.ID}}.json. Tables are in the same directory.</p></section>{{end}}<h2>Sandbox posting receipts</h2><p>These are stored sandbox states at export time, not a new provider readback. Executing or unknown means unresolved. Sandbox verification does not imply production posting or close sign-off.</p><pre>{{.Receipts}}</pre><h2>Native supplier credit receipts</h2><p>These are stored sandbox VendorCredit attempts and readbacks; unknown outcomes require investigation.</p><pre>{{.VendorReceipts}}</pre><h2>Production posting receipts</h2><p>Stored attempts and canonical readback at verification time; export does not perform a new QuickBooks read. Unknown outcomes need investigation.</p><pre>{{.Package.ProductionPostings}}</pre><h2>Review still required</h2><ul><li>Verify source completeness and ledger freshness independently.</li><li>Review accounting assumptions, alternative draft versions and unresolved items.</li><li>Resolve uncertain sandbox attempts without blindly retrying a write.</li><li>Confirm that recorded sign-off covers your intended scope; unlisted work is not certified.</li></ul></html>`))
 
 func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +144,11 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 			problem(w, 503, "Could not read sandbox posting receipts.")
 			return
 		}
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.id),'[]'::jsonb) FROM vendor_credit_postings p WHERE close_id=$1`, pack.Close.ID).Scan(&pack.VendorCredits)
+		if err != nil {
+			problem(w, 503, "Could not read supplier credit receipts.")
+			return
+		}
 		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.id),'[]'::jsonb) FROM production_postings p WHERE close_id=$1`, pack.Close.ID).Scan(&pack.ProductionPostings)
 		if err != nil {
 			problem(w, 503, "Could not read production posting receipts.")
@@ -174,7 +182,8 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
             'request_links',COALESCE((SELECT jsonb_agg(jsonb_build_object('request_id',l.request_id,'issued_by',l.issued_by,'issued_at',l.issued_at,'expires_at',l.expires_at,'revoked_at',l.revoked_at,'used_at',l.used_at) ORDER BY l.issued_at) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'::jsonb),
             'quickbooks_snapshots',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'actor',s.actor,'file','ledger/snapshot-'||s.id::text||'.json') ORDER BY s.id) FROM quickbooks_snapshots s WHERE s.close_id=$1),'[]'::jsonb),
             'quickbooks_entity_syncs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id::text,'period',s.period,'state',s.state,'attempts',s.attempts,'digest',s.digest,'evidence_id',s.evidence_id::text,'counts',s.payload->'counts','created_at',s.created_at,'finished_at',s.finished_at) ORDER BY s.id) FROM quickbooks_entity_syncs s WHERE s.close_id=$1),'[]'::jsonb),
-            'forwarded_files',COALESCE((SELECT jsonb_agg(to_jsonb(f)-'body'-'claim' ORDER BY f.id) FROM forwarded_files f WHERE f.close_id=$1),'[]'::jsonb),
+			'forwarded_files',COALESCE((SELECT jsonb_agg(to_jsonb(f)-'body'-'claim' ORDER BY f.id) FROM forwarded_files f WHERE f.close_id=$1),'[]'::jsonb),
+			'inbound_replies',COALESCE((SELECT jsonb_agg((to_jsonb(i)-'body') || CASE WHEN i.state='released' THEN jsonb_build_object('body',i.body) ELSE '{}'::jsonb END ORDER BY i.id) FROM inbound_replies i WHERE i.close_id=$1),'[]'::jsonb),
             'forwarding_links',COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.issued_at) FROM forwarding_links l WHERE l.close_id=$1),'[]'::jsonb),
             'coverage_bindings',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=$1),'[]'),
             'request_targets',COALESCE((SELECT jsonb_agg(to_jsonb(t)) FROM work_request_targets t JOIN work_requests q ON q.id=t.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'),
@@ -409,13 +418,21 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 	}
 	var review bytes.Buffer
 	if err = packageHTML.Execute(&review, struct {
-		Package  closePackage
-		Papers   []reviewPaper
-		Receipts string
-	}{pack, papers, receiptJSON.String()}); err != nil {
+		Package        closePackage
+		Papers         []reviewPaper
+		Receipts       string
+		VendorReceipts string
+	}{pack, papers, receiptJSON.String(), string(pack.VendorCredits)}); err != nil {
 		return nil, err
 	}
 	if err = write("review.html", review.Bytes()); err != nil {
+		return nil, err
+	}
+	pdf, err := workpapersPDF(pack.Workpapers, papers)
+	if err != nil {
+		return nil, err
+	}
+	if err = write("workpapers.pdf", pdf); err != nil {
 		return nil, err
 	}
 	if err = write("checksums.sha256", checksums.Bytes()); err != nil {
@@ -425,6 +442,81 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
+}
+
+func workpapersPDF(saved []savedPaper, summaries []reviewPaper) ([]byte, error) {
+	var pdf gopdf.GoPdf
+	pdf.Start(gopdf.Config{PageSize: *gopdf.PageSizeA4})
+	if err := pdf.AddTTFFontData("Go", goregular.TTF); err != nil {
+		return nil, err
+	}
+	if err := pdf.SetFont("Go", "", 9); err != nil {
+		return nil, err
+	}
+	page := func() { pdf.AddPage() }
+	y := 40.0
+	line := func(value string) error {
+		characters := []rune(value)
+		if len(characters) == 0 {
+			y += 12
+			return nil
+		}
+		for len(characters) > 0 {
+			if y > 770 {
+				page()
+				y = 40
+			}
+			n := len(characters)
+			if n > 120 {
+				n = 120
+			}
+			for n > 1 {
+				width, err := pdf.MeasureTextWidth(string(characters[:n]))
+				if err != nil {
+					return err
+				}
+				if width <= 510 {
+					break
+				}
+				n--
+			}
+			pdf.SetX(40)
+			pdf.SetY(y)
+			if err := pdf.Cell(&gopdf.Rect{W: 510, H: 12}, string(characters[:n])); err != nil {
+				return err
+			}
+			y += 12
+			characters = characters[n:]
+		}
+		return nil
+	}
+	page()
+	if len(saved) == 0 {
+		if err := line("No saved workpapers in this close."); err != nil {
+			return nil, err
+		}
+	}
+	for index, paper := range saved {
+		if index > 0 {
+			page()
+			y = 40
+		}
+		for _, value := range []string{"Draft #" + paper.ID + " - " + paper.Kind, "Review: " + paper.ReviewState + "; digest: " + paper.Digest, "Source: " + summaries[index].Source, "Method: " + summaries[index].Method, "Full saved calculation and inputs:"} {
+			if err := line(value); err != nil {
+				return nil, err
+			}
+		}
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, paper.Paper, "", "  "); err != nil {
+			return nil, err
+		}
+		for _, value := range strings.Split(pretty.String(), "\n") {
+			if err := line(value); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return pdf.GetBytesPdfReturnErr()
 }
 func csvText(value string) string {
 	trimmed := strings.TrimLeft(value, " \t\r\n")

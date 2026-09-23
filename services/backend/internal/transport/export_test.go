@@ -6,6 +6,9 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -61,5 +64,16 @@ func TestPackagePreservesBothWorkpapersAndEscapesSources(t *testing.T) {
 	}
 	if !strings.Contains(files["ledger/snapshot-7.json"], `"accounts":[]`) || !strings.Contains(files["ledger/snapshot-8.json"], `"reports":{}`) {
 		t.Fatal("captured ledger report files were omitted")
+	}
+	if !strings.HasPrefix(files["workpapers.pdf"], "%PDF-") {
+		t.Fatal("portable workpaper PDF missing")
+	}
+	path := filepath.Join(t.TempDir(), "workpapers.pdf")
+	if err := os.WriteFile(path, []byte(files["workpapers.pdf"]), 0600); err != nil {
+		t.Fatal(err)
+	}
+	text, err := exec.Command("pdftotext", path, "-").Output()
+	if err != nil || !strings.Contains(string(text), "Draft #1") || !strings.Contains(string(text), "Draft #2") || !strings.Contains(string(text), "Statement page 2 is missing") {
+		t.Fatalf("PDF content incomplete: %s %v", text, err)
 	}
 }

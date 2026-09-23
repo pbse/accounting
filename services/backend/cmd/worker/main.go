@@ -31,5 +31,6 @@ func main() {
 	go delivery.Run(ctx, db)
 	go forwarded.Run(ctx, db)
 	go quickbooks.RunSync(ctx, db)
+	go transport.RunAlerts(ctx, db)
 	transport.Run(transport.Worker())
 }

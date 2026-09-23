@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 
 	"close.local/backend/internal/auth"
@@ -39,6 +40,64 @@ func readProcedureImpact(ctx context.Context, tx *sql.Tx, closeID, kind string) 
 }
 
 func registerProcedures(mux *http.ServeMux, db *sql.DB) {
+	mux.HandleFunc("GET /v1/closes/{id}/procedures/suggestion", func(w http.ResponseWriter, r *http.Request) {
+		kind := r.URL.Query().Get("kind")
+		if kind != "prepaid" && kind != "accrual" && kind != "reconciliation" {
+			problem(w, 422, "Choose one supported work type.")
+			return
+		}
+		var entity string
+		if err := db.QueryRowContext(r.Context(), `SELECT entity FROM client_closes WHERE id::text=$1 AND organization_id=$2`, r.PathValue("id"), organization(r)).Scan(&entity); err != nil {
+			problem(w, 404, "Close unavailable.")
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,w.paper,p.paper FROM workpapers w JOIN client_closes c ON c.id=w.close_id JOIN workpapers p ON p.id::text=w.paper->>'revises' AND p.close_id=w.close_id WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND w.kind=$3 ORDER BY w.id DESC LIMIT 20`, organization(r), entity, kind)
+		if err != nil {
+			problem(w, 503, "Prior edit history unavailable.")
+			return
+		}
+		defer rows.Close()
+		fields := map[string]int{}
+		papers := []string{}
+		for rows.Next() {
+			var id string
+			var current, previous []byte
+			if err = rows.Scan(&id, &current, &previous); err != nil {
+				break
+			}
+			papers = append(papers, id)
+			for _, change := range paperChanges(previous, current) {
+				if strings.HasPrefix(change.Field, "input.") && (strings.Contains(change.Field, "method") || strings.Contains(change.Field, "account") || strings.Contains(change.Field, "booking") || strings.Contains(change.Field, "estimation") || strings.Contains(change.Field, "rule")) {
+					fields[change.Field]++
+				}
+			}
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		if err != nil {
+			problem(w, 503, "Prior edit history unavailable.")
+			return
+		}
+		names := []string{}
+		for field := range fields {
+			names = append(names, field)
+		}
+		sort.Slice(names, func(i, j int) bool {
+			if fields[names[i]] == fields[names[j]] {
+				return names[i] < names[j]
+			}
+			return fields[names[i]] > fields[names[j]]
+		})
+		if len(names) > 5 {
+			names = names[:5]
+		}
+		instruction := ""
+		if len(names) > 0 {
+			instruction = "Review current source evidence and the client's approved policy for " + strings.Join(names, ", ") + " before preparing. Prior revisions identify review points, not an approved accounting rule or current account mapping."
+		}
+		jsonReply(w, 200, map[string]any{"client_entity": entity, "kind": kind, "draft_instructions": instruction, "changed_fields": names, "source_draft_ids": papers})
+	})
 	mux.HandleFunc("GET /v1/closes/{id}/procedures/impact", func(w http.ResponseWriter, r *http.Request) {
 		kind := r.URL.Query().Get("kind")
 		if kind != "prepaid" && kind != "reconciliation" && kind != "accrual" {

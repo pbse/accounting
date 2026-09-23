@@ -4,8 +4,9 @@ Open a saved client close and select **Download draft review package**. Once an 
 
 The ZIP contains:
 
-- `review.html`: offline, printable summary with source references, methods, unresolved blockers, stored sandbox receipts and remaining manual review steps. Use your browser's Print / Save as PDF command for a PDF summary.
-- `manifest.json`: close identity, period, database snapshot timestamp, scope, every saved workpaper version and stored sandbox posting record.
+- `review.html`: offline, printable summary with source references, methods, unresolved blockers, stored posting receipts and remaining manual review steps.
+- `workpapers.pdf`: portable PDF of saved workpaper inputs, calculations, review IDs and source links. The embedded font may substitute unsupported scripts; JSON retains the exact text. It is a snapshot, not an approval by itself.
+- `manifest.json`: close identity, period, database snapshot timestamp, scope, every saved workpaper version and stored posting record, including sandbox VendorCredit attempts.
 - `workpapers/{id}.json`: full inputs and calculated results for each draft.
 - CSV files for prepaid schedules, reconciliation match candidates and unmatched transactions.
 - `evidence/{id}.txt` or `.pdf`, with extracted PDF text alongside: exact uploaded originals, names and hashes in the manifest. Workpaper source links retain role and location.
