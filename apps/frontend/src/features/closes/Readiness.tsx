@@ -8,6 +8,8 @@ type Scope = {
 };
 type Status = {
   scope: Scope;
+  suggested_papers: string[];
+  suggestion_limited: boolean;
   digest: string;
   decision_id: string;
   state: "open" | "signed_off" | "reopen_required";
@@ -169,6 +171,23 @@ export function Readiness({
             >
               <fieldset disabled={busy}>
                 <legend>Required work and external steps</legend>
+                <p>
+                  The current drafts can be proposed as required work. Check
+                  their sources and add missing accounts or external steps;
+                  this does not certify the whole ledger.
+                </p>
+                {status.suggested_papers.length > 0 && <button
+                  type="button"
+                  onClick={() => setScope({
+                    ...scope,
+                    required_papers: status.suggested_papers,
+                  })}
+                >
+                  Replace selection with {status.suggested_papers.length} latest draft
+                  {status.suggested_papers.length === 1 ? "" : "s"}
+                </button>}
+                {status.suggestion_limited &&
+                  <p role="alert">More than 100 current drafts exist. Select a bounded supported scope manually.</p>}
                 <label>
                   Supported scope and explicit exclusions
                   <textarea
@@ -304,7 +323,7 @@ export function Readiness({
                 >
                   Add external step
                 </button>
-                <button disabled={scope.required_papers.length === 0}>
+                <button disabled={scope.required_papers.length === 0 && scope.external_steps.length === 0}>
                   Save scope revision
                 </button>
                 <button type="button" onClick={() => setEditing(false)}>

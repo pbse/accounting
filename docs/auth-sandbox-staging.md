@@ -33,7 +33,7 @@ Configure `QBO_SANDBOX_REALM_ID`, `QBO_SANDBOX_ACCESS_TOKEN`, `QBO_SANDBOX_ENTIT
 Open a saved prepaid in a client close and use **Check posting status**:
 
 1. Prepare a preview. The server reads company/account metadata and persists the exact journal and digest.
-2. Type **APPROVE SANDBOX DRAFT**. Approval records the WorkOS user and expires after ten minutes.
+2. Approve the current source-linked workpaper review, then type **APPROVE SANDBOX DRAFT**. A pending, changed or rejected workpaper cannot be approved for posting. Posting approval records the WorkOS user and expires after ten minutes.
 3. Type **POST TO SANDBOX**. The same human reviewer needs execution permission. A conditional database update records the attempt before the HTTP write. Expired approvals, changed mappings, newer saved versions of the source, and existing attempts stop execution.
 4. A successful create response records the external ID. An independent GET compares ID, date, currency, note and both exact account/amount lines before marking verified. This verifies the journal fields, not an accounting close or full ledger balances.
 

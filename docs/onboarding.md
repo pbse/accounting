@@ -86,7 +86,7 @@ For detailed feature behavior follow the README links. For what remains and its 
 
 ## Define readiness and sign off a supported scope
 
-On a client close, open **Close readiness → Define or update scope**. Describe the included work and exclusions, select exact required drafts, and list external steps such as an independently performed ledger tie-out or prior-month follow-up. A scope containing only external steps is permitted. Mark an external step done only with its completion reference. Save the scope revision.
+On a client close, open **Close readiness → Define or update scope**. **Replace selection with latest drafts** proposes the current end of each draft revision chain; inspect and change the selection before saving. The suggestion covers only drafts already in this close, not the client's complete ledger or missing documents. Describe the included work and exclusions, and list external steps such as an independently performed ledger tie-out or prior-month follow-up. A scope containing only external steps is permitted. Mark an external step done only with its completion reference. Save the scope revision.
 
 Readiness explains unresolved reviews/calculation blockers, active or failed work, outstanding client jobs and uncertain sandbox attempts. Resolve or explicitly cancel work as appropriate; cancellation does not establish source completeness. Refresh readiness before deciding. A hosted signer needs both `workpapers:review` and `close:signoff`. Review the defined scope, record your reason, affirm your authority and choose **Sign off supported scope**.
 

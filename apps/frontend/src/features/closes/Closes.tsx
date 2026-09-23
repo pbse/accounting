@@ -218,12 +218,27 @@ export default function Closes() {
           <p>
             <Link to="/dashboard/closes">All client closes</Link>
           </p>
+          <Evidence
+            key={`evidence-${close.id}`}
+            closeId={close.id}
+            onReplace={() => void load()}
+          />
           <QuickBooks
             key={`qbo-${close.id}`}
             closeId={close.id}
             entity={close.entity}
           />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
+          <Work
+            key={`work-${close.id}`}
+            closeId={close.id}
+            onPrepared={() => void load()}
+          />
+          <PreparationJobs
+            key={`jobs-${close.id}`}
+            closeId={close.id}
+            onComplete={() => void load()}
+          />
           <Readiness
             key={`readiness-${close.id}`}
             closeId={close.id}
@@ -236,21 +251,6 @@ export default function Closes() {
             onApplied={() => void load()}
           />
           <CarryForward key={close.id} closeId={close.id} />
-          <Evidence
-            key={`evidence-${close.id}`}
-            closeId={close.id}
-            onReplace={() => void load()}
-          />
-          <Work
-            key={`work-${close.id}`}
-            closeId={close.id}
-            onPrepared={() => void load()}
-          />
-          <PreparationJobs
-            key={`jobs-${close.id}`}
-            closeId={close.id}
-            onComplete={() => void load()}
-          />
           <div className="export-actions">
             <Link
               className="button primary"

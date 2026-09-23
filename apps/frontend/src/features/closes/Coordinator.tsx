@@ -31,6 +31,10 @@ type Status = {
   };
 };
 export function Coordinator({ closeId }: { closeId: string }) {
+  function revealWork(jobID: string) {
+    const target = document.getElementById(`work-${jobID}`);
+    if (target instanceof HTMLDetailsElement) target.open = true;
+  }
   const [status, setStatus] = useState<Status>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -144,6 +148,18 @@ export function Coordinator({ closeId }: { closeId: string }) {
       questions.set(key, q);
     }
   }
+  const decisions = items.map((item) => {
+    if (item.stale || ["failed", "missing"].includes(item.state))
+      return { item, action: "Inspect changed evidence or retry preparation" };
+    if (item.state === "needs_confirmation")
+      return { item, action: "Confirm proposed facts and method" };
+    if (item.state === "waiting_client")
+      return { item, action: "Track the client request and review the reply" };
+    if (item.state === "completed" && item.reviews.some((review) =>
+      review.state !== "approved" || (review.blockers?.length ?? 0) > 0,
+    )) return { item, action: "Review the prepared draft and its blockers" };
+    return null;
+  }).filter((value): value is { item: Item; action: string } => value !== null);
   return (
     <section className="panel" aria-labelledby="prepare-close-title">
       <h2 id="prepare-close-title">Prepare this close</h2>
@@ -156,7 +172,6 @@ export function Coordinator({ closeId }: { closeId: string }) {
       {!status && !error && <p role="status">Loading preparation scope…</p>}
       {status && (
         <>
-          <Coverage closeId={closeId} />
           {(!run || changed) && (
             <>
               {changed && (
@@ -167,7 +182,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
               )}
               {status.inventory.length === 0 ? (
                 <p>
-                  Upload evidence below to begin. Existing manual and carried
+                  Upload evidence above to begin. Existing manual and carried
                   drafts remain in the review section.
                 </p>
               ) : (
@@ -207,6 +222,19 @@ export function Coordinator({ closeId }: { closeId: string }) {
           )}
           {run && (
             <>
+              <h3>Next decisions</h3>
+              <p><a href="#coverage-work">{status.coverage === null
+                ? "Capture period reports or document ledger scope separately"
+                : status.coverage.stale
+                  ? "Recapture changed ledger coverage"
+                  : "Review ledger account coverage and missing evidence"}</a></p>
+              {decisions.length === 0
+                ? <p>No source decisions are waiting. Review coverage and prepared drafts before sign-off.</p>
+                : <ul>{decisions.slice(0, 10).map(({ item, action }) =>
+                  <li key={item.job_id}><a href={`#work-${item.job_id}`} onClick={() => revealWork(item.job_id)}>{action}: {item.name}</a></li>,
+                )}</ul>}
+              {decisions.length > 10 &&
+                <p>{decisions.length - 10} more decisions are listed in Work below.</p>}
               <h3>Proposed work from this run</h3>
               <p>
                 {Object.entries(proposed).map(([kind, count]) => `${count} ${kind.replaceAll("_", " ")}`).join(" · ")}. {status.coverage === null
@@ -233,7 +261,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
               <ul>
                 {items.map((i) => (
                   <li key={i.job_id}>
-                    <a href={`#work-${i.job_id}`}>{i.name}</a> ·{" "}
+                    <a href={`#work-${i.job_id}`} onClick={() => revealWork(i.job_id)}>{i.name}</a> ·{" "}
                     {i.proposal?.kind ? `${i.proposal.kind.replaceAll("_", " ")} · ` : ""}{i.state.replaceAll("_", " ")}
                     {i.stale ? " · source changed" : ""}
                     {i.error ? ` · ${i.error}` : ""}
@@ -267,7 +295,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
                         {q.jobs.map((j, index) => (
                           <span key={j.job_id}>
                             {index > 0 ? ", " : ""}
-                            <a href={`#work-${j.job_id}`}>{j.name}</a>
+                            <a href={`#work-${j.job_id}`} onClick={() => revealWork(j.job_id)}>{j.name}</a>
                           </span>
                         ))}
                       </li>
@@ -292,6 +320,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
               <button type="button" disabled={busy || !stopConfirmed || !stopReason.trim()} onClick={() => void stopRemaining()}>{busy ? "Stopping…" : "Stop remaining work"}</button>
             </details>
           )}
+          <Coverage closeId={closeId} />
         </>
       )}
     </section>
