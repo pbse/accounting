@@ -68,7 +68,7 @@ func TestRecurringAccrualFreshReviewAndPortfolioDependency(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledgerSource, "accounts": []map[string]string{{"Id": "17", "Name": "Accrued service", "AccountType": "Other Current Liability"}}, "reports": map[string]any{"TrialBalance": map[string]any{"Header": map[string]string{"Currency": "USD", "ReportBasis": "Accrual"}, "Rows": map[string]any{"Row": []map[string]any{{"type": "Data", "ColData": []map[string]string{{"id": "17", "value": "Accrued service"}, {"value": ""}, {"value": "25.00"}}}}}}}})
-	if _, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,$4,now(),'fixture')`, next, rand.Text(), string(payload)); err != nil {
+	if _, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,$4,now(),'fixture')`, next, connection, rand.Text(), string(payload)); err != nil {
 		t.Fatal(err)
 	}
 	h := apiWithStore(db, "recurring-accrual-fixture-token-00000000")

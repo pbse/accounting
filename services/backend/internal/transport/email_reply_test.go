@@ -84,7 +84,7 @@ func TestInboundReplyHeldUntilSenderAndReviewerMatch(t *testing.T) {
 	if err = tx.QueryRow(`INSERT INTO email_connections(organization_id,sender,domain_id,credential,actor) VALUES('local-development','firm@example.test','synthetic','dummy','fixture') RETURNING id::text`).Scan(&connection); err != nil {
 		t.Fatal(err)
 	}
-	outbox := strings.ToLower(rand.Text())
+	outbox := rand.Text()
 	if _, err = tx.Exec(`INSERT INTO email_outbox(id,request_id,connection_id,link_digest,payload,state,approved_by,firm_authority,approved_until) VALUES($1,$2,$3,$4,'dummy','accepted','fixture',true,now()+interval '1 hour')`, outbox, request, connection, "reply-test-"+request); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestInboundReplyHeldUntilSenderAndReviewerMatch(t *testing.T) {
 		raw := []byte("From: " + sender + "\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + text)
 		r := httptest.NewRequest("POST", "/internal/email-reply", bytes.NewReader(raw))
 		r.Header.Set("X-Close-Email-Key", strings.Repeat("k", 32))
-		r.Header.Set("X-Close-Envelope-To", "inbox+reply-"+outbox+"@example.test")
+		r.Header.Set("X-Close-Envelope-To", "inbox+reply-"+strings.ToLower(outbox)+"@example.test")
 		r.Header.Set("X-Close-Envelope-From", sender)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
