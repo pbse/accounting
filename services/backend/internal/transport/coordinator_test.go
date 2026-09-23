@@ -14,6 +14,19 @@ import (
 	"close.local/backend/internal/preparation"
 )
 
+func TestScopeDigestIgnoresProposalProgress(t *testing.T) {
+	before := []byte(`[{"job_id":"1","source_id":"2","digest":"a","name":"invoice","state":"waiting_evidence","kind":""}]`)
+	after := []byte(`[{"job_id":"1","source_id":"2","digest":"a","name":"invoice","state":"needs_confirmation","kind":"prepaid"}]`)
+	changed := []byte(`[{"job_id":"1","source_id":"3","digest":"b","name":"new invoice","state":"waiting_evidence","kind":""}]`)
+	if scopeDigest(before, nil) != scopeDigest(after, nil) || scopeDigest(before, nil) == scopeDigest(changed, nil) {
+		t.Fatal("scope must pin sources without changing when interpretation progresses")
+	}
+	stored := scopeSources(after)
+	if bytes.Contains(stored, []byte(`"state"`)) || bytes.Contains(stored, []byte(`"kind"`)) || !bytes.Contains(stored, []byte(`"name":"invoice"`)) {
+		t.Fatal("durable scope must contain only source identity and display name")
+	}
+}
+
 func TestClosePreparationScopeReusesDurableJobs(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {

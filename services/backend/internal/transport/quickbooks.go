@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 
 	"close.local/backend/internal/auth"
@@ -47,6 +48,87 @@ func quickbooksReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 }
 func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 	path := "/v1/closes/{id}/quickbooks"
+	ledgerPage := func(w http.ResponseWriter, r *http.Request, saved bool) {
+		accountID := r.URL.Query().Get("account_id")
+		offset, parseErr := strconv.Atoi(r.URL.Query().Get("offset"))
+		if parseErr != nil || len(accountID) > 100 {
+			problem(w, 422, "Choose an account and a valid page offset.")
+			return
+		}
+		var snapshot struct {
+			ID       string                     `json:"id"`
+			Digest   string                     `json:"digest"`
+			Accounts json.RawMessage            `json:"accounts"`
+			Reports  map[string]json.RawMessage `json:"reports"`
+		}
+		var raw []byte
+		err := db.QueryRowContext(r.Context(), `SELECT payload || jsonb_build_object('id',id::text,'digest',digest) FROM quickbooks_snapshots WHERE id::text=$1 AND close_id::text=$2 AND payload ? 'period'`, r.PathValue("snapshot"), r.PathValue("id")).Scan(&raw)
+		if err != nil || json.Unmarshal(raw, &snapshot) != nil {
+			problem(w, 404, "Period snapshot not found in this close.")
+			return
+		}
+		page, err := quickbooks.SelectLedger(snapshot.Accounts, snapshot.Reports["GeneralLedger"], accountID, offset)
+		if err != nil {
+			problem(w, 422, err.Error())
+			return
+		}
+		if !saved {
+			jsonReply(w, 200, page)
+			return
+		}
+		actor, ok := reviewActor(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			Confirmed bool `json:"confirmed"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if !in.Confirmed || len(page.Rows) == 0 {
+			problem(w, 422, "Confirm a page with account-matched rows before adding agent evidence.")
+			return
+		}
+		content, _ := json.MarshalIndent(map[string]any{"snapshot_id": snapshot.ID, "snapshot_digest": snapshot.Digest, "account_id": accountID, "offset": offset, "total_matching_rows": page.Total, "rows": page.Rows, "scope": "Account-matched General Ledger report rows; not a complete ledger or verified balance."}, "", "  ")
+		if len(content) > 96*1024 {
+			problem(w, 413, "This ledger page exceeds 96 KiB. Inspect the downloaded snapshot and narrow the account.")
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "Evidence storage unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		var current bool
+		err = tx.QueryRowContext(r.Context(), `SELECT e.superseded_by IS NULL AND e.extraction_state='ready' AND x.state='active' FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=$1 AND s.close_id::text=$2 FOR UPDATE OF e`, snapshot.ID, r.PathValue("id")).Scan(&current)
+		if err != nil || !current {
+			problem(w, 409, "Ledger capture changed. Refresh before selecting rows.")
+			return
+		}
+		var sourceID string
+		err = tx.QueryRowContext(r.Context(), `SELECT source_id::text FROM quickbooks_ledger_selections WHERE snapshot_id=$1 AND account_id=$2 AND offset_rows=$3`, snapshot.ID, accountID, offset).Scan(&sourceID)
+		if err == sql.ErrNoRows {
+			var count, size int
+			err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, r.PathValue("id")).Scan(&count, &size)
+			if err != nil || count >= 100 || size+len(content) > 20*1024*1024 {
+				problem(w, 413, "Close evidence capacity is full. Review existing sources before adding another ledger page.")
+				return
+			}
+			err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, r.PathValue("id"), "QuickBooks account "+accountID+" ledger rows "+strconv.Itoa(offset)+"–"+strconv.Itoa(offset+len(page.Rows)-1), preparation.Digest(content), string(content), actor).Scan(&sourceID)
+			if err == nil {
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO quickbooks_ledger_selections(snapshot_id,source_id,account_id,offset_rows) VALUES($1,$2,$3,$4)`, snapshot.ID, sourceID, accountID, offset)
+			}
+		}
+		if err != nil || tx.Commit() != nil {
+			problem(w, 503, "Ledger selection could not be saved. Refresh before retrying.")
+			return
+		}
+		jsonReply(w, 200, map[string]string{"source_id": sourceID})
+	}
+	mux.HandleFunc("GET "+path+"/snapshots/{snapshot}/ledger", func(w http.ResponseWriter, r *http.Request) { ledgerPage(w, r, false) })
+	mux.HandleFunc("POST "+path+"/snapshots/{snapshot}/ledger", func(w http.ResponseWriter, r *http.Request) { ledgerPage(w, r, true) })
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
 		err := db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'realm',x.realm,'company_name',x.company_name,'confirmed_by',x.confirmed_by,'confirmed_at',x.confirmed_at,'error',x.error,'updated_at',x.updated_at) FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'), 'snapshots',COALESCE((SELECT jsonb_agg(v ORDER BY (v->>'id')::bigint DESC) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'account_count',jsonb_array_length(s.payload->'accounts'),'actor',s.actor,'period',s.payload->>'period','source_id',s.payload->>'source_id') v FROM quickbooks_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 20) recent),'[]'::jsonb)) FROM client_closes c WHERE c.id::text=$1`, r.PathValue("id")).Scan(&raw)
@@ -269,11 +351,22 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				snapshot["period"], snapshot["basis"], snapshot["reports"], snapshot["coverage"] = period, "Accrual", reports, coverage
 				snapshot["completed_at"] = time.Now()
 				snapshot["scope"] = "Sequential sandbox account and period report reads, not an atomic or independently verified complete ledger. TransactionList contains reported transactions, not full transaction entities. Account CurrentBalance is current, not month-end. Coverage is proposed evidence needs, never approval or completeness."
-				evidence, e = json.Marshal(snapshot)
-				// ponytail: one bounded evidence bundle fits the existing 128 KiB agent budget with room for invoices. No silent truncation.
-				if e != nil || len(evidence) > 96*1024 {
-					readFail("Period evidence exceeds 96 KiB. No snapshot saved; use scoped exports and manual preparation for this close.")
+				full, marshalErr := json.Marshal(snapshot)
+				if marshalErr != nil || len(full) > 18*1024*1024 {
+					readFail("Period reports exceed the 18 MiB supported snapshot size. No partial ledger was saved.")
 					return
+				}
+				evidence = full
+				if len(full) > 96*1024 {
+					index := map[string]any{"environment": "sandbox", "realm": realm, "company_name": company, "period": period, "basis": "Accrual", "coverage_item_count": len(coverage), "report_sizes": map[string]int{}, "scope": "Full reports are stored in the immutable snapshot, not this index. Account-scoped ledger pages must be selected separately; no complete ledger or balance is certified."}
+					for name, report := range reports {
+						index["report_sizes"].(map[string]int)[name] = len(report)
+					}
+					evidence, e = json.Marshal(index)
+					if e != nil {
+						readFail("Could not prepare the ledger evidence index.")
+						return
+					}
 				}
 			}
 			payload, _ := json.Marshal(snapshot)
@@ -319,6 +412,11 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				_, e = tx.ExecContext(ctx, `UPDATE evidence SET superseded_by=$2,replacement_reason='New period ledger capture',replaced_by=$3,replaced_at=now() WHERE close_id=$1 AND superseded_by IS NULL AND id::text IN (SELECT payload->>'source_id' FROM quickbooks_snapshots WHERE close_id=$1 AND payload->>'period'=$4)`, lockedClose, sourceID, a.Subject, period)
 				if e != nil {
 					problem(w, 503, "Could not replace prior ledger evidence.")
+					return
+				}
+				_, e = tx.ExecContext(ctx, `UPDATE evidence SET superseded_by=$2,replacement_reason='New period ledger capture',replaced_by=$3,replaced_at=now() WHERE close_id=$1 AND superseded_by IS NULL AND id IN (SELECT l.source_id FROM quickbooks_ledger_selections l JOIN quickbooks_snapshots s ON s.id=l.snapshot_id WHERE s.close_id=$1 AND s.payload->>'period'=$4)`, lockedClose, sourceID, a.Subject, period)
+				if e != nil {
+					problem(w, 503, "Could not replace selected ledger evidence.")
 					return
 				}
 				_, e = tx.ExecContext(ctx, `UPDATE sandbox_postings p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id=$1 AND p.state='approved' AND EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=$1 AND e.superseded_by::text=$2 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text)))`, lockedClose, sourceID)

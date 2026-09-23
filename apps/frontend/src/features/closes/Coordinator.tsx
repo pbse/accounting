@@ -19,7 +19,7 @@ type Item = {
 type Status = {
   coverage: null | { snapshot_id: string; source_id: string; period: string; captured_at: string; stale: boolean; items: { account_id: string; name: string; kind: string; reason: string; question: string; location: string; report_locations?: string[] }[] };
 
-  inventory: { job_id: string; source_id: string; name: string }[];
+  inventory: { job_id: string; source_id: string; name: string; state: string; kind: string; summary: string; questions: string[] }[];
   inventory_digest: string;
   stop: { count: number; digest: string };
   run: null | {
@@ -189,17 +189,28 @@ export function Coordinator({ closeId }: { closeId: string }) {
                 <>
                   <details>
                     <summary>
-                      {status.inventory.length} source document
+                      Proposed scope · {status.inventory.length} source document
                       {status.inventory.length === 1 ? "" : "s"} in scope
                     </summary>
+                    <p>Based on the uploaded documents and the ledger capture below. An account or document absent from this inventory is not covered.</p>
                     <ul>
                       {status.inventory.map((i) => (
                         <li key={i.job_id}>
-                          {i.name} · source #{i.source_id}
+                          {i.name} · source #{i.source_id} · {i.kind ? `${i.kind.replaceAll("_", " ")} proposed` : "awaiting interpretation"} · {i.state.replaceAll("_", " ")}
+                          {i.summary && <span> — {i.summary}</span>}
+                          {!!i.questions?.length && <span> · {i.questions.length} question{i.questions.length === 1 ? "" : "s"}</span>}
                         </li>
                       ))}
                     </ul>
                   </details>
+                  {!status.coverage && <p role="status">No period ledger is linked. This proposal covers uploaded documents only; capture QuickBooks reports or document external ledger work before signing off.</p>}
+                  {status.coverage?.stale && <p role="alert">The ledger capture is stale. Recapture it before relying on these account suggestions.</p>}
+                  {status.coverage && <details>
+                    <summary>{status.coverage.items.length} ledger accounts in proposed scope</summary>
+                    <p>Account type suggests work; it does not establish the complete invoice set or approve a method. Review account evidence and explicit exclusions below.</p>
+                    <ul>{status.coverage.items.slice(0, 20).map((account) => <li key={account.account_id}>{account.name || account.account_id} · {account.kind.replaceAll("_", " ")} · {account.question}</li>)}</ul>
+                    {status.coverage.items.length > 20 && <p>Showing the first 20 here. <a href="#coverage-work">Search and review all {status.coverage.items.length} accounts in Coverage.</a></p>}
+                  </details>}
                   <label>
                     <input
                       type="checkbox"

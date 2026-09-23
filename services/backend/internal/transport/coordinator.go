@@ -45,7 +45,7 @@ func cancellableJobs(ctx context.Context, tx *sql.Tx, closeID string, lock bool)
 // progress is read from those jobs rather than stored in a second status cache.
 func preparationInventory(ctx context.Context, tx *sql.Tx, closeID string) ([]byte, error) {
 	var raw []byte
-	err := tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('job_id',j.id::text,'source_id',e.id::text,'digest',e.digest,'name',e.name) ORDER BY j.id),'[]'::jsonb) FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND e.superseded_by IS NULL`, closeID).Scan(&raw)
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('job_id',j.id::text,'source_id',e.id::text,'digest',e.digest,'name',e.name,'state',j.state,'kind',COALESCE(i.proposal->>'kind',''),'summary',COALESCE(i.proposal->>'summary',''),'questions',COALESCE(i.proposal->'questions','[]'::jsonb)) ORDER BY j.id),'[]'::jsonb) FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND e.superseded_by IS NULL`, closeID).Scan(&raw)
 	return raw, err
 }
 
@@ -56,7 +56,20 @@ func ledgerCoverage(ctx context.Context, tx *sql.Tx, closeID string) (json.RawMe
 	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('snapshot_id',s.id::text,'digest',s.digest,'source_id',s.payload->>'source_id','period',s.payload->>'period','captured_at',s.captured_at,'items',s.payload->'coverage','stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id=$1 AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1),'null'::jsonb)`, closeID).Scan(&raw)
 	return raw, err
 }
+func scopeSources(inventory []byte) []byte {
+	var sources []struct {
+		JobID    string `json:"job_id"`
+		SourceID string `json:"source_id"`
+		Digest   string `json:"digest"`
+		Name     string `json:"name"`
+	}
+	if json.Unmarshal(inventory, &sources) == nil {
+		inventory, _ = json.Marshal(sources)
+	}
+	return inventory
+}
 func scopeDigest(inventory []byte, coverage json.RawMessage) string {
+	inventory = scopeSources(inventory)
 	if string(coverage) == "null" {
 		return preparation.Digest(inventory)
 	}
@@ -213,6 +226,7 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Evidence changed. Refresh and inspect the current scope.")
 			return
 		}
+		raw = scopeSources(raw)
 		var items []json.RawMessage
 		if json.Unmarshal(raw, &items) != nil || len(items) == 0 || len(items) > 100 {
 			problem(w, 422, "Upload between one and 100 source documents before preparing this close.")

@@ -4,7 +4,7 @@ This is a runbook for the implemented controls, not an enterprise certification.
 
 ## Release and migration
 
-Deploy the API and worker from the same reviewed revision. Fresh databases use migrations 001–017 in numeric order; existing databases apply only unapplied migrations. Stop worker and API traffic before a schema change, preserve a verified backup, and restart them after migration and readiness checks. The GitHub staging job checks required schema objects but does not perform production migrations or grant deployment authorization. See [onboarding](onboarding.md).
+Deploy the API and worker from the same reviewed revision. Fresh databases use migrations 001–021 in numeric order; existing databases apply only unapplied migrations. Stop worker and API traffic before a schema change, preserve a verified backup, and restart them after migration and readiness checks. The GitHub staging job checks required schema objects but does not perform production migrations or grant deployment authorization. See [onboarding](onboarding.md).
 
 A healthy HTTP process is not proof of a functioning worker. Check API `/readyz` for the schema/database boundary and inspect the Work inbox for advancing durable state. Monitor failed jobs, old `waiting_evidence`/`interpreting`/`queued` work, extraction failures, email `unknown`, and sandbox `unknown`/`executing`. The current application does not provide alert delivery or an on-call integration. Do not report these manual checks as automated monitoring.
 

@@ -238,7 +238,7 @@ export function Work({
               </button>
             </p>
           )}
-          {!closeId && <PortfolioStop key={`${filter}:${clientSearch}`} items={items} onChange={() => setRefresh((n) => n + 1)} />}
+          {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} onChange={() => setRefresh((n) => n + 1)} />}
           <fieldset disabled={!!error}>
             {items.map((item) => (
               <details
@@ -276,8 +276,9 @@ export function Work({
   );
 }
 
-function PortfolioStop({items,onChange}:{items:WorkItem[];onChange:()=>void}) {
-  const closes = [...new Map(items.filter(i=>!["completed","cancelled"].includes(i.state)).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`}])).values()];
+function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}) {
+  const [mode,setMode] = useState<"prepare"|"stop">("prepare");
+  const closes = [...new Map(items.filter(i=>mode === "prepare" || !["completed","cancelled"].includes(i.state)).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`}])).values()];
   const [selected,setSelected] = useState<string[]>([]);
   const [preview,setPreview] = useState<{id:string;label:string;count:number;digest:string}[]>();
   const [reason,setReason] = useState("");
@@ -290,31 +291,33 @@ function PortfolioStop({items,onChange}:{items:WorkItem[];onChange:()=>void}) {
       const next = [];
       for (const close of closes.filter(c=>selected.includes(c.id))) {
         const status = await workspaceRequest(`/${close.id}/prepare-close`);
-        next.push({...close,count:status.stop.count as number,digest:status.stop.digest as string});
+        next.push({...close,count:mode === "prepare" ? status.inventory.length as number : status.stop.count as number,digest:mode === "prepare" ? status.inventory_digest as string : status.stop.digest as string});
       }
       setPreview(next);
     } catch(e) { setPreview(undefined);setError(e instanceof Error?e.message:"Could not inspect selected closes."); }
     finally { setBusy(false); }
   }
-  async function stop() {
-    if(!preview?.length || !reason.trim()) return;
+  async function submit() {
+    if(!preview?.length || (mode === "stop" && !reason.trim())) return;
     setBusy(true);setError("");
     const results:string[]=[];
     for(const close of preview) {
-      if(close.count===0) { results.push(`${close.label}: no unresolved jobs to stop.`); continue; }
+      if(close.count===0) { results.push(`${close.label}: no ${mode === "prepare" ? "source jobs to coordinate" : "unresolved jobs to stop"}.`); continue; }
       try {
-        await workspaceRequest(`/${close.id}/prepare-close/cancel`,{digest:close.digest,reason:reason.trim(),confirmed:true});
-        results.push(`${close.label}: stopped ${close.count} unresolved job${close.count===1?"":"s"}.`);
-      } catch(e) { results.push(`${close.label}: ${e instanceof Error?e.message:"Stop failed"}. Inspect this close before another attempt.`); }
+        if(mode === "prepare") await workspaceRequest(`/${close.id}/prepare-close`,{inventory_digest:close.digest,confirmed:true});
+        else await workspaceRequest(`/${close.id}/prepare-close/cancel`,{digest:close.digest,reason:reason.trim(),confirmed:true});
+        results.push(`${close.label}: ${mode === "prepare" ? "coordinated" : "stopped"} ${close.count} source job${close.count===1?"":"s"}.`);
+      } catch(e) { results.push(`${close.label}: ${e instanceof Error?e.message:"Command failed"}. Inspect this close before another attempt.`); }
     }
     setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
   }
   if(!closes.length) return null;
-  return <details><summary>Portfolio command · stop unresolved work in selected closes</summary>
-    <p>Select up to 10 visible closes. Preview counts before stopping. Each close is checked again when submitted; messages already sent and prepared drafts remain in history.</p>
+  return <details><summary>Portfolio commands · prepare or stop selected closes</summary>
+    <p>Select up to 10 visible closes. Each close is checked again when submitted and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
+    <label>Command<select value={mode} onChange={e=>{setMode(e.target.value as "prepare"|"stop");setSelected([]);setPreview(undefined);setOutcomes([]);}}><option value="prepare">Prepare selected closes</option><option value="stop">Stop unresolved work</option></select></label>
     {closes.map(close=><label key={close.id}><input type="checkbox" checked={selected.includes(close.id)} disabled={busy || (!selected.includes(close.id) && selected.length>=10)} onChange={e=>{setPreview(undefined);setOutcomes([]);setSelected(current=>e.target.checked?[...current,close.id]:current.filter(id=>id!==close.id));}} /> {close.label}</label>)}
     <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect()}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
-    {preview && <div><h3>Exact stop preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} unresolved job{close.count===1?"":"s"}</li>)}</ul><label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label><button type="button" disabled={busy || !reason.trim() || preview.every(close=>close.count===0)} onClick={()=>void stop()}>Stop listed work in selected closes</button></div>}
+    {preview && <div><h3>Exact {mode} preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} {mode === "prepare" ? "source" : "unresolved"} job{close.count===1?"":"s"}</li>)}</ul>{mode === "stop" && <label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label>}<button type="button" disabled={busy || (mode === "stop" && !reason.trim()) || preview.every(close=>close.count===0)} onClick={()=>void submit()}>{mode === "prepare" ? "Coordinate selected closes" : "Stop listed work"}</button></div>}
     {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
     {error && <p role="alert">{error}</p>}
   </details>;
