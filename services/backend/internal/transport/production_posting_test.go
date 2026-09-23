@@ -47,7 +47,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	org := "org_production_" + rand.Text()
+	org := "org_Production" + rand.Text()
 	var closeID, paperID, connectionID string
 	if _, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Production fixture')`, org); err != nil {
 		t.Fatal(err)

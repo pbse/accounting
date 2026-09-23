@@ -105,6 +105,9 @@ func (s Sandbox) Prepare(ctx context.Context, paper prepaids.Workpaper) (Journal
 func (s Sandbox) PrepareObserved(ctx context.Context, paper prepaids.Workpaper) (Journal, LedgerObservation, error) {
 	var observation LedgerObservation
 	if paper.Input.Method != prepaids.Method || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" || paper.Input.CancellationMethod != "" {
+		if !s.Production {
+			return Journal{}, observation, errors.New("This accounting method supports draft review only; sandbox posting has not been enabled for it")
+		}
 		return Journal{}, observation, errors.New("Only the initial full-month prepaid method is enabled for posting")
 	}
 	if !s.Ready() || paper.Proposal == nil || paper.Input.Entity != s.Entity {
