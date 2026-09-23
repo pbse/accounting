@@ -61,7 +61,7 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 		}
 		return source
 	}
-	invoice := insert(closeID, "invoice.pdf", "Example insurance costs USD 1200. Coverage runs 2026-09-01 through 2027-08-31.")
+	invoice := insert(closeID, "invoice.pdf", "--- Page 1 · PDF text ---\nExample insurance costs USD 1200. Coverage runs 2026-09-01 through 2027-08-31.\n")
 	insert(other, "private.txt", "FOREIGN_CLIENT_CONTENT_MUST_NOT_LEAVE")
 	tx, _ := db.Begin()
 	job, err := preparation.StartIntake(context.Background(), tx, closeID, invoice, "fixture")

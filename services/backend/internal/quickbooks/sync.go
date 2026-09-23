@@ -197,7 +197,7 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	if productionPending {
 		return errors.New("Resolve the linked production posting approval or attempt before replacing transaction evidence")
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE evidence e SET superseded_by=$2,replacement_reason='New QuickBooks transaction capture',replaced_by='quickbooks-sync',replaced_at=now() WHERE e.close_id=$1 AND e.id::text<>$2 AND e.superseded_by IS NULL AND e.id IN (SELECT old.evidence_id FROM quickbooks_entity_syncs old WHERE old.close_id=$1 AND old.state='completed' AND old.evidence_id IS NOT NULL)`, job.closeID, sourceID)
+	_, err = tx.ExecContext(ctx, `UPDATE evidence e SET superseded_by=$2::bigint,replacement_reason='New QuickBooks transaction capture',replaced_by='quickbooks-sync',replaced_at=now() WHERE e.close_id=$1 AND e.id<>$2::bigint AND e.superseded_by IS NULL AND e.id IN (SELECT old.evidence_id FROM quickbooks_entity_syncs old WHERE old.close_id=$1 AND old.state='completed' AND old.evidence_id IS NOT NULL)`, job.closeID, sourceID)
 	if err != nil {
 		return err
 	}
