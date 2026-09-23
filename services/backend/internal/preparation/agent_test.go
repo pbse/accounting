@@ -14,7 +14,7 @@ type agentRoundTrip func(*http.Request) (*http.Response, error)
 func (f agentRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestInterpretationContractAndCitationBoundary(t *testing.T) {
-	sources := []IntakeSource{{Source: Source{ID: "1", Name: "insurance.pdf", Digest: "invoice-hash", Role: "evidence", Location: "Full extracted text"}, Content: "Insurance coverage costs USD 1,200.00.\nCoverage starts September 1, 2026."}, {Source: Source{ID: "2", Name: "booking.txt", Digest: "booking-hash", Role: "evidence", Location: "Full extracted text"}, Content: "Insurance expense account 6100."}}
+	sources := []IntakeSource{{Source: Source{ID: "1", Name: "insurance.txt", Digest: "invoice-hash", Role: "evidence", Location: "Full extracted text"}, Content: "Insurance coverage costs USD 1,200.00.\nCoverage starts September 1, 2026."}, {Source: Source{ID: "2", Name: "booking.txt", Digest: "booking-hash", Role: "evidence", Location: "Full extracted text"}, Content: "Insurance expense account 6100."}}
 	output := `{"kind":"prepaid","summary":"Prepare the insurance coverage schedule.","questions":["When does coverage end?"],"sources":[{"id":"1","role":"invoice"},{"id":"2","role":"support"}],"facts":[{"field":"amount","value":"1200.00","source_id":"1","quote":"Insurance coverage costs USD 1,200.00."},{"field":"service_start","value":"2026-09-01","source_id":"1","quote":"Coverage starts September 1, 2026."}]}`
 	client := &http.Client{Transport: agentRoundTrip(func(r *http.Request) (*http.Response, error) {
 		if r.URL.String() != "https://api.openai.com/v1/responses" {
@@ -43,6 +43,11 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 	result.Sources[1].ID = "foreign-client-source"
 	if _, err = validateInterpretation(result, "1", sources); err == nil {
 		t.Fatal("Foreign evidence accepted")
+	}
+	json.Unmarshal([]byte(output), &result)
+	result.Facts[0].Quote = "Insurance"
+	if _, err = validateInterpretation(result, "1", []IntakeSource{{Source: sources[0].Source, Content: "Insurance\nInsurance"}, sources[1]}); err == nil {
+		t.Fatal("Repeated quote was assigned a false first location")
 	}
 	// A completed transport response without completed model output is not a proposal.
 	client.Transport = agentRoundTrip(func(*http.Request) (*http.Response, error) {
@@ -129,5 +134,16 @@ func TestSelectionCheckpointOnlyResumesSameBoundedInventory(t *testing.T) {
 	}
 	if _, ok := resumeSelection([]byte(`{"inventory_digest":"snapshot-a","selected_ids":["2"]}`), "snapshot-a", "1", sources); ok {
 		t.Fatal("checkpoint omitted primary")
+	}
+}
+
+func TestPrimaryClientLabelBlocksBeforeEvidenceSelection(t *testing.T) {
+	sources := []IntakeSource{{Source: Source{ID: "1", Name: "invoice.txt"}, Content: "Client entity: Other LLC\nAmount: 100"}, {Source: Source{ID: "2", Name: "support.txt"}, Content: "Client entity: Third LLC"}}
+	if p, ok := blockedIdentity("1", "Acme LLC", sources); !ok || p.Kind != "unsupported" || p.Engine != "identity_blocked" {
+		t.Fatal("misfiled primary source was not blocked", p)
+	}
+	sources[0].Content = "Amount: 100"
+	if _, ok := blockedIdentity("1", "Acme LLC", sources); ok {
+		t.Fatal("unrelated support source blocked this job")
 	}
 }

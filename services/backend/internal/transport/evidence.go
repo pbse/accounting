@@ -59,7 +59,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 		if err == sql.ErrNoRows {
 			added = true
 			var count, size int
-			if err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil {
 				problem(w, 503, "Could not check evidence storage.")
 				return
 			}
@@ -102,6 +102,11 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/evidence", func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
 		inspect := r.URL.Query().Get("checks") == "1"
+		var entity string
+		if inspect && db.QueryRowContext(r.Context(), `SELECT entity FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&entity) != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
 		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'bytes',COALESCE(octet_length(original),octet_length(content)),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
 		if err != nil {
 			problem(w, 503, "Could not load evidence.")
@@ -119,7 +124,11 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			json.Unmarshal(file["extraction_state"], &state)
 			delete(file, "content")
 			if inspect && state == "ready" && string(file["superseded_by"]) == "null" {
-				file["checks"], _ = json.Marshal(documents.Check(name, content))
+				checks := documents.Check(name, content)
+				if issue := documents.EntityIssue(content, entity); issue != "" {
+					checks.Questions = append(checks.Questions, issue)
+				}
+				file["checks"], _ = json.Marshal(checks)
 			}
 		}
 		jsonReply(w, 200, files)

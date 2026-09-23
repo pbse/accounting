@@ -507,7 +507,7 @@ function WorkDetails({
               </ul>
             </section>
           )}
-          {item.proposal.engine !== "openai" && (
+          {item.proposal.engine === "local" && (
             <p>
               AI interpretation is not configured. Only exact labeled lines are
               proposed; these are unverified candidates, not conclusions. An
@@ -515,7 +515,8 @@ function WorkDetails({
               blank.
             </p>
           )}
-          {item.proposal.engine !== "openai" && (
+          {item.proposal.engine === "identity_blocked" && <p role="alert">This evidence names a different or ambiguous client. Compare it with the original and replace the misfiled source before preparing this work.</p>}
+          {item.proposal.engine === "local" && (
             <p>
               For statement/ledger evidence,{" "}
               <Link

@@ -162,7 +162,7 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	var id, closeID string
+	var id, closeID, entity string
 	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.state='waiting_evidence' AND (e.extraction_state IN ('ready','failed') OR e.superseded_by IS NOT NULL) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`).Scan(&id, &closeID)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -170,7 +170,7 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&closeID); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT id::text,entity FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&closeID, &entity); err != nil {
 		return false, err
 	}
 	var ready bool
@@ -185,7 +185,16 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	proposal, _ := json.Marshal(Propose(sources))
+	proposed := Propose(sources)
+	for _, source := range sources {
+		if source.Role == "invoice" {
+			if blocked, ok := blockedIdentity(source.ID, entity, sources); ok {
+				proposed = blocked
+			}
+			break
+		}
+	}
+	proposal, _ := json.Marshal(proposed)
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET proposal=$2,revision=revision+1 WHERE job_id=$1`, id, string(proposal)); err != nil {
 		return false, err
 	}

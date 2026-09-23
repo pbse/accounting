@@ -38,6 +38,7 @@ type TransactionSync = {
   completeness?: string;
   latest?: boolean;
 };
+type TransactionRow = { kind: string; provider_id: string; revision: string; txn_date: string; provider_updated_at: string; currency: string; amount: string; record: unknown; capture_id: string; evidence_id: string };
 export function QuickBooks({
   closeId,
   entity,
@@ -47,6 +48,11 @@ export function QuickBooks({
 }) {
   const [status, setStatus] = useState<Status>();
   const [syncs, setSyncs] = useState<TransactionSync[]>([]);
+  const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+  const [transactionKind, setTransactionKind] = useState("");
+  const [transactionOffset, setTransactionOffset] = useState(0);
+  const [transactionMore, setTransactionMore] = useState(false);
+  const [transactionsLoaded, setTransactionsLoaded] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -76,7 +82,16 @@ export function QuickBooks({
   }
   useEffect(() => {
     void load();
+    setTransactions([]);
+    setTransactionOffset(0);
+    setTransactionsLoaded(false);
   }, [closeId]);
+  const latestCaptureId = syncs.find(s => s.latest)?.id;
+  useEffect(() => {
+    setTransactions([]);
+    setTransactionOffset(0);
+    setTransactionsLoaded(false);
+  }, [latestCaptureId]);
   useEffect(() => {
     if (!syncs.some((s) => s.state === "queued" || s.state === "running")) return;
     const timer = window.setInterval(() => void load(), 5000);
@@ -94,6 +109,21 @@ export function QuickBooks({
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Transaction refresh could not be queued.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function reviewTransactions(offset: number, kind = transactionKind) {
+    setBusy(true);
+    try {
+      const result = await workspaceRequest(`/${closeId}/quickbooks/entities/transactions?kind=${encodeURIComponent(kind)}&offset=${offset}`);
+      setTransactions(result.items);
+      setTransactionMore(result.has_more);
+      setTransactionOffset(offset);
+      setTransactionsLoaded(true);
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Transaction index unavailable.");
     } finally {
       setBusy(false);
     }
@@ -274,14 +304,21 @@ export function QuickBooks({
             app in Intuit as well to remove provider authorization.
           </p>
           <h3>Captured ledger evidence</h3>
-          <p>Transaction refresh runs in the background. It captures provider IDs and revisions for this close month. A partial or failed read is never offered as evidence; review the completed JSON and linked source before using proposed facts.</p>
+          <p>For active sandbox connections, the worker checks unsigned-off current and prior-month closes automatically every 24 hours. It retries interrupted checks and records failures here. Identical captures reuse the current evidence; changed captures reopen dependent sandbox approvals. A partial read is never offered as complete evidence.</p>
           {syncs.length === 0 ? <p>No transaction capture requested.</p> : (
             <ul>{syncs.map((s) => <li key={s.id}>
               {s.period} transactions · {s.state.replaceAll("_", " ")} · attempt {s.attempts}/3
               {s.state === "completed" && <> · {s.latest ? "latest completed" : "historical"} · evidence #{s.evidence_id} · {Object.values(s.counts ?? {}).reduce((n, count) => n + count, 0)} records · {s.started_at ? `${new Date(s.started_at).toLocaleString()} to ` : ""}{s.finished_at && new Date(s.finished_at).toLocaleString()} · {s.completeness ? "provider counts checked before and after each type" : "legacy capture; count completeness unverified"} <button onClick={() => void download(s.id, true)}>Download transactions</button></>}
+              {s.state === "unchanged" && <> · no source change · evidence #{s.evidence_id} · checked {s.finished_at && new Date(s.finished_at).toLocaleString()}</>}
               {s.error && <span role="alert"> · {s.error}</span>}
             </li>)}</ul>
           )}
+          <h4>Review indexed transactions</h4>
+          <p>Rows come from the latest completed capture and retain the provider ID, revision and exact source record. Values here are evidence, not confirmed accounting facts. Older captures need a new refresh to populate this index.</p>
+          <label>Transaction type <select value={transactionKind} onChange={e => { setTransactionKind(e.target.value); setTransactions([]); setTransactionOffset(0); setTransactionsLoaded(false); }}><option value="">All types</option>{Object.keys(syncs.find(s => s.latest)?.counts ?? {}).sort().map(kind => <option key={kind} value={kind}>{kind}</option>)}</select></label>
+          <button disabled={busy} onClick={() => void reviewTransactions(0)}>Show latest transactions</button>
+          {transactions.length > 0 && <><ul>{transactions.map(row => <li key={`${row.kind}-${row.provider_id}`}>{row.txn_date} · {row.kind} #{row.provider_id} · revision {row.revision} · {row.amount ? `${row.currency || "currency unverified"} ${row.amount}` : "amount not provided"} · source #{row.evidence_id}<details><summary>Inspect exact provider record</summary><pre>{JSON.stringify(row.record, null, 2)}</pre></details></li>)}</ul><button disabled={busy || transactionOffset === 0} onClick={() => void reviewTransactions(Math.max(0, transactionOffset - 100))}>Previous 100</button><button disabled={busy || !transactionMore} onClick={() => void reviewTransactions(transactionOffset + 100)}>Next 100</button></>}
+          {transactionsLoaded && transactions.length === 0 && <p>The selected capture has no indexed rows for this filter, or has not been refreshed since indexing was added.</p>}
           <p>Counts and company settings are checked during each transaction capture, but QuickBooks reads are sequential. A later change can make a completed capture stale; refresh before relying on it. Period capture reads Transaction List, General Ledger, Trial Balance and Profit and Loss for this close month on the accrual basis. It links immutable evidence and proposes coverage in Prepare this close. Confirm accrual is appropriate for this client. No facts, exclusions or methods are approved automatically.</p>
           <p>
             These are dated reads of the account directory, including inactive

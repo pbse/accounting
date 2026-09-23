@@ -265,7 +265,7 @@ func registerForwardedEvidence(mux *http.ServeMux, db *sql.DB) {
 			}
 			var count, size int
 			var copyExists bool
-			err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0),COALESCE(bool_or(digest=$2),false) FROM evidence WHERE close_id=$1`, closeID, digest).Scan(&count, &size, &copyExists)
+			err = tx.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0),COALESCE(bool_or(digest=$2),false) FROM evidence WHERE close_id=$1`, closeID, digest).Scan(&count, &size, &copyExists)
 			if err != nil || (!copyExists && (count >= 100 || size+len(body) > 20*1024*1024)) {
 				problem(w, 413, "Close evidence capacity is full.")
 				return
