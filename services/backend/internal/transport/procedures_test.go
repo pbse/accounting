@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"testing"
 
@@ -81,7 +82,7 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	}
 	publish := func(client, expense, previous string) string {
 		t.Helper()
-		request := httptest.NewRequest("GET", "/v1/closes/procedures?impact_kind=prepaid&client_entity="+client, nil)
+		request := httptest.NewRequest("GET", "/v1/closes/procedures?impact_kind=prepaid&client_entity="+neturl.QueryEscape(client), nil)
 		request = request.WithContext(auth.WithActor(request.Context(), actor))
 		response := httptest.NewRecorder()
 		h.ServeHTTP(response, request)
