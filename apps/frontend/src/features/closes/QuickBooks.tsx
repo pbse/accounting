@@ -109,7 +109,7 @@ export function QuickBooks({
   }
   const c = status?.data.connection;
   return (
-    <details open={callback.has("qbo_code")}>
+    <details open={callback.has("qbo_code") && callback.get("qbo_env") !== "production"}>
       <summary>QuickBooks sandbox ledger evidence</summary>
       <p>
         Connect the sandbox company for {entity}. This reader cannot post
@@ -183,7 +183,7 @@ export function QuickBooks({
                   Connect QuickBooks sandbox
                 </button>
               )}
-              {c?.state === "authorizing" && callback.has("qbo_code") && (
+              {c?.state === "authorizing" && callback.has("qbo_code") && callback.get("qbo_env") !== "production" && (
                 <button
                   disabled={!confirmed}
                   onClick={() => void action("callback")}

@@ -7,7 +7,7 @@
 1. Install Node 24 and Docker Desktop (Compose 2.22 or later); start Docker.
 2. Copy `.env.example` to `.env`. Set `WORKSPACE_TOKEN` to a privately generated `openssl rand -hex 32` value. Keep provider settings empty for a fully local synthetic workflow.
 3. Run `npm run dev`. Open http://localhost:5173. The API runs on port 8080, worker on 8081 and PostgreSQL on 5432. Fresh volumes apply every migration automatically.
-4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–022:
+4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–023:
 
    ```sh
    docker compose stop api worker
@@ -23,6 +23,7 @@
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/020_accruals.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/021_ledger_selections.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/022_ledger_search.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/023_production_posting.sql
    docker compose up -d --build api worker
    ```
 
@@ -68,7 +69,7 @@ To suspend a firm, set its `organizations.enabled` to false through an approved 
 
 ## Cloudflare and GitHub activation
 
-Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-staging.md). Provision managed PostgreSQL with TLS, apply migrations 001–022 to a fresh database, register synthetic test organizations, configure the GitHub staging environment and deploy API/worker/frontend together. No deployment provisions provider accounts or a database automatically.
+Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-staging.md). Provision managed PostgreSQL with TLS, apply migrations 001–023 to a fresh database, register synthetic test organizations, configure the GitHub staging environment and deploy API/worker/frontend together. No deployment provisions provider accounts or a database automatically.
 
 Before admitting client data, verify with **two** hosted organizations: sign-in, same-named client/month creation, denied cross-firm URLs, isolated Work, upload/extraction, preparation, review, client reply, carry-forward and export. Restart the worker mid-job and verify one durable outcome. Then rehearse database restore and verify access isolation again. Local mocks and a successful deployment are not substitutes for these checks.
 
@@ -109,3 +110,5 @@ Client-specific sandbox OAuth, period reports, linked evidence and coverage plan
 For automatic coverage status, multi-job requests, mandatory scanning and attachment release, follow [Coverage and client evidence](coverage-requests.md).
 
 For partial-month prepaids, prospective credits, prior-balance adjustments, month-boundary cancellations and fixed incurred accruals, follow [accounting methods and accountant acceptance](accounting-methods.md).
+
+Separate production OAuth, client grants, review, one-attempt posting and readback: [production posting](production-posting.md). Leave production credentials unset during ordinary local development.

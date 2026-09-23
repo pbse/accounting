@@ -32,6 +32,9 @@ jobs:
       QBO_CLIENT_ID: ${{ vars.QBO_CLIENT_ID }}
       QBO_CLIENT_SECRET: ${{ secrets.QBO_CLIENT_SECRET }}
       QBO_REDIRECT_URI: ${{ vars.QBO_REDIRECT_URI }}
+      QBO_PRODUCTION_CLIENT_ID: ${{ vars.QBO_PRODUCTION_CLIENT_ID }}
+      QBO_PRODUCTION_CLIENT_SECRET: ${{ secrets.QBO_PRODUCTION_CLIENT_SECRET }}
+      QBO_PRODUCTION_REDIRECT_URI: ${{ vars.QBO_PRODUCTION_REDIRECT_URI }}
       PUBLIC_APP_URL: ${{ vars.STAGING_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
@@ -59,6 +62,8 @@ jobs:
           if (new URL(process.env.VITE_API_BASE_URL || process.env.STAGING_URL).hostname !== process.env.UPLOAD_SCAN_HOST || process.env.UPLOAD_SCAN_HOST.endsWith('.workers.dev')) throw new Error('UPLOAD_SCAN_HOST must match the API custom hostname protected by WAF');
           const qbo = ['QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI'].map(name => !!process.env[name]);
           if (qbo.some(Boolean) && (!qbo.every(Boolean) || !process.env.SECRETS_KEY)) throw new Error('QBO OAuth requires all three settings and SECRETS_KEY');
+          const productionQbo = ['QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI'].map(name => !!process.env[name]);
+          if (productionQbo.some(Boolean) && (!productionQbo.every(Boolean) || !process.env.SECRETS_KEY)) throw new Error('Production QBO OAuth requires all three settings and SECRETS_KEY');
           if (!!process.env.OPENAI_API_KEY !== !!process.env.OPENAI_MODEL) throw new Error('Set both OpenAI worker settings or neither');
           if (process.env.SECRETS_KEY && !/^[0-9a-fA-F]{64}$/.test(process.env.SECRETS_KEY)) throw new Error('SECRETS_KEY must be 32 hex-encoded random bytes');
           for (const name of ['STAGING_URL','WORKOS_ISSUER','TEXT_SCANNER_URL']) {
@@ -68,7 +73,7 @@ jobs:
           JS
       - name: Verify migrations are already applied
         run: |
-          test "$(psql "$DATABASE_URL" -At -v ON_ERROR_STOP=1 -c "SELECT to_regclass('quickbooks_ledger_selections') IS NOT NULL AND to_regclass('client_attachments') IS NOT NULL AND to_regclass('coverage_bindings') IS NOT NULL AND to_regclass('request_jobs') IS NOT NULL AND to_regclass('quickbooks_snapshots') IS NOT NULL AND to_regclass('quickbooks_connections') IS NOT NULL AND to_regclass('close_preparations') IS NOT NULL AND to_regclass('email_outbox') IS NOT NULL AND to_regclass('current_client_access') IS NOT NULL AND to_regclass('procedure_versions') IS NOT NULL AND to_regclass('close_scopes') IS NOT NULL AND to_regclass('close_signoffs') IS NOT NULL AND to_regclass('organizations') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='client_closes' AND column_name='organization_id') AND to_regclass('client_closes') IS NOT NULL AND to_regclass('workpapers') IS NOT NULL AND to_regclass('sandbox_postings') IS NOT NULL AND to_regclass('evidence') IS NOT NULL AND to_regclass('preparation_plans') IS NOT NULL AND to_regclass('preparation_jobs') IS NOT NULL AND to_regclass('workpaper_review_state') IS NOT NULL AND to_regclass('request_drafts') IS NOT NULL AND to_regclass('work_replies') IS NOT NULL AND to_regclass('client_request_links') IS NOT NULL AND to_regclass('workpaper_source_review_state') IS NOT NULL AND to_regclass('preparation_answers') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='preparation_intakes' AND column_name='agent_claim') AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='evidence' AND column_name='extraction_state')")" = t
+          test "$(psql "$DATABASE_URL" -At -v ON_ERROR_STOP=1 -c "SELECT to_regclass('quickbooks_ledger_selections') IS NOT NULL AND to_regclass('client_attachments') IS NOT NULL AND to_regclass('coverage_bindings') IS NOT NULL AND to_regclass('request_jobs') IS NOT NULL AND to_regclass('quickbooks_snapshots') IS NOT NULL AND to_regclass('quickbooks_connections') IS NOT NULL AND to_regclass('production_postings') IS NOT NULL AND to_regclass('production_posting_grants') IS NOT NULL AND to_regclass('close_preparations') IS NOT NULL AND to_regclass('email_outbox') IS NOT NULL AND to_regclass('current_client_access') IS NOT NULL AND to_regclass('procedure_versions') IS NOT NULL AND to_regclass('close_scopes') IS NOT NULL AND to_regclass('close_signoffs') IS NOT NULL AND to_regclass('organizations') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='client_closes' AND column_name='organization_id') AND to_regclass('client_closes') IS NOT NULL AND to_regclass('workpapers') IS NOT NULL AND to_regclass('sandbox_postings') IS NOT NULL AND to_regclass('evidence') IS NOT NULL AND to_regclass('preparation_plans') IS NOT NULL AND to_regclass('preparation_jobs') IS NOT NULL AND to_regclass('workpaper_review_state') IS NOT NULL AND to_regclass('request_drafts') IS NOT NULL AND to_regclass('work_replies') IS NOT NULL AND to_regclass('client_request_links') IS NOT NULL AND to_regclass('workpaper_source_review_state') IS NOT NULL AND to_regclass('preparation_answers') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='preparation_intakes' AND column_name='agent_claim') AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='evidence' AND column_name='extraction_state')")" = t
       - name: Deploy isolated on-demand text scanner
         run: |
           export CLOSE_SCANNER_SECRET_FILE="$(mktemp)"
@@ -84,7 +89,7 @@ jobs:
           trap 'rm -f "$CLOSE_DEPLOY_SECRET_FILE"' EXIT
           node --input-type=module <<'JS'
           import { writeFileSync } from 'node:fs';
-          const names = ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','UPLOAD_SCAN_KEY','QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI','SECRETS_KEY','PUBLIC_APP_URL','DATABASE_URL','WORKOS_CLIENT_ID','WORKOS_ORGANIZATION_ID','WORKOS_ISSUER','FRONTEND_ORIGIN','QBO_SANDBOX_REALM_ID','QBO_SANDBOX_ENTITY','QBO_SANDBOX_PREPAID_ACCOUNT_ID','QBO_SANDBOX_EXPENSE_ACCOUNT_ID','QBO_SANDBOX_ACCESS_TOKEN'];
+          const names = ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','UPLOAD_SCAN_KEY','QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI','QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI','SECRETS_KEY','PUBLIC_APP_URL','DATABASE_URL','WORKOS_CLIENT_ID','WORKOS_ORGANIZATION_ID','WORKOS_ISSUER','FRONTEND_ORIGIN','QBO_SANDBOX_REALM_ID','QBO_SANDBOX_ENTITY','QBO_SANDBOX_PREPAID_ACCOUNT_ID','QBO_SANDBOX_EXPENSE_ACCOUNT_ID','QBO_SANDBOX_ACCESS_TOKEN'];
           writeFileSync(process.env.CLOSE_DEPLOY_SECRET_FILE, JSON.stringify(Object.fromEntries(names.map(name => [name, process.env[name] || '']))), {mode: 0o600});
           JS
           npm run deploy:staging -- --secrets-file "$CLOSE_DEPLOY_SECRET_FILE" --route "${UPLOAD_SCAN_HOST}/*"

@@ -78,6 +78,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	verifier := workspaceVerifier()
 	mux := http.NewServeMux()
 	registerPosting(mux, db)
+	registerProductionPosting(mux, db)
 	registerEvidence(mux, db)
 	registerReview(mux, db)
 	registerRequests(mux, db)

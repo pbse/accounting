@@ -39,6 +39,18 @@ type Journal struct {
 type Sandbox struct {
 	Realm, Token, Entity, DebitAccount, CreditAccount string
 	Client                                            *http.Client
+	Production                                        bool
+}
+type LedgerAccount struct {
+	ID        string      `json:"id"`
+	Name      string      `json:"name"`
+	Balance   json.Number `json:"balance"`
+	SyncToken string      `json:"sync_token"`
+}
+type LedgerObservation struct {
+	Company string        `json:"company"`
+	Prepaid LedgerAccount `json:"prepaid"`
+	Expense LedgerAccount `json:"expense"`
 }
 
 var identifier = regexp.MustCompile(`^[0-9]{1,30}$`)
@@ -58,8 +70,11 @@ func (s Sandbox) request(ctx context.Context, method, path string, body any, res
 			return err
 		}
 	}
-	// The production QuickBooks hostname is deliberately not configurable in this sandbox capability.
-	req, err := http.NewRequestWithContext(ctx, method, "https://sandbox-quickbooks.api.intuit.com/v3/company/"+s.Realm+path, bytes.NewReader(data))
+	host := "sandbox-quickbooks.api.intuit.com"
+	if s.Production {
+		host = "quickbooks.api.intuit.com"
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "https://"+host+"/v3/company/"+s.Realm+path, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -84,19 +99,28 @@ func (s Sandbox) request(ctx context.Context, method, path string, body any, res
 	return nil
 }
 func (s Sandbox) Prepare(ctx context.Context, paper prepaids.Workpaper) (Journal, error) {
+	journal, _, err := s.PrepareObserved(ctx, paper)
+	return journal, err
+}
+func (s Sandbox) PrepareObserved(ctx context.Context, paper prepaids.Workpaper) (Journal, LedgerObservation, error) {
+	var observation LedgerObservation
 	if paper.Input.Method != prepaids.Method || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" || paper.Input.CancellationMethod != "" {
-		return Journal{}, errors.New("This accounting method supports draft review only; sandbox posting has not been enabled for it")
+		if !s.Production {
+			return Journal{}, observation, errors.New("This accounting method supports draft review only; sandbox posting has not been enabled for it")
+		}
+		return Journal{}, observation, errors.New("Only the initial full-month prepaid method is enabled for posting")
 	}
 	if !s.Ready() || paper.Proposal == nil || paper.Input.Entity != s.Entity {
-		return Journal{}, errors.New("This draft must match the configured sandbox entity and have a positive prepaid proposal")
+		return Journal{}, observation, errors.New("This draft must match the confirmed company and have a positive prepaid proposal")
 	}
 	var company struct{ CompanyInfo struct{ CompanyName string } }
 	if err := s.request(ctx, "GET", "/companyinfo/"+s.Realm, nil, &company); err != nil {
-		return Journal{}, err
+		return Journal{}, observation, err
 	}
 	if company.CompanyInfo.CompanyName != s.Entity {
-		return Journal{}, errors.New("Sandbox company name does not match the configured client")
+		return Journal{}, observation, errors.New("QuickBooks company name does not match the configured client")
 	}
+	observation.Company = company.CompanyInfo.CompanyName
 	for _, mapping := range []struct{ id, name, classification string }{{s.DebitAccount, paper.Proposal.DebitAccount, "Asset"}, {s.CreditAccount, paper.Proposal.CreditAccount, "Expense"}} {
 		var result struct {
 			Account struct {
@@ -104,21 +128,38 @@ func (s Sandbox) Prepare(ctx context.Context, paper prepaids.Workpaper) (Journal
 				Name, FullyQualifiedName, Classification string
 				Active                                   bool
 				CurrencyRef                              Reference
+				CurrentBalance                           json.Number
+				SyncToken                                string
 			}
 		}
 		if err := s.request(ctx, "GET", "/account/"+mapping.id, nil, &result); err != nil {
-			return Journal{}, err
+			return Journal{}, observation, err
 		}
 		account := result.Account
 		if account.ID != mapping.id || !account.Active || account.Classification != mapping.classification || (account.Name != mapping.name && account.FullyQualifiedName != mapping.name) || (account.CurrencyRef.Value != "" && account.CurrencyRef.Value != "USD") {
-			return Journal{}, errors.New("Sandbox account mapping, active status, classification or currency no longer matches the proposal")
+			return Journal{}, observation, errors.New("QuickBooks account mapping, active status, classification or currency no longer matches the proposal")
+		}
+		if s.Production {
+			if _, ok := new(big.Rat).SetString(string(account.CurrentBalance)); !ok || account.SyncToken == "" {
+				return Journal{}, observation, errors.New("Current account balance or version is unavailable; production posting is blocked")
+			}
+		}
+		saved := LedgerAccount{ID: account.ID, Name: account.Name, Balance: account.CurrentBalance, SyncToken: account.SyncToken}
+		if mapping.id == s.DebitAccount {
+			observation.Prepaid = saved
+		} else {
+			observation.Expense = saved
 		}
 	}
 	p := paper.Proposal
-	return Journal{TxnDate: p.Date, CurrencyRef: Reference{"USD"}, PrivateNote: "Close sandbox test / " + strings.TrimSpace(paper.Input.SourceReference), Line: []Line{
+	note := "Close sandbox test / "
+	if s.Production {
+		note = "Reviewed close / "
+	}
+	return Journal{TxnDate: p.Date, CurrencyRef: Reference{"USD"}, PrivateNote: note + strings.TrimSpace(paper.Input.SourceReference), Line: []Line{
 		{json.Number(p.Amount), "JournalEntryLineDetail", Detail{"Debit", Reference{s.DebitAccount}}},
 		{json.Number(p.Amount), "JournalEntryLineDetail", Detail{"Credit", Reference{s.CreditAccount}}},
-	}}, nil
+	}}, observation, nil
 }
 func (s Sandbox) Create(ctx context.Context, journal Journal, requestID string) (string, error) {
 	var result struct{ JournalEntry Journal }
@@ -131,16 +172,20 @@ func (s Sandbox) Create(ctx context.Context, journal Journal, requestID string) 
 	return result.JournalEntry.ID, nil
 }
 func (s Sandbox) Verify(ctx context.Context, id string, expected Journal) error {
+	_, err := s.VerifyReadback(ctx, id, expected)
+	return err
+}
+func (s Sandbox) VerifyReadback(ctx context.Context, id string, expected Journal) (Journal, error) {
 	if !identifier.MatchString(id) {
-		return errors.New("External journal ID is required for readback")
+		return Journal{}, errors.New("External journal ID is required for readback")
 	}
 	var result struct{ JournalEntry Journal }
 	if err := s.request(ctx, "GET", "/journalentry/"+id, nil, &result); err != nil {
-		return err
+		return Journal{}, err
 	}
 	actual := result.JournalEntry
 	if actual.ID != id || actual.TxnDate != expected.TxnDate || actual.CurrencyRef.Value != "USD" || actual.PrivateNote != expected.PrivateNote || len(actual.Line) != 2 {
-		return errors.New("Journal readback does not match the approved draft")
+		return Journal{}, errors.New("Journal readback does not match the approved draft")
 	}
 	used := map[int]bool{}
 	for _, want := range expected.Line {
@@ -155,8 +200,8 @@ func (s Sandbox) Verify(ctx context.Context, id string, expected Journal) error 
 			}
 		}
 		if !found {
-			return errors.New("Journal line readback does not match the approved accounts and exact amounts")
+			return Journal{}, errors.New("Journal line readback does not match the approved accounts and exact amounts")
 		}
 	}
-	return nil
+	return actual, nil
 }

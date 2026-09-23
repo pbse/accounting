@@ -20,6 +20,8 @@ import {
 } from "./Evidence";
 import { ReviewDecision } from "./ReviewDecision";
 import { Posting } from "./Posting";
+import { ProductionPosting } from "./Posting";
+import { ProductionAccess } from "./ProductionAccess";
 import { AccountAccess, authKitClientId } from "../auth/Auth";
 import { unlock, workspaceRequest } from "./workspace";
 import type { PrepaidWorkpaper } from "../../../../../packages/contracts/prepaid";
@@ -229,6 +231,7 @@ export default function Closes() {
             closeId={close.id}
             entity={close.entity}
           />
+          <ProductionAccess closeId={close.id} entity={close.entity} />
           <Recurring key={`recurring-${close.id}`} closeId={close.id} onPrepared={() => void load()} />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work
@@ -440,7 +443,10 @@ export default function Closes() {
                   </>
                 )}
                 {saved.kind === "prepaid" && !saved.paper.carry_forward && saved.paper.input.method==="equal_full_months_v1" && !saved.paper.input.credit_amount && !saved.paper.input.booked_balance && !saved.paper.input.cancellation_method && (
+                  <>
                   <Posting closeId={close.id} paperId={saved.id} />
+                  <ProductionPosting closeId={close.id} paperId={saved.id} />
+                  </>
                 )}
                 <details>
                   <summary>Original inputs and full calculation</summary>
