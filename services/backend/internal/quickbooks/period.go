@@ -138,9 +138,18 @@ type reportRows struct {
 // TrialBalanceAccount returns the exact reported cells for one prepaid account.
 // The reviewer, not the report parser, interprets debit/credit signs and cutoff.
 func TrialBalanceAccount(accounts, report json.RawMessage, accountID string) (string, string, json.RawMessage, error) {
+	return trialBalanceAccount(accounts, report, accountID, "PrepaidExpenses")
+}
+
+func TrialBalanceLiability(accounts, report json.RawMessage, accountID string) (string, string, json.RawMessage, error) {
+	return trialBalanceAccount(accounts, report, accountID, "Other Current Liability")
+}
+
+func trialBalanceAccount(accounts, report json.RawMessage, accountID, requiredType string) (string, string, json.RawMessage, error) {
 	var directory []struct {
 		ID             string `json:"Id"`
 		Name           string
+		AccountType    string
 		AccountSubType string
 	}
 	if json.Unmarshal(accounts, &directory) != nil {
@@ -148,12 +157,12 @@ func TrialBalanceAccount(accounts, report json.RawMessage, accountID string) (st
 	}
 	name := ""
 	for _, a := range directory {
-		if a.ID == accountID && a.AccountSubType == "PrepaidExpenses" {
+		if a.ID == accountID && (a.AccountSubType == requiredType || a.AccountType == requiredType) {
 			name = a.Name
 		}
 	}
 	if accountID == "" || name == "" {
-		return "", "", nil, fmt.Errorf("Choose a prepaid account in this snapshot")
+		return "", "", nil, fmt.Errorf("Choose an exact %s account in this snapshot", requiredType)
 	}
 	var root struct {
 		Header struct{ Currency, ReportBasis string }

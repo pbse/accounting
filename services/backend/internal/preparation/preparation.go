@@ -27,11 +27,12 @@ type Source struct {
 	Location string `json:"location"`
 }
 type Plan struct {
-	CarryForward *CarryForward   `json:"carry_forward,omitempty"`
-	Revises      string          `json:"revises,omitempty"`
-	Kind         string          `json:"kind"`
-	Input        json.RawMessage `json:"input"`
-	Sources      []Source        `json:"sources"`
+	CarryForward     *CarryForward     `json:"carry_forward,omitempty"`
+	RecurringAccrual *RecurringAccrual `json:"recurring_accrual,omitempty"`
+	Revises          string            `json:"revises,omitempty"`
+	Kind             string            `json:"kind"`
+	Input            json.RawMessage   `json:"input"`
+	Sources          []Source          `json:"sources"`
 }
 
 func Digest(b []byte) string { return fmt.Sprintf("%x", sha256.Sum256(b)) }
@@ -73,7 +74,7 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 		if err := Strict(p.Input, &in); err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(in.Entity) != entity || in.ClosePeriod != period || p.CarryForward != nil {
+		if strings.TrimSpace(in.Entity) != entity || in.ClosePeriod != period || p.CarryForward != nil || (p.RecurringAccrual != nil && in.Method != accruals.RecurringMethod) {
 			return nil, fmt.Errorf("Accrual must match this close and cannot inherit carry-forward approval")
 		}
 		paper, err := accruals.Prepare(in)
@@ -107,6 +108,9 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 	}
 	if p.CarryForward != nil {
 		object["carry_forward"], _ = json.Marshal(p.CarryForward)
+	}
+	if p.RecurringAccrual != nil {
+		object["recurring_accrual"], _ = json.Marshal(p.RecurringAccrual)
 	}
 	if p.Revises != "" {
 		object["revises"], _ = json.Marshal(p.Revises)
@@ -174,9 +178,15 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				break
 			}
 		}
+		if p.RecurringAccrual != nil {
+			if e := ValidateRecurringAccrual(ctx, tx, p, closeID, entity, period); e != nil {
+				failure = e.Error()
+				break
+			}
+		}
 		if p.Revises != "" {
 			var active bool
-			err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sandbox_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown'))`, p.Revises).Scan(&active)
+			err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sandbox_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown'))`, p.Revises).Scan(&active)
 			if err != nil {
 				return false, err
 			}
@@ -215,6 +225,9 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 			if plans[i].Revises != "" {
 				if _, err = tx.ExecContext(ctx, `UPDATE sandbox_postings SET state='preview',approved_by=NULL,approval_expires_at=NULL WHERE workpaper_id::text=$1 AND state='approved'`, plans[i].Revises); err != nil {
+					return false, err
+				}
+				if _, err = tx.ExecContext(ctx, `UPDATE vendor_credit_postings SET state='preview',approved_by=NULL,approval_expires_at=NULL WHERE workpaper_id::text=$1 AND state='approved'`, plans[i].Revises); err != nil {
 					return false, err
 				}
 			}

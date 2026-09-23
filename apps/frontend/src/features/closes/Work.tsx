@@ -29,6 +29,8 @@ type WorkItem = {
   error: string;
   blockers: string[];
   agent_started_at: string;
+  agent_attempts: number;
+  agent_checkpoint: { stage?: string; input_tokens?: number; output_tokens?: number };
   revision: number;
   stale: boolean;
   coordinated: boolean;
@@ -278,24 +280,48 @@ export function Work({
 
 function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}) {
   const [mode,setMode] = useState<"prepare"|"stop"|"recheck">("prepare");
-  const closes = [...new Map(items.filter(i=>mode === "prepare" || (mode === "recheck" ? ["failed","needs_confirmation"].includes(i.state) : !["completed","cancelled"].includes(i.state))).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`}])).values()];
+  const [command,setCommand] = useState("");
+  const [answer,setAnswer] = useState("");
+  const closesFor = (action:"prepare"|"stop"|"recheck") => [...new Map(items.filter(i=>action === "prepare" || (action === "recheck" ? ["failed","needs_confirmation"].includes(i.state) : !["completed","cancelled"].includes(i.state))).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`,entity:i.entity.toLowerCase()}])).values()];
+  const closes = closesFor(mode);
   const [selected,setSelected] = useState<string[]>([]);
   const [preview,setPreview] = useState<{id:string;label:string;count:number;digest:string}[]>();
   const [reason,setReason] = useState("");
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState("");
   const [outcomes,setOutcomes] = useState<string[]>([]);
-  async function inspect() {
+  async function inspect(targets = selected, action = mode) {
     setBusy(true);setError("");setOutcomes([]);
     try {
       const next = [];
-      for (const close of closes.filter(c=>selected.includes(c.id))) {
+      for (const close of closesFor(action).filter(c=>targets.includes(c.id))) {
         const status = await workspaceRequest(`/${close.id}/prepare-close`);
-        next.push({...close,count:mode === "prepare" ? status.inventory.length as number : mode === "recheck" ? status.recheck.count as number : status.stop.count as number,digest:mode === "prepare" ? status.inventory_digest as string : mode === "recheck" ? status.recheck.digest as string : status.stop.digest as string});
+        next.push({...close,count:action === "prepare" ? status.inventory.length as number : action === "recheck" ? status.recheck.count as number : status.stop.count as number,digest:action === "prepare" ? status.inventory_digest as string : action === "recheck" ? status.recheck.digest as string : status.stop.digest as string});
       }
       setPreview(next);
     } catch(e) { setPreview(undefined);setError(e instanceof Error?e.message:"Could not inspect selected closes."); }
     finally { setBusy(false); }
+  }
+  function interpret() {
+    setAnswer("");
+    const why = /^why is (.+) waiting\??$/i.exec(command.trim());
+    if (why) {
+      const query = why[1].trim().toLowerCase();
+      const matches = [...new Map(items.filter(i=>i.entity.toLowerCase() === query || `${i.entity} · ${i.period}`.toLowerCase() === query).map(i=>[i.close_id,i])).values()];
+      if (matches.length !== 1) {setError("Name exactly one visible client and month to explain its work.");return;}
+      const related = items.filter(i=>i.close_id === matches[0].close_id);
+      setError("");setAnswer(related.map(i=>`${i.source_name}: ${labels[i.state] ?? i.state}${i.blockers.length ? ` — ${i.blockers.join("; ")}` : i.error ? ` — ${i.error}` : ""}`).join("\n"));
+      return;
+    }
+    const match = /^(prepare|recheck|stop) (.+)$/i.exec(command.trim());
+    if (!match) {setError("Try ‘prepare Client name’, ‘recheck Client name’, ‘stop Client name’ or ‘why is Client name waiting?’.");return;}
+    const action = match[1].toLowerCase() as "prepare"|"stop"|"recheck";
+    const query = match[2].trim().toLowerCase();
+    const eligible = closesFor(action);
+    const matches = eligible.filter(c=>c.entity === query || c.label.toLowerCase() === query);
+    if (matches.length !== 1) {setError(matches.length ? "Several closes match. Include the close month shown below." : "No eligible visible close matches. Change the inbox filter or use the exact client name and month.");return;}
+    setMode(action);setSelected([matches[0].id]);setPreview(undefined);setError("");
+    void inspect([matches[0].id],action);
   }
   async function submit() {
     if(!preview?.length || (mode === "stop" && !reason.trim())) return;
@@ -313,11 +339,13 @@ function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}
     setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
   }
   if(!closes.length) return null;
-  return <details><summary>Portfolio commands · prepare, recheck or stop selected closes</summary>
+  return <details open><summary>Ask Work · prepare, recheck, stop or explain</summary>
     <p>Select up to 10 visible closes. Each close is checked again when submitted and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
+    <label>Ask Work<input value={command} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();interpret();}}} placeholder="prepare Client name" maxLength={220} /></label><button type="button" disabled={busy || !command.trim()} onClick={interpret}>Find and preview</button>
+    {answer && <p role="status" style={{whiteSpace:"pre-line"}}>{answer}</p>}
     <label>Command<select value={mode} onChange={e=>{setMode(e.target.value as "prepare"|"stop"|"recheck");setSelected([]);setPreview(undefined);setOutcomes([]);}}><option value="prepare">Prepare selected closes</option><option value="recheck">Recheck failed or pending proposals</option><option value="stop">Stop unresolved work</option></select></label>
     {closes.map(close=><label key={close.id}><input type="checkbox" checked={selected.includes(close.id)} disabled={busy || (!selected.includes(close.id) && selected.length>=10)} onChange={e=>{setPreview(undefined);setOutcomes([]);setSelected(current=>e.target.checked?[...current,close.id]:current.filter(id=>id!==close.id));}} /> {close.label}</label>)}
-    <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect()}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
+    <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect(selected,mode)}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
     {preview && <div><h3>Exact {mode} preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} {mode === "prepare" ? "source" : "unresolved"} job{close.count===1?"":"s"}</li>)}</ul>{mode === "stop" && <label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label>}<button type="button" disabled={busy || (mode === "stop" && !reason.trim()) || preview.every(close=>close.count===0)} onClick={()=>void submit()}>{mode === "prepare" ? "Coordinate selected closes" : mode === "recheck" ? "Recheck listed proposals" : "Stop listed work"}</button></div>}
     {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
     {error && <p role="alert">{error}</p>}
@@ -409,6 +437,7 @@ function WorkDetails({
         Durable job #{item.id} · revision {item.revision}. Preparation does not
         approve or post a journal.
       </p>
+      {item.coordinated && <p>Agent budget: {item.agent_attempts} of 3 interpretation attempts used. Checkpoint: {item.agent_checkpoint?.stage?.replaceAll("_", " ") ?? "pending"}. Each attempt selects at most 20 sources / 128 KiB and requests at most 8,000 output tokens across selection and interpretation; a fresh client answer or reviewer recheck can reset this budget.</p>}
       {item.error && <p role="alert">{item.error}</p>}
       {item.blockers?.length > 0 && (
         <section>

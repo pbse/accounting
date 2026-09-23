@@ -45,3 +45,20 @@ func TestActualInvoiceLinksEstimateAndOnlyReversesNewDifference(t *testing.T) {
 		t.Fatal("unapproved method accepted")
 	}
 }
+
+func TestRecurringAccrualRequiresCurrentMonthAndApprovedRule(t *testing.T) {
+	in := Input{Entity: "Synthetic", SourceReference: "Current-month service confirmation", ClosePeriod: "2026-09", ServiceStart: "2026-09-01", ServiceEnd: "2026-09-30", Amount: "1200.00", BookedBalance: "200.00", BookingReference: "Current September liability ledger", EstimationBasis: "Approved $1,200 monthly service", AccountantRuleReference: "Client accountant rule R1", ExpenseAccount: "Consulting expense", LiabilityAccount: "Accrued consulting", Currency: "USD", Basis: "accrual", Method: RecurringMethod, MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true}
+	p, err := Prepare(in)
+	if err != nil || p.Proposal == nil || p.Proposal.Amount != "1000.00" {
+		t.Fatalf("recurring accrual: %+v %v", p, err)
+	}
+	in.AccountantRuleReference = ""
+	if _, err = Prepare(in); err == nil {
+		t.Fatal("recurring rule missing")
+	}
+	in.AccountantRuleReference = "Client accountant rule R1"
+	in.ServiceStart = "2026-08-31"
+	if _, err = Prepare(in); err == nil {
+		t.Fatal("prior-month service accepted")
+	}
+}

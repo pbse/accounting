@@ -120,18 +120,29 @@ func selectEvidence(ctx context.Context, client *http.Client, key, model, primar
 	var chosen struct {
 		IDs []string `json:"selected_ids"`
 	}
-	if Strict([]byte(output.String()), &chosen) != nil || len(chosen.IDs) == 0 || len(chosen.IDs) > 20 {
+	if Strict([]byte(output.String()), &chosen) != nil {
 		return nil, fmt.Errorf("Evidence selection was invalid; review the close inventory.")
 	}
+	selected, ok := pickSources(chosen.IDs, primary, sources)
+	if !ok {
+		return nil, fmt.Errorf("Selected evidence is repeated, unknown, missing the primary source or exceeds 128 KiB. Narrow the source set for this work.")
+	}
+	return selected, nil
+}
+
+func pickSources(ids []string, primary string, sources []IntakeSource) ([]IntakeSource, bool) {
+	if len(ids) == 0 || len(ids) > 20 {
+		return nil, false
+	}
 	want := map[string]bool{}
-	for _, id := range chosen.IDs {
+	for _, id := range ids {
 		if want[id] {
-			return nil, fmt.Errorf("Evidence selection repeated a source.")
+			return nil, false
 		}
 		want[id] = true
 	}
 	if !want[primary] {
-		return nil, fmt.Errorf("Evidence selection omitted the primary source.")
+		return nil, false
 	}
 	selected := []IntakeSource{}
 	selectedBytes := 0
@@ -142,10 +153,26 @@ func selectEvidence(ctx context.Context, client *http.Client, key, model, primar
 			delete(want, s.ID)
 		}
 	}
-	if len(want) != 0 || selectedBytes > 128*1024 {
-		return nil, fmt.Errorf("Selected evidence is unknown or exceeds 128 KiB. Narrow the source set for this work.")
+	return selected, len(want) == 0 && selectedBytes <= 128*1024
+}
+
+func resumeSelection(raw []byte, digest, primary string, sources []IntakeSource) ([]IntakeSource, bool) {
+	var checkpoint struct {
+		Digest string   `json:"inventory_digest"`
+		IDs    []string `json:"selected_ids"`
 	}
-	return selected, nil
+	if json.Unmarshal(raw, &checkpoint) != nil || checkpoint.Digest != digest {
+		return nil, false
+	}
+	return pickSources(checkpoint.IDs, primary, sources)
+}
+
+func selectedIDs(sources []IntakeSource) []string {
+	ids := make([]string, 0, len(sources))
+	for _, source := range sources {
+		ids = append(ids, source.ID)
+	}
+	return ids
 }
 
 type agentResult struct {
@@ -399,7 +426,8 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	defer tx.Rollback()
 	var id, closeID, primary, entity, period string
 	var revision, attempts int
-	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text,i.source_id::text,i.revision,i.agent_attempts FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE (j.state='waiting_evidence' OR (j.state='interpreting' AND i.agent_started_at<now()-interval '2 minutes')) AND e.extraction_state IN ('ready','failed') AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j,i SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &primary, &revision, &attempts)
+	var checkpoint []byte
+	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text,i.source_id::text,i.revision,i.agent_attempts,i.agent_checkpoint FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE (j.state='waiting_evidence' OR (j.state='interpreting' AND i.agent_started_at<now()-interval '2 minutes')) AND e.extraction_state IN ('ready','failed') AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j,i SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &primary, &revision, &attempts, &checkpoint)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -439,7 +467,21 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	client := &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	selected, selectErr := selectEvidence(ctx, client, os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), primary, sources)
+	selected, reusable := resumeSelection(checkpoint, digest, primary, sources)
+	var selectErr error
+	if !reusable {
+		selected, selectErr = selectEvidence(ctx, client, os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), primary, sources)
+	}
+	if selectErr == nil && !reusable {
+		body, _ := json.Marshal(map[string]any{"stage": "selected", "inventory_digest": digest, "selected_ids": selectedIDs(selected), "attempt": attempts + 1})
+		result, e := db.ExecContext(ctx, `UPDATE preparation_intakes SET agent_checkpoint=$3 WHERE job_id::text=$1 AND agent_claim=$2`, id, claim, string(body))
+		if e != nil {
+			return true, e
+		}
+		if changed, _ := result.RowsAffected(); changed != 1 {
+			return true, nil
+		}
+	}
 	proposal, interpretErr := Proposal{}, selectErr
 	if selectErr == nil {
 		proposal, interpretErr = interpret(ctx, client, os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), entity, period, primary, selected)
@@ -487,7 +529,8 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			return true, err
 		}
 	}
-	if _, err = finish.ExecContext(persist, `UPDATE preparation_intakes SET agent_claim=NULL WHERE job_id=$1`, id); err != nil {
+	checkpointBody, _ := json.Marshal(map[string]any{"stage": state, "inventory_digest": digest, "selected_ids": selectedIDs(selected), "attempt": attempts + 1, "input_tokens": proposal.InputTokens, "output_tokens": proposal.OutputTokens})
+	if _, err = finish.ExecContext(persist, `UPDATE preparation_intakes SET agent_claim=NULL,agent_checkpoint=$2 WHERE job_id=$1`, id, string(checkpointBody)); err != nil {
 		return true, err
 	}
 	if _, err = finish.ExecContext(persist, `UPDATE preparation_jobs SET state=$2,error=$3 WHERE id=$1`, id, state, message); err != nil {

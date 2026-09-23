@@ -7,6 +7,8 @@ export class PreparationWorker extends Container<Env> {
     SECRETS_KEY: this.env.SECRETS_KEY ?? "",
     OPENAI_API_KEY: this.env.OPENAI_API_KEY ?? "",
     OPENAI_MODEL: this.env.OPENAI_MODEL ?? "",
+    OPERATIONS_ALERT_WEBHOOK_URL: this.env.OPERATIONS_ALERT_WEBHOOK_URL ?? "",
+    OPERATIONS_ALERT_WEBHOOK_TOKEN: this.env.OPERATIONS_ALERT_WEBHOOK_TOKEN ?? "",
     QBO_CLIENT_ID: this.env.QBO_CLIENT_ID ?? "",
     QBO_CLIENT_SECRET: this.env.QBO_CLIENT_SECRET ?? "",
     QBO_REDIRECT_URI: this.env.QBO_REDIRECT_URI ?? "",
@@ -24,6 +26,8 @@ interface Env {
   SECRETS_KEY?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
+  OPERATIONS_ALERT_WEBHOOK_URL?: string;
+  OPERATIONS_ALERT_WEBHOOK_TOKEN?: string;
   QBO_CLIENT_ID?: string;
   QBO_CLIENT_SECRET?: string;
   QBO_REDIRECT_URI?: string;

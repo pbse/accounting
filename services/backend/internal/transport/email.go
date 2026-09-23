@@ -201,6 +201,10 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 		id, token := rand.Text(), rand.Text()
 		digest := preparation.Digest([]byte(token))
 		message := delivery.Email{From: sender, To: []string{recipient}, Subject: "A secure request from your accounting team", Text: "Your accounting team has requested information. Review the request and reply using this private link:\n\n" + strings.TrimRight(origin.String(), "/") + "/request#" + token + "\n\nThis link expires in seven days. Do not forward it. Contact your accounting team if you were not expecting this request."}
+		if intake := strings.Split(os.Getenv("EMAIL_INTAKE_ADDRESS"), "@"); len(intake) == 2 && intake[0] != "" && intake[1] != "" && len(os.Getenv("EMAIL_INTAKE_KEY")) >= 32 {
+			message.ReplyTo = intake[0] + "+reply-" + strings.ToLower(id) + "@" + intake[1]
+			message.Text += "\n\nYou may also reply to this email with text. Your accounting team will review the sender and answer before using it; use the secure link for attachments."
+		}
 		if in.PreviousID != "" {
 			var prior []byte
 			err = tx.QueryRowContext(r.Context(), `SELECT m.payload,m.link_digest FROM email_delivery m JOIN client_request_links l ON l.digest=m.link_digest WHERE m.id=$1 AND m.request_id::text=$2 AND m.connection_id::text=$3 AND m.state='accepted' AND m.delivery='delivered' AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now() AND NOT EXISTS(SELECT 1 FROM email_delivery bad WHERE bad.request_id=m.request_id AND bad.delivery IN ('bounced','complained','failed','suppressed')) AND NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=m.request_id)`, in.PreviousID, r.PathValue("request"), connection).Scan(&prior, &digest)

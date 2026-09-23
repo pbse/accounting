@@ -142,12 +142,16 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 		}
 		if input.Decision == "changes_requested" {
 			var active bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM sandbox_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown'))`, r.PathValue("paper")).Scan(&active); err != nil || active {
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM sandbox_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown'))`, r.PathValue("paper")).Scan(&active); err != nil || active {
 				problem(w, 409, "Resolve the outstanding sandbox execution before changing review status.")
 				return
 			}
 			if _, err = tx.ExecContext(r.Context(), `UPDATE sandbox_postings SET state='preview',approved_by=NULL,approval_expires_at=NULL WHERE workpaper_id::text=$1 AND state='approved'`, r.PathValue("paper")); err != nil {
 				problem(w, 503, "Could not invalidate posting approval.")
+				return
+			}
+			if _, err = tx.ExecContext(r.Context(), `UPDATE vendor_credit_postings SET state='preview',approved_by=NULL,approval_expires_at=NULL WHERE workpaper_id::text=$1 AND state='approved'`, r.PathValue("paper")); err != nil {
+				problem(w, 503, "Could not invalidate supplier credit approval.")
 				return
 			}
 		}
@@ -195,7 +199,7 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 		}
 		source, _ := json.Marshal([]map[string]string{{"id": r.PathValue("evidence")}})
 		var active bool
-		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM sandbox_postings p JOIN workpapers w ON w.id=p.workpaper_id WHERE w.close_id=$1 AND w.paper->'sources' @> $2::jsonb AND p.state IN ('executing','unknown'))`, closeID, string(source)).Scan(&active)
+		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM sandbox_postings p JOIN workpapers w ON w.id=p.workpaper_id WHERE w.close_id=$1 AND w.paper->'sources' @> $2::jsonb AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings p JOIN workpapers w ON w.id=p.workpaper_id WHERE w.close_id=$1 AND (w.paper->'sources' @> $2::jsonb OR p.evidence_id::text=$3) AND p.state IN ('executing','unknown'))`, closeID, string(source), r.PathValue("evidence")).Scan(&active)
 		if err != nil || active {
 			problem(w, 409, "Resolve the affected sandbox execution before replacing its evidence.")
 			return
@@ -206,6 +210,10 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 		}
 		if _, err = tx.ExecContext(r.Context(), `UPDATE sandbox_postings p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id=$1 AND w.paper->'sources' @> $2::jsonb AND p.state='approved'`, closeID, string(source)); err != nil {
 			problem(w, 503, "Could not invalidate affected posting approvals.")
+			return
+		}
+		if _, err = tx.ExecContext(r.Context(), `UPDATE vendor_credit_postings p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id=$1 AND (w.paper->'sources' @> $2::jsonb OR p.evidence_id::text=$3) AND p.state='approved'`, closeID, string(source), r.PathValue("evidence")); err != nil {
+			problem(w, 503, "Could not invalidate affected supplier credit approval.")
 			return
 		}
 		if err = tx.Commit(); err != nil {

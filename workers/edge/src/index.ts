@@ -62,13 +62,14 @@ export default {
       message.setReject("Evidence intake address or message size is invalid");
       return;
     }
-    const response = await env.API.getByName("reference-api").fetch(new Request("http://api/internal/forwarded-email", {
+    const reply = recipient.startsWith(`${base}+reply-`);
+    const response = await env.API.getByName("reference-api").fetch(new Request(reply ? "http://api/internal/email-reply" : "http://api/internal/forwarded-email", {
       method: "POST",
       headers: { "X-Close-Email-Key": env.EMAIL_INTAKE_KEY, "X-Close-Envelope-From": message.from, "X-Close-Envelope-To": message.to, "Content-Type": "message/rfc822" },
       body: await new Response(message.raw).arrayBuffer(),
     }));
     if (response.status === 413 || response.status === 422) {
-      message.setReject("Evidence message cannot be accepted; check the address and supported attachments");
+      message.setReject(reply ? "Reply cannot be accepted; use the secure request link" : "Evidence message cannot be accepted; check the address and supported attachments");
       return;
     }
     if (!response.ok) throw new Error("Durable evidence intake unavailable");

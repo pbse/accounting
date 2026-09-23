@@ -21,6 +21,7 @@ type Connection struct {
 type Email struct {
 	From    string   `json:"from"`
 	To      []string `json:"to"`
+	ReplyTo string   `json:"reply_to,omitempty"`
 	Subject string   `json:"subject"`
 	Text    string   `json:"text"`
 }

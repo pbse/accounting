@@ -19,6 +19,7 @@ type Impact = {
   impact_digest: string;
   affected_drafts: { id: string; kind: string; review_state: string }[];
 };
+type Suggestion = { draft_instructions: string; changed_fields: string[]; source_draft_ids: string[] };
 export function Procedures({
   closeId,
   entity,
@@ -38,6 +39,7 @@ export function Procedures({
   const [applyConfirmed, setApplyConfirmed] = useState(false);
   const [message, setMessage] = useState("");
   const [impact, setImpact] = useState<Impact>();
+  const [suggestion, setSuggestion] = useState<Suggestion>();
   async function load() {
     setBusy(true);
     setError("");
@@ -118,6 +120,12 @@ export function Procedures({
     } finally {
       setBusy(false);
     }
+  }
+  async function suggest() {
+    setBusy(true); setError("");setSuggestion(undefined);
+    try { const next = await workspaceRequest(`/${closeId}/procedures/suggestion?kind=${kind}`) as Suggestion; setSuggestion(next);setEditing(true); }
+    catch (e) { setError(e instanceof Error ? e.message : "Prior edits unavailable."); }
+    finally { setBusy(false); }
   }
   return (
     <details
@@ -229,7 +237,8 @@ export function Procedures({
                   </option>
                 </select>
               </label>
-              <button onClick={() => setEditing(true)} disabled={busy}>
+              {target === "client" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
+              <button onClick={() => { setSuggestion(undefined);setEditing(true); }} disabled={busy}>
                 Propose and approve a new version
               </button>
             </>
@@ -246,9 +255,10 @@ export function Procedures({
                     name="instructions"
                     required
                     maxLength={4000}
-                    defaultValue={previous?.instructions ?? ""}
+                    defaultValue={suggestion?.draft_instructions || previous?.instructions || ""}
                   />
                 </label>
+                {suggestion && <p>Suggested from up to 20 recent revision drafts {suggestion.source_draft_ids.join(", ") || "none"}. Check every field and rewrite this draft before approval; prior edits do not establish policy or materiality.</p>}
                 {kind === "prepaid" && (
                   <>
                     <label>

@@ -9,6 +9,7 @@ import (
 
 const Method = "fixed_incurred_amount_v1"
 const ActualMethod = "actual_invoice_true_up_v1"
+const RecurringMethod = "fixed_recurring_incurred_v1"
 
 type Input struct {
 	Entity                  string `json:"entity"`
@@ -53,7 +54,7 @@ func Prepare(in Input) (Workpaper, error) {
 	if strings.EqualFold(in.ExpenseAccount, in.LiabilityAccount) {
 		return empty, fmt.Errorf("Expense and liability accounts must differ")
 	}
-	if (in.Method != Method && in.Method != ActualMethod) || in.Currency != "USD" || in.Basis != "accrual" || !in.MethodConfirmed || !in.BookingConfirmed || !in.ExamplesConfirmed {
+	if (in.Method != Method && in.Method != ActualMethod && in.Method != RecurringMethod) || in.Currency != "USD" || in.Basis != "accrual" || !in.MethodConfirmed || !in.BookingConfirmed || !in.ExamplesConfirmed {
 		return empty, fmt.Errorf("Select and confirm a supported USD accrual method, booked liability, synthetic examples and reversal choice")
 	}
 	period, err := time.Parse("2006-01", in.ClosePeriod)
@@ -88,6 +89,14 @@ func Prepare(in Input) (Workpaper, error) {
 			result.EstimateVariance = "-" + prepaids.Money(-variance)
 		} else {
 			result.EstimateVariance = prepaids.Money(variance)
+		}
+	} else if in.Method == RecurringMethod {
+		in.AccountantRuleReference = strings.TrimSpace(in.AccountantRuleReference)
+		if in.AccountantRuleReference == "" || len(in.AccountantRuleReference) > 200 || in.EstimateAmount != "" || in.EstimateReference != "" || in.ActualReference != "" {
+			return empty, fmt.Errorf("Cite the client accountant-approved recurring rule; prior estimates and actual invoices use the actual-invoice method")
+		}
+		if start.Format("2006-01") != in.ClosePeriod || end.Format("2006-01") != in.ClosePeriod {
+			return empty, fmt.Errorf("Recurring accrual must cover incurred service in this close month only")
 		}
 	} else if in.EstimateAmount != "" || in.EstimateReference != "" || in.ActualReference != "" || in.AccountantRuleReference != "" {
 		return empty, fmt.Errorf("Estimate-to-actual references require the actual invoice true-up method")

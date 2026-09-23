@@ -17,7 +17,7 @@ export default function WorkspaceLayout() {
       <div className="workspace">
         <nav aria-label="Workspace">
           <NavLink end to="/dashboard">
-            Work
+            Work · ask or review
           </NavLink>
           <NavLink to="/dashboard/closes">Client closes</NavLink>
           <NavLink to="/dashboard/reconciliations/new">

@@ -7,7 +7,7 @@
 1. Install Node 24 and Docker Desktop (Compose 2.22 or later); start Docker.
 2. Copy `.env.example` to `.env`. Set `WORKSPACE_TOKEN` to a privately generated `openssl rand -hex 32` value. Keep provider settings empty for a fully local synthetic workflow.
 3. Run `npm run dev`. Open http://localhost:5173. The API runs on port 8080, worker on 8081 and PostgreSQL on 5432. Fresh volumes apply every migration automatically.
-4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–024:
+4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–031:
 
    ```sh
    docker compose stop api worker
@@ -25,6 +25,13 @@
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/022_ledger_search.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/023_production_posting.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/024_enterprise_controls.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/025_quickbooks_entity_sync.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/026_forwarded_evidence.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/027_inbound_replies.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/028_vendor_credits.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/029_agent_checkpoint.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/030_dependency_review.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/031_external_alerts.sql
    docker compose up -d --build api worker
    ```
 
@@ -64,11 +71,11 @@ To suspend a firm, an authorized administrator uses `POST /v1/closes/organizatio
 
 ## Cloudflare and GitHub activation
 
-Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-staging.md). Provision managed PostgreSQL with TLS, apply migrations 001–024 to a fresh database, enroll synthetic test organizations, configure the GitHub staging environment and deploy API/worker/frontend together. No deployment provisions provider accounts or a database automatically.
+Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-staging.md). Provision managed PostgreSQL with TLS, apply all numbered migrations to a fresh database, enroll synthetic test organizations, configure the GitHub staging environment and deploy API/worker/frontend together. No deployment provisions provider accounts or a database automatically.
 
 Before admitting client data, verify with **two** hosted organizations: sign-in, same-named client/month creation, denied cross-firm URLs, isolated Work, upload/extraction, preparation, review, client reply, carry-forward and export. Restart the worker mid-job and verify one durable outcome. Then rehearse database restore and verify access isolation again. Local mocks and a successful deployment are not substitutes for these checks.
 
-Current controls include application-enforced organization ownership, authenticated roles and membership, same-close source validation, durable jobs, malware-scanning gates, firm resource caps, deletion preview/holds and an operational snapshot. External alert delivery, PostgreSQL row-level security, contractual backup expiry and hosted recovery verification remain outstanding. Do not treat this guide or code as enterprise certification. See [operations and recovery](operations.md).
+Current controls include application-enforced organization ownership, authenticated roles and membership, same-close source validation, durable jobs, malware-scanning gates, firm resource caps, deletion preview/holds and an operational snapshot. Optional webhook alert delivery is implemented; PostgreSQL row-level security, contractual backup expiry and hosted recovery verification remain outstanding. Do not treat this guide or code as enterprise certification. See [operations and recovery](operations.md).
 
 ## Troubleshooting
 

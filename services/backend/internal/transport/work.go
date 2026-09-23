@@ -16,7 +16,7 @@ import (
 
 // The inbox reads the queue's real states; it never maintains a second status cache.
 const workSelect = `SELECT j.id::text,j.close_id::text,c.entity,c.period,j.state,j.error,j.workpaper_ids,
- COALESCE(i.agent_started_at::text,''),COALESCE(i.revision,0),COALESCE(i.proposal,'{}'::jsonb),COALESCE(e.id::text,''),COALESCE(e.name,'Confirmed preparation'),COALESCE(e.extraction_state,''),e.superseded_by IS NOT NULL,i.job_id IS NOT NULL,
+ COALESCE(i.agent_started_at::text,''),COALESCE(i.revision,0),COALESCE(i.agent_attempts,0),COALESCE(i.agent_checkpoint,'{}'::jsonb),COALESCE(i.proposal,'{}'::jsonb),COALESCE(e.id::text,''),COALESCE(e.name,'Confirmed preparation'),COALESCE(e.extraction_state,''),e.superseded_by IS NOT NULL,i.job_id IS NOT NULL,
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',q.id::text,'consolidated',q.coverage_scope IS NOT NULL,'draft_id',q.draft_id::text,'body',d.body,'recipient',q.recipient,'approved_by',q.approved_by,'approved_at',q.approved_at,'delivered_at',q.delivered_at,'delivery_reference',q.delivery_reference,
  'email',(SELECT jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'provider_id',m.provider_id,'error',m.error,'approved_by',m.approved_by,'created_at',m.created_at) FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),
  'emails',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'approved_by',m.approved_by,'created_at',m.created_at,'error',m.error) ORDER BY m.created_at) FROM email_delivery m WHERE m.request_id=q.id),'[]'::jsonb),
@@ -70,14 +70,14 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		items := []map[string]any{}
 		for rows.Next() {
 			var id, closeID, entity, period, state, message, sourceID, name, extraction, started string
-			var revision int
+			var revision, attempts int
 			var stale, coordinated bool
-			var papers, proposal, requests, replies, blockers json.RawMessage
-			if err = rows.Scan(&id, &closeID, &entity, &period, &state, &message, &papers, &started, &revision, &proposal, &sourceID, &name, &extraction, &stale, &coordinated, &requests, &replies, &blockers); err != nil {
+			var papers, checkpoint, proposal, requests, replies, blockers json.RawMessage
+			if err = rows.Scan(&id, &closeID, &entity, &period, &state, &message, &papers, &started, &revision, &attempts, &checkpoint, &proposal, &sourceID, &name, &extraction, &stale, &coordinated, &requests, &replies, &blockers); err != nil {
 				problem(w, 503, "Could not read work.")
 				return
 			}
-			items = append(items, map[string]any{"id": id, "close_id": closeID, "entity": entity, "period": period, "state": state, "error": message, "workpaper_ids": papers, "revision": revision, "proposal": proposal, "source_id": sourceID, "source_name": name, "extraction_state": extraction, "stale": stale, "coordinated": coordinated, "requests": requests, "replies": replies, "blockers": blockers, "agent_started_at": started})
+			items = append(items, map[string]any{"id": id, "close_id": closeID, "entity": entity, "period": period, "state": state, "error": message, "workpaper_ids": papers, "revision": revision, "agent_attempts": attempts, "agent_checkpoint": checkpoint, "proposal": proposal, "source_id": sourceID, "source_name": name, "extraction_state": extraction, "stale": stale, "coordinated": coordinated, "requests": requests, "replies": replies, "blockers": blockers, "agent_started_at": started})
 		}
 		if rows.Err() != nil {
 			problem(w, 503, "Could not finish work snapshot.")

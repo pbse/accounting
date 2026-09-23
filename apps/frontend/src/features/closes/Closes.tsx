@@ -6,6 +6,8 @@ import { EmailSettings } from "./Email";
 import { ClientAccess } from "./ClientAccess";
 import { FirmEnrollment, FirmOperations, RetentionControls } from "./Enterprise";
 import { Procedures } from "./Procedures";
+import { EmailReplies } from "./EmailReplies";
+import { RecurringAccruals } from "./RecurringAccruals";
 import { Readiness } from "./Readiness";
 import { CarryForward } from "./CarryForward";
 import { Recurring } from "./Recurring";
@@ -21,6 +23,7 @@ import {
 } from "./Evidence";
 import { ReviewDecision } from "./ReviewDecision";
 import { Posting } from "./Posting";
+import { VendorCredit } from "./VendorCredit";
 import { ProductionPosting } from "./Posting";
 import { ProductionAccess } from "./ProductionAccess";
 import { AccountAccess, authKitClientId } from "../auth/Auth";
@@ -258,12 +261,14 @@ export default function Closes() {
           />
           <ProductionAccess closeId={close.id} entity={close.entity} />
           <Recurring key={`recurring-${close.id}`} closeId={close.id} onPrepared={() => void load()} />
+          <RecurringAccruals closeId={close.id} onPrepared={() => void load()} />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work
             key={`work-${close.id}`}
             closeId={close.id}
             onPrepared={() => void load()}
           />
+          <EmailReplies closeId={close.id} onReleased={() => void load()} />
           <PreparationJobs
             key={`jobs-${close.id}`}
             closeId={close.id}
@@ -451,6 +456,7 @@ export default function Closes() {
                   <ProductionPosting closeId={close.id} paperId={saved.id} />
                   </>
                 )}
+                {saved.kind === "prepaid" && <VendorCredit closeId={close.id} paperId={saved.id} paper={saved.paper} sources={saved.paper.sources ?? []} approved={saved.review_state === "approved"} />}
                 <details>
                   <summary>Original inputs and full calculation</summary>
                   <pre>{JSON.stringify(saved.paper, null, 2)}</pre>
