@@ -24,13 +24,15 @@ type externalStep struct {
 	Reference string `json:"reference"`
 }
 type readiness struct {
-	DecisionID string          `json:"decision_id"`
-	Scope      closeScope      `json:"scope"`
-	Digest     string          `json:"digest"`
-	State      string          `json:"state"`
-	Blockers   []string        `json:"blockers"`
-	History    json.RawMessage `json:"history"`
-	Snapshot   json.RawMessage `json:"snapshot"`
+	DecisionID        string          `json:"decision_id"`
+	Scope             closeScope      `json:"scope"`
+	SuggestedPapers   []string        `json:"suggested_papers"`
+	SuggestionLimited bool            `json:"suggestion_limited"`
+	Digest            string          `json:"digest"`
+	State             string          `json:"state"`
+	Blockers          []string        `json:"blockers"`
+	History           json.RawMessage `json:"history"`
+	Snapshot          json.RawMessage `json:"snapshot"`
 }
 
 // Read from the caller's consistent snapshot. Sign-off never relies on browser counts.
@@ -101,6 +103,19 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	}
 	if err = json.Unmarshal(raw, &snapshot); err != nil {
 		return out, err
+	}
+	// Keep suggestions out of the signed digest: UI guidance cannot reopen a
+	// previously signed accounting snapshot on deployment.
+	var suggested []byte
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(w.id::text ORDER BY w.id),'[]'::jsonb) FROM workpapers w WHERE w.close_id::text=$1 AND NOT EXISTS (SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)`, id).Scan(&suggested); err != nil {
+		return out, err
+	}
+	if err = json.Unmarshal(suggested, &out.SuggestedPapers); err != nil {
+		return out, err
+	}
+	if len(out.SuggestedPapers) > 100 {
+		out.SuggestedPapers = []string{}
+		out.SuggestionLimited = true
 	}
 	if snapshot.Scope == nil {
 		out.Blockers = append(out.Blockers, "Define the supported scope and required work before sign-off.")

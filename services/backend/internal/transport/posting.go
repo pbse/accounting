@@ -163,8 +163,8 @@ func registerPosting(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Could not lock the close.")
 				return
 			}
-			if err = tx.QueryRowContext(r.Context(), `SELECT review_state FROM workpaper_review_state WHERE id::text=$1 AND close_id=$2`, r.PathValue("paper"), closeID).Scan(&reviewState); err != nil || reviewState == "source_changed" || reviewState == "changes_requested" {
-				problem(w, 409, "Evidence changed or the reviewer requested changes. Prepare and review current work before posting.")
+			if err = tx.QueryRowContext(r.Context(), `SELECT review_state FROM workpaper_review_state WHERE id::text=$1 AND close_id=$2`, r.PathValue("paper"), closeID).Scan(&reviewState); err != nil || reviewState != "approved" {
+				problem(w, 409, "A current approved workpaper review is required before posting.")
 				return
 			}
 			if input.Action == "approve" {

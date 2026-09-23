@@ -111,6 +111,10 @@ func TestSandboxAttemptIsDurableAndNotRepeated(t *testing.T) {
 			preview := call("preview", "", "", 200)
 			call("execute", preview.Digest, "POST TO SANDBOX", 409)
 			call("approve", "wrong-digest", "APPROVE SANDBOX DRAFT", 409)
+			call("approve", preview.Digest, "APPROVE SANDBOX DRAFT", 409)
+			if _, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'test','approved','Reviewed synthetic schedule','fixture')`, paperID); err != nil {
+				t.Fatal(err)
+			}
 			call("approve", preview.Digest, "APPROVE SANDBOX DRAFT", 200)
 			if _, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'test','changes_requested','Correct treatment first','fixture')`, paperID); err != nil {
 				t.Fatal(err)
@@ -119,7 +123,7 @@ func TestSandboxAttemptIsDurableAndNotRepeated(t *testing.T) {
 			if writes != 0 {
 				t.Fatal("Posting bypassed requested changes")
 			}
-			if _, err = db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id=$1`, paperID); err != nil {
+			if _, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'test','approved','Reviewed corrected treatment','fixture')`, paperID); err != nil {
 				t.Fatal(err)
 			}
 			status := 200

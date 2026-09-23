@@ -87,6 +87,12 @@ func TestScopedSignoffInvalidationAndReopening(t *testing.T) {
 	if len(initial.Blockers) == 0 {
 		t.Fatal("empty close looked ready")
 	}
+	if len(initial.SuggestedPapers) != 2 || initial.SuggestedPapers[0] != papers[0] || initial.SuggestedPapers[1] != papers[1] {
+		t.Fatal("current drafts were not suggested", initial.SuggestedPapers)
+	}
+	if bytes.Contains(initial.Snapshot, []byte(`"revises"`)) {
+		t.Fatal("UI suggestions changed the signed readiness snapshot")
+	}
 	scope := closeScope{Description: "Prepaids only <script>unsafe</script>; payroll excluded.", RequiredPapers: papers, ExternalSteps: []externalStep{{Name: "Ledger tie-out"}}}
 	call("POST", base+"/scope", map[string]any{"digest": initial.Digest, "scope": scope}, 200)
 	current := get()
@@ -185,6 +191,14 @@ func TestScopedSignoffInvalidationAndReopening(t *testing.T) {
 	}
 	if get().State != "reopen_required" {
 		t.Fatal("job retry resurrected sign-off")
+	}
+	var revised string
+	if err = db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','revision',jsonb_build_object('revises',$2::text,'blockers','[]'::jsonb)) RETURNING id::text`, closeID, papers[0]).Scan(&revised); err != nil {
+		t.Fatal(err)
+	}
+	suggested := get().SuggestedPapers
+	if len(suggested) != 2 || suggested[0] != papers[1] || suggested[1] != revised {
+		t.Fatal("superseded draft remained in suggested scope", suggested)
 	}
 	// A hosted reviewer cannot sign without the additional close permission.
 	mux := http.NewServeMux()
