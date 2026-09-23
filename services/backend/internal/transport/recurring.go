@@ -280,7 +280,7 @@ func registerRecurring(mux *http.ServeMux, db *sql.DB) {
 		jobDigest := preparation.Digest([]byte("recurring:" + selected.ID + ":" + snapshot.ID + ":" + input.BookedBalance))
 		err = tx.QueryRowContext(r.Context(), `INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(close_id,digest) DO UPDATE SET state=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN 'queued' ELSE preparation_jobs.state END,error=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN '' ELSE preparation_jobs.error END,finished_at=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN NULL ELSE preparation_jobs.finished_at END RETURNING id::text`, closeID, jobDigest, string(plans), actor).Scan(&job)
 		if err != nil {
-			problem(w, 503, "Could not queue recurring preparation.")
+			jobProblem(w, err, "Could not queue recurring preparation.")
 			return
 		}
 		if err = tx.Commit(); err != nil {

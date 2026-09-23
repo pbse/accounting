@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
@@ -35,6 +36,7 @@ type packageLedger struct {
 	Payload []byte
 }
 type closePackage struct {
+	ReleaseReady      bool              `json:"release_ready"`
 	RecordedDecisions json.RawMessage   `json:"recorded_decisions"`
 	ScopeHistory      json.RawMessage   `json:"scope_history"`
 	Readiness         *readiness        `json:"readiness,omitempty"`
@@ -51,16 +53,16 @@ type closePackage struct {
 	ProductionPostings json.RawMessage `json:"production_postings"`
 	Reviews            json.RawMessage `json:"reviews"`
 	WorkHistory        json.RawMessage `json:"work_history"`
-	RequestDrafts      json.RawMessage `json:"request_drafts_latest_20"`
+	RequestDrafts      json.RawMessage `json:"request_drafts"`
 }
 type reviewPaper struct {
 	ID, Kind, Source, Method string
 	Issues                   []string
 }
 
-var packageHTML = template.Must(template.New("review").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Close review package</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}section{border-top:1px solid #ccc;margin-top:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:.6rem}@media print{button{display:none}section{break-inside:avoid}}</style><h1>{{.Package.Close.Entity}} · {{.Package.Close.Period}}</h1><p>Saved-work snapshot: {{.Package.DataCutAt}}</p><p>{{.Package.Scope}}</p><p><strong>Firm sign-off: {{.Package.SignOff}}</strong></p>{{if .Package.Readiness}}<h2>Supported scope</h2><p>{{.Package.Readiness.Scope.Description}}</p><p>Required draft IDs: {{.Package.Readiness.Scope.RequiredPapers}}</p><ul>{{range .Package.Readiness.Scope.ExternalSteps}}<li>{{.Name}} · complete: {{.Complete}} · {{.Reference}}</li>{{end}}{{range .Package.Readiness.Blockers}}<li>{{.}}</li>{{end}}</ul><p>Decision history and the exact snapshot are preserved in manifest.json. Local development decisions are not verified individual firm identities.</p>{{end}}<p>All saved versions are included. Versions are not additive; do not sum alternative drafts. Source references are user-supplied, not verified attachments. Originals are in evidence/{id}.txt or .pdf; PDF extraction is in evidence/{id}-extracted.txt; no documents outside these uploads are included.</p><p>Use your browser’s Print / Save as PDF command to retain this review summary as a PDF.</p><h2>Workpapers · {{len .Papers}}</h2>{{if not .Papers}}<p>No saved workpapers. This close has no prepared evidence in this package.</p>{{end}}{{range .Papers}}<section><h3>{{.Kind}} · draft #{{.ID}}</h3><p>Source: {{.Source}}</p><p>Method: {{.Method}}</p><ul>{{range .Issues}}<li>{{.}}</li>{{end}}</ul><p>Full inputs and calculations: workpapers/{{.ID}}.json. Tables are in the same directory.</p></section>{{end}}<h2>Sandbox posting receipts</h2><p>These are stored sandbox states at export time, not a new provider readback. Executing or unknown means unresolved. Sandbox verification does not imply production posting or close sign-off.</p><pre>{{.Receipts}}</pre><h2>Production posting receipts</h2><p>Stored attempts and canonical readback at verification time; export does not perform a new QuickBooks read. Unknown outcomes need investigation.</p><pre>{{.Package.ProductionPostings}}</pre><h2>Review still required</h2><ul><li>Verify source completeness and ledger freshness independently.</li><li>Review accounting assumptions, alternative draft versions and unresolved items.</li><li>Resolve uncertain sandbox attempts without blindly retrying a write.</li><li>Confirm that recorded sign-off covers your intended scope; unlisted work is not certified.</li></ul></html>`))
+var packageHTML = template.Must(template.New("review").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>{{if .Package.ReleaseReady}}Accountant binder{{else}}Close review package{{end}}</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}section{border-top:1px solid #ccc;margin-top:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:.6rem}@media print{button{display:none}section{break-inside:avoid}}</style><h1>{{.Package.Close.Entity}} · {{.Package.Close.Period}}</h1><p>Saved-work snapshot: {{.Package.DataCutAt}}</p><p>{{.Package.Scope}}</p><p><strong>Firm sign-off: {{.Package.SignOff}}</strong></p>{{if .Package.ReleaseReady}}<p>Accountant binder for the signed-off supported scope. Decision #{{.Package.Readiness.DecisionID}} binds snapshot digest {{.Package.Readiness.Digest}}. This is not an audit or assurance opinion. Verify current provider facts before external reliance.</p>{{end}}{{if .Package.Readiness}}<h2>Supported scope</h2><p>{{.Package.Readiness.Scope.Description}}</p><p>Required draft IDs: {{.Package.Readiness.Scope.RequiredPapers}}</p><ul>{{range .Package.Readiness.Scope.ExternalSteps}}<li>{{.Name}} · complete: {{.Complete}} · {{.Reference}}</li>{{end}}{{range .Package.Readiness.Blockers}}<li>{{.}}</li>{{end}}</ul><p>Decision history and the exact snapshot are preserved in manifest.json. Local development decisions are not verified individual firm identities.</p>{{end}}<p>All saved versions are included. Versions are not additive; do not sum alternative drafts. Source references are user-supplied, not verified attachments. Originals are in evidence/{id}.txt or .pdf; PDF extraction is in evidence/{id}-extracted.txt; no documents outside these uploads are included.</p><p>Use your browser’s Print / Save as PDF command to retain this review summary as a PDF.</p><h2>Workpapers · {{len .Papers}}</h2>{{if not .Papers}}<p>No saved workpapers. This close has no prepared evidence in this package.</p>{{end}}{{range .Papers}}<section><h3>{{.Kind}} · draft #{{.ID}}</h3><p>Source: {{.Source}}</p><p>Method: {{.Method}}</p><ul>{{range .Issues}}<li>{{.}}</li>{{end}}</ul><p>Full inputs and calculations: workpapers/{{.ID}}.json. Tables are in the same directory.</p></section>{{end}}<h2>Sandbox posting receipts</h2><p>These are stored sandbox states at export time, not a new provider readback. Executing or unknown means unresolved. Sandbox verification does not imply production posting or close sign-off.</p><pre>{{.Receipts}}</pre><h2>Production posting receipts</h2><p>Stored attempts and canonical readback at verification time; export does not perform a new QuickBooks read. Unknown outcomes need investigation.</p><pre>{{.Package.ProductionPostings}}</pre><h2>Review still required</h2><ul><li>Verify source completeness and ledger freshness independently.</li><li>Review accounting assumptions, alternative draft versions and unresolved items.</li><li>Resolve uncertain sandbox attempts without blindly retrying a write.</li><li>Confirm that recorded sign-off covers your intended scope; unlisted work is not certified.</li></ul></html>`))
 
-func exportClose(db *sql.DB) http.HandlerFunc {
+func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
@@ -70,7 +72,7 @@ func exportClose(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		defer tx.Rollback()
-		pack := closePackage{Version: "close_package_v1", Scope: "Saved prepaid, accrued-expense and statement-reconciliation drafts only. Includes uploaded originals, available PDF extraction and captured QuickBooks report JSON. Latest 20 request draft revisions are included in the manifest; these are not sent messages. Captured reports are sequential reads, not independently verified current ledger state. Supported-scope decisions, when present, are recorded separately.", SignOff: "not signed off", Workpapers: []savedPaper{}}
+		pack := closePackage{Version: "close_package_v2", Scope: "Saved prepaid, accrued-expense and statement-reconciliation work within the recorded supported scope. Includes uploaded originals, available PDF extraction, captured QuickBooks report JSON and request draft history. Captured reports are sequential reads, not independently verified current ledger state.", SignOff: "not signed off", Workpapers: []savedPaper{}}
 		err = tx.QueryRowContext(ctx, `SELECT id::text,entity,period,transaction_timestamp() FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&pack.Close.ID, &pack.Close.Entity, &pack.Close.Period, &pack.DataCutAt)
 		if err == sql.ErrNoRows {
 			problem(w, 404, "Close not found.")
@@ -86,6 +88,13 @@ func exportClose(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		pack.Readiness = &status
+		if release {
+			if status.State != "signed_off" || len(status.Blockers) != 0 {
+				problem(w, 409, "This close is not release-ready. Resolve blockers and obtain a current accountant sign-off, then refresh readiness.")
+				return
+			}
+			pack.Version, pack.ReleaseReady = "accountant_binder_v1", true
+		}
 		if e = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(s) ORDER BY s.id),'[]') FROM close_signoffs s WHERE close_id=$1`, pack.Close.ID).Scan(&pack.RecordedDecisions); e != nil {
 			problem(w, 503, "Could not export signed snapshots.")
 			return
@@ -142,9 +151,18 @@ func exportClose(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Could not read review history.")
 			return
 		}
-		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY d.id DESC),'[]'::jsonb) FROM (SELECT * FROM request_drafts WHERE close_id=$1 ORDER BY id DESC LIMIT 20) d`, pack.Close.ID).Scan(&pack.RequestDrafts)
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY d.id),'[]'::jsonb) FROM (SELECT * FROM request_drafts WHERE close_id=$1 ORDER BY id LIMIT 1001) d`, pack.Close.ID).Scan(&pack.RequestDrafts)
 		if err != nil {
 			problem(w, 503, "Could not read request drafts.")
+			return
+		}
+		var drafts []json.RawMessage
+		if json.Unmarshal(pack.RequestDrafts, &drafts) != nil {
+			problem(w, 503, "Could not decode request drafts.")
+			return
+		}
+		if len(drafts) > 1000 || len(pack.RequestDrafts) > 16*1024*1024 {
+			problem(w, 413, "Request history exceeds the export limit; nothing was omitted.")
 			return
 		}
 
@@ -200,17 +218,24 @@ func exportClose(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		evidenceRows, err := tx.QueryContext(ctx, `SELECT id::text,name,digest,content,original,extraction_state,extraction_error,superseded_by::text,replacement_reason FROM evidence WHERE close_id=$1 ORDER BY id`, pack.Close.ID)
+		evidenceRows, err := tx.QueryContext(ctx, `SELECT id::text,name,digest,content,original,extraction_state,extraction_error,superseded_by::text,replacement_reason FROM evidence WHERE close_id=$1 ORDER BY id LIMIT 101`, pack.Close.ID)
 		if err != nil {
 			problem(w, 503, "Could not read source evidence.")
 			return
 		}
 		pack.Evidence = []packageEvidence{}
+		evidenceBytes := 0
 		for evidenceRows.Next() {
 			var source packageEvidence
 			if err = evidenceRows.Scan(&source.ID, &source.Name, &source.Digest, &source.Content, &source.Original, &source.ExtractionState, &source.ExtractionError, &source.SupersededBy, &source.ReplacementReason); err != nil {
 				evidenceRows.Close()
 				problem(w, 503, "Could not read source evidence.")
+				return
+			}
+			evidenceBytes += len(source.Content) + len(source.Original)
+			if len(pack.Evidence) == 100 || evidenceBytes > 40*1024*1024 {
+				evidenceRows.Close()
+				problem(w, 413, "Source evidence exceeds the export limit (100 files or 40 MiB). Nothing was omitted silently.")
 				return
 			}
 			pack.Evidence = append(pack.Evidence, source)
@@ -232,19 +257,27 @@ func exportClose(db *sql.DB) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/zip")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="close-%s-%s.zip"`, pack.Close.ID, pack.Close.Period))
+		kind := "close-review"
+		if release {
+			kind = "accountant-binder"
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s-%s.zip"`, kind, pack.Close.ID, pack.Close.Period))
 		w.Write(archive)
 	}
 }
 func buildClosePackage(pack closePackage) ([]byte, error) {
 	var buffer bytes.Buffer
 	archive := zip.NewWriter(&buffer)
+	var checksums bytes.Buffer
 	write := func(name string, data []byte) error {
 		file, err := archive.Create(name)
 		if err != nil {
 			return err
 		}
 		_, err = file.Write(data)
+		if err == nil {
+			fmt.Fprintf(&checksums, "%x  %s\n", sha256.Sum256(data), name)
+		}
 		return err
 	}
 	csvFile := func(name string, records [][]string) error {
@@ -376,6 +409,9 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 		return nil, err
 	}
 	if err = write("review.html", review.Bytes()); err != nil {
+		return nil, err
+	}
+	if err = write("checksums.sha256", checksums.Bytes()); err != nil {
 		return nil, err
 	}
 	if err = archive.Close(); err != nil {

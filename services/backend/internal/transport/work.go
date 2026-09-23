@@ -355,6 +355,10 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Only stopped or unresolved work can be rechecked.")
 				return
 			}
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO recovery_actions(organization_id,close_id,job_id,action,prior_state,actor,reason) VALUES($1,$2,$3,'retry_preparation',$4,$5,'Work inbox recheck')`, organization(r), closeID, jobID, state, actor)
+			if err != nil {
+				break
+			}
 			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND used_at IS NULL AND revoked_at IS NULL`, jobID)
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_evidence',error='',finished_at=NULL WHERE id=$1`, jobID)
@@ -368,7 +372,11 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		if err == nil && action != "link" && action != "revoke_link" {
 			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=CASE WHEN $2 IN ('retry','reply','answer') THEN 0 ELSE agent_attempts END WHERE job_id=$1`, jobID, action)
 		}
-		if err != nil || tx.Commit() != nil {
+		if err != nil {
+			jobProblem(w, err, "Work update could not be confirmed. Refresh before retrying.")
+			return
+		}
+		if tx.Commit() != nil {
 			problem(w, 503, "Work update could not be confirmed. Refresh before retrying.")
 			return
 		}

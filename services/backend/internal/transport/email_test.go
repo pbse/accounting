@@ -41,6 +41,9 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Email fixture')`, org); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_sender',true,'Synthetic enrollment','fixture')`, org); err != nil {
+		t.Fatal(err)
+	}
 	if err = db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Email synthetic','2026-09') RETURNING id::text`, org).Scan(&closeID); err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +57,7 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 		db.Exec(`DELETE FROM evidence WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
 		db.Exec(`DELETE FROM email_connections WHERE organization_id=$1`, org)
+		db.Exec(`DELETE FROM organization_member_access WHERE organization_id=$1`, org)
 		db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
 	}()
 	t.Setenv("SECRETS_KEY", strings.Repeat("ab", 32))
@@ -217,6 +221,17 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	}
 	job, request := makeRequest("invoice-one")
 	id := enqueue(job, request)
+	if _, err = db.Exec(`UPDATE email_outbox SET state='sending',claimed_at=now(),claim='fixture' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	event("unrelated", "bounced", "unrelated-delivery", false, 204)
+	var unrelated sql.NullString
+	if err = db.QueryRow(`SELECT close_id::text FROM email_delivery_events WHERE event_id='unrelated-delivery' AND connection_id=$1`, status.Connection.ID).Scan(&unrelated); err != nil || unrelated.Valid {
+		t.Fatalf("unrelated delivery attributed to client close: %v %v", unrelated, err)
+	}
+	if _, err = db.Exec(`UPDATE email_outbox SET state='queued',claim=NULL,claimed_at=NULL WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
 	event(id, "delivered", "first-delivery", true, 401)
 	event(id, "delivered", "first-delivery", false, 204)
 	event(id, "delivered", "first-delivery", false, 204)
@@ -243,6 +258,10 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	var deliveryState string
 	if e := db.QueryRow(`SELECT delivery FROM email_delivery WHERE id=$1`, id).Scan(&deliveryState); e != nil || deliveryState != "delivered" {
 		t.Fatalf("early event lost: %s %v", deliveryState, e)
+	}
+	var eventClose string
+	if e := db.QueryRow(`SELECT close_id::text FROM email_delivery_events WHERE event_id='first-delivery' AND connection_id=$1`, status.Connection.ID).Scan(&eventClose); e != nil || eventClose != closeID {
+		t.Fatalf("early delivery event was not linked to its close: %s %v", eventClose, e)
 	}
 	job, request = makeRequest("invoice-two")
 	expired := enqueue(job, request)

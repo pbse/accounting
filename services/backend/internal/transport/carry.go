@@ -323,7 +323,7 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 			plans, _ := json.Marshal([]preparation.Plan{p})
 			var job string
 			if err = tx.QueryRowContext(r.Context(), `INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(close_id,digest) DO UPDATE SET plans=EXCLUDED.plans,state='queued',error='',finished_at=NULL WHERE preparation_jobs.state IN ('failed','cancelled') RETURNING id::text`, target, "carry-forward:"+item.ID+":"+item.ReviewID, string(plans), actor).Scan(&job); err != nil {
-				problem(w, 503, "Could not queue schedule #"+item.ID+".")
+				jobProblem(w, err, "Could not queue schedule #"+item.ID+".")
 				return
 			}
 			jobs = append(jobs, job)

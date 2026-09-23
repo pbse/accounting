@@ -53,11 +53,14 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Production fixture')`, org); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture')`, org); err != nil {
+		t.Fatal(err)
+	}
 	if err = db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Production fixture','2026-09') RETURNING id::text`, org).Scan(&closeID); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, q := range []string{`DELETE FROM production_postings WHERE close_id=$1`, `DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM production_postings WHERE close_id=$1`, `DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			arg := closeID
 			if strings.Contains(q, "organization_id") || strings.Contains(q, "organizations WHERE") {
 				arg = org

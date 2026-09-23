@@ -4,6 +4,7 @@ import { QuickBooks } from "./QuickBooks";
 import { Coordinator } from "./Coordinator";
 import { EmailSettings } from "./Email";
 import { ClientAccess } from "./ClientAccess";
+import { FirmEnrollment, FirmOperations, RetentionControls } from "./Enterprise";
 import { Procedures } from "./Procedures";
 import { Readiness } from "./Readiness";
 import { CarryForward } from "./CarryForward";
@@ -57,6 +58,26 @@ export default function Closes() {
   const [reviewFilter, setReviewFilter] = useState("all");
   const [exporting, setExporting] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
+  const [deletedReceipt, setDeletedReceipt] = useState("");
+  async function downloadPackage(kind: "export" | "binder") {
+    if (!close) return;
+    setExporting(true);
+    setExportStatus("");
+    try {
+      const blob = await workspaceRequest(`/${close.id}/${kind}`, undefined, true);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${kind === "binder" ? "accountant-binder" : "close-review"}-${close.id}-${close.period}.zip`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setExportStatus("Package ready. Open review.html for the summary and checksums.sha256 to verify its files.");
+    } catch (e) {
+      setExportStatus(e instanceof Error ? e.message : "Export failed. Saved work has not changed.");
+    } finally {
+      setExporting(false);
+    }
+  }
   async function load() {
     const current = ++generation.current;
     setBusy(true);
@@ -85,6 +106,7 @@ export default function Closes() {
     }
   }
   useEffect(() => {
+    setDeletedReceipt("");
     void load();
     return () => {
       generation.current++;
@@ -114,7 +136,7 @@ export default function Closes() {
   return (
     <>
       <p className="eyebrow">PRIVATE WORKSPACE / DRAFTS ONLY</p>
-      <h1>{close ? `${close.entity} · ${close.period}` : "Client closes"}</h1>
+      <h1>{close && !deletedReceipt ? `${close.entity} · ${close.period}` : "Client closes"}</h1>
       <p>
         Keep prepared work together by client and month. Saving does not approve
         or post it. Sandbox execution and supported-scope sign-off are tracked
@@ -175,11 +197,14 @@ export default function Closes() {
         </button>
       )}
       {error && <p role="alert">{error}</p>}
+      {deletedReceipt && <p role="status">Close removed. Deletion receipt #{deletedReceipt}. <Link to="/dashboard/closes">Return to client closes</Link></p>}
+      {authKitClientId && error.includes("firm or membership") && <FirmEnrollment onEnrolled={() => void load()} />}
       {busy && <p role="status">Opening workspace…</p>}
       {loaded && !id && (
         <>
           <EmailSettings />
           <ClientAccess entities={[...new Set(items.map((c) => c.entity))]} />
+          <FirmOperations />
           <section>
             <h2>Create a client close</h2>
             <form onSubmit={create}>
@@ -216,7 +241,7 @@ export default function Closes() {
           </section>
         </>
       )}
-      {loaded && close && (
+      {loaded && close && !deletedReceipt && (
         <>
           <p>
             <Link to="/dashboard/closes">All client closes</Link>
@@ -249,6 +274,7 @@ export default function Closes() {
             closeId={close.id}
             papers={papers}
           />
+          <RetentionControls close={close} onDeleted={setDeletedReceipt} />
           <Procedures
             key={`procedures-${close.id}`}
             closeId={close.id}
@@ -281,39 +307,16 @@ export default function Closes() {
             </p>
             <button
               disabled={exporting}
-              onClick={async () => {
-                setExporting(true);
-                setExportStatus("");
-                try {
-                  const blob = await workspaceRequest(
-                    `/${close.id}/export`,
-                    undefined,
-                    true,
-                  );
-                  const url = URL.createObjectURL(blob);
-                  const link = document.createElement("a");
-                  link.href = url;
-                  link.download = `close-${close.id}-${close.period}.zip`;
-                  link.click();
-                  setTimeout(() => URL.revokeObjectURL(url), 1000);
-                  setExportStatus(
-                    "Package prepared. Open review.html inside the ZIP for the summary; your browser can print it to PDF.",
-                  );
-                } catch (e) {
-                  setExportStatus(
-                    e instanceof Error
-                      ? e.message
-                      : "Export failed. Your saved work has not changed.",
-                  );
-                } finally {
-                  setExporting(false);
-                }
-              }}
+              onClick={() => void downloadPackage("export")}
             >
               {exporting
                 ? "Preparing review package…"
                 : "Download close review package"}
             </button>
+            <button disabled={exporting} onClick={() => void downloadPackage("binder")}>
+              Download signed accountant binder
+            </button>
+            <p>The binder is available only while the current supported scope remains signed off with no blockers. A new source or unresolved action requires fresh review.</p>
             <p role="status">{exportStatus}</p>
           </section>
           <Requests closeId={close.id} papers={papers} />

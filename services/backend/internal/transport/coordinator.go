@@ -172,6 +172,9 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		for _, job := range jobs {
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO recovery_actions(organization_id,close_id,job_id,action,prior_state,actor,reason) VALUES($1,$2,$3,'retry_preparation',$4,$5,'Close-wide recheck')`, organization(r), closeID, job.ID, job.State, subject(r)); err != nil {
+				break
+			}
 			if _, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND used_at IS NULL AND revoked_at IS NULL`, job.ID); err != nil {
 				break
 			}
@@ -182,7 +185,11 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 				break
 			}
 		}
-		if err != nil || tx.Commit() != nil {
+		if err != nil {
+			jobProblem(w, err, "Recheck could not be confirmed. Refresh before retrying.")
+			return
+		}
+		if tx.Commit() != nil {
 			problem(w, 503, "Recheck could not be confirmed. Refresh before retrying.")
 			return
 		}

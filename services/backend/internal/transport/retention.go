@@ -1,0 +1,223 @@
+package transport
+
+import (
+	"context"
+	"database/sql"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"close.local/backend/internal/auth"
+	"close.local/backend/internal/preparation"
+)
+
+type retentionStatus struct {
+	RetainUntil string   `json:"retain_until"`
+	LegalHold   bool     `json:"legal_hold"`
+	Version     int      `json:"version"`
+	Blockers    []string `json:"deletion_blockers"`
+}
+
+func canManageData(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return firmAccess(r) && a != nil && (a.Organization == "" || slices.Contains(a.Permissions, "data:manage"))
+}
+
+func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retentionStatus, error) {
+	out := retentionStatus{Blockers: []string{}}
+	var due, jobs, postings, mail, links, attachments, connection, grants, shared, unmapped bool
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(c.retain_until::text,''),c.legal_hold,c.retention_version,COALESCE(c.retain_until<=CURRENT_DATE,false),
+ EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id AND j.state IN ('queued','waiting_evidence','interpreting','needs_confirmation','waiting_client')),
+ EXISTS(SELECT 1 FROM sandbox_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')),
+ EXISTS(SELECT 1 FROM email_outbox m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND m.state IN ('queued','sending','unknown')),
+ EXISTS(SELECT 1 FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now()),
+ EXISTS(SELECT 1 FROM client_attachments a WHERE a.close_id=c.id AND a.state NOT IN ('released','rejected')),
+ EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.close_id=c.id AND x.state<>'disconnected'),
+ EXISTS(SELECT 1 FROM production_posting_grants g JOIN quickbooks_connections x ON x.id=g.connection_id WHERE x.close_id=c.id AND g.revoked_at IS NULL),
+ EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.close_id=c.id AND (EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.connection_id=x.id AND s.close_id<>c.id) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.connection_id=x.id AND p.close_id<>c.id))),
+ EXISTS(SELECT 1 FROM email_delivery_events e JOIN email_outbox m ON m.connection_id=e.connection_id AND m.provider_id=e.provider_id
+  JOIN work_requests q ON q.id=m.request_id AND lower(q.recipient)=lower(e.recipient)
+  JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND e.close_id IS NULL)
+ FROM client_closes c WHERE c.id::text=$1 AND c.organization_id=$2`, closeID, org).Scan(&out.RetainUntil, &out.LegalHold, &out.Version, &due, &jobs, &postings, &mail, &links, &attachments, &connection, &grants, &shared, &unmapped)
+	if err != nil {
+		return out, err
+	}
+	if out.RetainUntil == "" {
+		out.Blockers = append(out.Blockers, "Set an approved retention date for this close.")
+	} else if !due {
+		out.Blockers = append(out.Blockers, "The approved retention date has not arrived.")
+	}
+	if out.LegalHold {
+		out.Blockers = append(out.Blockers, "A legal hold protects this close.")
+	}
+	for _, condition := range []struct {
+		active  bool
+		message string
+	}{
+		{jobs, "Preparation or client follow-up work remains active."},
+		{postings, "A posting attempt needs canonical resolution."},
+		{mail, "Email delivery has an in-flight or unknown outcome."},
+		{links, "An active client request link must expire or be revoked."},
+		{attachments, "A client attachment still needs scanning or disposition."},
+		{connection, "Disconnect QuickBooks connections opened from this close."},
+		{grants, "Revoke production posting grants opened from this close."},
+		{shared, "A QuickBooks connection opened here is used by another close."},
+		{unmapped, "Historical email delivery events need close attribution before any close in this firm can be deleted."},
+	} {
+		if condition.active {
+			out.Blockers = append(out.Blockers, condition.message)
+		}
+	}
+	return out, nil
+}
+
+func registerRetention(mux *http.ServeMux, db *sql.DB) {
+	mux.HandleFunc("GET /v1/closes/{id}/retention", func(w http.ResponseWriter, r *http.Request) {
+		if !canManageData(r) {
+			problem(w, 403, "Firm data administration requires clients:all and data:manage.")
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			problem(w, 503, "Retention state unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		status, err := readRetention(r.Context(), tx, r.PathValue("id"), organization(r))
+		if err != nil {
+			problem(w, 503, "Retention state unavailable.")
+			return
+		}
+		jsonReply(w, 200, status)
+	})
+	mux.HandleFunc("POST /v1/closes/{id}/retention", func(w http.ResponseWriter, r *http.Request) {
+		if !canManageData(r) {
+			problem(w, 403, "Firm data administration requires clients:all and data:manage.")
+			return
+		}
+		var in struct {
+			RetainUntil     string `json:"retain_until"`
+			LegalHold       bool   `json:"legal_hold"`
+			ExpectedVersion int    `json:"expected_version"`
+			Reason          string `json:"reason"`
+			Confirmed       bool   `json:"confirmed"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		in.Reason = strings.TrimSpace(in.Reason)
+		if in.RetainUntil != "" {
+			date, err := time.Parse("2006-01-02", in.RetainUntil)
+			if err != nil || date.Format("2006-01-02") != in.RetainUntil || date.Year() < 2000 || date.Year() > 2200 {
+				problem(w, 422, "Use an exact YYYY-MM-DD retention date approved by the firm.")
+				return
+			}
+		}
+		if !in.Confirmed || in.ExpectedVersion < 0 || len(in.Reason) < 10 || len(in.Reason) > 2000 {
+			problem(w, 422, "Confirm the approved retention or hold decision and record its authority.")
+			return
+		}
+		var version int
+		err := db.QueryRowContext(r.Context(), `UPDATE client_closes SET retain_until=NULLIF($3,'')::date,legal_hold=$4,retention_reason=$5,retention_actor=$6,retention_changed_at=now(),retention_version=retention_version+1 WHERE id::text=$1 AND organization_id=$2 AND retention_version=$7 RETURNING retention_version`, r.PathValue("id"), organization(r), in.RetainUntil, in.LegalHold, in.Reason, subject(r), in.ExpectedVersion).Scan(&version)
+		if err != nil {
+			problem(w, 409, "Retention changed or could not be confirmed. Refresh before deciding.")
+			return
+		}
+		jsonReply(w, 200, map[string]int{"version": version})
+	})
+	mux.HandleFunc("POST /v1/closes/{id}/delete", func(w http.ResponseWriter, r *http.Request) {
+		if !canManageData(r) {
+			problem(w, 403, "Firm data deletion requires clients:all and data:manage.")
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Entity          string `json:"entity"`
+			Period          string `json:"period"`
+			ReasonCode      string `json:"reason_code"`
+			Confirmed       bool   `json:"confirmed"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if !in.Confirmed || !slices.Contains([]string{"retention_expired", "client_request", "contract_termination"}, in.ReasonCode) {
+			problem(w, 422, "Confirm the exact close and an approved deletion reason.")
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+		if err != nil {
+			problem(w, 503, "Deletion storage unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		var id, entity, period string
+		err = tx.QueryRowContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE id::text=$1 AND organization_id=$2 FOR UPDATE`, r.PathValue("id"), organization(r)).Scan(&id, &entity, &period)
+		if err != nil || entity != in.Entity || period != in.Period {
+			problem(w, 409, "Close identity changed. Refresh before deleting.")
+			return
+		}
+		var enabled bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, organization(r)).Scan(&enabled); err != nil || !enabled {
+			problem(w, 403, "Firm access changed. Refresh before deleting.")
+			return
+		}
+		if organization(r) != "local-development" {
+			var member bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, organization(r), subject(r)).Scan(&member); err != nil || !member {
+				problem(w, 403, "Firm membership changed. No data was deleted.")
+				return
+			}
+		}
+		status, err := readRetention(r.Context(), tx, id, organization(r))
+		if err != nil || status.Version != in.ExpectedVersion || len(status.Blockers) != 0 {
+			problem(w, 409, "Deletion is blocked. Refresh retention and resolve every listed dependency.")
+			return
+		}
+		var productionCount int
+		if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM production_postings WHERE close_id=$1`, id).Scan(&productionCount); err != nil {
+			problem(w, 503, "Deletion scope could not be confirmed.")
+			return
+		}
+		// Child records are removed in foreign-key order. Shared firm procedures,
+		// member access and email sender connections stay in place.
+		for _, query := range []string{
+			`DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`,
+			`DELETE FROM request_drafts WHERE close_id=$1`,
+			`DELETE FROM preparation_jobs WHERE close_id=$1`,
+			`DELETE FROM production_postings WHERE close_id=$1`,
+			`DELETE FROM sandbox_postings WHERE close_id=$1`,
+			`DELETE FROM workpapers WHERE close_id=$1`,
+			`DELETE FROM quickbooks_snapshots WHERE close_id=$1`,
+			`DELETE FROM production_posting_grants WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
+			`DELETE FROM quickbooks_connections WHERE close_id=$1`,
+			`DELETE FROM client_attachments WHERE close_id=$1`,
+			`DELETE FROM evidence WHERE close_id=$1`,
+			`DELETE FROM preparation_plans WHERE close_id=$1`,
+			`DELETE FROM close_preparations WHERE close_id=$1`,
+			`DELETE FROM close_signoffs WHERE close_id=$1`,
+			`DELETE FROM close_scopes WHERE close_id=$1`,
+		} {
+			if _, err = tx.ExecContext(r.Context(), query, id); err != nil {
+				problem(w, 503, "Deletion stopped without committing. Inspect related records and retry only after a fresh preview.")
+				return
+			}
+		}
+		if _, err = tx.ExecContext(r.Context(), `DELETE FROM client_closes WHERE id::text=$1 AND organization_id=$2`, id, organization(r)); err != nil {
+			problem(w, 503, "Deletion stopped without committing.")
+			return
+		}
+		var receipt string
+		identity := preparation.Digest([]byte(organization(r) + "\x00" + strings.ToLower(entity) + "\x00" + period))
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, organization(r), id, identity, period, productionCount, subject(r), in.ReasonCode).Scan(&receipt)
+		if err != nil {
+			problem(w, 503, "Deletion stopped without committing. Refresh before retrying.")
+			return
+		}
+		if tx.Commit() != nil {
+			problem(w, 503, "Deletion outcome is uncertain. Inspect the deletion receipt before retrying.")
+			return
+		}
+		jsonReply(w, 200, map[string]string{"deletion_receipt_id": receipt})
+	})
+}
