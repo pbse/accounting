@@ -11,6 +11,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"close.local/backend/internal/auth"
@@ -50,6 +51,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 	path := "/v1/closes/{id}/quickbooks"
 	ledgerPage := func(w http.ResponseWriter, r *http.Request, saved bool) {
 		accountID := r.URL.Query().Get("account_id")
+		query := strings.TrimSpace(r.URL.Query().Get("query"))
 		offset, parseErr := strconv.Atoi(r.URL.Query().Get("offset"))
 		if parseErr != nil || len(accountID) > 100 {
 			problem(w, 422, "Choose an account and a valid page offset.")
@@ -67,7 +69,12 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Period snapshot not found in this close.")
 			return
 		}
-		page, err := quickbooks.SelectLedger(snapshot.Accounts, snapshot.Reports["GeneralLedger"], accountID, offset)
+		var page quickbooks.LedgerPage
+		if query == "" {
+			page, err = quickbooks.SelectLedger(snapshot.Accounts, snapshot.Reports["GeneralLedger"], accountID, offset)
+		} else {
+			page, err = quickbooks.SearchLedger(snapshot.Accounts, snapshot.Reports["GeneralLedger"], accountID, query, offset)
+		}
 		if err != nil {
 			problem(w, 422, err.Error())
 			return
@@ -90,7 +97,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Confirm a page with account-matched rows before adding agent evidence.")
 			return
 		}
-		content, _ := json.MarshalIndent(map[string]any{"snapshot_id": snapshot.ID, "snapshot_digest": snapshot.Digest, "account_id": accountID, "offset": offset, "total_matching_rows": page.Total, "rows": page.Rows, "scope": "Account-matched General Ledger report rows; not a complete ledger or verified balance."}, "", "  ")
+		content, _ := json.MarshalIndent(map[string]any{"snapshot_id": snapshot.ID, "snapshot_digest": snapshot.Digest, "account_id": accountID, "query": query, "offset": offset, "total_matching_rows": page.Total, "rows": page.Rows, "scope": "Account-matched General Ledger report rows; not a complete ledger or verified balance."}, "", "  ")
 		if len(content) > 96*1024 {
 			problem(w, 413, "This ledger page exceeds 96 KiB. Inspect the downloaded snapshot and narrow the account.")
 			return
@@ -108,7 +115,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var sourceID string
-		err = tx.QueryRowContext(r.Context(), `SELECT source_id::text FROM quickbooks_ledger_selections WHERE snapshot_id=$1 AND account_id=$2 AND offset_rows=$3`, snapshot.ID, accountID, offset).Scan(&sourceID)
+		err = tx.QueryRowContext(r.Context(), `SELECT source_id::text FROM quickbooks_ledger_selections WHERE snapshot_id=$1 AND account_id=$2 AND offset_rows=$3 AND search_query=$4`, snapshot.ID, accountID, offset, query).Scan(&sourceID)
 		if err == sql.ErrNoRows {
 			var count, size int
 			err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, r.PathValue("id")).Scan(&count, &size)
@@ -116,9 +123,13 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 413, "Close evidence capacity is full. Review existing sources before adding another ledger page.")
 				return
 			}
-			err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, r.PathValue("id"), "QuickBooks account "+accountID+" ledger rows "+strconv.Itoa(offset)+"–"+strconv.Itoa(offset+len(page.Rows)-1), preparation.Digest(content), string(content), actor).Scan(&sourceID)
+			name := "QuickBooks account " + accountID + " ledger rows " + strconv.Itoa(offset) + "–" + strconv.Itoa(offset+len(page.Rows)-1)
+			if query != "" {
+				name += " matching " + strconv.Quote(query)
+			}
+			err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, r.PathValue("id"), name, preparation.Digest(content), string(content), actor).Scan(&sourceID)
 			if err == nil {
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO quickbooks_ledger_selections(snapshot_id,source_id,account_id,offset_rows) VALUES($1,$2,$3,$4)`, snapshot.ID, sourceID, accountID, offset)
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO quickbooks_ledger_selections(snapshot_id,source_id,account_id,offset_rows,search_query) VALUES($1,$2,$3,$4,$5)`, snapshot.ID, sourceID, accountID, offset, query)
 			}
 		}
 		if err != nil || tx.Commit() != nil {

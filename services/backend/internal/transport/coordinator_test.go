@@ -103,6 +103,10 @@ func TestClosePreparationScopeReusesDurableJobs(t *testing.T) {
 			Count  int    `json:"count"`
 			Digest string `json:"digest"`
 		} `json:"stop"`
+		Recheck struct {
+			Count  int    `json:"count"`
+			Digest string `json:"digest"`
+		} `json:"recheck"`
 		Run *struct {
 			ID     string `json:"id"`
 			Digest string `json:"inventory_digest"`
@@ -134,6 +138,18 @@ func TestClosePreparationScopeReusesDurableJobs(t *testing.T) {
 	call("POST", base, approve, 200)
 	if read().Run.ID != run.Run.ID {
 		t.Fatal("retry created another parent")
+	}
+	if _, e := db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id=$1`, run.Run.Items[1].Job); e != nil {
+		t.Fatal(e)
+	}
+	recheck := read()
+	if recheck.Recheck.Count != 1 {
+		t.Fatal("recheck preview included the wrong jobs")
+	}
+	call("POST", base+"/recheck", map[string]any{"digest": "stale", "confirmed": true}, 409)
+	call("POST", base+"/recheck", map[string]any{"digest": recheck.Recheck.Digest, "confirmed": true}, 200)
+	if read().Recheck.Count != 0 {
+		t.Fatal("reviewed recheck did not resume interpretation")
 	}
 	var draft, request string
 	if e := db.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Synthetic question','[]','fixture','fixture') RETURNING id::text`, id).Scan(&draft); e != nil {

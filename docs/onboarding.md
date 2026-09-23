@@ -7,7 +7,7 @@
 1. Install Node 24 and Docker Desktop (Compose 2.22 or later); start Docker.
 2. Copy `.env.example` to `.env`. Set `WORKSPACE_TOKEN` to a privately generated `openssl rand -hex 32` value. Keep provider settings empty for a fully local synthetic workflow.
 3. Run `npm run dev`. Open http://localhost:5173. The API runs on port 8080, worker on 8081 and PostgreSQL on 5432. Fresh volumes apply every migration automatically.
-4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–020:
+4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–022:
 
    ```sh
    docker compose stop api worker
@@ -21,6 +21,8 @@
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/018_coverage_requests_attachments.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/019_email_followup.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/020_accruals.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/021_ledger_selections.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/022_ledger_search.sql
    docker compose up -d --build api worker
    ```
 
@@ -38,7 +40,7 @@ Compose is the supported no-Go-install path. For native setup use the README, in
 5. Replace changed evidence explicitly, then prepare the revised draft. Earlier reviews remain in history and cannot approve changed evidence.
 6. Export the close review package. It contains saved work and available originals, not an assertion that all books are complete.
 
-Supported prepaids require USD and accrual basis; the reviewer explicitly selects equal full months or inclusive actual days and confirms booking assumptions. One prospective credit, confirmed booked-balance adjustments, and separately reviewed full-refund or no-refund month-boundary cancellations are supported as draft methods. Fixed incurred accruals are also drafts; see [accounting methods](accounting-methods.md). CSV reconciliation matches only unique exact dates and signed amounts, while unmatched-row hints remain questions; the ledger is not independently verified by importing a CSV. On a large evidence inventory, model selection narrows the sources for each proposal; the reviewer sees files the proposal did not cite and must acknowledge them before confirmation.
+Supported prepaids require USD and accrual basis; the reviewer explicitly selects equal full months or inclusive actual days and confirms booking assumptions. One prospective credit, separately reviewed multiple/retrospective credits with a client-accountant rule reference, confirmed booked-balance adjustments, and full-refund or no-refund month-boundary cancellations are supported as drafts. Fixed incurred accruals and estimate-to-actual invoice true-ups are drafts; see [accounting methods](accounting-methods.md). CSV reconciliation matches only unique exact dates and signed amounts, while richer unmatched-row hints remain questions. On a large evidence inventory, model selection narrows sources; the reviewer sees uncited files before confirmation. Account-linked source references can search captured QuickBooks ledger rows, preserving exact report locations for review.
 
 ## Ask a client and resume work
 
@@ -66,7 +68,7 @@ To suspend a firm, set its `organizations.enabled` to false through an approved 
 
 ## Cloudflare and GitHub activation
 
-Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-staging.md). Provision managed PostgreSQL with TLS, apply migrations 001–020 to a fresh database, register synthetic test organizations, configure the GitHub staging environment and deploy API/worker/frontend together. No deployment provisions provider accounts or a database automatically.
+Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-staging.md). Provision managed PostgreSQL with TLS, apply migrations 001–022 to a fresh database, register synthetic test organizations, configure the GitHub staging environment and deploy API/worker/frontend together. No deployment provisions provider accounts or a database automatically.
 
 Before admitting client data, verify with **two** hosted organizations: sign-in, same-named client/month creation, denied cross-firm URLs, isolated Work, upload/extraction, preparation, review, client reply, carry-forward and export. Restart the worker mid-job and verify one durable outcome. Then rehearse database restore and verify access isolation again. Local mocks and a successful deployment are not substitutes for these checks.
 

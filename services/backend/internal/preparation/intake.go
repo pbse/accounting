@@ -69,9 +69,13 @@ func Propose(sources []IntakeSource) Proposal {
 	}
 	if p.Kind == "accrual" {
 		definitions = nil
-		for _, field := range []string{"amount", "service_start", "service_end", "currency", "expense_account", "liability_account", "booked_balance", "booking_reference", "estimation_basis"} {
+		for _, field := range []string{"amount", "service_start", "service_end", "currency", "expense_account", "liability_account", "booked_balance", "booking_reference", "estimation_basis", "estimate_amount", "estimate_reference", "actual_reference"} {
 			label := strings.ReplaceAll(field, "_", " ")
-			definitions = append(definitions, struct{ field, label, question string }{field, label, "Confirm " + label + " from incurred-service and ledger evidence."})
+			question := "Confirm " + label + " from incurred-service and ledger evidence."
+			if field == "estimate_amount" || field == "estimate_reference" || field == "actual_reference" {
+				question = ""
+			}
+			definitions = append(definitions, struct{ field, label, question string }{field, label, question})
 		}
 	}
 	for _, def := range definitions {

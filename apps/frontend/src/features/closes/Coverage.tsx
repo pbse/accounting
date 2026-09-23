@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { EmailHistory, SendRequestEmail, type EmailRecord } from "./Email";
 import { workspaceRequest } from "./workspace";
 
-type Requirement = { account_id: string; name: string; kind: string; question: string; binding_id: string; job_ids: string[]; excluded: boolean; reason: string; state: string };
+type Requirement = { account_id: string; name: string; kind: string; question: string; binding_id: string; job_ids: string[]; suggested_job_ids: string[]; suggested_ledger_queries: string[]; excluded: boolean; reason: string; state: string };
 type Status = {
   coverage: { snapshot_id: string; stale: boolean; digest: string; items: Requirement[]; jobs: { id: string; name: string; state: string }[] };
   requests: { email?: EmailRecord; emails: EmailRecord[]; id: string; body: string; recipient: string; link?: { used_at?: string; revoked_at?: string; expires_at: string } }[];
@@ -62,16 +62,17 @@ export function Coverage({ closeId }: { closeId: string }) {
         <summary>{item.name || item.account_id} · {item.state.replaceAll("_", " ")}</summary>
         <p>{item.question}</p>
         <p>{item.reason}</p>
+        {!!item.suggested_job_ids.length && <p>Agent suggestion: work #{item.suggested_job_ids.join(", #")} cites this exact account name or ID. Confirm against the source and ledger before binding; a match is not coverage approval.</p>}
         <form onSubmit={e => bind(e, item.account_id)}><fieldset disabled={busy || coverage.stale}>
           <legend>Required work for {item.name}</legend>
-          {coverage.jobs.map(job => <label key={job.id}><input type="checkbox" name="jobs" value={job.id} defaultChecked={item.job_ids.includes(job.id)} /> {job.name} · #{job.id} · {job.state.replaceAll("_", " ")}</label>)}
+          {coverage.jobs.map(job => <label key={job.id}><input type="checkbox" name="jobs" value={job.id} defaultChecked={item.binding_id ? item.job_ids.includes(job.id) : item.suggested_job_ids.includes(job.id)} /> {job.name} · #{job.id} · {job.state.replaceAll("_", " ")}</label>)}
           {coverage.jobs.length === 0 && <p>No intake jobs yet. Request the missing documents below.</p>}
           <label><input type="checkbox" name="excluded" defaultChecked={item.excluded} /> Exclude from supported preparation scope; deselect all jobs and document the reason or external-work reference.</label>
           <label>Scope rationale<textarea name="reason" defaultValue={item.reason} maxLength={2000} required /></label>
           <label><input type="checkbox" name="confirmed" required /> I reviewed the account and ledger evidence. This is the complete required work set, or a justified exclusion.</label>
           <button>Confirm coverage scope</button>
         </fieldset></form>
-        <LedgerSelection key={`${coverage.snapshot_id}:${item.account_id}`} closeId={closeId} snapshotId={coverage.snapshot_id} accountId={item.account_id} stale={coverage.stale} />
+        <LedgerSelection key={`${coverage.snapshot_id}:${item.account_id}`} closeId={closeId} snapshotId={coverage.snapshot_id} accountId={item.account_id} stale={coverage.stale} suggestions={item.suggested_ledger_queries} />
       </details>)}
       {page > 0 && <button type="button" onClick={() => setAccountPage(page - 1)}>Previous accounts</button>}
       {(page + 1) * 50 < matchingAccounts.length && <button type="button" onClick={() => setAccountPage(page + 1)}>Next accounts</button>}
@@ -114,19 +115,18 @@ export function Coverage({ closeId }: { closeId: string }) {
   </section>;
 }
 
-type LedgerPage = { account_id: string; offset: number; total: number; columns: string[]; rows: { location: string; row: { ColData?: { value?: string }[]; Header?: { ColData?: { value?: string }[] } } }[] };
-function LedgerSelection({ closeId, snapshotId, accountId, stale }: { closeId: string; snapshotId: string; accountId: string; stale: boolean }) {
+type LedgerPage = { account_id: string; query?: string; offset: number; total: number; columns: string[]; rows: { location: string; row: { ColData?: { value?: string }[]; Header?: { ColData?: { value?: string }[] } } }[] };
+function LedgerSelection({ closeId, snapshotId, accountId, stale, suggestions }: { closeId: string; snapshotId: string; accountId: string; stale: boolean; suggestions: string[] }) {
   const [page, setPage] = useState<LedgerPage>();
-  const [offset, setOffset] = useState(0);
+  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
-  const path = `/${closeId}/quickbooks/snapshots/${snapshotId}/ledger?account_id=${encodeURIComponent(accountId)}&offset=${offset}`;
-  async function inspect(next = offset) {
+  const path = `/${closeId}/quickbooks/snapshots/${snapshotId}/ledger?account_id=${encodeURIComponent(accountId)}&offset=${page?.offset ?? 0}&query=${encodeURIComponent(page?.query ?? "")}`;
+  async function inspect(next = 0, search = query) {
     setBusy(true); setError(""); setSaved("");
     try {
-      setPage(await workspaceRequest(`/${closeId}/quickbooks/snapshots/${snapshotId}/ledger?account_id=${encodeURIComponent(accountId)}&offset=${next}`));
-      setOffset(next);
+      setPage(await workspaceRequest(`/${closeId}/quickbooks/snapshots/${snapshotId}/ledger?account_id=${encodeURIComponent(accountId)}&offset=${next}&query=${encodeURIComponent(search)}`));
     } catch (e) { setError(e instanceof Error ? e.message : "Ledger rows unavailable."); }
     finally { setBusy(false); }
   }
@@ -134,18 +134,20 @@ function LedgerSelection({ closeId, snapshotId, accountId, stale }: { closeId: s
     setBusy(true); setError("");
     try {
       const result = await workspaceRequest(path, { confirmed: true });
-      setSaved(`Evidence #${result.source_id} is available to the agent. Open Work and choose “Recheck evidence and proposals” for affected jobs.`);
+      setSaved(`Evidence #${result.source_id} is available to the agent. Recheck the affected work proposal before confirming facts.`);
     } catch (e) { setError(e instanceof Error ? e.message : "Could not add ledger evidence."); }
     finally { setBusy(false); }
   }
   return <div>
-    <button type="button" disabled={busy || stale} onClick={() => void inspect(0)}>Inspect account-matched ledger rows</button>
+    {!!suggestions.length && <p>Agent-found source references: {suggestions.map(term => <button type="button" key={term} disabled={busy || stale} onClick={() => { setQuery(term); void inspect(0, term); }}>{term}</button>)}. Search results are candidates, not proof of a complete ledger.</p>}
+    <label>Find invoice, memo or transaction reference in this account's captured ledger<input type="search" value={query} maxLength={100} onChange={e => setQuery(e.target.value)} placeholder="Optional exact text; leave blank for first rows" /></label>
+    <button type="button" disabled={busy || stale} onClick={() => void inspect(0)}>Find account-matched ledger rows</button>
     {error && <p role="alert">{error}</p>}{saved && <p role="status">{saved}</p>}
     {page && <><p>{page.total} account-matched report row{page.total === 1 ? "" : "s"}. Showing {page.rows.length ? `${page.offset + 1}–${page.offset + page.rows.length}` : "none"}. Report rows are context, not a verified balance or complete transaction export.</p>
       {page.rows.length === 0 ? <p>No exact account ID match in this report. Inspect the original snapshot before deciding coverage.</p> : <ul>{page.rows.map(row => <li key={row.location}>{row.location}: {(row.row.ColData ?? row.row.Header?.ColData ?? []).map((cell, index) => `${page.columns[index] || `Column ${index + 1}`}: ${cell.value ?? ""}`).join(" · ")}</li>)}</ul>}
       {page.rows.length > 0 && <button type="button" disabled={busy || stale} onClick={() => void add()}>Add this page to agent evidence</button>}
-      {page.offset + page.rows.length < page.total && <button type="button" disabled={busy} onClick={() => void inspect(page.offset + page.rows.length)}>Next ledger page</button>}
-      {page.offset > 0 && <button type="button" disabled={busy} onClick={() => void inspect(Math.max(0, page.offset - 20))}>Previous ledger page</button>}
+      {page.offset + page.rows.length < page.total && <button type="button" disabled={busy} onClick={() => void inspect(page.offset + page.rows.length, page.query ?? "")}>Next ledger page</button>}
+      {page.offset > 0 && <button type="button" disabled={busy} onClick={() => void inspect(Math.max(0, page.offset - 20), page.query ?? "")}>Previous ledger page</button>}
     </>}
   </div>;
 }

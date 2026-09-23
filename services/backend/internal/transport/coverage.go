@@ -15,22 +15,29 @@ import (
 )
 
 type coverageRequirement struct {
-	AccountID string   `json:"account_id"`
-	Name      string   `json:"name"`
-	Kind      string   `json:"kind"`
-	Question  string   `json:"question"`
-	BindingID string   `json:"binding_id"`
-	JobIDs    []string `json:"job_ids"`
-	Excluded  bool     `json:"excluded"`
-	Reason    string   `json:"reason"`
-	State     string   `json:"state"`
+	AccountID              string   `json:"account_id"`
+	Name                   string   `json:"name"`
+	Kind                   string   `json:"kind"`
+	Question               string   `json:"question"`
+	BindingID              string   `json:"binding_id"`
+	JobIDs                 []string `json:"job_ids"`
+	Excluded               bool     `json:"excluded"`
+	Reason                 string   `json:"reason"`
+	State                  string   `json:"state"`
+	SuggestedJobIDs        []string `json:"suggested_job_ids"`
+	SuggestedLedgerQueries []string `json:"suggested_ledger_queries"`
 }
 type coverageJob struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	State    string `json:"state"`
 	Revision int    `json:"revision"`
-	Papers   []struct {
+	Facts    []struct {
+		Field string `json:"field"`
+		Value string `json:"value"`
+	} `json:"facts"`
+	Kind   string `json:"kind"`
+	Papers []struct {
 		ID, Kind, State string
 		Blockers        []string
 		Sources         []json.RawMessage
@@ -63,7 +70,7 @@ func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageV
 	// Include current paper approvals in the optimistic fence and derive progress;
 	// there is no independently writable "resolved" flag.
 	var jobs []byte
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(v ORDER BY (v->>'id')::bigint),'[]') FROM (SELECT jsonb_build_object('id',j.id::text,'name',e.name,'state',j.state,'revision',i.revision,'papers',COALESCE((SELECT jsonb_agg(jsonb_build_object('ID',w.id::text,'Kind',w.kind,'State',w.review_state,'Blockers',COALESCE(w.paper->'blockers','[]'),'Sources',COALESCE(w.paper->'sources','[]')) ORDER BY w.id) FROM workpaper_review_state w WHERE w.close_id=j.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text)),'[]')) v FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 ORDER BY j.id LIMIT 101) x`, closeID).Scan(&jobs)
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(v ORDER BY (v->>'id')::bigint),'[]') FROM (SELECT jsonb_build_object('id',j.id::text,'name',e.name,'state',j.state,'revision',i.revision,'kind',i.proposal->>'kind','facts',(SELECT COALESCE(jsonb_agg(jsonb_build_object('field',f->>'field','value',f->>'value')),'[]'::jsonb) FROM jsonb_array_elements(COALESCE(i.proposal->'facts','[]'::jsonb)) f WHERE f->>'field' IN ('prepaid_account','liability_account','account','booking_reference','credit_reference','actual_reference')),'papers',COALESCE((SELECT jsonb_agg(jsonb_build_object('ID',w.id::text,'Kind',w.kind,'State',w.review_state,'Blockers',COALESCE(w.paper->'blockers','[]'),'Sources',COALESCE(w.paper->'sources','[]')) ORDER BY w.id) FROM workpaper_review_state w WHERE w.close_id=j.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text)),'[]')) v FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 ORDER BY j.id LIMIT 101) x`, closeID).Scan(&jobs)
 	if err != nil {
 		return out, err
 	}
@@ -73,19 +80,66 @@ func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageV
 	if len(out.Jobs) > 100 {
 		return out, fmt.Errorf("Coverage supports up to 100 intake jobs per close")
 	}
+	bindings := map[string]struct {
+		ID       string
+		Jobs     []string
+		Excluded bool
+		Reason   string
+	}{}
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT ON (account_id) account_id,id::text,job_ids,excluded,reason FROM coverage_bindings WHERE close_id=$1 AND snapshot_id::text=$2 ORDER BY account_id,id DESC`, closeID, out.SnapshotID)
+	if err != nil {
+		return out, err
+	}
+	for rows.Next() {
+		var account, id, reason string
+		var ids []byte
+		var excluded bool
+		if err = rows.Scan(&account, &id, &ids, &excluded, &reason); err != nil {
+			break
+		}
+		var jobs []string
+		if err = json.Unmarshal(ids, &jobs); err != nil {
+			break
+		}
+		bindings[account] = struct {
+			ID       string
+			Jobs     []string
+			Excluded bool
+			Reason   string
+		}{id, jobs, excluded, reason}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return out, err
+	}
 	for n := range out.Items {
 		item := &out.Items[n]
 		item.JobIDs = []string{}
+		item.SuggestedJobIDs = []string{}
+		item.SuggestedLedgerQueries = []string{}
 		item.State = "missing_evidence"
-		var ids []byte
-		err = tx.QueryRowContext(ctx, `SELECT id::text,job_ids,excluded,reason FROM coverage_bindings WHERE close_id=$1 AND snapshot_id::text=$2 AND account_id=$3 ORDER BY id DESC LIMIT 1`, closeID, out.SnapshotID, item.AccountID).Scan(&item.BindingID, &ids, &item.Excluded, &item.Reason)
-		if err != nil && err != sql.ErrNoRows {
-			return out, err
-		}
-		if err == nil {
-			if err = json.Unmarshal(ids, &item.JobIDs); err != nil {
-				return out, err
+		for _, job := range out.Jobs {
+			if job.Kind != item.Kind {
+				continue
 			}
+			field := map[string]string{"prepaid": "prepaid_account", "accrual": "liability_account", "reconciliation": "account"}[item.Kind]
+			for _, fact := range job.Facts {
+				if fact.Field == field && fact.Value != "" && (strings.EqualFold(fact.Value, item.Name) || fact.Value == item.AccountID) {
+					item.SuggestedJobIDs = append(item.SuggestedJobIDs, job.ID)
+					for _, reference := range job.Facts {
+						if (reference.Field == "booking_reference" || reference.Field == "credit_reference" || reference.Field == "actual_reference") && len(reference.Value) >= 3 && len(reference.Value) <= 100 && !slices.Contains(item.SuggestedLedgerQueries, reference.Value) && len(item.SuggestedLedgerQueries) < 5 {
+							item.SuggestedLedgerQueries = append(item.SuggestedLedgerQueries, reference.Value)
+						}
+					}
+					break
+				}
+			}
+		}
+		if binding, ok := bindings[item.AccountID]; ok {
+			item.BindingID, item.JobIDs, item.Excluded, item.Reason = binding.ID, binding.Jobs, binding.Excluded, binding.Reason
 			if item.Excluded {
 				item.State = "excluded"
 			} else if len(item.JobIDs) > 0 {

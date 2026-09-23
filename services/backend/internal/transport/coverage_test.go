@@ -70,6 +70,8 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 		must(tx.Commit())
 		jobs = append(jobs, job)
 	}
+	_, err = db.Exec(`UPDATE preparation_intakes SET proposal='{"kind":"prepaid","facts":[{"field":"prepaid_account","value":"Prepaid A"},{"field":"booking_reference","value":"INV-42"}]}' WHERE job_id=$1`, jobs[0])
+	must(err)
 	token := strings.Repeat("k", 32)
 	handler := apiWithStore(db, token)
 	call := func(method, path, bearer string, body any, want int) []byte {
@@ -93,6 +95,10 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 		}
 		must(json.Unmarshal(call("GET", path, token, nil, 200), &got))
 		return got.Coverage
+	}
+	suggestion := view()
+	if len(suggestion.Items[0].SuggestedJobIDs) != 1 || suggestion.Items[0].SuggestedJobIDs[0] != jobs[0] || len(suggestion.Items[0].SuggestedLedgerQueries) != 1 || suggestion.Items[0].SuggestedLedgerQueries[0] != "INV-42" || suggestion.Items[0].State != "missing_evidence" {
+		t.Fatalf("account suggestion must stay unapproved: %+v", suggestion.Items[0])
 	}
 	for n, account := range []string{"a", "b"} {
 		v := view()

@@ -15,3 +15,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `019_email_followup.sql` extends the existing outbox with uniquely linked reminders and signed, deduplicated delivery events. Apply after 018 with API/worker stopped, then restart both. Fresh volumes apply it automatically. See `docs/email-delivery.md` for per-firm webhook setup and synthetic local checks.
 
 `020_accruals.sql` permits accrued-expense drafts and procedure versions. Apply after 019 with API/worker stopped. No existing workpaper or policy is rewritten. See `docs/accounting-methods.md`.
+
+`021_ledger_selections.sql` records immutable account-scoped General Ledger pages. `022_ledger_search.sql` adds the search term to their identity, so two distinct searches at the same offset cannot reuse the wrong evidence. Apply both in order with API/worker stopped before deploying ledger search.

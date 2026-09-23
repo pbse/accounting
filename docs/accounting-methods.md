@@ -4,7 +4,7 @@ These are explicit product methods, not universal accounting policy. The client'
 
 ## Start locally or on Cloudflare
 
-Apply migration `020_accruals.sql` after 019 with API and preparation worker stopped, then restart both on the same code revision. Fresh Compose volumes apply all migrations. No additional service or secret is required for these calculations. Existing hosted AuthKit organization/client permissions and database setup still apply. Cloudflare deployment must migrate the database before starting the new containers; API readiness checks for the accrual schema. This slice has local validation, not hosted activation evidence.
+Apply migrations through `022_ledger_search.sql` in numeric order with API and preparation worker stopped, then restart both on the same code revision. Fresh Compose volumes apply all migrations. No additional service or secret is required for these calculations. Existing hosted AuthKit organization/client permissions and database setup still apply. Cloudflare deployment must migrate the database before starting the new containers; API readiness checks for the required schema. This slice has local validation, not hosted activation evidence.
 
 Open a client close. Upload terms and ledger/credit support, or use the synthetic examples in the preparation forms. Example buttons fill facts but never check approval boxes. Examples use February 2028; use a synthetic close for that month to save them. Avoid mixing synthetic examples into real client evidence.
 
@@ -43,7 +43,9 @@ For any prior adjustments, enter the prepaid balance actually booked through clo
 - Same target, booked $10: debit prepaid / credit expense $11.60.
 - Same target, booked $21.60: no entry.
 
-Confirm that net invoice cost is recorded between the selected expense/prepaid accounts and that the balance includes all prior entries. The calculator does not independently read or certify the ledger. Multiple credits, negative balances, retrospective restatements, mid-month cancellation and tax/foreign-currency effects remain unsupported; request explicit review rather than netting them silently. The separate month-boundary cancellation treatments below do not change earlier expense.
+For multiple or retrospective credits, enter up to 20 individual positive credits, each with amount, effective service month, booked month and source reference. The booked month must be no earlier than the effective month and no later than this close. Cite the **client accountant's approved rule** and confirm the prepaid debit balance after all credit entries. Credits effective in an earlier service month revise the analytical schedule from that month; the calculator proposes only the current-close difference from the confirmed booked balance. It never edits an earlier close or posts a prior-period journal. The reviewer must resolve whether that treatment is acceptable before approving. Example: $120 January–March with $5 effective January but booked February and $10 effective/booked February yields $38.33, $33.33 and $33.34 of revised expense; total expense $105. At February close a booked prepaid balance of $40 yields a $6.66 debit expense / credit prepaid proposal. Excess credits, negative balances, combined credits/cancellation, mid-month cancellation and tax/foreign-currency effects remain blocked.
+
+Confirm that net invoice cost is recorded between the selected expense/prepaid accounts and that the balance includes all prior entries. The calculator does not independently read or certify the ledger. The separate month-boundary cancellation treatments below do not change earlier expense.
 
 ## Month-boundary cancellation
 
@@ -61,6 +63,8 @@ Synthetic example: $100 allocated equally over January–March 2028 produces Jan
 Select whether to propose a reversal on the first of the following month. It reverses **only the proposed adjustment**, not the entire target liability or prior entries. Reversals are draft entries, not scheduled execution.
 
 Example: supported liability $1,200, booked $200 → debit expense / credit liability $1,000 at month-end. Optional next-month reversal: debit liability / credit expense $1,000. Booked $1,400 → correct downward by $200. Booked $1,200 → no adjustment or reversal.
+
+`actual_invoice_true_up_v1` links a prior estimate amount/reference to a distinct actual invoice reference and the client accountant's approved rule. The entered amount is the approved **current closing liability**, supported by the actual invoice; the entered booked balance already reflects invoices, payments, reversals and earlier adjustments through this close. The workpaper reports actual minus estimate as a variance. Only current target minus booked liability becomes a proposed adjustment, and optional next-month reversal applies only to that new adjustment. Example: prior estimate $1,200, actual closing liability $1,250, booked liability $1,200 → variance +$50 and debit expense / credit liability $50. If the booked liability is already $1,250, no entry or reversal is proposed. This does not automatically derecognize paid invoices or revise an earlier period.
 
 The local agent recognizes exact labeled facts. To propose an accrual locally, put `Preparation kind: accrual` on its own line in the primary source, followed by labels such as `Amount:`, `Service start:`, `Service end:`, `Currency:`, `Expense account:`, `Liability account:`, `Booked balance:`, `Booking reference:` and `Estimation basis:`. This classifies a proposal only. OpenAI interpretation supports the same fields with verified citations when configured. Neither path accepts approval flags from document text; conflicting candidates remain visible for review.
 

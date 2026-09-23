@@ -89,7 +89,11 @@ func Coverage(accounts json.RawMessage, reports map[string]json.RawMessage) ([]C
 		case a.AccountSubType == "PrepaidExpenses":
 			item.Kind = "prepaid"
 			item.Reason = "Prepaid account is a candidate for schedule review; the ledger does not prove invoice service terms."
-			item.Question = "Provide invoices and existing schedules with service dates, currency, original booking and prior adjustments. Only fully expensed USD invoices covering full calendar months can use the current calculator."
+			item.Question = "Provide invoices and existing schedules with service dates, currency, original booking, credits and prior adjustments. A client accountant must approve any treatment beyond the established methods."
+		case a.AccountType == "Other Current Liability" && strings.Contains(strings.ToLower(a.Name), "accru"):
+			item.Kind = "accrual"
+			item.Reason = "The account name suggests an accrued liability; its activity and invoices still need review."
+			item.Question = "Provide incurred-service evidence, supported closing liability, current booked balance and any prior estimate or actual invoice. Confirm the client's approved method before preparing."
 		}
 		items = append(items, item)
 		byID[a.ID] = index
@@ -139,6 +143,7 @@ type LedgerRow struct {
 }
 type LedgerPage struct {
 	AccountID string      `json:"account_id"`
+	Query     string      `json:"query,omitempty"`
 	Offset    int         `json:"offset"`
 	Total     int         `json:"total"`
 	Columns   []string    `json:"columns"`
@@ -146,7 +151,22 @@ type LedgerPage struct {
 }
 
 func SelectLedger(accounts, report json.RawMessage, accountID string, offset int) (LedgerPage, error) {
-	page := LedgerPage{AccountID: accountID, Offset: offset, Rows: []LedgerRow{}}
+	return selectLedger(accounts, report, accountID, offset, "")
+}
+
+// SearchLedger scans the captured report once and returns only exact-account
+// rows containing a reviewer-supplied reference. Search is a discovery aid;
+// the original report location remains the citation.
+func SearchLedger(accounts, report json.RawMessage, accountID, query string, offset int) (LedgerPage, error) {
+	query = strings.TrimSpace(query)
+	if len(query) < 3 || len(query) > 100 {
+		return LedgerPage{}, fmt.Errorf("Search using a 3–100 character invoice, memo or transaction reference")
+	}
+	return selectLedger(accounts, report, accountID, offset, query)
+}
+
+func selectLedger(accounts, report json.RawMessage, accountID string, offset int, query string) (LedgerPage, error) {
+	page := LedgerPage{AccountID: accountID, Query: query, Offset: offset, Rows: []LedgerRow{}}
 	if accountID == "" || offset < 0 || offset > 100000 {
 		return page, fmt.Errorf("Choose an account and a valid ledger offset")
 	}
@@ -174,17 +194,18 @@ func SelectLedger(accounts, report json.RawMessage, accountID string, offset int
 		page.Columns = append(page.Columns, column.ColTitle)
 	}
 	accountColumn := len(root.Columns.Column) > 0 && strings.Contains(strings.ToLower(root.Columns.Column[0].ColTitle), "account")
+	needle := strings.ToLower(query)
 	var visit func([]json.RawMessage, string, bool) error
 	visit = func(rows []json.RawMessage, path string, inherited bool) error {
 		for n, raw := range rows {
 			location := fmt.Sprintf("%s.Row[%d]", path, n)
 			var value struct {
 				ColData []struct {
-					ID string `json:"id"`
+					ID, Value string
 				}
 				Header struct {
 					ColData []struct {
-						ID string `json:"id"`
+						ID, Value string
 					}
 				}
 				Rows struct{ Row []json.RawMessage }
@@ -200,19 +221,28 @@ func SelectLedger(accounts, report json.RawMessage, accountID string, offset int
 				matched = value.ColData[0].ID == accountID
 			}
 			if matched {
-				if page.Total >= offset && len(page.Rows) < 20 {
+				include := query == ""
+				for _, cell := range value.ColData {
+					include = include || strings.Contains(strings.ToLower(cell.Value), needle)
+				}
+				for _, cell := range value.Header.ColData {
+					include = include || strings.Contains(strings.ToLower(cell.Value), needle)
+				}
+				if include {
 					var cells map[string]json.RawMessage
 					if json.Unmarshal(raw, &cells) != nil {
 						return fmt.Errorf("General Ledger row is invalid")
 					}
 					delete(cells, "Rows")
 					body, _ := json.Marshal(cells)
-					if len(body) > 32*1024 {
-						return fmt.Errorf("A selected ledger row exceeds 32 KiB; inspect the original report")
+					if page.Total >= offset && len(page.Rows) < 20 {
+						if len(body) > 32*1024 {
+							return fmt.Errorf("A selected ledger row exceeds 32 KiB; inspect the original report")
+						}
+						page.Rows = append(page.Rows, LedgerRow{Location: location, Row: body})
 					}
-					page.Rows = append(page.Rows, LedgerRow{Location: location, Row: body})
+					page.Total++
 				}
-				page.Total++
 			}
 			if err := visit(value.Rows.Row, location+".Rows", matched); err != nil {
 				return err

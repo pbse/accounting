@@ -1,4 +1,4 @@
-import { PrepaidMethodFields } from "../prepaids/MethodFields";
+import { PrepaidMethodFields, readCredits } from "../prepaids/MethodFields";
 import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, SendRequestEmail, type EmailRecord } from "./Email";
 import { useEffect, useState, type FormEvent } from "react";
@@ -277,8 +277,8 @@ export function Work({
 }
 
 function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}) {
-  const [mode,setMode] = useState<"prepare"|"stop">("prepare");
-  const closes = [...new Map(items.filter(i=>mode === "prepare" || !["completed","cancelled"].includes(i.state)).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`}])).values()];
+  const [mode,setMode] = useState<"prepare"|"stop"|"recheck">("prepare");
+  const closes = [...new Map(items.filter(i=>mode === "prepare" || (mode === "recheck" ? ["failed","needs_confirmation"].includes(i.state) : !["completed","cancelled"].includes(i.state))).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`}])).values()];
   const [selected,setSelected] = useState<string[]>([]);
   const [preview,setPreview] = useState<{id:string;label:string;count:number;digest:string}[]>();
   const [reason,setReason] = useState("");
@@ -291,7 +291,7 @@ function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}
       const next = [];
       for (const close of closes.filter(c=>selected.includes(c.id))) {
         const status = await workspaceRequest(`/${close.id}/prepare-close`);
-        next.push({...close,count:mode === "prepare" ? status.inventory.length as number : status.stop.count as number,digest:mode === "prepare" ? status.inventory_digest as string : status.stop.digest as string});
+        next.push({...close,count:mode === "prepare" ? status.inventory.length as number : mode === "recheck" ? status.recheck.count as number : status.stop.count as number,digest:mode === "prepare" ? status.inventory_digest as string : mode === "recheck" ? status.recheck.digest as string : status.stop.digest as string});
       }
       setPreview(next);
     } catch(e) { setPreview(undefined);setError(e instanceof Error?e.message:"Could not inspect selected closes."); }
@@ -302,22 +302,23 @@ function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}
     setBusy(true);setError("");
     const results:string[]=[];
     for(const close of preview) {
-      if(close.count===0) { results.push(`${close.label}: no ${mode === "prepare" ? "source jobs to coordinate" : "unresolved jobs to stop"}.`); continue; }
+      if(close.count===0) { results.push(`${close.label}: no ${mode === "prepare" ? "source jobs to coordinate" : mode === "recheck" ? "ready unresolved jobs to recheck" : "unresolved jobs to stop"}.`); continue; }
       try {
         if(mode === "prepare") await workspaceRequest(`/${close.id}/prepare-close`,{inventory_digest:close.digest,confirmed:true});
+        else if(mode === "recheck") await workspaceRequest(`/${close.id}/prepare-close/recheck`,{digest:close.digest,confirmed:true});
         else await workspaceRequest(`/${close.id}/prepare-close/cancel`,{digest:close.digest,reason:reason.trim(),confirmed:true});
-        results.push(`${close.label}: ${mode === "prepare" ? "coordinated" : "stopped"} ${close.count} source job${close.count===1?"":"s"}.`);
+        results.push(`${close.label}: ${mode === "prepare" ? "coordinated" : mode === "recheck" ? "rechecking" : "stopped"} ${close.count} source job${close.count===1?"":"s"}.`);
       } catch(e) { results.push(`${close.label}: ${e instanceof Error?e.message:"Command failed"}. Inspect this close before another attempt.`); }
     }
     setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
   }
   if(!closes.length) return null;
-  return <details><summary>Portfolio commands · prepare or stop selected closes</summary>
+  return <details><summary>Portfolio commands · prepare, recheck or stop selected closes</summary>
     <p>Select up to 10 visible closes. Each close is checked again when submitted and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
-    <label>Command<select value={mode} onChange={e=>{setMode(e.target.value as "prepare"|"stop");setSelected([]);setPreview(undefined);setOutcomes([]);}}><option value="prepare">Prepare selected closes</option><option value="stop">Stop unresolved work</option></select></label>
+    <label>Command<select value={mode} onChange={e=>{setMode(e.target.value as "prepare"|"stop"|"recheck");setSelected([]);setPreview(undefined);setOutcomes([]);}}><option value="prepare">Prepare selected closes</option><option value="recheck">Recheck failed or pending proposals</option><option value="stop">Stop unresolved work</option></select></label>
     {closes.map(close=><label key={close.id}><input type="checkbox" checked={selected.includes(close.id)} disabled={busy || (!selected.includes(close.id) && selected.length>=10)} onChange={e=>{setPreview(undefined);setOutcomes([]);setSelected(current=>e.target.checked?[...current,close.id]:current.filter(id=>id!==close.id));}} /> {close.label}</label>)}
     <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect()}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
-    {preview && <div><h3>Exact {mode} preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} {mode === "prepare" ? "source" : "unresolved"} job{close.count===1?"":"s"}</li>)}</ul>{mode === "stop" && <label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label>}<button type="button" disabled={busy || (mode === "stop" && !reason.trim()) || preview.every(close=>close.count===0)} onClick={()=>void submit()}>{mode === "prepare" ? "Coordinate selected closes" : "Stop listed work"}</button></div>}
+    {preview && <div><h3>Exact {mode} preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} {mode === "prepare" ? "source" : "unresolved"} job{close.count===1?"":"s"}</li>)}</ul>{mode === "stop" && <label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label>}<button type="button" disabled={busy || (mode === "stop" && !reason.trim()) || preview.every(close=>close.count===0)} onClick={()=>void submit()}>{mode === "prepare" ? "Coordinate selected closes" : mode === "recheck" ? "Recheck listed proposals" : "Stop listed work"}</button></div>}
     {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
     {error && <p role="alert">{error}</p>}
   </details>;
@@ -392,7 +393,7 @@ function WorkDetails({
         method_confirmed: data.has("method_confirmed"),
         booking_confirmed: data.has("booking_confirmed"),
         examples_confirmed:data.has("examples_confirmed"),
-        ...(kind==="accrual" ? {reverse_next_month:data.get("reverse_next_month")==="true"} : Object.fromEntries(["credit_amount","credit_period","credit_reference","booked_balance","booking_reference","cancellation_method","cancellation_period","cancellation_reference"].map(key=>[key,String(data.get(key)??"")]))),
+        ...(kind==="accrual" ? {reverse_next_month:data.get("reverse_next_month")==="true",estimate_amount:String(data.get("estimate_amount")??""),estimate_reference:String(data.get("estimate_reference")??""),actual_reference:String(data.get("actual_reference")??""),accountant_rule_reference:String(data.get("accountant_rule_reference")??"")} : {...Object.fromEntries(["credit_amount","credit_period","credit_reference","booked_balance","booking_reference","cancellation_method","cancellation_period","cancellation_reference","accountant_rule_reference"].map(key=>[key,String(data.get(key)??"")])),credits:readCredits(data)}),
       });
     }
     void act("confirm", { input, facts_confirmed: data.has("facts"), inventory_confirmed:data.has("inventory") });
@@ -526,7 +527,7 @@ function WorkDetails({
                     ? "Confirm proposed statement reconciliation"
                     : kind === "accrual" ? "Confirm proposed accrual" : "Confirm proposed prepaid preparation"}
                 </legend>
-                {facts.filter(f=>kind!=="prepaid" || !f.optional).map((f) => (
+                {facts.filter(f=>!f.optional).map((f) => (
                   <div key={f.field}>
                     <label>
                       {f.label}
@@ -553,7 +554,7 @@ function WorkDetails({
                   {item.entity}.
                 </label>
                 {!!item.proposal.unselected?.length && <details open><summary>{item.proposal.unselected.length} sources not cited by this proposal</summary><p>The agent did not cite these files; on large closes it may not have read their full text. Inspect them before confirming that none changes this work:</p><ul>{item.proposal.unselected.map(s=><li key={s.id}>Evidence #{s.id}: {s.name}</li>)}</ul><label><input name="inventory" type="checkbox" required /> I reviewed the uncited evidence for this work.</label></details>}
-                {kind==="reconciliation" ? <label><input name="method" type="checkbox" required /> Confirm USD, complete page inventory, exact-date/signed-amount matching; ambiguous transactions stay unresolved.</label> : kind==="accrual" ? <AccrualConfirmations /> : <>
+                {kind==="reconciliation" ? <label><input name="method" type="checkbox" required /> Confirm USD, complete page inventory, exact-date/signed-amount matching; ambiguous transactions stay unresolved.</label> : kind==="accrual" ? <>{facts.filter(f=>f.optional && f.candidates.length>0).map(f=><p key={f.field}>{f.label}: {f.candidates.map(c=>`${c.value} · evidence #${c.source_id} ${c.location}: ${c.quote}`).join("; ")}</p>)}<AccrualConfirmations /></> : <>
                   {facts.filter(f=>f.optional && f.candidates.length>0).map(f=><p key={f.field}>{f.label}: {f.candidates.map(c=>`${c.value} · evidence #${c.source_id} ${c.location}: ${c.quote}`).join("; ")}{f.question}</p>)}
                   <PrepaidMethodFields values={Object.fromEntries(facts.map(f=>[f.field,f.value]))} />
                 </>}

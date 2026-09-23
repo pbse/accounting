@@ -165,3 +165,23 @@ func TestCarryScheduleDropsHistoricalBookedBalance(t *testing.T) {
 		t.Fatalf("second-generation carry lost credit or repeated booking: %+v %v", p, err)
 	}
 }
+
+func TestMultipleRetrospectiveCreditsRequireApprovedRule(t *testing.T) {
+	in := example()
+	in.Amount, in.ServiceStart, in.ServiceEnd, in.ClosePeriod = "120.00", "2028-01-01", "2028-03-31", "2028-02"
+	in.ExamplesConfirmed = true
+	in.BookedBalance, in.BookingReference = "40.00", "February ledger after credits"
+	in.Credits = []Credit{{"5.00", "2028-01", "2028-02", "Late January credit"}, {"10.00", "2028-02", "2028-02", "February credit"}}
+	if _, err := Prepare(in); err == nil {
+		t.Fatal("missing accountant rule accepted")
+	}
+	in.AccountantRuleReference = "Client accountant approval v2"
+	p, err := Prepare(in)
+	if err != nil || p.Schedule[0].Expense != "38.33" || p.Schedule[1].Expense != "33.33" || p.Schedule[1].Credit != "10.00" || p.PrepaidBalance != "33.34" || p.Proposal == nil || p.Proposal.Amount != "6.66" || p.Proposal.DebitAccount != in.ExpenseAccount {
+		t.Fatalf("retrospective schedule or current-close adjustment: %+v %v", p, err)
+	}
+	in.Credits[1].Amount = "100.00"
+	if _, err = Prepare(in); err == nil {
+		t.Fatal("credit beyond remaining balance accepted")
+	}
+}

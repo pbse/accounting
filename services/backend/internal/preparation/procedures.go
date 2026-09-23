@@ -42,7 +42,7 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 	}
 	text := fmt.Sprintf("Approved firm procedure version: %s\nWork kind: %s\nInstructions: %s\nApproval actor: %s\nApproval reason: %s\nThese instructions do not prove invoice booking, source completeness or ledger state. Human method and booking confirmations remain required.\n", p.ID, p.Kind, p.Instructions, p.Actor, p.Reason)
 	if p.Kind == "prepaid" {
-		text += "Supported method: equal_full_months_v1 or actual_days_v1 (USD accrual; explicitly selected and confirmed per draft)\n"
+		text += "Supported allocation: equal_full_months_v1 or actual_days_v1 (USD accrual). Multiple or retrospective credits require separately cited entries and the client accountant's approved rule reference. Method and booking are confirmed per draft.\n"
 		if p.ExpenseAccount != "" {
 			text += "Expense account: " + p.ExpenseAccount + "\n"
 		}
@@ -50,7 +50,7 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 			text += "Prepaid account: " + p.PrepaidAccount + "\n"
 		}
 	} else if p.Kind == "accrual" {
-		text += "Supported method: fixed_incurred_amount_v1. Accountant-confirmed incurred amount, booked liability and explicit reversal choice; no inferred estimates.\n"
+		text += "Supported method: fixed_incurred_amount_v1 or actual_invoice_true_up_v1. Cite the prior estimate and actual invoice; the true-up requires the client accountant's approved rule reference. Confirm incurred amount, booked liability and reversal choice; never infer estimates.\n"
 	} else {
 		text += "Supported method: exact_bank_month_v1 (unique exact-date and signed-amount CSV matching only)\n"
 	}

@@ -1,4 +1,4 @@
-import { PrepaidMethodFields } from "./MethodFields";
+import { PrepaidMethodFields, readCredits } from "./MethodFields";
 import { useRevision } from "../closes/useRevision";
 import { SourceReview } from "../closes/Evidence";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -56,6 +56,7 @@ export default function Prepare() {
       (form.current!.elements.namedItem(name) as HTMLInputElement).value =
         value;
     }
+    for (let i=0;i<20;i++) for (const key of ["amount","effective","recorded","reference"]) { const field=form.current?.elements.namedItem(`credit_${key}_${i}`); if(field instanceof HTMLInputElement) field.value=""; }
     for (const name of ["method_confirmed", "booking_confirmed", "examples_confirmed"]) {
       (form.current!.elements.namedItem(name) as HTMLInputElement).checked =
         false;
@@ -83,6 +84,7 @@ export default function Prepare() {
       examples_confirmed: data.has("examples_confirmed"),
       booked_balance:text("booked_balance"), booking_reference:text("booking_reference"),
       credit_amount:text("credit_amount"),credit_period:text("credit_period"),credit_reference:text("credit_reference"),
+      credits: readCredits(data), accountant_rule_reference: text("accountant_rule_reference"),
       cancellation_method:text("cancellation_method") as PrepaidInput["cancellation_method"],cancellation_period:text("cancellation_period"),cancellation_reference:text("cancellation_reference"),
       method_confirmed: data.get("method_confirmed") === "on",
       booking_confirmed: data.get("booking_confirmed") === "on",
@@ -256,7 +258,7 @@ export default function Prepare() {
           </fieldset>
           <fieldset disabled={busy || !revision.ready}>
             <legend>2. Confirm this method applies</legend>
-            <PrepaidMethodFields />
+            <PrepaidMethodFields key={revision.savedInput ? "revision-loaded" : "new"} values={revision.savedInput as Record<string,string> | undefined} credits={revision.savedInput?.credits as PrepaidInput["credits"] | undefined} />
           </fieldset>
           {error && (
             <p className="form-error" role="alert">
@@ -306,6 +308,7 @@ export default function Prepare() {
                 <dt>Method</dt>
                 <dd>{result.input.method} · residual in final month.</dd>
                 {result.input.cancellation_method && <><dt>Cancellation</dt><dd>{result.input.cancellation_method} effective {result.input.cancellation_period} · {result.input.cancellation_reference}</dd></>}
+                {!!result.input.credits?.length && <><dt>Reviewed credit rule</dt><dd>{result.input.accountant_rule_reference}</dd><dt>Credits</dt><dd>{result.input.credits.map(c => `$${c.amount} effective ${c.effective_period}, booked ${c.recorded_period} · ${c.reference}`).join("; ")}</dd></>}
                 <dt>Booking assumption</dt>
                 <dd>{result.input.booked_balance ? `Ledger prepaid: $${result.input.booked_balance} · ${result.input.booking_reference}` : "Fully expensed; no prior adjustments or credits."}</dd>
               </dl>
