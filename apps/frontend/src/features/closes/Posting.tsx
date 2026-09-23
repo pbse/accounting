@@ -1,6 +1,38 @@
 import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 
+type ProposedState = { items: { workpaper_id: string; state: string; review_state: string; digest: string; ledger_before: { prepaid: { name: string; balance: string; sync_token: string }; expense: { name: string; balance: string; sync_token: string } }; projected_balances: { prepaid: string; expense: string }; other_open_intents: string[] }[]; has_more: boolean; notice: string };
+export function ProposedStatePreview({ closeId }: { closeId: string }) {
+  const [preview, setPreview] = useState<ProposedState>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function load() {
+    setBusy(true);
+    setError("");
+    try {
+      setPreview(await workspaceRequest(`/${encodeURIComponent(closeId)}/proposed-state`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Proposed state unavailable.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <section className="panel" aria-labelledby="proposed-state-heading">
+    <h2 id="proposed-state-heading">Proposed ledger effects</h2>
+    <p>Review saved production journal previews against the account balances and versions captured with each intent. Refresh before an approval; QuickBooks may have changed since capture.</p>
+    <button disabled={busy} onClick={() => void load()}>{busy ? "Loading…" : "Show proposed effects"}</button>
+    {error && <p role="alert">{error}</p>}
+    {preview && <><p>{preview.notice}</p>{preview.items.length === 0 && <p>No versioned production journal preview is saved for this close.</p>}
+      {preview.items.map(item => <section key={item.workpaper_id}><h3>Draft #{item.workpaper_id} · {item.state} · review {item.review_state}</h3>
+        <ul>{(["prepaid", "expense"] as const).map(account => <li key={account}>{item.ledger_before[account].name}: ${item.ledger_before[account].balance} → proposed ${item.projected_balances[account]} · account version {item.ledger_before[account].sync_token}</li>)}</ul>
+        {item.other_open_intents.length > 0 && <p role="alert">Other open intents use these accounts: {item.other_open_intents.join(", ")}. Resolve before approval.</p>}
+        {item.review_state !== "approved" && <p role="status">This workpaper needs current accountant review.</p>}
+      </section>)}
+      {preview.has_more && <p>Showing 100 recent proposals; inspect older intents individually.</p>}
+    </>}
+  </section>;
+}
+
 type Intent = {
   state: string;
   request_id?: string;

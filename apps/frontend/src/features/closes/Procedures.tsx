@@ -20,6 +20,7 @@ type Impact = {
   affected_drafts: { id: string; kind: string; review_state: string }[];
 };
 type Suggestion = { draft_instructions: string; changed_fields: string[]; source_draft_ids: string[] };
+type PublishImpact = { kind: string; client_entity: string; previous_id: string; impact_digest: string; total_closes: number; has_more: boolean; closes: { close_id: string; entity: string; period: string; pinned_source_id: string; draft_count: number }[] };
 export function Procedures({
   closeId,
   entity,
@@ -40,6 +41,7 @@ export function Procedures({
   const [message, setMessage] = useState("");
   const [impact, setImpact] = useState<Impact>();
   const [suggestion, setSuggestion] = useState<Suggestion>();
+  const [publishImpact, setPublishImpact] = useState<PublishImpact>();
   async function load() {
     setBusy(true);
     setError("");
@@ -61,6 +63,10 @@ export function Procedures({
   );
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!publishImpact || publishImpact.kind !== kind || publishImpact.previous_id !== (previous?.id ?? "") || publishImpact.client_entity.toLowerCase() !== (target === "client" ? entity : "").toLowerCase()) {
+      setError("Review the affected closes before publishing this procedure.");
+      return;
+    }
     const data = new FormData(event.currentTarget);
     setBusy(true);
     setError("");
@@ -68,6 +74,7 @@ export function Procedures({
     try {
       await workspaceRequest("/procedures", {
         previous_id: previous?.id ?? "",
+        impact_digest: publishImpact.impact_digest,
         client_entity: target === "client" ? entity : "",
         kind,
         instructions: data.get("instructions"),
@@ -78,12 +85,25 @@ export function Procedures({
         confirmed: data.get("confirmed") === "on",
       });
       setEditing(false);
+      setPublishImpact(undefined);
       setMessage(
         "Published a new immutable version. Existing close context stays pinned until explicitly updated.",
       );
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Procedure save failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function previewPublish() {
+    setBusy(true);
+    setError("");
+    setPublishImpact(undefined);
+    try {
+      setPublishImpact(await workspaceRequest(`/procedures?impact_kind=${encodeURIComponent(kind)}&client_entity=${encodeURIComponent(target === "client" ? entity : "")}`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Affected closes unavailable.");
     } finally {
       setBusy(false);
     }
@@ -299,7 +319,13 @@ export function Procedures({
                   its applicability. Unsupported accounting methods remain
                   blocked.
                 </label>
-                <button>Publish approved version</button>
+                <button type="button" onClick={() => void previewPublish()}>Review affected closes</button>
+                {publishImpact?.kind === kind && publishImpact.client_entity.toLowerCase() === (target === "client" ? entity : "").toLowerCase() && <section role="status">
+                  <p>{publishImpact.total_closes} existing close{publishImpact.total_closes === 1 ? "" : "s"} in this procedure scope. Publishing leaves their pinned context unchanged; each close needs a separate reviewed apply action.</p>
+                  {publishImpact.has_more && <p>Showing the latest 100 closes. Open older closes individually before a firm-wide change.</p>}
+                  <ul>{publishImpact.closes.map(item => <li key={item.close_id}>{item.entity} · {item.period} · {item.draft_count} draft{item.draft_count === 1 ? "" : "s"} · {item.pinned_source_id ? `pinned source #${item.pinned_source_id}` : "no pinned procedure"}</li>)}</ul>
+                </section>}
+                <button disabled={!publishImpact || publishImpact.kind !== kind || publishImpact.previous_id !== (previous?.id ?? "") || publishImpact.client_entity.toLowerCase() !== (target === "client" ? entity : "").toLowerCase()}>Publish approved version</button>
                 <button type="button" onClick={() => setEditing(false)}>
                   Cancel
                 </button>

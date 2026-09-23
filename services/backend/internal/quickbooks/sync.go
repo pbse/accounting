@@ -140,6 +140,13 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	if uncertain {
 		return errors.New("Resolve uncertain posting attempts before replacing transaction evidence")
 	}
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bill_corrections b JOIN evidence e ON e.id=b.evidence_id WHERE b.close_id=$1 AND e.id::text<>$2 AND e.superseded_by IS NULL AND b.state IN ('executing','unknown'))`, job.closeID, sourceID).Scan(&uncertain)
+	if err != nil {
+		return err
+	}
+	if uncertain {
+		return errors.New("Resolve the Bill correction attempt before replacing transaction evidence")
+	}
 	var productionPending bool
 	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM quickbooks_entity_syncs old JOIN evidence e ON e.id=old.evidence_id JOIN workpapers w ON w.close_id=old.close_id JOIN production_postings p ON p.workpaper_id=w.id WHERE old.close_id=$1 AND old.state='completed' AND e.id::text<>$2 AND e.superseded_by IS NULL AND (p.state IN ('executing','unknown') OR (p.state='approved' AND p.approval_expires_at>now())) AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text)))`, job.closeID, sourceID).Scan(&productionPending)
 	if err != nil {
@@ -157,6 +164,10 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE vendor_credit_postings p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id=$1 AND p.state='approved' AND EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=$1 AND e.superseded_by::text=$2 AND e.replaced_by='quickbooks-sync' AND (p.evidence_id=e.id OR w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text))))`, job.closeID, sourceID)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE bill_corrections b SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM evidence e WHERE b.evidence_id=e.id AND b.close_id=$1 AND b.state='approved' AND e.superseded_by::text=$2 AND e.replaced_by='quickbooks-sync'`, job.closeID, sourceID)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 import type { AccrualWorkpaper } from "../../../../../packages/contracts/accrual";
 import { AccrualResult } from "../accruals/Prepare";
 import { QuickBooks } from "./QuickBooks";
+import { BillCorrection } from "./BillCorrection";
 import { Coordinator } from "./Coordinator";
 import { EmailSettings } from "./Email";
 import { ClientAccess } from "./ClientAccess";
@@ -22,7 +23,7 @@ import {
   type Source,
 } from "./Evidence";
 import { ReviewDecision } from "./ReviewDecision";
-import { Posting } from "./Posting";
+import { Posting, ProposedStatePreview } from "./Posting";
 import { VendorCredit } from "./VendorCredit";
 import { ProductionPosting } from "./Posting";
 import { ProductionAccess } from "./ProductionAccess";
@@ -260,6 +261,8 @@ export default function Closes() {
             entity={close.entity}
           />
           <ProductionAccess closeId={close.id} entity={close.entity} />
+          <ProposedStatePreview closeId={close.id} />
+          <BillCorrection closeId={close.id} />
           <Recurring key={`recurring-${close.id}`} closeId={close.id} onPrepared={() => void load()} />
           <RecurringAccruals closeId={close.id} onPrepared={() => void load()} />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
