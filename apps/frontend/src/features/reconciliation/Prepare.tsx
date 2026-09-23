@@ -11,6 +11,7 @@ import type {
   ReconciliationInput,
   ReconciliationWorkpaper,
   ReconciliationLine,
+  ReviewedMatch,
 } from "../../../../../packages/contracts/reconciliation";
 
 function Lines({
@@ -59,8 +60,8 @@ export function ReconciliationResult({
   return (
     <>
       <p className="note">
-        Draft workpaper only. Exact matches are candidates, not confirmed
-        matches or native bank reconciliation. Source references and page
+        Draft workpaper only. Unreviewed exact matches are candidates, not
+        confirmed matches or native bank reconciliation. Source references and page
         inventory are user-supplied; documents have not been independently
         inspected.
       </p>
@@ -93,7 +94,22 @@ export function ReconciliationResult({
         <dd>${result.opening_difference}</dd>
         <dt>Closing statement minus ledger</dt>
         <dd>${result.closing_difference}</dd>
+        <dt>Opening bridge after cited prior items</dt>
+        <dd>${result.opening_bridge_difference}</dd>
+        <dt>Closing bridge after reviewed timing items</dt>
+        <dd>${result.closing_bridge_difference}</dd>
+        <dt>Reviewer-reported QuickBooks status (not provider-verified)</dt>
+        <dd>{result.input.native_status || "unverified"}{result.input.native_status_reference ? ` · ${result.input.native_status_reference}` : ""}</dd>
       </dl>
+      {(result.input.prior_outstanding?.length || result.input.current_outstanding?.length || result.input.transfers?.length) ? <section>
+        <h3>Reviewed timing and transfer instructions</h3>
+        <p>These draft classifications use the cited accountant rules; they do not change the ledger or QuickBooks status.</p>
+        <ul>
+          {result.input.prior_outstanding?.map((item, index) => <li key={`prior-${index}`}>Prior {item.side} {item.id}: ${item.amount} · {item.cleared_by ? `cleared by ${item.cleared_by}` : "still outstanding"} · {item.source_reference} · rule {item.policy_reference}</li>)}
+          {result.input.current_outstanding?.map((item, index) => <li key={`current-${index}`}>Current {item.side} {item.id} · rule {item.policy_reference} · {item.reason}</li>)}
+          {result.input.transfers?.map((item, index) => <li key={`transfer-${index}`}>Transfer {item.statement_id}/{item.ledger_id} ↔ {item.other_statement_id}/{item.other_ledger_id} in {result.input.other_account} · rule {item.policy_reference}</li>)}
+        </ul>
+      </section> : null}
       <h3>Exact-match candidates · {result.matches.length}</h3>
       <p>
         Same date and signed amount, unique on both sides. Duplicate amounts on
@@ -119,6 +135,11 @@ export function ReconciliationResult({
           </tbody>
         </table>
       )}
+      {(result.reviewed_matches?.length ?? 0) > 0 && <section>
+        <h3>Reviewer-selected groups · {result.reviewed_matches.length}</h3>
+        <p>These choices remain draft work until the saved workpaper receives its separate accountant review.</p>
+        <ul>{result.reviewed_matches.map((match, index) => <li key={index}>{match.statement_ids.join(" + ")} ↔ {match.ledger_ids.join(" + ")} · {match.method} · signed difference ${match.amount_difference} · {match.reason}</li>)}</ul>
+      </section>}
       <Lines
         title="Unmatched statement items"
         lines={result.unmatched_statement}
@@ -154,6 +175,10 @@ export default function Prepare() {
   const [result, setResult] = useState<ReconciliationWorkpaper>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [matchReason, setMatchReason] = useState("");
+  const [selection, setSelection] = useState({ statement: "", ledger: "", reason: "", policy: "", days: "0", amount: "0.00" });
+  const [timing, setTiming] = useState({ side: "ledger" as "ledger" | "statement", id: "", amount: "", clearedBy: "", source: "", policy: "", reason: "" });
+  const [transfer, setTransfer] = useState({ statement: "", ledger: "", otherStatement: "", otherLedger: "", policy: "", reason: "" });
   useEffect(() => {
     if (result) heading.current?.focus();
   }, [result]);
@@ -168,6 +193,28 @@ export default function Prepare() {
         .then(setEvidenceFiles)
         .catch((e) => setError(e.message));
   }, [params]);
+  async function calculate(input: ReconciliationInput) {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/reconciliations:prepare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await authenticationHeaders()) },
+        body: JSON.stringify(input),
+      });
+      const paper = await response.json();
+      if (!response.ok) throw new Error(paper.message ?? "Preparation failed.");
+      setResult(paper);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Preparation is unavailable. Your inputs are still here.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function confirmSelection(match: ReviewedMatch) {
+    if (!result) return;
+    await calculate({ ...result.input, reviewed_matches: [...(result.input.reviewed_matches ?? []), match] });
+  }
   async function prepare(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -191,31 +238,20 @@ export default function Prepare() {
       statement_csv: text("statement_csv"),
       ledger_csv: text("ledger_csv"),
       policy_confirmed: data.get("policy_confirmed") === "on",
+      reviewed_matches: [],
+      prior_outstanding: [],
+      current_outstanding: [],
+      transfers: [],
+      other_account: text("other_account"),
+      other_statement_reference: text("other_statement_reference"),
+      other_ledger_reference: text("other_ledger_reference"),
+      other_statement_csv: text("other_statement_csv"),
+      other_ledger_csv: text("other_ledger_csv"),
+      native_status: text("native_status") as ReconciliationInput["native_status"],
+      native_status_reference: text("native_status_reference"),
     };
-    setBusy(true);
-    setError("");
     setResult(undefined);
-    try {
-      const response = await fetch(`${apiBaseUrl}/v1/reconciliations:prepare`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(await authenticationHeaders()),
-        },
-        body: JSON.stringify(input),
-      });
-      const paper = await response.json();
-      if (!response.ok) throw new Error(paper.message ?? "Preparation failed.");
-      setResult(paper);
-    } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "Preparation is unavailable. Your inputs are still here.",
-      );
-    } finally {
-      setBusy(false);
-    }
+    await calculate(input);
   }
   function example() {
     const values = {
@@ -250,8 +286,8 @@ export default function Prepare() {
       <p>
         Import one full month of a USD bank account. Deposits are positive;
         withdrawals are negative on both sources. Credit-card accounts, grouped
-        match selection, date tolerances, and prior-period outstanding items need a
-        separate method.
+        transfer relationships and prior-period outstanding items need separate
+        source evidence and the accountant's approved rule.
       </p>
       <details open={!result}>
         <summary>
@@ -297,7 +333,7 @@ export default function Prepare() {
                   Load uploaded CSV evidence directly into this form, then
                   confirm its balances and page inventory.
                 </p>
-                {["statement", "ledger"].map((role) => (
+                {["statement", "ledger", "other_statement", "other_ledger"].map((role) => (
                   <label key={role}>
                     {role} evidence
                     <select
@@ -392,6 +428,18 @@ export default function Prepare() {
                 <input name="ledger_reference" required maxLength={200} />
               </label>
               <label>
+                Other account (for reviewed transfers)
+                <input name="other_account" maxLength={200} />
+              </label>
+              <label>
+                Other account statement reference
+                <input name="other_statement_reference" maxLength={200} />
+              </label>
+              <label>
+                Other account ledger reference
+                <input name="other_ledger_reference" maxLength={200} />
+              </label>
+              <label>
                 Expected statement pages
                 <input
                   name="expected_pages"
@@ -454,7 +502,13 @@ export default function Prepare() {
                   maxLength={200000}
                 />
               </label>
+              <label>Other account statement CSV (transfers only)<textarea name="other_statement_csv" rows={5} maxLength={200000} /></label>
+              <label>Other account ledger CSV (transfers only)<textarea name="other_ledger_csv" rows={5} maxLength={200000} /></label>
             </div>
+            <label>Reviewer-reported QuickBooks reconciliation status
+              <select name="native_status" defaultValue="unverified"><option value="unverified">Not verified</option><option value="reconciled">Reconciled (cite observation)</option><option value="unreconciled">Not reconciled (cite observation)</option></select>
+            </label>
+            <label>Native status source reference<input name="native_status_reference" maxLength={200} placeholder="QuickBooks account report and date" /></label>
             <label className="checkbox-label">
               <input name="policy_confirmed" type="checkbox" required />
               <span>
@@ -478,6 +532,65 @@ export default function Prepare() {
             Prepared reconciliation draft
           </h2>
           <ReconciliationResult result={result} />
+          <details>
+            <summary>Confirm matches after inspecting the originals</summary>
+            <p>These choices create a revised draft calculation. They do not approve the workpaper or mark QuickBooks reconciled. A nonzero amount difference remains a blocker.</p>
+            <label>What did you verify in the original records?<input value={matchReason} onChange={(e) => setMatchReason(e.target.value)} minLength={5} maxLength={500} placeholder="Describe the matching evidence" /></label>
+            {result.matches.map((match) => <button key={`${match.statement_id}-${match.ledger_id}`} disabled={busy || matchReason.trim().length < 5} onClick={() => void confirmSelection({ statement_ids: [match.statement_id], ledger_ids: [match.ledger_id], method: "exact", reason: matchReason })}>Confirm {match.statement_id} ↔ {match.ledger_id}</button>)}
+            {(result.exceptions ?? []).flatMap((item) => (item.candidate_groups ?? []).map((group) => {
+              const match: ReviewedMatch = item.side === "statement"
+                ? { statement_ids: [item.id], ledger_ids: group, method: "exact", reason: matchReason }
+                : { statement_ids: group, ledger_ids: [item.id], method: "exact", reason: matchReason };
+              return <button key={`${item.side}-${item.id}-${group.join("-")}`} disabled={busy || matchReason.trim().length < 5} onClick={() => void confirmSelection(match)}>Confirm {match.statement_ids.join(" + ")} ↔ {match.ledger_ids.join(" + ")}</button>;
+            }))}
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              const days = Number(selection.days);
+              const method = days === 0 && selection.amount === "0.00" ? "exact" : "tolerance";
+              void confirmSelection({ statement_ids: selection.statement.split(",").map((s) => s.trim()), ledger_ids: selection.ledger.split(",").map((s) => s.trim()), method, reason: selection.reason, ...(method === "tolerance" ? { date_window_days: days, amount_tolerance: selection.amount, policy_reference: selection.policy } : {}) });
+            }}>
+              <fieldset disabled={busy}>
+                <legend>Review another exact or approved-tolerance group</legend>
+                <p>Enter IDs shown above, up to five on each side. The accountant’s rule reference is required for a date or amount tolerance.</p>
+                <label>Statement IDs, comma-separated<input required value={selection.statement} onChange={(e) => setSelection({ ...selection, statement: e.target.value })} /></label>
+                <label>Ledger IDs, comma-separated<input required value={selection.ledger} onChange={(e) => setSelection({ ...selection, ledger: e.target.value })} /></label>
+                <label>Date window, days<input type="number" min="0" max="31" value={selection.days} onChange={(e) => setSelection({ ...selection, days: e.target.value })} /></label>
+                <label>Maximum amount difference, USD<input inputMode="decimal" value={selection.amount} onChange={(e) => setSelection({ ...selection, amount: e.target.value })} /></label>
+                <label>Approved rule reference<input value={selection.policy} maxLength={200} onChange={(e) => setSelection({ ...selection, policy: e.target.value })} /></label>
+                <label>Why do these original records belong together?<textarea required minLength={5} maxLength={500} value={selection.reason} onChange={(e) => setSelection({ ...selection, reason: e.target.value })} /></label>
+                <button>Confirm reviewed group and recalculate</button>
+              </fieldset>
+            </form>
+          </details>
+          <details>
+            <summary>Resolve timing items and transfers with approved rules</summary>
+            <p>Inspect the original records and cite the accountant-approved method. Each choice recalculates the bridge; an unexplained difference stays blocked. Upload prior-period support and both other-account CSVs before saving source-linked instructions.</p>
+            {result.input.prior_outstanding?.map((item, index) => <button key={`remove-prior-${index}`} disabled={busy} onClick={() => void calculate({ ...result.input, prior_outstanding: result.input.prior_outstanding?.filter((_, i) => i !== index) })}>Remove prior item {item.id}</button>)}
+            {result.input.current_outstanding?.map((item, index) => <button key={`remove-current-${index}`} disabled={busy} onClick={() => void calculate({ ...result.input, current_outstanding: result.input.current_outstanding?.filter((_, i) => i !== index) })}>Remove current item {item.id}</button>)}
+            {result.input.transfers?.map((item, index) => <button key={`remove-transfer-${index}`} disabled={busy} onClick={() => void calculate({ ...result.input, transfers: result.input.transfers?.filter((_, i) => i !== index) })}>Remove transfer {item.statement_id}</button>)}
+            <label>Source side
+              <select value={timing.side} onChange={(e) => setTiming({ ...timing, side: e.target.value as "statement" | "ledger" })}><option value="ledger">Ledger</option><option value="statement">Statement</option></select>
+            </label>
+            <label>Source row ID<input value={timing.id} onChange={(e) => setTiming({ ...timing, id: e.target.value })} placeholder="Current row ID or prior item ID" /></label>
+            <label>Prior item signed amount (USD)<input inputMode="decimal" value={timing.amount} onChange={(e) => setTiming({ ...timing, amount: e.target.value })} /></label>
+            <label>Current-period clearing row ID on opposite source (optional)<input value={timing.clearedBy} onChange={(e) => setTiming({ ...timing, clearedBy: e.target.value })} /></label>
+            <label>Prior workpaper or statement citation<input maxLength={200} value={timing.source} onChange={(e) => setTiming({ ...timing, source: e.target.value })} /></label>
+            <label>Accountant-approved rule reference<input maxLength={200} value={timing.policy} onChange={(e) => setTiming({ ...timing, policy: e.target.value })} /></label>
+            <label>What did you verify?<textarea minLength={5} maxLength={500} value={timing.reason} onChange={(e) => setTiming({ ...timing, reason: e.target.value })} /></label>
+            <div>
+              <button disabled={busy || !timing.id || !timing.amount || timing.source.trim().length < 5 || timing.policy.trim().length < 5 || timing.reason.trim().length < 5} onClick={() => void calculate({ ...result.input, prior_outstanding: [...(result.input.prior_outstanding ?? []), { side: timing.side, id: timing.id, amount: timing.amount, cleared_by: timing.clearedBy, source_reference: timing.source, policy_reference: timing.policy, reason: timing.reason }] })}>Add cited prior item</button>
+              <button disabled={busy || !timing.id || timing.policy.trim().length < 5 || timing.reason.trim().length < 5} onClick={() => void calculate({ ...result.input, current_outstanding: [...(result.input.current_outstanding ?? []), { side: timing.side, id: timing.id, policy_reference: timing.policy, reason: timing.reason }] })}>Classify current unmatched row</button>
+            </div>
+            <h3>Pair a transfer across both accounts</h3>
+            <p>Enter all four row IDs from the current and other account statement/ledger CSVs. Their signed amounts must agree in each account and offset between accounts.</p>
+            <label>Current account statement row<input value={transfer.statement} onChange={(e) => setTransfer({ ...transfer, statement: e.target.value })} /></label>
+            <label>Current account ledger row<input value={transfer.ledger} onChange={(e) => setTransfer({ ...transfer, ledger: e.target.value })} /></label>
+            <label>Other account statement row<input value={transfer.otherStatement} onChange={(e) => setTransfer({ ...transfer, otherStatement: e.target.value })} /></label>
+            <label>Other account ledger row<input value={transfer.otherLedger} onChange={(e) => setTransfer({ ...transfer, otherLedger: e.target.value })} /></label>
+            <label>Accountant-approved transfer rule<input maxLength={200} value={transfer.policy} onChange={(e) => setTransfer({ ...transfer, policy: e.target.value })} /></label>
+            <label>What did you verify?<textarea minLength={5} maxLength={500} value={transfer.reason} onChange={(e) => setTransfer({ ...transfer, reason: e.target.value })} /></label>
+            <button disabled={busy || !transfer.statement || !transfer.ledger || !transfer.otherStatement || !transfer.otherLedger || transfer.policy.trim().length < 5 || transfer.reason.trim().length < 5} onClick={() => void calculate({ ...result.input, transfers: [...(result.input.transfers ?? []), { statement_id: transfer.statement, ledger_id: transfer.ledger, other_statement_id: transfer.otherStatement, other_ledger_id: transfer.otherLedger, policy_reference: transfer.policy, reason: transfer.reason }] })}>Confirm transfer pair and recalculate</button>
+          </details>
           <button
             onClick={() => {
               const url = URL.createObjectURL(

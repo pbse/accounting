@@ -64,6 +64,21 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 		}
 		return w.Body.Bytes()
 	}
+	preview := func(kind string) procedureImpact {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/"+id+"/procedures/impact?kind="+kind, nil)
+		r = r.WithContext(auth.WithActor(r.Context(), actor))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("impact: %d %s", w.Code, w.Body.String())
+		}
+		var impact procedureImpact
+		if json.Unmarshal(w.Body.Bytes(), &impact) != nil {
+			t.Fatal("invalid impact preview")
+		}
+		return impact
+	}
 	publish := func(client, expense, previous string) string {
 		t.Helper()
 		var v struct {
@@ -141,8 +156,14 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	}
 	tx.Rollback()
 	call("/v1/closes/"+id+"/procedures/apply", map[string]any{"kind": "prepaid", "version_id": first, "confirmed": true}, 409)
-	apply := map[string]any{"kind": "prepaid", "version_id": second, "confirmed": true}
+	impact := preview("prepaid")
+	if impact.VersionID != second || impact.SourceID == "" || !bytes.Contains(impact.Affected, []byte(paper)) {
+		t.Fatalf("affected review was not previewed: %+v", impact)
+	}
+	apply := map[string]any{"kind": "prepaid", "version_id": second, "impact_digest": impact.ImpactDigest, "confirmed": true}
 	call("/v1/closes/"+id+"/procedures/apply", apply, 200)
+	call("/v1/closes/"+id+"/procedures/apply", apply, 409)
+	apply["impact_digest"] = preview("prepaid").ImpactDigest
 	call("/v1/closes/"+id+"/procedures/apply", apply, 200)
 	var state string
 	if err = db.QueryRow(`SELECT review_state FROM workpaper_review_state WHERE id=$1`, paper).Scan(&state); err != nil || state != "source_changed" {

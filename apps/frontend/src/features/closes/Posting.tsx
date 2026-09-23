@@ -160,6 +160,8 @@ type ProductionIntent = Intent & {
   id?: string;
   grant_id?: string;
   ledger_before?: unknown;
+  projected_balances?: { prepaid: string; expense: string };
+  other_open_intents?: string[];
   ledger_after?: unknown;
   verified_at?: string;
 };
@@ -200,13 +202,15 @@ export function ProductionPosting({ closeId, paperId }: { closeId: string; paper
       {intent.verified_at && <p>Canonical readback saved {new Date(intent.verified_at).toLocaleString()}</p>}
       {intent.journal && <details open><summary>Exact journal to review</summary><pre>{JSON.stringify(intent.journal, null, 2)}</pre></details>}
       {intent.ledger_before && <details open><summary>Prepaid and expense ledger preconditions</summary><pre>{JSON.stringify(intent.ledger_before, null, 2)}</pre></details>}
+      {intent.projected_balances && <p>Proposed effect on these versioned account balances: prepaid ${intent.projected_balances.prepaid}; expense ${intent.projected_balances.expense}. This is a preview, not an official financial statement.</p>}
+      {(intent.other_open_intents?.length ?? 0) > 0 && <p role="alert">Other open proposals use these accounts: #{intent.other_open_intents?.join(", #")}. Resolve them before approving or posting.</p>}
       {intent.ledger_after && <details><summary>Saved canonical readback and balances</summary><pre>{JSON.stringify(intent.ledger_after, null, 2)}</pre></details>}
       {intent.state === "not_prepared" && <button disabled={busy} onClick={() => void run("preview")}>Prepare production preview</button>}
       {(intent.state === "preview" || intent.state === "approved") && <>
         <p>Review the exact account balances and journal. Approval expires after 10 minutes. A reserved execution attempt cannot be repeated, even if the provider outcome is unknown.</p>
         <button disabled={busy} onClick={() => void run("preview")}>Refresh preview from live ledger and clear approval</button>
         <label>Type {phraseRequired}<input value={phrase} onChange={e => setPhrase(e.target.value)} autoComplete="off" /></label>
-        <button disabled={busy || phrase !== phraseRequired} onClick={() => void run(intent.state === "preview" ? "approve" : "execute")}>
+        <button disabled={busy || phrase !== phraseRequired || (intent.other_open_intents?.length ?? 0) > 0} onClick={() => void run(intent.state === "preview" ? "approve" : "execute")}>
           {intent.state === "preview" ? "Approve exact production proposal" : "Post once to production QuickBooks"}
         </button>
       </>}

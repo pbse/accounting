@@ -44,6 +44,10 @@ func registerOperations(mux *http.ServeMux, db *sql.DB) {
  FROM production_postings p JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state IN ('unknown','executing')
  UNION ALL SELECT 'client_attachment',a.close_id::text,a.id::text,a.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(a.started_at,a.created_at))/60)::int)
  FROM client_attachments a JOIN client_closes c ON c.id=a.close_id WHERE c.organization_id=$1 AND (a.state IN ('failed','infected') OR (a.state='scanning' AND a.started_at<now()-interval '5 minutes'))
+ UNION ALL SELECT 'quickbooks_sync',s.close_id::text,s.id::text,s.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(s.claimed_at,s.created_at))/60)::int)
+ FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id WHERE c.organization_id=$1 AND ((s.state='failed' AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.connection_id=s.connection_id AND n.period=s.period AND n.id>s.id)) OR (s.state='running' AND s.claimed_at<now()-interval '8 minutes') OR (s.state='queued' AND s.created_at<now()-interval '10 minutes'))
+ UNION ALL SELECT 'forwarded_scan',f.close_id::text,f.id::text,f.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(f.claimed_at,f.received_at))/60)::int)
+ FROM forwarded_files f JOIN client_closes c ON c.id=f.close_id WHERE c.organization_id=$1 AND (f.state='failed' OR (f.state='scanning' AND f.claimed_at<now()-interval '8 minutes') OR (f.state='queued' AND f.received_at<now()-interval '10 minutes'))
  ) alerts ORDER BY age_minutes DESC,kind,item_id LIMIT 101`, organization(r))
 		if err != nil {
 			problem(w, 503, "Operational alerts unavailable.")

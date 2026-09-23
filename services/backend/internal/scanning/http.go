@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -27,20 +28,27 @@ func Handler(key, database string) http.Handler {
 			w.WriteHeader(200)
 			return
 		}
-		if r.Method != "POST" || r.URL.Path != "/scan" || len(key) < 32 || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+key)) != 1 {
+		binary := r.URL.Path == "/scan-file"
+		if r.Method != "POST" || (r.URL.Path != "/scan" && !binary) || len(key) < 32 || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+key)) != 1 {
 			http.Error(w, "Unavailable", 403)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 512*1024)
+		limit := int64(512 * 1024)
+		if binary {
+			limit = 5 * 1024 * 1024
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		body, err := io.ReadAll(r.Body)
-		if err != nil || len(body) == 0 || !utf8.Valid(body) {
+		if err != nil || len(body) == 0 || (!binary && !utf8.Valid(body)) {
 			http.Error(w, "Invalid text upload", 422)
 			return
 		}
-		for _, c := range string(body) {
-			if unicode.IsControl(c) && c != '\n' && c != '\r' && c != '\t' {
-				http.Error(w, "Invalid text upload", 422)
-				return
+		if !binary {
+			for _, c := range string(body) {
+				if unicode.IsControl(c) && c != '\n' && c != '\r' && c != '\t' {
+					http.Error(w, "Invalid text upload", 422)
+					return
+				}
 			}
 		}
 		if !lock.TryLock() {
@@ -70,7 +78,11 @@ func Handler(key, database string) http.Handler {
 		}
 		state, version := scan(ctx, database, body)
 		if state != "clean" {
-			http.Error(w, "Scan not clean or unavailable; file remains quarantined", 422)
+			status := 503
+			if state == "infected" {
+				status = 422
+			}
+			http.Error(w, "Scan not clean or unavailable; file remains quarantined", status)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -94,9 +106,13 @@ func scan(ctx context.Context, database string, body []byte) (string, string) {
 	if err != nil || len(version) > 500 {
 		return "failed", ""
 	}
-	err = exec.CommandContext(ctx, "clamscan", "--database="+database, "--official-db-only=yes", "--fail-if-cvd-older-than=2", "--alert-encrypted=yes", "--alert-exceeds-max=yes", "--max-filesize=1M", "--max-scansize=5M", "--max-files=10", "--no-summary", path).Run()
+	err = exec.CommandContext(ctx, "clamscan", "--database="+database, "--official-db-only=yes", "--fail-if-cvd-older-than=2", "--alert-encrypted=yes", "--alert-exceeds-max=yes", "--max-filesize=6M", "--max-scansize=50M", "--max-files=100", "--no-summary", path).Run()
 	if err != nil {
-		return "failed", ""
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return "infected", ""
+		}
+		return "unavailable", ""
 	}
 	return "clean", strings.TrimSpace(string(version))
 }

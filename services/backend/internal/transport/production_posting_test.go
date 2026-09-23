@@ -28,6 +28,10 @@ func TestProductionLedgerEffect(t *testing.T) {
 	if !ledgerAfterMatches(before, after, "1000.00") {
 		t.Fatal("exact ledger delta rejected")
 	}
+	projected, err := projectedBalances(before, "1000.00")
+	if err != nil || projected["prepaid"] != "1010.00" || projected["expense"] != "-995.00" {
+		t.Fatalf("wrong proposed balances: %v %v", projected, err)
+	}
 	after.Expense.Balance = "-994.99"
 	if ledgerAfterMatches(before, after, "1000.00") {
 		t.Fatal("incorrect ledger delta accepted")

@@ -78,3 +78,51 @@ func TestExactGroupedCandidatesRemainUnmatched(t *testing.T) {
 		t.Fatalf("mixed-sign offset was suggested as a grouped match: %+v %v", result, err)
 	}
 }
+
+func TestReviewedOutstandingBridgeAndTransferEvidence(t *testing.T) {
+	base := Input{Entity: "Example", Account: "Operating", ClosePeriod: "2026-09", Currency: "USD", StatementReference: "Statement", LedgerReference: "Ledger", ExpectedPages: 1, Pages: []int{1}, StatementOpening: "1000", LedgerOpening: "900", StatementClosing: "900", LedgerClosing: "900", StatementCSV: "id,date,amount\nS1,2026-09-03,-100", LedgerCSV: "id,date,amount", PolicyConfirmed: true}
+	base.PriorOutstanding = []PriorItem{{Side: "ledger", ID: "aug-check", Amount: "-100", SourceReference: "August workpaper row 7", PolicyReference: "Approved timing rule 1", ClearedBy: "S1", Reason: "Bank cleared the August check"}}
+	got, err := Prepare(base)
+	if err != nil || len(got.Blockers) != 0 || got.OpeningBridgeDifference != "0.00" || got.ClosingBridgeDifference != "0.00" || len(got.UnmatchedStatement) != 0 {
+		t.Fatalf("prior clearing did not tie reviewed bridge: %+v %v", got, err)
+	}
+	bad := base
+	bad.PriorOutstanding = append([]PriorItem{}, base.PriorOutstanding...)
+	bad.PriorOutstanding[0].Amount = "-90"
+	if _, err := Prepare(bad); err == nil {
+		t.Fatal("accepted a clearing row with a different signed amount")
+	}
+	current := base
+	current.LedgerOpening = "1000"
+	current.StatementClosing = "1000"
+	current.LedgerClosing = "950"
+	current.StatementCSV = "id,date,amount"
+	current.LedgerCSV = "id,date,amount\nL1,2026-09-28,-50"
+	current.PriorOutstanding = nil
+	current.CurrentOutstanding = []CurrentItem{{Side: "ledger", ID: "L1", PolicyReference: "Approved timing rule 2", Reason: "Check has not cleared bank"}}
+	got, err = Prepare(current)
+	if err != nil || len(got.Blockers) != 0 || got.ClosingBridgeDifference != "0.00" || len(got.UnmatchedLedger) != 0 {
+		t.Fatalf("current outstanding did not tie reviewed bridge: %+v %v", got, err)
+	}
+	transfer := base
+	transfer.LedgerOpening = "1000"
+	transfer.StatementClosing = "800"
+	transfer.LedgerClosing = "800"
+	transfer.StatementCSV = "id,date,amount\nS1,2026-09-12,-200"
+	transfer.LedgerCSV = "id,date,amount\nL1,2026-09-12,-200"
+	transfer.PriorOutstanding = nil
+	transfer.OtherAccount = "Savings"
+	transfer.OtherStatementRef = "Savings statement"
+	transfer.OtherLedgerRef = "Savings ledger"
+	transfer.OtherStatementCSV = "id,date,amount\nOS1,2026-09-12,200"
+	transfer.OtherLedgerCSV = "id,date,amount\nOL1,2026-09-12,200"
+	transfer.Transfers = []TransferPair{{StatementID: "S1", LedgerID: "L1", OtherStatementID: "OS1", OtherLedgerID: "OL1", PolicyReference: "Approved transfer rule", Reason: "Both account records identify transfer"}}
+	got, err = Prepare(transfer)
+	if err != nil || len(got.Blockers) != 0 || len(got.Matches) != 0 {
+		t.Fatalf("transfer pair did not preserve distinct reviewed method: %+v %v", got, err)
+	}
+	transfer.OtherLedgerCSV = "id,date,amount\nOL1,2026-09-12,201"
+	if _, err := Prepare(transfer); err == nil {
+		t.Fatal("accepted transfer without offsetting counterpart records")
+	}
+}
