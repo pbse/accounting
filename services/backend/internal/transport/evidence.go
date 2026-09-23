@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/reconciliation"
 )
@@ -100,12 +101,28 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/evidence", func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'bytes',COALESCE(octet_length(original),octet_length(content)),'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id")).Scan(&body)
+		inspect := r.URL.Query().Get("checks") == "1"
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'bytes',COALESCE(octet_length(original),octet_length(content)),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
 		if err != nil {
 			problem(w, 503, "Could not load evidence.")
 			return
 		}
-		jsonReply(w, 200, json.RawMessage(body))
+		var files []map[string]json.RawMessage
+		if json.Unmarshal(body, &files) != nil {
+			problem(w, 503, "Could not inspect evidence.")
+			return
+		}
+		for _, file := range files {
+			var name, content, state string
+			json.Unmarshal(file["name"], &name)
+			json.Unmarshal(file["content"], &content)
+			json.Unmarshal(file["extraction_state"], &state)
+			delete(file, "content")
+			if inspect && state == "ready" && string(file["superseded_by"]) == "null" {
+				file["checks"], _ = json.Marshal(documents.Check(name, content))
+			}
+		}
+		jsonReply(w, 200, files)
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/evidence/{evidence}", func(w http.ResponseWriter, r *http.Request) {
 		var name, body string

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
 import { ForwardedEvidence } from "./ForwardedEvidence";
 
@@ -18,6 +18,7 @@ export type EvidenceFile = {
   extraction_error: string;
   superseded_by: string | null;
   replacement_reason: string | null;
+  checks?: { pages: number; warnings: string[]; questions: string[] };
 };
 
 export function SourceReview({
@@ -125,11 +126,13 @@ export function Evidence({
     after: string;
   }>();
   const [files, setFiles] = useState<EvidenceFile[]>([]);
+  const checking = useRef(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  async function load() {
+  async function load(includeChecks = true) {
     try {
-      setFiles(await workspaceRequest(`/${closeId}/evidence`));
+      const fresh: EvidenceFile[] = await workspaceRequest(`/${closeId}/evidence${includeChecks ? "?checks=1" : ""}`);
+      setFiles((previous) => fresh.map((file) => ({ ...file, checks: file.checks ?? previous.find((old) => old.id === file.id)?.checks })));
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Could not load evidence.");
     }
@@ -142,9 +145,14 @@ export function Evidence({
   );
   useEffect(() => {
     if (!extracting) return;
-    const timer = setInterval(() => void load(), 3000);
+    const timer = setInterval(() => void load(false), 3000);
     return () => clearInterval(timer);
   }, [closeId, extracting]);
+  useEffect(() => {
+    if (checking.current || !files.some((file) => file.extraction_state === "ready" && !file.superseded_by && !file.checks)) return;
+    checking.current = true;
+    void load(true).finally(() => { checking.current = false; });
+  }, [closeId, files]);
   async function upload(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget;
@@ -186,6 +194,11 @@ export function Evidence({
         const previous = files.find((other) => other.name.toLowerCase() === file.name.toLowerCase() && other.digest !== file.digest && !other.superseded_by && BigInt(other.id) < BigInt(file.id));
         return previous && <p key={file.id} role="status">{file.name} has different bytes in source #{previous.id} and #{file.id}. The agent keeps both as separate evidence until you compare them. <button onClick={() => { setOldId(previous.id); setNewId(file.id); setComparison(undefined); }}>Select for comparison</button></p>;
       })}
+      {files.filter((file) => !file.superseded_by && file.checks && (file.checks.warnings.length || file.checks.questions.length)).map((file) => <div key={`check-${file.id}`} role="status">
+        <strong>{file.name} · source #{file.id}</strong>{file.checks?.pages ? ` · ${file.checks.pages} extracted pages` : ""}
+        <ul>{[...(file.checks?.questions ?? []), ...(file.checks?.warnings ?? [])].map((issue, index) => <li key={`${file.id}-${index}`}>{issue}</li>)}</ul>
+        <p>Compare the original and linked facts before confirming work. If this is a revised or incomplete file, upload the complete copy and use Replace source.</p>
+      </div>)}
       <details>
         <summary>Replace or compare source evidence</summary>
         <p>

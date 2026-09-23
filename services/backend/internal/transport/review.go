@@ -192,7 +192,7 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var valid bool
-		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM evidence old JOIN evidence fresh ON fresh.close_id=old.close_id AND fresh.id>old.id WHERE old.id::text=$1 AND old.close_id=$2 AND old.superseded_by IS NULL AND fresh.id::text=$3 AND fresh.superseded_by IS NULL)`, r.PathValue("evidence"), closeID, input.Replacement).Scan(&valid)
+		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM evidence old JOIN evidence fresh ON fresh.close_id=old.close_id AND fresh.id>old.id WHERE old.id::text=$1 AND old.close_id=$2 AND old.superseded_by IS NULL AND fresh.id::text=$3 AND fresh.superseded_by IS NULL AND fresh.extraction_state='ready' AND fresh.digest<>old.digest)`, r.PathValue("evidence"), closeID, input.Replacement).Scan(&valid)
 		if err != nil || !valid {
 			problem(w, 409, "Select a current, newer source from this close. Replaced sources cannot be replaced again or form a cycle.")
 			return
