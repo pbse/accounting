@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -103,7 +104,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		return w.Body.Bytes()
 	}
 	grantPath := "/v1/closes/" + closeID + "/production-grant"
-	call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "prepaid_account_id": "10", "expense_account_id": "20", "max_amount": "2000", "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic client authority", "confirmation": "GRANT PRODUCTION POSTING"}, 200)
+	call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "prepaid_account_id": "10", "expense_account_id": "20", "max_amount": "20000", "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic client authority", "confirmation": "GRANT PRODUCTION POSTING"}, 200)
 	original := http.DefaultTransport
 	defer func() { http.DefaultTransport = original }()
 	writes := 0
@@ -135,10 +136,15 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 				}
 			}
 			if writes == 2 {
+				cents, e := prepaids.Amount(amount)
+				if e != nil {
+					t.Fatal(e)
+				}
+				twice := fmt.Sprintf("%d.%02d", cents*2/100, cents*2%100)
 				if prepaid {
-					balance = "2000"
+					balance = twice
 				} else {
-					balance = "-2000"
+					balance = "-" + twice
 				}
 			}
 			if laterBalance {
