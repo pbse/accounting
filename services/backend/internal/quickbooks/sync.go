@@ -19,6 +19,26 @@ type syncClaim struct {
 	attempts                                        int
 }
 
+func scheduleSync(ctx context.Context, db *sql.DB) error {
+	if !OAuthConfigured() {
+		return nil
+	}
+	_, err := db.ExecContext(ctx, `WITH due AS (
+ SELECT c.id AS close_id,x.id AS connection_id,c.period FROM client_closes c
+ JOIN organizations o ON o.id=c.organization_id AND o.enabled
+ JOIN quickbooks_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity)
+ WHERE x.environment='sandbox' AND x.state='active' AND x.credential IS NOT NULL
+ AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ AND NOT EXISTS (SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period AND s.state IN ('queued','running'))
+ AND NOT EXISTS (SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period AND s.created_at>now()-interval '24 hours')
+ ORDER BY c.id FOR UPDATE OF c SKIP LOCKED LIMIT 10
+ ) INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by)
+ SELECT close_id,connection_id,period,'scheduled-quickbooks-refresh' FROM due
+ ON CONFLICT(close_id,connection_id,period) WHERE state IN ('queued','running') DO NOTHING`)
+	return err
+}
+
 func claimSync(ctx context.Context, db *sql.DB) (syncClaim, error) {
 	var job syncClaim
 	job.token = rand.Text()
@@ -111,6 +131,19 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	if err != nil || !valid {
 		return errors.New("Connection, close, or job changed during transaction capture")
 	}
+	var unchangedSource string
+	err = tx.QueryRowContext(ctx, `SELECT s.evidence_id::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id=$1 AND s.connection_id=$2 AND s.period=$3 AND s.state='completed' AND s.digest=$4 AND (SELECT count(*) FROM quickbooks_transaction_rows t WHERE t.sync_id=s.id)=COALESCE((SELECT sum(value::int) FROM jsonb_each_text(COALESCE(s.payload->'counts','{}'::jsonb))),0) ORDER BY s.id DESC LIMIT 1`, job.closeID, job.connectionID, job.period, captureDigest).Scan(&unchangedSource)
+	if err == nil {
+		summary, _ := json.Marshal(map[string]any{"counts": capture.Counts, "started_at": capture.StartedAt, "finished_at": capture.FinishedAt, "completeness": capture.Completeness})
+		_, err = tx.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET state='unchanged',payload=$3,digest=$4,evidence_id=$5,finished_at=now(),claim=NULL,error='' WHERE id=$1 AND claim=$2 AND state='running'`, job.id, job.token, string(summary), captureDigest, unchangedSource)
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
 	var sourceID string
 	digest := fmt.Sprintf("%x", sha256.Sum256(index))
 	var replaced bool
@@ -123,13 +156,22 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	}
 	if err == sql.ErrNoRows {
 		var count, size int
-		err = tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, job.closeID).Scan(&count, &size)
+		err = tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1 AND created_by<>'quickbooks-sync'`, job.closeID).Scan(&count, &size)
 		if err != nil || count >= 100 || size+len(index) > 20*1024*1024 {
 			return errors.New("Close evidence capacity is full")
 		}
 		err = tx.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, job.closeID, "QuickBooks transactions "+job.period, digest, string(index), "quickbooks-sync").Scan(&sourceID)
 	}
 	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record)
+ SELECT $1,k.kind,r.item->>'Id',r.item->>'SyncToken',(r.item->>'TxnDate')::date,(r.item->'MetaData'->>'LastUpdatedTime')::timestamptz,r.item->'CurrencyRef'->>'value',r.item->>'TotalAmt',r.item
+ FROM jsonb_each($2::jsonb->'records') AS k(kind,items) CROSS JOIN LATERAL jsonb_array_elements(k.items) AS r(item)`, job.id, canonical)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM quickbooks_transaction_rows t USING quickbooks_entity_syncs s WHERE t.sync_id=s.id AND s.close_id=$1 AND s.id<>$2`, job.closeID, job.id); err != nil {
 		return err
 	}
 	var uncertain bool
@@ -217,7 +259,14 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 }
 
 func RunSync(ctx context.Context, db *sql.DB) {
+	nextSchedule := time.Time{}
 	for ctx.Err() == nil {
+		if !time.Now().Before(nextSchedule) {
+			if err := scheduleSync(ctx, db); err != nil && ctx.Err() == nil {
+				log.Print("Transaction refresh scheduler could not queue due closes")
+			}
+			nextSchedule = time.Now().Add(5 * time.Minute)
+		}
 		worked, err := ProcessSync(ctx, db)
 		if err != nil && ctx.Err() == nil {
 			log.Print("Transaction sync worker could not update durable state")

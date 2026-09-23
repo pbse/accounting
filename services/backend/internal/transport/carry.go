@@ -308,7 +308,7 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 				p.Sources = append(p.Sources, s)
 			}
 			var count, size int
-			if e := tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, target).Scan(&count, &size); e != nil || count > 100 || size > 20*1024*1024 {
+			if e := tx.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, target).Scan(&count, &size); e != nil || count > 100 || size > 20*1024*1024 {
 				problem(w, 413, "Next close evidence capacity would be exceeded.")
 				return
 			}

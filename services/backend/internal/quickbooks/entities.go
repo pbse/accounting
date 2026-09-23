@@ -108,6 +108,12 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 				if json.Unmarshal(record, &item) != nil || item.ID == "" || item.SyncToken == "" || item.TxnDate < first || item.TxnDate > last || item.MetaData.LastUpdatedTime == "" || seen[item.ID] {
 					return result, fmt.Errorf("%s transaction identity, revision or period is inconsistent", kind)
 				}
+				if date, dateErr := time.Parse("2006-01-02", item.TxnDate); dateErr != nil || date.Format("2006-01-02") != item.TxnDate {
+					return result, fmt.Errorf("%s transaction date is invalid", kind)
+				}
+				if _, updatedErr := time.Parse(time.RFC3339Nano, item.MetaData.LastUpdatedTime); updatedErr != nil {
+					return result, fmt.Errorf("%s transaction update time is invalid", kind)
+				}
 				seen[item.ID] = true
 				rows = append(rows, record)
 			}

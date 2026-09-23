@@ -67,7 +67,7 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		return "", err
 	}
 	var count, size int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id::text=$1`, closeID).Scan(&count, &size); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id::text=$1`, closeID).Scan(&count, &size); err != nil {
 		return "", err
 	}
 	if count >= 100 || size+len(text) > 20*1024*1024 {

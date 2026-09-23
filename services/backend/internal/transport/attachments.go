@@ -180,7 +180,7 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			var count, size int
-			if err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil || count >= 100 || size+len(body) > 20*1024*1024 {
+			if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil || count >= 100 || size+len(body) > 20*1024*1024 {
 				problem(w, 413, "Close evidence capacity reached.")
 				return
 			}

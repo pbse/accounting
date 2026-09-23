@@ -18,7 +18,7 @@ func saveWorkReply(ctx context.Context, tx *sql.Tx, closeID, jobID, requestID, b
 		return 422, fmt.Errorf("Provide an original reply of at most 20,000 bytes and its reported sender.")
 	}
 	var count, size int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil {
 		return 503, fmt.Errorf("Could not check evidence storage.")
 	}
 	if count >= 100 || size+len(body) > 20*1024*1024 {

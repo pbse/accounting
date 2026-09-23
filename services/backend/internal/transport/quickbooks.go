@@ -118,7 +118,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 		err = tx.QueryRowContext(r.Context(), `SELECT source_id::text FROM quickbooks_ledger_selections WHERE snapshot_id=$1 AND account_id=$2 AND offset_rows=$3 AND search_query=$4`, snapshot.ID, accountID, offset, query).Scan(&sourceID)
 		if err == sql.ErrNoRows {
 			var count, size int
-			err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, r.PathValue("id")).Scan(&count, &size)
+			err = tx.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, r.PathValue("id")).Scan(&count, &size)
 			if err != nil || count >= 100 || size+len(content) > 20*1024*1024 {
 				problem(w, 413, "Close evidence capacity is full. Review existing sources before adding another ledger page.")
 				return
@@ -417,7 +417,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 					return
 				}
 				var count, size int
-				if e = tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))),0) FROM evidence WHERE close_id=$1`, lockedClose).Scan(&count, &size); e != nil || count >= 100 || size+len(evidence) > 20*1024*1024 {
+				if e = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, lockedClose).Scan(&count, &size); e != nil || count >= 100 || size+len(evidence) > 20*1024*1024 {
 					problem(w, 413, "Close evidence capacity cannot hold this snapshot.")
 					return
 				}
