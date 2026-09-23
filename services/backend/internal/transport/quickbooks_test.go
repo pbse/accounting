@@ -175,7 +175,7 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 		t.Fatal("invalid state reached provider")
 	}
 	actor.Subject = "user_other"
-	call("POST", base, callback, 409)
+	call("POST", base, callback, 403)
 	actor.Subject = "user_accountant"
 	r := httptest.NewRequest("GET", "/v1/quickbooks/callback?state="+url.QueryEscape(state)+"&code=synthetic-code&realmId=123", nil)
 	w := httptest.NewRecorder()
