@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"reflect"
 )
 
 type Bill struct {
@@ -52,17 +53,25 @@ func (line *BillLine) UnmarshalJSON(raw []byte) error {
 }
 
 func simpleBill(b Bill) bool {
-	if !identifier.MatchString(b.ID) || b.SyncToken == "" || b.TxnDate == "" || !identifier.MatchString(b.VendorRef.Value) || b.CurrencyRef.Value != "USD" || len(b.Line) != 1 || len(b.LinkedTxn) > 0 || len(b.TxnTaxDetail) > 0 {
+	if !identifier.MatchString(b.ID) || b.SyncToken == "" || b.TxnDate == "" || !identifier.MatchString(b.VendorRef.Value) || b.CurrencyRef.Value != "USD" || len(b.Line) < 1 || len(b.Line) > 10 || len(b.LinkedTxn) > 0 || len(b.TxnTaxDetail) > 0 {
 		return false
 	}
-	line := b.Line[0]
-	if !identifier.MatchString(line.ID) || line.DetailType != "AccountBasedExpenseLineDetail" || !identifier.MatchString(line.AccountBasedExpenseLineDetail.AccountRef.Value) {
-		return false
-	}
-	amount, ok := new(big.Rat).SetString(string(line.Amount))
 	total, totalOK := new(big.Rat).SetString(string(b.TotalAmt))
 	balance, balanceOK := new(big.Rat).SetString(string(b.Balance))
-	return ok && totalOK && balanceOK && amount.Sign() > 0 && amount.Cmp(total) == 0 && balance.Cmp(total) == 0
+	if !totalOK || !balanceOK || total.Sign() <= 0 || balance.Cmp(total) != 0 || !new(big.Rat).Mul(total, big.NewRat(100, 1)).IsInt() {
+		return false
+	}
+	sum := new(big.Rat)
+	seen := map[string]bool{}
+	for _, line := range b.Line {
+		amount, ok := new(big.Rat).SetString(string(line.Amount))
+		if !identifier.MatchString(line.ID) || seen[line.ID] || line.DetailType != "AccountBasedExpenseLineDetail" || !identifier.MatchString(line.AccountBasedExpenseLineDetail.AccountRef.Value) || !ok || amount.Sign() <= 0 || !new(big.Rat).Mul(amount, big.NewRat(100, 1)).IsInt() {
+			return false
+		}
+		seen[line.ID] = true
+		sum.Add(sum, amount)
+	}
+	return sum.Cmp(total) == 0
 }
 
 func (s Sandbox) ReadBill(ctx context.Context, id string) (Bill, error) {
@@ -74,7 +83,7 @@ func (s Sandbox) ReadBill(ctx context.Context, id string) (Bill, error) {
 		return Bill{}, err
 	}
 	if result.Bill.ID != id || !simpleBill(result.Bill) {
-		return Bill{}, errors.New("Only a current, unpaid USD Bill with one simple account-based expense line is supported")
+		return Bill{}, errors.New("Only a current, unpaid USD Bill with up to ten simple account-based expense lines is supported")
 	}
 	return result.Bill, nil
 }
@@ -102,13 +111,25 @@ func (s Sandbox) ValidateExpenseAccount(ctx context.Context, id string) (string,
 	return a.Name, nil
 }
 
-func (s Sandbox) CorrectBillAccount(ctx context.Context, before Bill, target string) (Bill, error) {
-	if s.Production || !simpleBill(before) || !identifier.MatchString(target) || target == before.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value {
+func (s Sandbox) CorrectBillAccount(ctx context.Context, before Bill, lineID, target string) (Bill, error) {
+	if s.Production || !simpleBill(before) || !identifier.MatchString(target) {
 		return Bill{}, errors.New("The approved sandbox Bill correction is invalid")
 	}
-	line := before.Line[0]
-	line.AccountBasedExpenseLineDetail.AccountRef = Reference{target}
-	body := map[string]any{"Id": before.ID, "SyncToken": before.SyncToken, "sparse": true, "Line": []BillLine{line}}
+	lines := append([]BillLine(nil), before.Line...)
+	found := false
+	for i := range lines {
+		if lines[i].ID == lineID {
+			if lines[i].AccountBasedExpenseLineDetail.AccountRef.Value == target {
+				return Bill{}, errors.New("Target account must differ from the selected Bill line")
+			}
+			lines[i].AccountBasedExpenseLineDetail.AccountRef = Reference{target}
+			found = true
+		}
+	}
+	if !found {
+		return Bill{}, errors.New("Selected Bill line is missing")
+	}
+	body := map[string]any{"Id": before.ID, "SyncToken": before.SyncToken, "sparse": true, "Line": lines}
 	var response struct{ Bill Bill }
 	if err := s.request(ctx, "POST", "/bill", body, &response); err != nil {
 		return Bill{}, err
@@ -119,20 +140,40 @@ func (s Sandbox) CorrectBillAccount(ctx context.Context, before Bill, target str
 	return response.Bill, nil
 }
 
-func (s Sandbox) VerifyBillCorrection(ctx context.Context, before Bill, target string) (Bill, error) {
+func (s Sandbox) VerifyBillCorrection(ctx context.Context, before Bill, lineID, target string) (Bill, error) {
 	got, err := s.ReadBill(ctx, before.ID)
 	if err != nil {
 		return Bill{}, err
 	}
-	if got.SyncToken == before.SyncToken || got.TxnDate != before.TxnDate || got.VendorRef != before.VendorRef || got.CurrencyRef != before.CurrencyRef || len(got.Line) != 1 || got.Line[0].ID != before.Line[0].ID || got.Line[0].DetailType != before.Line[0].DetailType || got.Line[0].Description != before.Line[0].Description || got.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value != target {
-		return Bill{}, errors.New("Bill readback differs from the approved identity, date, vendor, line or account")
+	if got.SyncToken == before.SyncToken || len(got.Line) != len(before.Line) {
+		return Bill{}, errors.New("Bill readback version or line count differs from approval")
 	}
-	for _, pair := range [][2]json.Number{{got.TotalAmt, before.TotalAmt}, {got.Balance, before.Balance}, {got.Line[0].Amount, before.Line[0].Amount}} {
+	expected := before
+	expected.SyncToken = got.SyncToken
+	expected.Line = append([]BillLine(nil), before.Line...)
+	for _, pair := range [][2]json.Number{{got.TotalAmt, before.TotalAmt}, {got.Balance, before.Balance}} {
 		a, okA := new(big.Rat).SetString(string(pair[0]))
 		b, okB := new(big.Rat).SetString(string(pair[1]))
 		if !okA || !okB || a.Cmp(b) != 0 {
 			return Bill{}, errors.New("Bill readback amount differs from approval")
 		}
+	}
+	expected.TotalAmt, expected.Balance = got.TotalAmt, got.Balance
+	found := false
+	for i := range expected.Line {
+		a, okA := new(big.Rat).SetString(string(got.Line[i].Amount))
+		b, okB := new(big.Rat).SetString(string(expected.Line[i].Amount))
+		if !okA || !okB || a.Cmp(b) != 0 {
+			return Bill{}, errors.New("Bill readback line amount differs from approval")
+		}
+		expected.Line[i].Amount = got.Line[i].Amount
+		if expected.Line[i].ID == lineID {
+			expected.Line[i].AccountBasedExpenseLineDetail.AccountRef = Reference{target}
+			found = true
+		}
+	}
+	if !found || !reflect.DeepEqual(expected, got) {
+		return Bill{}, errors.New("Bill readback differs from the selected account change or preserved lines")
 	}
 	return got, nil
 }

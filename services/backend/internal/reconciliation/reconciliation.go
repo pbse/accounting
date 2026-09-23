@@ -14,6 +14,8 @@ import (
 type Input struct {
 	Entity             string          `json:"entity"`
 	Account            string          `json:"account"`
+	AccountType        string          `json:"account_type,omitempty"`
+	CardRuleReference  string          `json:"card_rule_reference,omitempty"`
 	ClosePeriod        string          `json:"close_period"`
 	Currency           string          `json:"currency"`
 	StatementReference string          `json:"statement_reference"`
@@ -43,6 +45,8 @@ type PriorItem struct {
 	Side            string `json:"side"`
 	ID              string `json:"id"`
 	Amount          string `json:"amount"`
+	Treatment       string `json:"treatment,omitempty"`
+	ClearingRef     string `json:"clearing_reference,omitempty"`
 	SourceReference string `json:"source_reference"`
 	PolicyReference string `json:"policy_reference"`
 	ClearedBy       string `json:"cleared_by,omitempty"`
@@ -51,6 +55,8 @@ type PriorItem struct {
 type CurrentItem struct {
 	Side            string `json:"side"`
 	ID              string `json:"id"`
+	Treatment       string `json:"treatment,omitempty"`
+	ClearingRef     string `json:"clearing_reference,omitempty"`
 	PolicyReference string `json:"policy_reference"`
 	Reason          string `json:"reason"`
 }
@@ -295,6 +301,9 @@ func reviewTiming(input Input, statement, ledger []Line, usedStatement, usedLedg
 		if err != nil || amount == 0 || (item.Side != "statement" && item.Side != "ledger") || strings.TrimSpace(item.ID) == "" || priorIDs[item.Side+"/"+item.ID] || len(strings.TrimSpace(item.SourceReference)) < 5 || len(item.SourceReference) > 200 || len(strings.TrimSpace(item.PolicyReference)) < 5 || len(item.PolicyReference) > 200 || len(strings.TrimSpace(item.Reason)) < 5 || len(item.Reason) > 500 {
 			return 0, 0, fmt.Errorf("Each prior item needs a unique ID, signed amount, cited source, approved rule and reviewer reason.")
 		}
+		if err := validTreatment(item.Treatment, item.ClearingRef, input.AccountType); err != nil {
+			return 0, 0, err
+		}
 		priorIDs[item.Side+"/"+item.ID] = true
 		if item.Side == "statement" {
 			amount = -amount
@@ -321,6 +330,9 @@ func reviewTiming(input Input, statement, ledger []Line, usedStatement, usedLedg
 	for _, item := range input.CurrentOutstanding {
 		if len(strings.TrimSpace(item.PolicyReference)) < 5 || len(item.PolicyReference) > 200 || len(strings.TrimSpace(item.Reason)) < 5 || len(item.Reason) > 500 {
 			return 0, 0, fmt.Errorf("Each current outstanding item needs an approved rule reference and reviewer reason.")
+		}
+		if err := validTreatment(item.Treatment, item.ClearingRef, input.AccountType); err != nil {
+			return 0, 0, err
 		}
 		row, err := choose(item.Side, item.ID)
 		if err != nil {
@@ -394,8 +406,24 @@ func reviewTiming(input Input, statement, ledger []Line, usedStatement, usedLedg
 	return opening, closing, nil
 }
 
+func validTreatment(treatment, clearingRef, accountType string) error {
+	if treatment == "" && accountType != "credit_card" && clearingRef == "" {
+		return nil
+	}
+	if treatment != "timing" && treatment != "clearing" {
+		return fmt.Errorf("Choose the reviewed timing or clearing treatment for each outstanding item.")
+	}
+	if treatment == "clearing" && (len(strings.TrimSpace(clearingRef)) < 5 || len(clearingRef) > 200) {
+		return fmt.Errorf("A clearing treatment needs its clearing-account source reference.")
+	}
+	if treatment == "timing" && clearingRef != "" {
+		return fmt.Errorf("A timing item cannot cite a clearing-account source.")
+	}
+	return nil
+}
+
 func CarryForwardItems(prior Workpaper, source string) ([]PriorItem, error) {
-	if prior.Method != "exact_bank_month_v1" || len(prior.Blockers) != 0 || len(strings.TrimSpace(source)) < 5 || len(source) > 200 {
+	if (prior.Method != "exact_bank_month_v1" && prior.Method != "card_liability_month_v1") || len(prior.Blockers) != 0 || len(strings.TrimSpace(source)) < 5 || len(source) > 200 {
 		return nil, fmt.Errorf("Choose an approved, complete prior reconciliation and cite its workpaper.")
 	}
 	statement, _, err := lines(prior.Input.StatementCSV, prior.Input.ClosePeriod)
@@ -433,7 +461,7 @@ func CarryForwardItems(prior Workpaper, source string) ([]PriorItem, error) {
 			return nil, fmt.Errorf("Current outstanding row changed or overlaps a prior item.")
 		}
 		seen[key] = true
-		items = append(items, PriorItem{Side: item.Side, ID: item.ID, Amount: row.Amount, SourceReference: source, PolicyReference: item.PolicyReference, Reason: "Carried from approved prior close; confirm whether it cleared this month."})
+		items = append(items, PriorItem{Side: item.Side, ID: item.ID, Amount: row.Amount, Treatment: item.Treatment, ClearingRef: item.ClearingRef, SourceReference: source, PolicyReference: item.PolicyReference, Reason: "Carried from approved prior close; confirm whether it cleared this month."})
 	}
 	return items, nil
 }
@@ -445,8 +473,16 @@ func Prepare(input Input) (Workpaper, error) {
 			return fail("Entity, account and both source references require 1–200 characters.")
 		}
 	}
-	if input.Currency != "USD" || !input.PolicyConfirmed {
-		return fail("Confirm the USD bank-account method, complete month boundaries and signed cash amounts.")
+	if input.Currency != "USD" || !input.PolicyConfirmed || (input.AccountType != "" && input.AccountType != "bank" && input.AccountType != "credit_card") {
+		return fail("Confirm the USD account method, complete month boundaries and signed movements.")
+	}
+	if input.AccountType == "credit_card" {
+		if len(strings.TrimSpace(input.CardRuleReference)) < 5 || len(input.CardRuleReference) > 200 {
+			return fail("Card reconciliation needs the client accountant's approved liability-sign rule reference.")
+		}
+		result.Method = "card_liability_month_v1"
+	} else if input.CardRuleReference != "" {
+		return fail("A bank reconciliation cannot use a card liability rule.")
 	}
 	if _, err := time.Parse("2006-01", input.ClosePeriod); err != nil {
 		return fail("Choose a valid close month.")

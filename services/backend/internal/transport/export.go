@@ -377,7 +377,7 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			}
 			summary.Source = paper.Input.StatementReference + " / " + paper.Input.LedgerReference
 			summary.Method = paper.Method
-			summary.Issues = append([]string{"USD bank-account method; match candidates are not confirmed matches or native reconciliation."}, paper.Blockers...)
+			summary.Issues = append([]string{"USD " + paper.Method + "; match candidates are not confirmed matches or native reconciliation."}, paper.Blockers...)
 			if len(paper.Blockers) == 0 {
 				summary.Issues = append(summary.Issues, "No arithmetic blockers in imported rows; source completeness still requires review.")
 			}

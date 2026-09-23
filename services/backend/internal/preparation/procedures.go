@@ -52,7 +52,7 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 	} else if p.Kind == "accrual" {
 		text += "Supported method: fixed_incurred_amount_v1 or actual_invoice_true_up_v1. Cite the prior estimate and actual invoice; the true-up requires the client accountant's approved rule reference. Confirm incurred amount, booked liability and reversal choice; never infer estimates.\n"
 	} else {
-		text += "Supported method: exact_bank_month_v1 begins with unique exact-date and signed-amount CSV candidates. Grouped matches, exact-net split settlements, tolerances, timing items and two-account transfers require cited accountant-approved rules and source review. Native reconciliation status is separately observed, not inferred from this workpaper.\n"
+		text += "Supported methods: exact_bank_month_v1 uses positive deposits; card_liability_month_v1 uses positive charges and negative payments/credits under a cited accountant-approved card rule. Both begin with unique exact-date and signed-amount CSV candidates. Grouped matches, net splits, tolerances, timing and clearing items, and transfers require cited accountant-approved rules and source review. Native reconciliation status is separately observed.\n"
 	}
 	var source string
 	var usable bool

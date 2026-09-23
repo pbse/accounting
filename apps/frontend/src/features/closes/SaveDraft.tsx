@@ -31,7 +31,7 @@ export function SaveDraft({
         .then(setFiles)
         .catch((e) => setStatus(e.message));
   }, [close]);
-  const roles = kind === "reconciliation" ? ["statement", "ledger", ...((input as ReconciliationInput).prior_outstanding?.length ? ["support"] : []), ...((input as ReconciliationInput).transfers?.length ? ["other_statement", "other_ledger"] : []), ...((input as ReconciliationInput).native_status && (input as ReconciliationInput).native_status !== "unverified" ? ["native_status"] : [])] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
+  const roles = kind === "reconciliation" ? ["statement", "ledger", ...((input as ReconciliationInput).account_type === "credit_card" ? ["procedure"] : []), ...((input as ReconciliationInput).prior_outstanding?.length ? ["support"] : []), ...((input as ReconciliationInput).current_outstanding?.some(item => item.treatment === "clearing") ? ["clearing"] : []), ...((input as ReconciliationInput).transfers?.length ? ["other_statement", "other_ledger"] : []), ...((input as ReconciliationInput).native_status && (input as ReconciliationInput).native_status !== "unverified" ? ["native_status"] : [])] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
   if (!close)
     return (
       <p>
@@ -77,7 +77,8 @@ export function SaveDraft({
         Confirm the values against uploaded evidence, then save instructions for
         the durable close job. Supporting evidence must cover invoice/service terms, any credit and the current ledger balance.
         Reconciliation CSV values will come from the selected files, replacing
-        the pasted rows above.
+        the pasted rows above. Card work also needs the applied approved reconciliation procedure;
+        current clearing items need their own clearing-account evidence.
       </p>
       {files.length === 0 && (
         <p>
@@ -106,7 +107,7 @@ export function SaveDraft({
                   (f) =>
                     !f.superseded_by &&
                     f.extraction_state === "ready" &&
-                    (kind !== "reconciliation" || role === "support" || role === "native_status" ||
+                    (role === "procedure" ? f.procedure_kind === "reconciliation" : kind !== "reconciliation" || role === "support" || role === "clearing" || role === "native_status" ||
                       f.name.toLowerCase().endsWith(".csv")),
                 )
                 .map((f) => (

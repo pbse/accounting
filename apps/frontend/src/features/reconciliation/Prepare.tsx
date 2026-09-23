@@ -63,13 +63,13 @@ export function ReconciliationResult({
     <>
       <p className="note">
         Draft workpaper only. Unreviewed exact matches are candidates, not
-        confirmed matches or native bank reconciliation. Source references and page
+        confirmed matches or native reconciliation. Source references and page
         inventory are user-supplied; documents have not been independently
         inspected.
       </p>
       <p>
         {result.input.entity} · {result.input.account} ·{" "}
-        {result.input.close_period} · USD
+        {result.input.close_period} · USD · {result.input.account_type === "credit_card" ? "card liability" : "bank cash"}
       </p>
       <p>
         Statement: {result.input.statement_reference}. Ledger:{" "}
@@ -98,17 +98,17 @@ export function ReconciliationResult({
         <dd>${result.closing_difference}</dd>
         <dt>Opening bridge after cited prior items</dt>
         <dd>${result.opening_bridge_difference}</dd>
-        <dt>Closing bridge after reviewed timing items</dt>
+        <dt>Closing bridge after reviewed timing and clearing items</dt>
         <dd>${result.closing_bridge_difference}</dd>
         <dt>Reviewer-observed QuickBooks status (not API-verified)</dt>
         <dd>{result.input.native_status || "unverified"}{result.input.native_status_reference ? ` · ${result.input.native_status_reference}` : ""}</dd>
       </dl>
       {(result.input.prior_outstanding?.length || result.input.current_outstanding?.length || result.input.transfers?.length) ? <section>
-        <h3>Reviewed timing and transfer instructions</h3>
+        <h3>Reviewed timing, clearing and transfer instructions</h3>
         <p>These draft classifications use the cited accountant rules; they do not change the ledger or QuickBooks status.</p>
         <ul>
-          {result.input.prior_outstanding?.map((item, index) => <li key={`prior-${index}`}>Prior {item.side} {item.id}: ${item.amount} · {item.cleared_by ? `cleared by ${item.cleared_by}` : "still outstanding"} · {item.source_reference} · rule {item.policy_reference}</li>)}
-          {result.input.current_outstanding?.map((item, index) => <li key={`current-${index}`}>Current {item.side} {item.id} · rule {item.policy_reference} · {item.reason}</li>)}
+          {result.input.prior_outstanding?.map((item, index) => <li key={`prior-${index}`}>Prior {item.treatment ?? "timing"} {item.side} {item.id}: ${item.amount} · {item.cleared_by ? `cleared by ${item.cleared_by}` : "still outstanding"} · {item.source_reference} · {item.clearing_reference ? `clearing source ${item.clearing_reference} · ` : ""}rule {item.policy_reference}</li>)}
+          {result.input.current_outstanding?.map((item, index) => <li key={`current-${index}`}>Current {item.treatment ?? "timing"} {item.side} {item.id} · {item.clearing_reference ? `clearing source ${item.clearing_reference} · ` : ""}rule {item.policy_reference} · {item.reason}</li>)}
           {result.input.transfers?.map((item, index) => <li key={`transfer-${index}`}>Transfer {item.statement_id}/{item.ledger_id} ↔ {item.other_statement_id}/{item.other_ledger_id} in {result.input.other_account} · rule {item.policy_reference}</li>)}
         </ul>
       </section> : null}
@@ -180,7 +180,7 @@ export default function Prepare() {
   const [busy, setBusy] = useState(false);
   const [matchReason, setMatchReason] = useState("");
   const [selection, setSelection] = useState({ statement: "", ledger: "", method: "exact" as ReviewedMatch["method"], reason: "", policy: "", days: "0", amount: "0.00" });
-  const [timing, setTiming] = useState({ side: "ledger" as "ledger" | "statement", id: "", amount: "", clearedBy: "", source: "", policy: "", reason: "" });
+  const [timing, setTiming] = useState({ side: "ledger" as "ledger" | "statement", treatment: "timing" as "timing" | "clearing", clearingRef: "", id: "", amount: "", clearedBy: "", source: "", policy: "", reason: "" });
   const [transfer, setTransfer] = useState({ statement: "", ledger: "", otherStatement: "", otherLedger: "", policy: "", reason: "" });
   const [priorSuggestions, setPriorSuggestions] = useState<{ items: PriorOutstanding[]; message: string; prior_workpaper_id?: string }>();
   useEffect(() => {
@@ -225,7 +225,7 @@ export default function Prepare() {
     setBusy(true);
     setError("");
     try {
-      setPriorSuggestions(await workspaceRequest(`/${close}/reconciliation/prior-items?account=${encodeURIComponent(result.input.account)}`));
+      setPriorSuggestions(await workspaceRequest(`/${close}/reconciliation/prior-items?account=${encodeURIComponent(result.input.account)}&account_type=${encodeURIComponent(result.input.account_type ?? "bank")}`));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not check the previous close.");
     } finally {
@@ -239,6 +239,8 @@ export default function Prepare() {
     const input: ReconciliationInput = {
       entity: text("entity"),
       account: text("account"),
+      account_type: text("account_type") as ReconciliationInput["account_type"],
+      card_rule_reference: text("card_rule_reference"),
       close_period: text("close_period"),
       currency: "USD",
       statement_reference: text("statement_reference"),
@@ -271,21 +273,23 @@ export default function Prepare() {
     setPriorSuggestions(undefined);
     await calculate(input);
   }
-  function example() {
+  function example(card = false) {
     const values = {
       entity: params.get("entity") ?? "Acme Services (example)",
-      account: "Operating bank",
+      account: card ? "Corporate card" : "Operating bank",
+      account_type: card ? "credit_card" : "bank",
+      card_rule_reference: card ? "Client accountant approved card liability rule (example)" : "",
       close_period: params.get("period") ?? "2026-09",
       statement_reference: "Synthetic statement, pages 1–2",
       ledger_reference: "Synthetic ledger export",
       expected_pages: "2",
       pages: "1,2",
-      statement_opening: "1000.00",
-      statement_closing: "1150.00",
-      ledger_opening: "1000.00",
-      ledger_closing: "1100.00",
-      statement_csv: `id,date,amount\nS1,${params.get("period") ?? "2026-09"}-02,200.00\nS2,${params.get("period") ?? "2026-09"}-05,-50.00`,
-      ledger_csv: `id,date,amount\nL1,${params.get("period") ?? "2026-09"}-02,200.00\nL2,${params.get("period") ?? "2026-09"}-05,-50.00\nL3,${params.get("period") ?? "2026-09"}-28,-50.00`,
+      statement_opening: card ? "0.00" : "1000.00",
+      statement_closing: card ? "75.00" : "1150.00",
+      ledger_opening: card ? "0.00" : "1000.00",
+      ledger_closing: card ? "85.00" : "1100.00",
+      statement_csv: card ? `id,date,amount\nS1,${params.get("period") ?? "2026-09"}-02,100.00\nS2,${params.get("period") ?? "2026-09"}-05,-25.00` : `id,date,amount\nS1,${params.get("period") ?? "2026-09"}-02,200.00\nS2,${params.get("period") ?? "2026-09"}-05,-50.00`,
+      ledger_csv: card ? `id,date,amount\nL1,${params.get("period") ?? "2026-09"}-02,100.00\nL2,${params.get("period") ?? "2026-09"}-05,-25.00\nL3,${params.get("period") ?? "2026-09"}-28,10.00` : `id,date,amount\nL1,${params.get("period") ?? "2026-09"}-02,200.00\nL2,${params.get("period") ?? "2026-09"}-05,-50.00\nL3,${params.get("period") ?? "2026-09"}-28,-50.00`,
     };
     for (const [name, value] of Object.entries(values)) {
       (form.current!.elements.namedItem(name) as HTMLInputElement).value =
@@ -303,10 +307,9 @@ export default function Prepare() {
       <p className="eyebrow">STATEMENT RECONCILIATION / PREPARATION</p>
       <h1>See what ties. Investigate what doesn’t.</h1>
       <p>
-        Import one full month of a USD bank account. Deposits are positive;
-        withdrawals are negative on both sources. Credit-card accounts, grouped
-        transfer relationships and prior-period outstanding items need separate
-        source evidence and the accountant's approved rule.
+        Import one full month of a USD bank or credit-card account. Bank deposits increase cash;
+        card charges increase the liability. Bank withdrawals, card payments and card credits decrease it.
+        Normalize both CSVs to the selected sign convention before review.
       </p>
       <details open={!result}>
         <summary>
@@ -413,9 +416,8 @@ export default function Prepare() {
               </div>
             )}
 
-            <button type="button" onClick={example}>
-              Use an example with an outstanding item
-            </button>
+            <button type="button" onClick={() => example(false)}>Use bank example</button>
+            <button type="button" onClick={() => example(true)}>Use card example</button>
             <div className="form-grid">
               <label>
                 Client / entity
@@ -436,9 +438,11 @@ export default function Prepare() {
                 />
               </label>
               <label>
-                Bank account
+                Account
                 <input name="account" required maxLength={200} />
               </label>
+              <label>Account type<select name="account_type" defaultValue="bank"><option value="bank">Bank cash</option><option value="credit_card">Credit-card liability</option></select></label>
+              <label>Client accountant's approved card sign and clearing rule<input name="card_rule_reference" maxLength={200} placeholder="Required for credit cards; cite the approved procedure" /></label>
               <label>
                 Statement reference
                 <input name="statement_reference" required maxLength={200} />
@@ -532,13 +536,7 @@ export default function Prepare() {
             <p>A saved source-linked workpaper also requires the QuickBooks report as separate PDF or text evidence. The app does not read or change QuickBooks' native reconciliation flag.</p>
             <label className="checkbox-label">
               <input name="policy_confirmed" type="checkbox" required />
-              <span>
-                I confirm these are the same entity and USD bank account,
-                balances cover the first through last day of the selected month,
-                both sources use positive cash inflows and negative outflows,
-                and unique exact date/amount matching is suitable for preparing
-                candidates.
-              </span>
+              <span>I confirm the same entity, account and full USD month on both sources. Bank deposits are positive and withdrawals negative; card charges are positive and payments or credits negative. The selected method and exact match candidates need accountant review.</span>
             </label>
           </fieldset>
           {error && <p role="alert">{error}</p>}
@@ -593,7 +591,7 @@ export default function Prepare() {
             </form>
           </details>
           <details>
-            <summary>Resolve timing items and transfers with approved rules</summary>
+            <summary>Resolve timing, clearing and transfers with approved rules</summary>
             <p>Inspect the original records and cite the accountant-approved method. Each choice recalculates the bridge; an unexplained difference stays blocked. Upload prior-period support and both other-account CSVs before saving source-linked instructions.</p>
             {params.get("close") && <button disabled={busy} onClick={() => void checkPrior()}>Check previous approved close for outstanding items</button>}
             {priorSuggestions && <section role="status">
@@ -609,6 +607,8 @@ export default function Prepare() {
             <label>Source side
               <select value={timing.side} onChange={(e) => setTiming({ ...timing, side: e.target.value as "statement" | "ledger" })}><option value="ledger">Ledger</option><option value="statement">Statement</option></select>
             </label>
+            <label>Reviewed treatment<select value={timing.treatment} onChange={(e) => setTiming({ ...timing, treatment: e.target.value as "timing" | "clearing", clearingRef: "" })}><option value="timing">Timing difference</option><option value="clearing">Clearing account item</option></select></label>
+            {timing.treatment === "clearing" && <label>Clearing-account source reference<input maxLength={200} value={timing.clearingRef} onChange={(e) => setTiming({ ...timing, clearingRef: e.target.value })} placeholder="Source and account showing the unsettled item" /></label>}
             <label>Source row ID<input value={timing.id} onChange={(e) => setTiming({ ...timing, id: e.target.value })} placeholder="Current row ID or prior item ID" /></label>
             <label>Prior item signed amount (USD)<input inputMode="decimal" value={timing.amount} onChange={(e) => setTiming({ ...timing, amount: e.target.value })} /></label>
             <label>Current-period clearing row ID on opposite source (optional)<input value={timing.clearedBy} onChange={(e) => setTiming({ ...timing, clearedBy: e.target.value })} /></label>
@@ -616,8 +616,8 @@ export default function Prepare() {
             <label>Accountant-approved rule reference<input maxLength={200} value={timing.policy} onChange={(e) => setTiming({ ...timing, policy: e.target.value })} /></label>
             <label>What did you verify?<textarea minLength={5} maxLength={500} value={timing.reason} onChange={(e) => setTiming({ ...timing, reason: e.target.value })} /></label>
             <div>
-              <button disabled={busy || !timing.id || !timing.amount || timing.source.trim().length < 5 || timing.policy.trim().length < 5 || timing.reason.trim().length < 5} onClick={() => void calculate({ ...result.input, prior_outstanding: [...(result.input.prior_outstanding ?? []), { side: timing.side, id: timing.id, amount: timing.amount, cleared_by: timing.clearedBy, source_reference: timing.source, policy_reference: timing.policy, reason: timing.reason }] })}>Add cited prior item</button>
-              <button disabled={busy || !timing.id || timing.policy.trim().length < 5 || timing.reason.trim().length < 5} onClick={() => void calculate({ ...result.input, current_outstanding: [...(result.input.current_outstanding ?? []), { side: timing.side, id: timing.id, policy_reference: timing.policy, reason: timing.reason }] })}>Classify current unmatched row</button>
+              <button disabled={busy || !timing.id || !timing.amount || timing.source.trim().length < 5 || timing.policy.trim().length < 5 || timing.reason.trim().length < 5 || (timing.treatment === "clearing" && timing.clearingRef.trim().length < 5)} onClick={() => void calculate({ ...result.input, prior_outstanding: [...(result.input.prior_outstanding ?? []), { side: timing.side, id: timing.id, amount: timing.amount, treatment: timing.treatment, clearing_reference: timing.clearingRef, cleared_by: timing.clearedBy, source_reference: timing.source, policy_reference: timing.policy, reason: timing.reason }] })}>Add cited prior item</button>
+              <button disabled={busy || !timing.id || timing.policy.trim().length < 5 || timing.reason.trim().length < 5 || (timing.treatment === "clearing" && timing.clearingRef.trim().length < 5)} onClick={() => void calculate({ ...result.input, current_outstanding: [...(result.input.current_outstanding ?? []), { side: timing.side, id: timing.id, treatment: timing.treatment, clearing_reference: timing.clearingRef, policy_reference: timing.policy, reason: timing.reason }] })}>Classify current unmatched row</button>
             </div>
             <h3>Pair a transfer across both accounts</h3>
             <p>Enter all four row IDs from the current and other account statement/ledger CSVs. Their signed amounts must agree in each account and offset between accounts.</p>
