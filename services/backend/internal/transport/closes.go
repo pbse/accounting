@@ -233,6 +233,46 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		}
 		jsonReply(w, 200, map[string]any{"close": item, "workpapers": papers, "has_more": more})
 	})
+	mux.HandleFunc("GET /v1/closes/{id}/reconciliation/prior-items", func(w http.ResponseWriter, r *http.Request) {
+		account := strings.TrimSpace(r.URL.Query().Get("account"))
+		if account == "" || len(account) > 200 {
+			problem(w, 422, "Choose the bank account to carry forward.")
+			return
+		}
+		var entity, period, org string
+		if err := db.QueryRowContext(r.Context(), `SELECT entity,period,organization_id FROM client_closes WHERE id::text=$1 AND organization_id=$2`, r.PathValue("id"), organization(r)).Scan(&entity, &period, &org); err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		month, _ := time.Parse("2006-01", period)
+		previous := month.AddDate(0, -1, 0).Format("2006-01")
+		var paperID, priorCloseID, state string
+		var raw []byte
+		err := db.QueryRowContext(r.Context(), `SELECT w.id::text,c.id::text,w.review_state,w.paper FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND c.period=$3 AND w.kind='reconciliation' AND lower(w.paper->'input'->>'account')=lower($4) ORDER BY w.id DESC LIMIT 1`, org, entity, previous, account).Scan(&paperID, &priorCloseID, &state, &raw)
+		if err == sql.ErrNoRows {
+			jsonReply(w, 200, map[string]any{"items": []reconciliation.PriorItem{}, "message": "No prior-month reconciliation exists for this account."})
+			return
+		}
+		if err != nil {
+			problem(w, 503, "Could not read the previous reconciliation.")
+			return
+		}
+		if state != "approved" {
+			jsonReply(w, 200, map[string]any{"items": []reconciliation.PriorItem{}, "message": "The latest prior-month reconciliation needs accountant approval before carry-forward."})
+			return
+		}
+		var prior reconciliation.Workpaper
+		if json.Unmarshal(raw, &prior) != nil {
+			problem(w, 503, "Could not read the approved prior workpaper.")
+			return
+		}
+		items, err := reconciliation.CarryForwardItems(prior, "Approved "+previous+" reconciliation workpaper #"+paperID)
+		if err != nil {
+			problem(w, 409, err.Error())
+			return
+		}
+		jsonReply(w, 200, map[string]any{"items": items, "prior_close_id": priorCloseID, "prior_workpaper_id": paperID, "message": "Review each carried item against the prior workpaper and current statement before confirming."})
+	})
 	mux.HandleFunc("POST /v1/closes/{id}/workpapers", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			Kind  string          `json:"kind"`

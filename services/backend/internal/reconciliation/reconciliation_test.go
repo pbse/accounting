@@ -126,3 +126,50 @@ func TestReviewedOutstandingBridgeAndTransferEvidence(t *testing.T) {
 		t.Fatal("accepted transfer without offsetting counterpart records")
 	}
 }
+
+func TestReviewedGroupsAndNetSplitRequireApprovedRules(t *testing.T) {
+	base := Input{Entity: "Example", Account: "Bank", ClosePeriod: "2026-09", Currency: "USD", StatementReference: "Statement", LedgerReference: "Ledger", ExpectedPages: 1, Pages: []int{1}, StatementOpening: "0", StatementClosing: "97", LedgerOpening: "0", LedgerClosing: "97", StatementCSV: "id,date,amount\nS1,2026-09-02,97", LedgerCSV: "id,date,amount\nL1,2026-09-02,100\nL2,2026-09-02,-3", PolicyConfirmed: true}
+	suggested, err := Prepare(base)
+	if err != nil || len(suggested.Exceptions) == 0 || len(suggested.Exceptions[0].SplitGroups) != 1 || suggested.Exceptions[0].SplitGroups[0][0] != "L1" || suggested.Exceptions[0].SplitGroups[0][1] != "L2" {
+		t.Fatalf("net split candidate was not proposed for review: %+v %v", suggested.Exceptions, err)
+	}
+	base.ReviewedMatches = []ReviewedMatch{{StatementIDs: []string{"S1"}, LedgerIDs: []string{"L1", "L2"}, Method: "exact", Reason: "Verified net settlement rows"}}
+	if _, err := Prepare(base); err == nil {
+		t.Fatal("mixed-sign settlement accepted as an ordinary exact group")
+	}
+	base.ReviewedMatches[0].Method = "split"
+	base.ReviewedMatches[0].PolicyReference = "Approved net settlement rule"
+	got, err := Prepare(base)
+	if err != nil || len(got.ReviewedMatches) != 1 || len(got.Blockers) != 0 || len(got.UnmatchedStatement)+len(got.UnmatchedLedger) != 0 {
+		t.Fatalf("reviewed split did not tie: %+v %v", got, err)
+	}
+	base.ReviewedMatches[0].PolicyReference = ""
+	if _, err := Prepare(base); err == nil {
+		t.Fatal("split settlement accepted without approved rule")
+	}
+	base.LedgerCSV = "id,date,amount\nL1,2026-09-02,100\nL2,2026-09-02,-4"
+	base.ReviewedMatches[0].PolicyReference = "Approved net settlement rule"
+	if _, err := Prepare(base); err == nil {
+		t.Fatal("split settlement accepted with an unexplained cent difference")
+	}
+	base.LedgerCSV = "id,date,amount\nL1,2026-09-02,40\nL2,2026-09-02,57"
+	base.ReviewedMatches[0].Method = "exact"
+	base.ReviewedMatches[0].PolicyReference = ""
+	if _, err := Prepare(base); err == nil {
+		t.Fatal("grouped exact match accepted without approved rule")
+	}
+}
+
+func TestCarryForwardOutstandingKeepsUnclearedPriorAndCurrentRows(t *testing.T) {
+	input := Input{Entity: "Example", Account: "Bank", ClosePeriod: "2026-08", Currency: "USD", StatementReference: "August statement", LedgerReference: "August ledger", ExpectedPages: 1, Pages: []int{1}, StatementOpening: "1000", StatementClosing: "1000", LedgerOpening: "900", LedgerClosing: "850", StatementCSV: "id,date,amount", LedgerCSV: "id,date,amount\nL1,2026-08-25,-50", PolicyConfirmed: true,
+		PriorOutstanding:   []PriorItem{{Side: "ledger", ID: "old-check", Amount: "-100", SourceReference: "July workpaper 7", PolicyReference: "Approved timing rule", Reason: "Still awaiting bank clearing"}},
+		CurrentOutstanding: []CurrentItem{{Side: "ledger", ID: "L1", PolicyReference: "Approved timing rule", Reason: "Check has not cleared bank"}}}
+	prior, err := Prepare(input)
+	if err != nil || len(prior.Blockers) != 0 {
+		t.Fatalf("prior review fixture did not tie: %+v %v", prior, err)
+	}
+	items, err := CarryForwardItems(prior, "Approved August workpaper #42")
+	if err != nil || len(items) != 2 || items[0].ID != "old-check" || items[1].ID != "L1" || items[1].Amount != "-50.00" || items[1].SourceReference != "Approved August workpaper #42" {
+		t.Fatalf("lost prior item lineage or current signed row: %+v %v", items, err)
+	}
+}

@@ -31,7 +31,7 @@ export function SaveDraft({
         .then(setFiles)
         .catch((e) => setStatus(e.message));
   }, [close]);
-  const roles = kind === "reconciliation" ? ["statement", "ledger", ...((input as ReconciliationInput).prior_outstanding?.length ? ["support"] : []), ...((input as ReconciliationInput).transfers?.length ? ["other_statement", "other_ledger"] : [])] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
+  const roles = kind === "reconciliation" ? ["statement", "ledger", ...((input as ReconciliationInput).prior_outstanding?.length ? ["support"] : []), ...((input as ReconciliationInput).transfers?.length ? ["other_statement", "other_ledger"] : []), ...((input as ReconciliationInput).native_status && (input as ReconciliationInput).native_status !== "unverified" ? ["native_status"] : [])] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
   if (!close)
     return (
       <p>
@@ -106,7 +106,7 @@ export function SaveDraft({
                   (f) =>
                     !f.superseded_by &&
                     f.extraction_state === "ready" &&
-                    (kind !== "reconciliation" || role === "support" ||
+                    (kind !== "reconciliation" || role === "support" || role === "native_status" ||
                       f.name.toLowerCase().endsWith(".csv")),
                 )
                 .map((f) => (

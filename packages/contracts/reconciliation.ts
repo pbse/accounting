@@ -29,7 +29,7 @@ export type ReconciliationInput = {
 export type ReviewedMatch = {
   statement_ids: string[];
   ledger_ids: string[];
-  method: "exact" | "tolerance";
+  method: "exact" | "split" | "tolerance";
   reason: string;
   policy_reference?: string;
   date_window_days?: number;
@@ -47,11 +47,13 @@ export type ReconciliationWorkpaper = {
   exceptions?: {
     side: "statement" | "ledger";
     id: string;
-    kind: "ambiguous_exact" | "same_id_different_detail" | "same_amount_other_date" | "opposite_sign" | "same_date_other_amount" | "grouped_exact" | "no_counterpart";
+    kind: "ambiguous_exact" | "same_id_different_detail" | "same_amount_other_date" | "opposite_sign" | "same_date_other_amount" | "grouped_exact" | "split_settlement" | "no_counterpart";
     candidate_ids: string[];
     candidate_count: number;
     candidate_groups?: string[][];
     group_count?: number;
+    split_groups?: string[][];
+    split_count?: number;
     question: string;
   }[];
   blockers: string[];
