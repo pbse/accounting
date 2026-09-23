@@ -38,7 +38,7 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Synthetic QBO'),($2,'Other firm')`, org, other); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture')`, org); err != nil {
+	if _, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture'),($1,'user_other',true,'Synthetic enrollment','fixture'),($2,'user_accountant',true,'Synthetic enrollment','fixture')`, org, other); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'QBO synthetic client','2026-09') RETURNING id::text`, org).Scan(&closeID); err != nil {
@@ -50,7 +50,7 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 				t.Error(e)
 			}
 		}
-		db.Exec(`DELETE FROM organization_member_access WHERE organization_id=$1`, org)
+		db.Exec(`DELETE FROM organization_member_access WHERE organization_id IN ($1,$2)`, org, other)
 		db.Exec(`DELETE FROM organizations WHERE id IN ($1,$2)`, org, other)
 	}()
 	t.Setenv("QBO_CLIENT_ID", "synthetic-client")
@@ -175,7 +175,7 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 		t.Fatal("invalid state reached provider")
 	}
 	actor.Subject = "user_other"
-	call("POST", base, callback, 403)
+	call("POST", base, callback, 409)
 	actor.Subject = "user_accountant"
 	r := httptest.NewRequest("GET", "/v1/quickbooks/callback?state="+url.QueryEscape(state)+"&code=synthetic-code&realmId=123", nil)
 	w := httptest.NewRecorder()
