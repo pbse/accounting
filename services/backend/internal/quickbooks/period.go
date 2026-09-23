@@ -21,7 +21,7 @@ func PeriodReports(ctx context.Context, realm, token, period string) (map[string
 	currency := ""
 	for _, name := range []string{"TransactionList", "GeneralLedger", "TrialBalance", "ProfitAndLoss"} {
 		query := url.Values{"start_date": {start.Format("2006-01-02")}, "end_date": {end}, "accounting_method": {"Accrual"}}
-		raw, err := readSandbox(ctx, realm, token, "/reports/"+name+"?"+query.Encode())
+		raw, err := readSandboxLimit(ctx, realm, token, "/reports/"+name+"?"+query.Encode(), 8*1024*1024)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
@@ -78,6 +78,7 @@ func Coverage(accounts json.RawMessage, reports map[string]json.RawMessage) ([]C
 		return nil, err
 	}
 	items := []CoverageItem{}
+	byID := map[string]int{}
 	for index, a := range rows {
 		item := CoverageItem{AccountID: a.ID, Name: a.Name, Kind: "accountant_review", Reason: "No supported preparation selected for this account type.", Question: "Review period activity and balances; define any required work or explicitly document exclusion from the close scope.", Location: fmt.Sprintf("accounts[%d]", index)}
 		switch {
@@ -91,6 +92,7 @@ func Coverage(accounts json.RawMessage, reports map[string]json.RawMessage) ([]C
 			item.Question = "Provide invoices and existing schedules with service dates, currency, original booking and prior adjustments. Only fully expensed USD invoices covering full calendar months can use the current calculator."
 		}
 		items = append(items, item)
+		byID[a.ID] = index
 	}
 	// TrialBalance data-row account IDs link coverage to reported balances.
 	// Preserve cell values in evidence; do not infer signs or calculate totals.
@@ -104,15 +106,10 @@ func Coverage(accounts json.RawMessage, reports map[string]json.RawMessage) ([]C
 			location := fmt.Sprintf("%s.Row[%d]", path, index)
 			if row.Type == "Data" && len(row.ColData) > 0 && row.ColData[0].ID != "" {
 				id := row.ColData[0].ID
-				found := false
-				for i := range items {
-					if items[i].AccountID == id {
-						items[i].ReportLocations = append(items[i].ReportLocations, location)
-						found = true
-						break
-					}
-				}
-				if !found {
+				if i, found := byID[id]; found {
+					items[i].ReportLocations = append(items[i].ReportLocations, location)
+				} else {
+					byID[id] = len(items)
 					items = append(items, CoverageItem{AccountID: id, Name: row.ColData[0].Value, Kind: "accountant_review", Reason: "Trial balance references an account missing from the account capture.", Question: "Resolve the inconsistent account inventory and recapture before preparing this account.", Location: location, ReportLocations: []string{location}})
 				}
 			}
@@ -132,4 +129,99 @@ type reportRows struct {
 		}
 		Rows reportRows
 	}
+}
+
+// LedgerPage selects only rows under an exact account ID. It preserves the
+// provider's cells and JSON locations; a missing match is not a zero balance.
+type LedgerRow struct {
+	Location string          `json:"location"`
+	Row      json.RawMessage `json:"row"`
+}
+type LedgerPage struct {
+	AccountID string      `json:"account_id"`
+	Offset    int         `json:"offset"`
+	Total     int         `json:"total"`
+	Columns   []string    `json:"columns"`
+	Rows      []LedgerRow `json:"rows"`
+}
+
+func SelectLedger(accounts, report json.RawMessage, accountID string, offset int) (LedgerPage, error) {
+	page := LedgerPage{AccountID: accountID, Offset: offset, Rows: []LedgerRow{}}
+	if accountID == "" || offset < 0 || offset > 100000 {
+		return page, fmt.Errorf("Choose an account and a valid ledger offset")
+	}
+	var directory []struct {
+		ID string `json:"Id"`
+	}
+	if json.Unmarshal(accounts, &directory) != nil {
+		return page, fmt.Errorf("Account inventory is invalid")
+	}
+	found := false
+	for _, account := range directory {
+		found = found || account.ID == accountID
+	}
+	if !found {
+		return page, fmt.Errorf("Account is not in this snapshot")
+	}
+	var root struct {
+		Columns struct{ Column []struct{ ColTitle string } }
+		Rows    struct{ Row []json.RawMessage }
+	}
+	if json.Unmarshal(report, &root) != nil {
+		return page, fmt.Errorf("General Ledger report is invalid")
+	}
+	for _, column := range root.Columns.Column {
+		page.Columns = append(page.Columns, column.ColTitle)
+	}
+	accountColumn := len(root.Columns.Column) > 0 && strings.Contains(strings.ToLower(root.Columns.Column[0].ColTitle), "account")
+	var visit func([]json.RawMessage, string, bool) error
+	visit = func(rows []json.RawMessage, path string, inherited bool) error {
+		for n, raw := range rows {
+			location := fmt.Sprintf("%s.Row[%d]", path, n)
+			var value struct {
+				ColData []struct {
+					ID string `json:"id"`
+				}
+				Header struct {
+					ColData []struct {
+						ID string `json:"id"`
+					}
+				}
+				Rows struct{ Row []json.RawMessage }
+			}
+			if json.Unmarshal(raw, &value) != nil {
+				return fmt.Errorf("General Ledger row is invalid")
+			}
+			matched := inherited
+			if len(value.Header.ColData) > 0 && value.Header.ColData[0].ID != "" {
+				matched = value.Header.ColData[0].ID == accountID
+			}
+			if accountColumn && len(value.ColData) > 0 && value.ColData[0].ID != "" {
+				matched = value.ColData[0].ID == accountID
+			}
+			if matched {
+				if page.Total >= offset && len(page.Rows) < 20 {
+					var cells map[string]json.RawMessage
+					if json.Unmarshal(raw, &cells) != nil {
+						return fmt.Errorf("General Ledger row is invalid")
+					}
+					delete(cells, "Rows")
+					body, _ := json.Marshal(cells)
+					if len(body) > 32*1024 {
+						return fmt.Errorf("A selected ledger row exceeds 32 KiB; inspect the original report")
+					}
+					page.Rows = append(page.Rows, LedgerRow{Location: location, Row: body})
+				}
+				page.Total++
+			}
+			if err := visit(value.Rows.Row, location+".Rows", matched); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visit(root.Rows.Row, "reports.GeneralLedger.Rows", false); err != nil {
+		return page, err
+	}
+	return page, nil
 }

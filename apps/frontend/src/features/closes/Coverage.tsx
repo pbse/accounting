@@ -16,6 +16,8 @@ export function Coverage({ closeId }: { closeId: string }) {
   const [body, setBody] = useState("");
   const [link, setLink] = useState("");
   const [version, setVersion] = useState(0);
+  const [accountSearch, setAccountSearch] = useState("");
+  const [accountPage, setAccountPage] = useState(0);
   useEffect(() => {
     let live = true; let timer: ReturnType<typeof setTimeout>;
     async function load() {
@@ -43,6 +45,9 @@ export function Coverage({ closeId }: { closeId: string }) {
     void act({ action: "bind", account_id: account, jobs: data.getAll("jobs"), excluded: data.has("excluded"), reason: data.get("reason"), confirmed: data.has("confirmed") });
   }
   const coverage = status?.coverage;
+  const matchingAccounts = coverage?.items.filter(item => `${item.name} ${item.account_id} ${item.kind} ${item.state}`.toLowerCase().includes(accountSearch.toLowerCase().trim())) ?? [];
+  const page = Math.min(accountPage, Math.max(0, Math.ceil(matchingAccounts.length / 50) - 1));
+  const visibleAccounts = matchingAccounts.slice(page * 50, (page + 1) * 50);
   return <section id="coverage-work" aria-labelledby="coverage-title">
     <h3 id="coverage-title">Coverage and client evidence</h3>
     {error && <p role="alert">{error}</p>}
@@ -51,7 +56,9 @@ export function Coverage({ closeId }: { closeId: string }) {
       <p>Ledger snapshot #{coverage.snapshot_id}. Confirm the complete set of required jobs for each account. Resolution then follows their current, approved drafts automatically. Uploads, matching names and client replies cannot approve accounting decisions.</p>
       {coverage.stale && <p role="alert">Ledger source or connection changed. Recapture before changing coverage.</p>}
       <p>{coverage.items.filter(i => i.state === "resolved").length} resolved · {coverage.items.filter(i => i.state === "excluded").length} explicitly excluded · {coverage.items.filter(i => !["resolved", "excluded"].includes(i.state)).length} unresolved</p>
-      {coverage.items.map(item => <details key={`${item.account_id}-${item.binding_id}`}>
+      <label>Find an account or status<input type="search" value={accountSearch} onChange={e => { setAccountSearch(e.target.value); setAccountPage(0); }} placeholder="Name, ID, prepaid, missing…" /></label>
+      <p>Showing {visibleAccounts.length ? `${page * 50 + 1}–${page * 50 + visibleAccounts.length}` : "none"} of {matchingAccounts.length} matching accounts.</p>
+      {visibleAccounts.map(item => <details key={`${coverage.snapshot_id}-${item.account_id}-${item.binding_id}`}>
         <summary>{item.name || item.account_id} · {item.state.replaceAll("_", " ")}</summary>
         <p>{item.question}</p>
         <p>{item.reason}</p>
@@ -64,7 +71,10 @@ export function Coverage({ closeId }: { closeId: string }) {
           <label><input type="checkbox" name="confirmed" required /> I reviewed the account and ledger evidence. This is the complete required work set, or a justified exclusion.</label>
           <button>Confirm coverage scope</button>
         </fieldset></form>
+        <LedgerSelection key={`${coverage.snapshot_id}:${item.account_id}`} closeId={closeId} snapshotId={coverage.snapshot_id} accountId={item.account_id} stale={coverage.stale} />
       </details>)}
+      {page > 0 && <button type="button" onClick={() => setAccountPage(page - 1)}>Previous accounts</button>}
+      {(page + 1) * 50 < matchingAccounts.length && <button type="button" onClick={() => setAccountPage(page + 1)}>Next accounts</button>}
       <details><summary>Consolidated missing-evidence request</summary>
         <form onSubmit={e => { e.preventDefault(); const data = new FormData(e.currentTarget); void act({ action: "request", accounts: selected, jobs: [], body, recipient: data.get("recipient"), confirmed: data.has("confirmed") }); }}>
           <fieldset disabled={busy || coverage.stale}>
@@ -102,4 +112,40 @@ export function Coverage({ closeId }: { closeId: string }) {
       </article>)}
     </details>
   </section>;
+}
+
+type LedgerPage = { account_id: string; offset: number; total: number; columns: string[]; rows: { location: string; row: { ColData?: { value?: string }[]; Header?: { ColData?: { value?: string }[] } } }[] };
+function LedgerSelection({ closeId, snapshotId, accountId, stale }: { closeId: string; snapshotId: string; accountId: string; stale: boolean }) {
+  const [page, setPage] = useState<LedgerPage>();
+  const [offset, setOffset] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
+  const path = `/${closeId}/quickbooks/snapshots/${snapshotId}/ledger?account_id=${encodeURIComponent(accountId)}&offset=${offset}`;
+  async function inspect(next = offset) {
+    setBusy(true); setError(""); setSaved("");
+    try {
+      setPage(await workspaceRequest(`/${closeId}/quickbooks/snapshots/${snapshotId}/ledger?account_id=${encodeURIComponent(accountId)}&offset=${next}`));
+      setOffset(next);
+    } catch (e) { setError(e instanceof Error ? e.message : "Ledger rows unavailable."); }
+    finally { setBusy(false); }
+  }
+  async function add() {
+    setBusy(true); setError("");
+    try {
+      const result = await workspaceRequest(path, { confirmed: true });
+      setSaved(`Evidence #${result.source_id} is available to the agent. Open Work and choose “Recheck evidence and proposals” for affected jobs.`);
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not add ledger evidence."); }
+    finally { setBusy(false); }
+  }
+  return <div>
+    <button type="button" disabled={busy || stale} onClick={() => void inspect(0)}>Inspect account-matched ledger rows</button>
+    {error && <p role="alert">{error}</p>}{saved && <p role="status">{saved}</p>}
+    {page && <><p>{page.total} account-matched report row{page.total === 1 ? "" : "s"}. Showing {page.rows.length ? `${page.offset + 1}–${page.offset + page.rows.length}` : "none"}. Report rows are context, not a verified balance or complete transaction export.</p>
+      {page.rows.length === 0 ? <p>No exact account ID match in this report. Inspect the original snapshot before deciding coverage.</p> : <ul>{page.rows.map(row => <li key={row.location}>{row.location}: {(row.row.ColData ?? row.row.Header?.ColData ?? []).map((cell, index) => `${page.columns[index] || `Column ${index + 1}`}: ${cell.value ?? ""}`).join(" · ")}</li>)}</ul>}
+      {page.rows.length > 0 && <button type="button" disabled={busy || stale} onClick={() => void add()}>Add this page to agent evidence</button>}
+      {page.offset + page.rows.length < page.total && <button type="button" disabled={busy} onClick={() => void inspect(page.offset + page.rows.length)}>Next ledger page</button>}
+      {page.offset > 0 && <button type="button" disabled={busy} onClick={() => void inspect(Math.max(0, page.offset - 20))}>Previous ledger page</button>}
+    </>}
+  </div>;
 }

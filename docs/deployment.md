@@ -59,4 +59,4 @@ Saved closes need migrated PostgreSQL and server-side `DATABASE_URL` / `WORKSPAC
 
 ## AuthKit and sandbox staging workflow
 
-The current workflow deploys the frontend/API and preparation/OCR worker, uploads code and server secrets together, and verifies `/readyz`. It requires WorkOS organization configuration and a TLS PostgreSQL database with migrations 001–010 already applied. See `auth-sandbox-staging.md` for the exact settings. The local development token is not accepted by the hosted edge. GitHub environment protection must be configured separately; it is not established merely by the workflow file.
+The current workflow deploys the frontend/API and preparation/OCR worker, uploads code and server secrets together, and verifies `/readyz`. It requires WorkOS organization configuration and a TLS PostgreSQL database with migrations 001–021 already applied. See `auth-sandbox-staging.md` for the exact settings. The local development token is not accepted by the hosted edge. GitHub environment protection must be configured separately; it is not established merely by the workflow file.

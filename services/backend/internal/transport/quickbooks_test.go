@@ -77,7 +77,7 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	defer func() { http.DefaultTransport = original }()
 	exchanges, refreshes, pages := 0, 0, 0
 	failRefresh, failPage := false, false
-	periodMode, badPeriod := false, false
+	periodMode, badPeriod, largePeriod := false, false, false
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
 		var raw string
 		switch r.URL.Host {
@@ -125,6 +125,13 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 					end = "2026-08-31"
 				}
 				raw = fmt.Sprintf(`{"Header":{"ReportName":%q,"StartPeriod":"2026-09-01","EndPeriod":%q,"ReportBasis":"Accrual","Currency":"USD","Time":"2026-09-22T10:00:00Z","Option":[{"Name":"NoReportData","Value":"false"}]},"Columns":{"Column":[{"ColTitle":"Account"},{"ColTitle":"Amount"}]},"Rows":{"Row":[{"type":"Data","ColData":[{"id":"1","value":"Checking"},{"value":"9007199254740993.01"}]},{"type":"Data","ColData":[{"id":"2","value":"Prepaid"},{"value":"123.45"}]}]}}`, name, end)
+				if largePeriod && name == "GeneralLedger" {
+					rows := make([]string, 1500)
+					for n := range rows {
+						rows[n] = fmt.Sprintf(`{"type":"Data","ColData":[{"id":"2","value":"Prepaid"},{"value":"%d.01"}]}`, n)
+					}
+					raw = strings.Replace(raw, `"Rows":{"Row":[`, `"Rows":{"Row":[`+strings.Join(rows, ",")+`,`, 1)
+				}
 			} else if periodMode {
 				raw = `{"QueryResponse":{"startPosition":1,"maxResults":2,"Account":[{"Id":"1","Name":"Checking","AccountType":"Bank"},{"Id":"2","Name":"Prepaid","AccountType":"Other Current Asset","AccountSubType":"PrepaidExpenses","Active":false}]}}`
 			} else {
@@ -280,6 +287,34 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 		t.Fatal(e)
 	}
 	actor.Permissions = append(actor.Permissions, "workpapers:review")
+	ledgerPath := base + "/snapshots/" + result.ID + "/ledger?account_id=2&offset=0"
+	var ledger struct {
+		Total int `json:"total"`
+		Rows  []struct {
+			Location string `json:"location"`
+		} `json:"rows"`
+	}
+	if e = json.Unmarshal(call("GET", ledgerPath, nil, 200), &ledger); e != nil || ledger.Total != 1 || len(ledger.Rows) != 1 || ledger.Rows[0].Location != "reports.GeneralLedger.Rows.Row[1]" {
+		t.Fatal("account-scoped ledger selection lost its source location", e)
+	}
+	call("GET", base+"/snapshots/"+result.ID+"/ledger?account_id=999&offset=0", nil, 422)
+	var selected struct {
+		SourceID string `json:"source_id"`
+	}
+	if e = json.Unmarshal(call("POST", ledgerPath, map[string]bool{"confirmed": true}, 200), &selected); e != nil || selected.SourceID == "" {
+		t.Fatal("ledger selection did not create evidence", e)
+	}
+	var selectedContent string
+	if e = db.QueryRow(`SELECT content FROM evidence WHERE id=$1 AND close_id=$2`, selected.SourceID, closeID).Scan(&selectedContent); e != nil || !strings.Contains(selectedContent, "123.45") || strings.Contains(selectedContent, "9007199254740993.01") {
+		t.Fatal("ledger evidence included another account or lost selected cells", e)
+	}
+	var replay struct {
+		SourceID string `json:"source_id"`
+	}
+	json.Unmarshal(call("POST", ledgerPath, map[string]bool{"confirmed": true}, 200), &replay)
+	if replay.SourceID != selected.SourceID {
+		t.Fatal("ledger page replay duplicated evidence")
+	}
 	before := call("GET", "/v1/closes/"+closeID+"/prepare-close", nil, 200)
 	var scope struct {
 		Digest string `json:"inventory_digest"`
@@ -295,10 +330,26 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	if e = db.QueryRow(`SELECT superseded_by::text FROM evidence WHERE id=$1`, saved.SourceID).Scan(&replacement); e != nil || replacement == "" {
 		t.Fatal("prior ledger not superseded", e)
 	}
+	if e = db.QueryRow(`SELECT superseded_by::text FROM evidence WHERE id=$1`, selected.SourceID).Scan(&replacement); e != nil || replacement == "" {
+		t.Fatal("selected ledger evidence was not superseded", e)
+	}
 	call("POST", "/v1/closes/"+closeID+"/prepare-close", map[string]any{"confirmed": true, "inventory_digest": scope.Digest}, 409)
 	after := call("GET", "/v1/closes/"+closeID+"/prepare-close", nil, 200)
 	if bytes.Equal(before, after) || !bytes.Contains(after, []byte("reconciliation")) {
 		t.Fatal("coverage not refreshed")
+	}
+	largePeriod = true
+	json.Unmarshal(action("period_snapshot", 200), &result)
+	fullReport := call("GET", base+"/snapshots/"+result.ID, nil, 200)
+	if len(fullReport) < 96*1024 {
+		t.Fatal("large report fixture did not exceed the old evidence limit")
+	}
+	var indexSource string
+	if e = db.QueryRow(`SELECT payload->>'source_id' FROM quickbooks_snapshots WHERE id=$1`, result.ID).Scan(&indexSource); e != nil {
+		t.Fatal(e)
+	}
+	if e = db.QueryRow(`SELECT content FROM evidence WHERE id=$1`, indexSource).Scan(&content); e != nil || len(content) > 96*1024 || !strings.Contains(content, "report_sizes") || strings.Contains(content, `"rows"`) {
+		t.Fatal("large report was not represented by a bounded, explicit evidence index", e)
 	}
 	actor.Organization = other
 	call("GET", base+"/snapshots/"+result.ID, nil, 404)

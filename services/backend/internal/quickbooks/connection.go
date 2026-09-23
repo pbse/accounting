@@ -82,12 +82,15 @@ func ValidRealm(realm string) bool { return realmPattern.MatchString(realm) }
 
 // Sandbox only. This reader exposes fixed GET operations, never arbitrary paths or writes.
 func readSandbox(ctx context.Context, realm, token, path string) ([]byte, error) {
+	return readSandboxLimit(ctx, realm, token, path, 2*1024*1024)
+}
+func readSandboxLimit(ctx context.Context, realm, token, path string, limit int64) ([]byte, error) {
 	if !ValidRealm(realm) {
 		return nil, errors.New("Invalid company identifier")
 	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://sandbox-quickbooks.api.intuit.com/v3/company/"+realm+path, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	return readResponse(req, 2*1024*1024)
+	return readResponse(req, limit)
 }
 func Company(ctx context.Context, realm, token string) (string, error) {
 	raw, err := readSandbox(ctx, realm, token, "/companyinfo/"+realm)

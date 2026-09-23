@@ -21,7 +21,7 @@ npm run dev
 
 Open http://localhost:5173. Compose installs locked dependencies, starts the API on localhost:8080, the worker on localhost:8081, and Postgres on localhost:5432. React hot-reloads; Go edits rebuild through Compose Watch. Stop with Ctrl-C; `docker compose down` removes containers while preserving the database volume.
 
-No Cloudflare account, model key, live ledger, or Go installation is needed for this path. Saved closes connect to Postgres. Fresh Compose volumes receive migrations 001–018; existing volumes need the explicit migration command in the feature guide. Its local-only credentials are in `compose.yaml`; never reuse them in cloud environments.
+No Cloudflare account, model key, live ledger, or Go installation is needed for this path. Saved closes connect to Postgres. Fresh Compose volumes receive migrations 001–021; existing volumes need the explicit migration command in the feature guide. Its local-only credentials are in `compose.yaml`; never reuse them in cloud environments.
 
 For faster native iteration (Node 24 and Go 1.27 installed):
 
