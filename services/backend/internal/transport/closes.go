@@ -86,6 +86,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	mux := http.NewServeMux()
 	registerPosting(mux, db)
 	registerVendorCredit(mux, db)
+	registerBillCorrection(mux, db)
 	registerProductionPosting(mux, db)
 	registerEvidence(mux, db)
 	registerForwardedEvidence(mux, db)

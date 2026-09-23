@@ -133,6 +133,51 @@ func ledgerAfterMatches(before, after quickbooks.LedgerObservation, amount json.
 	return true
 }
 func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
+	mux.HandleFunc("GET /v1/closes/{id}/proposed-state", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := productionActor(w, r, ""); !ok {
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT workpaper_id::text FROM production_postings WHERE close_id::text=$1 AND state IN ('preview','approved') ORDER BY id DESC LIMIT 101`, r.PathValue("id"))
+		if err != nil {
+			problem(w, 503, "Proposed state unavailable.")
+			return
+		}
+		ids := []string{}
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) != nil {
+				rows.Close()
+				problem(w, 503, "Proposed state unavailable.")
+				return
+			}
+			ids = append(ids, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			problem(w, 503, "Proposed state unavailable.")
+			return
+		}
+		more := len(ids) > 100
+		if more {
+			ids = ids[:100]
+		}
+		items := []map[string]any{}
+		for _, id := range ids {
+			intent, err := readProductionPosting(r.Context(), db, r.PathValue("id"), id)
+			if err != nil {
+				problem(w, 503, "A saved proposal could not be read. Resolve it before relying on this preview.")
+				return
+			}
+			var state string
+			if err = db.QueryRowContext(r.Context(), `SELECT review_state FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, id, r.PathValue("id")).Scan(&state); err != nil {
+				problem(w, 503, "Current workpaper review unavailable.")
+				return
+			}
+			items = append(items, map[string]any{"workpaper_id": id, "state": intent.State, "review_state": state, "digest": intent.Digest, "ledger_before": intent.LedgerBefore, "projected_balances": intent.Projected, "other_open_intents": intent.Conflicts})
+		}
+		jsonReply(w, 200, map[string]any{"items": items, "has_more": more, "notice": "Proposed-state preview from saved, versioned account observations. Not a current ledger balance or official statement; every intent is rechecked before approval."})
+	})
 	grantPath := "/v1/closes/{id}/production-grant"
 	mux.HandleFunc("GET "+grantPath, func(w http.ResponseWriter, r *http.Request) {
 		a, ok := productionActor(w, r, "")

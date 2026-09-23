@@ -20,6 +20,17 @@ type procedureImpact struct {
 	ImpactDigest string          `json:"impact_digest"`
 }
 
+type procedureScopeReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func procedureScopeDigest(ctx context.Context, q procedureScopeReader, org, client, kind, previous string) (string, int, error) {
+	var total int
+	var scopeHash string
+	err := q.QueryRowContext(ctx, `SELECT count(*),COALESCE(md5(string_agg(c.id::text||':'||COALESCE(w.last_id::text,'')||':'||COALESCE(e.source_id::text,''),',' ORDER BY c.id)),'') FROM client_closes c LEFT JOIN LATERAL (SELECT max(id) last_id FROM workpapers WHERE close_id=c.id AND kind=$3) w ON true LEFT JOIN LATERAL (SELECT max(e.id) source_id FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL) e ON true WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3)))`, org, client, kind).Scan(&total, &scopeHash)
+	return preparation.Digest([]byte(kind + "/" + strings.ToLower(client) + "/" + previous + "/" + scopeHash)), total, err
+}
+
 func readProcedureImpact(ctx context.Context, tx *sql.Tx, closeID, kind string) (procedureImpact, error) {
 	var out procedureImpact
 	p, err := preparation.CurrentProcedure(ctx, tx, closeID, kind)
@@ -122,6 +133,51 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		jsonReply(w, 200, impact)
 	})
 	mux.HandleFunc("GET /v1/closes/procedures", func(w http.ResponseWriter, r *http.Request) {
+		if kind := r.URL.Query().Get("impact_kind"); kind != "" {
+			client := strings.TrimSpace(r.URL.Query().Get("client_entity"))
+			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation") || len(client) > 200 {
+				problem(w, 422, "Choose a supported procedure scope.")
+				return
+			}
+			allowed, err := clientAccess(db, r, client)
+			if err != nil || !allowed {
+				problem(w, 403, "Client access is required to preview procedure impact.")
+				return
+			}
+			var previous string
+			err = db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM procedure_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND kind=$3 ORDER BY id DESC LIMIT 1),'')`, organization(r), client, kind).Scan(&previous)
+			if err != nil {
+				problem(w, 503, "Procedure impact unavailable.")
+				return
+			}
+			digest, total, err := procedureScopeDigest(r.Context(), db, organization(r), client, kind, previous)
+			if err != nil {
+				problem(w, 503, "Procedure impact unavailable.")
+				return
+			}
+			rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period,COALESCE((SELECT e.id::text FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id=c.id AND p.kind=$3 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),''),(SELECT count(*) FROM workpapers w WHERE w.close_id=c.id AND w.kind=$3) FROM client_closes c WHERE c.organization_id=$1 AND (($2<>'' AND lower(c.entity)=lower($2)) OR ($2='' AND NOT EXISTS(SELECT 1 FROM procedure_versions p WHERE p.organization_id=c.organization_id AND lower(p.client_entity)=lower(c.entity) AND p.kind=$3))) ORDER BY c.id DESC LIMIT 100`, organization(r), client, kind)
+			if err != nil {
+				problem(w, 503, "Procedure impact unavailable.")
+				return
+			}
+			defer rows.Close()
+			items := []map[string]any{}
+			for rows.Next() {
+				var id, entity, period, source string
+				var drafts int
+				if rows.Scan(&id, &entity, &period, &source, &drafts) != nil {
+					problem(w, 503, "Procedure impact unavailable.")
+					return
+				}
+				items = append(items, map[string]any{"close_id": id, "entity": entity, "period": period, "pinned_source_id": source, "draft_count": drafts})
+			}
+			if rows.Err() != nil {
+				problem(w, 503, "Procedure impact unavailable.")
+				return
+			}
+			jsonReply(w, 200, map[string]any{"kind": kind, "client_entity": client, "previous_id": previous, "impact_digest": digest, "total_closes": total, "has_more": total > len(items), "closes": items})
+			return
+		}
 		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) ORDER BY id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r))
 		if err != nil {
 			problem(w, 503, "Firm procedures unavailable.")
@@ -158,8 +214,9 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		}
 		var in struct {
 			preparation.Procedure
-			PreviousID string `json:"previous_id"`
-			Confirmed  bool   `json:"confirmed"`
+			PreviousID   string `json:"previous_id"`
+			ImpactDigest string `json:"impact_digest"`
+			Confirmed    bool   `json:"confirmed"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -207,6 +264,11 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		}
 		if prior != in.PreviousID {
 			problem(w, 409, "Procedure changed. Refresh and review the latest version first.")
+			return
+		}
+		digest, _, impactErr := procedureScopeDigest(r.Context(), tx, org, in.ClientEntity, in.Kind, prior)
+		if impactErr != nil || in.ImpactDigest == "" || in.ImpactDigest != digest {
+			problem(w, 409, "Affected closes changed. Refresh the procedure impact before publishing.")
 			return
 		}
 		var id string

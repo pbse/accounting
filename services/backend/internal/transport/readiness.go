@@ -47,6 +47,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
  'jobs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',j.id::text,'state',j.state,'digest',j.digest,'finished_at',j.finished_at,'plans',j.plans,'revision',i.revision) ORDER BY j.id) FROM preparation_jobs j LEFT JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=c.id),'[]'),
  'postings',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM sandbox_postings p WHERE p.close_id=c.id),'[]'),
  'vendor_credits',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM vendor_credit_postings p WHERE p.close_id=c.id),'[]'),
+ 'bill_corrections',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM bill_corrections p WHERE p.close_id=c.id),'[]'),
  'production_postings',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM production_postings p WHERE p.close_id=c.id),'[]'),
  'email',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'provider_id',m.provider_id,'attempts',m.attempts) ORDER BY m.id) FROM email_delivery m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id),'[]'),
  'coverage',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=c.id),'[]'),
@@ -106,6 +107,10 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 			ID    int64  `json:"id"`
 			State string `json:"state"`
 		} `json:"vendor_credits"`
+		BillCorrections []struct {
+			ID    int64  `json:"id"`
+			State string `json:"state"`
+		} `json:"bill_corrections"`
 		ProductionPostings []struct {
 			ID    int64  `json:"id"`
 			State string `json:"state"`
@@ -165,6 +170,11 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	for _, p := range snapshot.VendorCredits {
 		if p.State == "executing" || p.State == "unknown" {
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Supplier credit attempt #%d must be resolved.", p.ID))
+		}
+	}
+	for _, p := range snapshot.BillCorrections {
+		if p.State == "executing" || p.State == "unknown" {
+			out.Blockers = append(out.Blockers, fmt.Sprintf("Bill correction attempt #%d must be resolved.", p.ID))
 		}
 	}
 	for _, p := range snapshot.ProductionPostings {

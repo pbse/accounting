@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"os"
 	"testing"
 
@@ -81,10 +82,23 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	}
 	publish := func(client, expense, previous string) string {
 		t.Helper()
+		request := httptest.NewRequest("GET", "/v1/closes/procedures?impact_kind=prepaid&client_entity="+neturl.QueryEscape(client), nil)
+		request = request.WithContext(auth.WithActor(request.Context(), actor))
+		response := httptest.NewRecorder()
+		h.ServeHTTP(response, request)
+		if response.Code != 200 {
+			t.Fatalf("publish impact: %d %s", response.Code, response.Body.String())
+		}
+		var scope struct {
+			ImpactDigest string `json:"impact_digest"`
+		}
+		if json.Unmarshal(response.Body.Bytes(), &scope) != nil || scope.ImpactDigest == "" {
+			t.Fatal("invalid publish impact")
+		}
 		var v struct {
 			ID string `json:"id"`
 		}
-		json.Unmarshal(call("/v1/closes/procedures", map[string]any{"client_entity": client, "kind": "prepaid", "instructions": "Only supported full-month prepaids; verify invoice booking separately.", "expense_account": expense, "prepaid_account": "Prepaid insurance", "enabled": true, "reason": "Synthetic accountant approval reference", "confirmed": true, "previous_id": previous}, 200), &v)
+		json.Unmarshal(call("/v1/closes/procedures", map[string]any{"client_entity": client, "kind": "prepaid", "instructions": "Only supported full-month prepaids; verify invoice booking separately.", "expense_account": expense, "prepaid_account": "Prepaid insurance", "enabled": true, "reason": "Synthetic accountant approval reference", "confirmed": true, "previous_id": previous, "impact_digest": scope.ImpactDigest}, 200), &v)
 		return v.ID
 	}
 	publish("", "Firm insurance", "")

@@ -20,6 +20,8 @@ After Intuit returns a journal ID, the API reads that journal by ID and verifies
 
 The close readiness digest and review ZIP include production attempt states and stored receipts. `executing` or `unknown` blocks sign-off. Export is a saved snapshot, not a new provider read.
 
+The close page's **Proposed ledger effects** panel also lists saved, unexecuted journal previews with their captured account balances, SyncTokens, projected balances, review state and competing intents. It is a view of each versioned preview, not a fresh QuickBooks query or a summed close balance. Refresh the individual preview before approval or posting; the server rechecks live preconditions at execution.
+
 ## Local and staged validation
 
 Run `npm ci`, `npm run check --workspace @close/frontend`, and the focused Go tests under `services/backend`. CI applies every migration to PostgreSQL and runs the integration tests with synthetic credentials and mocked Intuit HTTP. Do not configure a real production token for tests. Before real activation, validate the Intuit app, WorkOS roles, account IDs, company identity, grant limits, book-close policy and provider permissions with the client's accounting professional. This code cannot make QuickBooks reads and writes atomic with other users' activity.
