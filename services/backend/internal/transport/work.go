@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/mail"
+	"slices"
 	"strings"
 
 	"close.local/backend/internal/accruals"
@@ -215,8 +216,8 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 					problem(w, 422, e.Error())
 					return
 				}
-				if len(value.PriorOutstanding) > 0 || len(value.Transfers) > 0 {
-					problem(w, 422, "Prior items and transfers need separately linked support. Open the source-linked preparation review.")
+				if len(value.PriorOutstanding) > 0 || len(value.Transfers) > 0 || value.AccountType == "credit_card" || slices.ContainsFunc(value.CurrentOutstanding, func(item reconciliation.CurrentItem) bool { return item.Treatment == "clearing" }) {
+					problem(w, 422, "Card rules, timing items and transfers need separately linked support. Open the source-linked preparation review.")
 					return
 				}
 				value.Entity = entity

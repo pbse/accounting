@@ -18,6 +18,8 @@ export type EvidenceFile = {
   extraction_error: string;
   superseded_by: string | null;
   replacement_reason: string | null;
+  procedure_id?: string | null;
+  procedure_kind?: string | null;
   checks?: { pages: number; warnings: string[]; questions: string[] };
 };
 

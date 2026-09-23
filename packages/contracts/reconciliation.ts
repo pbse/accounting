@@ -1,6 +1,8 @@
 export type ReconciliationInput = {
   entity: string;
   account: string;
+  account_type?: "bank" | "credit_card";
+  card_rule_reference?: string;
   close_period: string;
   currency: "USD";
   statement_reference: string;
@@ -15,8 +17,8 @@ export type ReconciliationInput = {
   ledger_csv: string;
   policy_confirmed: boolean;
   reviewed_matches?: ReviewedMatch[];
-  prior_outstanding?: { side: "statement" | "ledger"; id: string; amount: string; source_reference: string; policy_reference: string; cleared_by?: string; reason: string }[];
-  current_outstanding?: { side: "statement" | "ledger"; id: string; policy_reference: string; reason: string }[];
+  prior_outstanding?: { side: "statement" | "ledger"; id: string; amount: string; treatment?: "timing" | "clearing"; clearing_reference?: string; source_reference: string; policy_reference: string; cleared_by?: string; reason: string }[];
+  current_outstanding?: { side: "statement" | "ledger"; id: string; treatment?: "timing" | "clearing"; clearing_reference?: string; policy_reference: string; reason: string }[];
   transfers?: { statement_id: string; ledger_id: string; other_statement_id: string; other_ledger_id: string; policy_reference: string; reason: string }[];
   other_account?: string;
   other_statement_csv?: string;
@@ -38,7 +40,7 @@ export type ReviewedMatch = {
 export type ReconciliationLine = { id: string; date: string; amount: string };
 export type ReconciliationWorkpaper = {
   status: "draft";
-  method: "exact_bank_month_v1";
+  method: "exact_bank_month_v1" | "card_liability_month_v1";
   input: ReconciliationInput;
   matches: { statement_id: string; ledger_id: string; reason: string }[];
   reviewed_matches: (ReviewedMatch & { amount_difference: string })[];

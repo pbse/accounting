@@ -7,7 +7,7 @@
 1. Install Node 24 and Docker Desktop (Compose 2.22 or later); start Docker.
 2. Copy `.env.example` to `.env`. Set `WORKSPACE_TOKEN` to a privately generated `openssl rand -hex 32` value. Keep provider settings empty for a fully local synthetic workflow.
 3. Run `npm run dev`. Open http://localhost:5173. The API runs on port 8080, worker on 8081 and PostgreSQL on 5432. Fresh volumes apply every migration automatically.
-4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–033:
+4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–034:
 
    ```sh
    docker compose stop api worker
@@ -34,6 +34,7 @@
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/031_external_alerts.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/032_bill_corrections.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/033_source_coverage.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/034_bill_line_correction.sql
    docker compose up -d --build api worker
    ```
 

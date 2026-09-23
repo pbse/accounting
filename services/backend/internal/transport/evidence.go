@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -107,7 +108,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'bytes',COALESCE(octet_length(original),octet_length(content)),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'bytes',COALESCE(octet_length(original),octet_length(content)),'procedure_id',procedure_id::text,'procedure_kind',(SELECT kind FROM procedure_versions WHERE id=procedure_id),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
 		if err != nil {
 			problem(w, 503, "Could not load evidence.")
 			return
@@ -200,7 +201,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Use the reviewed next-month carry-forward action.")
 			return
 		}
-		if len(p.Sources) < 1 || len(p.Sources) > 6 {
+		if len(p.Sources) < 1 || len(p.Sources) > 8 {
 			problem(w, 422, "Link source evidence and the ledger/credit support for the selected method.")
 			return
 		}
@@ -224,6 +225,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		content := map[string]string{}
+		procedureID := ""
 		selectedIDs := map[string]bool{}
 		for i := range p.Sources {
 			s := &p.Sources[i]
@@ -233,17 +235,31 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			selectedIDs[s.ID] = true
-			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") {
+			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "clearing" && s.Role != "procedure" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") {
 				problem(w, 422, "Unsupported source role.")
 				return
 			}
 			var text string
-			err := tx.QueryRowContext(r.Context(), `SELECT name,digest,content FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND superseded_by IS NULL AND extraction_state='ready'`, s.ID, r.PathValue("id")).Scan(&s.Name, &s.Digest, &text)
+			var approved sql.NullString
+			err := tx.QueryRowContext(r.Context(), `SELECT name,digest,content,procedure_id::text FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND superseded_by IS NULL AND extraction_state='ready'`, s.ID, r.PathValue("id")).Scan(&s.Name, &s.Digest, &text, &approved)
 			if err != nil {
 				problem(w, 422, "Every source must be current, fully extracted, and belong to this close.")
 				return
 			}
 			content[s.Role] = text
+			if s.Role == "procedure" {
+				var valid bool
+				if !approved.Valid || tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.id::text=$2 AND p.kind='reconciliation' AND p.enabled AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)))`, r.PathValue("id"), approved.String).Scan(&valid) != nil || !valid {
+					problem(w, 422, "Select an applied, approved reconciliation procedure for this close.")
+					return
+				}
+				current, currentErr := preparation.CurrentProcedure(r.Context(), tx, r.PathValue("id"), "reconciliation")
+				if currentErr != nil || !current.Enabled {
+					problem(w, 422, "The current reconciliation procedure is disabled; request a new accountant-approved rule.")
+					return
+				}
+				procedureID = approved.String
+			}
 		}
 		if p.Kind == "reconciliation" {
 			if content["statement"] == "" || content["ledger"] == "" {
@@ -258,6 +274,19 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			if len(in.PriorOutstanding) > 0 && content["support"] == "" {
 				problem(w, 422, "Link reviewed prior-period evidence before preparing outstanding items.")
 				return
+			}
+			if in.AccountType == "credit_card" {
+				if procedureID == "" {
+					problem(w, 422, "Apply and link the client accountant's approved card reconciliation procedure.")
+					return
+				}
+				in.CardRuleReference = "Approved reconciliation procedure v" + procedureID
+			}
+			for i := range in.CurrentOutstanding {
+				if in.CurrentOutstanding[i].Treatment == "clearing" && content["clearing"] == "" {
+					problem(w, 422, "Link clearing-account evidence for the reviewed current item.")
+					return
+				}
 			}
 			if len(in.Transfers) > 0 && (content["other_statement"] == "" || content["other_ledger"] == "") {
 				problem(w, 422, "Link both account records before preparing a transfer pair.")
@@ -282,6 +311,12 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 					in.OtherLedgerRef = s.Name + " · " + s.Location
 				} else if s.Role == "native_status" {
 					in.NativeStatusRef = s.Name + " · " + s.Location
+				} else if s.Role == "clearing" {
+					for i := range in.CurrentOutstanding {
+						if in.CurrentOutstanding[i].Treatment == "clearing" {
+							in.CurrentOutstanding[i].ClearingRef = s.Name + " · " + s.Location
+						}
+					}
 				}
 			}
 			p.Input, _ = json.Marshal(in)
@@ -317,6 +352,9 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 					return
 				}
 				for _, chosen := range p.Sources {
+					if chosen.Role == "procedure" || chosen.Role == "clearing" {
+						continue
+					}
 					found := false
 					for _, selected := range proposal.Sources {
 						if chosen.ID == selected.ID && (chosen.Role == selected.Role || (selected.Role == "support" && (chosen.Role == "other_statement" || chosen.Role == "other_ledger"))) {
@@ -345,7 +383,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			for _, s := range sources {
-				if s.Role == "client_reply" || (proposal.Engine == "openai" && s.Role == "support") {
+				if (s.Role == "client_reply" || (proposal.Engine == "openai" && s.Role == "support")) && !slices.ContainsFunc(p.Sources, func(selected preparation.Source) bool { return selected.ID == s.ID }) {
 					p.Sources = append(p.Sources, s.Source)
 				}
 			}

@@ -173,3 +173,31 @@ func TestCarryForwardOutstandingKeepsUnclearedPriorAndCurrentRows(t *testing.T) 
 		t.Fatalf("lost prior item lineage or current signed row: %+v %v", items, err)
 	}
 }
+
+func TestCardLiabilityTimingAndClearingRequireReviewedSources(t *testing.T) {
+	input := Input{Entity: "Example", Account: "Corporate card", AccountType: "credit_card", CardRuleReference: "Approved card liability sign rule", ClosePeriod: "2026-09", Currency: "USD", StatementReference: "Card statement pages 1-2", LedgerReference: "Card liability ledger", ExpectedPages: 2, Pages: []int{1, 2}, StatementOpening: "0", StatementClosing: "75", LedgerOpening: "0", LedgerClosing: "85", StatementCSV: "id,date,amount\nS1,2026-09-02,100\nS2,2026-09-05,-25", LedgerCSV: "id,date,amount\nL1,2026-09-02,100\nL2,2026-09-05,-25\nL3,2026-09-28,10", PolicyConfirmed: true, CurrentOutstanding: []CurrentItem{{Side: "ledger", ID: "L3", Treatment: "clearing", ClearingRef: "Unsettled card clearing account #8", PolicyReference: "Approved card clearing rule", Reason: "Charge is posted but not on statement"}}}
+	prior, err := Prepare(input)
+	if err != nil || prior.Method != "card_liability_month_v1" || len(prior.Blockers) != 0 || prior.ClosingBridgeDifference != "0.00" || len(prior.Matches) != 2 {
+		t.Fatalf("card liability bridge did not tie: %+v %v", prior, err)
+	}
+	input.CardRuleReference = ""
+	if _, err = Prepare(input); err == nil {
+		t.Fatal("card treatment accepted without approved liability rule")
+	}
+	input.CardRuleReference = "Approved card liability sign rule"
+	input.CurrentOutstanding[0].ClearingRef = ""
+	if _, err = Prepare(input); err == nil {
+		t.Fatal("clearing item accepted without a clearing source")
+	}
+	input.CurrentOutstanding[0].ClearingRef = "Unsettled card clearing account #8"
+	carried, err := CarryForwardItems(prior, "Approved September card workpaper #42")
+	if err != nil || len(carried) != 1 || carried[0].Treatment != "clearing" || carried[0].ClearingRef != "Unsettled card clearing account #8" {
+		t.Fatalf("card clearing lineage was lost: %+v %v", carried, err)
+	}
+	carried[0].ClearedBy = "S3"
+	next := Input{Entity: "Example", Account: "Corporate card", AccountType: "credit_card", CardRuleReference: "Approved card liability sign rule", ClosePeriod: "2026-10", Currency: "USD", StatementReference: "October card statement", LedgerReference: "October liability ledger", ExpectedPages: 1, Pages: []int{1}, StatementOpening: "75", StatementClosing: "85", LedgerOpening: "85", LedgerClosing: "85", StatementCSV: "id,date,amount\nS3,2026-10-03,10", LedgerCSV: "id,date,amount", PolicyConfirmed: true, PriorOutstanding: carried}
+	got, err := Prepare(next)
+	if err != nil || len(got.Blockers) != 0 || got.OpeningBridgeDifference != "0.00" || got.ClosingBridgeDifference != "0.00" {
+		t.Fatalf("cited card clearing row did not settle the bridge: %+v %v", got, err)
+	}
+}

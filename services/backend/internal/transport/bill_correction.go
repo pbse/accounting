@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ type billCorrection struct {
 	Treatment         string          `json:"treatment"`
 	Reason            string          `json:"reason"`
 	TargetAccountID   string          `json:"target_account_id"`
+	TargetLineID      string          `json:"target_line_id"`
 	TargetAccountName string          `json:"target_account_name"`
 	BeforeBill        json.RawMessage `json:"before_bill"`
 	Digest            string          `json:"digest"`
@@ -39,7 +41,7 @@ type billCorrection struct {
 
 func readBillCorrection(ctx context.Context, db *sql.DB, closeID, billID string) (billCorrection, error) {
 	var b billCorrection
-	err := db.QueryRowContext(ctx, `SELECT id::text,capture_id::text,evidence_id::text,realm,bill_id,treatment,reason,target_account_id,target_account_name,before_bill,digest,state,proposed_by,COALESCE(approved_by,''),approval_expires_at,COALESCE(attempted_by,''),last_error,COALESCE(readback,'null'::jsonb) FROM bill_corrections WHERE close_id::text=$1 AND bill_id=$2`, closeID, billID).Scan(&b.ID, &b.CaptureID, &b.EvidenceID, &b.Realm, &b.BillID, &b.Treatment, &b.Reason, &b.TargetAccountID, &b.TargetAccountName, &b.BeforeBill, &b.Digest, &b.State, &b.ProposedBy, &b.ApprovedBy, &b.Expires, &b.AttemptedBy, &b.Error, &b.Readback)
+	err := db.QueryRowContext(ctx, `SELECT id::text,capture_id::text,evidence_id::text,realm,bill_id,treatment,reason,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by,COALESCE(approved_by,''),approval_expires_at,COALESCE(attempted_by,''),last_error,COALESCE(readback,'null'::jsonb) FROM bill_corrections WHERE close_id::text=$1 AND bill_id=$2`, closeID, billID).Scan(&b.ID, &b.CaptureID, &b.EvidenceID, &b.Realm, &b.BillID, &b.Treatment, &b.Reason, &b.TargetAccountID, &b.TargetLineID, &b.TargetAccountName, &b.BeforeBill, &b.Digest, &b.State, &b.ProposedBy, &b.ApprovedBy, &b.Expires, &b.AttemptedBy, &b.Error, &b.Readback)
 	return b, err
 }
 
@@ -79,12 +81,19 @@ func billCorrectionCurrent(ctx context.Context, db *sql.DB, closeID string, item
 		return quickbooks.Bill{}, errors.New("Transaction capture changed; prepare a new correction")
 	}
 	var before quickbooks.Bill
-	if json.Unmarshal(item.BeforeBill, &before) != nil || len(captured.Line) != 1 || len(before.Line) != 1 || captured.ID != before.ID || captured.SyncToken != before.SyncToken || captured.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value != before.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value {
+	if json.Unmarshal(item.BeforeBill, &before) != nil || !reflect.DeepEqual(captured, before) {
 		return quickbooks.Bill{}, errors.New("Captured Bill changed")
 	}
 	live, err := sandbox.ReadBill(ctx, item.BillID)
-	if err != nil || live.SyncToken != before.SyncToken || live.TxnDate != before.TxnDate || live.VendorRef != before.VendorRef || live.TotalAmt != before.TotalAmt || live.Balance != before.Balance || live.Line[0].ID != before.Line[0].ID || live.Line[0].Amount != before.Line[0].Amount || live.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value != before.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value {
+	if err != nil || !reflect.DeepEqual(live, before) {
 		return quickbooks.Bill{}, errors.New("Live Bill differs from the reviewed capture; refresh before correcting")
+	}
+	selected := false
+	for _, line := range before.Line {
+		selected = selected || line.ID == item.TargetLineID && line.AccountBasedExpenseLineDetail.AccountRef.Value != item.TargetAccountID
+	}
+	if !selected {
+		return quickbooks.Bill{}, errors.New("Selected Bill line changed")
 	}
 	name, err := sandbox.ValidateExpenseAccount(ctx, item.TargetAccountID)
 	if err != nil || name != item.TargetAccountName {
@@ -134,7 +143,12 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		item, err := readBillCorrection(r.Context(), db, r.PathValue("id"), r.PathValue("bill"))
 		if err == sql.ErrNoRows {
-			jsonReply(w, 200, map[string]any{"state": "not_prepared"})
+			_, _, captured, captureErr := capturedBill(r.Context(), db, r.PathValue("id"), r.PathValue("bill"), sandboxConfiguration().Realm)
+			if captureErr != nil {
+				problem(w, 409, captureErr.Error())
+				return
+			}
+			jsonReply(w, 200, map[string]any{"state": "not_prepared", "before_bill": captured})
 			return
 		}
 		if err != nil {
@@ -155,6 +169,7 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 			Treatment       string `json:"treatment"`
 			Reason          string `json:"reason"`
 			TargetAccountID string `json:"target_account_id"`
+			TargetLineID    string `json:"target_line_id"`
 			Confirmed       bool   `json:"confirmed"`
 		}
 		if !decode(w, r, &in) {
@@ -192,18 +207,26 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			live, err := sandbox.ReadBill(r.Context(), billID)
-			if err != nil || captured.SyncToken != live.SyncToken || captured.TxnDate != live.TxnDate || len(captured.TxnDate) < 7 || captured.TxnDate[:7] != period || captured.VendorRef != live.VendorRef || captured.TotalAmt != live.TotalAmt || len(captured.Line) != 1 || captured.Line[0].ID != live.Line[0].ID || captured.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value != live.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value {
+			if err != nil || len(captured.TxnDate) < 7 || captured.TxnDate[:7] != period || !reflect.DeepEqual(captured, live) {
 				problem(w, 409, "Bill is unsupported or differs from the captured close month. Refresh transactions and review it.")
 				return
 			}
+			selected := false
+			for _, line := range live.Line {
+				selected = selected || line.ID == in.TargetLineID && line.AccountBasedExpenseLineDetail.AccountRef.Value != in.TargetAccountID
+			}
+			if !selected {
+				problem(w, 422, "Choose one captured Bill line and a different expense account.")
+				return
+			}
 			name, err := sandbox.ValidateExpenseAccount(r.Context(), in.TargetAccountID)
-			if err != nil || in.TargetAccountID == live.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value {
+			if err != nil {
 				problem(w, 422, "Choose a different active USD expense account.")
 				return
 			}
 			before, _ := json.Marshal(live)
-			digest := preparation.Digest([]byte(captureID + "/" + evidenceID + "/" + string(before) + "/" + in.Treatment + "/" + in.Reason + "/" + in.TargetAccountID + "/" + name))
-			result, err := db.ExecContext(r.Context(), `INSERT INTO bill_corrections(close_id,capture_id,evidence_id,realm,bill_id,treatment,reason,target_account_id,target_account_name,before_bill,digest,state,proposed_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'preview',$12) ON CONFLICT(realm,bill_id) DO UPDATE SET capture_id=EXCLUDED.capture_id,evidence_id=EXCLUDED.evidence_id,treatment=EXCLUDED.treatment,reason=EXCLUDED.reason,target_account_id=EXCLUDED.target_account_id,target_account_name=EXCLUDED.target_account_name,before_bill=EXCLUDED.before_bill,digest=EXCLUDED.digest,state='preview',proposed_by=EXCLUDED.proposed_by,approved_by=NULL,approval_expires_at=NULL WHERE bill_corrections.close_id=EXCLUDED.close_id AND bill_corrections.attempted_at IS NULL`, closeID, captureID, evidenceID, sandbox.Realm, billID, in.Treatment, in.Reason, in.TargetAccountID, name, string(before), digest, a.Subject)
+			digest := preparation.Digest([]byte(captureID + "/" + evidenceID + "/" + string(before) + "/" + in.Treatment + "/" + in.Reason + "/" + in.TargetLineID + "/" + in.TargetAccountID + "/" + name))
+			result, err := db.ExecContext(r.Context(), `INSERT INTO bill_corrections(close_id,capture_id,evidence_id,realm,bill_id,treatment,reason,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'preview',$13) ON CONFLICT(realm,bill_id) DO UPDATE SET capture_id=EXCLUDED.capture_id,evidence_id=EXCLUDED.evidence_id,treatment=EXCLUDED.treatment,reason=EXCLUDED.reason,target_account_id=EXCLUDED.target_account_id,target_line_id=EXCLUDED.target_line_id,target_account_name=EXCLUDED.target_account_name,before_bill=EXCLUDED.before_bill,digest=EXCLUDED.digest,state='preview',proposed_by=EXCLUDED.proposed_by,approved_by=NULL,approval_expires_at=NULL WHERE bill_corrections.close_id=EXCLUDED.close_id AND bill_corrections.attempted_at IS NULL`, closeID, captureID, evidenceID, sandbox.Realm, billID, in.Treatment, in.Reason, in.TargetAccountID, in.TargetLineID, name, string(before), digest, a.Subject)
 			if err != nil {
 				problem(w, 503, "Could not save Bill preview.")
 				return
@@ -293,7 +316,7 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Bill attempt reservation was not confirmed; inspect status before retrying.")
 				return
 			}
-			_, writeErr := sandbox.CorrectBillAccount(r.Context(), before, item.TargetAccountID)
+			_, writeErr := sandbox.CorrectBillAccount(r.Context(), before, item.TargetLineID, item.TargetAccountID)
 			persist, stop := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 			defer stop()
 			if writeErr != nil {
@@ -301,7 +324,7 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 502, "Bill write outcome is uncertain. Inspect QuickBooks before any further action.")
 				return
 			}
-			readback, readErr := sandbox.VerifyBillCorrection(r.Context(), before, item.TargetAccountID)
+			readback, readErr := sandbox.VerifyBillCorrection(r.Context(), before, item.TargetLineID, item.TargetAccountID)
 			if readErr != nil {
 				_, _ = db.ExecContext(persist, `UPDATE bill_corrections SET state='unknown',last_error=$2 WHERE id::text=$1 AND state='executing'`, item.ID, readErr.Error())
 				problem(w, 502, "Bill update returned, but canonical readback is unverified.")
@@ -322,7 +345,7 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Saved Bill preview is invalid.")
 				return
 			}
-			readback, err := sandbox.VerifyBillCorrection(r.Context(), before, item.TargetAccountID)
+			readback, err := sandbox.VerifyBillCorrection(r.Context(), before, item.TargetLineID, item.TargetAccountID)
 			if err != nil {
 				if item.State == "verified" {
 					_, _ = db.ExecContext(r.Context(), `UPDATE bill_corrections SET state='unknown',last_error=$2 WHERE id::text=$1 AND state='verified'`, item.ID, err.Error())
