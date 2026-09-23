@@ -4,9 +4,9 @@
 
 A foundation for an agent-first accounting preparation workspace. React presents the decisions; Go owns capabilities and accounting; Cloudflare supplies delivery and runtime adapters. The connected ledger remains the ledger of record.
 
-**Implemented locally:** saved closes; exact prepaid and reconciliation calculations; reviewed prepaid carry-forward into the next month; secure evidence upload with PDF/OCR; source-linked review and recalculation; a live Work inbox that keeps uploads, proposed facts, approved requests, private client reply links, recorded replies, and preparation on one durable job. OpenAI interpretation selects evidence and proposes cited facts, with staff answers resuming the same job; it requires local worker credentials. Without credentials, local proposals recognize labeled fields. WorkOS AuthKit, controlled QuickBooks sandbox posting, and Cloudflare/GitHub deployment code require provider activation. Supported-scope readiness, sign-off and reopening are available locally; production posting is not implemented. See [the Work inbox guide](docs/work-inbox.md).
+**Implemented locally:** saved closes; exact prepaid and reconciliation calculations; reviewed prepaid carry-forward; secure evidence upload with PDF/OCR; source-linked review and recalculation; a live Work inbox that connects proposed facts, approved requests, client replies, and durable preparation. OpenAI interpretation needs worker credentials; without them, local proposals recognize labeled fields and require review. WorkOS AuthKit, QuickBooks sandbox and controlled production posting, and Cloudflare/GitHub delivery have code but require provider activation. Supported-scope readiness, sign-off, release-gated accountant binders, firm membership and operational controls are available locally. See [the Work inbox guide](docs/work-inbox.md).
 
-See [onboarding and end-to-end flows](docs/onboarding.md) and the [current delivery backlog](docs/implementation-backlog.md). Multi-firm API access is bound to registered WorkOS organizations; existing local data belongs to the development workspace. Enterprise operations and live activation remain pending.
+See [onboarding and end-to-end flows](docs/onboarding.md), [enterprise controls and recovery](docs/operations.md), and the [current delivery backlog](docs/implementation-backlog.md). Multi-firm API access is bound to enrolled WorkOS organizations; existing local data belongs to the development workspace. Scoped MCP exposure and live enterprise validation remain pending.
 
 ## Start locally
 
@@ -21,7 +21,7 @@ npm run dev
 
 Open http://localhost:5173. Compose installs locked dependencies, starts the API on localhost:8080, the worker on localhost:8081, and Postgres on localhost:5432. React hot-reloads; Go edits rebuild through Compose Watch. Stop with Ctrl-C; `docker compose down` removes containers while preserving the database volume.
 
-No Cloudflare account, model key, live ledger, or Go installation is needed for this path. Saved closes connect to Postgres. Fresh Compose volumes receive migrations 001–022; existing volumes need the explicit migration command in the feature guide. Its local-only credentials are in `compose.yaml`; never reuse them in cloud environments.
+No Cloudflare account, model key, live ledger, or Go installation is needed for this path. Saved closes connect to Postgres. Fresh Compose volumes receive all migrations through 024; existing volumes need the explicit migration command in the onboarding guide. Its local-only credentials are in `compose.yaml`; never reuse them in cloud environments.
 
 For faster native iteration (Node 24 and Go 1.27 installed):
 

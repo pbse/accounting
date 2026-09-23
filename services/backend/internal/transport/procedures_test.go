@@ -13,6 +13,7 @@ import (
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
@@ -29,6 +30,9 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Procedure test'),($2,'Other test')`, org, other); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture')`, org); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		for _, table := range []string{"preparation_jobs", "workpapers", "evidence"} {
 			if _, e := db.Exec(`DELETE FROM `+table+` WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id IN ($1,$2))`, org, other); e != nil {
@@ -37,6 +41,7 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 		}
 		db.Exec(`DELETE FROM client_closes WHERE organization_id IN ($1,$2)`, org, other)
 		db.Exec(`DELETE FROM procedure_versions WHERE organization_id IN ($1,$2)`, org, other)
+		db.Exec(`DELETE FROM organization_member_access WHERE organization_id IN ($1,$2)`, org, other)
 		db.Exec(`DELETE FROM organizations WHERE id IN ($1,$2)`, org, other)
 	}()
 	var id, foreign string
@@ -45,7 +50,7 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	mux := http.NewServeMux()
 	registerProcedures(mux, db)
 	h := organizationBoundary(db, mux)
-	actor := &auth.Claims{Organization: org, Permissions: []string{"clients:all", "workpapers:review", "procedures:manage"}}
+	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_accountant"}, Organization: org, Permissions: []string{"clients:all", "workpapers:review", "procedures:manage"}}
 	call := func(path string, value any, want int) []byte {
 		t.Helper()
 		b, _ := json.Marshal(value)

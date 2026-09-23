@@ -116,6 +116,7 @@ func TestScopedSignoffInvalidationAndReopening(t *testing.T) {
 	if len(current.Blockers) != 0 {
 		t.Fatal(current.Blockers)
 	}
+	call("GET", base+"/binder", nil, 409)
 	stale := current
 	// New work invalidates an already-open browser snapshot and blocks sign-off.
 	var job string
@@ -138,6 +139,28 @@ func TestScopedSignoffInvalidationAndReopening(t *testing.T) {
 	if current.State != "signed_off" || current.DecisionID == "" {
 		t.Fatalf("sign-off missing: %+v", current)
 	}
+	binder := call("GET", base+"/binder", nil, 200)
+	binderArchive, e := zip.NewReader(bytes.NewReader(binder), int64(len(binder)))
+	if e != nil {
+		t.Fatal(e)
+	}
+	var hasChecksums, hasRelease bool
+	for _, f := range binderArchive.File {
+		if f.Name == "checksums.sha256" {
+			hasChecksums = true
+		}
+		if f.Name == "manifest.json" {
+			r, _ := f.Open()
+			raw, _ := io.ReadAll(r)
+			r.Close()
+			var pack closePackage
+			json.Unmarshal(raw, &pack)
+			hasRelease = pack.ReleaseReady && pack.Readiness != nil && pack.Readiness.DecisionID == current.DecisionID
+		}
+	}
+	if !hasChecksums || !hasRelease {
+		t.Fatal("signed binder lacked its decision or file checksums")
+	}
 	// No inherited approval after a new source, even if selected papers are unchanged.
 	if _, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'new.txt','new','new facts','fixture')`, closeID); err != nil {
 		t.Fatal(err)
@@ -146,6 +169,7 @@ func TestScopedSignoffInvalidationAndReopening(t *testing.T) {
 	if current.State != "reopen_required" {
 		t.Fatal("new evidence retained sign-off")
 	}
+	call("GET", base+"/binder", nil, 409)
 	call("POST", base+"/signoff", decision(current, "sign"), 409)
 	call("POST", base+"/scope", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "scope": scope}, 409)
 	call("POST", base+"/signoff", decision(current, "reopen"), 200)

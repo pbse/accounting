@@ -213,7 +213,11 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Unknown attachment decision.")
 			return
 		}
-		if err != nil || tx.Commit() != nil {
+		if err != nil {
+			jobProblem(w, err, "Attachment decision unconfirmed. Refresh before retrying.")
+			return
+		}
+		if tx.Commit() != nil {
 			problem(w, 503, "Attachment decision unconfirmed. Refresh before retrying.")
 			return
 		}

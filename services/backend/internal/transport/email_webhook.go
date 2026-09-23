@@ -67,16 +67,24 @@ func emailWebhook(db *sql.DB) http.HandlerFunc {
 			problem(w, 400, "Invalid delivery event.")
 			return
 		}
+		var closeID sql.NullString
+		err = db.QueryRowContext(r.Context(), `SELECT CASE WHEN count(DISTINCT d.close_id)=1 THEN min(d.close_id)::text END
+ FROM email_outbox m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id
+ WHERE m.connection_id=$1 AND m.provider_id=$2 AND lower(q.recipient)=lower($3)`, r.PathValue("connection"), event.Data.ID, event.Data.To[0]).Scan(&closeID)
+		if err != nil {
+			problem(w, 503, "Delivery scope unavailable.")
+			return
+		}
 		digest := preparation.Digest(raw)
 		// A conflicting duplicate is rejected; identical retries do not alter history.
 		var saved string
-		err = db.QueryRowContext(r.Context(), `INSERT INTO email_delivery_events(connection_id,event_id,body_digest,provider_id,recipient,kind,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(connection_id,event_id) DO UPDATE SET event_id=EXCLUDED.event_id RETURNING body_digest`, r.PathValue("connection"), eventID, digest, event.Data.ID, event.Data.To[0], kind, event.CreatedAt).Scan(&saved)
-		if err != nil {
-			problem(w, 503, "Delivery event could not be persisted.")
+		err = db.QueryRowContext(r.Context(), `INSERT INTO email_delivery_events(connection_id,event_id,body_digest,provider_id,recipient,kind,occurred_at,close_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(connection_id,event_id) DO UPDATE SET close_id=COALESCE(email_delivery_events.close_id,EXCLUDED.close_id) WHERE email_delivery_events.body_digest=EXCLUDED.body_digest AND (EXCLUDED.close_id IS NULL OR email_delivery_events.close_id IS NULL OR email_delivery_events.close_id=EXCLUDED.close_id) RETURNING body_digest`, r.PathValue("connection"), eventID, digest, event.Data.ID, event.Data.To[0], kind, event.CreatedAt, closeID).Scan(&saved)
+		if err == sql.ErrNoRows {
+			problem(w, 409, "Conflicting delivery event.")
 			return
 		}
-		if saved != digest {
-			problem(w, 409, "Conflicting delivery event.")
+		if err != nil {
+			problem(w, 503, "Delivery event could not be persisted.")
 			return
 		}
 		w.WriteHeader(204)

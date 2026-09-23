@@ -373,12 +373,17 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Close changed.")
 			return
 		}
+		var activeMember bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT enabled AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) FROM organizations WHERE id=$1 FOR UPDATE`, a.Organization, a.Subject).Scan(&activeMember); err != nil || !activeMember {
+			problem(w, 403, "Firm or member access was revoked before this posting decision.")
+			return
+		}
 		err = tx.QueryRowContext(r.Context(), `SELECT review_state FROM workpaper_review_state WHERE id::text=$1 AND close_id=$2`, r.PathValue("paper"), closeID).Scan(&reviewState)
 		if err != nil || reviewState != "approved" {
 			problem(w, 409, "A current accountant-approved workpaper is required.")
 			return
 		}
-		err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM production_posting_grants WHERE id=$1 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`, g.ID).Scan(&currentGrant)
+		err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM production_posting_grants WHERE id=$1 AND revoked_at IS NULL AND expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=production_posting_grants.organization_id AND subject=production_posting_grants.granted_by AND granted) FOR UPDATE`, g.ID).Scan(&currentGrant)
 		if err != nil {
 			problem(w, 409, "Production grant expired or was revoked.")
 			return
@@ -403,7 +408,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Type POST TO PRODUCTION.")
 				return
 			}
-			result, e := tx.ExecContext(r.Context(), `UPDATE production_postings SET state='executing',attempted_by=$2,attempted_at=now() WHERE id=$1 AND state='approved' AND approval_expires_at>now() AND approved_by IS NOT NULL`, record.ID, a.Subject)
+			result, e := tx.ExecContext(r.Context(), `UPDATE production_postings SET state='executing',attempted_by=$2,attempted_at=now() WHERE id=$1 AND state='approved' AND approval_expires_at>now() AND approved_by IS NOT NULL AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$3 AND subject=production_postings.approved_by AND granted)`, record.ID, a.Subject, a.Organization)
 			if e != nil {
 				problem(w, 503, "Attempt reservation failed; no provider call was made.")
 				return

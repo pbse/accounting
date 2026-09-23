@@ -45,6 +45,13 @@ func jsonReply(w http.ResponseWriter, status int, value any) {
 func problem(w http.ResponseWriter, status int, message string) {
 	jsonReply(w, status, map[string]string{"message": message})
 }
+func jobProblem(w http.ResponseWriter, err error, message string) {
+	if err != nil && strings.Contains(err.Error(), "Firm active job limit reached") {
+		problem(w, 429, "This firm has reached its active preparation limit. Resolve or cancel existing work before starting more.")
+		return
+	}
+	problem(w, 503, message)
+}
 func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" {
@@ -88,12 +95,17 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerReadiness(mux, db)
 	registerProcedures(mux, db)
 	registerAccess(mux, db)
+	registerMembers(mux, db)
+	registerOrganizationRevocation(mux, db)
+	registerRetention(mux, db)
+	registerOperations(mux, db)
 	registerEmail(mux, db)
 	registerCoordinator(mux, db)
 	registerCoverage(mux, db)
 	registerAttachments(mux, db)
 	registerQuickBooks(mux, db)
-	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db))
+	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
+	mux.HandleFunc("GET /v1/closes/{id}/binder", exportClose(db, true))
 	mux.HandleFunc("GET /v1/closes", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := db.QueryContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)) ORDER BY period DESC,id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r))
 		if err != nil {
@@ -142,10 +154,40 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 403, "You are not assigned to this client.")
 			return
 		}
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "Close storage unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		var limit, count int
+		err = tx.QueryRowContext(r.Context(), `SELECT max_closes FROM organizations WHERE id=$1 AND enabled FOR UPDATE`, organization(r)).Scan(&limit)
+		if err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM client_closes WHERE organization_id=$1`, organization(r)).Scan(&count)
+		}
+		if err != nil {
+			problem(w, 503, "Firm capacity is unavailable.")
+			return
+		}
 		var item savedClose
-		err := db.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT (organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity,period`, input.Entity, input.Period, organization(r)).Scan(&item.ID, &item.Entity, &item.Period)
+		err = tx.QueryRowContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, organization(r), input.Entity, input.Period).Scan(&item.ID, &item.Entity, &item.Period)
+		if err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "Could not check the current close.")
+			return
+		}
+		if err == sql.ErrNoRows {
+			if count >= limit {
+				problem(w, 429, "This firm has reached its close limit. Archive or retain existing work according to policy before opening another period.")
+				return
+			}
+			err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) RETURNING id::text,entity,period`, input.Entity, input.Period, organization(r)).Scan(&item.ID, &item.Entity, &item.Period)
+		}
 		if err != nil {
 			problem(w, 503, "Could not save the close. Retry safely with the same client and month.")
+			return
+		}
+		if tx.Commit() != nil {
+			problem(w, 503, "Could not confirm the close. Reopen this client and month before retrying.")
 			return
 		}
 		jsonReply(w, 200, item)

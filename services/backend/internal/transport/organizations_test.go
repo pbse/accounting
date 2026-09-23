@@ -36,6 +36,9 @@ func TestOrganizationIsolation(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Firm A'),($2,'Firm B')`, orgA, orgB); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_reviewer',true,'Synthetic enrollment','fixture'),($2,'user_reviewer',true,'Synthetic enrollment','fixture')`, orgA, orgB); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		for _, table := range []string{"preparation_jobs", "workpapers", "evidence"} {
 			if _, e := db.Exec(`DELETE FROM `+table+` WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id IN ($1,$2))`, orgA, orgB); e != nil {
@@ -44,6 +47,7 @@ func TestOrganizationIsolation(t *testing.T) {
 		}
 		db.Exec(`DELETE FROM client_closes WHERE organization_id IN ($1,$2)`, orgA, orgB)
 		db.Exec(`DELETE FROM client_access WHERE organization_id IN ($1,$2)`, orgA, orgB)
+		db.Exec(`DELETE FROM organization_member_access WHERE organization_id IN ($1,$2)`, orgA, orgB)
 		db.Exec(`DELETE FROM organizations WHERE id IN ($1,$2)`, orgA, orgB)
 	}()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -156,6 +160,10 @@ func TestOrganizationIsolation(t *testing.T) {
 		t.Fatal("own work missing")
 	}
 	call(tokenB, "POST", "/v1/closes/"+b.ID+"/workpapers/1/posting", `{"action":"preview"}`, 403)
+	if _, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_reviewer',false,'Synthetic immediate revocation','fixture')`, orgB); err != nil {
+		t.Fatal(err)
+	}
+	call(tokenB, "GET", "/v1/closes", "", 403)
 	if _, err = db.Exec(`UPDATE organizations SET enabled=false WHERE id=$1`, orgB); err != nil {
 		t.Fatal(err)
 	}

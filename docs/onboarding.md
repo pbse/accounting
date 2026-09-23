@@ -7,7 +7,7 @@
 1. Install Node 24 and Docker Desktop (Compose 2.22 or later); start Docker.
 2. Copy `.env.example` to `.env`. Set `WORKSPACE_TOKEN` to a privately generated `openssl rand -hex 32` value. Keep provider settings empty for a fully local synthetic workflow.
 3. Run `npm run dev`. Open http://localhost:5173. The API runs on port 8080, worker on 8081 and PostgreSQL on 5432. Fresh volumes apply every migration automatically.
-4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–023:
+4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–024:
 
    ```sh
    docker compose stop api worker
@@ -24,6 +24,7 @@
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/021_ledger_selections.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/022_ledger_search.sql
    docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/023_production_posting.sql
+   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/024_enterprise_controls.sql
    docker compose up -d --build api worker
    ```
 
@@ -39,7 +40,7 @@ Compose is the supported no-Go-install path. For native setup use the README, in
 3. Inspect linked originals and quoted facts. Answer specific questions in Work. Confirm the supported accounting method and booking assumptions; do not confirm facts that are absent from the evidence.
 4. The worker prepares an immutable draft. Inspect its exact schedule, sources and blockers, then approve or request changes with an explanation. Workpaper approval does not post to a ledger or sign off a close; the separate readiness flow below records a scoped sign-off.
 5. Replace changed evidence explicitly, then prepare the revised draft. Earlier reviews remain in history and cannot approve changed evidence.
-6. Export the close review package. It contains saved work and available originals, not an assertion that all books are complete.
+6. Export the close review package. It contains saved work and available originals, not an assertion that all books are complete. After a client accountant signs off a defined, currently unblocked scope, download the separate accountant binder and verify `checksums.sha256` before release.
 
 Supported prepaids require USD and accrual basis; the reviewer explicitly selects equal full months or inclusive actual days and confirms booking assumptions. One prospective credit, separately reviewed multiple/retrospective credits with a client-accountant rule reference, confirmed booked-balance adjustments, and full-refund or no-refund month-boundary cancellations are supported as drafts. Fixed incurred accruals and estimate-to-actual invoice true-ups are drafts; see [accounting methods](accounting-methods.md). CSV reconciliation matches only unique exact dates and signed amounts, while richer unmatched-row hints remain questions. On a large evidence inventory, model selection narrows sources; the reviewer sees uncited files before confirmation. Account-linked source references can search captured QuickBooks ledger rows, preserving exact report locations for review.
 
@@ -53,27 +54,21 @@ Preview carry-forward, then select current approved prepaid schedules or approve
 
 ## Onboard a hosted firm
 
-The API accepts signed WorkOS organization sessions only; it does not trust an organization ID supplied in a form, URL or header. Create the organization and its user memberships in your WorkOS environment, require your chosen MFA policy there, and register its **exact** ID in PostgreSQL before access:
-
-```sql
-INSERT INTO organizations(id,name) VALUES ('org_REPLACE_WITH_REAL_ID','Your firm');
-```
-
-Use an authorized database administrator and reviewed migration/change record. Do not run this example unchanged. All new client closes derive ownership from the verified session. Registration is operator-managed in this first slice; self-service firm creation/invitations remain in the backlog. Client assignments are available in Client access administration.
+The API accepts signed WorkOS organization sessions only; it does not trust an organization ID supplied in a form, URL or header. Create the organization and its user memberships in WorkOS and require your MFA policy there. Grant the first authorized administrator `org:enroll`, `members:manage` and `clients:all`, then sign in to that organization and use **Enroll a new firm** on Client closes. The API derives the exact organization and user IDs from the verified token and records the first membership. Existing registered organizations without membership records may be claimed only by an administrator with the same enrollment grant; verify their identity and ownership before doing so. All new client closes derive ownership from the verified session.
 
 Set backend `WORKOS_CLIENT_ID` and exact `WORKOS_ISSUER`; set frontend `VITE_WORKOS_CLIENT_ID` and `VITE_WORKOS_API_HOSTNAME`. The local token is rejected when WorkOS is configured. For multi-firm access leave `WORKOS_ORGANIZATION_ID` empty. When set, it further restricts sessions to one organization and binds the legacy sandbox configuration to that firm; shared SaaS therefore keeps that sandbox disabled until company-scoped connectors replace it.
 
-Grant `clients:all` only to intended firm staff; assign client accounting professionals to their clients instead. Configure `workpapers:review` for reviewers, `posting:approve` and `posting:execute` only for their intended roles. Do not grant permissions merely to make an error disappear. Sign out and sign in to the intended organization before changing firms; do not reuse a prior firm's open tabs.
+Grant `clients:all` only to intended firm staff; assign client accounting professionals to their clients instead. Configure `members:manage` for firm access administrators, `data:manage` for retention administrators, `operations:read` for operations readers, `org:manage` for firm suspension, `workpapers:review` for reviewers, and `posting:approve` / `posting:execute` for distinct posting roles. A hosted user must have both an active recorded firm membership and the relevant WorkOS permission. Use **Firm operations and membership** to enroll/revoke exact `user_` IDs with a reason; also revoke WorkOS memberships/sessions. Sign out and sign in to the intended organization before changing firms.
 
-To suspend a firm, set its `organizations.enabled` to false through an approved administrative change. Subsequent workspace requests and client links fail closed; workers stop claiming its queued work. Already-running OCR/model requests may finish and persist their results; suspension cannot recall data already sent to a provider. Resume only after the incident/change is resolved. Revoking individual memberships is managed in WorkOS; existing signed tokens remain valid until expiry unless a separate revocation mechanism is added.
+To suspend a firm, an authorized administrator uses `POST /v1/closes/organization/revoke` with `org:manage`, the exact organization ID, reason and confirmation. Subsequent workspace requests and client links fail closed; workers stop claiming queued work. Already-running OCR/model requests may finish and persist results; suspension cannot recall prior provider delivery. Re-enable only through an approved administrative change after incident review. App membership revocation blocks subsequent workspace calls even if a WorkOS token has not yet expired; revoke WorkOS access too.
 
 ## Cloudflare and GitHub activation
 
-Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-staging.md). Provision managed PostgreSQL with TLS, apply migrations 001–023 to a fresh database, register synthetic test organizations, configure the GitHub staging environment and deploy API/worker/frontend together. No deployment provisions provider accounts or a database automatically.
+Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-staging.md). Provision managed PostgreSQL with TLS, apply migrations 001–024 to a fresh database, enroll synthetic test organizations, configure the GitHub staging environment and deploy API/worker/frontend together. No deployment provisions provider accounts or a database automatically.
 
 Before admitting client data, verify with **two** hosted organizations: sign-in, same-named client/month creation, denied cross-firm URLs, isolated Work, upload/extraction, preparation, review, client reply, carry-forward and export. Restart the worker mid-job and verify one durable outcome. Then rehearse database restore and verify access isolation again. Local mocks and a successful deployment are not substitutes for these checks.
 
-Current controls are application-enforced organization ownership, authenticated roles for review/posting, same-close source validation, durable job identities and required malware-scanning gates for client attachments. PostgreSQL row-level security, contractual retention/deletion, operational alerting and full hosted recovery verification remain outstanding. Do not treat this guide or the existing code as enterprise certification.
+Current controls include application-enforced organization ownership, authenticated roles and membership, same-close source validation, durable jobs, malware-scanning gates, firm resource caps, deletion preview/holds and an operational snapshot. External alert delivery, PostgreSQL row-level security, contractual backup expiry and hosted recovery verification remain outstanding. Do not treat this guide or code as enterprise certification. See [operations and recovery](operations.md).
 
 ## Troubleshooting
 

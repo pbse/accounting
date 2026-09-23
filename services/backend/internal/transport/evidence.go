@@ -88,7 +88,11 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 		if err == nil && added {
 			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.id::text<>$2 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai' AND (jsonb_array_length(COALESCE(i.proposal->'questions','[]'))>0 OR EXISTS(SELECT 1 FROM jsonb_array_elements(i.proposal->'facts') f WHERE COALESCE(f->>'question','')<>''))`, closeID, jobID)
 		}
-		if err != nil || tx.Commit() != nil {
+		if err != nil {
+			jobProblem(w, err, "Upload could not be confirmed. Retry the same file safely.")
+			return
+		}
+		if tx.Commit() != nil {
 			problem(w, 503, "Upload could not be confirmed. Retry the same file safely.")
 			return
 		}
@@ -318,7 +322,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 		if jobID != "" {
 			plans, _ := json.Marshal([]preparation.Plan{p})
 			if _, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET plans=$2,state='queued',error='' WHERE id=$1`, jobID, string(plans)); err != nil {
-				problem(w, 503, "Could not queue preparation.")
+				jobProblem(w, err, "Could not queue preparation.")
 				return
 			}
 		}
@@ -331,7 +335,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			plans, _ := json.Marshal([]preparation.Plan{p})
 			err = tx.QueryRowContext(r.Context(), `INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(close_id,digest) DO UPDATE SET state=CASE WHEN preparation_jobs.state IN ('cancelled','failed') THEN 'queued' ELSE preparation_jobs.state END,error='',finished_at=CASE WHEN preparation_jobs.state IN ('cancelled','failed') THEN NULL ELSE preparation_jobs.finished_at END RETURNING id::text`, r.PathValue("id"), preparation.Digest(plans), string(plans), subject).Scan(&jobID)
 			if err != nil {
-				problem(w, 503, "Could not queue recalculation.")
+				jobProblem(w, err, "Could not queue recalculation.")
 				return
 			}
 		}
@@ -389,7 +393,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 		}
 		err := db.QueryRowContext(r.Context(), `INSERT INTO preparation_jobs(close_id,digest,plans,created_by) SELECT id,$2,$3,$4 FROM client_closes WHERE id::text=$1 ON CONFLICT(close_id,digest) DO UPDATE SET state=CASE WHEN preparation_jobs.state='cancelled' THEN 'queued' ELSE preparation_jobs.state END,finished_at=CASE WHEN preparation_jobs.state='cancelled' THEN NULL ELSE preparation_jobs.finished_at END RETURNING id::text`, r.PathValue("id"), preparation.Digest(body), string(body), subject).Scan(&id)
 		if err != nil {
-			problem(w, 503, "Queueing could not be confirmed. Retry the same selection safely.")
+			jobProblem(w, err, "Queueing could not be confirmed. Retry the same selection safely.")
 			return
 		}
 		jsonReply(w, 202, map[string]string{"id": id})
