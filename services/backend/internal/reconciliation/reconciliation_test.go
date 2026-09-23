@@ -47,3 +47,34 @@ func TestInvestigationFlagsIDAndOppositeSignWithoutMatching(t *testing.T) {
 		t.Fatalf("lost reconciliation investigation hints: %+v", got)
 	}
 }
+
+func TestExactGroupedCandidatesRemainUnmatched(t *testing.T) {
+	input := Input{Entity: "Example", Account: "Bank", ClosePeriod: "2026-09", Currency: "USD", StatementReference: "Statement", LedgerReference: "Ledger", ExpectedPages: 1, Pages: []int{1}, StatementOpening: "0", StatementClosing: "150", LedgerOpening: "0", LedgerClosing: "150", PolicyConfirmed: true,
+		StatementCSV: "id,date,amount\nS1,2026-09-02,100\nS2,2026-09-02,20\nS3,2026-09-02,30",
+		LedgerCSV:    "id,date,amount\nL1,2026-09-02,40\nL2,2026-09-02,60\nL3,2026-09-02,50"}
+	result, err := Prepare(input)
+	if err != nil || len(result.Matches) != 0 || len(result.UnmatchedStatement) != 3 || len(result.UnmatchedLedger) != 3 || len(result.Blockers) == 0 {
+		t.Fatalf("group candidates became confirmed matches: %+v %v", result, err)
+	}
+	want := map[string][]string{"statement/S1": {"L1", "L2"}, "ledger/L3": {"S2", "S3"}}
+	for _, exception := range result.Exceptions {
+		key := exception.Side + "/" + exception.ID
+		if ids, ok := want[key]; ok {
+			if exception.Kind != "grouped_exact" || len(exception.CandidateGroups) != 1 || len(exception.CandidateGroups[0]) != 2 || exception.CandidateGroups[0][0] != ids[0] || exception.CandidateGroups[0][1] != ids[1] {
+				t.Fatalf("missing source-linked group for %s: %+v", key, exception)
+			}
+			delete(want, key)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing grouped candidates: %v", want)
+	}
+	input.StatementClosing = "10"
+	input.LedgerClosing = "10"
+	input.StatementCSV = "id,date,amount\nS1,2026-09-02,10"
+	input.LedgerCSV = "id,date,amount\nL1,2026-09-02,20\nL2,2026-09-02,-10"
+	result, err = Prepare(input)
+	if err != nil || len(result.Exceptions) == 0 || result.Exceptions[0].GroupCount != 0 {
+		t.Fatalf("mixed-sign offset was suggested as a grouped match: %+v %v", result, err)
+	}
+}

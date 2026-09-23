@@ -127,13 +127,16 @@ export function ReconciliationResult({
       {exceptions.length > 0 && (
         <section>
           <h3>Investigate these items · {exceptions.length}</h3>
-          <p>These are possible leads from imported rows, not confirmed matches or accounting treatments. Check the cited source rows before resolving an item.</p>
+          <p>These are possible leads from imported rows, not confirmed matches or accounting treatments. Exact groups contain two same-date, same-sign rows whose amounts sum to the source row; check the originals before relying on a grouping.</p>
           <table>
             <thead><tr><th>Source row</th><th>Possible related rows</th><th>Question</th></tr></thead>
             <tbody>{exceptions.map((item) => (
               <tr key={`${item.side}-${item.id}`}>
                 <th>{item.side} {item.id}</th>
-                <td>{item.candidate_count === 0 ? "None in imported rows" : `${item.candidate_ids.join(", ")}${item.candidate_count > item.candidate_ids.length ? ` and ${item.candidate_count - item.candidate_ids.length} more` : ""}`}</td>
+                <td>
+                  {item.candidate_count === 0 ? "None in imported rows" : `${item.candidate_ids.join(", ")}${item.candidate_count > item.candidate_ids.length ? ` and ${item.candidate_count - item.candidate_ids.length} more` : ""}`}
+                  {(item.group_count ?? 0) > 0 && <p>Exact groups: {item.candidate_groups?.map((group) => group.join(" + ")).join("; ")}{(item.group_count ?? 0) > (item.candidate_groups?.length ?? 0) ? ` and ${(item.group_count ?? 0) - (item.candidate_groups?.length ?? 0)} more` : ""}</p>}
+                </td>
                 <td>{item.question}</td>
               </tr>
             ))}</tbody>
@@ -247,7 +250,7 @@ export default function Prepare() {
       <p>
         Import one full month of a USD bank account. Deposits are positive;
         withdrawals are negative on both sources. Credit-card accounts, grouped
-        matches, date tolerances, and prior-period outstanding items need a
+        match selection, date tolerances, and prior-period outstanding items need a
         separate method.
       </p>
       <details open={!result}>
