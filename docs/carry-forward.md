@@ -22,7 +22,15 @@ New drafts therefore contain no journal proposal or prior month's booked balance
 
 To correct carried terms, revise and review the originating schedule, then carry the new version forward. The existing initial-booking revision form does not accept carried drafts. Prior versions stay in history and become stale through lineage. Repeating this procedure for another month requires that month's schedule to receive its own review first.
 
-Non-goals: automatic ledger balance verification, journal creation/posting, reconciliation calculation carry-forward, client requests, sign-off, provider activation and cloud deployment.
+## Refresh a recurring month
+
+In the new close, use **QuickBooks sandbox ledger evidence → Capture this month’s accrual reports and plan coverage**, then **Refresh recurring prepaid work → Compare current period**. The latter shows each latest carried schedule, its expected closing prepaid balance, and the matching QuickBooks prepaid account's Trial Balance row and columns. The account name must match the schedule after trimming spaces and ignoring case, its subtype must be `PrepaidExpenses`, and a USD accrual Trial Balance row must exist exactly once. Missing or ambiguous rows stop the comparison; a missing row is never treated as zero. Download the full snapshot to inspect the report cutoff and raw cells. For large captures, the linked evidence is an index and the full snapshot supplies the cited row.
+
+The client’s accounting professional confirms the actual booked balance, account, cutoff, method and synthetic examples. Enter the balance in exact USD cents; the page shows the difference from the carried schedule. **Prepare reviewed comparison** queues a durable revision using the current snapshot as linked evidence. The existing calculator proposes any supported difference for fresh workpaper review. A repeated submit of an in-flight comparison reuses its job. New captures supersede earlier snapshot evidence, make source-dependent reviews stale and allow a new comparison from the latest version. Prior reviews and posting records remain in history. A signed-off close must be reopened before queuing new work.
+
+The QuickBooks account directory's `CurrentBalance` is never used as a month-end balance. The system does not infer debit/credit signs from report cells, confirm a provider balance automatically, or post a journal. If an account name differs from the schedule, resolve the mapping in the prior reviewed schedule or prepare manually with supported evidence. Without a sandbox connection, carry-forward schedules still work locally, but this QuickBooks comparison remains unavailable.
+
+Non-goals: automatic ledger balance certification, journal posting, reconciliation calculation carry-forward, client requests, sign-off, provider activation and cloud deployment.
 
 ## Setup and implementation
 

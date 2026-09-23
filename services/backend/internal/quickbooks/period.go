@@ -135,6 +135,74 @@ type reportRows struct {
 	}
 }
 
+// TrialBalanceAccount returns the exact reported cells for one prepaid account.
+// The reviewer, not the report parser, interprets debit/credit signs and cutoff.
+func TrialBalanceAccount(accounts, report json.RawMessage, accountID string) (string, string, json.RawMessage, error) {
+	var directory []struct {
+		ID             string `json:"Id"`
+		Name           string
+		AccountSubType string
+	}
+	if json.Unmarshal(accounts, &directory) != nil {
+		return "", "", nil, fmt.Errorf("Account directory is invalid")
+	}
+	name := ""
+	for _, a := range directory {
+		if a.ID == accountID && a.AccountSubType == "PrepaidExpenses" {
+			name = a.Name
+		}
+	}
+	if accountID == "" || name == "" {
+		return "", "", nil, fmt.Errorf("Choose a prepaid account in this snapshot")
+	}
+	var root struct {
+		Header struct{ Currency, ReportBasis string }
+		Rows   struct{ Row []json.RawMessage }
+	}
+	if json.Unmarshal(report, &root) != nil {
+		return "", "", nil, fmt.Errorf("Trial Balance is invalid")
+	}
+	if root.Header.Currency != "USD" || root.Header.ReportBasis != "Accrual" {
+		return "", "", nil, fmt.Errorf("This comparison requires a USD accrual Trial Balance")
+	}
+	var location string
+	var cells json.RawMessage
+	var visit func([]json.RawMessage, string) error
+	visit = func(rows []json.RawMessage, path string) error {
+		for i, raw := range rows {
+			var row struct {
+				Type    string
+				ColData json.RawMessage
+				Rows    struct{ Row []json.RawMessage }
+			}
+			if json.Unmarshal(raw, &row) != nil {
+				return fmt.Errorf("Trial Balance row is invalid")
+			}
+			at := fmt.Sprintf("%s.Row[%d]", path, i)
+			var values []struct {
+				ID string `json:"id"`
+			}
+			if row.Type == "Data" && json.Unmarshal(row.ColData, &values) == nil && len(values) > 0 && values[0].ID == accountID {
+				if location != "" {
+					return fmt.Errorf("Account appears more than once in Trial Balance")
+				}
+				location, cells = at, row.ColData
+			}
+			if err := visit(row.Rows.Row, at+".Rows"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visit(root.Rows.Row, "reports.TrialBalance.Rows"); err != nil {
+		return "", "", nil, err
+	}
+	if location == "" {
+		return "", "", nil, fmt.Errorf("Account has no Trial Balance row; do not assume zero")
+	}
+	return name, location, cells, nil
+}
+
 // LedgerPage selects only rows under an exact account ID. It preserves the
 // provider's cells and JSON locations; a missing match is not a zero balance.
 type LedgerRow struct {

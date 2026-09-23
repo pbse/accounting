@@ -57,6 +57,8 @@ Open an account under **Coverage and client evidence**, then choose **Inspect ac
 
 A new capture supersedes earlier period evidence atomically, invalidates source-dependent review/posting approvals, and requeues pending OpenAI proposals. Uncertain sandbox posting attempts must be resolved first. The close-run scope digest includes ledger coverage, so a changed capture requires a fresh scope confirmation. Completed work is never silently overwritten; review source-changed drafts and recalculate using existing review controls. Historical snapshots and originals remain downloadable. A disconnected connection is labeled stale in coverage. Restore the connection and recapture before relying on it.
 
+For a carried prepaid schedule, open **Refresh recurring prepaid work** after the new-period capture. It shows the matching prepaid Trial Balance row and expected schedule balance; the client accountant supplies and confirms the actual booked balance. The existing durable preparation worker then makes a source-linked revision for fresh review. The [carry-forward guide](carry-forward.md) describes the exact flow and limits.
+
 Apply migration `021_ledger_selections.sql` after 020 before starting this API revision. No new dependency or cloud secret is required. Deploy the API and frontend together. Live sandbox validation remains pending; development integration tests intercept all Intuit HTTP calls.
 
 Protocol references: [Intuit report service parameters](https://github.com/intuit/QuickBooks-V3-PHP-SDK/blob/master/src/ReportService/ReportService.php), [report header schema](https://github.com/intuit/QuickBooks-V3-PHP-SDK/blob/master/src/Data/IPPReportHeader.php).
