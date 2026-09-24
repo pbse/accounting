@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"maps"
 	"math/big"
 	"net/http"
 	"slices"
@@ -278,7 +279,6 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 			problem(w, 500, "Could not render the handoff summary.")
 			return
 		}
-		ordered := []string{"handoff.html", "months.csv", "prepaids.csv", "loans.csv", "reconciliations.csv", "adjustments.csv", "postings.csv", "open-questions.csv"}
 		files["handoff.html"] = page.Bytes()
 		for name, table := range map[string][][]string{
 			"months.csv":          append([][]string{{"period", "close_id", "sign_off_state", "decision_id", "blockers"}}, months...),
@@ -293,17 +293,9 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 			csv.NewWriter(&b).WriteAll(table)
 			files[name] = b.Bytes()
 		}
-		papers := []string{}
-		for name := range files {
-			if strings.HasPrefix(name, "workpapers/") {
-				papers = append(papers, name)
-			}
-		}
-		slices.Sort(papers)
-		ordered = append(ordered, papers...)
 		var buffer, checksums bytes.Buffer
 		archive := zip.NewWriter(&buffer)
-		for _, name := range ordered {
+		for _, name := range slices.Sorted(maps.Keys(files)) {
 			part, err := archive.Create(name)
 			if err == nil {
 				_, err = part.Write(files[name])
