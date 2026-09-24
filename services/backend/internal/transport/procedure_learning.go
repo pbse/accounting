@@ -374,11 +374,12 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 		}
 		if in.SourceID != "" {
 			var current string
-			if e := db.QueryRowContext(r.Context(), `SELECT digest FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND purpose='procedure' AND extraction_state='ready' AND superseded_by IS NULL`, in.SourceID, r.PathValue("id")).Scan(&current); e != nil && e != sql.ErrNoRows {
+			e := db.QueryRowContext(r.Context(), `SELECT digest FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND purpose='procedure' AND extraction_state='ready' AND superseded_by IS NULL`, in.SourceID, r.PathValue("id")).Scan(&current)
+			if e != nil && e != sql.ErrNoRows {
 				problem(w, 503, "Could not verify the policy source.")
 				return
 			}
-			if current != digest {
+			if e != nil || current != digest {
 				problemCode(w, 409, "SOURCE_STALE", "Policy source changed while drafting. Select its current revision.")
 				return
 			}

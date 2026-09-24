@@ -305,11 +305,12 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			var currentCapture string
-			if e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture); e != nil && e != sql.ErrNoRows {
+			e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture)
+			if e != nil && e != sql.ErrNoRows {
 				problem(w, 503, "Could not verify the transaction capture.")
 				return
 			}
-			if currentCapture != item.CaptureID {
+			if e != nil || currentCapture != item.CaptureID {
 				problemCode(w, 409, "SOURCE_STALE", "Transaction capture changed. Review a new correction.")
 				return
 			}

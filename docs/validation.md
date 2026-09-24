@@ -352,7 +352,7 @@ Author: Claude Opus 5.5. Stacked on posting safety. No migration.
 
 Author: Claude Opus 5.5. Stacked on exception investigation. No migration; messages and statuses are unchanged.
 
-- Every `problem()` response now carries a status-derived `code`. `SOURCE_STALE` is used only where the branch proves a replaced or changed source (9 sites plus the replaced-source branch of Work actions, split from its not-yet-extracted case). `EXECUTION_UNKNOWN` covers the 7 uncertain-outcome or unverified-readback provider writes.
+- Every `problem()` response now carries a status-derived `code`. `SOURCE_STALE` is used only where the branch proves a replaced or changed source (9 sites plus the replaced-source branch of Work actions, split from its not-yet-extracted case). `EXECUTION_UNKNOWN` covers the 7 uncertain-outcome or unverified-readback provider writes. At the stale-source sites, a failed lookup returns `UNAVAILABLE`, a missing source stays `SOURCE_STALE`, and a period with no evidence yet is `CONFLICT`.
 - `TestWorkInboxCoordinator` asserts `CONFLICT` on a repeated confirmation and `SOURCE_STALE` after the source is replaced. `TestProductionPostingSingleDurableAttempt` asserts `EXECUTION_UNKNOWN` on the lost response. Observed red with `code` removed from `problem()`, with the replaced source reported as `CONFLICT`, and with the production site left on the status default.
 - Plan reviewed once by GPT-6 Sol (medium). Adopted: no generic Idempotency-Key cache (replay would bypass revoked access and could release an unresolved write), named codes only where the branch proves them, and schemas deferred to the first exposed capability.
 
