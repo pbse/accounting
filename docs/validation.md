@@ -419,6 +419,15 @@ Author: Claude Opus 5.5. Migration 045 adds `agent_access`, `current_agent_acces
 - Observed red with the membership binding off, the pending-request rule off, widening allowed, scope filtering off, the grant requirement off, and the audience check off. Agents never receive firm-wide access; decisions are serialized with the firm row lock.
 - Full `internal/transport` and `internal/auth` packages pass; frontend typecheck passes. The Firm settings card couldn't be exercised in a browser: hosted sign-in isn't available locally, where the card shows the workspace-token note.
 
+## Row-level security (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 047.
+
+- `TestRowLevelSecurityIsolatesFirms` (PostgreSQL, through the API connection wrapper as a non-superuser, non-owner role): with firm A signed in, closes, workpapers, reviews (through their workpaper), the review-state view and organizations return only firm A's row; with no firm nothing is visible; a system-marked handler sees both; writing a close into firm B fails; after a rolled-back transaction changed the firm, the next statement sets it again; a prepared statement is refused (it could later run as another firm); the readiness query is true for that role and false for a superuser. Observed red with the wrapper not setting the firm, with the system mark ignored, without the rollback reset, with prepared statements allowed, with RLS disabled on the reviews table, with the view running as its owner and with an open organizations policy.
+- One-off readiness check: with the probe role granted a table owner's role WITH INHERIT FALSE, the readiness query using `MEMBER` reports not enforced; with `USAGE` it wrongly reported enforced.
+- One-off probe (not committed): the full transport suite with its pools opened through the wrapper as a non-owner role, and with the API's own pool failing closed. 50 of 51 tests passed. The one failure calls the posting handler directly as firm `org_fixture` against a `local-development` close; the database refused that cross-firm read, as intended (the application boundary would refuse the same request). Removing the system mark from the client-request route made two client-request tests fail, showing the probe exercised it.
+- Backup expiry verification is not included: no PostgreSQL provider is provisioned, so retention cannot be checked against a provider or contract.
+
 ## Year-end handoff (2026-09-24)
 
 Author: Claude Opus 5.5. No migration.

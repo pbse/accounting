@@ -7,8 +7,6 @@ import (
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/transport"
 	"context"
-	"database/sql"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"log"
 	"os"
 	"os/signal"
@@ -19,7 +17,7 @@ func main() {
 	if os.Getenv("DATABASE_URL") == "" {
 		log.Fatal("DATABASE_URL is required for durable preparation")
 	}
-	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
+	db, err := transport.OpenTenantDB(os.Getenv("DATABASE_URL"), "*")
 	if err != nil {
 		log.Fatal("Invalid database configuration")
 	}
