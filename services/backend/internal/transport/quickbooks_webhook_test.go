@@ -107,7 +107,7 @@ func TestQuickBooksWebhookMarksOnlyActiveSandboxCompanies(t *testing.T) {
 	}
 	at = "2099-01-01T00:00:00Z"
 	future := "[" + event(realm1, "qbo.bill.updated.v1") + "]"
-	if code := post(future, sign(future)); code != 200 || changed() >= "2099" {
-		t.Fatalf("a change time in the future is capped at now: %d %s", code, changed())
+	if code := post(future, sign(future)); code != 400 || changed() != "2026-09-24T12:00:00Z" {
+		t.Fatalf("a change time in the future is refused and records nothing: %d %s", code, changed())
 	}
 }
