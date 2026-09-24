@@ -11,7 +11,7 @@ import (
 
 // PeriodReports preserves report cells and provider decimals verbatim. These are
 // sequential report reads, not an atomic ledger export or transaction entities.
-func PeriodReports(ctx context.Context, realm, token, period string) (map[string]json.RawMessage, error) {
+func PeriodReports(ctx context.Context, env, realm, token, period string) (map[string]json.RawMessage, error) {
 	start, err := time.Parse("2006-01", period)
 	if err != nil {
 		return nil, fmt.Errorf("Invalid close month")
@@ -21,7 +21,7 @@ func PeriodReports(ctx context.Context, realm, token, period string) (map[string
 	currency := ""
 	for _, name := range []string{"TransactionList", "GeneralLedger", "TrialBalance", "ProfitAndLoss"} {
 		query := url.Values{"start_date": {start.Format("2006-01-02")}, "end_date": {end}, "accounting_method": {"Accrual"}}
-		raw, err := readSandboxLimit(ctx, realm, token, "/reports/"+name+"?"+query.Encode(), 8*1024*1024)
+		raw, err := read(ctx, env, realm, token, "/reports/"+name+"?"+query.Encode(), 8*1024*1024)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
