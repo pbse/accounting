@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -130,11 +131,14 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 			return result, fmt.Errorf("%s transaction count changed or pagination was incomplete; retry the capture", kind)
 		}
 	}
+	// Open items only add questions; if a read fails, the transaction capture still completes and says so.
 	result.OpenItems = map[string][]json.RawMessage{}
+	unread := []string{}
 	for _, kind := range []string{"Invoice", "Bill"} {
 		items, err := openItems(ctx, realm, token, kind, last)
 		if err != nil {
-			return result, err
+			unread = append(unread, err.Error())
+			continue
 		}
 		result.OpenItems[kind] = items
 	}
@@ -153,6 +157,9 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 	}
 	result.FinishedAt = time.Now().UTC()
 	result.Completeness = "All supported types were paged and provider counts agreed before and after each type. Reads are sequential, not an atomic ledger snapshot; later edits require refresh."
+	if len(unread) > 0 {
+		result.Completeness += " Open items were not fully read, so their overdue questions are missing: " + strings.Join(unread, "; ") + "."
+	}
 	return result, nil
 }
 
@@ -161,7 +168,7 @@ func openItems(ctx context.Context, realm, token, kind, last string) ([]json.Raw
 	where := fmt.Sprintf("WHERE Balance > '0' AND TxnDate <= '%s'", last)
 	before, err := periodCount(ctx, realm, token, kind, where)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Open %s count: %w", kind, err)
 	}
 	if before > 2500 {
 		return nil, fmt.Errorf("Open %s records exceed the 2500-record limit", kind)

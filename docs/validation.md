@@ -510,7 +510,7 @@ Author: Claude Opus 5.5. Migration 050.
 Author: Claude Opus 5.5. No migration.
 
 - `TestOpenItemExceptionsAskAboutOldInvoicesAndBills`: at 30 September, invoices 75 and 120 days past due and a bill 45 days past due are asked about (the policy pointer only past 90 days); an invoice 30 days past due, a bill 20 days past due, an item without a due date and a zero balance are not. Observed red with each threshold and the 90-day pointer changed.
-- `TestPeriodEntitiesRequiresCompletePagedRevisions` now checks that the capture pages open bills and invoices into `open_items`. Observed red when they are not stored.
+- `TestPeriodEntitiesRequiresCompletePagedRevisions` now checks that the capture pages open bills and invoices into `open_items`, and that a refused open-bill query still completes the transaction capture with a completeness note. Observed red when they are not stored and when the refusal failed the capture. `Balance` is documented as filterable for invoices; the bill filter is not verified against a live company.
 - `TestTransactionChecksReuseEvidenceAndRefreshIndexedRows` now checks that a capture differing only in open items stays unchanged, keeps its open items and records a past-due bill beside the reused transaction findings. Observed red with open items in the evidence digest, dropped from the unchanged payload, or left out of its findings.
 - `TestExceptionsScanTheWholeLatestCapture` now checks that the close shows the latest finished capture's recorded findings, including an unchanged one, as Daily books does. Observed red when the endpoint ignores stored findings or unchanged captures.
 
