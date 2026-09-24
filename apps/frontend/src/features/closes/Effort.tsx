@@ -14,7 +14,7 @@ const labels: Record<Activity, string> = {
 // Credits 30 seconds only when the tab is visible and someone interacted in the last two minutes.
 export function EffortTracker({ closeId, activity }: { closeId: string; activity: Activity }) {
   useEffect(() => {
-    let last = Date.now();
+    let last = 0;
     const seen = () => {
       last = Date.now();
     };
@@ -22,7 +22,9 @@ export function EffortTracker({ closeId, activity }: { closeId: string; activity
     events.forEach((name) => window.addEventListener(name, seen, { passive: true }));
     const timer = setInterval(() => {
       if (document.visibilityState === "visible" && Date.now() - last < 120_000)
-        void workspaceRequest(`/${closeId}/effort`, { activity, seconds: 30 }, true).catch(() => undefined);
+        void workspaceRequest(`/${closeId}/effort`, { activity, seconds: 30 }, true)
+          .then(() => window.dispatchEvent(new Event("effort-recorded")))
+          .catch(() => undefined);
     }, 30_000);
     return () => {
       clearInterval(timer);
@@ -52,6 +54,11 @@ export function EffortCard({ closeId }: { closeId: string }) {
   const [form, setForm] = useState({ activity: "prepare" as Activity, minutes: "", note: "" });
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    const recorded = () => setRefresh((n) => n + 1);
+    window.addEventListener("effort-recorded", recorded);
+    return () => window.removeEventListener("effort-recorded", recorded);
+  }, []);
   useEffect(() => {
     let live = true;
     workspaceRequest(`/${closeId}/effort`)

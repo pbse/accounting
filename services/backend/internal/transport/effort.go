@@ -71,7 +71,7 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 		var since, oldest sql.NullTime
 		err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT sum(seconds) FROM close_effort WHERE close_id::text=$1),0),(SELECT min(minute) FROM close_effort WHERE close_id::text=$1),COALESCE((SELECT sum(minutes) FROM close_effort_entries WHERE close_id::text=$1),0)`, id).Scan(&tracked, &since, &recorded)
 		if err == nil {
-			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(sum(GREATEST(0,EXTRACT(EPOCH FROM first_reply-q.delivered_at))) FILTER (WHERE first_reply IS NOT NULL),0)::bigint,count(*) FILTER (WHERE first_reply IS NULL),min(q.delivered_at) FILTER (WHERE first_reply IS NULL) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id LEFT JOIN LATERAL (SELECT min(p.recorded_at) AS first_reply FROM work_replies p WHERE p.request_id=q.id) reply ON true WHERE d.close_id::text=$1 AND q.delivered_at IS NOT NULL`, id).Scan(&answered, &open, &oldest)
+			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(sum(EXTRACT(EPOCH FROM first_reply-q.delivered_at)) FILTER (WHERE first_reply IS NOT NULL),0)::bigint,count(*) FILTER (WHERE first_reply IS NULL),min(q.delivered_at) FILTER (WHERE first_reply IS NULL) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id LEFT JOIN LATERAL (SELECT min(p.recorded_at) AS first_reply FROM work_replies p WHERE p.request_id=q.id AND p.recorded_at>=q.delivered_at) reply ON true WHERE d.close_id::text=$1 AND q.delivered_at IS NOT NULL`, id).Scan(&answered, &open, &oldest)
 		}
 		if err != nil {
 			problem(w, 503, "Effort is unavailable.")
@@ -139,7 +139,6 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer rows.Close()
 		items := []map[string]any{}
-		measured := []float64{}
 		more := false
 		for rows.Next() {
 			if len(items) == 200 {
@@ -153,11 +152,9 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Effort is unavailable.")
 				return
 			}
-			total := float64(tracked)/60 + float64(recorded)
 			item := map[string]any{"close_id": id, "entity": entity, "tracked_seconds": tracked, "recorded_minutes": recorded, "approved_drafts": approved, "measured": tracked > 0 || recorded > 0}
 			if tracked > 0 || recorded > 0 {
-				item["total_minutes"] = total
-				measured = append(measured, total)
+				item["total_minutes"] = float64(tracked)/60 + float64(recorded)
 			}
 			items = append(items, item)
 		}
@@ -165,14 +162,16 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Effort is unavailable.")
 			return
 		}
-		out := map[string]any{"period": period, "items": items, "measured": len(measured), "has_more": more}
-		if len(measured) > 0 {
-			slices.Sort(measured)
-			median := measured[len(measured)/2]
-			if len(measured)%2 == 0 {
-				median = (measured[len(measured)/2-1] + measured[len(measured)/2]) / 2
-			}
-			out["median_minutes"] = median
+		// The cohort figures cover every accessible measured close, not just the rows shown.
+		var measured int
+		var median sql.NullFloat64
+		if err := db.QueryRowContext(r.Context(), `SELECT count(*),percentile_cont(0.5) WITHIN GROUP (ORDER BY total) FROM (SELECT COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0)/60.0+COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id),0) AS total FROM client_closes c WHERE `+scope+` AND c.period=$4) totals WHERE total>0`, organization(r), firmAccess(r), subject(r), period).Scan(&measured, &median); err != nil {
+			problem(w, 503, "Effort is unavailable.")
+			return
+		}
+		out := map[string]any{"period": period, "items": items, "measured": measured, "has_more": more}
+		if median.Valid {
+			out["median_minutes"] = median.Float64
 		}
 		jsonReply(w, 200, out)
 	})

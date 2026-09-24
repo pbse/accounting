@@ -63,10 +63,8 @@ export default function Measure() {
                 Measured closes
               </span>
               <span className="kpi-body">
-                <span className="kpi-value">
-                  {report.measured} <small>of {report.items.length}</small>
-                </span>
-                <span className="kpi-caption">Closes without activity are not counted as zero</span>
+                <span className="kpi-value">{report.measured}</span>
+                <span className="kpi-caption">Closes with tracked or recorded time; others are not counted as zero</span>
               </span>
             </div>
           </div>

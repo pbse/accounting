@@ -92,6 +92,14 @@ func TestEffortCapsCreditAndSeparatesWaiting(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO work_replies(request_id,source_id,recorded_by,received_from,recorded_at) VALUES($1,$2,'fixture','client@example.test',now()-interval '1 hour')`, answered, reply); err != nil {
 		t.Fatal(err)
 	}
+	var early string
+	content = "Earlier note " + rand.Text()
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'early.txt',$2,$3,'fixture') RETURNING id::text`, measured, preparation.Digest([]byte(content)), content).Scan(&early); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO work_replies(request_id,source_id,recorded_by,received_from,recorded_at) VALUES($1,$2,'fixture','client@example.test',now()-interval '4 hours')`, pending, early); err != nil {
+		t.Fatal(err)
+	}
 	var summary struct {
 		Tracked  int64            `json:"tracked_seconds"`
 		By       map[string]int64 `json:"tracked_by_activity"`
