@@ -379,3 +379,19 @@ Author: Claude Opus 5.5. Migration 043 adds the `basis` procedure kind. Stacked 
 - Observed red with precedence reversed, the save check off, the approval check off, and the always-enabled rule off.
 - Browser: published a cash-basis client override for Northstar in Settings. The close header showed "Cash basis · client override", and the prepaid and accrual actions were hidden.
 
+## Owner-related reclassifications (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 044 adds the `owner` workpaper and procedure kinds. Stacked on accounting basis (#29).
+
+- `TestOwnerReclassesFollowTheConfirmedPurpose`:
+  - personal → draw (Dr Owner's draw / Cr Meals 100.01);
+  - 33% business use → 67.01 personal share;
+  - a business cost paid personally → Dr Software / Cr Owner's contribution 33.00, refused unless confirmed not already booked;
+  - 100% business → no entry;
+  - "Due from owner" with a repayment confirmation → receivable;
+  - an open purpose → a question with a blocker and no entry;
+  - refused: due-from without repayment, an undeclared C corp distribution, a partner draw without a partner, no stated purpose, a date outside the month, and a contribution for a personal cost.
+- `TestOwnerDraftsNeedTheClientsOwnEntityType`: a firm-level entity type, even inserted directly, doesn't count. A mismatched client type is refused and the recorded type saves. A question-only draft saves. Publishing refuses a client override without a type, a firm default with one, and an unknown type.
+- Observed red with the split inverted, the business-cost direction reversed, the C corp and repayment rules off, the firm default counted, the type check off, and the publish rule off.
+- Browser: recorded Harbor Dental as an S corporation under Owner treatments. The owner item prefilled "Shareholder distributions", prepared Dr Shareholder distributions / Cr Meals 86.40, and saved.
+

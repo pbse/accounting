@@ -76,6 +76,9 @@ function PrepareActions({ close }: { close: Close }) {
       <Link className="button" to={`/dashboard/loans/new?${query}`}>
         Loan schedule
       </Link>
+      <Link className="button" to={`/dashboard/owners/new?${query}`}>
+        Owner item
+      </Link>
       <Link className="button" to={`/dashboard/reconciliations/new?${query}`}>
         Statement reconciliation
       </Link>

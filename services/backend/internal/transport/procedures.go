@@ -2,6 +2,7 @@ package transport
 
 import (
 	"close.local/backend/internal/loans"
+	"close.local/backend/internal/owners"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -139,7 +140,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/procedures", func(w http.ResponseWriter, r *http.Request) {
 		if kind := r.URL.Query().Get("impact_kind"); kind != "" {
 			client := strings.TrimSpace(r.URL.Query().Get("client_entity"))
-			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis") || len(client) > 200 {
+			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis" && kind != "owner") || len(client) > 200 {
 				problem(w, 422, "Choose a supported procedure scope.")
 				return
 			}
@@ -231,7 +232,11 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		in.ExpenseAccount = strings.TrimSpace(in.ExpenseAccount)
 		in.PrepaidAccount = strings.TrimSpace(in.PrepaidAccount)
 		methodOK := slices.Contains(fixedMethods[in.Kind], in.Method) || (fixedMethods[in.Kind] == nil && in.Method == "")
-		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
+		if in.Kind == "owner" {
+			// Entity type is a fact about one client; the firm default carries only policy and account names.
+			methodOK = (in.ClientEntity != "") == (in.Method != "") && (in.Method == "" || slices.Contains(owners.EntityTypes, in.Method))
+		}
+		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis" && in.Kind != "owner") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
 			problem(w, 422, "Confirm a supported procedure, bounded instructions, a reason and optional single-line prepaid account names.")
 			return
 		}
@@ -271,7 +276,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Procedure changed. Refresh and review the latest version first.")
 			return
 		}
-		if in.Enabled && fixedMethods[in.Kind] == nil {
+		if in.Enabled && fixedMethods[in.Kind] == nil && in.Kind != "owner" {
 			var learned bool
 			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM procedure_versions WHERE organization_id=$1 AND kind=$2 AND method<>'' AND (client_entity='' OR lower(client_entity)=lower($3)))`, org, in.Kind, in.ClientEntity).Scan(&learned)
 			if err != nil || learned {

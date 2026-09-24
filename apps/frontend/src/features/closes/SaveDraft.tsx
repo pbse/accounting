@@ -7,6 +7,7 @@ import type { PrepaidInput } from "../../../../../packages/contracts/prepaid";
 import type { ReconciliationInput } from "../../../../../packages/contracts/reconciliation";
 import type { SettlementInput } from "../../../../../packages/contracts/settlement";
 import type { LoanInput } from "../../../../../packages/contracts/loan";
+import type { OwnerInput } from "../../../../../packages/contracts/owner";
 
 const roleLabels: Record<string, string> = { processor_report: "Stripe payout export", bank: "Bank CSV" };
 
@@ -15,8 +16,8 @@ export function SaveDraft({
   input,
   initialSources = {},
 }: {
-  kind: "prepaid" | "reconciliation" | "accrual" | "settlement" | "loan";
-  input: PrepaidInput | ReconciliationInput | AccrualInput | SettlementInput | LoanInput;
+  kind: "prepaid" | "reconciliation" | "accrual" | "settlement" | "loan" | "owner";
+  input: PrepaidInput | ReconciliationInput | AccrualInput | SettlementInput | LoanInput | OwnerInput;
   initialSources?: Record<string, { id: string; location: string }>;
 }) {
   const [params] = useSearchParams();
@@ -36,7 +37,7 @@ export function SaveDraft({
         .catch((e) => setStatus(e.message));
   }, [close]);
   const csvOnly = kind === "reconciliation" || kind === "settlement";
-  const roles = kind === "loan" ? ["statement", "support", "ledger"] : kind === "settlement" ? ["processor_report", "bank"] : kind === "reconciliation" ? ["statement", "ledger", ...((input as ReconciliationInput).account_type === "credit_card" ? ["procedure"] : []), ...((input as ReconciliationInput).prior_outstanding?.length ? ["support"] : []), ...((input as ReconciliationInput).current_outstanding?.some(item => item.treatment === "clearing") ? ["clearing"] : []), ...((input as ReconciliationInput).transfers?.length ? ["other_statement", "other_ledger"] : []), ...((input as ReconciliationInput).native_status && (input as ReconciliationInput).native_status !== "unverified" ? ["native_status"] : [])] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
+  const roles = kind === "owner" ? ["support", "ledger"] : kind === "loan" ? ["statement", "support", "ledger"] : kind === "settlement" ? ["processor_report", "bank"] : kind === "reconciliation" ? ["statement", "ledger", ...((input as ReconciliationInput).account_type === "credit_card" ? ["procedure"] : []), ...((input as ReconciliationInput).prior_outstanding?.length ? ["support"] : []), ...((input as ReconciliationInput).current_outstanding?.some(item => item.treatment === "clearing") ? ["clearing"] : []), ...((input as ReconciliationInput).transfers?.length ? ["other_statement", "other_ledger"] : []), ...((input as ReconciliationInput).native_status && (input as ReconciliationInput).native_status !== "unverified" ? ["native_status"] : [])] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
   if (!close)
     return (
       <p>

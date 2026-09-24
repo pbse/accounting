@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"close.local/backend/internal/loans"
+	"close.local/backend/internal/owners"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -415,6 +416,20 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			}
 			if err = csvFile(root+"-exceptions.csv", records); err != nil {
 				return nil, err
+			}
+		case "owner":
+			var paper owners.Workpaper
+			if err = json.Unmarshal(saved.Paper, &paper); err != nil {
+				return nil, err
+			}
+			summary.Source = paper.Input.TransactionReference + " / " + paper.Input.LedgerReference
+			summary.Method = paper.Method + " · " + paper.Input.EntityType
+			summary.Issues = append([]string{"Owner treatment follows the client's confirmed purpose and recorded entity type; tax treatment is not decided here. Nothing is posted."}, paper.Blockers...)
+			if paper.Question != "" {
+				summary.Issues = append(summary.Issues, "Client question: "+paper.Question)
+			}
+			if paper.Proposal != nil {
+				summary.Issues = append(summary.Issues, fmt.Sprintf("Proposed %s: Dr %s / Cr %s %s USD", paper.Proposal.Date, paper.Proposal.DebitAccount, paper.Proposal.CreditAccount, paper.Proposal.Amount))
 			}
 		case "loan":
 			var paper loans.Workpaper

@@ -258,7 +258,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			selectedIDs[s.ID] = true
-			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "clearing" && s.Role != "procedure" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") || (p.Kind == "settlement" && s.Role != "processor_report" && s.Role != "bank") || (p.Kind == "loan" && s.Role != "statement" && s.Role != "support" && s.Role != "ledger") {
+			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "clearing" && s.Role != "procedure" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") || (p.Kind == "settlement" && s.Role != "processor_report" && s.Role != "bank") || (p.Kind == "loan" && s.Role != "statement" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "owner" && s.Role != "support" && s.Role != "ledger") {
 				problem(w, 422, "Unsupported source role.")
 				return
 			}
