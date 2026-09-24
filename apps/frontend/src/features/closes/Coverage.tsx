@@ -116,7 +116,7 @@ export function Coverage({ closeId }: { closeId: string }) {
 }
 
 type LedgerPage = { account_id: string; query?: string; offset: number; total: number; columns: string[]; rows: { location: string; row: { ColData?: { value?: string }[]; Header?: { ColData?: { value?: string }[] } } }[] };
-function LedgerSelection({ closeId, snapshotId, accountId, stale, suggestions }: { closeId: string; snapshotId: string; accountId: string; stale: boolean; suggestions: string[] }) {
+export function LedgerSelection({ closeId, snapshotId, accountId, stale, suggestions }: { closeId: string; snapshotId: string; accountId: string; stale: boolean; suggestions: string[] }) {
   const [page, setPage] = useState<LedgerPage>();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);

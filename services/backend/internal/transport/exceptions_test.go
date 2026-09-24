@@ -79,6 +79,16 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 	if got := scan(); got.Capture != nil || got.Balances.Snapshot == nil || got.Balances.Snapshot.ID != latest || len(got.Balances.Items) != 1 || got.Balances.Items[0].Account != "Business card" {
 		t.Fatalf("balances come from the latest period snapshot even without a capture: %+v", got)
 	}
+	var production string
+	if err = db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,environment) SELECT id,organization_id,entity,'fixture','active',$2,now(),'999','production' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&production); err != nil {
+		t.Fatal(err)
+	}
+	if got := scan(); got.Balances.Snapshot != nil {
+		t.Fatalf("a sandbox snapshot is not the client's current books once production is connected: %+v", got.Balances)
+	}
+	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, production); err != nil {
+		t.Fatal(err)
+	}
 	var xeroConnection, xeroSnapshot string
 	if err = db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) SELECT id,organization_id,entity,'fixture','active',$2,now(),'t-1' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&xeroConnection); err != nil {
 		t.Fatal(err)
@@ -116,6 +126,38 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 	got := scan()
 	if got.Capture == nil || got.Capture.ID != syncID || got.Scanned != 3 || len(got.Items) != 1 || got.Items[0].Type != "possible_duplicate" {
 		t.Fatalf("every captured row must be scanned and the nearby pair raised: %+v", got)
+	}
+	latestCaptures := func() (ids []string) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/"+closeID+"/quickbooks/entities", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		var captures []struct {
+			ID     string `json:"id"`
+			Latest bool   `json:"latest"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &captures) != nil {
+			t.Fatalf("captures: %d %s", w.Code, w.Body.String())
+		}
+		for _, c := range captures {
+			if c.Latest {
+				ids = append(ids, c.ID)
+			}
+		}
+		return ids
+	}
+	if ids := latestCaptures(); len(ids) != 1 || ids[0] != syncID {
+		t.Fatalf("the sandbox capture is the latest while sandbox is the client's books: %v", ids)
+	}
+	if err = db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,environment) SELECT id,organization_id,entity,'fixture','active',$2,now(),'999','production' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&production); err != nil {
+		t.Fatal(err)
+	}
+	if ids := latestCaptures(); len(ids) != 0 || scan().Capture != nil {
+		t.Fatalf("a sandbox capture is history, not the latest, once production is connected: %v", ids)
+	}
+	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, production); err != nil {
+		t.Fatal(err)
 	}
 	// A later unchanged capture reuses those rows and records its own findings, including open items.
 	var unchanged string

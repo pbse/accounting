@@ -13,6 +13,10 @@ This release connects a sandbox company to one organization/client and captures 
 
 Local development without credentials still works for all existing preparation flows. The integration test mocks Intuit and uses synthetic PostgreSQL records. Interactive OAuth testing from local development requires an explicitly configured trusted HTTPS API/SPA endpoint, AuthKit and an Intuit sandbox app; do not weaken callback TLS checks for convenience. A tunnel is not provisioned automatically.
 
+## Reading a client's production books
+
+When a client's production QuickBooks company is connected and confirmed (under **Settings → Production QuickBooks authorization**, with the company name exactly matching the client), it becomes the client's books: account and month-end snapshots, transaction captures, Daily Books, exceptions and balance checks read it instead of any sandbox company. A sandbox capture queued before production was connected does not run, and sandbox captures stay as history but are no longer shown as current. The Evidence tab's **QuickBooks ledger evidence** panel then acts on the production company. Production reads are fixed GET requests; posting keeps its separate grant and approvals. Intuit change webhooks are registered per app and remain sandbox-only; production companies are checked by the daily scheduled capture.
+
 ## Connect and confirm
 
 Open a client close → **QuickBooks sandbox ledger evidence**. Confirm the intended client and choose **Connect QuickBooks sandbox**. Intuit's accounting OAuth scope is broader than read-only; this application exposes only fixed GET operations through the new connection. Review Intuit's consent screen accordingly.

@@ -18,6 +18,7 @@ import type { Plan } from "./Planning";
 import { Posting, ProductionPosting } from "./Posting";
 import { ReviewDecision } from "./ReviewDecision";
 import { VendorCredit } from "./VendorCredit";
+import { scheduleTerms } from "../prepaids/MethodFields";
 import { money, workspaceRequest } from "./workspace";
 
 export type Profile = { currency: string; fiscal_year_start: number; state: "detected" | "none" | "unknown" | "conflict" };
@@ -33,6 +34,7 @@ export type Paper = { id: string; created_at: string; review_state: string } & (
 );
 
 export const paperLabels = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", loan: "Loan schedule", owner: "Owner reclassification" };
+export const paperLabel = (p: Paper) => (p.kind === "prepaid" && p.paper.input.schedule ? `${scheduleTerms[p.paper.input.schedule].name} schedule` : paperLabels[p.kind]);
 export const paperPaths = { prepaid: "prepaids", accrual: "accruals", reconciliation: "reconciliations", settlement: "settlements", loan: "loans", owner: "owners" };
 const reviewLabels: Record<string, [string, string]> = {
   pending: ["Awaiting review", "pill muted"],
@@ -201,6 +203,7 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
   if (saved.kind === "owner") return <><OwnerResult result={saved.paper} />{saved.paper.proposal && posting}</>;
   if (saved.kind === "reconciliation") return <ReconciliationResult result={saved.paper} />;
   const paper = saved.paper;
+  const terms = scheduleTerms[paper.input.schedule ?? ""];
   return (
     <>
       <p>Source: {paper.input.source_reference} · user-supplied, unverified.</p>
@@ -208,7 +211,7 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
         <section>
           <h3>Carried schedule · fresh review required</h3>
           <p>
-            From <Link to={`/dashboard/closes/${paper.carry_forward.close_id}`}>{paper.carry_forward.period} · draft #{paper.carry_forward.paper_id}</Link>. Opening scheduled prepaid balance: {money(paper.carry_forward.opening_balance, paper.input.currency)}.
+            From <Link to={`/dashboard/closes/${paper.carry_forward.close_id}`}>{paper.carry_forward.period} · draft #{paper.carry_forward.paper_id}</Link>. Opening scheduled balance: {money(paper.carry_forward.opening_balance, paper.input.currency)}.
           </p>
           <p>
             Schedule only: this is not a verified ledger opening balance. No journal is proposed. Review current contracts, credits, account mappings and prior postings before accounting action. To correct the schedule, revise and review its predecessor, then carry that new version forward.
@@ -216,11 +219,11 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
         </section>
       ) : (
         <p>
-          Method: {paper.input.method}, final-month rounding. {paper.input.booked_balance ? `Booked prepaid ${money(paper.input.booked_balance, paper.input.currency)} · ${paper.input.booking_reference}.` : "Fully expensed with no prior adjustments."} {paper.input.credit_amount ? `Credit ${money(paper.input.credit_amount, paper.input.currency)} effective ${paper.input.credit_period} · ${paper.input.credit_reference}.` : ""} {paper.input.cancellation_method ? `Cancellation ${paper.input.cancellation_method} effective ${paper.input.cancellation_period} · ${paper.input.cancellation_reference}.` : ""}
+          Method: {paper.input.method}, final-month rounding. {paper.input.booked_balance ? `${terms.booked} ${money(paper.input.booked_balance, paper.input.currency)} · ${paper.input.booking_reference}.` : terms.blank}{paper.input.salvage_value ? ` Salvage value ${money(paper.input.salvage_value, paper.input.currency)}.` : ""} {paper.input.credit_amount ? `Credit ${money(paper.input.credit_amount, paper.input.currency)} effective ${paper.input.credit_period} · ${paper.input.credit_reference}.` : ""} {paper.input.cancellation_method ? `Cancellation ${paper.input.cancellation_method} effective ${paper.input.cancellation_period} · ${paper.input.cancellation_reference}.` : ""}
         </p>
       )}
       <p>
-        Period expense: {money(paper.period_expense, paper.input.currency)}; recognized: {money(paper.recognized_expense, paper.input.currency)}; remaining: {money(paper.prepaid_balance, paper.input.currency)}.
+        {terms.recognized} this period: {money(paper.period_expense, paper.input.currency)}; to date: {money(paper.recognized_expense, paper.input.currency)}; {terms.remaining.toLowerCase()}: {money(paper.prepaid_balance, paper.input.currency)}.
       </p>
       <p>
         {paper.proposal
@@ -228,11 +231,11 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
           : "No reclassification proposed."}
       </p>
       <table>
-        <caption>Saved prepaid schedule</caption>
+        <caption>Saved {terms.name.toLowerCase()} schedule</caption>
         <thead>
           <tr>
             <th>Month</th>
-            <th>Expense {paper.input.currency}</th>
+            <th>{terms.recognized} {paper.input.currency}</th>
             <th>Remaining {paper.input.currency}</th>
             <th>Credit {paper.input.currency}</th>
           </tr>
@@ -248,13 +251,13 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
           ))}
         </tbody>
       </table>
-      {!paper.carry_forward && paper.input.method === "equal_full_months_v1" && !paper.input.credit_amount && !paper.input.booked_balance && !paper.input.cancellation_method && (
+      {!paper.carry_forward && !paper.input.schedule && paper.input.method === "equal_full_months_v1" && !paper.input.credit_amount && !paper.input.booked_balance && !paper.input.cancellation_method && (
         <>
           <Posting closeId={close.id} paperId={saved.id} />
           <ProductionPosting closeId={close.id} paperId={saved.id} />
         </>
       )}
-      <VendorCredit closeId={close.id} paperId={saved.id} paper={paper} sources={paper.sources ?? []} approved={saved.review_state === "approved"} />
+      {!paper.input.schedule && <VendorCredit closeId={close.id} paperId={saved.id} paper={paper} sources={paper.sources ?? []} approved={saved.review_state === "approved"} />}
     </>
   );
 }
@@ -299,7 +302,7 @@ export default function WorkpaperView() {
           </span>
           <span>
             <h1>
-              {paperLabels[saved.kind]} · draft #{saved.id}
+              {paperLabel(saved)} · draft #{saved.id}
             </h1>
             <p>
               <ReviewPill state={saved.review_state} /> Prepared {new Date(saved.created_at).toLocaleString()}
@@ -319,7 +322,7 @@ export default function WorkpaperView() {
             </Link>
           )}
           {!(saved.kind === "prepaid" && saved.paper.carry_forward) && (
-            <Link className="button" to={`/dashboard/${paperPaths[saved.kind]}/new?close=${close.id}&revise=${saved.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}`}>
+            <Link className="button" to={`/dashboard/${paperPaths[saved.kind]}/new?close=${close.id}&revise=${saved.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}${saved.kind === "prepaid" && saved.paper.input.schedule ? `&schedule=${saved.paper.input.schedule}` : ""}`}>
               Revise and recalculate
             </Link>
           )}

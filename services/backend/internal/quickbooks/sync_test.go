@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -220,5 +221,67 @@ func TestChangeHintsRefreshAfterTheCaptureThatMissedThem(t *testing.T) {
 	must(err)
 	if got := queued(); len(got) != 1 || got[0] != "quickbooks-change-hint" {
 		t.Fatalf("a change during a capture queues a refresh after it: %v", got)
+	}
+}
+
+func TestTheProductionConnectionIsReadFirst(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
+	t.Setenv("QBO_PRODUCTION_CLIENT_ID", "synthetic")
+	t.Setenv("QBO_PRODUCTION_CLIENT_SECRET", "synthetic")
+	t.Setenv("QBO_PRODUCTION_REDIRECT_URI", "https://api.example.test/v1/quickbooks/callback")
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	org := "org_read" + rand.Text()
+	period := time.Now().UTC().Format("2006-01")
+	var closeID string
+	if _, err = db.ExecContext(ctx, `INSERT INTO organizations(id,name) VALUES($1,'Synthetic reading connection')`, org); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRowContext(ctx, `INSERT INTO client_closes(organization_id,entity,period) VALUES($1,$2,$3) RETURNING id::text`, org, "Reading "+org, period).Scan(&closeID); err != nil {
+		t.Fatal(err)
+	}
+	connection := map[string]string{}
+	for _, environment := range []string{"sandbox", "production"} {
+		var id string
+		if err = db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,credential,environment) VALUES($1,$2,$3,'fixture','active',$4,now()+interval '1 day','123',decode('0102','hex'),$5) RETURNING id::text`, closeID, org, "Reading "+org, rand.Text(), environment).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		connection[environment] = id
+	}
+	defer func() {
+		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
+		db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
+	}()
+	var scheduled []string
+	for i := 0; i < 10 && len(scheduled) == 0; i++ {
+		if err = scheduleSync(ctx, db); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := db.QueryContext(ctx, `SELECT connection_id::text FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var id string
+			rows.Scan(&id)
+			scheduled = append(scheduled, id)
+		}
+		rows.Close()
+	}
+	if len(scheduled) != 1 || scheduled[0] != connection["production"] {
+		t.Fatalf("only the production connection is scheduled: %v of %v", scheduled, connection)
+	}
+	if _, _, _, err = syncCredentials(ctx, db, syncClaim{closeID: closeID, connectionID: connection["sandbox"], period: period}); err == nil || !strings.Contains(err.Error(), "production") {
+		t.Fatalf("a sandbox capture queued before production was connected must not run: %v", err)
 	}
 }

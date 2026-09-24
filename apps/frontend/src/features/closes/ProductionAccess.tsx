@@ -69,7 +69,7 @@ export function ProductionAccess({ closeId, entity, currency }: { closeId: strin
   const callbackHere = callback.get("qbo_env") === "production" && callback.has("qbo_code");
   return <details open={callbackHere}>
     <summary>Production QuickBooks authorization and client grant</summary>
-    <p>Production posting is always a separate human decision. The connected QuickBooks company name must exactly match the close client <strong>{entity}</strong>. The grant limits this client to listed account IDs, the draft kinds it covers, a maximum journal total and an expiry.</p>
+    <p>Once confirmed, this company is the client's books: the agent reads its accounts, reports and transactions for evidence and exceptions. Production posting is always a separate human decision. The connected QuickBooks company name must exactly match the close client <strong>{entity}</strong>. The grant limits this client to listed account IDs, the draft kinds it covers, a maximum journal total and an expiry.</p>
     <button disabled={busy} onClick={() => void load()}>Refresh production status</button>
     {error && <p role="alert">{error}</p>}
     {!status ? <p>Loading…</p> : <>

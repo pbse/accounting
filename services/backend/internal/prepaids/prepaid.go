@@ -15,6 +15,10 @@ const DailyMethod = "actual_days_v1"
 const FullRefundCancellation = "full_refund_month_boundary_v1"
 const NoRefundCancellation = "no_refund_month_boundary_v1"
 
+// Deferred revenue and depreciation reuse the straight-line schedule; only their accounts and entry direction differ.
+const DeferredRevenue = "deferred_revenue"
+const Depreciation = "depreciation"
+
 type Credit struct {
 	Amount          string `json:"amount"`
 	EffectivePeriod string `json:"effective_period"`
@@ -23,6 +27,8 @@ type Credit struct {
 }
 
 type Input struct {
+	Schedule                string   `json:"schedule,omitempty"`
+	SalvageValue            string   `json:"salvage_value,omitempty"`
 	ExamplesConfirmed       bool     `json:"examples_confirmed,omitempty"`
 	CreditAmount            string   `json:"credit_amount,omitempty"`
 	CreditPeriod            string   `json:"credit_period,omitempty"`
@@ -163,6 +169,33 @@ func Prepare(input Input) (Workpaper, error) {
 		input.BookedBalance = Money(booked)
 	} else if input.BookingReference != "" {
 		return empty, invalid("booked_balance", "Supply the referenced booked prepaid balance, including an explicit zero.")
+	}
+	if input.Schedule != "" && input.Schedule != DeferredRevenue && input.Schedule != Depreciation {
+		return empty, invalid("schedule", "Choose a prepaid, deferred revenue or depreciation schedule.")
+	}
+	if input.Schedule != Depreciation && input.SalvageValue != "" {
+		return empty, invalid("salvage_value", "Salvage value applies to depreciation only.")
+	}
+	if input.Schedule == Depreciation {
+		if input.CreditAmount != "" || len(input.Credits) > 0 || input.CancellationMethod != "" {
+			return empty, invalid("credits", "Disposals, impairments and credits on a fixed asset need a separate procedure.")
+		}
+		if input.BookedBalance == "" {
+			return empty, invalid("booked_balance", "Enter the booked accumulated depreciation and its ledger reference, including an explicit 0.00.")
+		}
+		salvage := int64(0)
+		if input.SalvageValue != "" {
+			if salvage, err = Amount(input.SalvageValue); err != nil || salvage >= total {
+				return empty, invalid("salvage_value", "Salvage value must be less than the asset's cost.")
+			}
+			input.SalvageValue = Money(salvage)
+		}
+		// The engine compares scheduled and booked amounts left to depreciate.
+		total -= salvage
+		if booked > total {
+			return empty, invalid("booked_balance", "Booked accumulated depreciation exceeds cost less salvage. Resolve the ledger difference separately.")
+		}
+		booked = total - booked
 	}
 	if input.CreditAmount != "" {
 		credit, err = Amount(input.CreditAmount)
@@ -314,6 +347,10 @@ func Prepare(input Input) (Workpaper, error) {
 			}
 		}
 	}
+	// Deferred revenue is a liability: recognizing it debits the deferred account and credits revenue.
+	if input.Schedule == DeferredRevenue && result.Proposal != nil {
+		result.Proposal.DebitAccount, result.Proposal.CreditAccount = result.Proposal.CreditAccount, result.Proposal.DebitAccount
+	}
 	return result, nil
 }
 
@@ -322,8 +359,8 @@ func Prepare(input Input) (Workpaper, error) {
 // schedule; its prior booked-balance confirmation is deliberately not reused.
 func ScheduleOnly(input Input) (Workpaper, error) {
 	input.BookedBalance, input.BookingReference = "", ""
-	if input.CreditAmount != "" || len(input.Credits) > 0 {
-		input.BookedBalance, input.BookingReference = "0.00", "Schedule-only historical credit"
+	if input.CreditAmount != "" || len(input.Credits) > 0 || input.Schedule == Depreciation {
+		input.BookedBalance, input.BookingReference = "0.00", "Schedule only"
 	}
 	input.MethodConfirmed, input.BookingConfirmed, input.ExamplesConfirmed = true, true, true
 	paper, err := Prepare(input)

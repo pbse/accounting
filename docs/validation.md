@@ -532,6 +532,33 @@ Author: Claude Opus 5.5. Migration 051. Review: GPT-6 Sol (medium) plan and code
 - `TestProductionPostingSingleDurableAttempt` now posts a CAD prepaid: refused while the company's currency is unknown, then posted with a CAD journal once it is detected. Observed red with a USD journal, with the client currency not passed and without the posting check.
 - `TestTrialBalanceAccountRequiresUniquePrepaidRow` refuses a Trial Balance in another currency (observed red without the check); `TestCurrencyNeedsThreeLettersAndTwoDecimals` accepts USD, CAD and GBP and refuses JPY, KWD, XOF, IQD and lowercase codes (observed red with the refusal list shortened).
 
+## Deferred revenue and depreciation (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan and code review; adopted the reversed deferred revenue entry, required accumulated depreciation, schedule-only carry, schedule-aware Trial Balance accounts and labels, and draft-only posting. Not adopted: rewording the procedure account hints, because only intake-prepared prepaids read them and the rule-based intake parses those labels.
+
+- `TestDeferredRevenueRecognizesTheEarnedMonth`: 12,000 billed for 12 months with 12,000 booked proposes debit deferred revenue, credit revenue 1,000; with no booked balance, 11,000 is deferred. Observed red without the reversed entry.
+- `TestDepreciationTruesUpAccumulatedDepreciation`: a 3,600 asset over 36 months depreciates 100.00 (90.00 with 360 salvage), proposes debit depreciation expense, credit accumulated depreciation, needs no entry when 100.00 is already booked, refuses a missing balance, salvage at cost and credits, and carries without a ledger balance. Observed red without the accumulated conversion, the salvage exclusion, the required balance and the carry exception.
+- `TestDeferredRevenueAndDepreciationStayDraftOnly`: a deferred revenue draft is refused before any QuickBooks call. Observed red without the refusal.
+- `TestRecurringComparisonRefreshesOnlyCurrentPeriod` (PostgreSQL) now runs for a prepaid and a depreciation schedule: the refresh finds the AccumulatedDepreciation account, shows 80.00 expected accumulated depreciation after January, proposes 10.00 against 70.00 booked and nothing against 80.00. Observed red with the prepaid subtype only and without the accumulated target.
+- `TestYearEndHandoffRollsForwardApprovedWork` checks the new `schedule` column in `prepaids.csv`. Observed red when blank. The columns `period_expense` and `closing_balance` are renamed `period_amount` and `scheduled_remaining`, since they hold revenue or depreciation for the new schedules (code review finding).
+
+## Holding and clearing balances (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted clearing only on balance-sheet accounts, reconciliation wording that allows deposits in transit, the opposite-side clue, updated labels, the check placed after the existing account filters, and gathering the account's month ledger rows as evidence. Receipt-level missing documents stay out of this slice: the product has never read QuickBooks attachments live, and missing statements are handled by coverage requests.
+
+- `TestHoldingAccountsWithABalanceNeedReconciliation`: from a QuickBooks Trial Balance, Undeposited Funds (1,200.00 debit), Ask My Accountant (35.00) and a Stripe clearing credit (15.00, also flagged as opposite its normal side) are one reconciliation item each; a zero payroll clearing account, a normal checking account and a "Clearing Revenue" income account are not. Observed red without the check, with "clearing" matched on every account, without the opposite-side clue and without the undeposited-funds next step.
+- `TestWrongSideReadsYTDColumnsWithXeroRules` now includes a Xero Suspense liability holding 80.00. Observed red without the Xero check.
+
+## Reading production QuickBooks books (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted the environment-aware company read in snapshots, the reading connection at admission, capture start and current-result selection, the server-side exact company-name check for production confirmation, the Evidence-tab production path (connect and confirm under Settings) and a lateral scheduler choice that keeps the close lock. Code review: adopted the reading-connection recheck when a snapshot is saved and the latest-capture flag scoped to the reading connection.
+
+- `TestPeriodEntitiesRequiresCompletePagedRevisions` now checks that a production capture reads only quickbooks.api.intuit.com.
+- `TestTheProductionConnectionIsReadFirst` (PostgreSQL): with a sandbox and a production connection for one client and only production OAuth configured, the scheduler queues the production connection only, and a sandbox capture already queued is refused when it starts.
+- `TestQuickBooksScopedOAuthRefreshAndSnapshots` now checks that a production company whose name differs from the client cannot be confirmed through the API, and that once production is connected the sandbox company can no longer be snapshotted.
+- `TestExceptionsScanTheWholeLatestCapture` now checks that a sandbox month-end snapshot and transaction capture are not shown as the client's current or latest books once a production connection exists. Observed red without the snapshot and latest-capture scoping.
+- `TestQuickBooksScopedOAuthRefreshAndSnapshots` also connects production while a sandbox snapshot is being read: the snapshot is not saved (code review finding). Observed red without the recheck at save. A client-level advisory lock taken by both the connect insert and the snapshot save orders a production connection started on another close of the same client against the save; the save takes it before any row lock, as the connect insert does, so the two cannot deadlock (final review round); this concurrency guard has no automated test. After every connection is disconnected, the most recent capture and snapshot stay visible and flagged stale, as before.
+
 ## Stripe fee entry posting (2026-09-24)
 
 Author: Claude Opus 5.5. Migration 052.
