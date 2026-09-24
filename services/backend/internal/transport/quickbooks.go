@@ -43,7 +43,11 @@ func quickbooksReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 503, "Configure the exact HTTPS application origin.")
 		return
 	}
-	origin.Path = "/dashboard/closes/" + closeID
+	// Sandbox evidence lives on the Evidence tab; production access on Settings.
+	origin.Path, origin.RawQuery = "/dashboard/closes/"+closeID, "tab=evidence"
+	if environment == "production" {
+		origin.RawQuery = "tab=settings"
+	}
 	origin.Fragment = url.Values{"qbo_code": {q.Get("code")}, "qbo_state": {q.Get("state")}, "qbo_realm": {q.Get("realmId")}, "qbo_env": {environment}}.Encode()
 	http.Redirect(w, r, origin.String(), http.StatusSeeOther)
 }
