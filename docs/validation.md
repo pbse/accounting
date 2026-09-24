@@ -549,12 +549,6 @@ Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; a
 - `TestHoldingAccountsWithABalanceNeedReconciliation`: from a QuickBooks Trial Balance, Undeposited Funds (1,200.00 debit), Ask My Accountant (35.00) and a Stripe clearing credit (15.00, also flagged as opposite its normal side) are one reconciliation item each; a zero payroll clearing account, a normal checking account and a "Clearing Revenue" income account are not. Observed red without the check, with "clearing" matched on every account, without the opposite-side clue and without the undeposited-funds next step.
 - `TestWrongSideReadsYTDColumnsWithXeroRules` now includes a Xero Suspense liability holding 80.00. Observed red without the Xero check.
 
-## Stripe fee entry posting (2026-09-24)
-
-Author: Claude Opus 5.5. Migration 052.
-
-- `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.
-
 ## Reading production QuickBooks books (2026-09-24)
 
 Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted the environment-aware company read in snapshots, the reading connection at admission, capture start and current-result selection, the server-side exact company-name check for production confirmation, the Evidence-tab production path (connect and confirm under Settings) and a lateral scheduler choice that keeps the close lock. Code review: adopted the reading-connection recheck when a snapshot is saved and the latest-capture flag scoped to the reading connection.
@@ -567,6 +561,9 @@ Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; a
 
 ## Stripe fee entry posting (2026-09-24)
 
+Author: Claude Opus 5.5. Migration 052.
+
+- `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.
 
 ## Production Bill corrections and supplier credits (2026-09-24)
 
@@ -577,4 +574,3 @@ Author: Claude Opus 5.5. Migration 053. Review: GPT-6 Sol (medium) plan review; 
 - Not covered by an end-to-end test: the production supplier-credit route (its account, currency and grant rules are covered at the QuickBooks layer), its sign-off recheck under the close lock (code review finding; the sandbox route lacked it too), and the grant recheck under the attempt lock (a race).
 
 - `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.
-
