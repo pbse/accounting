@@ -160,7 +160,12 @@ func mcpHandler(store http.Handler, token string) http.Handler {
 		server.AddTool(&mcp.Tool{Name: t.name, Title: t.title, Description: t.description, InputSchema: schema, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: t.readOnly, IdempotentHint: t.readOnly || t.idempotent, DestructiveHint: &destructive}}, t.handle(store))
 	}
 	protocol := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 8 << 20})
-	origins := strings.FieldsFunc(os.Getenv("MCP_ALLOWED_ORIGINS")+","+os.Getenv("FRONTEND_ORIGIN"), func(r rune) bool { return r == ',' })
+	origins := []string{}
+	for _, origin := range strings.Split(os.Getenv("MCP_ALLOWED_ORIGINS")+","+os.Getenv("FRONTEND_ORIGIN"), ",") {
+		if origin = strings.TrimSpace(origin); origin != "" {
+			origins = append(origins, origin)
+		}
+	}
 	verifier := workspaceVerifier()
 	// ponytail: per-process window; move to Postgres when the API runs as several instances.
 	var mu sync.Mutex

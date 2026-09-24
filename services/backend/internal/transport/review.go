@@ -232,9 +232,9 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 			requester = a.Subject
 		}
 		var id string
-		err := db.QueryRowContext(r.Context(), `INSERT INTO approval_requests(close_id,workpaper_id,requested_by,note) SELECT close_id,id,$3,$4 FROM workpaper_review_state WHERE close_id::text=$1 AND id::text=$2 AND review_state='pending' RETURNING id::text`, r.PathValue("id"), r.PathValue("paper"), requester, in.Note).Scan(&id)
+		err := db.QueryRowContext(r.Context(), `INSERT INTO approval_requests(close_id,workpaper_id,requested_by,note) SELECT close_id,id,$3,$4 FROM workpaper_review_state WHERE close_id::text=$1 AND id::text=$2 AND review_state='pending' AND jsonb_array_length(COALESCE(paper->'sources','[]'))>0 AND jsonb_array_length(COALESCE(paper->'blockers','[]'))=0 RETURNING id::text`, r.PathValue("id"), r.PathValue("paper"), requester, in.Note).Scan(&id)
 		if err == sql.ErrNoRows {
-			problem(w, 409, "Only a current draft awaiting review can be sent for approval.")
+			problem(w, 409, "Only a current draft with evidence and no blockers can be sent for approval. Resolve its blockers first.")
 			return
 		}
 		if err != nil {

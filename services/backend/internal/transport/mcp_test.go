@@ -66,6 +66,11 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	if err = db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper,created_by) VALUES($1,'prepaid','mcp',$2,'fixture') RETURNING id::text`, mine, sources).Scan(&paperID); err != nil {
 		t.Fatal(err)
 	}
+	var blockedID string
+	if err = db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper,created_by) VALUES($1,'prepaid','mcp-blocked',$2,'fixture') RETURNING id::text`, mine, strings.Replace(sources, `"blockers":[]`, `"blockers":["Service end date missing"]`, 1)).Scan(&blockedID); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MCP_ALLOWED_ORIGINS", "https://agent.example, https://other.example")
 	token := strings.Repeat("m", 32)
 	server := httptest.NewServer(apiWithStore(db, token))
 	defer server.Close()
@@ -118,6 +123,9 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	if err = db.QueryRow(`SELECT count(*) FROM preparation_jobs WHERE close_id=$1`, mine).Scan(&jobs); err != nil || jobs != 1 {
 		t.Fatalf("an added document must start intake: %d %v", jobs, err)
 	}
+	if blocked := call("request_approval", map[string]any{"close_id": mine, "workpaper_id": blockedID, "note": "Check the service dates"}); !blocked.IsError || !strings.Contains(text(blocked), "CONFLICT") {
+		t.Fatalf("a draft the queue hides must not take an approval request: %s", text(blocked))
+	}
 	if requested := call("request_approval", map[string]any{"close_id": mine, "workpaper_id": paperID, "note": "Check the service dates"}); requested.IsError {
 		t.Fatalf("request_approval: %s", text(requested))
 	}
@@ -160,6 +168,9 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	}
 	if anonymous := post(`{"jsonrpc":"2.0","id":3,"method":"tools/list"}`, nil); anonymous.StatusCode != 401 || anonymous.Header.Get("WWW-Authenticate") == "" {
 		t.Fatalf("MCP requires the same sign-in as the API: %d", anonymous.StatusCode)
+	}
+	if trusted := post(`{"jsonrpc":"2.0","id":5,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"browser","version":"1"}}}`, map[string]string{"Authorization": "Bearer " + token, "Origin": "https://other.example"}); trusted.StatusCode != 200 || trusted.Header.Get("Access-Control-Allow-Origin") != "https://other.example" {
+		t.Fatalf("a configured browser origin must be served: %d", trusted.StatusCode)
 	}
 	if foreign := post(`{"jsonrpc":"2.0","id":4,"method":"tools/list"}`, map[string]string{"Authorization": "Bearer " + token, "Origin": "https://attacker.example"}); foreign.StatusCode != 403 {
 		t.Fatalf("an untrusted browser origin must be refused: %d", foreign.StatusCode)
