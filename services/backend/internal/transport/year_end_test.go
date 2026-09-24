@@ -104,7 +104,7 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 
 	var connection, grant string
 	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,environment) VALUES($1,$2,$3,'fixture','active',$4,now(),'123','production') RETURNING id::text`, feb, local, entity, rand.Text()).Scan(&connection))
-	must(db.QueryRow(`INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,prepaid_account_id,expense_account_id,max_amount,expires_at,reason,granted_by) VALUES($1,$2,$3,'123','20','21',100,now()+interval '1 day','Synthetic','fixture') RETURNING id::text`, local, entity, connection).Scan(&grant))
+	must(db.QueryRow(`INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,account_ids,kinds,max_amount,expires_at,reason,granted_by) VALUES($1,$2,$3,'123',ARRAY['20','21'],ARRAY['prepaid'],100,now()+interval '1 day','Synthetic','fixture') RETURNING id::text`, local, entity, connection).Scan(&grant))
 	_, err = db.Exec(`INSERT INTO production_postings(close_id,workpaper_id,source_key,grant_id,connection_id,realm,digest,journal,ledger_before,state,external_id,verified_at) VALUES($1,$2,'software',$3,$4,'123','d','{"Line":[{"Amount":30,"JournalEntryLineDetail":{"PostingType":"Debit","AccountRef":{"value":"21"}}},{"Amount":30,"JournalEntryLineDetail":{"PostingType":"Credit","AccountRef":{"value":"20"}}}]}','{}','verified','901',now())`, feb, olderSoftware, grant, connection)
 	must(err)
 

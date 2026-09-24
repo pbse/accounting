@@ -424,3 +424,18 @@ Author: Claude Opus 5.5. Migration 045 adds `agent_access`, `current_agent_acces
 Author: Claude Opus 5.5. No migration.
 
 - `TestYearEndHandoffRollsForwardApprovedWork` (PostgreSQL): January to May with April missing; a prepaid with a February credit rolls forward without a break; a prepaid whose schedule disagrees with the prior approved balance, a loan whose opening differs from the prior closing, a prepaid with a prior-month balance but no prior paper, and a pending latest version (its older approved version is not used), a prepaid whose schedule omits a month that has an approved paper, and a loan with opening principal but no prior-month paper each become open questions (a loan opening at zero is new and is not asked about); a bank and a card reconciliation with one name stay separate; a verified posting on the older version stays in `postings.csv`; the prior year, another client and another firm are excluded; checksums verify. Observed red with the first version kept instead of the latest, with a closing-minus-expense rule in place of the saved schedule, with each continuity or missing-paper check removed, with loans opening at zero asked about, with the client, firm or year boundary removed, with reconciliations keyed by account alone and with unapproved versions included.
+
+## Posting beyond prepaids (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 046 moves production grants to account and kind lists.
+
+- `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (mocked production QuickBooks):
+  - loan posting is refused until `PRODUCTION_POSTING_KINDS` enables it, and a grant covers only the kinds it names;
+  - the grant limit applies to the journal's 2,019.67 total debits;
+  - the loan's two entries post as one four-line journal. Projected and verified balances are 119.67 for the expense and 19.67, 98,000.00 and 20,000.00 for the liabilities;
+  - an owner account name matching two granted accounts is refused, with no write.
+- `TestProductionPostingSingleDurableAttempt` and the rehearsal tests pass on the new grant and observation shapes, including closing-date and readback cases.
+- The migration's intent rewrite was checked on a synthetic legacy row: `{prepaid, expense}` became `accounts` with Asset and Expense classifications, in both `ledger_before` and `ledger_after`.
+- Observed red with liability signs treated as debit-normal, ambiguous names allowed, the limit on the largest line instead of the total, the release gate off, and the grant-kind check off.
+- Not verified live: how QuickBooks moves `CurrentBalance` per account type. New kinds stay off until the sandbox check in production-posting.md.
+
