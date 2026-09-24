@@ -323,3 +323,10 @@ Author: Claude Opus 5.5. Stacked on the workspace redesign; migration 038 applie
 
 - `TestClosePlanningRanksWorkAndBulkApprovalChecksEachDraft`: rejects an invalid due date; self-assignment works; taking or releasing a colleague's close returns 409; a due-soon close I own ranks ahead of an older undated one in the same bucket; Mine and due-soon counts match; the queue flags a ledger-adjusting draft for individual review; a batch approves the routine draft and separately refuses a stale digest, the adjusting draft and another firm's draft, writing exactly one approval. Observed red with the per-item access check removed (the foreign draft was approved) and with the new ordering removed.
 - Browser (proxy-injected disposable token, seeded closes): five KPIs including Due in 7 days, ranked rows with due/priority/Mine chips, a disabled queue checkbox with its reason, a bulk approval of one settlement draft with the full confirmation panel, and the close header planning controls.
+
+## Human effort measurement (2026-09-24)
+
+Author: Claude Opus 5.5. Stacked on close planning; migration 039 applied only to the disposable database.
+
+- `TestEffortCapsCreditAndSeparatesWaiting`: three 30-second beats in one minute credit at most 60 seconds (robust to a minute boundary); unknown activities, oversized beats and another firm's close are rejected; a recorded 15-minute entry adds to human minutes; client wait counts only the answered request (delivery to first reply ≈ 2 h) and reports one delivered request without a reply while ignoring an undelivered one; the monthly report's median uses the measured close only and the quiet close reports no total. Observed red with the 60-second cap removed (app and constraint) and with unmeasured closes counted as zero.
+- Browser: Measure page (median 21 min, 1 of 3 measured, unmeasured rows) and the close's Human effort card with tracked, recorded and waiting figures.

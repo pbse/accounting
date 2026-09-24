@@ -222,6 +222,8 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM preparation_plans WHERE close_id=$1`,
 			`DELETE FROM close_preparations WHERE close_id=$1`,
 			`DELETE FROM close_signoffs WHERE close_id=$1`,
+			`DELETE FROM close_effort WHERE close_id=$1`,
+			`DELETE FROM close_effort_entries WHERE close_id=$1`,
 			`DELETE FROM close_scopes WHERE close_id=$1`,
 		} {
 			if _, err = tx.ExecContext(r.Context(), query, id); err != nil {

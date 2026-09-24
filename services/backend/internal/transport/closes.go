@@ -105,6 +105,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerRecurringAccrual(mux, db)
 	registerReadiness(mux, db)
 	registerPlanning(mux, db)
+	registerEffort(mux, db)
 	registerProcedures(mux, db)
 	registerProcedureLearning(mux, db)
 	registerAccess(mux, db)

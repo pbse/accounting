@@ -5,6 +5,7 @@ import type { PrepaidWorkpaper } from "../../../../../packages/contracts/prepaid
 import type { ReconciliationWorkpaper } from "../../../../../packages/contracts/reconciliation";
 import type { SettlementWorkpaper } from "../../../../../packages/contracts/settlement";
 import { AccrualResult } from "../accruals/Prepare";
+import { EffortTracker } from "./Effort";
 import { Icon } from "../dashboard/Icon";
 import { ReconciliationResult } from "../reconciliation/Prepare";
 import { SettlementResult } from "../settlements/Prepare";
@@ -277,6 +278,7 @@ export default function WorkpaperView() {
   const blockers = saved.paper.blockers ?? [];
   return (
     <>
+      <EffortTracker closeId={close.id} activity="review" />
       <Link className="back-link" to={`/dashboard/closes/${close.id}?tab=workpapers`}>
         <Icon name="back" size={15} /> {close.entity} · {close.period}
       </Link>

@@ -15,6 +15,7 @@ import { Readiness } from "./Readiness";
 import { Recurring } from "./Recurring";
 import { RecurringAccruals } from "./RecurringAccruals";
 import { Requests } from "./Requests";
+import { EffortCard, EffortTracker, type Activity } from "./Effort";
 import { PlanChips, PlanningControls } from "./Planning";
 import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
@@ -29,6 +30,7 @@ const tabs = [
   ["settings", "Settings"],
 ] as const;
 type Tab = (typeof tabs)[number][0];
+const tabActivity: Record<Tab, Activity> = { overview: "prepare", workpapers: "prepare", evidence: "evidence", requests: "requests", signoff: "signoff", settings: "configuration" };
 const filters: Record<string, [string, (paper: Paper) => boolean]> = {
   all: ["All drafts", () => true],
   ready: ["Ready for review", readyForReview],
@@ -139,6 +141,7 @@ export default function ClientClose() {
   const latest = more ? " among the latest 100" : "";
   return (
     <>
+      <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
       <Link className="back-link" to="/dashboard/closes">
         <Icon name="back" size={15} /> Client closes
       </Link>
@@ -239,6 +242,7 @@ export default function ClientClose() {
         <div className="stack">
           <Readiness key={`readiness-${close.id}`} closeId={close.id} papers={papers} />
           <ProposedStatePreview closeId={close.id} />
+          <EffortCard closeId={close.id} />
           <Package close={close} />
         </div>
       )}
