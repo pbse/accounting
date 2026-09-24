@@ -28,6 +28,7 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 	}
 	defer func() {
 		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM evidence WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
@@ -35,9 +36,13 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 	token := strings.Repeat("x", 32)
 	handler := apiWithStore(db, token)
 	scan := func() (out struct {
-		Capture *struct{ ID string }    `json:"capture"`
-		Scanned int                     `json:"scanned"`
-		Items   []struct{ Type string } `json:"items"`
+		Capture  *struct{ ID string }    `json:"capture"`
+		Scanned  int                     `json:"scanned"`
+		Items    []struct{ Type string } `json:"items"`
+		Balances struct {
+			Snapshot *struct{ ID string }       `json:"snapshot"`
+			Items    []struct{ Account string } `json:"items"`
+		} `json:"balances"`
 	}) {
 		t.Helper()
 		r := httptest.NewRequest("GET", "/v1/closes/"+closeID+"/quickbooks/exceptions", nil)
@@ -49,14 +54,28 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 		}
 		return out
 	}
-	if got := scan(); got.Capture != nil || len(got.Items) != 0 {
-		t.Fatalf("without a capture nothing is scanned: %+v", got)
+	if got := scan(); got.Capture != nil || len(got.Items) != 0 || got.Balances.Snapshot != nil {
+		t.Fatalf("without a capture or snapshot nothing is scanned: %+v", got)
 	}
 	if err = db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&connection); err != nil {
 		t.Fatal(err)
 	}
 	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'capture.json',$2,'{}','fixture') RETURNING id::text`, closeID, preparation.Digest([]byte(rand.Text()))).Scan(&evidenceID); err != nil {
 		t.Fatal(err)
+	}
+	snapshot := func(receivable, card string) (id string) {
+		t.Helper()
+		payload := `{"period":"2026-09","source_id":"` + evidenceID + `","accounts":[{"Id":"1","Name":"Accounts Receivable","AccountType":"Accounts Receivable"},{"Id":"2","Name":"Business card","AccountType":"Credit Card"}],
+			"reports":{"TrialBalance":{"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Debit"},{"ColTitle":"Credit"}]},"Rows":{"Row":[{"type":"Data","ColData":[{"id":"1","value":"Accounts Receivable"},` + receivable + `]},{"type":"Data","ColData":[{"id":"2","value":"Business card"},` + card + `]}]}}}}`
+		if err := db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,$4,now(),'fixture') RETURNING id::text`, closeID, connection, rand.Text(), payload).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	snapshot(`{"value":""},{"value":"150.00"}`, `{"value":""},{"value":"10.00"}`)
+	latest := snapshot(`{"value":"150.00"},{"value":""}`, `{"value":"20.00"},{"value":""}`)
+	if got := scan(); got.Capture != nil || got.Balances.Snapshot == nil || got.Balances.Snapshot.ID != latest || len(got.Balances.Items) != 1 || got.Balances.Items[0].Account != "Business card" {
+		t.Fatalf("balances come from the latest period snapshot even without a capture: %+v", got)
 	}
 	if err = db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at) VALUES($1,$2,'2026-09','fixture','completed',$3,now()) RETURNING id::text`, closeID, connection, evidenceID).Scan(&syncID); err != nil {
 		t.Fatal(err)

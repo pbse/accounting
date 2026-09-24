@@ -425,6 +425,15 @@ Author: Claude Opus 5.5. No migration.
 
 - `TestYearEndHandoffRollsForwardApprovedWork` (PostgreSQL): January to May with April missing; a prepaid with a February credit rolls forward without a break; a prepaid whose schedule disagrees with the prior approved balance, a loan whose opening differs from the prior closing, a prepaid with a prior-month balance but no prior paper, and a pending latest version (its older approved version is not used), a prepaid whose schedule omits a month that has an approved paper, and a loan with opening principal but no prior-month paper each become open questions (a loan opening at zero is new and is not asked about); a bank and a card reconciliation with one name stay separate; a verified posting on the older version stays in `postings.csv`; the prior year, another client and another firm are excluded; checksums verify. Observed red with the first version kept instead of the latest, with a closing-minus-expense rule in place of the saved schedule, with each continuity or missing-paper check removed, with loans opening at zero asked about, with the client, firm or year boundary removed, with reconciliations keyed by account alone and with unapproved versions included.
 
+## Deeper exception finding (2026-09-24)
+
+Author: Claude Opus 5.5. No migration.
+
+- `TestAbnormalBalancesReadTheTrialBalanceColumns`: from a Trial Balance in either Debit/Credit column order, flags a receivable credit, a credit-card debit and an overdrawn bank; skips accumulated depreciation, a retained-earnings deficit, an owner draw, a normal expense and an account of unknown type. A EUR report yields a EUR question, and an unreadable amount fails the check instead of passing as normal. Observed red with expenses treated as credit-normal, with contra subtypes, owner draws or unknown types not skipped, with the Debit column not found, with the currency dropped and with unreadable amounts skipped.
+- `TestFindExceptionsRaisesQuestionsWithoutConcluding` now also flags one vendor whose three purchases and one bill went to two accounts (each account named once) without mixing in a customer with the same ID, flags two accounts that share a name, and does not flag one split purchase or the same split in a different line order. Observed red with transaction counts in place of distinct account sets, with unsorted sets, with repeated account names, with the payee type dropped from the key, with VendorRef not treated as a vendor and with sets compared by account name.
+- `TestExceptionsScanTheWholeLatestCapture` (PostgreSQL): without a snapshot `balances.snapshot` is null; with two period snapshots and no transaction capture, balance items come from the newer snapshot. Observed red with the oldest snapshot chosen and with balances dropped when no capture exists.
+- No personal-spending check: nothing in the captured data separates a personal purchase from a business one, so purpose stays a client question.
+
 ## Posting beyond prepaids (2026-09-24)
 
 Author: Claude Opus 5.5. Migration 046 moves production grants to account and kind lists.

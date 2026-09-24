@@ -167,7 +167,7 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_closes", Arguments: map[string]any{}})
 	must(err)
 	text := result.Content[0].(*mcp.TextContent).Text
-	if result.IsError || !strings.Contains(text, mineID) || strings.Contains(text, otherID) {
+	if result.IsError || !strings.Contains(text, `"id":"`+mineID+`"`) || strings.Contains(text, `"id":"`+otherID+`"`) {
 		t.Fatalf("the agent must see only the member's assigned client: %s", text)
 	}
 	session.Close()
