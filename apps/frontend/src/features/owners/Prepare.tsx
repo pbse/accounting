@@ -65,10 +65,28 @@ export default function PrepareOwner() {
     setStatus(saved.purpose_status ?? "");
     setTreatment(saved.treatment ?? "");
   }, [revision.savedInput]);
+  // Replace the suggested owner account when the type or treatment changes, but keep a manual edit.
+  const suggested = useRef("");
   useEffect(() => {
     const field = form.current?.elements.namedItem("owner_account");
-    if (field instanceof HTMLInputElement && entityType && treatment && !field.value) field.value = accounts[entityType][treatment] ?? "";
+    if (!(field instanceof HTMLInputElement) || !entityType || !treatment) return;
+    const next = accounts[entityType][treatment] ?? "";
+    if (!field.value || field.value === suggested.current) field.value = next;
+    suggested.current = next;
   }, [entityType, treatment]);
+  // Answer fields mount after the revision loads; fill each once it exists.
+  const restored = useRef(new Set<string>());
+  useEffect(() => {
+    const saved = revision.savedInput as Record<string, unknown> | undefined;
+    if (!saved) return;
+    for (const name of ["stated_purpose", "client_confirmation_reference", "business_use_percent", "booked_account", "owner_account", "partner", "dividend_declaration_reference", "repayment_reference", "reimbursement_reference"]) {
+      const field = form.current?.elements.namedItem(name);
+      if (field instanceof HTMLInputElement && saved[name] !== undefined && !restored.current.has(name)) {
+        field.value = String(saved[name]);
+        restored.current.add(name);
+      }
+    }
+  }, [revision.savedInput, status, direction, treatment, entityType]);
   async function prepare(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
