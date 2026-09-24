@@ -297,7 +297,9 @@ func WrongSide(payload json.RawMessage) (string, []ledger.BalanceException, erro
 		if class == "Revenue" || class == "Expense" {
 			basis = "year-to-date balance"
 		}
-		if item := ledger.WrongSide(row.AccountID, row.Name, class, net, currency, basis); item != nil {
+		if item := ledger.Holding(row.AccountID, row.Name, class, net, currency, basis); item != nil {
+			out = append(out, *item)
+		} else if item := ledger.WrongSide(row.AccountID, row.Name, class, net, currency, basis); item != nil {
 			out = append(out, *item)
 		}
 	}

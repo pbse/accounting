@@ -51,3 +51,39 @@ func TestAbnormalBalancesReadTheTrialBalanceColumns(t *testing.T) {
 		t.Fatal("an unreadable balance must fail the check, not pass as normal")
 	}
 }
+
+func TestHoldingAccountsWithABalanceNeedReconciliation(t *testing.T) {
+	accounts := json.RawMessage(`[
+		{"Id":"1","Name":"Undeposited Funds","AccountType":"Other Current Asset","AccountSubType":"UndepositedFunds"},
+		{"Id":"2","Name":"Payroll clearing","AccountType":"Other Current Liability"},
+		{"Id":"3","Name":"Ask My Accountant","AccountType":"Expense"},
+		{"Id":"4","Name":"Checking","AccountType":"Bank"},
+		{"Id":"5","Name":"Clearing Revenue","AccountType":"Income"},
+		{"Id":"6","Name":"Stripe clearing","AccountType":"Other Current Asset"}]`)
+	tb := json.RawMessage(`{"Header":{"Currency":"USD"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Debit"},{"ColTitle":"Credit"}]},"Rows":{"Row":[
+		{"type":"Data","ColData":[{"id":"1","value":"Undeposited Funds"},{"value":"1200.00"},{"value":""}]},
+		{"type":"Data","ColData":[{"id":"2","value":"Payroll clearing"},{"value":"0.00"},{"value":""}]},
+		{"type":"Data","ColData":[{"id":"3","value":"Ask My Accountant"},{"value":"35.00"},{"value":""}]},
+		{"type":"Data","ColData":[{"id":"4","value":"Checking"},{"value":"500.00"},{"value":""}]},
+		{"type":"Data","ColData":[{"id":"5","value":"Clearing Revenue"},{"value":""},{"value":"100.00"}]},
+		{"type":"Data","ColData":[{"id":"6","value":"Stripe clearing"},{"value":""},{"value":"15.00"}]}]}}`)
+	found, err := AbnormalBalances(accounts, tb)
+	if err != nil || len(found) != 3 {
+		t.Fatalf("Undeposited Funds, Ask My Accountant and the Stripe clearing credit are the only candidates: %+v %v", found, err)
+	}
+	got := map[string]string{}
+	for _, item := range found {
+		got[item.Account] = item.Type + " " + item.Side + " " + item.Amount
+	}
+	if got["Undeposited Funds"] != "holding_balance debit 1200.00" || got["Ask My Accountant"] != "holding_balance debit 35.00" || got["Stripe clearing"] != "holding_balance credit 15.00" {
+		t.Fatalf("each holding account is one reconciliation item: %v", got)
+	}
+	for _, item := range found {
+		if item.Account == "Stripe clearing" && !strings.Contains(item.Finding, "opposite the account's normal side") {
+			t.Fatalf("a clearing balance on the wrong side says so: %s", item.Finding)
+		}
+		if item.Account == "Undeposited Funds" && !strings.Contains(item.NextStep, "deposit in transit") {
+			t.Fatalf("undeposited funds are grouped into deposits: %s", item.NextStep)
+		}
+	}
+}
