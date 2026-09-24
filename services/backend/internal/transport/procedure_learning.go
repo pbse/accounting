@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"reflect"
 	"slices"
@@ -273,6 +274,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 		}
 		d, err := readLearnedDraft(r.Context(), db, organization(r), id)
 		if err != nil {
+			log.Printf("procedure draft readback failed: %v", err)
 			problem(w, 503, "Draft saved; refresh to inspect it.")
 			return
 		}
