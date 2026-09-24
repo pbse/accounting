@@ -347,7 +347,8 @@ func ledgerAfterMatches(before, after quickbooks.LedgerObservation, journal quic
 	for i, account := range after.Accounts {
 		next, ok := new(big.Rat).SetString(string(account.Balance))
 		want, _ := new(big.Rat).SetString(projected[account.ID])
-		if !ok || account.ID != before.Accounts[i].ID || want == nil || next.Cmp(want) != 0 {
+		previous := before.Accounts[i]
+		if !ok || account.ID != previous.ID || account.Name != previous.Name || account.Classification != previous.Classification || want == nil || next.Cmp(want) != 0 {
 			return false
 		}
 	}

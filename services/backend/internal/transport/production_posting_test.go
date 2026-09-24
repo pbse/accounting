@@ -40,6 +40,11 @@ func TestProductionLedgerEffect(t *testing.T) {
 	if ledgerAfterMatches(before, after, journal) {
 		t.Fatal("incorrect ledger delta accepted")
 	}
+	after.Accounts[1].Balance = "-995.00"
+	after.Accounts[1].Name = "Renamed after approval"
+	if ledgerAfterMatches(before, after, journal) {
+		t.Fatal("an account renamed around the write must not verify")
+	}
 	raw, _ := json.Marshal(productionPosting{posting: posting{State: "verified"}})
 	if !strings.Contains(string(raw), `"state":"verified"`) {
 		t.Fatal("posting state missing from API response")
