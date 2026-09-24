@@ -15,7 +15,7 @@ CREATE TABLE procedure_drafts (
  source_evidence_id bigint REFERENCES evidence(id),
  source_digest text NOT NULL DEFAULT '',
  source_quote text NOT NULL DEFAULT '',
- source_draft_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+ source_draft_ids jsonb NOT NULL DEFAULT '[]'::jsonb CHECK(jsonb_typeof(source_draft_ids)='array'),
  revision integer NOT NULL DEFAULT 1,
  created_by text NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now(),

@@ -244,7 +244,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var source, digest string
-		var ids []string
+		ids := []string{}
 		var edits []paperChange
 		if in.SourceID != "" {
 			err := db.QueryRowContext(r.Context(), `SELECT content,digest FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND purpose='procedure' AND extraction_state='ready' AND superseded_by IS NULL AND procedure_id IS NULL AND octet_length(content) BETWEEN 10 AND 16384`, in.SourceID, r.PathValue("id")).Scan(&source, &digest)
