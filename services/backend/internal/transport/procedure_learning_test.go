@@ -164,6 +164,7 @@ func TestLearnedRuleRequiresApprovedExampleBeforeActivation(t *testing.T) {
 	}
 	other := in
 	other.Method = prepaids.DailyMethod
+	other.ExamplesConfirmed = true
 	otherPaper, err := prepaids.Prepare(other)
 	must(err)
 	otherRaw, _ := json.Marshal(otherPaper)
