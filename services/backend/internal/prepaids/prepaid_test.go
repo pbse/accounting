@@ -185,3 +185,51 @@ func TestMultipleRetrospectiveCreditsRequireApprovedRule(t *testing.T) {
 		t.Fatal("credit beyond remaining balance accepted")
 	}
 }
+
+func TestDeferredRevenueRecognizesTheEarnedMonth(t *testing.T) {
+	in := example()
+	in.Schedule, in.ExpenseAccount, in.PrepaidAccount = DeferredRevenue, "Subscription revenue", "Deferred revenue"
+	in.BookedBalance, in.BookingReference, in.ExamplesConfirmed = "12000.00", "September ledger", true
+	p, err := Prepare(in)
+	if err != nil || p.PeriodExpense != "1000.00" || p.PrepaidBalance != "11000.00" || *p.Proposal != (Adjustment{"2026-09-30", "Deferred revenue", "Subscription revenue", "1000.00"}) {
+		t.Fatalf("September earns 1000 of the 12000 billed: %+v %v", p.Proposal, err)
+	}
+	in.BookedBalance, in.BookingReference = "", ""
+	if p, err = Prepare(in); err != nil || *p.Proposal != (Adjustment{"2026-09-30", "Subscription revenue", "Deferred revenue", "11000.00"}) {
+		t.Fatalf("an invoice booked straight to revenue defers the unearned 11000: %+v %v", p.Proposal, err)
+	}
+}
+
+func TestDepreciationTruesUpAccumulatedDepreciation(t *testing.T) {
+	in := example()
+	in.Schedule, in.Amount, in.ServiceEnd = Depreciation, "3600.00", "2029-08-31"
+	in.ExpenseAccount, in.PrepaidAccount = "Depreciation expense", "Accumulated depreciation"
+	in.BookedBalance, in.BookingReference, in.ExamplesConfirmed = "0.00", "September ledger", true
+	p, err := Prepare(in)
+	if err != nil || p.PeriodExpense != "100.00" || *p.Proposal != (Adjustment{"2026-09-30", "Depreciation expense", "Accumulated depreciation", "100.00"}) {
+		t.Fatalf("36 months of a 3600 laptop depreciate 100 in September: %+v %v", p.Proposal, err)
+	}
+	in.SalvageValue = "360.00"
+	if p, err = Prepare(in); err != nil || p.PeriodExpense != "90.00" || p.Proposal.Amount != "90.00" || p.Input.Amount != "3600.00" {
+		t.Fatalf("salvage is not depreciated: %+v %v", p, err)
+	}
+	in.SalvageValue, in.BookedBalance = "", "100.00"
+	if p, err = Prepare(in); err != nil || p.Proposal != nil {
+		t.Fatalf("booked accumulated depreciation that matches the schedule needs no entry: %+v %v", p.Proposal, err)
+	}
+	for field, change := range map[string]func(*Input){
+		"booked_balance": func(i *Input) { i.BookedBalance, i.BookingReference = "", "" },
+		"salvage_value":  func(i *Input) { i.SalvageValue = "3600.00" },
+		"credits":        func(i *Input) { i.CreditAmount, i.CreditPeriod, i.CreditReference = "10.00", "2026-09", "Credit" },
+	} {
+		bad := in
+		change(&bad)
+		var inputErr *InputError
+		if _, err := Prepare(bad); !errors.As(err, &inputErr) || inputErr.Field != field {
+			t.Fatalf("%s must be refused: %v", field, err)
+		}
+	}
+	if p, err = ScheduleOnly(in); err != nil || p.Proposal != nil || p.Input.BookedBalance != "" || p.Schedule[0].Expense != "100.00" {
+		t.Fatalf("a carried depreciation schedule needs no ledger balance: %+v %v", p, err)
+	}
+}

@@ -135,17 +135,13 @@ type reportRows struct {
 	}
 }
 
-// TrialBalanceAccount returns the exact reported cells for one prepaid account.
-// The reviewer, not the report parser, interprets debit/credit signs and cutoff.
-func TrialBalanceAccount(accounts, report json.RawMessage, accountID, currency string) (string, string, json.RawMessage, error) {
-	return trialBalanceAccount(accounts, report, accountID, currency, "PrepaidExpenses")
-}
-
 func TrialBalanceLiability(accounts, report json.RawMessage, accountID, currency string) (string, string, json.RawMessage, error) {
-	return trialBalanceAccount(accounts, report, accountID, currency, "Other Current Liability")
+	return TrialBalanceAccount(accounts, report, accountID, currency, "Other Current Liability")
 }
 
-func trialBalanceAccount(accounts, report json.RawMessage, accountID, currency, requiredType string) (string, string, json.RawMessage, error) {
+// TrialBalanceAccount returns the exact reported cells for one account of the required type or subtype.
+// The reviewer, not the report parser, interprets debit/credit signs and cutoff.
+func TrialBalanceAccount(accounts, report json.RawMessage, accountID, currency, requiredType string) (string, string, json.RawMessage, error) {
 	var directory []struct {
 		ID             string `json:"Id"`
 		Name           string

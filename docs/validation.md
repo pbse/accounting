@@ -532,6 +532,23 @@ Author: Claude Opus 5.5. Migration 051. Review: GPT-6 Sol (medium) plan and code
 - `TestProductionPostingSingleDurableAttempt` now posts a CAD prepaid: refused while the company's currency is unknown, then posted with a CAD journal once it is detected. Observed red with a USD journal, with the client currency not passed and without the posting check.
 - `TestTrialBalanceAccountRequiresUniquePrepaidRow` refuses a Trial Balance in another currency (observed red without the check); `TestCurrencyNeedsThreeLettersAndTwoDecimals` accepts USD, CAD and GBP and refuses JPY, KWD, XOF, IQD and lowercase codes (observed red with the refusal list shortened).
 
+## Deferred revenue and depreciation (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan and code review; adopted the reversed deferred revenue entry, required accumulated depreciation, schedule-only carry, schedule-aware Trial Balance accounts and labels, and draft-only posting. Not adopted: rewording the procedure account hints, because only intake-prepared prepaids read them and the rule-based intake parses those labels.
+
+- `TestDeferredRevenueRecognizesTheEarnedMonth`: 12,000 billed for 12 months with 12,000 booked proposes debit deferred revenue, credit revenue 1,000; with no booked balance, 11,000 is deferred. Observed red without the reversed entry.
+- `TestDepreciationTruesUpAccumulatedDepreciation`: a 3,600 asset over 36 months depreciates 100.00 (90.00 with 360 salvage), proposes debit depreciation expense, credit accumulated depreciation, needs no entry when 100.00 is already booked, refuses a missing balance, salvage at cost and credits, and carries without a ledger balance. Observed red without the accumulated conversion, the salvage exclusion, the required balance and the carry exception.
+- `TestDeferredRevenueAndDepreciationStayDraftOnly`: a deferred revenue draft is refused before any QuickBooks call. Observed red without the refusal.
+- `TestRecurringComparisonRefreshesOnlyCurrentPeriod` (PostgreSQL) now runs for a prepaid and a depreciation schedule: the refresh finds the AccumulatedDepreciation account, shows 80.00 expected accumulated depreciation after January, proposes 10.00 against 70.00 booked and nothing against 80.00. Observed red with the prepaid subtype only and without the accumulated target.
+- `TestYearEndHandoffRollsForwardApprovedWork` checks the new `schedule` column in `prepaids.csv`. Observed red when blank. The columns `period_expense` and `closing_balance` are renamed `period_amount` and `scheduled_remaining`, since they hold revenue or depreciation for the new schedules (code review finding).
+
+## Holding and clearing balances (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted clearing only on balance-sheet accounts, reconciliation wording that allows deposits in transit, the opposite-side clue, updated labels, the check placed after the existing account filters, and gathering the account's month ledger rows as evidence. Receipt-level missing documents stay out of this slice: the product has never read QuickBooks attachments live, and missing statements are handled by coverage requests.
+
+- `TestHoldingAccountsWithABalanceNeedReconciliation`: from a QuickBooks Trial Balance, Undeposited Funds (1,200.00 debit), Ask My Accountant (35.00) and a Stripe clearing credit (15.00, also flagged as opposite its normal side) are one reconciliation item each; a zero payroll clearing account, a normal checking account and a "Clearing Revenue" income account are not. Observed red without the check, with "clearing" matched on every account, without the opposite-side clue and without the undeposited-funds next step.
+- `TestWrongSideReadsYTDColumnsWithXeroRules` now includes a Xero Suspense liability holding 80.00. Observed red without the Xero check.
+
 ## Stripe fee entry posting (2026-09-24)
 
 Author: Claude Opus 5.5. Migration 052.
@@ -548,6 +565,9 @@ Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; a
 - `TestExceptionsScanTheWholeLatestCapture` now checks that a sandbox month-end snapshot and transaction capture are not shown as the client's current or latest books once a production connection exists. Observed red without the snapshot and latest-capture scoping.
 - `TestQuickBooksScopedOAuthRefreshAndSnapshots` also connects production while a sandbox snapshot is being read: the snapshot is not saved (code review finding). Observed red without the recheck at save. A client-level advisory lock taken by both the connect insert and the snapshot save orders a production connection started on another close of the same client against the save; the save takes it before any row lock, as the connect insert does, so the two cannot deadlock (final review round); this concurrency guard has no automated test. After every connection is disconnected, the most recent capture and snapshot stay visible and flagged stale, as before.
 
+## Stripe fee entry posting (2026-09-24)
+
+
 ## Production Bill corrections and supplier credits (2026-09-24)
 
 Author: Claude Opus 5.5. Migration 053. Review: GPT-6 Sol (medium) plan review; adopted hosted actor and client access checks, the grant limit and a grant recheck under the attempt lock, both sides of a Bill recode in the grant, grant membership instead of the sandbox prepaid mapping, the reading connection for captures, and the connection's recorded currency. Journal posting now shares the grant and credential lookup (`productionClient`) with unchanged behavior.
@@ -555,4 +575,6 @@ Author: Claude Opus 5.5. Migration 053. Review: GPT-6 Sol (medium) plan review; 
 - `TestProductionBillCorrectionStaysInsideItsGrant` (PostgreSQL, mocked production host): refused until `bill_correction` is enabled; refused at preview when the line's current account is outside the grant and when the line exceeds the grant limit; an approval under a different grant than the preview is refused; under a grant for both accounts it previews, approves, updates the Bill once and verifies. Observed red without the kind gate, the preview account check, the limit and the grant binding.
 - `TestBillCorrectionPreservesSimpleBillAndChecksReadback` and `TestVendorCreditChecksAccountsAndCanonicalReadback` now check that production writes stay within granted accounts (both Bill accounts; A/P and prepaid for a credit) and that the granted prepaid account is found by name. Observed red with either account unchecked.
 - Not covered by an end-to-end test: the production supplier-credit route (its account, currency and grant rules are covered at the QuickBooks layer), its sign-off recheck under the close lock (code review finding; the sandbox route lacked it too), and the grant recheck under the attempt lock (a race).
+
+- `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.
 

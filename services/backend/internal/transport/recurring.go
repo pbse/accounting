@@ -17,6 +17,7 @@ type recurringItem struct {
 	ID          string          `json:"id"`
 	Digest      string          `json:"digest"`
 	Scheduled   string          `json:"scheduled_balance"`
+	Schedule    string          `json:"schedule,omitempty"`
 	AccountID   string          `json:"account_id,omitempty"`
 	AccountName string          `json:"account_name,omitempty"`
 	Location    string          `json:"location,omitempty"`
@@ -39,6 +40,9 @@ type recurringSnapshot struct {
 	SourceDigest string `json:"-"`
 	Active       bool   `json:"-"`
 }
+
+// The QuickBooks account subtype holding each straight-line schedule's balance.
+var scheduleSubtypes = map[string]string{"": "PrepaidExpenses", prepaids.DeferredRevenue: "DeferredRevenue", prepaids.Depreciation: "AccumulatedDepreciation"}
 
 func recurringPreview(ctx context.Context, tx *sql.Tx, closeID string) (recurringSnapshot, []recurringItem, error) {
 	var snapshot recurringSnapshot
@@ -78,7 +82,14 @@ func recurringPreview(ctx context.Context, tx *sql.Tx, closeID string) (recurrin
 			rows.Close()
 			return snapshot, nil, err
 		}
-		item.Scheduled = item.Paper.PrepaidBalance
+		item.Scheduled, item.Schedule = item.Paper.PrepaidBalance, item.Paper.Input.Schedule
+		if item.Schedule == prepaids.Depreciation {
+			// The ledger holds accumulated depreciation: cost less salvage less what remains to depreciate.
+			cost, _ := prepaids.Amount(item.Paper.Input.Amount)
+			remaining, _ := prepaids.Amount(item.Paper.PrepaidBalance)
+			salvage, _ := prepaids.Amount(item.Paper.Input.SalvageValue)
+			item.Scheduled = prepaids.Money(cost - salvage - remaining)
+		}
 		items = append(items, item)
 	}
 	err = rows.Err()
@@ -119,19 +130,19 @@ func recurringPreview(ctx context.Context, tx *sql.Tx, closeID string) (recurrin
 				return snapshot, nil, fmt.Errorf("Invalid account directory")
 			}
 			for _, a := range accounts {
-				if a.AccountSubType == "PrepaidExpenses" && strings.EqualFold(strings.TrimSpace(a.Name), strings.TrimSpace(item.Paper.Input.PrepaidAccount)) {
+				if a.AccountSubType == scheduleSubtypes[item.Paper.Input.Schedule] && strings.EqualFold(strings.TrimSpace(a.Name), strings.TrimSpace(item.Paper.Input.PrepaidAccount)) {
 					if item.AccountID != "" {
-						item.Blocker = "Multiple prepaid accounts match this name; resolve the mapping."
+						item.Blocker = "Multiple accounts of this schedule's type match this name; resolve the mapping."
 						break
 					}
 					item.AccountID, item.AccountName = a.ID, a.Name
 				}
 			}
 			if item.AccountID == "" && item.Blocker == "" {
-				item.Blocker = "No exact prepaid account name matches the carried schedule. Resolve the mapping."
+				item.Blocker = "No account of this schedule's type has the carried account name. Resolve the mapping."
 			}
 			if item.Blocker == "" {
-				_, item.Location, item.Cells, err = quickbooks.TrialBalanceAccount(payload.Accounts, payload.Reports["TrialBalance"], item.AccountID, item.Paper.Input.Currency)
+				_, item.Location, item.Cells, err = quickbooks.TrialBalanceAccount(payload.Accounts, payload.Reports["TrialBalance"], item.AccountID, item.Paper.Input.Currency, scheduleSubtypes[item.Paper.Input.Schedule])
 				if err != nil {
 					item.Blocker = err.Error()
 				} else {
