@@ -34,12 +34,16 @@ func TestSandboxAttemptIsDurableAndNotRepeated(t *testing.T) {
 	for name, value := range map[string]string{"WORKOS_ORGANIZATION_ID": "org_fixture", "QBO_SANDBOX_REALM_ID": "123", "QBO_SANDBOX_ACCESS_TOKEN": "synthetic-only", "QBO_SANDBOX_ENTITY": "Posting fixture", "QBO_SANDBOX_PREPAID_ACCOUNT_ID": "10", "QBO_SANDBOX_EXPENSE_ACCOUNT_ID": "20"} {
 		t.Setenv(name, value)
 	}
+	// The actor and its close belong to the same firm.
+	if _, err = db.Exec(`INSERT INTO organizations(id,name) VALUES('org_fixture','Posting fixture') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
 	original := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = original })
 	for _, uncertain := range []bool{false, true} {
 		t.Run(map[bool]string{false: "verified", true: "unknown"}[uncertain], func(t *testing.T) {
 			var closeID, paperID string
-			err := db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Posting fixture "+time.Now().Format("150405.000000000")).Scan(&closeID)
+			err := db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES('org_fixture',$1,'2026-09') RETURNING id::text`, "Posting fixture "+time.Now().Format("150405.000000000")).Scan(&closeID)
 			if err != nil {
 				t.Fatal(err)
 			}

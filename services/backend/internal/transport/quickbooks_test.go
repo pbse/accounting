@@ -180,13 +180,25 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	r := httptest.NewRequest("GET", "/v1/quickbooks/callback?state="+url.QueryEscape(state)+"&code=synthetic-code&realmId=123", nil)
 	w := httptest.NewRecorder()
 	quickbooksReturn(w, r, db)
-	if w.Code != 303 || !strings.HasPrefix(w.Header().Get("Location"), "https://app.example.test/dashboard/closes/"+closeID+"#") || w.Header().Get("Referrer-Policy") != "no-referrer" {
-		t.Fatal("unsafe callback routing")
+	if w.Code != 303 || !strings.HasPrefix(w.Header().Get("Location"), "https://app.example.test/dashboard/closes/"+closeID+"?tab=evidence#") || w.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatal("unsafe callback routing, or not returned to the Evidence tab where the sandbox panel lives")
 	}
 	call("POST", base, callback, 200)
 	call("POST", base, callback, 409)
 	if exchanges != 1 {
 		t.Fatal("authorization code replayed")
+	}
+	productionState := rand.Text()
+	if _, err = db.Exec(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment) VALUES($1,$2,'QBO synthetic client','user_accountant','authorizing',$3,now()+interval '10 minutes','production')`, closeID, org, preparation.Digest([]byte(productionState))); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	quickbooksReturn(w, httptest.NewRequest("GET", "/v1/quickbooks/callback?state="+url.QueryEscape(productionState)+"&code=synthetic-code&realmId=123", nil), db)
+	if w.Code != 303 || !strings.HasPrefix(w.Header().Get("Location"), "https://app.example.test/dashboard/closes/"+closeID+"?tab=settings#") {
+		t.Fatalf("production authorization returns to Settings, where its panel lives: %s", w.Header().Get("Location"))
+	}
+	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE oauth_digest=$1`, preparation.Digest([]byte(productionState))); err != nil {
+		t.Fatal(err)
 	}
 	action := func(name string, want int) []byte {
 		return call("POST", base, map[string]any{"action": name, "connection_id": start.ID, "confirmed": true, "realm": "123"}, want)
