@@ -13,6 +13,7 @@ export type EvidenceFile = {
   id: string;
   name: string;
   digest: string;
+  purpose?: string;
   bytes: number;
   extraction_state: string;
   extraction_error: string;

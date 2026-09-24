@@ -299,7 +299,7 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 			p := preparation.Plan{Kind: "prepaid", Input: raw, Sources: []preparation.Source{}, CarryForward: carry}
 			for _, s := range item.paper.Sources {
 				oldID := s.ID
-				err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,original,extraction_state,created_by,procedure_id) SELECT $1,name,digest,content,original,'ready',$5,procedure_id FROM evidence WHERE id::text=$2 AND close_id=$3 AND digest=$4 AND superseded_by IS NULL AND extraction_state='ready' ON CONFLICT(close_id,digest) DO UPDATE SET digest=evidence.digest WHERE evidence.superseded_by IS NULL AND evidence.extraction_state='ready' RETURNING id::text`, target, oldID, closeID, s.Digest, actor).Scan(&s.ID)
+				err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,original,extraction_state,created_by,procedure_id,purpose) SELECT $1,name,digest,content,original,'ready',$5,procedure_id,purpose FROM evidence WHERE id::text=$2 AND close_id=$3 AND digest=$4 AND superseded_by IS NULL AND extraction_state='ready' ON CONFLICT(close_id,digest) DO UPDATE SET digest=evidence.digest WHERE evidence.superseded_by IS NULL AND evidence.extraction_state='ready' AND evidence.purpose=EXCLUDED.purpose RETURNING id::text`, target, oldID, closeID, s.Digest, actor).Scan(&s.ID)
 				if err != nil {
 					problem(w, 409, "Source evidence changed or could not be copied.")
 					return
