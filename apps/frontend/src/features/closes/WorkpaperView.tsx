@@ -336,7 +336,10 @@ export default function WorkpaperView() {
             paperId={saved.id}
             onChange={() => {
               void reload();
-              if (older) void workspaceRequest(`/${close.id}/workpapers/${saved.id}?record=1`).then(setOlder);
+              if (older)
+                void workspaceRequest(`/${close.id}/workpapers/${saved.id}?record=1`).then((record: Paper) =>
+                  setOlder((current) => (current?.id === record.id ? record : current)),
+                );
             }}
             autoLoad
           />
