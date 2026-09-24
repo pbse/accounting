@@ -17,6 +17,8 @@ Apply migration 016 after migrations 001–015. The same API/database-backed beh
 
 The Work inbox also offers a **Prepare selected closes** portfolio command for up to 10 visible closes. It previews each close's source count, submits the existing scope-checked action per close, and reports partial success separately. The existing **Stop unresolved work** command remains available. Neither command approves accounting facts, methods, requests, postings or sign-off.
 
+**Ask Work** understands bounded phrases such as “show blockers,” “show dependencies,” “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM,” and “prepare/recheck/stop all visible.” A command that acts on work still opens the existing per-close preview and confirmation; more than 10 eligible closes or a truncated inbox must be narrowed first. The Work dashboard also lists up to 100 current workpapers whose source or inherited schedule changed, filtered to the signed-in user's client access. Open the close to revise and reapprove; the list never carries an earlier approval forward. The command shortcut uses these explicit phrases locally, without an AI credential or permission bypass.
+
 This close-level coordinator preserves existing per-document interpretation and request/reply routing. Coverage requirements support consolidated client requests and scoped replies through the same durable jobs; see [coverage and attachments](coverage-requests.md). It does not infer complete account coverage or autonomously approve accounting methods. One consolidated visual question list is not a consolidated delivery authorization. Delivery still requires its own explicit authorization.
 
 ## Ledger coverage

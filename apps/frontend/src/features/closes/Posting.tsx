@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 
-type ProposedState = { items: { workpaper_id: string; state: string; review_state: string; digest: string; ledger_before: { prepaid: { name: string; balance: string; sync_token: string }; expense: { name: string; balance: string; sync_token: string } }; projected_balances: { prepaid: string; expense: string }; other_open_intents: string[] }[]; has_more: boolean; notice: string };
+type ProposedState = { items: { workpaper_id: string; state: string; review_state: string; digest: string; ledger_before: { prepaid: { name: string; balance: string; sync_token: string }; expense: { name: string; balance: string; sync_token: string } }; projected_balances: { prepaid: string; expense: string }; other_open_intents: string[] }[]; has_more: boolean; notice: string; rehearsal: { company: string; intent_count: number; accounts: { id: string; name: string; balance: string; sync_token: string; delta: string; projected: string }[]; blockers: string[]; review_required: string[] } };
 export function ProposedStatePreview({ closeId }: { closeId: string }) {
   const [preview, setPreview] = useState<ProposedState>();
   const [error, setError] = useState("");
@@ -9,6 +9,7 @@ export function ProposedStatePreview({ closeId }: { closeId: string }) {
   async function load() {
     setBusy(true);
     setError("");
+    setPreview(undefined);
     try {
       setPreview(await workspaceRequest(`/${encodeURIComponent(closeId)}/proposed-state`));
     } catch (e) {
@@ -17,12 +18,15 @@ export function ProposedStatePreview({ closeId }: { closeId: string }) {
       setBusy(false);
     }
   }
-  return <section className="panel" aria-labelledby="proposed-state-heading">
-    <h2 id="proposed-state-heading">Proposed ledger effects</h2>
-    <p>Review saved production journal previews against the account balances and versions captured with each intent. Refresh before an approval; QuickBooks may have changed since capture.</p>
-    <button disabled={busy} onClick={() => void load()}>{busy ? "Loading…" : "Show proposed effects"}</button>
+  return <section className="panel" id="close-rehearsal" aria-labelledby="proposed-state-heading">
+    <h2 id="proposed-state-heading">Close ledger rehearsal</h2>
+    <p>Combine saved production journal proposals against one set of account balances and versions. Refresh before any approval; QuickBooks may have changed since capture.</p>
+    <button disabled={busy} onClick={() => void load()}>{busy ? "Loading…" : "Rehearse saved proposals"}</button>
     {error && <p role="alert">{error}</p>}
-    {preview && <><p>{preview.notice}</p>{preview.items.length === 0 && <p>No versioned production journal preview is saved for this close.</p>}
+    {preview && <><p>{preview.notice}</p>{preview.items.length === 0 && <p>No unexecuted production journal proposal is saved for this close.</p>}
+      {preview.rehearsal.blockers.length > 0 && <div role="alert"><p>The combined state cannot be calculated safely:</p><ul>{preview.rehearsal.blockers.map((blocker,i)=><li key={i}>{blocker}</li>)}</ul></div>}
+      {preview.rehearsal.accounts.length > 0 && <div><h3>Combined proposed state · {preview.rehearsal.company}</h3><p>{preview.rehearsal.intent_count} saved journal proposal{preview.rehearsal.intent_count === 1 ? "" : "s"} included. These are versioned observations, not a live trial balance.</p><ul>{preview.rehearsal.accounts.map(account=><li key={account.id}>{account.name} (#{account.id}): ${account.balance} {account.delta.startsWith("-") ? "−" : "+"} ${account.delta.replace("-", "")} = ${account.projected} · version {account.sync_token}</li>)}</ul></div>}
+      {preview.rehearsal.review_required.length > 0 && <p role="status">Accountant re-review is required for draft{preview.rehearsal.review_required.length === 1 ? "" : "s"} #{preview.rehearsal.review_required.join(", #")}. The rehearsal grants no approval.</p>}
       {preview.items.map(item => <section key={item.workpaper_id}><h3>Draft #{item.workpaper_id} · {item.state} · review {item.review_state}</h3>
         <ul>{(["prepaid", "expense"] as const).map(account => <li key={account}>{item.ledger_before[account].name}: ${item.ledger_before[account].balance} → proposed ${item.projected_balances[account]} · account version {item.ledger_before[account].sync_token}</li>)}</ul>
         {item.other_open_intents.length > 0 && <p role="alert">Other open intents use these accounts: {item.other_open_intents.join(", ")}. Resolve before approval.</p>}

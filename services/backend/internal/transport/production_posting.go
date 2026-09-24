@@ -42,6 +42,29 @@ type productionPosting struct {
 	VerifiedAt   *time.Time                   `json:"verified_at,omitempty"`
 }
 
+type rehearsalInput struct {
+	PaperID     string
+	ReviewState string
+	Posting     productionPosting
+}
+type rehearsalAccount struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Balance   string `json:"balance"`
+	SyncToken string `json:"sync_token"`
+	Delta     string `json:"delta"`
+	Projected string `json:"projected"`
+	baseline  *big.Rat
+	change    *big.Rat
+}
+type closeRehearsal struct {
+	Company        string             `json:"company"`
+	Accounts       []rehearsalAccount `json:"accounts"`
+	Blockers       []string           `json:"blockers"`
+	ReviewRequired []string           `json:"review_required"`
+	IntentCount    int                `json:"intent_count"`
+}
+
 func productionActor(w http.ResponseWriter, r *http.Request, permission string) (*auth.Claims, bool) {
 	a := auth.Actor(r.Context())
 	if a == nil || a.Organization == "" || (permission != "" && !slices.Contains(a.Permissions, permission)) {
@@ -64,7 +87,12 @@ func readProductionGrant(ctx context.Context, db *sql.DB, org, entity string) (p
 	err := db.QueryRowContext(ctx, `SELECT g.id::text,g.realm,x.company_name,g.prepaid_account_id,g.expense_account_id,g.max_amount::text,g.expires_at,g.reason,g.granted_by,g.connection_id::text FROM production_posting_grants g JOIN quickbooks_connections x ON x.id=g.connection_id WHERE g.organization_id=$1 AND lower(g.client_entity)=lower($2) AND g.revoked_at IS NULL LIMIT 1`, org, entity).Scan(&g.ID, &g.Realm, &g.Company, &g.PrepaidID, &g.ExpenseID, &g.MaxAmount, &g.Expires, &g.Reason, &g.GrantedBy, &g.ConnectionID)
 	return g, err
 }
-func readProductionPosting(ctx context.Context, db *sql.DB, closeID, paperID string) (productionPosting, error) {
+
+type productionReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func readProductionPosting(ctx context.Context, db productionReader, closeID, paperID string) (productionPosting, error) {
 	var p productionPosting
 	var before []byte
 	err := db.QueryRowContext(ctx, `SELECT id::text,request_id::text,digest,realm,state,journal,COALESCE(approved_by,''),approval_expires_at,COALESCE(external_id,''),last_error,grant_id::text,connection_id::text,ledger_before,COALESCE(ledger_after,'null'::jsonb),verified_at FROM production_postings WHERE close_id::text=$1 AND workpaper_id::text=$2`, closeID, paperID).Scan(&p.ID, &p.RequestID, &p.Digest, &p.Realm, &p.State, &p.Journal, &p.ApprovedBy, &p.Expires, &p.ExternalID, &p.Error, &p.GrantID, &p.ConnectionID, &before, &p.LedgerAfter, &p.VerifiedAt)
@@ -111,6 +139,84 @@ func projectedBalances(before quickbooks.LedgerObservation, amount json.Number) 
 	}
 	return out, nil
 }
+
+func rehearseProduction(items []rehearsalInput, hasMore bool) closeRehearsal {
+	out := closeRehearsal{Accounts: []rehearsalAccount{}, Blockers: []string{}, ReviewRequired: []string{}, IntentCount: len(items)}
+	if hasMore {
+		out.Blockers = append(out.Blockers, "More than 100 saved proposals exist. Narrow or resolve them before relying on a combined state.")
+	}
+	included := map[string]bool{}
+	for _, item := range items {
+		included[item.Posting.ID] = true
+	}
+	competing := map[string]bool{}
+	accounts := map[string]*rehearsalAccount{}
+	var connection, company, realm string
+	for _, item := range items {
+		p := item.Posting
+		for _, id := range p.Conflicts {
+			if !included[id] && !competing[id] {
+				out.Blockers = append(out.Blockers, "Competing posting #"+id+" affects this company's saved account snapshot. Resolve it before relying on a combined state.")
+				competing[id] = true
+			}
+		}
+		if item.ReviewState != "approved" {
+			out.ReviewRequired = append(out.ReviewRequired, item.PaperID)
+		}
+		if p.ConnectionID == "" || p.Realm == "" || p.LedgerBefore.Company == "" {
+			out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" lacks a confirmed company or connection.")
+			continue
+		}
+		if connection == "" {
+			connection, company, realm = p.ConnectionID, p.LedgerBefore.Company, p.Realm
+			out.Company = company
+		} else if p.ConnectionID != connection || p.LedgerBefore.Company != company || p.Realm != realm {
+			out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" uses a different QuickBooks company or connection.")
+			continue
+		}
+		var journal quickbooks.Journal
+		if json.Unmarshal(p.Journal, &journal) != nil || journal.CurrencyRef.Value != "USD" || len(journal.Line) != 2 || journal.Line[0].DetailType != "JournalEntryLineDetail" || journal.Line[1].DetailType != "JournalEntryLineDetail" || journal.Line[0].JournalEntryLineDetail.PostingType != "Debit" || journal.Line[1].JournalEntryLineDetail.PostingType != "Credit" || journal.Line[0].JournalEntryLineDetail.AccountRef.Value != p.LedgerBefore.Prepaid.ID || journal.Line[1].JournalEntryLineDetail.AccountRef.Value != p.LedgerBefore.Expense.ID || p.LedgerBefore.Prepaid.ID == p.LedgerBefore.Expense.ID {
+			out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" has an incompatible saved journal.")
+			continue
+		}
+		amount, err := prepaids.Amount(string(journal.Line[0].Amount))
+		other, otherErr := prepaids.Amount(string(journal.Line[1].Amount))
+		if err != nil || otherErr != nil || amount <= 0 || amount != other {
+			out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" has an invalid or unbalanced amount.")
+			continue
+		}
+		for _, effect := range []struct {
+			account quickbooks.LedgerAccount
+			delta   int64
+		}{{p.LedgerBefore.Prepaid, amount}, {p.LedgerBefore.Expense, -amount}} {
+			balance, valid := new(big.Rat).SetString(string(effect.account.Balance))
+			if !valid || !new(big.Rat).Mul(balance, big.NewRat(100, 1)).IsInt() || effect.account.ID == "" || effect.account.SyncToken == "" {
+				out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" lacks a valid versioned account balance.")
+				continue
+			}
+			current := accounts[effect.account.ID]
+			if current == nil {
+				current = &rehearsalAccount{ID: effect.account.ID, Name: effect.account.Name, SyncToken: effect.account.SyncToken, baseline: balance, change: new(big.Rat)}
+				accounts[effect.account.ID] = current
+			} else if current.baseline.Cmp(balance) != 0 || current.SyncToken != effect.account.SyncToken || current.Name != effect.account.Name {
+				out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" uses a different balance or version for account #"+effect.account.ID+".")
+				continue
+			}
+			current.change.Add(current.change, new(big.Rat).SetFrac(big.NewInt(effect.delta), big.NewInt(100)))
+		}
+	}
+	if len(out.Blockers) > 0 {
+		return out
+	}
+	for _, account := range accounts {
+		account.Balance = account.baseline.FloatString(2)
+		account.Delta = account.change.FloatString(2)
+		account.Projected = new(big.Rat).Add(account.baseline, account.change).FloatString(2)
+		out.Accounts = append(out.Accounts, *account)
+	}
+	slices.SortFunc(out.Accounts, func(a, b rehearsalAccount) int { return strings.Compare(a.ID, b.ID) })
+	return out
+}
 func productionDigest(grantID, paperDigest string, j quickbooks.Journal, o quickbooks.LedgerObservation) string {
 	raw, _ := json.Marshal([]any{grantID, paperDigest, j, o})
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
@@ -137,7 +243,13 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		if _, ok := productionActor(w, r, ""); !ok {
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT workpaper_id::text FROM production_postings WHERE close_id::text=$1 AND state IN ('preview','approved') ORDER BY id DESC LIMIT 101`, r.PathValue("id"))
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if err != nil {
+			problem(w, 503, "Proposed state unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		rows, err := tx.QueryContext(r.Context(), `SELECT workpaper_id::text FROM production_postings WHERE close_id::text=$1 AND state IN ('preview','approved') ORDER BY id DESC LIMIT 101`, r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Proposed state unavailable.")
 			return
@@ -163,20 +275,36 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			ids = ids[:100]
 		}
 		items := []map[string]any{}
+		rehearsalItems := []rehearsalInput{}
 		for _, id := range ids {
-			intent, err := readProductionPosting(r.Context(), db, r.PathValue("id"), id)
+			intent, err := readProductionPosting(r.Context(), tx, r.PathValue("id"), id)
 			if err != nil {
 				problem(w, 503, "A saved proposal could not be read. Resolve it before relying on this preview.")
 				return
 			}
 			var state string
-			if err = db.QueryRowContext(r.Context(), `SELECT review_state FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, id, r.PathValue("id")).Scan(&state); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT review_state FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, id, r.PathValue("id")).Scan(&state); err != nil {
 				problem(w, 503, "Current workpaper review unavailable.")
 				return
 			}
 			items = append(items, map[string]any{"workpaper_id": id, "state": intent.State, "review_state": state, "digest": intent.Digest, "ledger_before": intent.LedgerBefore, "projected_balances": intent.Projected, "other_open_intents": intent.Conflicts})
+			rehearsalItems = append(rehearsalItems, rehearsalInput{PaperID: id, ReviewState: state, Posting: intent})
 		}
-		jsonReply(w, 200, map[string]any{"items": items, "has_more": more, "notice": "Proposed-state preview from saved, versioned account observations. Not a current ledger balance or official statement; every intent is rechecked before approval."})
+		rehearsal := rehearseProduction(rehearsalItems, more)
+		var uncertain int
+		if err := tx.QueryRowContext(r.Context(), `SELECT count(*) FROM production_postings WHERE close_id::text=$1 AND state IN ('executing','unknown')`, r.PathValue("id")).Scan(&uncertain); err != nil {
+			problem(w, 503, "Could not check unsettled production attempts.")
+			return
+		}
+		if uncertain > 0 {
+			rehearsal.Blockers = append(rehearsal.Blockers, fmt.Sprintf("%d production posting attempt(s) have an uncertain outcome. Investigate before relying on a combined state.", uncertain))
+			rehearsal.Accounts = []rehearsalAccount{}
+		}
+		if tx.Commit() != nil {
+			problem(w, 503, "Proposed state could not be confirmed.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"items": items, "has_more": more, "rehearsal": rehearsal, "notice": "Combined production journal proposal from saved, versioned account observations. Sandbox corrections and verified postings are outside this calculation. This is not a current ledger balance or official statement; every intent is rechecked before approval and posting."})
 	})
 	grantPath := "/v1/closes/{id}/production-grant"
 	mux.HandleFunc("GET "+grantPath, func(w http.ResponseWriter, r *http.Request) {

@@ -77,6 +77,7 @@ type WorkItem = {
     body: string;
   }[];
 };
+type Dependency = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; upstream_workpaper_id: string };
 const labels: Record<string, string> = {
   waiting_evidence: "Reading evidence",
   needs_confirmation: "Needs your decision",
@@ -102,6 +103,10 @@ export function Work({
   const [refresh, setRefresh] = useState(0);
   const [filter, setFilter] = useState(closeId ? "all" : "active");
   const [clientSearch, setClientSearch] = useState("");
+  const [dependencies, setDependencies] = useState<Dependency[]>([]);
+  const [dependencyMore, setDependencyMore] = useState(false);
+  const [dependencyError, setDependencyError] = useState("");
+  const [dependencyLoaded, setDependencyLoaded] = useState(false);
   useEffect(() => {
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -127,6 +132,20 @@ export function Work({
       clearTimeout(timer);
     };
   }, [closeId, refresh, filter, clientSearch]);
+  useEffect(() => {
+    if (closeId) return;
+    let live = true;
+    setDependencyLoaded(false);
+    setDependencies([]);
+    setDependencyMore(false);
+    setDependencyError("");
+    workspaceRequest(`/dependencies?client=${encodeURIComponent(clientSearch)}`).then(data => {
+      if (live) { setDependencies(data.items); setDependencyMore(data.has_more); setDependencyError(""); setDependencyLoaded(true); }
+    }).catch(e => {
+      if (live) { setDependencyError(e instanceof Error ? e.message : "Dependency review unavailable."); setDependencyLoaded(true); }
+    });
+    return () => { live = false; };
+  }, [closeId, clientSearch, refresh]);
   return (
     <section
       id={closeId ? "close-work" : undefined}
@@ -240,7 +259,15 @@ export function Work({
               </button>
             </p>
           )}
-          {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} onChange={() => setRefresh((n) => n + 1)} />}
+          {!closeId && <section id="dependency-review" aria-label="Portfolio dependency review"><h2>Work needing re-review</h2>
+            <p>Source revisions and inherited schedules can reopen a workpaper after preparation. Review the current draft in its close; earlier approvals are not reused.</p>
+            {!dependencyLoaded && <p role="status">Checking dependencies…</p>}
+            {dependencyError && <p role="alert">{dependencyError}</p>}
+            {dependencyLoaded && !dependencyError && dependencies.length === 0 && <p>No current workpapers have a changed dependency in this client filter.</p>}
+            {dependencies.length > 0 && <ul>{dependencies.map(item => <li key={item.workpaper_id}><Link to={`/dashboard/closes/${item.close_id}`}>{item.entity} · {item.period} · {item.kind} draft #{item.workpaper_id}</Link>{item.upstream_workpaper_id ? ` · linked to prior draft #${item.upstream_workpaper_id}` : " · linked source changed"}</li>)}</ul>}
+            {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
+          </section>}
+          {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} hasMore={more} onFilter={setFilter} onChange={() => setRefresh((n) => n + 1)} />}
           <fieldset disabled={!!error}>
             {items.map((item) => (
               <details
@@ -278,10 +305,11 @@ export function Work({
   );
 }
 
-function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}) {
+function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];hasMore:boolean;onFilter:(view:string)=>void;onChange:()=>void}) {
   const [mode,setMode] = useState<"prepare"|"stop"|"recheck">("prepare");
   const [command,setCommand] = useState("");
   const [answer,setAnswer] = useState("");
+  const [answerClose,setAnswerClose] = useState("");
   const closesFor = (action:"prepare"|"stop"|"recheck") => [...new Map(items.filter(i=>action === "prepare" || (action === "recheck" ? ["failed","needs_confirmation"].includes(i.state) : !["completed","cancelled"].includes(i.state))).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`,entity:i.entity.toLowerCase()}])).values()];
   const closes = closesFor(mode);
   const [selected,setSelected] = useState<string[]>([]);
@@ -303,7 +331,26 @@ function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}
     finally { setBusy(false); }
   }
   function interpret() {
-    setAnswer("");
+    setAnswer("");setAnswerClose("");setError("");
+    const view = /^(?:show|list)(?: me)? (decisions|blockers|running work|client requests|prepared work|all work|dependencies)$/i.exec(command.trim());
+    if (view) {
+      if (view[1].toLowerCase() === "dependencies") {setAnswer("Changed workpapers are listed in Work needing re-review.");return;}
+      const views:Record<string,string> = {decisions:"needs_confirmation",blockers:"blocked","running work":"running","client requests":"waiting_client","prepared work":"completed","all work":"all"};
+      onFilter(views[view[1].toLowerCase()]);
+      return;
+    }
+    const rehearsal = /^rehearse (.+)$/i.exec(command.trim());
+    if (rehearsal) {
+      const query = rehearsal[1].trim().toLowerCase();
+      setBusy(true);
+      void workspaceRequest("").then(data => {
+        const matches = (data.closes as {id:string;entity:string;period:string}[]).filter(c=>c.entity.toLowerCase() === query || `${c.entity} · ${c.period}`.toLowerCase() === query);
+        if(matches.length !== 1) {setError(data.has_more ? "Name an exact client and month among the latest 100 closes, or open Client closes." : "Name exactly one accessible client and month for rehearsal.");return;}
+        setAnswer(`Open the saved production journal rehearsal for ${matches[0].entity} · ${matches[0].period}.`);
+        setAnswerClose(matches[0].id);
+      }).catch(e=>setError(e instanceof Error ? e.message : "Could not find that close.")).finally(()=>setBusy(false));
+      return;
+    }
     const why = /^why is (.+) waiting\??$/i.exec(command.trim());
     if (why) {
       const query = why[1].trim().toLowerCase();
@@ -314,10 +361,16 @@ function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}
       return;
     }
     const match = /^(prepare|recheck|stop) (.+)$/i.exec(command.trim());
-    if (!match) {setError("Try ‘prepare Client name’, ‘recheck Client name’, ‘stop Client name’ or ‘why is Client name waiting?’.");return;}
+    if (!match) {setError("Try ‘show blockers’, ‘rehearse Client · YYYY-MM’, ‘prepare all visible’ or ‘why is Client · YYYY-MM waiting?’.");return;}
     const action = match[1].toLowerCase() as "prepare"|"stop"|"recheck";
     const query = match[2].trim().toLowerCase();
     const eligible = closesFor(action);
+    if (query === "all visible" || query === "visible closes") {
+      if (hasMore || eligible.length > 10) {setError("Narrow the inbox to at most 10 visible closes before a portfolio command.");return;}
+      if (eligible.length === 0) {setError("No eligible visible closes match this command.");return;}
+      setMode(action);setSelected(eligible.map(c=>c.id));setPreview(undefined);void inspect(eligible.map(c=>c.id),action);
+      return;
+    }
     const matches = eligible.filter(c=>c.entity === query || c.label.toLowerCase() === query);
     if (matches.length !== 1) {setError(matches.length ? "Several closes match. Include the close month shown below." : "No eligible visible close matches. Change the inbox filter or use the exact client name and month.");return;}
     setMode(action);setSelected([matches[0].id]);setPreview(undefined);setError("");
@@ -338,11 +391,12 @@ function PortfolioCommands({items,onChange}:{items:WorkItem[];onChange:()=>void}
     }
     setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
   }
-  if(!closes.length) return null;
-  return <details open><summary>Ask Work · prepare, recheck, stop or explain</summary>
+  return <details open><summary>Ask Work · find, explain and preview actions</summary>
     <p>Select up to 10 visible closes. Each close is checked again when submitted and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
-    <label>Ask Work<input value={command} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();interpret();}}} placeholder="prepare Client name" maxLength={220} /></label><button type="button" disabled={busy || !command.trim()} onClick={interpret}>Find and preview</button>
+    <label>Ask Work<input value={command} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();interpret();}}} placeholder="show blockers · prepare all visible · rehearse Client · YYYY-MM" maxLength={220} /></label><button type="button" disabled={busy || !command.trim()} onClick={interpret}>Find and preview</button>
+    <p>Try “show decisions”, “show dependencies”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, or “prepare/recheck/stop all visible”. Actions always need a preview and confirmation.</p>
     {answer && <p role="status" style={{whiteSpace:"pre-line"}}>{answer}</p>}
+    {answerClose && <Link to={`/dashboard/closes/${answerClose}`}>Open close rehearsal</Link>}
     <label>Command<select value={mode} onChange={e=>{setMode(e.target.value as "prepare"|"stop"|"recheck");setSelected([]);setPreview(undefined);setOutcomes([]);}}><option value="prepare">Prepare selected closes</option><option value="recheck">Recheck failed or pending proposals</option><option value="stop">Stop unresolved work</option></select></label>
     {closes.map(close=><label key={close.id}><input type="checkbox" checked={selected.includes(close.id)} disabled={busy || (!selected.includes(close.id) && selected.length>=10)} onChange={e=>{setPreview(undefined);setOutcomes([]);setSelected(current=>e.target.checked?[...current,close.id]:current.filter(id=>id!==close.id));}} /> {close.label}</label>)}
     <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect(selected,mode)}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
