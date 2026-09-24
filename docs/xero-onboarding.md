@@ -22,6 +22,10 @@ The connection belongs to the firm and client, so later months reuse it. Access 
 
 Deleting the close that opened a connection waits until the connection is disconnected and no other close holds a snapshot from it.
 
+## Exceptions
+
+The close's exceptions use the most recently captured month-end snapshot, QuickBooks or Xero, to list accounts on the wrong side of their normal balance. Xero has no contra-account subtype, so accounts named "accumulated" are skipped, along with retained earnings and owner drawings; revenue and expense accounts are judged on their year-to-date movement.
+
 ## Not included
 
-No writes, transaction or journal sync (complete Journals need Xero's Advanced tier), cash-basis reports, or checks that consume the snapshot yet. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.
+No writes, transaction or journal sync (complete Journals need Xero's Advanced tier), cash-basis reports, or other checks on Xero data yet. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.

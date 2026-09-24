@@ -2,6 +2,7 @@ package xero
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -43,5 +44,52 @@ func TestBalancesJoinReportRowsToAccountsByID(t *testing.T) {
 	}
 	if rows[3].Code != "" || rows[3].Class != "" || rows[3].Name != "Deleted since" {
 		t.Fatalf("an account missing from Accounts keeps its report label and no class: %+v", rows[3])
+	}
+}
+
+func TestWrongSideReadsYTDColumnsWithXeroRules(t *testing.T) {
+	accounts := []any{}
+	rows := []any{}
+	add := func(id, name, class, system, ytdDebit, ytdCredit string) {
+		if class != "" {
+			accounts = append(accounts, map[string]any{"AccountID": id, "Code": id, "Name": name, "Class": class, "SystemAccount": system})
+		}
+		rows = append(rows, map[string]any{"RowType": "Row", "Cells": []any{
+			map[string]any{"Value": name, "Attributes": []any{map[string]any{"Value": id, "Id": "account"}}},
+			map[string]any{"Value": ""}, map[string]any{"Value": ""}, map[string]any{"Value": ytdDebit}, map[string]any{"Value": ytdCredit}}})
+	}
+	add("090", "Business Bank Account", "ASSET", "", "", "1,200.00")
+	add("610", "Accounts Receivable", "ASSET", "DEBTORS", "800.00", "")
+	add("711", "Less Accumulated Depreciation on Office Equipment", "ASSET", "", "", "300.00")
+	add("960", "Retained Earnings", "EQUITY", "RETAINEDEARNINGS", "500.00", "")
+	add("880", "Owner A Drawings", "EQUITY", "", "250.00", "")
+	add("429", "General Expenses", "EXPENSE", "", "", "40.00")
+	add("091", "Petty Cash", "ASSET", "", "70.00", "70.00")
+	add("999", "Not in chart", "", "", "10.00", "")
+	payload := func(header ...string) json.RawMessage {
+		cells := []any{}
+		for _, h := range header {
+			cells = append(cells, map[string]any{"Value": h})
+		}
+		report, _ := json.Marshal(map[string]any{"Reports": []any{map[string]any{"Rows": append([]any{map[string]any{"RowType": "Header", "Cells": cells}}, map[string]any{"RowType": "Section", "Rows": rows})}}})
+		raw, _ := json.Marshal(map[string]any{"date": "2026-09-30", "organisation": map[string]any{"Organisations": []any{map[string]any{"BaseCurrency": "USD"}}}, "accounts": map[string]any{"Accounts": accounts}, "trial_balance": json.RawMessage(report)})
+		return raw
+	}
+	_, found, err := WrongSide(payload("Account", "Debit", "Credit", "YTD Debit", "YTD Credit"))
+	if err != nil || len(found) != 2 {
+		t.Fatalf("only the overdrawn bank and the expense credit are candidates: %v %+v", err, found)
+	}
+	if found[0].Account != "Business Bank Account" || found[0].Side != "credit" || found[0].Amount != "1200.00" || !strings.Contains(found[0].Finding, "$1200.00 credit balance,") {
+		t.Fatalf("a balance-sheet account shows its balance: %+v", found[0])
+	}
+	if found[1].Account != "General Expenses" || !strings.Contains(found[1].Finding, "credit year-to-date balance") {
+		t.Fatalf("a profit-and-loss account shows its year-to-date movement: %+v", found[1])
+	}
+	if _, _, err = WrongSide(payload("Account", "Debit", "Credit", "YTD Debit")); err == nil {
+		t.Fatal("a Trial Balance without YTD Credit must not pass as normal")
+	}
+	rows[0] = map[string]any{"RowType": "Row", "Cells": []any{map[string]any{"Value": "Business Bank Account", "Attributes": []any{map[string]any{"Value": "090", "Id": "account"}}}, map[string]any{"Value": ""}, map[string]any{"Value": ""}, map[string]any{"Value": "n/a"}, map[string]any{"Value": ""}}}
+	if _, _, err = WrongSide(payload("Account", "Debit", "Credit", "YTD Debit", "YTD Credit")); err == nil {
+		t.Fatal("an unreadable amount must fail the check")
 	}
 }
