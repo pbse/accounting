@@ -16,7 +16,10 @@ import (
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"close.local/backend/internal/prepaids"
+	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/reconciliation"
 	"close.local/backend/internal/secrets"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -49,6 +52,7 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 		db.Exec(`DELETE FROM production_posting_grants WHERE organization_id=$1`, org)
 		db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, closeID)
 		db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM evidence WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
 		db.Exec(`DELETE FROM organization_member_access WHERE organization_id=$1`, org)
@@ -79,6 +83,13 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 		Direction: "personal_paid_by_business", PurposeStatus: "answered", StatedPurpose: "Family dinner", ClientConfirmationReference: "Client reply", Treatment: "distribution", BookedAccount: "Meals", OwnerAccount: "Shareholder distributions", Method: owners.Method, TreatmentConfirmed: true})
 	must(err)
 	ownerID := saved("owner", owner)
+	var report string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'Stripe payouts Sep 2026','stripe-digest','Synthetic Stripe report','fixture') RETURNING id::text`, closeID).Scan(&report))
+	feeID := saved("settlement", struct {
+		reconciliation.SettlementWorkpaper
+		Sources []preparation.Source `json:"sources"`
+	}{reconciliation.SettlementWorkpaper{Input: reconciliation.SettlementInput{Entity: "Entries fixture", ClosePeriod: "2026-09", Currency: "USD", ReportReference: "Stripe payouts Sep 2026 · rows 1-13"},
+		Proposal: &prepaids.Adjustment{Date: "2026-09-30", DebitAccount: "Stripe fees", CreditAccount: "Sales", Amount: "29.22"}}, []preparation.Source{{ID: report, Digest: "stripe-digest", Name: "Stripe payouts Sep 2026", Role: "processor_report", Location: "rows 1-13"}}})
 
 	t.Setenv("SECRETS_KEY", strings.Repeat("ab", 32))
 	credentials, _ := json.Marshal(quickbooks.Credentials{Access: "synthetic-production-access", Refresh: "synthetic-refresh", Expires: 3600, Type: "bearer"})
@@ -89,7 +100,7 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 	must(err)
 
 	// Liabilities carry positive credit balances; the expense a positive debit balance.
-	accounts := map[string][3]string{"30": {"Interest expense", "Expense", "100.00"}, "31": {"Accrued interest", "Liability", "0.00"}, "32": {"Loan payable", "Liability", "100000.00"}, "33": {"Current portion of loan", "Liability", "18000.00"}, "40": {"Meals", "Expense", "500.00"}, "42": {"Shareholder distributions", "Equity", "0.00"}, "43": {"Shareholder distributions", "Equity", "0.00"}}
+	accounts := map[string][3]string{"30": {"Interest expense", "Expense", "100.00"}, "31": {"Accrued interest", "Liability", "0.00"}, "32": {"Loan payable", "Liability", "100000.00"}, "33": {"Current portion of loan", "Liability", "18000.00"}, "40": {"Meals", "Expense", "500.00"}, "42": {"Shareholder distributions", "Equity", "0.00"}, "43": {"Shareholder distributions", "Equity", "0.00"}, "50": {"Stripe fees", "Expense", "10.00"}, "51": {"Sales", "Revenue", "5000.00"}}
 	after := map[string]string{"30": "119.67", "31": "19.67", "32": "98000.00", "33": "20000.00"}
 	writes := 0
 	var posted quickbooks.Journal
@@ -108,6 +119,9 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 			balance := a[2]
 			if writes > 0 && after[id] != "" {
 				balance = after[id]
+			}
+			if writes > 1 && id >= "50" {
+				balance = map[string]string{"50": "39.22", "51": "5029.22"}[id]
 			}
 			result = map[string]any{"Account": map[string]any{"Id": id, "Name": a[0], "Active": true, "Classification": a[1], "SyncToken": "1", "CurrentBalance": json.RawMessage(balance)}}
 		case r.Method == "POST":
@@ -140,7 +154,7 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 	grantPath := "/v1/closes/" + closeID + "/production-grant"
 	grant := func(limit string, kinds []string) string {
 		var out struct{ ID string }
-		json.Unmarshal(call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "account_ids": []string{"30", "31", "32", "33", "40", "42", "43"}, "kinds": kinds, "max_amount": limit, "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic loan and owner posting", "confirmation": "GRANT PRODUCTION POSTING"}, 200), &out)
+		json.Unmarshal(call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "account_ids": []string{"30", "31", "32", "33", "40", "42", "43", "50", "51"}, "kinds": kinds, "max_amount": limit, "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic loan and owner posting", "confirmation": "GRANT PRODUCTION POSTING"}, 200), &out)
 		return out.ID
 	}
 	loanPath := "/v1/closes/" + closeID + "/workpapers/" + loanID + "/production-posting"
@@ -157,7 +171,7 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 		t.Fatalf("the grant limit applies to the journal's total debits (2,019.67): %s", body)
 	}
 	call(grantPath, map[string]any{"action": "revoke", "grant_id": first, "confirmation": "REVOKE PRODUCTION GRANT"}, 200)
-	grant("3000.00", []string{"loan", "owner"})
+	second := grant("3000.00", []string{"loan", "owner"})
 	var preview productionPosting
 	json.Unmarshal(call(loanPath, map[string]string{"action": "preview"}, 200), &preview)
 	var journal quickbooks.Journal
@@ -176,5 +190,28 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 	}
 	if writes != 1 {
 		t.Fatal("no write may follow a refused preview")
+	}
+	feePath := "/v1/closes/" + closeID + "/workpapers/" + feeID + "/production-posting"
+	call(grantPath, map[string]any{"action": "revoke", "grant_id": second, "confirmation": "REVOKE PRODUCTION GRANT"}, 200)
+	grant("3000.00", []string{"settlement"})
+	if body := call(feePath, map[string]string{"action": "preview"}, 409); !strings.Contains(string(body), "not enabled") {
+		t.Fatalf("Stripe fee entries stay off until enabled: %s", body)
+	}
+	t.Setenv("PRODUCTION_POSTING_KINDS", "prepaid,loan,owner,settlement")
+	var newer string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) SELECT close_id,kind,'newer',jsonb_set(paper,'{input,report_reference}','"Stripe payouts Sep 2026 · page 1"') FROM workpapers WHERE id=$1 RETURNING id::text`, feeID).Scan(&newer))
+	if body := call(feePath, map[string]string{"action": "preview"}, 409); !strings.Contains(string(body), "newer source draft") {
+		t.Fatalf("a newer draft of the same Stripe report file supersedes this one, whatever its cited location: %s", body)
+	}
+	_, err = db.Exec(`DELETE FROM workpapers WHERE id=$1`, newer)
+	must(err)
+	json.Unmarshal(call(feePath, map[string]string{"action": "preview"}, 200), &preview)
+	if preview.Projected["50"] != "39.22" || preview.Projected["51"] != "5029.22" {
+		t.Fatalf("the fee entry grosses up revenue by the payout fees: %v", preview.Projected)
+	}
+	call(feePath, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 200)
+	json.Unmarshal(call(feePath, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 200), &result)
+	if writes != 2 || result.State != "verified" {
+		t.Fatalf("the approved Stripe fee entry posts once and verifies: %+v writes=%d", result, writes)
 	}
 }

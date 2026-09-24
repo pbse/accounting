@@ -196,8 +196,8 @@ function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[]
 }
 
 export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
-  if (saved.kind === "settlement") return <SettlementResult result={saved.paper} />;
   const posting = <ProductionPosting closeId={close.id} paperId={saved.id} />;
+  if (saved.kind === "settlement") return <><SettlementResult result={saved.paper} />{saved.paper.proposal && saved.paper.blockers.length === 0 && posting}</>;
   if (saved.kind === "accrual") return <><AccrualResult result={saved.paper} />{saved.paper.proposal && posting}</>;
   if (saved.kind === "loan") return <><LoanResult result={saved.paper} />{saved.paper.proposals.length > 0 && saved.paper.blockers.length === 0 && posting}</>;
   if (saved.kind === "owner") return <><OwnerResult result={saved.paper} />{saved.paper.proposal && posting}</>;

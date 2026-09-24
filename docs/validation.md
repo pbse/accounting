@@ -558,3 +558,9 @@ Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; a
 - `TestQuickBooksScopedOAuthRefreshAndSnapshots` now checks that a production company whose name differs from the client cannot be confirmed through the API, and that once production is connected the sandbox company can no longer be snapshotted.
 - `TestExceptionsScanTheWholeLatestCapture` now checks that a sandbox month-end snapshot and transaction capture are not shown as the client's current or latest books once a production connection exists. Observed red without the snapshot and latest-capture scoping.
 - `TestQuickBooksScopedOAuthRefreshAndSnapshots` also connects production while a sandbox snapshot is being read: the snapshot is not saved (code review finding). Observed red without the recheck at save. A client-level advisory lock taken by both the connect insert and the snapshot save orders a production connection started on another close of the same client against the save; the save takes it before any row lock, as the connect insert does, so the two cannot deadlock (final review round); this concurrency guard has no automated test. After every connection is disconnected, the most recent capture and snapshot stay visible and flagged stale, as before.
+
+## Stripe fee entry posting (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 052.
+
+- `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.

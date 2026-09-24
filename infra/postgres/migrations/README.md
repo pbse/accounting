@@ -35,3 +35,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `050_daily_books.sql` stores each transaction capture's exceptions and the capture last reviewed per close, with row-level security like 047. Apply after 049 with API/worker stopped; `/readyz` checks it. See [Work inbox](../../../docs/work-inbox.md#daily-books).
 
 `051_client_profile.sql` stores each QuickBooks and Xero connection's home currency and first fiscal month, read at connect time (QuickBooks) or at each snapshot (Xero). Apply after 050 with API/worker stopped; existing connections stay unknown (USD only) until reconnected or snapshotted. `/readyz` checks it.
+
+`052_settlement_posting.sql` lets a production grant cover Stripe settlement fee entries. Apply after 051 with API/worker stopped; `/readyz` checks it.
