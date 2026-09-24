@@ -428,6 +428,12 @@ Author: Claude Opus 5.5. Migration 047.
 - One-off probe (not committed): the full transport suite with its pools opened through the wrapper as a non-owner role, and with the API's own pool failing closed. 50 of 51 tests passed. The one failure calls the posting handler directly as firm `org_fixture` against a `local-development` close; the database refused that cross-firm read, as intended (the application boundary would refuse the same request). Removing the system mark from the client-request route made two client-request tests fail, showing the probe exercised it.
 - Backup expiry verification is not included: no PostgreSQL provider is provisioned, so retention cannot be checked against a provider or contract.
 
+## Year-end handoff (2026-09-24)
+
+Author: Claude Opus 5.5. No migration.
+
+- `TestYearEndHandoffRollsForwardApprovedWork` (PostgreSQL): January to May with April missing; a prepaid with a February credit rolls forward without a break; a prepaid whose schedule disagrees with the prior approved balance, a loan whose opening differs from the prior closing, a prepaid with a prior-month balance but no prior paper, and a pending latest version (its older approved version is not used), a prepaid whose schedule omits a month that has an approved paper, and a loan with opening principal but no prior-month paper each become open questions (a loan opening at zero is new and is not asked about); a bank and a card reconciliation with one name stay separate; a verified posting on the older version stays in `postings.csv`; the prior year, another client and another firm are excluded; checksums verify. Observed red with the first version kept instead of the latest, with a closing-minus-expense rule in place of the saved schedule, with each continuity or missing-paper check removed, with loans opening at zero asked about, with the client, firm or year boundary removed, with reconciliations keyed by account alone and with unapproved versions included.
+
 ## Deeper exception finding (2026-09-24)
 
 Author: Claude Opus 5.5. No migration.
