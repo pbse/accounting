@@ -23,6 +23,7 @@ export default function WorkspaceLayout() {
           <NavLink to="/dashboard/reconciliations/new">
             Reconcile a statement
           </NavLink>
+          <NavLink to="/dashboard/settlements/new">Trace Stripe payouts</NavLink>
           <NavLink to="/dashboard/prepaids/new">Prepare a prepaid</NavLink>
           <NavLink to="/dashboard/close">Example close</NavLink>
           <NavLink to="/dashboard/review">Example review</NavLink>

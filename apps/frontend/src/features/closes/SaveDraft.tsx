@@ -5,14 +5,17 @@ import type { EvidenceFile } from "./Evidence";
 import { workspaceRequest } from "./workspace";
 import type { PrepaidInput } from "../../../../../packages/contracts/prepaid";
 import type { ReconciliationInput } from "../../../../../packages/contracts/reconciliation";
+import type { SettlementInput } from "../../../../../packages/contracts/settlement";
+
+const roleLabels: Record<string, string> = { processor_report: "Stripe payout export", bank: "Bank CSV" };
 
 export function SaveDraft({
   kind,
   input,
   initialSources = {},
 }: {
-  kind: "prepaid" | "reconciliation" | "accrual";
-  input: PrepaidInput | ReconciliationInput | AccrualInput;
+  kind: "prepaid" | "reconciliation" | "accrual" | "settlement";
+  input: PrepaidInput | ReconciliationInput | AccrualInput | SettlementInput;
   initialSources?: Record<string, { id: string; location: string }>;
 }) {
   const [params] = useSearchParams();
@@ -31,7 +34,8 @@ export function SaveDraft({
         .then(setFiles)
         .catch((e) => setStatus(e.message));
   }, [close]);
-  const roles = kind === "reconciliation" ? ["statement", "ledger", ...((input as ReconciliationInput).account_type === "credit_card" ? ["procedure"] : []), ...((input as ReconciliationInput).prior_outstanding?.length ? ["support"] : []), ...((input as ReconciliationInput).current_outstanding?.some(item => item.treatment === "clearing") ? ["clearing"] : []), ...((input as ReconciliationInput).transfers?.length ? ["other_statement", "other_ledger"] : []), ...((input as ReconciliationInput).native_status && (input as ReconciliationInput).native_status !== "unverified" ? ["native_status"] : [])] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
+  const csvOnly = kind === "reconciliation" || kind === "settlement";
+  const roles = kind === "settlement" ? ["processor_report", "bank"] : kind === "reconciliation" ? ["statement", "ledger", ...((input as ReconciliationInput).account_type === "credit_card" ? ["procedure"] : []), ...((input as ReconciliationInput).prior_outstanding?.length ? ["support"] : []), ...((input as ReconciliationInput).current_outstanding?.some(item => item.treatment === "clearing") ? ["clearing"] : []), ...((input as ReconciliationInput).transfers?.length ? ["other_statement", "other_ledger"] : []), ...((input as ReconciliationInput).native_status && (input as ReconciliationInput).native_status !== "unverified" ? ["native_status"] : [])] : kind==="accrual" ? ["invoice","support"] : ("credit_amount" in input && input.credit_amount) || ("booked_balance" in input && input.booked_balance) || ("cancellation_method" in input && input.cancellation_method) ? ["invoice","support"] : ["invoice"];
   if (!close)
     return (
       <p>
@@ -76,7 +80,7 @@ export function SaveDraft({
       <p>
         Confirm the values against uploaded evidence, then save instructions for
         the durable close job. Supporting evidence must cover invoice/service terms, any credit and the current ledger balance.
-        Reconciliation CSV values will come from the selected files, replacing
+        Reconciliation and Stripe CSV values will come from the selected files, replacing
         the pasted rows above. Card work also needs the applied approved reconciliation procedure;
         current clearing items need their own clearing-account evidence.
       </p>
@@ -88,7 +92,7 @@ export function SaveDraft({
       {roles.map((role) => (
         <div key={role}>
           <label>
-            {role} source
+            {roleLabels[role] ?? `${role} source`}
             <select
               value={sources[role]?.id ?? ""}
               onChange={(e) =>
@@ -107,7 +111,7 @@ export function SaveDraft({
                   (f) =>
                     !f.superseded_by &&
                     f.extraction_state === "ready" &&
-                    (role === "procedure" ? f.procedure_kind === "reconciliation" : kind !== "reconciliation" || role === "support" || role === "clearing" || role === "native_status" ||
+                    (role === "procedure" ? f.procedure_kind === "reconciliation" : !csvOnly || role === "support" || role === "clearing" || role === "native_status" ||
                       f.name.toLowerCase().endsWith(".csv")),
                 )
                 .map((f) => (

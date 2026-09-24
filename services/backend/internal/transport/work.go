@@ -268,6 +268,9 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 					return
 				}
 				input, _ = json.Marshal(value)
+			case "settlement":
+				problem(w, 422, "Choose the bank CSV on the Stripe settlement page to continue this job.")
+				return
 			default:
 				problem(w, 422, "This work is unsupported or ambiguous. Answer the questions and recheck evidence first.")
 				return

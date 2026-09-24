@@ -548,7 +548,9 @@ function WorkDetails({
           <h3>
             {item.proposal.engine === "openai"
               ? "Agent-proposed work and facts"
-              : "Proposed facts · local extraction"}
+              : item.proposal.engine === "recognized_export"
+                ? "Recognized Stripe payout export"
+                : "Proposed facts · local extraction"}
           </h3>
           {item.proposal.summary && <p>{item.proposal.summary}</p>}
           {questions.length > 0 && (
@@ -603,7 +605,17 @@ function WorkDetails({
               </fieldset>
             </form>
           )}
-          {kind !== "unsupported" && (
+          {kind === "settlement" && (
+            <p>
+              <Link
+                className="button primary"
+                to={`/dashboard/settlements/new?close=${item.close_id}&entity=${encodeURIComponent(item.entity)}&period=${item.period}&work=${item.id}&revision=${item.revision}&report=${item.source_id}`}
+              >
+                Trace payouts to bank deposits →
+              </Link>
+            </p>
+          )}
+          {kind !== "unsupported" && kind !== "settlement" && (
             <form onSubmit={confirm}>
               <fieldset disabled={busy}>
                 <legend>

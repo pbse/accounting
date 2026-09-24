@@ -415,6 +415,35 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			if err = csvFile(root+"-exceptions.csv", records); err != nil {
 				return nil, err
 			}
+		case "settlement":
+			var paper reconciliation.SettlementWorkpaper
+			if err = json.Unmarshal(saved.Paper, &paper); err != nil {
+				return nil, err
+			}
+			summary.Source = paper.Input.ReportReference + " / " + paper.Input.BankReference
+			summary.Method = paper.Method
+			summary.Issues = append(append([]string{"USD Stripe automatic payouts traced to " + paper.Input.BankAccount + ". Matched deposits are candidates until this workpaper is approved; in-transit payouts cite an accountant rule. No journal is proposed."}, paper.Blockers...), paper.Questions...)
+			records := [][]string{{"Payout", "Expected", "Transactions", "Gross USD", "Fee USD", "Net USD", "Status", "Bank row", "Bank date", "After month-end", "Candidates", "Rule", "Reason"}}
+			for _, payout := range paper.Payouts {
+				row, date, late := "", "", ""
+				if payout.Deposit != nil {
+					row, date = payout.Deposit.ID, payout.Deposit.Date
+					if !strings.HasPrefix(date, paper.Input.ClosePeriod) {
+						late = "yes"
+					}
+				}
+				records = append(records, []string{csvText(payout.ID), payout.ExpectedDate, fmt.Sprint(payout.Count), payout.Gross, payout.Fee, payout.Net, payout.Status, csvText(row), date, late, csvText(strings.Join(payout.CandidateIDs, "; ")), csvText(payout.Policy), csvText(payout.Reason)})
+			}
+			if err = csvFile(root+"-payouts.csv", records); err != nil {
+				return nil, err
+			}
+			records = [][]string{{"Stripe category", "Transactions", "Gross USD", "Fee USD", "Net USD"}}
+			for _, category := range append(paper.Categories, paper.Total) {
+				records = append(records, []string{csvText(category.Category), fmt.Sprint(category.Count), category.Gross, category.Fee, category.Net})
+			}
+			if err = csvFile(root+"-categories.csv", records); err != nil {
+				return nil, err
+			}
 		default:
 			return nil, fmt.Errorf("unsupported workpaper kind")
 		}
