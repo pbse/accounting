@@ -93,6 +93,7 @@ export function Procedures({
         "Published a new immutable version. Existing close context stays pinned until explicitly updated.",
       );
       await load();
+      if (kind === "basis") onApplied();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Procedure save failed.");
     } finally {
@@ -210,7 +211,7 @@ export function Procedures({
                       Approval record: {v.reason} · {v.actor} ·{" "}
                       {new Date(v.created_at).toLocaleString()}
                     </p>
-                    {v.enabled && <>
+                    {v.enabled && k !== "basis" && <>
                       <button disabled={busy} onClick={() => void preview(v)}>Preview affected work</button>
                       {impact?.version_id === v.id && <>
                         <p>Current pinned procedure source: {impact.source_id ? `#${impact.source_id}` : "none"}. Applying this version changes the cited context for {impact.affected_drafts.length} workpaper(s); their review may become stale.</p>
@@ -263,7 +264,7 @@ export function Procedures({
                   <option value="basis">Accounting basis</option>
                 </select>
               </label>
-              {target === "client" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
+              {target === "client" && kind !== "basis" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
               <button onClick={() => { setSuggestion(undefined);setEditing(true); }} disabled={busy}>
                 Propose and approve a new version
               </button>
