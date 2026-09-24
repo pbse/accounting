@@ -131,7 +131,7 @@ func TestLearnedRuleRequiresApprovedExampleBeforeActivation(t *testing.T) {
 	}
 	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
 	must(err)
-	inventory, _, err := preparation.AgentInventory(context.Background(), tx, closeID, "")
+	inventory, _, err := preparation.AgentInventory(context.Background(), tx, closeID, "0")
 	must(err)
 	tx.Rollback()
 	if len(inventory) != 0 {
