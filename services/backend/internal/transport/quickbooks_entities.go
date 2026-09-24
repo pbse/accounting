@@ -120,11 +120,29 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		jsonReply(w, 200, map[string]any{"items": items, "has_more": more})
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/quickbooks/exceptions", func(w http.ResponseWriter, r *http.Request) {
+		balances := map[string]any{"snapshot": nil, "items": []any{}}
+		var snapshotID, capturedAt string
+		var stale bool
+		var accounts, trialBalance []byte
+		err := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at::text,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
+ WHERE s.close_id::text=$1 AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &capturedAt, &stale, &accounts, &trialBalance)
+		if err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "Period snapshot unavailable.")
+			return
+		}
+		if err == nil {
+			balances["snapshot"] = map[string]any{"id": snapshotID, "captured_at": capturedAt, "stale": stale}
+			if items, err := quickbooks.AbnormalBalances(accounts, trialBalance); err != nil {
+				balances["error"] = err.Error()
+			} else {
+				balances["items"] = items
+			}
+		}
 		var captureID, evidenceID, finished string
-		err := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.evidence_id::text,s.finished_at::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
+		err = db.QueryRowContext(r.Context(), `SELECT s.id::text,s.evidence_id::text,s.finished_at::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
  WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(id) FROM quickbooks_entity_syncs WHERE close_id=s.close_id AND state='completed')`, r.PathValue("id")).Scan(&captureID, &evidenceID, &finished)
 		if err == sql.ErrNoRows {
-			jsonReply(w, 200, map[string]any{"capture": nil, "items": []any{}})
+			jsonReply(w, 200, map[string]any{"capture": nil, "items": []any{}, "balances": balances})
 			return
 		}
 		if err != nil {
@@ -149,7 +167,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Transaction index unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": captureID, "evidence_id": evidenceID, "finished_at": finished}, "scanned": len(scanned), "items": quickbooks.FindExceptions(scanned)})
+		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": captureID, "evidence_id": evidenceID, "finished_at": finished}, "scanned": len(scanned), "items": quickbooks.FindExceptions(scanned), "balances": balances})
 	})
 	mux.HandleFunc("GET "+path+"/{sync}", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
