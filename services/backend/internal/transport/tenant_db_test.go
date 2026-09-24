@@ -105,6 +105,9 @@ func TestRowLevelSecurityIsolatesFirms(t *testing.T) {
 	if n != 1 {
 		t.Fatal("after a rollback firm B must still see its own close")
 	}
+	if _, err = probe.PrepareContext(firmA, `SELECT 1`); err == nil {
+		t.Fatal("a prepared statement could later run as another firm")
+	}
 	var enforced bool
 	must(probe.QueryRow(rowSecurityEnforced).Scan(&enforced))
 	if !enforced {

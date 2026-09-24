@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"net/http"
 
 	"close.local/backend/internal/auth"
@@ -13,7 +14,7 @@ import (
 
 // Hosted readiness: the runtime role must not bypass policies, and every table and view must apply them.
 const rowSecurityEnforced = `SELECT NOT r.rolsuper AND NOT r.rolbypassrls
- AND NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND (NOT c.relrowsecurity OR pg_has_role(current_user,c.relowner,'USAGE') OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid)))
+ AND NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND (NOT c.relrowsecurity OR pg_has_role(current_user,c.relowner,'MEMBER') OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=c.oid)))
  AND NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='v' AND NOT coalesce('security_invoker=true'=ANY(c.reloptions),false))
  FROM pg_roles r WHERE r.rolname=current_user`
 
@@ -94,11 +95,9 @@ func (c *tenantConn) ExecContext(ctx context.Context, query string, args []drive
 	return c.Conn.ExecContext(ctx, query, args)
 }
 
-func (c *tenantConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
-	if err := c.use(ctx); err != nil {
-		return nil, err
-	}
-	return c.Conn.PrepareContext(ctx, query)
+// A prepared statement would run later as whichever firm the connection last served.
+func (c *tenantConn) PrepareContext(context.Context, string) (driver.Stmt, error) {
+	return nil, errors.New("prepared statements are not supported with row-level security")
 }
 
 func (c *tenantConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
