@@ -169,22 +169,25 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 					return
 				}
 				approvedPrepaids[s] = wp
-				credit := ""
-				for _, row := range wp.Schedule {
+				credit, prior := "", (*prepaids.Row)(nil)
+				for i, row := range wp.Schedule {
 					if row.Period == p.period {
 						credit = row.Credit
 					}
-					// The current schedule's prior-month balance already reflects credits and cancellations.
-					if row.Period != previous.period || previous.period < year+"-01" || closes[previous.period] == "" {
-						continue
+					if row.Period == previous.period {
+						prior = &wp.Schedule[i]
 					}
-					if before, ok := approvedPrepaids[previous]; ok {
-						if !sameAmount(before.PrepaidBalance, row.Remaining) {
-							ask(p.period, where, fmt.Sprintf("Roll-forward break: %s closed %s at %s, but this schedule shows %s for %s.", wp.Input.SourceReference, previous.period, before.PrepaidBalance, row.Remaining, previous.period))
-						}
-					} else if _, pending := latest[previous]; !pending {
-						ask(p.period, where, fmt.Sprintf("%s has a %s balance in this schedule but no %s workpaper.", wp.Input.SourceReference, previous.period, previous.period))
-					}
+				}
+				// The current schedule's prior-month balance already reflects credits and cancellations.
+				before, approvedBefore := approvedPrepaids[previous]
+				_, pending := latest[previous]
+				switch {
+				case approvedBefore && prior == nil:
+					ask(p.period, where, fmt.Sprintf("%s has an approved %s workpaper, but this schedule has no %s row.", wp.Input.SourceReference, previous.period, previous.period))
+				case approvedBefore && !sameAmount(before.PrepaidBalance, prior.Remaining):
+					ask(p.period, where, fmt.Sprintf("Roll-forward break: %s closed %s at %s, but this schedule shows %s for %s.", wp.Input.SourceReference, previous.period, before.PrepaidBalance, prior.Remaining, previous.period))
+				case !approvedBefore && !pending && prior != nil && previous.period >= year+"-01" && closes[previous.period] != "":
+					ask(p.period, where, fmt.Sprintf("%s has a %s balance in this schedule but no %s workpaper.", wp.Input.SourceReference, previous.period, previous.period))
 				}
 				prepaidRows = append(prepaidRows, []string{p.period, csvText(wp.Input.SourceReference), csvText(wp.Input.PrepaidAccount), csvText(wp.Input.ExpenseAccount), credit, wp.PeriodExpense, wp.PrepaidBalance, wp.Input.Currency, p.id})
 				propose(p, wp.Proposal)
@@ -195,8 +198,13 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 					return
 				}
 				approvedLoans[s] = wp
-				if before, ok := approvedLoans[previous]; ok && !sameAmount(before.Input.ClosingPrincipal, wp.Input.OpeningPrincipal) {
+				before, approvedBefore := approvedLoans[previous]
+				_, pending := latest[previous]
+				switch {
+				case approvedBefore && !sameAmount(before.Input.ClosingPrincipal, wp.Input.OpeningPrincipal):
 					ask(p.period, where, fmt.Sprintf("Roll-forward break: %s closed %s at %s principal, but this month opens at %s.", wp.Input.Lender, previous.period, before.Input.ClosingPrincipal, wp.Input.OpeningPrincipal))
+				case !approvedBefore && !pending && previous.period >= year+"-01" && closes[previous.period] != "" && !sameAmount(wp.Input.OpeningPrincipal, "0"):
+					ask(p.period, where, fmt.Sprintf("%s opens %s with %s principal, but %s has no loan workpaper.", wp.Input.Lender, p.period, wp.Input.OpeningPrincipal, previous.period))
 				}
 				principal, interest := new(big.Rat), new(big.Rat)
 				for _, row := range wp.Schedule {

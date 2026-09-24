@@ -86,11 +86,15 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	olderSoftware := save(feb, "prepaid", prepaid("Software", "30.00", "330.00", prepaids.Row{Period: "2026-02", Expense: "30.00", Remaining: "330.00"}), true)
 	save(feb, "prepaid", prepaid("Software", "35.00", "325.00", prepaids.Row{Period: "2026-02", Expense: "35.00", Remaining: "325.00"}), false)
 	save(mar, "prepaid", prepaid("Hosting", "20.00", "280.00", prepaids.Row{Period: "2026-02", Expense: "20.00", Remaining: "300.00"}, prepaids.Row{Period: "2026-03", Expense: "20.00", Remaining: "280.00"}), true)
-	loan := func(opening, closing string) loans.Workpaper {
-		return loans.Workpaper{Input: loans.Input{Lender: "First Bank", LoanAccount: "Loan payable", OpeningPrincipal: opening, ClosingPrincipal: closing, Currency: "USD"}, Schedule: []loans.Row{{Principal: "1500.00", Interest: "620.00"}, {Principal: "500.00", Interest: "276.50"}}}
+	save(jan, "prepaid", prepaid("Warranty", "10.00", "110.00", prepaids.Row{Period: "2026-01", Expense: "10.00", Remaining: "110.00"}), true)
+	save(feb, "prepaid", prepaid("Warranty", "10.00", "100.00", prepaids.Row{Period: "2026-02", Expense: "10.00", Remaining: "100.00"}), true)
+	loan := func(lender, opening, closing string) loans.Workpaper {
+		return loans.Workpaper{Input: loans.Input{Lender: lender, LoanAccount: "Loan payable", OpeningPrincipal: opening, ClosingPrincipal: closing, Currency: "USD"}, Schedule: []loans.Row{{Principal: "1500.00", Interest: "620.00"}, {Principal: "500.00", Interest: "276.50"}}}
 	}
-	save(jan, "loan", loan("120000.00", "118000.00"), true)
-	save(feb, "loan", loan("117500.00", "115500.00"), true)
+	save(jan, "loan", loan("First Bank", "120000.00", "118000.00"), true)
+	save(feb, "loan", loan("First Bank", "117500.00", "115500.00"), true)
+	save(mar, "loan", loan("Second Bank", "5000.00", "3000.00"), true)
+	save(mar, "loan", loan("New Bank", "0.00", "8000.00"), true)
 	for _, kind := range []string{"bank", "credit_card"} {
 		save(mar, "reconciliation", reconciliation.Workpaper{Status: "reconciled", Input: reconciliation.Input{Account: "Operating", AccountType: kind, StatementClosing: "900.00", LedgerClosing: "900.00"}, ClosingDifference: "0.00"}, true)
 	}
@@ -143,7 +147,7 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	if got := column("months.csv", 2); !strings.Contains(got, "2026-04 no close") || len(table("months.csv")) != 5 {
 		t.Fatalf("January through May, April has no close: %s", got)
 	}
-	if got := column("prepaids.csv", 1); got != "2026-01 Insurance, 2026-01 Maintenance, 2026-02 Insurance, 2026-02 Maintenance, 2026-03 Insurance, 2026-03 Hosting" {
+	if got := column("prepaids.csv", 1); got != "2026-01 Insurance, 2026-01 Maintenance, 2026-01 Warranty, 2026-02 Insurance, 2026-02 Maintenance, 2026-02 Warranty, 2026-03 Insurance, 2026-03 Hosting" {
 		t.Fatalf("only this client's approved latest prepaids for the year: %s", got)
 	}
 	if got := column("reconciliations.csv", 2); got != "2026-03 bank, 2026-03 credit_card" {
@@ -153,12 +157,12 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 		t.Fatalf("the verified posting on an older version stays in the history: %v", got)
 	}
 	questions := files["open-questions.csv"]
-	for _, want := range []string{"Roll-forward break: Maintenance closed 2026-01 at 500.00, but this schedule shows 450.00", "Roll-forward break: First Bank closed 2026-01 at 118000.00 principal, but this month opens at 117500.00", "latest prepaid version for software is pending, not approved", "Hosting has a 2026-02 balance in this schedule but no 2026-02 workpaper", "No close exists for this month"} {
+	for _, want := range []string{"Roll-forward break: Maintenance closed 2026-01 at 500.00, but this schedule shows 450.00", "Roll-forward break: First Bank closed 2026-01 at 118000.00 principal, but this month opens at 117500.00", "latest prepaid version for software is pending, not approved", "Hosting has a 2026-02 balance in this schedule but no 2026-02 workpaper", "No close exists for this month", "Warranty has an approved 2026-01 workpaper, but this schedule has no 2026-01 row", "Second Bank opens 2026-03 with 5000.00 principal, but 2026-02 has no loan workpaper"} {
 		if !strings.Contains(questions, want) {
 			t.Fatalf("missing open question %q in:\n%s", want, questions)
 		}
 	}
-	if strings.Contains(questions, "Roll-forward break: Insurance") {
-		t.Fatalf("a credit in the saved schedule is not a break:\n%s", questions)
+	if strings.Contains(questions, "Roll-forward break: Insurance") || strings.Contains(questions, "New Bank") {
+		t.Fatalf("a credit in the saved schedule is not a break, and a loan opening at zero is new:\n%s", questions)
 	}
 }
