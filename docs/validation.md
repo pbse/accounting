@@ -513,3 +513,10 @@ Author: Claude Opus 5.5. No migration.
 - `TestPeriodEntitiesRequiresCompletePagedRevisions` now checks that the capture pages open bills and invoices into `open_items`. Observed red when they are not stored.
 - `TestTransactionChecksReuseEvidenceAndRefreshIndexedRows` now checks that a capture differing only in open items stays unchanged, keeps its open items and records a past-due bill beside the reused transaction findings. Observed red with open items in the evidence digest, dropped from the unchanged payload, or left out of its findings.
 - `TestExceptionsScanTheWholeLatestCapture` now checks that the close shows the latest finished capture's recorded findings, including an unchanged one, as Daily books does. Observed red when the endpoint ignores stored findings or unchanged captures.
+
+## Stripe fee entry (2026-09-24)
+
+Author: Claude Opus 5.5. No migration.
+
+- `TestStripeFeeEntryCoversFeesOfPayoutsDepositedThisMonth`: with every payout traced, the fees of payouts deposited in September (4.95 + 21.10 + the 2.00 billing fee row + 1.17 = 29.22) are proposed as debit Stripe fees, credit Sales on 2026-09-30; the 4.46 of fees of a payout in transit and one deposited 2 October are named and left for October; booking 30.00 proposes 0.78 back; booking 29.22 proposes nothing; an untraced month proposes nothing and names the fees of untraced payouts separately; a payout deposited on 31 August is not a September fee; without the entry nothing is proposed. A missing rule, the same account twice, missing or negative booked fees and a blank fee account are refused. Observed red without the fee rows, without deferring after-month-end or in-transit payouts, with the entry never reversed, without blocker suppression, without the rule requirement, without the booked-fees check, when an August deposit counted and when untraced fees were described as deferred.
+- `TestYearEndHandoffRollsForwardApprovedWork` now includes an approved Stripe settlement's fee entry in `adjustments.csv`. Observed red with settlements excluded.

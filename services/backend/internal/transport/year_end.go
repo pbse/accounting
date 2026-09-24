@@ -105,7 +105,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 		type slot struct{ period, kind, key string }
 		latest := map[slot]paper{}
 		order := []slot{}
-		rows, err = tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT y.period,w.id::text,w.kind,w.review_state,w.paper FROM y JOIN workpaper_review_state w ON w.close_id=y.id WHERE w.kind IN ('prepaid','accrual','loan','owner','reconciliation') ORDER BY y.period,w.id`, r.PathValue("id"))
+		rows, err = tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT y.period,w.id::text,w.kind,w.review_state,w.paper FROM y JOIN workpaper_review_state w ON w.close_id=y.id WHERE w.kind IN ('prepaid','accrual','loan','owner','reconciliation','settlement') ORDER BY y.period,w.id`, r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Could not read saved workpapers.")
 			return
@@ -236,6 +236,13 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 					return
 				}
 				propose(p, wp.Proposal)
+			case "settlement":
+				var wp reconciliation.SettlementWorkpaper
+				if json.Unmarshal(p.raw, &wp) != nil {
+					problem(w, 500, "A saved Stripe settlement could not be read. No partial handoff was downloaded.")
+					return
+				}
+				propose(p, wp.Proposal)
 			case "reconciliation":
 				var wp reconciliation.Workpaper
 				if json.Unmarshal(p.raw, &wp) != nil {
@@ -345,6 +352,7 @@ func paperKey(kind string, raw json.RawMessage) string {
 			LoanAccount          string `json:"loan_account"`
 			Account              string `json:"account"`
 			AccountType          string `json:"account_type"`
+			ReportReference      string `json:"report_reference"`
 		} `json:"input"`
 	}
 	json.Unmarshal(raw, &p)
@@ -355,6 +363,8 @@ func paperKey(kind string, raw json.RawMessage) string {
 		parts = []string{in.Lender, in.LoanAccount}
 	case "owner":
 		parts = []string{in.TransactionReference}
+	case "settlement":
+		parts = []string{in.ReportReference}
 	case "reconciliation":
 		if in.AccountType == "" {
 			in.AccountType = "bank"

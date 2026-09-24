@@ -367,10 +367,27 @@ export function SettlementResult({
           </p>
         ))}
       </details>
+      {input.fee_entry && (
+        <section>
+          <h4>Stripe fee entry</h4>
+          <p>
+            Fees of payouts deposited in {input.close_period}: {usd(result.fees ?? "0.00")}; already booked: {usd(input.fee_entry.booked_fees)}. Rule: {input.fee_entry.rule_reference}.
+          </p>
+          {result.proposal ? (
+            <p>
+              Proposed {result.proposal.date}: debit {result.proposal.debit_account}, credit {result.proposal.credit_account}, {usd(result.proposal.amount)}.
+            </p>
+          ) : (
+            <p>{result.blockers.length > 0 ? "No entry is proposed until every payout is traced." : "No entry is needed; the booked fees match."}</p>
+          )}
+        </section>
+      )}
       <p className="note">
         Draft workpaper. A candidate deposit is a lead, not a confirmed match,
-        until an accountant approves this workpaper. No journal is proposed;
-        record gross revenue and fees under the client's approved method.
+        until an accountant approves this workpaper.{" "}
+        {input.fee_entry
+          ? "Nothing is posted; book the approved fee entry in QuickBooks."
+          : "No journal is proposed; record gross revenue and fees under the client's approved method."}
       </p>
     </>
   );
@@ -391,6 +408,7 @@ export default function Prepare() {
   const [result, setResult] = useState<SettlementWorkpaper>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [feeEntry, setFeeEntry] = useState(false);
   const csvFiles = files.filter(
     (f) =>
       !f.superseded_by &&
@@ -486,6 +504,16 @@ export default function Prepare() {
       coverage_confirmed: data.has("coverage_confirmed"),
       reviewed_deposits: [],
       in_transit: [],
+      ...(feeEntry
+        ? {
+            fee_entry: {
+              fee_account: text("fee_account"),
+              deposit_account: text("deposit_account"),
+              booked_fees: text("booked_fees"),
+              rule_reference: text("rule_reference"),
+            },
+          }
+        : {}),
     });
   }
   function readFile(file: File | undefined, set: (value?: Chosen) => void) {
@@ -645,6 +673,35 @@ export default function Prepare() {
                 for this month, and the bank file covers the whole month.
               </span>
             </label>
+          </fieldset>
+          <fieldset disabled={busy || !revision.ready}>
+            <legend>3. Stripe fee entry (optional)</legend>
+            <label className="checkbox-label">
+              <input type="checkbox" checked={feeEntry} onChange={(e) => setFeeEntry(e.target.checked)} />
+              <span>
+                The client books Stripe deposits net of fees, and their accountant's rule says to move the fees to an expense account. Only fees of payouts deposited this month count.
+              </span>
+            </label>
+            {feeEntry && (
+              <div className="form-grid">
+                <label>
+                  Fee expense account
+                  <input name="fee_account" required maxLength={200} />
+                </label>
+                <label>
+                  Account the net deposits were booked to
+                  <input name="deposit_account" required maxLength={200} />
+                </label>
+                <label>
+                  Fees already booked this month (USD; enter zero explicitly)
+                  <input name="booked_fees" required inputMode="decimal" />
+                </label>
+                <label>
+                  Accountant's rule reference
+                  <input name="rule_reference" required minLength={5} maxLength={200} />
+                </label>
+              </div>
+            )}
           </fieldset>
           {error && !result && (
             <p className="form-error" role="alert">
