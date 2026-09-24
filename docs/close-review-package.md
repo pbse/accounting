@@ -21,3 +21,20 @@ Authenticated callers can use `GET /v1/closes/{id}/export` for the draft archive
 Every saved version is included, including versions beyond the dashboard's 100-row display limit. Alternative drafts are not additive. Export rejects closes exceeding 1,000 workpapers, 16 MiB of workpaper JSON, 1,000 request drafts, 20 ledger captures or 16 MiB of ledger JSON, or 100 source files / 40 MiB of source and extracted content instead of silently truncating them. No partial archive is sent if generation fails.
 
 The draft package is not firm sign-off. The signed binder proves that the app recorded a current sign-off of the stated supported scope, not that the whole ledger is complete or audited. Source references are user-supplied; uploaded originals and stored capture payloads are attached. Stored sandbox and production statuses are historical receipts, not fresh provider verification. The accountant must still inspect source completeness, scope and external steps before releasing it.
+
+## Year-end handoff
+
+Select **Download year-end handoff** on any close. It covers that client's closes from January of the close's year through its month (`GET /v1/closes/{id}/year-end`), read from one consistent database snapshot with no provider calls.
+
+The ZIP contains:
+
+- `handoff.html`: printable summary with each month's sign-off state and every open question.
+- `months.csv`: each month's close, sign-off state, decision ID and blockers. A month with no close is listed.
+- `prepaids.csv` and `loans.csv`: monthly roll-forwards from approved schedules. A prepaid is checked against the prior month's approved closing balance using its own saved schedule, so credits and cancellations are not breaks. A loan's opening principal is checked against the prior month's closing principal.
+- `reconciliations.csv`: approved reconciled balances. Bank and card reconciliations with one account name stay separate.
+- `adjustments.csv`: entries proposed by approved workpapers.
+- `postings.csv`: every stored production posting record for the year, including one tied to an older workpaper version.
+- `open-questions.csv`: missing months, months not signed off, blockers, unapproved latest versions, workpaper questions and roll-forward breaks.
+- `workpapers/{month}/{kind}-{id}.json` and `checksums.sha256`.
+
+Only the latest version of each workpaper is used (prepaid and accrual by source reference, loan by lender and loan account, owner item by transaction reference, reconciliation by account and account type). If that version is not approved, it becomes an open question; an older approved version is never substituted. The handoff is not an audit opinion or a tax return, and monthly evidence originals stay in each close's own package. Workpapers over 16 MiB for the year return 413 with nothing exported.
