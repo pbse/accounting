@@ -12,6 +12,7 @@ import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
 import { ProductionAccess } from "./ProductionAccess";
 import { QuickBooks } from "./QuickBooks";
+import { Xero } from "./Xero";
 import { Readiness } from "./Readiness";
 import { Recurring } from "./Recurring";
 import { RecurringAccruals } from "./RecurringAccruals";
@@ -260,6 +261,7 @@ export default function ClientClose() {
         <div className="stack">
           <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
           <QuickBooks key={`qbo-${close.id}`} closeId={close.id} entity={close.entity} />
+          <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} />
         </div>
       )}
       {tab === "requests" && <Requests closeId={close.id} papers={papers} />}

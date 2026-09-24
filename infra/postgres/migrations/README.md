@@ -27,3 +27,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `037_settlements.sql` permits Stripe settlement drafts. Apply after 036 with API/worker stopped; `/readyz` checks it. See [settlement reconciliation](../../../docs/settlement-reconciliation.md).
 
 `047_row_level_security.sql` enables row-level security on every public table and sets every public view to check it as the caller. Apply with API/worker stopped, as the owning role; run API and worker as a separate non-owner role without superuser or BYPASSRLS. `/readyz` checks the migration, and hosted readiness checks the runtime role. See [operations](../../../docs/operations.md#row-level-security).
+
+`048_xero.sql` adds read-only Xero connections and month-end Trial Balance snapshots, with the same row-level security as 047. Apply after 047 with API/worker stopped. See [Xero month-end Trial Balance](../../../docs/xero-onboarding.md).
