@@ -77,6 +77,9 @@ export default function PrepareOwner() {
   // Answer fields mount after the revision loads; fill each once it exists.
   const restored = useRef(new Set<string>());
   useEffect(() => {
+    restored.current = new Set();
+  }, [revision.savedInput]);
+  useEffect(() => {
     const saved = revision.savedInput as Record<string, unknown> | undefined;
     if (!saved) return;
     for (const name of ["stated_purpose", "client_confirmation_reference", "business_use_percent", "booked_account", "owner_account", "partner", "dividend_declaration_reference", "repayment_reference", "reimbursement_reference"]) {
