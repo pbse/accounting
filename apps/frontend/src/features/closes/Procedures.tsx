@@ -79,7 +79,7 @@ export function Procedures({
         impact_digest: publishImpact.impact_digest,
         client_entity: target === "client" ? entity : "",
         kind,
-        method: kind === "loan" ? "lender_statement_v1" : kind === "basis" ? data.get("basis") : kind === "owner" && target === "client" ? data.get("entity_type") : "",
+        method: kind === "loan" ? data.get("loan_method") : kind === "basis" ? data.get("basis") : kind === "owner" && target === "client" ? data.get("entity_type") : "",
         instructions: data.get("instructions"),
         expense_account: data.get("expense_account") ?? "",
         prepaid_account: data.get("prepaid_account") ?? "",
@@ -316,6 +316,15 @@ export function Procedures({
                       <option value="partnership">Partnership / multi-member LLC</option>
                       <option value="s_corp">S corporation</option>
                       <option value="c_corp">C corporation</option>
+                    </select>
+                  </label>
+                )}
+                {kind === "loan" && (
+                  <label>
+                    Loan method
+                    <select name="loan_method" required defaultValue={previous?.method ?? "lender_statement_v1"}>
+                      <option value="lender_statement_v1">Lender statement, fixed rate</option>
+                      <option value="lender_statement_variable_v1">Lender statement with rate changes and fees added to the balance</option>
                     </select>
                   </label>
                 )}

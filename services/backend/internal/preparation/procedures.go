@@ -101,7 +101,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if err == sql.ErrNoRows || !enabled || approved != loans.Method {
+		if err == sql.ErrNoRows || !enabled || (approved != loans.Method && approved != loans.VariableMethod) {
 			return fmt.Errorf("Loan schedules need the firm's approved loan procedure for this client (a firm default or client override) before drafts are saved")
 		}
 	}
