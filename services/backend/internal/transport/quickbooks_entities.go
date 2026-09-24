@@ -165,21 +165,8 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Transaction index unavailable.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT kind,provider_id,txn_date::text,COALESCE(currency,''),COALESCE(amount,''),record FROM quickbooks_transaction_rows WHERE sync_id=$1`, captureID)
+		scanned, err := quickbooks.CapturedRows(r.Context(), db, captureID)
 		if err != nil {
-			problem(w, 503, "Transaction index unavailable.")
-			return
-		}
-		defer rows.Close()
-		scanned := []quickbooks.TransactionRow{}
-		for rows.Next() {
-			var row quickbooks.TransactionRow
-			if err = rows.Scan(&row.Kind, &row.ProviderID, &row.Date, &row.Currency, &row.Amount, &row.Record); err != nil {
-				break
-			}
-			scanned = append(scanned, row)
-		}
-		if err != nil || rows.Err() != nil {
 			problem(w, 503, "Transaction index unavailable.")
 			return
 		}

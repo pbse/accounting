@@ -290,22 +290,30 @@ func RunSync(ctx context.Context, db *sql.DB) {
 	}
 }
 
-// captureExceptions records what FindExceptions reports for the capture's indexed rows.
-func captureExceptions(ctx context.Context, tx *sql.Tx, syncID string) (string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT kind,provider_id,txn_date::text,COALESCE(currency,''),COALESCE(amount,''),record FROM quickbooks_transaction_rows WHERE sync_id=$1`, syncID)
+// CapturedRows reads a capture's indexed transaction rows.
+func CapturedRows(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, syncID string) ([]TransactionRow, error) {
+	rows, err := q.QueryContext(ctx, `SELECT kind,provider_id,txn_date::text,COALESCE(currency,''),COALESCE(amount,''),record FROM quickbooks_transaction_rows WHERE sync_id=$1`, syncID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer rows.Close()
 	scanned := []TransactionRow{}
 	for rows.Next() {
 		var row TransactionRow
 		if err = rows.Scan(&row.Kind, &row.ProviderID, &row.Date, &row.Currency, &row.Amount, &row.Record); err != nil {
-			return "", err
+			return nil, err
 		}
 		scanned = append(scanned, row)
 	}
-	if err = rows.Err(); err != nil {
+	return scanned, rows.Err()
+}
+
+// captureExceptions records what FindExceptions reports for the capture's indexed rows.
+func captureExceptions(ctx context.Context, tx *sql.Tx, syncID string) (string, error) {
+	scanned, err := CapturedRows(ctx, tx, syncID)
+	if err != nil {
 		return "", err
 	}
 	items := FindExceptions(scanned)
