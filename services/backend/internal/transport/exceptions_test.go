@@ -117,4 +117,12 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 	if got.Capture == nil || got.Capture.ID != syncID || got.Scanned != 3 || len(got.Items) != 1 || got.Items[0].Type != "possible_duplicate" {
 		t.Fatalf("every captured row must be scanned and the nearby pair raised: %+v", got)
 	}
+	// A later unchanged capture reuses those rows and records its own findings, including open items.
+	var unchanged string
+	if err = db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at,exceptions) VALUES($1,$2,'2026-09','fixture','unchanged',$3,now(),'[{"type":"possible_duplicate","kind":"Purchase","provider_ids":["1","2"]},{"type":"past_due_receivable","kind":"Invoice","provider_ids":["77"]}]') RETURNING id::text`, closeID, connection, evidenceID).Scan(&unchanged); err != nil {
+		t.Fatal(err)
+	}
+	if got = scan(); got.Capture == nil || got.Capture.ID != unchanged || got.Scanned != 3 || len(got.Items) != 2 || got.Items[1].Type != "past_due_receivable" {
+		t.Fatalf("the close shows the latest finished capture's findings, as Daily books does: %+v", got)
+	}
 }

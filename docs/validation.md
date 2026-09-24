@@ -504,3 +504,12 @@ Author: Claude Opus 5.5. Migration 050.
 - `TestTransactionChecksReuseEvidenceAndRefreshIndexedRows` now checks that a completed capture records its exceptions and an unchanged capture carries the same ones, and that a capture finished before exceptions were recorded is re-indexed rather than reused. Observed red without each.
 - `TestDailyBooksShowsExceptionsNewSinceTheLastReview` (PostgreSQL, hosted firm actor through the organization boundary): unreviewed closes list every finding, most new first; signed-off and other firms' closes are left out; reviewing an older capture is refused; reviewing the latest clears what it covered; the same IDs reported under another transaction kind, and a new type, are new; after reconnecting, the old baseline no longer applies. Observed red without the kind in the finding key, without the same-connection baseline rule, without the signed-off and firm filters, when an older capture could be reviewed and without ranking by new findings.
 - Browser, with a local API and Vite on the disposable database: Work showed Daily books with one new finding out of two for a client whose change-hint capture added a payment without a payee; **Mark reviewed** cleared it to "No new exceptions since the last review."
+
+## Cash operations: overdue receivables and payables (2026-09-24)
+
+Author: Claude Opus 5.5. No migration.
+
+- `TestOpenItemExceptionsAskAboutOldInvoicesAndBills`: at 30 September, invoices 75 and 120 days past due and a bill 45 days past due are asked about (the policy pointer only past 90 days); an invoice 30 days past due, a bill 20 days past due, an item without a due date and a zero balance are not. Observed red with each threshold and the 90-day pointer changed.
+- `TestPeriodEntitiesRequiresCompletePagedRevisions` now checks that the capture pages open bills and invoices into `open_items`. Observed red when they are not stored.
+- `TestTransactionChecksReuseEvidenceAndRefreshIndexedRows` now checks that a capture differing only in open items stays unchanged, keeps its open items and records a past-due bill beside the reused transaction findings. Observed red with open items in the evidence digest, dropped from the unchanged payload, or left out of its findings.
+- `TestExceptionsScanTheWholeLatestCapture` now checks that the close shows the latest finished capture's recorded findings, including an unchanged one, as Daily books does. Observed red when the endpoint ignores stored findings or unchanged captures.

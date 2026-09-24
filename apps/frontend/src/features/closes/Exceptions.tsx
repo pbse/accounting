@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 
 type Found = {
-  type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding";
+  type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding" | "past_due_receivable" | "past_due_payable";
   kind: string;
   provider_ids: string[];
   dates: string[];
@@ -25,6 +25,8 @@ const labels: Record<Found["type"], [string, string]> = {
   uncategorized: ["Holding account", "info"],
   no_payee: ["No payee", "info"],
   inconsistent_coding: ["Inconsistent coding", "info"],
+  past_due_receivable: ["Overdue invoice", "warn"],
+  past_due_payable: ["Overdue bill", "warn"],
 };
 
 export function Exceptions({ closeId }: { closeId: string }) {
@@ -68,17 +70,18 @@ export function Exceptions({ closeId }: { closeId: string }) {
       {!scan.capture ? (
         <p className="empty">
           Capture this month's QuickBooks transactions on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every
-          transaction for possible duplicates, holding-account postings, payments without a payee and payees coded to different accounts.
+          transaction for possible duplicates, holding-account postings, payments without a payee and payees coded to different accounts, and
+          asks about open invoices more than 60 days and bills more than 30 days past due at month-end.
         </p>
       ) : (
         <>
           <p>
             Checked all {scan.scanned} transactions in the capture from {new Date(scan.capture.finished_at).toLocaleString()} (evidence #
-            {scan.capture.evidence_id}). Each item is a question with the evidence still missing, not a conclusion. Nothing is changed in
-            QuickBooks.
+            {scan.capture.evidence_id}). Open invoice and bill balances are as of that capture; days past due are counted at month-end. Each
+            item is a question with the evidence still missing, not a conclusion. Nothing is changed in QuickBooks.
           </p>
           {scan.items.length === 0 ? (
-            <p className="empty">No possible duplicates, holding-account postings, payments without a payee or inconsistent coding in this capture.</p>
+            <p className="empty">No possible duplicates, holding-account postings, payments without a payee, inconsistent coding or overdue items in this capture.</p>
           ) : (
             <div className="rows">
               <div className="rows-head">

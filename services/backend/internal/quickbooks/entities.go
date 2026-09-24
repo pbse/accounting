@@ -21,6 +21,9 @@ type EntityCapture struct {
 	StartedAt    time.Time                    `json:"started_at"`
 	FinishedAt   time.Time                    `json:"finished_at"`
 	Completeness string                       `json:"completeness"`
+	// Invoices and bills still open at capture time, dated on or before month-end. Their balances
+	// change with later payments, so they are kept out of the transaction evidence digest.
+	OpenItems map[string][]json.RawMessage `json:"open_items,omitempty"`
 }
 
 func periodCount(ctx context.Context, realm, token, kind, first, last string) (int, error) {
@@ -127,6 +130,14 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 			return result, fmt.Errorf("%s transaction count changed or pagination was incomplete; retry the capture", kind)
 		}
 	}
+	result.OpenItems = map[string][]json.RawMessage{}
+	for _, kind := range []string{"Invoice", "Bill"} {
+		items, err := openItems(ctx, realm, token, kind, last)
+		if err != nil {
+			return result, err
+		}
+		result.OpenItems[kind] = items
+	}
 	check, err := readSandboxLimit(ctx, realm, token, "/preferences", 2*1024*1024)
 	if err != nil {
 		return result, fmt.Errorf("Company settings recheck: %w", err)
@@ -143,4 +154,54 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 	result.FinishedAt = time.Now().UTC()
 	result.Completeness = "All supported types were paged and provider counts agreed before and after each type. Reads are sequential, not an atomic ledger snapshot; later edits require refresh."
 	return result, nil
+}
+
+// openItems pages through a type's records with a balance, dated on or before month-end.
+func openItems(ctx context.Context, realm, token, kind, last string) ([]json.RawMessage, error) {
+	where := fmt.Sprintf("WHERE Balance > '0' AND TxnDate <= '%s'", last)
+	count := func() (int, error) {
+		raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(fmt.Sprintf("SELECT COUNT(*) FROM %s %s", kind, where)), 1024*1024)
+		var response struct {
+			QueryResponse struct {
+				TotalCount *int `json:"totalCount"`
+			} `json:"QueryResponse"`
+		}
+		if err != nil || json.Unmarshal(raw, &response) != nil || response.QueryResponse.TotalCount == nil {
+			return 0, fmt.Errorf("Open %s count is unavailable", kind)
+		}
+		return *response.QueryResponse.TotalCount, nil
+	}
+	before, err := count()
+	if err != nil {
+		return nil, err
+	}
+	if before > 2500 {
+		return nil, fmt.Errorf("Open %s records exceed the 2500-record limit", kind)
+	}
+	rows, seen := []json.RawMessage{}, map[string]bool{}
+	for position := 1; position <= before; position += 500 {
+		raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(fmt.Sprintf("SELECT * FROM %s %s ORDERBY Id STARTPOSITION %d MAXRESULTS 500", kind, where, position)), 8*1024*1024)
+		if err != nil {
+			return nil, fmt.Errorf("Open %s page %d: %w", kind, position, err)
+		}
+		var response struct{ QueryResponse map[string]json.RawMessage }
+		var page []json.RawMessage
+		if json.Unmarshal(raw, &response) != nil || (len(response.QueryResponse[kind]) > 0 && json.Unmarshal(response.QueryResponse[kind], &page) != nil) {
+			return nil, fmt.Errorf("Open %s page is invalid", kind)
+		}
+		for _, record := range page {
+			var item struct {
+				ID string `json:"Id"`
+			}
+			if json.Unmarshal(record, &item) != nil || item.ID == "" || seen[item.ID] {
+				return nil, fmt.Errorf("Open %s identity is inconsistent", kind)
+			}
+			seen[item.ID] = true
+			rows = append(rows, record)
+		}
+	}
+	if after, err := count(); err != nil || after != before || len(rows) != before {
+		return nil, fmt.Errorf("Open %s records changed during capture; retry", kind)
+	}
+	return rows, nil
 }

@@ -65,7 +65,7 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})
 	capture, err := PeriodEntities(context.Background(), "123", "synthetic", "2026-09")
-	if err != nil || capture.Counts["Bill"] != 502 || len(capture.Records["Bill"]) != 502 || capture.Limits["records_per_type"] != 2500 {
+	if err != nil || capture.Counts["Bill"] != 502 || len(capture.Records["Bill"]) != 502 || capture.Limits["records_per_type"] != 2500 || len(capture.OpenItems["Bill"]) != 502 || len(capture.OpenItems["Invoice"]) != 0 {
 		t.Fatalf("complete paged capture: count=%d err=%v", capture.Counts["Bill"], err)
 	}
 	duplicate = true

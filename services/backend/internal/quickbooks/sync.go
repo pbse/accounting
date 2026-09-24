@@ -118,7 +118,7 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	}
 	defer tx.Rollback()
 	var canonical, stable string
-	if err = tx.QueryRowContext(ctx, `SELECT $1::jsonb::text,($1::jsonb-'started_at'-'finished_at'-'completeness')::text`, string(raw)).Scan(&canonical, &stable); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT $1::jsonb::text,($1::jsonb-'started_at'-'finished_at'-'completeness'-'open_items')::text`, string(raw)).Scan(&canonical, &stable); err != nil {
 		return err
 	}
 	captureDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(stable)))
@@ -133,13 +133,16 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	if err != nil || !valid {
 		return errors.New("Connection, close, or job changed during transaction capture")
 	}
-	var unchangedSource string
-	err = tx.QueryRowContext(ctx, `SELECT s.evidence_id::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id=$1 AND s.connection_id=$2 AND s.period=$3 AND s.state='completed' AND s.digest=$4 AND s.exceptions IS NOT NULL AND (SELECT count(*) FROM quickbooks_transaction_rows t WHERE t.sync_id=s.id)=COALESCE((SELECT sum(value::int) FROM jsonb_each_text(COALESCE(s.payload->'counts','{}'::jsonb))),0) ORDER BY s.id DESC LIMIT 1`, job.closeID, job.connectionID, job.period, captureDigest).Scan(&unchangedSource)
+	var sourceSync, unchangedSource string
+	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.evidence_id::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id=$1 AND s.connection_id=$2 AND s.period=$3 AND s.state='completed' AND s.digest=$4 AND s.exceptions IS NOT NULL AND (SELECT count(*) FROM quickbooks_transaction_rows t WHERE t.sync_id=s.id)=COALESCE((SELECT sum(value::int) FROM jsonb_each_text(COALESCE(s.payload->'counts','{}'::jsonb))),0) ORDER BY s.id DESC LIMIT 1`, job.closeID, job.connectionID, job.period, captureDigest).Scan(&sourceSync, &unchangedSource)
 	if err == nil {
-		summary, _ := json.Marshal(map[string]any{"counts": capture.Counts, "started_at": capture.StartedAt, "finished_at": capture.FinishedAt, "completeness": capture.Completeness})
-		// Unchanged evidence has the same exceptions as the capture that produced it.
-		_, err = tx.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET state='unchanged',payload=$3,digest=$4,evidence_id=$5,finished_at=now(),claim=NULL,error='',
- exceptions=(SELECT p.exceptions FROM quickbooks_entity_syncs p WHERE p.evidence_id=$5::bigint AND p.id<>$1 AND p.exceptions IS NOT NULL ORDER BY p.id DESC LIMIT 1) WHERE id=$1 AND claim=$2 AND state='running'`, job.id, job.token, string(summary), captureDigest, unchangedSource)
+		summary, _ := json.Marshal(map[string]any{"counts": capture.Counts, "started_at": capture.StartedAt, "finished_at": capture.FinishedAt, "completeness": capture.Completeness, "open_items": capture.OpenItems})
+		// Unchanged transactions reuse the earlier capture's rows; this capture's open items are new.
+		found, err := captureExceptions(ctx, tx, sourceSync, capture.OpenItems, job.period)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET state='unchanged',payload=$3,digest=$4,evidence_id=$5,finished_at=now(),claim=NULL,error='',exceptions=$6 WHERE id=$1 AND claim=$2 AND state='running'`, job.id, job.token, string(summary), captureDigest, unchangedSource, found)
 		if err != nil {
 			return err
 		}
@@ -217,7 +220,7 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 	if err != nil {
 		return err
 	}
-	found, err := captureExceptions(ctx, tx, job.id)
+	found, err := captureExceptions(ctx, tx, job.id, capture.OpenItems, job.period)
 	if err != nil {
 		return err
 	}
@@ -310,13 +313,17 @@ func CapturedRows(ctx context.Context, q interface {
 	return scanned, rows.Err()
 }
 
-// captureExceptions records what FindExceptions reports for the capture's indexed rows.
-func captureExceptions(ctx context.Context, tx *sql.Tx, syncID string) (string, error) {
-	scanned, err := CapturedRows(ctx, tx, syncID)
+// captureExceptions records the transaction rows' exceptions and the open items' past-due questions.
+func captureExceptions(ctx context.Context, tx *sql.Tx, rowsSync string, open map[string][]json.RawMessage, period string) (string, error) {
+	scanned, err := CapturedRows(ctx, tx, rowsSync)
 	if err != nil {
 		return "", err
 	}
-	items := FindExceptions(scanned)
+	month, err := time.Parse("2006-01", period)
+	if err != nil {
+		return "", err
+	}
+	items := append(FindExceptions(scanned), OpenItemExceptions(open, month.AddDate(0, 1, -1))...)
 	if items == nil {
 		items = []Exception{}
 	}
