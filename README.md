@@ -6,7 +6,7 @@ A foundation for an agent-first accounting preparation workspace. React presents
 
 **Implemented locally:** saved closes; exact prepaid, accrual and reconciliation calculations; reviewed prepaid carry-forward and recurring accrual refresh; secure evidence upload with PDF/OCR; source-linked review and recalculation; a live Work inbox that connects proposed facts, approved requests, held email replies, client replies, and durable preparation. OpenAI interpretation needs worker credentials; without them, local proposals recognize labeled fields and require review. WorkOS AuthKit, QuickBooks sandbox VendorCredit and controlled production prepaid posting, and Cloudflare/GitHub delivery have code but require provider activation. Supported-scope readiness, sign-off, release-gated accountant binders with PDF workpapers, firm membership and operational controls are available locally. See [the Work inbox guide](docs/work-inbox.md).
 
-See [onboarding and end-to-end flows](docs/onboarding.md), [enterprise controls and recovery](docs/operations.md), and the [current delivery backlog](docs/implementation-backlog.md). Multi-firm API access is bound to enrolled WorkOS organizations; existing local data belongs to the development workspace. Scoped MCP exposure and live enterprise validation remain pending.
+See [onboarding and end-to-end flows](docs/onboarding.md), [enterprise controls and recovery](docs/operations.md), and the [current delivery backlog](docs/implementation-backlog.md). Multi-firm API access is bound to enrolled WorkOS organizations; existing local data belongs to the development workspace. Agents connect through [MCP](docs/mcp.md) with the same sign-in and permissions as the app. Live enterprise validation remains pending.
 
 ## Start locally
 
