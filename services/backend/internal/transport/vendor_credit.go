@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -37,6 +38,7 @@ type vendorCreditIntent struct {
 	ExternalID          string          `json:"external_id"`
 	Error               string          `json:"error"`
 	Readback            json.RawMessage `json:"readback,omitempty"`
+	GrantID             string          `json:"grant_id,omitempty"`
 }
 
 type vendorCreditQuerier interface {
@@ -45,17 +47,17 @@ type vendorCreditQuerier interface {
 
 func readVendorCredit(ctx context.Context, db *sql.DB, closeID, paperID string) (vendorCreditIntent, error) {
 	var item vendorCreditIntent
-	err := db.QueryRowContext(ctx, `SELECT id::text,request_id::text,digest,realm,state,credit,review_id,evidence_id::text,evidence_digest,credit_reference,vendor_name,unbooked_confirmed_by,COALESCE(approved_by,''),approval_expires_at,COALESCE(external_id,''),last_error,COALESCE(readback,'null'::jsonb) FROM vendor_credit_postings WHERE close_id::text=$1 AND workpaper_id::text=$2`, closeID, paperID).Scan(&item.ID, &item.RequestID, &item.Digest, &item.Realm, &item.State, &item.Credit, &item.ReviewID, &item.EvidenceID, &item.EvidenceDigest, &item.Reference, &item.VendorName, &item.UnbookedConfirmedBy, &item.ApprovedBy, &item.Expires, &item.ExternalID, &item.Error, &item.Readback)
+	err := db.QueryRowContext(ctx, `SELECT id::text,request_id::text,digest,realm,state,credit,review_id,evidence_id::text,evidence_digest,credit_reference,vendor_name,unbooked_confirmed_by,COALESCE(approved_by,''),approval_expires_at,COALESCE(external_id,''),last_error,COALESCE(readback,'null'::jsonb),COALESCE(grant_id::text,'') FROM vendor_credit_postings WHERE close_id::text=$1 AND workpaper_id::text=$2`, closeID, paperID).Scan(&item.ID, &item.RequestID, &item.Digest, &item.Realm, &item.State, &item.Credit, &item.ReviewID, &item.EvidenceID, &item.EvidenceDigest, &item.Reference, &item.VendorName, &item.UnbookedConfirmedBy, &item.ApprovedBy, &item.Expires, &item.ExternalID, &item.Error, &item.Readback, &item.GrantID)
 	return item, err
 }
 
-func reviewedSupplierCredit(ctx context.Context, db vendorCreditQuerier, closeID, paperID, reference, evidenceID string) (prepaids.Workpaper, string, string, string, error) {
+func reviewedSupplierCredit(ctx context.Context, db vendorCreditQuerier, closeID, paperID, reference, evidenceID, currency string) (prepaids.Workpaper, string, string, string, error) {
 	var paper prepaids.Workpaper
 	var raw []byte
 	var state, reviewID, digest, entity, period string
 	err := db.QueryRowContext(ctx, `SELECT w.paper,w.review_state,w.review_id,w.digest,c.entity,c.period FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind='prepaid'`, paperID, closeID).Scan(&raw, &state, &reviewID, &digest, &entity, &period)
-	if err != nil || state != "approved" || json.Unmarshal(raw, &paper) != nil || paper.Input.Entity != entity || paper.Input.ClosePeriod != period || paper.Input.Currency != "USD" || paper.Input.Schedule != "" || paper.Input.CancellationMethod != "" || paper.Input.PrepaidAccount == "" {
-		return paper, "", "", "", fmt.Errorf("A current approved USD prepaid credit workpaper is required")
+	if err != nil || state != "approved" || json.Unmarshal(raw, &paper) != nil || paper.Input.Entity != entity || paper.Input.ClosePeriod != period || paper.Input.Currency != currency || paper.Input.Schedule != "" || paper.Input.CancellationMethod != "" || paper.Input.PrepaidAccount == "" {
+		return paper, "", "", "", fmt.Errorf("A current approved prepaid credit workpaper in the client's currency is required")
 	}
 	var newer bool
 	if err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND paper->>'revises'=$2)`, closeID, paperID).Scan(&newer); err != nil || newer {
@@ -112,7 +114,10 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		item, err := readVendorCredit(r.Context(), db, r.PathValue("id"), r.PathValue("paper"))
 		if err == sql.ErrNoRows {
-			jsonReply(w, 200, map[string]any{"state": "not_prepared", "configured": sandboxConfiguration().Ready() && organization(r) == os.Getenv("WORKOS_ORGANIZATION_ID")})
+			var environment string
+			db.QueryRowContext(r.Context(), `SELECT environment FROM quickbooks_connections WHERE id=`+quickbooks.ReadingConnection("$1::bigint"), r.PathValue("id")).Scan(&environment)
+			production := environment == "production" && slices.Contains(postingKinds(), "vendor_credit")
+			jsonReply(w, 200, map[string]any{"state": "not_prepared", "production": production, "configured": production || sandboxConfiguration().Ready() && organization(r) == os.Getenv("WORKOS_ORGANIZATION_ID")})
 			return
 		}
 		if err != nil {
@@ -123,8 +128,8 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 	})
 	mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
 		a := auth.Actor(r.Context())
-		if a == nil || a.Organization == "" || a.Organization != os.Getenv("WORKOS_ORGANIZATION_ID") {
-			problem(w, 403, "A hosted session for this sandbox company is required.")
+		if a == nil || a.Organization == "" {
+			problem(w, 403, "A hosted firm session is required.")
 			return
 		}
 		var in struct {
@@ -150,16 +155,45 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "Your role lacks "+permission+".")
 			return
 		}
-		sandbox := sandboxConfiguration()
-		if !sandbox.Ready() {
-			problem(w, 503, "Configure the QuickBooks sandbox first.")
+		closeID, paperID := r.PathValue("id"), r.PathValue("paper")
+		var entity, environment string
+		if err := db.QueryRowContext(r.Context(), `SELECT entity,COALESCE((SELECT x.environment FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("client_closes.id")+`),'') FROM client_closes WHERE id::text=$1 AND organization_id=$2`, closeID, organization(r)).Scan(&entity, &environment); err != nil {
+			problem(w, 404, "Client close not found.")
 			return
 		}
-		closeID, paperID := r.PathValue("id"), r.PathValue("paper")
-		var entity string
-		if err := db.QueryRowContext(r.Context(), `SELECT entity FROM client_closes WHERE id::text=$1 AND organization_id=$2`, closeID, organization(r)).Scan(&entity); err != nil || entity != sandbox.Entity {
-			problem(w, 409, "The client close does not match the configured QuickBooks sandbox company.")
-			return
+		// A client's production company receives the credit under its grant; otherwise the configured sandbox company.
+		production := environment == "production"
+		var sandbox quickbooks.Sandbox
+		var grant productionGrant
+		if production {
+			if access, err := clientAccess(db, r, entity); err != nil || !access {
+				problem(w, 403, "Client access is required.")
+				return
+			}
+			if !slices.Contains(postingKinds(), "vendor_credit") {
+				problem(w, 409, "Production supplier credits are not enabled yet. They turn on after the QuickBooks behavior is checked in the sandbox.")
+				return
+			}
+			saved, kind := "", "vendor_credit"
+			if in.Action == "verify" {
+				prior, err := readVendorCredit(r.Context(), db, closeID, paperID)
+				if err != nil || prior.GrantID == "" {
+					problem(w, 409, "Only an attempted production supplier credit can be verified.")
+					return
+				}
+				saved, kind = prior.GrantID, ""
+			}
+			var err error
+			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entity, kind, saved); err != nil {
+				refuse(w, err)
+				return
+			}
+		} else {
+			sandbox = sandboxConfiguration()
+			if a.Organization != os.Getenv("WORKOS_ORGANIZATION_ID") || !sandbox.Ready() || entity != sandbox.Entity {
+				problem(w, 409, "The client close does not match the configured QuickBooks sandbox company.")
+				return
+			}
 		}
 		if in.Action == "preview" {
 			if !in.MethodConfirmed || !in.UnbookedConfirmed {
@@ -180,7 +214,7 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Choose an exact supplier-credit date in an open close month.")
 				return
 			}
-			paper, review, sourceDigest, amount, err := reviewedSupplierCredit(r.Context(), db, closeID, paperID, in.CreditReference, in.EvidenceID)
+			paper, review, sourceDigest, amount, err := reviewedSupplierCredit(r.Context(), db, closeID, paperID, in.CreditReference, in.EvidenceID, cmp.Or(sandbox.Currency, "USD"))
 			if err != nil {
 				problem(w, 409, err.Error())
 				return
@@ -194,14 +228,26 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "This workpaper already has a journal attempt; reconcile it before considering a native supplier credit.")
 				return
 			}
-			credit, err := sandbox.PrepareVendorCredit(r.Context(), in.VendorID, in.APAccountID, sandbox.DebitAccount, paper.Input.PrepaidAccount, in.TxnDate, amount, in.CreditReference)
+			prepaidID := sandbox.DebitAccount
+			if production {
+				limit, e := prepaids.Amount(grant.MaxAmount)
+				if cents, e2 := prepaids.Amount(amount); e != nil || e2 != nil || cents > limit {
+					problem(w, 409, "The supplier credit exceeds this client's grant limit.")
+					return
+				}
+				if prepaidID, err = sandbox.AccountNamed(r.Context(), paper.Input.PrepaidAccount); err != nil {
+					problem(w, 422, err.Error())
+					return
+				}
+			}
+			credit, err := sandbox.PrepareVendorCredit(r.Context(), in.VendorID, in.APAccountID, prepaidID, paper.Input.PrepaidAccount, in.TxnDate, amount, in.CreditReference)
 			if err != nil {
 				problem(w, 422, err.Error())
 				return
 			}
 			raw, _ := json.Marshal(credit)
 			digest := vendorCreditDigest(sandbox.Realm, paperID, review, sourceDigest, credit)
-			_, err = db.ExecContext(r.Context(), `INSERT INTO vendor_credit_postings(close_id,workpaper_id,evidence_id,evidence_digest,review_id,credit_reference,vendor_name,unbooked_confirmed_by,realm,digest,credit,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'preview') ON CONFLICT(workpaper_id) DO UPDATE SET evidence_id=EXCLUDED.evidence_id,evidence_digest=EXCLUDED.evidence_digest,review_id=EXCLUDED.review_id,credit_reference=EXCLUDED.credit_reference,vendor_name=EXCLUDED.vendor_name,unbooked_confirmed_by=EXCLUDED.unbooked_confirmed_by,unbooked_confirmed_at=now(),realm=EXCLUDED.realm,digest=EXCLUDED.digest,credit=EXCLUDED.credit,state='preview',request_id=gen_random_uuid(),approved_by=NULL,approval_expires_at=NULL WHERE vendor_credit_postings.state IN ('preview','approved')`, closeID, paperID, in.EvidenceID, sourceDigest, review, in.CreditReference, credit.VendorName, a.Subject, sandbox.Realm, digest, string(raw))
+			_, err = db.ExecContext(r.Context(), `INSERT INTO vendor_credit_postings(close_id,workpaper_id,evidence_id,evidence_digest,review_id,credit_reference,vendor_name,unbooked_confirmed_by,realm,digest,credit,state,grant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'preview',NULLIF($12,'')::bigint) ON CONFLICT(workpaper_id) DO UPDATE SET grant_id=EXCLUDED.grant_id,evidence_id=EXCLUDED.evidence_id,evidence_digest=EXCLUDED.evidence_digest,review_id=EXCLUDED.review_id,credit_reference=EXCLUDED.credit_reference,vendor_name=EXCLUDED.vendor_name,unbooked_confirmed_by=EXCLUDED.unbooked_confirmed_by,unbooked_confirmed_at=now(),realm=EXCLUDED.realm,digest=EXCLUDED.digest,credit=EXCLUDED.credit,state='preview',request_id=gen_random_uuid(),approved_by=NULL,approval_expires_at=NULL WHERE vendor_credit_postings.state IN ('preview','approved')`, closeID, paperID, in.EvidenceID, sourceDigest, review, in.CreditReference, credit.VendorName, a.Subject, sandbox.Realm, digest, string(raw), grant.ID)
 			if err != nil {
 				problem(w, 503, "Could not save VendorCredit preview.")
 				return
@@ -225,8 +271,12 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		credit.VendorName = item.VendorName
+		if (in.Action == "approve" || in.Action == "execute") && item.GrantID != grant.ID {
+			problem(w, 409, "This client's production grant changed; prepare the supplier credit again.")
+			return
+		}
 		if in.Action == "approve" || in.Action == "execute" {
-			paper, review, sourceDigest, amount, e := reviewedSupplierCredit(r.Context(), db, closeID, paperID, item.Reference, item.EvidenceID)
+			paper, review, sourceDigest, amount, e := reviewedSupplierCredit(r.Context(), db, closeID, paperID, item.Reference, item.EvidenceID, cmp.Or(sandbox.Currency, "USD"))
 			if e != nil || review != item.ReviewID || sourceDigest != item.EvidenceDigest || paper.Input.PrepaidAccount == "" {
 				problem(w, 409, "Review or supplier credit evidence changed. Start a new reviewed intent.")
 				return
@@ -276,7 +326,7 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 			var locked string
 			e = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID).Scan(&locked)
 			if e == nil {
-				_, currentReview, currentSource, _, checkErr := reviewedSupplierCredit(r.Context(), tx, closeID, paperID, item.Reference, item.EvidenceID)
+				_, currentReview, currentSource, _, checkErr := reviewedSupplierCredit(r.Context(), tx, closeID, paperID, item.Reference, item.EvidenceID, cmp.Or(sandbox.Currency, "USD"))
 				if checkErr != nil || currentReview != item.ReviewID || currentSource != item.EvidenceDigest {
 					problem(w, 409, "The workpaper or credit source changed before posting.")
 					return
@@ -285,6 +335,18 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 			if e != nil {
 				problem(w, 503, "Could not lock the close; no provider write was made.")
 				return
+			}
+			var signed bool
+			if tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=$1::bigint ORDER BY id DESC LIMIT 1),false)`, locked).Scan(&signed) != nil || signed {
+				problem(w, 409, "Close sign-off changed. Reopen and review before posting.")
+				return
+			}
+			if production {
+				var current string
+				if tx.QueryRowContext(r.Context(), `SELECT id::text FROM production_posting_grants WHERE id=$1 AND revoked_at IS NULL AND expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=production_posting_grants.organization_id AND subject=production_posting_grants.granted_by AND granted) FOR UPDATE`, item.GrantID).Scan(&current) != nil {
+					problem(w, 409, "Production grant expired or was revoked.")
+					return
+				}
 			}
 			var alreadyReserved bool
 			if e = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM vendor_credit_postings WHERE close_id::text=$1 AND lower(credit_reference)=lower($2) AND id::text<>$3 AND state<>'preview') OR EXISTS(SELECT 1 FROM sandbox_postings WHERE workpaper_id::text=$4 AND state IN ('executing','unknown','verified')) OR EXISTS(SELECT 1 FROM production_postings WHERE workpaper_id::text=$4 AND state IN ('executing','unknown','verified'))`, closeID, item.Reference, item.ID, paperID).Scan(&alreadyReserved); e != nil || alreadyReserved {

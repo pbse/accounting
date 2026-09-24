@@ -565,6 +565,16 @@ Author: Claude Opus 5.5. Migration 052.
 
 - `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.
 
+## Production Bill corrections and supplier credits (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 053. Review: GPT-6 Sol (medium) plan review; adopted hosted actor and client access checks, the grant limit and a grant recheck under the attempt lock, both sides of a Bill recode in the grant, grant membership instead of the sandbox prepaid mapping, the reading connection for captures, and the connection's recorded currency. Journal posting now shares the grant and credential lookup (`productionClient`) with unchanged behavior.
+
+- `TestProductionBillCorrectionStaysInsideItsGrant` (PostgreSQL, mocked production host): refused until `bill_correction` is enabled; refused at preview when the line's current account is outside the grant and when the line exceeds the grant limit; an approval under a different grant than the preview is refused; under a grant for both accounts it previews, approves, updates the Bill once and verifies. Observed red without the kind gate, the preview account check, the limit and the grant binding.
+- `TestBillCorrectionPreservesSimpleBillAndChecksReadback` and `TestVendorCreditChecksAccountsAndCanonicalReadback` now check that production writes stay within granted accounts (both Bill accounts; A/P and prepaid for a credit) and that the granted prepaid account is found by name. Observed red with either account unchecked.
+- Not covered by an end-to-end test: the production supplier-credit route (its account, currency and grant rules are covered at the QuickBooks layer), its sign-off recheck under the close lock (code review finding; the sandbox route lacked it too), and the grant recheck under the attempt lock (a race).
+
+- `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.
+
 ## Sign-off carries the month forward (2026-09-24)
 
 Author: Claude Opus 5.5. No migration. Plan and code reviewed together (small change); adopted a distinct carry failure in the sign-off reply, "queued" wording and the standard library's response recorder.

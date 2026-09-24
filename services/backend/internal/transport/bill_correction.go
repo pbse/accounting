@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 )
@@ -37,18 +38,19 @@ type billCorrection struct {
 	AttemptedBy       string          `json:"attempted_by"`
 	Error             string          `json:"error"`
 	Readback          json.RawMessage `json:"readback"`
+	GrantID           string          `json:"grant_id,omitempty"`
 }
 
 func readBillCorrection(ctx context.Context, db *sql.DB, closeID, billID string) (billCorrection, error) {
 	var b billCorrection
-	err := db.QueryRowContext(ctx, `SELECT id::text,capture_id::text,evidence_id::text,realm,bill_id,treatment,reason,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by,COALESCE(approved_by,''),approval_expires_at,COALESCE(attempted_by,''),last_error,COALESCE(readback,'null'::jsonb) FROM bill_corrections WHERE close_id::text=$1 AND bill_id=$2`, closeID, billID).Scan(&b.ID, &b.CaptureID, &b.EvidenceID, &b.Realm, &b.BillID, &b.Treatment, &b.Reason, &b.TargetAccountID, &b.TargetLineID, &b.TargetAccountName, &b.BeforeBill, &b.Digest, &b.State, &b.ProposedBy, &b.ApprovedBy, &b.Expires, &b.AttemptedBy, &b.Error, &b.Readback)
+	err := db.QueryRowContext(ctx, `SELECT id::text,capture_id::text,evidence_id::text,realm,bill_id,treatment,reason,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by,COALESCE(approved_by,''),approval_expires_at,COALESCE(attempted_by,''),last_error,COALESCE(readback,'null'::jsonb),COALESCE(grant_id::text,'') FROM bill_corrections WHERE close_id::text=$1 AND bill_id=$2`, closeID, billID).Scan(&b.ID, &b.CaptureID, &b.EvidenceID, &b.Realm, &b.BillID, &b.Treatment, &b.Reason, &b.TargetAccountID, &b.TargetLineID, &b.TargetAccountName, &b.BeforeBill, &b.Digest, &b.State, &b.ProposedBy, &b.ApprovedBy, &b.Expires, &b.AttemptedBy, &b.Error, &b.Readback, &b.GrantID)
 	return b, err
 }
 
 func capturedBill(ctx context.Context, db *sql.DB, closeID, billID, realm string) (string, string, quickbooks.Bill, error) {
 	var captureID, evidenceID string
 	var raw []byte
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.evidence_id::text,s.payload FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(id) FROM quickbooks_entity_syncs WHERE close_id=s.close_id AND state='completed') AND s.payload->>'realm'=$2 AND e.superseded_by IS NULL AND e.extraction_state='ready'`, closeID, realm).Scan(&captureID, &evidenceID, &raw)
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.evidence_id::text,s.payload FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state='completed' AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND s.payload->>'realm'=$2 AND e.superseded_by IS NULL AND e.extraction_state='ready'`, closeID, realm).Scan(&captureID, &evidenceID, &raw)
 	if err != nil {
 		return "", "", quickbooks.Bill{}, errors.New("A current completed QuickBooks transaction capture is required")
 	}
@@ -74,7 +76,7 @@ func capturedBill(ctx context.Context, db *sql.DB, closeID, billID, realm string
 
 func billCorrectionCurrent(ctx context.Context, db *sql.DB, closeID string, item billCorrection, sandbox quickbooks.Sandbox) (quickbooks.Bill, error) {
 	if item.Realm != sandbox.Realm {
-		return quickbooks.Bill{}, errors.New("Sandbox company changed")
+		return quickbooks.Bill{}, errors.New("QuickBooks company changed")
 	}
 	captureID, evidenceID, captured, err := capturedBill(ctx, db, closeID, item.BillID, sandbox.Realm)
 	if err != nil || captureID != item.CaptureID || evidenceID != item.EvidenceID {
@@ -108,7 +110,7 @@ func billCorrectionCurrent(ctx context.Context, db *sql.DB, closeID string, item
 func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/quickbooks/bills/candidates", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
-		err := db.QueryRowContext(r.Context(), `SELECT payload FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' ORDER BY id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw)
+		err := db.QueryRowContext(r.Context(), `SELECT payload FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw)
 		if err == sql.ErrNoRows {
 			jsonReply(w, 200, map[string]any{"bills": []any{}, "message": "Refresh QuickBooks transactions to review Bill candidates."})
 			return
@@ -146,7 +148,9 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		item, err := readBillCorrection(r.Context(), db, r.PathValue("id"), r.PathValue("bill"))
 		if err == sql.ErrNoRows {
-			_, _, captured, captureErr := capturedBill(r.Context(), db, r.PathValue("id"), r.PathValue("bill"), sandboxConfiguration().Realm)
+			realm := sandboxConfiguration().Realm
+			db.QueryRowContext(r.Context(), `SELECT realm FROM quickbooks_connections WHERE id=`+quickbooks.ReadingConnection("$1::bigint")+` AND environment='production'`, r.PathValue("id")).Scan(&realm)
+			_, _, captured, captureErr := capturedBill(r.Context(), db, r.PathValue("id"), r.PathValue("bill"), realm)
 			if captureErr != nil {
 				problem(w, 409, captureErr.Error())
 				return
@@ -162,8 +166,8 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 	})
 	mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
 		a := auth.Actor(r.Context())
-		if a == nil || a.Organization == "" || a.Organization != os.Getenv("WORKOS_ORGANIZATION_ID") {
-			problem(w, 403, "A hosted sandbox-company session is required.")
+		if a == nil || a.Organization == "" {
+			problem(w, 403, "A hosted firm session is required.")
 			return
 		}
 		var in struct {
@@ -186,17 +190,46 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "Your role lacks "+permission+".")
 			return
 		}
-		sandbox := sandboxConfiguration()
-		if !sandbox.Ready() || sandbox.Production {
-			problem(w, 503, "Configure the QuickBooks sandbox first.")
+		closeID, billID := r.PathValue("id"), r.PathValue("bill")
+		var entity, period, environment string
+		var signed bool
+		if err := db.QueryRowContext(r.Context(), `SELECT entity,period,COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=client_closes.id ORDER BY id DESC LIMIT 1),false),COALESCE((SELECT x.environment FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("client_closes.id")+`),'') FROM client_closes WHERE id::text=$1 AND organization_id=$2`, closeID, a.Organization).Scan(&entity, &period, &signed, &environment); err != nil || (signed && in.Action != "verify") {
+			problem(w, 409, "Use an open close for this client.")
 			return
 		}
-		closeID, billID := r.PathValue("id"), r.PathValue("bill")
-		var entity, period string
-		var signed bool
-		if err := db.QueryRowContext(r.Context(), `SELECT entity,period,COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=client_closes.id ORDER BY id DESC LIMIT 1),false) FROM client_closes WHERE id::text=$1 AND organization_id=$2`, closeID, a.Organization).Scan(&entity, &period, &signed); err != nil || entity != sandbox.Entity || (signed && in.Action != "verify") {
-			problem(w, 409, "Use an open close for the configured sandbox company.")
-			return
+		// A client's production company is corrected under its grant; otherwise the configured sandbox company.
+		production := environment == "production"
+		var sandbox quickbooks.Sandbox
+		var grant productionGrant
+		if production {
+			if access, err := clientAccess(db, r, entity); err != nil || !access {
+				problem(w, 403, "Client access is required.")
+				return
+			}
+			if !slices.Contains(postingKinds(), "bill_correction") {
+				problem(w, 409, "Production Bill corrections are not enabled yet. They turn on after the QuickBooks behavior is checked in the sandbox.")
+				return
+			}
+			saved, kind := "", "bill_correction"
+			if in.Action == "verify" {
+				prior, err := readBillCorrection(r.Context(), db, closeID, billID)
+				if err != nil || prior.GrantID == "" {
+					problem(w, 409, "Only an attempted production Bill can be verified.")
+					return
+				}
+				saved, kind = prior.GrantID, ""
+			}
+			var err error
+			if sandbox, grant, _, err = productionClient(r.Context(), db, a.Organization, entity, kind, saved); err != nil {
+				refuse(w, err)
+				return
+			}
+		} else {
+			sandbox = sandboxConfiguration()
+			if a.Organization != os.Getenv("WORKOS_ORGANIZATION_ID") || !sandbox.Ready() || sandbox.Production || entity != sandbox.Entity {
+				problem(w, 409, "Use an open close for the configured sandbox company.")
+				return
+			}
 		}
 		if in.Action == "preview" {
 			in.Reason = strings.TrimSpace(in.Reason)
@@ -228,12 +261,29 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 			}
 			name, err := sandbox.ValidateExpenseAccount(r.Context(), in.TargetAccountID)
 			if err != nil {
-				problem(w, 422, "Choose a different active expense account in the client's currency.")
+				problem(w, 422, err.Error())
 				return
 			}
+			if production {
+				limit, limitErr := prepaids.Amount(grant.MaxAmount)
+				for _, line := range live.Line {
+					amount, amountErr := prepaids.Amount(string(line.Amount))
+					if line.ID != in.TargetLineID {
+						continue
+					}
+					if limitErr != nil || amountErr != nil || amount > limit {
+						problem(w, 409, "The Bill line exceeds this client's grant limit.")
+						return
+					}
+					if !slices.Contains(grant.AccountIDs, line.AccountBasedExpenseLineDetail.AccountRef.Value) {
+						problem(w, 409, "The Bill line's current account is not allowed by this client's production grant.")
+						return
+					}
+				}
+			}
 			before, _ := json.Marshal(live)
-			digest := preparation.Digest([]byte(captureID + "/" + evidenceID + "/" + string(before) + "/" + in.Treatment + "/" + in.Reason + "/" + in.TargetLineID + "/" + in.TargetAccountID + "/" + name))
-			result, err := db.ExecContext(r.Context(), `INSERT INTO bill_corrections(close_id,capture_id,evidence_id,realm,bill_id,treatment,reason,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'preview',$13) ON CONFLICT(realm,bill_id) DO UPDATE SET capture_id=EXCLUDED.capture_id,evidence_id=EXCLUDED.evidence_id,treatment=EXCLUDED.treatment,reason=EXCLUDED.reason,target_account_id=EXCLUDED.target_account_id,target_line_id=EXCLUDED.target_line_id,target_account_name=EXCLUDED.target_account_name,before_bill=EXCLUDED.before_bill,digest=EXCLUDED.digest,state='preview',proposed_by=EXCLUDED.proposed_by,approved_by=NULL,approval_expires_at=NULL WHERE bill_corrections.close_id=EXCLUDED.close_id AND bill_corrections.attempted_at IS NULL`, closeID, captureID, evidenceID, sandbox.Realm, billID, in.Treatment, in.Reason, in.TargetAccountID, in.TargetLineID, name, string(before), digest, a.Subject)
+			digest := preparation.Digest([]byte(captureID + "/" + evidenceID + "/" + string(before) + "/" + in.Treatment + "/" + in.Reason + "/" + in.TargetLineID + "/" + in.TargetAccountID + "/" + name + "/" + grant.ID))
+			result, err := db.ExecContext(r.Context(), `INSERT INTO bill_corrections(close_id,capture_id,evidence_id,realm,bill_id,treatment,reason,target_account_id,target_line_id,target_account_name,before_bill,digest,state,proposed_by,grant_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'preview',$13,NULLIF($14,'')::bigint) ON CONFLICT(realm,bill_id) DO UPDATE SET grant_id=EXCLUDED.grant_id,capture_id=EXCLUDED.capture_id,evidence_id=EXCLUDED.evidence_id,treatment=EXCLUDED.treatment,reason=EXCLUDED.reason,target_account_id=EXCLUDED.target_account_id,target_line_id=EXCLUDED.target_line_id,target_account_name=EXCLUDED.target_account_name,before_bill=EXCLUDED.before_bill,digest=EXCLUDED.digest,state='preview',proposed_by=EXCLUDED.proposed_by,approved_by=NULL,approval_expires_at=NULL WHERE bill_corrections.close_id=EXCLUDED.close_id AND bill_corrections.attempted_at IS NULL`, closeID, captureID, evidenceID, sandbox.Realm, billID, in.Treatment, in.Reason, in.TargetAccountID, in.TargetLineID, name, string(before), digest, a.Subject, grant.ID)
 			if err != nil {
 				problem(w, 503, "Could not save Bill preview.")
 				return
@@ -257,6 +307,10 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if in.Action == "approve" || in.Action == "execute" {
+			if item.GrantID != grant.ID {
+				problem(w, 409, "This client's production grant changed; prepare the Bill correction again.")
+				return
+			}
 			if _, err = billCorrectionCurrent(r.Context(), db, closeID, item, sandbox); err != nil {
 				problem(w, 409, err.Error())
 				return
@@ -305,7 +359,7 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			var currentCapture string
-			e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture)
+			e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture)
 			if e != nil && e != sql.ErrNoRows {
 				problem(w, 503, "Could not verify the transaction capture.")
 				return
@@ -313,6 +367,13 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 			if e != nil || currentCapture != item.CaptureID {
 				problemCode(w, 409, "SOURCE_STALE", "Transaction capture changed. Review a new correction.")
 				return
+			}
+			if production {
+				var current string
+				if tx.QueryRowContext(r.Context(), `SELECT id::text FROM production_posting_grants WHERE id=$1 AND revoked_at IS NULL AND expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=production_posting_grants.organization_id AND subject=production_posting_grants.granted_by AND granted) FOR UPDATE`, item.GrantID).Scan(&current) != nil {
+					problem(w, 409, "Production grant expired or was revoked.")
+					return
+				}
 			}
 			result, err := tx.ExecContext(r.Context(), `UPDATE bill_corrections SET state='executing',attempted_by=$2,attempted_at=now() WHERE id::text=$1 AND digest=$3 AND state='approved' AND approval_expires_at>now() AND approved_by IS NOT NULL AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$4 AND subject=bill_corrections.approved_by AND granted)`, item.ID, a.Subject, item.Digest, a.Organization)
 			if err != nil {

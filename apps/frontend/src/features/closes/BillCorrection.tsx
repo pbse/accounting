@@ -45,7 +45,7 @@ export function BillCorrection({ closeId }: { closeId: string }) {
   }
   return <details onToggle={event => { if (event.currentTarget.open && bills.length === 0) void load(); }}>
     <summary>Review a Bill expense-account correction</summary>
-    <p>For an unpaid USD Bill with up to ten simple expense lines. Select exactly one line and target account; the other lines must read back unchanged. This posts only to the configured QuickBooks sandbox. No automatic retry follows an uncertain write.</p>
+    <p>For an unpaid Bill in the client's currency with up to ten simple expense lines. Select exactly one line and target account; the other lines must read back unchanged. It writes to the client's production QuickBooks company under a grant that covers Bill corrections (both the line's current and new accounts must be granted), or to the configured sandbox company in development. No automatic retry follows an uncertain write.</p>
     <button type="button" disabled={busy} onClick={() => void load()}>Refresh Bill candidates</button>
     <label>Bill from the latest transaction capture<select value={selected} onChange={event => void select(event.target.value)}><option value="">Choose a Bill</option>{selected && !bills.some(b => b.id === selected) && <option value={selected}>Bill #{selected}</option>}{bills.map(b => <option key={b.id} value={b.id}>#{b.id} · {b.date} · ${b.amount} · vendor #{b.vendor_id}</option>)}</select></label>
     {hasMore && <p><label>Older Bill ID from the downloaded transaction capture<input inputMode="numeric" pattern="[0-9]+" value={manualId} onChange={event => setManualId(event.target.value)} /></label><button type="button" disabled={busy || !/^[0-9]+$/.test(manualId)} onClick={() => void select(manualId)}>Review this captured Bill</button></p>}
@@ -61,7 +61,7 @@ export function BillCorrection({ closeId }: { closeId: string }) {
         <button type="button" disabled={busy || !confirmed || reason.trim().length < 5 || !lineId || !account} onClick={() => void run("preview")}>Preview exact correction</button>
       </>}
       {item?.state === "preview" && <button type="button" disabled={busy || !confirmed} onClick={() => void run("approve")}>Approve this Bill correction for 10 minutes</button>}
-      {item?.state === "approved" && <button type="button" disabled={busy || !confirmed} onClick={() => void run("execute")}>Update Bill account once in sandbox</button>}
+      {item?.state === "approved" && <button type="button" disabled={busy || !confirmed} onClick={() => void run("execute")}>Update Bill account once</button>}
       {(item?.state === "executing" || item?.state === "unknown" || item?.state === "verified") && <button type="button" disabled={busy} onClick={() => void run("verify")}>Read back Bill from QuickBooks</button>}
     </>}
     {message && <p role="status">{message}</p>}

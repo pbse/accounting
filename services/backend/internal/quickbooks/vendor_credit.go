@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -30,8 +31,13 @@ type CreditLine struct {
 }
 
 func (s Sandbox) PrepareVendorCredit(ctx context.Context, vendorID, apID, prepaidID, prepaidName, date, amount, source string) (VendorCredit, error) {
-	if !s.Ready() || s.Production || !identifier.MatchString(vendorID) || !identifier.MatchString(apID) || !identifier.MatchString(prepaidID) || vendorID == apID || apID == prepaidID || prepaidID != s.DebitAccount {
-		return VendorCredit{}, errors.New("Exact sandbox vendor and distinct mapped A/P and prepaid account IDs are required")
+	// The sandbox credits its configured prepaid account; production credits accounts its grant allows.
+	mapped := prepaidID == s.DebitAccount
+	if s.Production {
+		mapped = slices.Contains(s.Accounts, apID) && slices.Contains(s.Accounts, prepaidID)
+	}
+	if !s.Ready() || !identifier.MatchString(vendorID) || !identifier.MatchString(apID) || !identifier.MatchString(prepaidID) || vendorID == apID || apID == prepaidID || !mapped {
+		return VendorCredit{}, errors.New("An exact vendor and distinct A/P and prepaid accounts allowed for this company are required")
 	}
 	parsed, ok := new(big.Rat).SetString(amount)
 	if !ok || parsed.Sign() <= 0 || len(source) < 3 || len(source) > 21 || strings.TrimSpace(source) != source || strings.ContainsAny(source, "'\\\r\n") {

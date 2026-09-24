@@ -24,12 +24,12 @@ export function VendorCredit({ closeId, paperId, paper, sources, approved }: { c
     const data = new FormData(event.currentTarget);
     void run({ action: "preview", vendor_id: String(data.get("vendor_id")), ap_account_id: String(data.get("ap_account_id")), evidence_id: String(data.get("evidence_id")), credit_reference: String(data.get("credit_reference")), txn_date: String(data.get("txn_date")), method_confirmed: data.has("method_confirmed"), unbooked_confirmed: data.has("unbooked_confirmed") });
   }
-  return <details><summary>Reviewed supplier credit · QuickBooks sandbox</summary>
-    <p>This creates a native VendorCredit for one reviewed supplier credit. It credits the mapped prepaid asset and the exact A/P account. The supplier credit document must be linked to this approved workpaper. This sandbox flow does not authorize production posting.</p>
+  return <details><summary>Reviewed supplier credit · QuickBooks</summary>
+    <p>This creates a native VendorCredit for one reviewed supplier credit. It credits the prepaid asset named on the workpaper and the exact A/P account. The supplier credit document must be linked to this approved workpaper. It writes to the client's production QuickBooks company under a grant that covers supplier credits, or to the configured sandbox company in development.</p>
     <button disabled={busy} onClick={() => void run()}>Check credit status</button>
     {error && <p role="alert">{error}</p>}
     {intent && <><p role="status">State: {intent.state}{intent.error ? ` · ${intent.error}` : ""}</p>
-      {intent.realm && <p>Sandbox company #{intent.realm}</p>}
+      {intent.realm && <p>QuickBooks company #{intent.realm}</p>}
       {intent.vendor_name && <p>QuickBooks vendor: {intent.vendor_name}. Confirm this is the supplier named on the linked credit before approval.</p>}
       {intent.unbooked_confirmed_by && <p>Unbooked-credit check confirmed by {intent.unbooked_confirmed_by} for this preview. Recheck the books immediately before posting.</p>}
       {intent.external_id && <p>QuickBooks VendorCredit #{intent.external_id}</p>}
@@ -46,7 +46,7 @@ export function VendorCredit({ closeId, paperId, paper, sources, approved }: { c
         <label><input type="checkbox" name="unbooked_confirmed" required /> I checked the current QuickBooks books and confirmed this credit has not been recorded or included in the booked prepaid balance. Posting it will require a fresh ledger capture and workpaper review.</label>
         <button className="primary" disabled={busy}>{intent.state === "not_prepared" ? "Preview native VendorCredit" : "Replace preview and reset approval"}</button>
       </form>}
-      {(intent.state === "preview" || intent.state === "approved") && <><p>Accountant approval binds this exact vendor, evidence, date, amount and accounts for ten minutes. A posting attempt is never retried automatically.</p><label>Type {intent.state === "preview" ? "APPROVE VENDOR CREDIT" : "POST VENDOR CREDIT"}<input value={confirmation} onChange={e => setConfirmation(e.target.value)} autoComplete="off" /></label><button disabled={busy || confirmation !== (intent.state === "preview" ? "APPROVE VENDOR CREDIT" : "POST VENDOR CREDIT")} onClick={() => void run({ action: intent.state === "preview" ? "approve" : "execute", digest: intent.digest, confirmation })}>{intent.state === "preview" ? "Approve exact credit" : "Post once to sandbox"}</button>{intent.approval_expires_at && <p>Approval expires {new Date(intent.approval_expires_at).toLocaleString()}.</p>}</>}
+      {(intent.state === "preview" || intent.state === "approved") && <><p>Accountant approval binds this exact vendor, evidence, date, amount and accounts for ten minutes. A posting attempt is never retried automatically.</p><label>Type {intent.state === "preview" ? "APPROVE VENDOR CREDIT" : "POST VENDOR CREDIT"}<input value={confirmation} onChange={e => setConfirmation(e.target.value)} autoComplete="off" /></label><button disabled={busy || confirmation !== (intent.state === "preview" ? "APPROVE VENDOR CREDIT" : "POST VENDOR CREDIT")} onClick={() => void run({ action: intent.state === "preview" ? "approve" : "execute", digest: intent.digest, confirmation })}>{intent.state === "preview" ? "Approve exact credit" : "Post once to QuickBooks"}</button>{intent.approval_expires_at && <p>Approval expires {new Date(intent.approval_expires_at).toLocaleString()}.</p>}</>}
       {intent.external_id && <button disabled={busy} onClick={() => void run({ action: "verify", digest: intent.digest })}>Verify saved VendorCredit in QuickBooks</button>}
     </>}
   </details>;
