@@ -29,6 +29,7 @@ func registerEnrollment(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "A WorkOS organization enrollment grant is required.")
 			return
 		}
+		r = r.WithContext(auth.WithActor(r.Context(), actor))
 		var in struct {
 			Name      string `json:"name"`
 			Reason    string `json:"reason"`

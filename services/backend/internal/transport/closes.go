@@ -141,6 +141,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerXero(mux, db)
 	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
 	mux.HandleFunc("GET /v1/closes/{id}/binder", exportClose(db, true))
+	mux.HandleFunc("GET /v1/closes/{id}/year-end", yearEndHandoff(db))
 	mux.HandleFunc("GET /v1/closes", func(w http.ResponseWriter, r *http.Request) {
 		search := strings.TrimSpace(r.URL.Query().Get("q"))
 		if len(search) > 200 {
@@ -425,7 +426,7 @@ func ConfiguredAPI() (http.Handler, func(), error) {
 	} else if len(os.Getenv("WORKSPACE_TOKEN")) < 32 {
 		return nil, nil, fmt.Errorf("WORKSPACE_TOKEN must contain at least 32 characters when DATABASE_URL is set")
 	}
-	db, err := sql.Open("pgx", url)
+	db, err := OpenTenantDB(url, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid database configuration")
 	}

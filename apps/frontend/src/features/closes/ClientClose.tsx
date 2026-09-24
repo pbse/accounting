@@ -93,7 +93,7 @@ function PrepareActions({ close }: { close: Close }) {
 function Package({ close }: { close: Close }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  async function download(kind: "export" | "binder") {
+  async function download(kind: "export" | "binder" | "year-end") {
     setBusy(true);
     setStatus("");
     try {
@@ -101,10 +101,15 @@ function Package({ close }: { close: Close }) {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${kind === "binder" ? "accountant-binder" : "close-review"}-${close.id}-${close.period}.zip`;
+      const year = close.period.slice(0, 4);
+      link.download = kind === "year-end" ? `year-end-handoff-${close.id}-${year}.zip` : `${kind === "binder" ? "accountant-binder" : "close-review"}-${close.id}-${close.period}.zip`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus("Package ready. Open review.html for the summary and checksums.sha256 to verify its files.");
+      setStatus(
+        kind === "year-end"
+          ? `Year-end handoff ready for January through ${close.period}. Open handoff.html for the summary and open-questions.csv for what still needs an answer.`
+          : "Package ready. Open review.html for the summary and checksums.sha256 to verify its files.",
+      );
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Export failed. Saved work has not changed.");
     } finally {
@@ -122,8 +127,12 @@ function Package({ close }: { close: Close }) {
         <button disabled={busy} onClick={() => void download("binder")}>
           Download signed accountant binder
         </button>
+        <button disabled={busy} onClick={() => void download("year-end")}>
+          Download year-end handoff
+        </button>
       </div>
       <p>The binder is available only while the current supported scope remains signed off with no blockers. A new source or unresolved action requires fresh review.</p>
+      <p>The year-end handoff collects this client's approved schedules, roll-forwards, reconciled balances, adjustments, posting records and open questions from January through this month, for the firm's tax and audit work.</p>
       <p role="status">{status}</p>
     </section>
   );

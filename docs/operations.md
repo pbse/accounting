@@ -63,7 +63,13 @@ Use your own local port/user. The script rejects non-loopback hosts, creates two
 
 Stop API, worker and deployment traffic. Preserve a verified database backup and the old key in a separate secret store. Set `DATABASE_URL`, the **new** `SECRETS_KEY` and the **old** `SECRETS_KEY_PREVIOUS` only in an isolated operator shell, then run `go -C services/backend run ./cmd/rotate-secrets`. The command locks encrypted QuickBooks, Xero, Resend and outbox records in one transaction, decrypts with the old key, encrypts and reads back with the new key, and commits only after every record passes. It does not contact providers. If it reports an uncertain commit, inspect ciphertext with both keys before retrying. Deploy the new current key to API and worker only after the rotation succeeds, verify a controlled provider read, then remove the old key from the operator shell. Never configure `SECRETS_KEY_PREVIOUS` on API, worker, Cloudflare or GitHub Actions.
 
-Pending enterprise controls include PostgreSQL row-level security, a configured/live-validated alert receiver, backup expiry verification, scoped MCP access and a hosted recovery exercise. Keep these gaps visible during any pilot review.
+## Row-level security
+
+Migration 047 enables row-level security on every public table and makes every public view check it as the caller. Each statement from the API carries the signed-in firm (`app.organization`), so a query that forgets its firm filter still returns only that firm's rows, and a write into another firm fails. Token-checked public routes (client links, provider webhooks, the QuickBooks callback) and the worker run as system work and see every firm, which is what they need today. API work with neither a signed-in firm nor a system mark sees nothing.
+
+Policies bind the runtime role only. Run migrations as the owning role and run the API and worker as a separate role that does not own the tables and has neither superuser nor BYPASSRLS; grant it `SELECT, INSERT, UPDATE, DELETE` on all tables and `USAGE, SELECT` on all sequences in `public`. Hosted `/readyz` (WorkOS configured) returns 503 when the runtime role would bypass the policies or any table or view lacks them. Local development connects as a superuser, so policies do not apply there. The key-rotation command marks its own transaction as system work.
+
+Pending enterprise controls include a configured/live-validated alert receiver, backup expiry verification, scoped MCP access and a hosted recovery exercise. Keep these gaps visible during any pilot review.
 
 ## Human effort measurement
 
