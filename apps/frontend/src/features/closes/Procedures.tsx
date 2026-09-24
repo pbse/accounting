@@ -79,11 +79,11 @@ export function Procedures({
         impact_digest: publishImpact.impact_digest,
         client_entity: target === "client" ? entity : "",
         kind,
-        method: kind === "loan" ? "lender_statement_v1" : "",
+        method: kind === "loan" ? "lender_statement_v1" : kind === "basis" ? data.get("basis") : "",
         instructions: data.get("instructions"),
         expense_account: data.get("expense_account") ?? "",
         prepaid_account: data.get("prepaid_account") ?? "",
-        enabled: data.get("enabled") === "on",
+        enabled: kind === "basis" || data.get("enabled") === "on",
         reason: data.get("reason"),
         confirmed: data.get("confirmed") === "on",
       });
@@ -93,6 +93,7 @@ export function Procedures({
         "Published a new immutable version. Existing close context stays pinned until explicitly updated.",
       );
       await load();
+      if (kind === "basis") onApplied();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Procedure save failed.");
     } finally {
@@ -175,14 +176,14 @@ export function Procedures({
       {loaded && (
         <>
           <h3>Effective versions for {entity}</h3>
-          {["prepaid", "reconciliation", "accrual", "loan"].map((k) => {
+          {["basis", "prepaid", "reconciliation", "accrual", "loan"].map((k) => {
             const v =
               versions.find((p) => matches(p, entity, k)) ??
               versions.find((p) => matches(p, "", k));
             return (
               <section key={k}>
                 <h4>
-                  {k === "prepaid" ? "Prepaid preparation" : k === "accrual" ? "Accrual preparation" : k === "loan" ? "Loan schedules" : "Statement reconciliation"}
+                  {k === "basis" ? "Accounting basis" : k === "prepaid" ? "Prepaid preparation" : k === "accrual" ? "Accrual preparation" : k === "loan" ? "Loan schedules" : "Statement reconciliation"}
                 </h4>
                 {!v ? (
                   <p>
@@ -210,7 +211,7 @@ export function Procedures({
                       Approval record: {v.reason} · {v.actor} ·{" "}
                       {new Date(v.created_at).toLocaleString()}
                     </p>
-                    {v.enabled && <>
+                    {v.enabled && k !== "basis" && <>
                       <button disabled={busy} onClick={() => void preview(v)}>Preview affected work</button>
                       {impact?.version_id === v.id && <>
                         <p>Current pinned procedure source: {impact.source_id ? `#${impact.source_id}` : "none"}. Applying this version changes the cited context for {impact.affected_drafts.length} workpaper(s); their review may become stale.</p>
@@ -260,9 +261,10 @@ export function Procedures({
                     Statement reconciliation
                   </option>
                   <option value="loan">Loan schedules (lender statement method)</option>
+                  <option value="basis">Accounting basis</option>
                 </select>
               </label>
-              {target === "client" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
+              {target === "client" && kind !== "basis" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
               <button onClick={() => { setSuggestion(undefined);setEditing(true); }} disabled={busy}>
                 Propose and approve a new version
               </button>
@@ -304,6 +306,17 @@ export function Procedures({
                     </label>
                   </>
                 )}
+                {kind === "basis" ? (
+                  <label>
+                    Accounting basis
+                    <select name="basis" required defaultValue={previous?.method ?? ""}>
+                      <option value="">Choose the basis the accountant approved</option>
+                      <option value="accrual">Accrual</option>
+                      <option value="modified_cash">Modified cash (no accruals or prepaid schedules)</option>
+                      <option value="cash">Cash (no accruals or prepaid schedules)</option>
+                    </select>
+                  </label>
+                ) : (
                 <label>
                   <input
                     type="checkbox"
@@ -313,6 +326,7 @@ export function Procedures({
                   Enable for new context (a disabled client override suppresses
                   the firm default)
                 </label>
+                )}
                 <label>
                   Approval reference, accounting professional and reason for
                   this version

@@ -45,3 +45,13 @@ Apply migrations through 036 in order, with API/worker stopped, then restart bot
 For model drafts, set both `OPENAI_API_KEY` and `OPENAI_MODEL` privately on the API and worker. Local Compose reads the root `.env`; staging passes the same server-only secret and model to the Cloudflare API container and queue worker. With only one setting, drafting fails visibly. With neither, local prompts remain available. Apply migration 036 before deploying the updated API. No new package is needed. The version-history screen supports 200 versions and fails explicitly beyond that; larger histories need a paginated view before broader rollout. New calculation methods and materiality thresholds remain separately reviewed accounting work.
 
 API: `GET/POST /v1/closes/procedures`, `POST /v1/closes/{id}/procedures/apply`, `GET/POST /v1/closes/access`. Publishing/applying/access changes require explicit confirmation and current version references. Caller-supplied organization or actor metadata cannot change ownership.
+
+## Accounting basis per client
+
+Choose **Accounting basis** in **Approved procedures and client overrides** to record the basis the client's accountant approved: accrual, modified cash or cash. Set it once as the firm default and override it for individual clients. A basis version is always enabled; to change a client's basis, publish a new override.
+
+- **Cash and modified cash clients:** new prepaid and accrued-expense drafts are refused, and so is a loan draft that accrues interest. Drafts saved before a basis change can't be approved, and prepaid schedules can't be posted to production. Reconciliations, Stripe settlements and loans without accrued interest are unaffected.
+- **Accrual clients:** today's behavior, with per-draft accrual confirmations.
+- **The close header shows the effective basis** and whether a client override sets it. Prepaid and accrual actions are hidden for cash and modified-cash clients.
+- **Rollout exception:** a firm that hasn't set any basis keeps today's behavior (each prepaid or accrual draft confirms accrual basis) until it publishes a firm default.
+

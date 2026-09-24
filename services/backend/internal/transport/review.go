@@ -48,9 +48,9 @@ func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, deci
 		return "", 422, decisionMessage
 	}
 	note = strings.TrimSpace(note)
-	var digest, state, version, reason string
+	var digest, state, version, kind, reason string
 	var raw []byte
-	err := tx.QueryRowContext(ctx, `SELECT digest,review_state,review_id,paper,`+bulkReason+` FROM workpaper_review_state w WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&digest, &state, &version, &raw, &reason)
+	err := tx.QueryRowContext(ctx, `SELECT digest,review_state,review_id,paper,kind,`+bulkReason+` FROM workpaper_review_state w WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&digest, &state, &version, &raw, &kind, &reason)
 	if err == sql.ErrNoRows {
 		return "", 404, "Workpaper not found."
 	}
@@ -86,6 +86,12 @@ func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, deci
 		}
 	}
 	if decision == "approved" {
+		if issue, err := preparation.BasisIssue(ctx, tx, closeID, kind, raw); err != nil || issue != "" {
+			if err != nil {
+				return "", 503, "The client's accounting basis could not be checked."
+			}
+			return "", 409, issue
+		}
 		issue, err := independenceIssue(ctx, tx, closeID, paperID, actor)
 		if err != nil {
 			return "", 503, "Firm review policy could not be checked."

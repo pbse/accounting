@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"close.local/backend/internal/preparation"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -604,6 +605,14 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		var reviewer string
 		if err = tx.QueryRowContext(r.Context(), `SELECT actor FROM workpaper_reviews WHERE workpaper_id::text=$1 ORDER BY id DESC LIMIT 1`, r.PathValue("paper")).Scan(&reviewer); err != nil {
 			problem(w, 409, "A current accountant-approved workpaper is required.")
+			return
+		}
+		if basis, e := preparation.BasisIssue(r.Context(), tx, closeID, "prepaid", nil); e != nil || basis != "" {
+			if e != nil {
+				problem(w, 503, "The client's accounting basis could not be checked. No write was made.")
+			} else {
+				problem(w, 409, basis+" No write was made.")
+			}
 			return
 		}
 		issue, err := independenceIssue(r.Context(), tx, closeID, r.PathValue("paper"), reviewer)

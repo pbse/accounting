@@ -5,7 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 )
 
 type Procedure struct {
@@ -29,9 +31,49 @@ func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Pr
 	return p, err
 }
 
+// BasisIssue refuses work the client's approved basis does not support. Firms that have
+// not set any basis keep per-draft accrual confirmations; basis versions are never disabled.
+func BasisIssue(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID, kind string, paper []byte) (string, error) {
+	if kind != "accrual" && kind != "prepaid" && kind != "loan" {
+		return "", nil
+	}
+	var basis string
+	err := q.QueryRowContext(ctx, `SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='basis' AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID).Scan(&basis)
+	if err == sql.ErrNoRows || basis == "accrual" {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	label := strings.ReplaceAll(basis, "_", " ")
+	switch kind {
+	case "accrual":
+		return fmt.Sprintf("Accrued expense schedules are unsupported for this client's %s basis.", label), nil
+	case "prepaid":
+		return fmt.Sprintf("Prepaid schedules are unsupported for this client's %s basis.", label), nil
+	}
+	var loan struct {
+		Input struct {
+			AccrueInterest bool `json:"accrue_interest"`
+		} `json:"input"`
+	}
+	if json.Unmarshal(paper, &loan) == nil && loan.Input.AccrueInterest {
+		return fmt.Sprintf("Accrued loan interest is unsupported for this client's %s basis; prepare the loan without accruing interest.", label), nil
+	}
+	return "", nil
+}
+
 func CheckProcedureMethod(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID, kind string, paper []byte) error {
+	if issue, err := BasisIssue(ctx, q, closeID, kind, paper); err != nil || issue != "" {
+		if err != nil {
+			return err
+		}
+		return errors.New(issue)
+	}
 	if kind == "loan" {
 		var enabled bool
 		var approved string

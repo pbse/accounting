@@ -375,3 +375,16 @@ Author: Claude Opus 5.5. Migration 042 adds the `loan` workpaper and procedure k
 - Observed red with the 30/360 bond D2 rule changed, the tie-out off, accrual counted from the paid-through date instead of the last payment, the reclass gate off, interest computed on opening principal, the procedure gate off, bulk exclusion off, and the publish method rule off.
 - Browser: published a firm-default loan procedure in Settings, which showed the approved method boundary. The calculator example showed the schedule, question, accrual and reclass. Saving was refused while the procedure was disabled and saved once enabled, and the draft opened on the review canvas.
 
+## Accounting basis (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 043 adds the `basis` procedure kind. Stacked on loan schedules (#28).
+
+- `TestTheClientsBasisDecidesWhichWorkCanBeSavedAndApproved`:
+  - a firm-default cash basis refuses accruals, and a client override (accrual) wins over it;
+  - a cash client's accrual, prepaid, and interest-accruing loan saves are refused, while a loan without accrual saves;
+  - an accrual saved before the change can't be approved;
+  - the close returns `basis: cash, basis_scope: client`;
+  - publishing refuses a basis without a method, a disabled basis, and a method on a prepaid procedure.
+- Observed red with precedence reversed, the save check off, the approval check off, and the always-enabled rule off.
+- Browser: published a cash-basis client override for Northstar in Settings. The close header showed "Cash basis · client override", and the prepaid and accrual actions were hidden.
+
