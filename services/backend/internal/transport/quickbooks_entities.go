@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"time"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/xero"
 )
 
 func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
@@ -120,23 +122,37 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		jsonReply(w, 200, map[string]any{"items": items, "has_more": more})
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/quickbooks/exceptions", func(w http.ResponseWriter, r *http.Request) {
+		// Balances come from the most recently captured month-end snapshot, QuickBooks or Xero.
 		balances := map[string]any{"snapshot": nil, "items": []any{}}
-		var snapshotID, capturedAt string
-		var stale bool
-		var accounts, trialBalance []byte
-		err := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at::text,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
+		var snapshotID, xeroID string
+		var capturedAt, xeroAt time.Time
+		var stale, xeroStale bool
+		var accounts, trialBalance, xeroPayload []byte
+		err := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
  WHERE s.close_id::text=$1 AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &capturedAt, &stale, &accounts, &trialBalance)
 		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Period snapshot unavailable.")
 			return
 		}
-		if err == nil {
-			balances["snapshot"] = map[string]any{"id": snapshotID, "captured_at": capturedAt, "stale": stale}
-			if items, err := quickbooks.AbnormalBalances(accounts, trialBalance); err != nil {
-				balances["error"] = err.Error()
-			} else {
-				balances["items"] = items
-			}
+		xeroErr := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at,x.state<>'active',s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&xeroID, &xeroAt, &xeroStale, &xeroPayload)
+		if xeroErr != nil && xeroErr != sql.ErrNoRows {
+			problem(w, 503, "Xero snapshot unavailable.")
+			return
+		}
+		var items any
+		var checkErr error
+		switch {
+		case xeroErr == nil && (err == sql.ErrNoRows || xeroAt.After(capturedAt)):
+			balances["snapshot"] = map[string]any{"id": xeroID, "captured_at": xeroAt, "stale": xeroStale, "source": "xero"}
+			_, items, checkErr = xero.WrongSide(xeroPayload)
+		case err == nil:
+			balances["snapshot"] = map[string]any{"id": snapshotID, "captured_at": capturedAt, "stale": stale, "source": "quickbooks"}
+			items, checkErr = quickbooks.AbnormalBalances(accounts, trialBalance)
+		}
+		if checkErr != nil {
+			balances["error"] = checkErr.Error()
+		} else if items != nil {
+			balances["items"] = items
 		}
 		var captureID, evidenceID, finished string
 		err = db.QueryRowContext(r.Context(), `SELECT s.id::text,s.evidence_id::text,s.finished_at::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL

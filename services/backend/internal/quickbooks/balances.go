@@ -6,19 +6,9 @@ import (
 	"math/big"
 	"slices"
 	"strings"
-)
 
-type BalanceException struct {
-	Type      string `json:"type"`
-	AccountID string `json:"account_id"`
-	Account   string `json:"account"`
-	Side      string `json:"side"`
-	Amount    string `json:"amount"`
-	Currency  string `json:"currency"`
-	Finding   string `json:"finding"`
-	NextStep  string `json:"next_step"`
-	Question  string `json:"question"`
-}
+	"close.local/backend/internal/ledger"
+)
 
 // Classification by QuickBooks account type; unknown types are skipped rather than guessed.
 var accountTypes = map[string]string{
@@ -33,7 +23,7 @@ var oppositeSubtypes = []string{"AccumulatedDepreciation", "AccumulatedAmortizat
 
 // AbnormalBalances lists Trial Balance accounts whose balance sits opposite their normal side.
 // It reads the report's Debit and Credit columns; each item is a candidate for review, not a conclusion.
-func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]BalanceException, error) {
+func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]ledger.BalanceException, error) {
 	var directory []struct {
 		ID                                                string `json:"Id"`
 		Name, Classification, AccountType, AccountSubType string
@@ -72,7 +62,7 @@ func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]BalanceExceptio
 	if debit < 1 || credit < 1 {
 		return nil, fmt.Errorf("trial balance has no Debit and Credit columns")
 	}
-	out := []BalanceException{}
+	out := []ledger.BalanceException{}
 	var invalid error
 	var visit func(reportRows)
 	visit = func(group reportRows) {
@@ -102,26 +92,15 @@ func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]BalanceExceptio
 				}
 				net.Add(net, cell.Mul(cell, big.NewRat(sign, 1)))
 			}
-			debitNormal := account.class == "Asset" || account.class == "Expense"
-			if net.Sign() == 0 || (net.Sign() > 0) == debitNormal {
-				continue
+			if item := ledger.WrongSide(row.ColData[0].ID, account.name, account.class, net, report.Header.Currency, "balance"); item != nil {
+				out = append(out, *item)
 			}
-			side := "credit"
-			if net.Sign() > 0 {
-				side = "debit"
-			}
-			balance := new(big.Rat).Abs(net).FloatString(2)
-			shown := amount(TransactionRow{Amount: balance, Currency: report.Header.Currency})
-			out = append(out, BalanceException{Type: "abnormal_balance", AccountID: row.ColData[0].ID, Account: account.name, Side: side, Amount: balance, Currency: report.Header.Currency,
-				Finding:  fmt.Sprintf("%s (%s) shows a %s %s balance, opposite its normal side.", account.name, account.class, shown, side),
-				NextStep: "Cause unverified: review this account's activity in the captured General Ledger before any correction. Common causes are a misposted payment, a refund or a duplicate. Nothing is changed.",
-				Question: fmt.Sprintf("Our records show a %s %s balance in %s at month-end. Do you know of an advance, refund or overpayment that explains it?", shown, side, account.name)})
 		}
 	}
 	visit(report.Rows)
 	if invalid != nil {
 		return nil, invalid
 	}
-	slices.SortFunc(out, func(a, b BalanceException) int { return strings.Compare(a.Account, b.Account) })
+	slices.SortFunc(out, func(a, b ledger.BalanceException) int { return strings.Compare(a.Account, b.Account) })
 	return out, nil
 }

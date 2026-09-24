@@ -8,12 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/ledger"
 )
 
 // Granular scopes are required for apps created after 2 March 2026.
@@ -168,6 +171,7 @@ type Balance struct {
 	Credit    string `json:"credit"`
 	YTDDebit  string `json:"ytd_debit"`
 	YTDCredit string `json:"ytd_credit"`
+	System    string `json:"system_account,omitempty"`
 }
 
 func Balances(payload json.RawMessage) (currency, date string, rows []Balance, err error) {
@@ -178,7 +182,7 @@ func Balances(payload json.RawMessage) (currency, date string, rows []Balance, e
 		}
 		Accounts struct {
 			Accounts []struct {
-				AccountID, Code, Name, Class string
+				AccountID, Code, Name, Class, SystemAccount string
 			}
 		}
 		TrialBalance struct {
@@ -222,16 +226,18 @@ func Balances(payload json.RawMessage) (currency, date string, rows []Balance, e
 				return ""
 			}
 			b := Balance{AccountID: id, Name: r.Cells[0].Value, Debit: cell("Debit"), Credit: cell("Credit"), YTDDebit: cell("YTD Debit"), YTDCredit: cell("YTD Credit")}
-			if i := slices.IndexFunc(snapshot.Accounts.Accounts, func(a struct{ AccountID, Code, Name, Class string }) bool { return a.AccountID == id }); i >= 0 {
+			if i := slices.IndexFunc(snapshot.Accounts.Accounts, func(a struct{ AccountID, Code, Name, Class, SystemAccount string }) bool { return a.AccountID == id }); i >= 0 {
 				account := snapshot.Accounts.Accounts[i]
-				b.Code, b.Name, b.Class = account.Code, account.Name, account.Class
+				b.Code, b.Name, b.Class, b.System = account.Code, account.Name, account.Class, account.SystemAccount
 			}
 			rows = append(rows, b)
 		}
 	}
 	visit(snapshot.TrialBalance.Reports[0].Rows)
-	if _, ok := columns["YTD Debit"]; !ok {
-		return "", "", nil, errors.New("Xero Trial Balance has no YTD Debit column")
+	_, debit := columns["YTD Debit"]
+	_, credit := columns["YTD Credit"]
+	if !debit || !credit {
+		return "", "", nil, errors.New("Xero Trial Balance has no YTD Debit and YTD Credit columns")
 	}
 	return currency, snapshot.Date, rows, nil
 }
@@ -246,4 +252,47 @@ type row struct {
 		}
 	}
 	Rows []row
+}
+
+var classes = map[string]string{"ASSET": "Asset", "LIABILITY": "Liability", "EQUITY": "Equity", "REVENUE": "Revenue", "EXPENSE": "Expense"}
+
+// WrongSide lists accounts whose YTD net sits opposite their normal side. Xero has no contra
+// subtype, so accumulated depreciation and amortisation are recognised by name; retained
+// earnings and owner drawings normally sit on the opposite side and are skipped.
+func WrongSide(payload json.RawMessage) (string, []ledger.BalanceException, error) {
+	currency, date, rows, err := Balances(payload)
+	if err != nil {
+		return "", nil, err
+	}
+	out := []ledger.BalanceException{}
+	for _, row := range rows {
+		class, lower := classes[row.Class], strings.ToLower(row.Name)
+		if class == "" || row.System == "RETAINEDEARNINGS" || strings.Contains(lower, "accumulated") || class == "Equity" && (strings.Contains(lower, "draw") || strings.Contains(lower, "distribution")) {
+			continue
+		}
+		net := new(big.Rat)
+		for _, cell := range []struct {
+			value string
+			sign  int64
+		}{{row.YTDDebit, 1}, {row.YTDCredit, -1}} {
+			value, sign := strings.ReplaceAll(strings.TrimSpace(cell.value), ",", ""), cell.sign
+			if value == "" {
+				continue
+			}
+			amount, ok := new(big.Rat).SetString(value)
+			if !ok {
+				return "", nil, fmt.Errorf("Xero Trial Balance amount %q for %s is not a number", value, row.Name)
+			}
+			net.Add(net, amount.Mul(amount, big.NewRat(sign, 1)))
+		}
+		basis := "balance"
+		if class == "Revenue" || class == "Expense" {
+			basis = "year-to-date balance"
+		}
+		if item := ledger.WrongSide(row.AccountID, row.Name, class, net, currency, basis); item != nil {
+			out = append(out, *item)
+		}
+	}
+	slices.SortFunc(out, func(a, b ledger.BalanceException) int { return strings.Compare(a.Account, b.Account) })
+	return date, out, nil
 }

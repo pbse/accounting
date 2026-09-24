@@ -17,7 +17,7 @@ type Scan = {
   capture: { id: string; evidence_id: string; finished_at: string } | null;
   scanned?: number;
   items: Found[];
-  balances: { snapshot: { id: string; captured_at: string; stale: boolean } | null; items: Balance[]; error?: string };
+  balances: { snapshot: { id: string; captured_at: string; stale: boolean; source: "quickbooks" | "xero" } | null; items: Balance[]; error?: string };
 };
 
 const labels: Record<Found["type"], [string, string]> = {
@@ -114,7 +114,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
       ) : (
         <>
           <p>
-            From the Trial Balance in snapshot #{balances.snapshot.id}, captured {new Date(balances.snapshot.captured_at).toLocaleString()}.
+            From the {balances.snapshot.source === "xero" ? "Xero" : "QuickBooks"} Trial Balance in snapshot #{balances.snapshot.id}, captured {new Date(balances.snapshot.captured_at).toLocaleString()}.
             Contra accounts, retained earnings and owner draws are skipped because they normally sit on the opposite side.
           </p>
           {balances.snapshot.stale && (
