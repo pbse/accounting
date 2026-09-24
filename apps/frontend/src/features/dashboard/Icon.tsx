@@ -16,6 +16,7 @@ const paths = {
   back: "M15 18l-6-6 6-6",
   arrow: "M5 12h14M13 6l6 6-6 6",
   file: "M6 3h9l4 4v14H6zM15 3v4h4",
+  measure: "M5 20V10M10 20V4M15 20v-7M20 20V8",
 } as const;
 
 export type IconName = keyof typeof paths;

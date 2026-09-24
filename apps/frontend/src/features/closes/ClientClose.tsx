@@ -5,6 +5,7 @@ import { BillCorrection } from "./BillCorrection";
 import { CarryForward } from "./CarryForward";
 import { Coordinator } from "./Coordinator";
 import { EmailReplies } from "./EmailReplies";
+import { Exceptions } from "./Exceptions";
 import { RetentionControls } from "./Enterprise";
 import { Evidence, PreparationJobs } from "./Evidence";
 import { ProposedStatePreview } from "./Posting";
@@ -15,6 +16,8 @@ import { Readiness } from "./Readiness";
 import { Recurring } from "./Recurring";
 import { RecurringAccruals } from "./RecurringAccruals";
 import { Requests } from "./Requests";
+import { EffortCard, EffortTracker, type Activity } from "./Effort";
+import { PlanChips, PlanningControls } from "./Planning";
 import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
 import { needsAttention, paperLabels, readyForReview, ReviewPill, useClose, type Close, type Paper } from "./WorkpaperView";
@@ -28,6 +31,7 @@ const tabs = [
   ["settings", "Settings"],
 ] as const;
 type Tab = (typeof tabs)[number][0];
+const tabActivity: Record<Tab, Activity> = { overview: "prepare", workpapers: "prepare", evidence: "evidence", requests: "requests", signoff: "signoff", settings: "configuration" };
 const filters: Record<string, [string, (paper: Paper) => boolean]> = {
   all: ["All drafts", () => true],
   ready: ["Ready for review", readyForReview],
@@ -138,6 +142,7 @@ export default function ClientClose() {
   const latest = more ? " among the latest 100" : "";
   return (
     <>
+      <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
       <Link className="back-link" to="/dashboard/closes">
         <Icon name="back" size={15} /> Client closes
       </Link>
@@ -146,11 +151,14 @@ export default function ClientClose() {
           <Avatar label={close.entity} />
           <span>
             <h1>{close.entity}</h1>
-            <p>Close month {close.period} · prepared work stays a draft until an accountant approves it</p>
+            <p>
+              Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
+            </p>
           </span>
         </div>
         <PrepareActions close={close} />
       </div>
+      <PlanningControls key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}`} closeId={close.id} plan={close} onSaved={() => void reload()} />
       <div className="kpis">
         <Kpi icon="review" tone="" label="Ready for review" value={ready.length} caption={`Current drafts with evidence and no blockers${latest}`} to={`${base}?tab=workpapers&filter=ready`} />
         <Kpi icon="blocked" tone="red" label="Needs attention" value={attention.length} caption={`Blockers, changes requested or evidence changed${latest}`} to={`${base}?tab=workpapers&filter=attention`} />
@@ -170,6 +178,7 @@ export default function ClientClose() {
         <div className="stack">
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
+          <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
           <EmailReplies closeId={close.id} onReleased={() => void reload()} />
           <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
         </div>
@@ -235,6 +244,7 @@ export default function ClientClose() {
         <div className="stack">
           <Readiness key={`readiness-${close.id}`} closeId={close.id} papers={papers} />
           <ProposedStatePreview closeId={close.id} />
+          <EffortCard closeId={close.id} />
           <Package close={close} />
         </div>
       )}

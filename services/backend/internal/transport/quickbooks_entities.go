@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/quickbooks"
 )
 
 func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
@@ -117,6 +118,38 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		jsonReply(w, 200, map[string]any{"items": items, "has_more": more})
+	})
+	mux.HandleFunc("GET /v1/closes/{id}/quickbooks/exceptions", func(w http.ResponseWriter, r *http.Request) {
+		var captureID, evidenceID, finished string
+		err := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.evidence_id::text,s.finished_at::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
+ WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(id) FROM quickbooks_entity_syncs WHERE close_id=s.close_id AND state='completed')`, r.PathValue("id")).Scan(&captureID, &evidenceID, &finished)
+		if err == sql.ErrNoRows {
+			jsonReply(w, 200, map[string]any{"capture": nil, "items": []any{}})
+			return
+		}
+		if err != nil {
+			problem(w, 503, "Transaction index unavailable.")
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT kind,provider_id,txn_date::text,COALESCE(currency,''),COALESCE(amount,''),record FROM quickbooks_transaction_rows WHERE sync_id=$1`, captureID)
+		if err != nil {
+			problem(w, 503, "Transaction index unavailable.")
+			return
+		}
+		defer rows.Close()
+		scanned := []quickbooks.TransactionRow{}
+		for rows.Next() {
+			var row quickbooks.TransactionRow
+			if err = rows.Scan(&row.Kind, &row.ProviderID, &row.Date, &row.Currency, &row.Amount, &row.Record); err != nil {
+				break
+			}
+			scanned = append(scanned, row)
+		}
+		if err != nil || rows.Err() != nil {
+			problem(w, 503, "Transaction index unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": captureID, "evidence_id": evidenceID, "finished_at": finished}, "scanned": len(scanned), "items": quickbooks.FindExceptions(scanned)})
 	})
 	mux.HandleFunc("GET "+path+"/{sync}", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte

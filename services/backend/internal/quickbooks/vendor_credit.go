@@ -44,6 +44,9 @@ func (s Sandbox) PrepareVendorCredit(ctx context.Context, vendorID, apID, prepai
 	if company.CompanyInfo.CompanyName != s.Entity {
 		return VendorCredit{}, errors.New("QuickBooks company does not match the client")
 	}
+	if _, err := s.OpenPeriod(ctx, date); err != nil {
+		return VendorCredit{}, err
+	}
 	var vendor struct {
 		Vendor struct {
 			ID          string `json:"Id"`

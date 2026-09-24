@@ -147,3 +147,25 @@ func TestPrimaryClientLabelBlocksBeforeEvidenceSelection(t *testing.T) {
 		t.Fatal("unrelated support source blocked this job")
 	}
 }
+
+func TestRecognizeExportLeavesTheReconciliationRoleToTheReviewer(t *testing.T) {
+	intake := func(content string) []IntakeSource {
+		return []IntakeSource{{Source: Source{ID: "1", Role: "invoice"}, Content: content}}
+	}
+	p, ok := RecognizeExport(intake("id,date,amount\nB1,2026-09-05,-50.00\nB2,2026-09-02,200.00\n"), "2026-09", true)
+	if !ok || p.Kind != "reconciliation" || p.Engine != "recognized_export" || !strings.Contains(p.Summary, "2 transactions dated 2026-09-02 to 2026-09-05, net $150.00") || !strings.Contains(p.Summary, "bank statement or the ledger export") {
+		t.Fatalf("an id,date,amount CSV must be proposed as a reconciliation with an unconfirmed role: %+v", p)
+	}
+	if p, ok = RecognizeExport(intake("id,date,amount\nB1,2026-10-01,5.00\n"), "2026-09", true); !ok || p.Kind != "unsupported" || len(p.Questions) != 1 {
+		t.Fatalf("a malformed reconciliation CSV must stay visibly unsupported: %+v", p)
+	}
+	if p, ok = RecognizeExport(intake("id,date,amount\n"), "2026-09", true); !ok || p.Kind != "reconciliation" || !strings.Contains(p.Summary, "no transactions") {
+		t.Fatalf("a header-only CSV is zero movement, not an error: %+v", p)
+	}
+	if _, ok = RecognizeExport(intake("id,date,amount\nB1,2026-09-05,-50.00\n"), "2026-09", false); ok {
+		t.Fatal("the agent path reads reconciliation CSVs itself")
+	}
+	if _, ok = RecognizeExport(intake("Invoice amount: 1200.00\nService start: 2026-09-01"), "2026-09", true); ok {
+		t.Fatal("an invoice is not a recognized export")
+	}
+}

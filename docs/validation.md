@@ -316,3 +316,35 @@ Author: Claude Opus 5.5. Worktree from `origin/main` cd96e9d; disposable databas
 - `TestWorkCountsAndReviewQueueMatchTheirLists`: every Work view's count equals its list; client search spans matching closes; the queue holds only the current, linked, unblocked draft; close search filters server-side. Observed red when counts ignored the view predicate and when the no-blockers rule was removed. Removing an explicit "no newer revision" rule stayed green because the review view (migration 005) already marks revised predecessors as changed, so that rule was deleted from SQL and UI.
 - Direct consumers passed: organization isolation (the boundary allowlist gained `/review-queue`), Work coordinator, saved-close round trip, close preparation scope, agent answers. Frontend typecheck and build passed.
 - Browser (isolated API/worker, seeded synthetic closes): gate, sidebar, Work KPIs/queue/segmented list, sidebar search, close KPIs and sections, Firm settings, and the canvas (cited lines 3–5 highlighted), including an approval that updated the pill and emptied the queue. Authenticated pages were reached through a local test proxy that injected the disposable instance's token; the browser only received a placeholder.
+
+## Close planning, ranking and bulk approval (2026-09-24)
+
+Author: Claude Opus 5.5. Stacked on the workspace redesign; migration 038 applied only to the disposable database.
+
+- `TestClosePlanningRanksWorkAndBulkApprovalChecksEachDraft`: rejects an invalid due date; self-assignment works; taking or releasing a colleague's close returns 409; a due-soon close I own ranks ahead of an older undated one in the same bucket; Mine and due-soon counts match; the queue flags a ledger-adjusting draft for individual review; a batch approves the routine draft and separately refuses a stale digest, the adjusting draft and another firm's draft, writing exactly one approval. Observed red with the per-item access check removed (the foreign draft was approved) and with the new ordering removed.
+- Browser (proxy-injected disposable token, seeded closes): five KPIs including Due in 7 days, ranked rows with due/priority/Mine chips, a disabled queue checkbox with its reason, a bulk approval of one settlement draft with the full confirmation panel, and the close header planning controls.
+
+## Human effort measurement (2026-09-24)
+
+Author: Claude Opus 5.5. Stacked on close planning; migration 039 applied only to the disposable database.
+
+- `TestEffortCapsCreditAndSeparatesWaiting`: three 30-second beats in one minute credit at most 60 seconds (robust to a minute boundary); unknown activities, oversized beats and another firm's close are rejected; a recorded 15-minute entry adds to human minutes; client wait counts only the answered request (delivery to first reply ≈ 2 h) and reports one delivered request without a reply while ignoring an undelivered one; the monthly report's median uses the measured close only and the quiet close reports no total. Observed red with the 60-second cap removed (app and constraint) and with unmeasured closes counted as zero.
+- Browser: Measure page (median 21 min, 1 of 3 measured, unmeasured rows) and the close's Human effort card with tracked, recorded and waiting figures.
+
+## Posting safety: closing date and independent review (2026-09-24)
+
+Author: Claude Opus 5.5. Stacked on human effort measurement; migration 040 applied only to the disposable database.
+
+- `TestOpenPeriodFollowsTheCompanyClosingDate`: refuses a date equal to the closing date, allows the day after, allows no closing date, and blocks a missing Preferences block or malformed date. Observed red when a date on the closing date was allowed.
+- `TestProductionPostingSingleDurableAttempt` now also proves that a closing date on or after the journal date refuses execution (422) and a changed but earlier closing date rejects the stale intent (409), both with zero writes, before the original single verified write. Books that close after that write still verify: readback does not recheck the closing date (observed red when it did). `TestVendorCreditRefusesAClosedPeriodBeforeAnyWrite` stops before any vendor, account or write request. Sandbox posting and Bill mocks serve Preferences.
+- `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`: under the policy the job's creator, the direct saver and drafts without provenance are refused; another member approves; the posting gate refuses a preparer's approval; policy changes need org:manage on a hosted firm, are recorded, and the local workspace cannot enable the policy (database constraint). Observed red with the check disabled.
+
+## Exception investigation and reconciliation CSV recognition (2026-09-24)
+
+Author: Claude Opus 5.5. Stacked on posting safety. No migration.
+
+- `TestFindExceptionsRaisesQuestionsWithoutConcluding`: flags only the nearby same-vendor pair (not the same payment 26 days later, another vendor, or another currency), the Uncategorized Expense line, and the payee-less Purchase; a JournalEntry without a payee is not flagged. A third equal payment six days after the first starts a new cluster, and a EUR amount is shown as EUR, not dollars. Observed red with a 31-day window, with currency dropped from the grouping, with the window measured from the previous payment, and with every amount printed in dollars.
+- `TestExceptionsScanTheWholeLatestCapture` (PostgreSQL): no capture returns `capture: null`; a capture with three rows reports `scanned: 3` and one possible duplicate.
+- `TestRecognizeExportLeavesTheReconciliationRoleToTheReviewer`: an `id,date,amount` CSV becomes a `reconciliation` proposal with its row count, date range and net total; a header-only CSV is zero movement (observed red when it was rejected); a row outside the month stays unsupported with the reason; an invoice is not recognized; the agent path does not short-circuit CSVs, so `TestAgentAnswersResumeAndInventoryFence` keeps its paired statement, ledger and balances (it failed while the agent path recognized them). Observed red with the CSV check removed. `TestStripeExportIsRecognizedPreparedAndExported` still passes.
+- Browser, with a local API, worker and Vite on the disposable database: the Overview card listed a no-payee purchase, a CloudSuite pair two days apart and an Uncategorized Bill, and left the monthly rent payment alone. A close without a capture showed the capture prompt. An uploaded bank CSV showed **Recognized reconciliation CSV** with no confirm form, and its button opened the reconciliation page with the job continuation.
+

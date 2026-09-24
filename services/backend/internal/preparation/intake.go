@@ -115,21 +115,27 @@ func Propose(sources []IntakeSource) Proposal {
 
 // RecognizeExport identifies a known structured export without a model. The file
 // selects the work type only; it cannot confirm policy or authorize execution.
-func RecognizeExport(sources []IntakeSource, period string) (Proposal, bool) {
+// The agent pairs and reads id,date,amount CSVs itself, so only the local path asks for them.
+func RecognizeExport(sources []IntakeSource, period string, reconciliationCSV bool) (Proposal, bool) {
 	for _, s := range sources {
 		if s.Role != "invoice" {
 			continue
 		}
+		kind, failed := "settlement", "This Stripe payout export cannot be traced yet."
 		summary, ok, err := reconciliation.StripeReportSummary(s.Content, period)
+		if !ok && reconciliationCSV {
+			kind, failed = "reconciliation", "This reconciliation CSV cannot be reconciled yet."
+			summary, ok, err = reconciliation.CSVSummary(s.Content, period)
+		}
 		if !ok {
 			return Proposal{}, false
 		}
-		p := Proposal{Kind: "settlement", Engine: "recognized_export", Summary: summary, Facts: []Fact{}, Sources: []Source{}}
+		p := Proposal{Kind: kind, Engine: "recognized_export", Summary: summary, Facts: []Fact{}, Sources: []Source{}}
 		for _, source := range sources {
 			p.Sources = append(p.Sources, source.Source)
 		}
 		if err != nil {
-			p.Kind, p.Summary, p.Questions = "unsupported", "This Stripe payout export cannot be traced yet.", []string{err.Error()}
+			p.Kind, p.Summary, p.Questions = "unsupported", failed, []string{err.Error()}
 		}
 		return p, true
 	}
@@ -210,7 +216,7 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	proposed, recognized := RecognizeExport(sources, period)
+	proposed, recognized := RecognizeExport(sources, period, true)
 	if !recognized {
 		proposed = Propose(sources)
 	}

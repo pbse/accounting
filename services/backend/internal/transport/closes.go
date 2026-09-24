@@ -21,10 +21,17 @@ import (
 )
 
 type savedClose struct {
-	ID     string `json:"id"`
-	Entity string `json:"entity"`
-	Period string `json:"period"`
+	ID        string `json:"id"`
+	Entity    string `json:"entity"`
+	Period    string `json:"period"`
+	DueOn     string `json:"due_on,omitempty"`
+	Priority  string `json:"priority,omitempty"`
+	Assigned  bool   `json:"assigned,omitempty"`
+	OwnedByMe bool   `json:"owned_by_me,omitempty"`
 }
+
+const closePlanning = `COALESCE(due_on::text,''),priority,owner<>'',owner<>'' AND owner=`
+
 type savedPaper struct {
 	Digest      string `json:"digest"`
 	ReviewState string `json:"review_state"`
@@ -97,6 +104,9 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerRecurring(mux, db)
 	registerRecurringAccrual(mux, db)
 	registerReadiness(mux, db)
+	registerPlanning(mux, db)
+	registerEffort(mux, db)
+	registerIndependence(mux, db)
 	registerProcedures(mux, db)
 	registerProcedureLearning(mux, db)
 	registerAccess(mux, db)
@@ -119,7 +129,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 422, "Client search is too long.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)) AND ($4='' OR entity ILIKE '%'||$4||'%' OR period=$4) ORDER BY period DESC,id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$3 FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)) AND ($4='' OR entity ILIKE '%'||$4||'%' OR period=$4) ORDER BY period DESC,id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
 		if err != nil {
 			problem(w, 503, "Saved closes are unavailable.")
 			return
@@ -128,7 +138,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		items := []savedClose{}
 		for rows.Next() {
 			var item savedClose
-			if rows.Scan(&item.ID, &item.Entity, &item.Period) != nil {
+			if rows.Scan(&item.ID, &item.Entity, &item.Period, &item.DueOn, &item.Priority, &item.Assigned, &item.OwnedByMe) != nil {
 				problem(w, 503, "Could not read saved closes.")
 				return
 			}
@@ -206,7 +216,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	})
 	mux.HandleFunc("GET /v1/closes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var item savedClose
-		err := db.QueryRowContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&item.ID, &item.Entity, &item.Period)
+		err := db.QueryRowContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$2 FROM client_closes WHERE id::text=$1`, r.PathValue("id"), subject(r)).Scan(&item.ID, &item.Entity, &item.Period, &item.DueOn, &item.Priority, &item.Assigned, &item.OwnedByMe)
 		if err == sql.ErrNoRows {
 			problem(w, 404, "Close not found.")
 			return
@@ -339,7 +349,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		}
 		digest := fmt.Sprintf("%x", sha256.Sum256(body))
 		var saved savedPaper
-		err = db.QueryRowContext(r.Context(), `INSERT INTO workpapers(close_id,kind,digest,paper) SELECT id,$2,$3,$4 FROM client_closes WHERE id::text=$1 AND entity=$5 AND period=$6 ON CONFLICT(close_id,kind,digest) DO UPDATE SET digest=workpapers.digest RETURNING id::text,kind,created_at,paper`, r.PathValue("id"), input.Kind, digest, string(body), entity, period).Scan(&saved.ID, &saved.Kind, &saved.CreatedAt, &saved.Paper)
+		err = db.QueryRowContext(r.Context(), `INSERT INTO workpapers(close_id,kind,digest,paper,created_by) SELECT id,$2,$3,$4,$7 FROM client_closes WHERE id::text=$1 AND entity=$5 AND period=$6 ON CONFLICT(close_id,kind,digest) DO UPDATE SET digest=workpapers.digest RETURNING id::text,kind,created_at,paper`, r.PathValue("id"), input.Kind, digest, string(body), entity, period, subject(r)).Scan(&saved.ID, &saved.Kind, &saved.CreatedAt, &saved.Paper)
 		if err == sql.ErrNoRows {
 			problem(w, 409, "The workpaper client and month must match the selected close.")
 			return

@@ -28,6 +28,12 @@ func TestCloseDeletionRequiresPolicyAndSettledWork(t *testing.T) {
 	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err = db.Exec(`INSERT INTO close_effort(close_id,actor,minute,activity,seconds) VALUES($1,'fixture',date_trunc('minute',now()),'review',30)`, closeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO close_effort_entries(close_id,actor,activity,minutes,note) VALUES($1,'fixture','prepare',5,'Offline fixture work')`, closeID); err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		db.Exec(`DELETE FROM email_connections WHERE id::text=$1`, emailConnection)
 		db.Exec(`DELETE FROM preparation_jobs WHERE close_id=$1`, closeID)

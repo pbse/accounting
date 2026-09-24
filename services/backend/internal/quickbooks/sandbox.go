@@ -48,9 +48,36 @@ type LedgerAccount struct {
 	SyncToken string      `json:"sync_token"`
 }
 type LedgerObservation struct {
-	Company string        `json:"company"`
-	Prepaid LedgerAccount `json:"prepaid"`
-	Expense LedgerAccount `json:"expense"`
+	Company       string        `json:"company"`
+	Prepaid       LedgerAccount `json:"prepaid"`
+	Expense       LedgerAccount `json:"expense"`
+	ClosedThrough string        `json:"closed_through,omitempty"`
+}
+
+// OpenPeriod reads the company's book closing date and refuses a transaction dated on or before it.
+func (s Sandbox) OpenPeriod(ctx context.Context, date string) (string, error) {
+	var result struct {
+		Preferences *struct {
+			AccountingInfoPrefs struct{ BookCloseDate string }
+		}
+	}
+	if err := s.request(ctx, "GET", "/preferences", nil, &result); err != nil {
+		return "", err
+	}
+	if result.Preferences == nil {
+		return "", errors.New("QuickBooks closing date is unavailable; no write was made")
+	}
+	closed := result.Preferences.AccountingInfoPrefs.BookCloseDate
+	if closed == "" {
+		return "", nil
+	}
+	if _, err := time.Parse("2006-01-02", closed); err != nil {
+		return "", errors.New("QuickBooks closing date is unreadable; no write was made")
+	}
+	if date <= closed {
+		return closed, fmt.Errorf("QuickBooks books are closed through %s, so a transaction dated %s cannot be written. Choose a later date or reopen the period in QuickBooks under the firm's policy", closed, date)
+	}
+	return closed, nil
 }
 
 var identifier = regexp.MustCompile(`^[0-9]{1,30}$`)
@@ -103,6 +130,16 @@ func (s Sandbox) Prepare(ctx context.Context, paper prepaids.Workpaper) (Journal
 	return journal, err
 }
 func (s Sandbox) PrepareObserved(ctx context.Context, paper prepaids.Workpaper) (Journal, LedgerObservation, error) {
+	return s.prepare(ctx, paper, true)
+}
+
+// ObserveAfterWrite rereads balances for readback; period eligibility only gates new writes.
+func (s Sandbox) ObserveAfterWrite(ctx context.Context, paper prepaids.Workpaper) (LedgerObservation, error) {
+	_, observation, err := s.prepare(ctx, paper, false)
+	return observation, err
+}
+
+func (s Sandbox) prepare(ctx context.Context, paper prepaids.Workpaper, beforeWrite bool) (Journal, LedgerObservation, error) {
 	var observation LedgerObservation
 	if paper.Input.Method != prepaids.Method || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" || paper.Input.CancellationMethod != "" {
 		if !s.Production {
@@ -121,6 +158,13 @@ func (s Sandbox) PrepareObserved(ctx context.Context, paper prepaids.Workpaper) 
 		return Journal{}, observation, errors.New("QuickBooks company name does not match the configured client")
 	}
 	observation.Company = company.CompanyInfo.CompanyName
+	if beforeWrite {
+		closed, err := s.OpenPeriod(ctx, paper.Proposal.Date)
+		if err != nil {
+			return Journal{}, observation, err
+		}
+		observation.ClosedThrough = closed
+	}
 	for _, mapping := range []struct{ id, name, classification string }{{s.DebitAccount, paper.Proposal.DebitAccount, "Asset"}, {s.CreditAccount, paper.Proposal.CreditAccount, "Expense"}} {
 		var result struct {
 			Account struct {

@@ -49,7 +49,7 @@ func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 			return
 		}
 		path := strings.TrimPrefix(r.URL.EscapedPath(), "/v1/closes")
-		if path != "" && path != "/work" && path != "/dependencies" && path != "/review-queue" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" {
+		if path != "" && path != "/work" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/organization/policy" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" {
 			id, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 			id, err = url.PathUnescape(id)
 			if err != nil {

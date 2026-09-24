@@ -67,6 +67,8 @@ func TestSandboxAttemptIsDurableAndNotRepeated(t *testing.T) {
 				switch {
 				case strings.Contains(r.URL.Path, "/companyinfo/"):
 					result = map[string]any{"CompanyInfo": map[string]string{"CompanyName": "Posting fixture"}}
+				case strings.HasSuffix(r.URL.Path, "/preferences"):
+					result = map[string]any{"Preferences": map[string]any{"AccountingInfoPrefs": map[string]string{}}}
 				case strings.HasSuffix(r.URL.Path, "/account/10"):
 					result = map[string]any{"Account": map[string]any{"Id": "10", "Name": "Prepaid", "Active": true, "Classification": "Asset"}}
 				case strings.HasSuffix(r.URL.Path, "/account/20"):

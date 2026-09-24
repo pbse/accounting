@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { Avatar, Icon, type IconName } from "../dashboard/Icon";
 import { SourceReview, type Source } from "./Evidence";
+import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
 
 type Fact = {
@@ -20,7 +21,7 @@ type Fact = {
     quote: string;
   }[];
 };
-type WorkItem = {
+type WorkItem = Plan & {
   id: string;
   close_id: string;
   entity: string;
@@ -91,6 +92,7 @@ const labels: Record<string, string> = {
 
 const views: [string, string][] = [
   ["active", "Active"],
+  ["mine", "Mine"],
   ["needs_confirmation", "Decisions"],
   ["blocked", "Blockers"],
   ["running", "Running"],
@@ -107,7 +109,7 @@ const tones: Record<string, string> = {
   waiting_evidence: "status info",
   completed: "status ok",
 };
-type QueueItem = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string };
+type QueueItem = Plan & { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string; digest: string; review_id: string; bulk_reason: string };
 const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement" };
 
 function Kpi({ icon, tone, label, value, caption, onClick }: { icon: IconName; tone: string; label: string; value?: number; caption: string; onClick: () => void }) {
@@ -237,6 +239,7 @@ export function Work({
             <Kpi icon="decision" tone="amber" label="Needs your decision" value={counts.needs_confirmation} caption="Proposed facts and questions to confirm" onClick={() => show("needs_confirmation")} />
             <Kpi icon="review" tone="" label="Ready for review" value={queue?.count} caption="Prepared drafts with evidence and no blockers" onClick={() => document.getElementById("review-queue")?.scrollIntoView({ block: "start" })} />
             <Kpi icon="waiting" tone="green" label="Waiting on clients" value={counts.waiting_client} caption="Approved requests awaiting a reply" onClick={() => show("waiting_client")} />
+            <Kpi icon="accrual" tone="gray" label="Due in 7 days" value={counts.due_soon} caption="Closes due within a week, including overdue" onClick={() => show("active")} />
             <Kpi icon="blocked" tone="red" label="Blocked" value={counts.blocked} caption="Failed, replaced or unsupported work" onClick={() => show("blocked")} />
           </div>
         </>
@@ -254,24 +257,7 @@ export function Work({
                 <h2>Ready for your review</h2>
                 {queue && queue.count > queue.items.length && <small>Showing {queue.items.length} of {queue.count}</small>}
               </div>
-              <div className="rows">
-                {!queue && <p className="empty">Review queue unavailable. Open a close to review its drafts.</p>}
-                {queue && queue.items.length === 0 && <p className="empty">Nothing is waiting for review in this filter.</p>}
-                {queue?.items.map((item) => (
-                  <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
-                    <span className="row-main">
-                      <Avatar label={item.entity} />
-                      <span>
-                        <strong>{item.entity} · {item.period}</strong>
-                        <small>{kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}</small>
-                      </span>
-                    </span>
-                    <span className="status warn">Awaiting review</span>
-                    <small>{new Date(item.created_at).toLocaleDateString()}</small>
-                    <span className="chip">Review</span>
-                  </Link>
-                ))}
-              </div>
+              <BulkReview items={queue?.items} onDone={() => setRefresh((n) => n + 1)} />
               <div className="section-title" id="dependency-review">
                 <h2>Work needing re-review</h2>
                 <small>Source revisions and inherited schedules reopen review; earlier approvals are not reused.</small>
@@ -337,7 +323,9 @@ export function Work({
                         ? "Prepared · review blockers"
                         : (labels[item.state] ?? item.state)}
                   </span>
-                  <small>{item.proposal.kind && item.proposal.kind !== "unsupported" ? (kindLabels[item.proposal.kind] ?? item.proposal.kind) : ""}</small>
+                  <span>
+                    <small>{item.proposal.kind && item.proposal.kind !== "unsupported" ? (kindLabels[item.proposal.kind] ?? item.proposal.kind) : ""}</small> <PlanChips plan={item} />
+                  </span>
                   <span className="chip">Open</span>
                 </summary>
                 <div className="work-body">
@@ -360,6 +348,134 @@ export function Work({
         </>
       )}
     </section>
+  );
+}
+
+function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [confirming, setConfirming] = useState<QueueItem[]>();
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<{ workpaper_id: string; review_id?: string; error?: string }[]>([]);
+  const [error, setError] = useState("");
+  const chosen = confirming ?? [];
+  const label = (item: QueueItem) => `${item.entity} · ${item.period} · ${kindLabels[item.kind] ?? item.kind} #${item.workpaper_id}`;
+  async function approve() {
+    setBusy(true);
+    setError("");
+    try {
+      const data = await workspaceRequest("/review-batch", {
+        note,
+        items: chosen.map((item) => ({ close_id: item.close_id, workpaper_id: item.workpaper_id, digest: item.digest, expected_review_id: item.review_id })),
+      });
+      setResults(data.results);
+      setSelected([]);
+      setConfirming(undefined);
+      setNote("");
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Bulk approval failed. Nothing was approved by this request.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <div className="rows">
+        {!items && <p className="empty">Review queue unavailable. Open a close to review its drafts.</p>}
+        {items && items.length === 0 && <p className="empty">Nothing is waiting for review in this filter.</p>}
+        {items?.map((item) => (
+          <div className="row" key={item.workpaper_id}>
+            <span className="row-main">
+              <input
+                type="checkbox"
+                aria-label={`Select ${label(item)} for bulk approval`}
+                disabled={!!item.bulk_reason || busy || (!selected.includes(item.workpaper_id) && selected.length >= 20)}
+                checked={selected.includes(item.workpaper_id)}
+                onChange={(e) => {
+                  setConfirming(undefined);
+                  setSelected((current) => (e.target.checked ? [...current, item.workpaper_id] : current.filter((id) => id !== item.workpaper_id)));
+                }}
+              />
+              <Avatar label={item.entity} />
+              <span>
+                <strong>{item.entity} · {item.period}</strong>
+                <small>
+                  {kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}
+                  {item.bulk_reason ? ` · review individually: ${item.bulk_reason.toLowerCase()}` : ""}
+                </small>
+              </span>
+            </span>
+            <span className="status warn">Awaiting review</span>
+            <PlanChips plan={item} />
+            <Link className="button" to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
+              Review
+            </Link>
+          </div>
+        ))}
+      </div>
+      {selected.length > 0 && !confirming && (
+        <div className="toolbar">
+          <button type="button" className="primary" onClick={() => setConfirming((items ?? []).filter((item) => selected.includes(item.workpaper_id)))}>
+            Approve {selected.length} selected
+          </button>
+          <button type="button" onClick={() => setSelected([])}>
+            Clear selection
+          </button>
+        </div>
+      )}
+      {confirming && (
+        <section aria-label="Confirm bulk approval">
+          <h3>Approve {chosen.length === 1 ? "1 draft" : `${chosen.length} drafts`}</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Draft</th>
+                <th>Effect</th>
+                <th>Exceptions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {chosen.map((item) => (
+                <tr key={item.workpaper_id}>
+                  <th>{label(item)}</th>
+                  <td>No ledger change</td>
+                  <td>None: evidence linked, no blockers, questions or reviewer classifications</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p>
+            <strong>Total effect:</strong> no ledger changes. Approval records a review decision on each exact draft; it is not posting or sign-off. You approve as yourself and need the reviewer role. Each draft is rechecked individually, so some can succeed while others are refused.
+          </p>
+          <label>
+            What did you check across these drafts?
+            <textarea required maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <div className="toolbar">
+            <button type="button" className="primary" disabled={busy || !note.trim()} onClick={() => void approve()}>
+              {busy ? "Approving…" : `Approve ${chosen.length === 1 ? "1 draft" : `${chosen.length} drafts`}`}
+            </button>
+            <button type="button" disabled={busy} onClick={() => setConfirming(undefined)}>
+              Back
+            </button>
+          </div>
+          {error && <p role="alert">{error}</p>}
+        </section>
+      )}
+      {results.length > 0 && (
+        <section role="status" aria-label="Bulk approval results">
+          <h3>Approval results</h3>
+          <ul>
+            {results.map((result) => (
+              <li key={result.workpaper_id}>
+                Draft #{result.workpaper_id}: {result.review_id ? "approved" : result.error}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
   );
 }
 
@@ -609,7 +725,7 @@ function WorkDetails({
             {item.proposal.engine === "openai"
               ? "Agent-proposed work and facts"
               : item.proposal.engine === "recognized_export"
-                ? "Recognized Stripe payout export"
+                ? kind === "reconciliation" ? "Recognized reconciliation CSV" : "Recognized Stripe payout export"
                 : "Proposed facts · local extraction"}
           </h3>
           {item.proposal.summary && <p>{item.proposal.summary}</p>}
@@ -675,7 +791,17 @@ function WorkDetails({
               </Link>
             </p>
           )}
-          {kind !== "unsupported" && kind !== "settlement" && (
+          {kind === "reconciliation" && item.proposal.engine === "recognized_export" && (
+            <p>
+              <Link
+                className="button primary"
+                to={`/dashboard/reconciliations/new?close=${item.close_id}&entity=${encodeURIComponent(item.entity)}&period=${item.period}&work=${item.id}&revision=${item.revision}`}
+              >
+                Choose statement or ledger and reconcile →
+              </Link>
+            </p>
+          )}
+          {kind !== "unsupported" && kind !== "settlement" && item.proposal.engine !== "recognized_export" && (
             <form onSubmit={confirm}>
               <fieldset disabled={busy}>
                 <legend>

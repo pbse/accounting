@@ -7,7 +7,7 @@ The dashboard reads real preparation jobs across client closes, prioritizing dec
 1. Upload evidence in a client close. The upload transaction creates or reuses one durable preparation job alongside the evidence. Existing evidence can be re-uploaded to start its first intake; migration does not silently prepare old files.
 2. The worker waits for PDF extraction, then proposes labeled invoice facts with source IDs, exact quotes, and line locations. Missing or conflicting fields produce specific questions. No document content can confirm policy or trigger posting.
 3. Inspect originals, correct values, confirm the entity and accounting assumptions, then submit. The same job becomes queued; the existing deterministic worker saves an exact-cent workpaper. Preparation remains distinct from workpaper approval, posting, and sign-off.
-4. For statement/ledger CSVs, follow the reconciliation link, confirm the existing reconciliation form and pair source files, then use **Confirm linked facts and continue this job**. That source-linked save queues the original intake job automatically. An unused companion-file intake can be cancelled.
+4. Without an AI provider, an uploaded `id,date,amount` CSV is recognized from its header. (With one configured, the agent reads and pairs statement and ledger files itself.) Work shows **Recognized reconciliation CSV** with its row count, date range and net total. The header cannot tell a bank statement from a ledger export, so the reviewer chooses its role on the reconciliation page; a file with a row outside the month is shown as unsupported with the reason. For other statement/ledger CSVs, follow the reconciliation link, confirm the existing reconciliation form and pair source files, then use **Confirm linked facts and continue this job**. That source-linked save queues the original intake job automatically. An unused companion-file intake can be cancelled.
 5. If clarification is needed, edit a specific request or load an existing request draft, enter its exact recipient, and approve. It remains explicitly **not sent**. Staff may record delivery already performed through their own secure channel, then record the original reply and its reported sender. The app sends nothing and does not verify the sender's identity.
 6. A recorded reply is immutable evidence. The same job returns to proposal review. Contradictory values remain unresolved; method/booking confirmations must be supplied again. The original reply, approver, delivery reference, facts, final inputs, confirmation actor and resulting workpaper remain linked.
 
@@ -61,3 +61,21 @@ Each call covers at most 20 current ready files / 128 KiB extracted text, has a 
 `preparation_intakes` stores the claim, proposal revision, model/response identifiers and token counts. `preparation_answers` links staff answers to immutable evidence. The existing queue and calculators remain the execution path (Ponytail rung 2); the provider call uses Go's HTTP/JSON standard library (rung 3). No SDK, provider framework or second queue was added.
 
 Validation uses a mocked provider with the real local database. It covers quoted prose, missing information, same-job answers, cross-client exclusion, inventory changes during calls, and both supported preparation kinds. It does **not** establish live model accuracy or credential access. Cloud deployment checks require migration 008, but the staging workflow does not forward OpenAI credentials; hosted AI activation remains separate.
+
+## Planning, ranking and bulk approval
+
+Each close can carry a due date, a client priority (high, normal, low) and an owner. Taking a close assigns it to you; only the owner can release it, and nobody can take a close someone else holds. Planning is scheduling metadata: it never grants review, posting or sign-off authority.
+
+Work ranks jobs by what they need first (decisions and failures, then blocked or changed-dependency work, then client requests, then running work, then the rest), and within each group puts your closes first, then the earliest due date, then higher priority, then the newest. These are the only ranking signals today; there is no policy-defined risk model, and no score is invented. **Mine** shows your active work; **Due in 7 days** counts closes by date only, including overdue ones, so a changed sign-off never hides a date.
+
+The review queue can approve up to 20 drafts at once, but only drafts that change nothing in the ledger and carry no reviewer judgment: no proposed adjustment, no open questions, no reviewer-chosen or in-transit payouts and no reviewer classifications. Everything else says why it needs individual review. The confirmation lists every draft, its effect and exceptions, the total effect and your authority. Each draft is rechecked inside its own transaction with fresh firm, membership and client-access checks, so a stale or inaccessible draft is refused while the others proceed. Apply migration 038 with the API and worker stopped; `/readyz` checks it.
+
+## Exceptions the agent found
+
+The close Overview scans every row of the latest completed QuickBooks transaction capture, with no model call. It raises three kinds of question:
+
+- **Possible duplicate:** same transaction type, counterparty, currency and amount within three days. Monthly recurring payments are not flagged.
+- **Holding account:** a line posted to an Uncategorized, Ask My Accountant or Suspense account.
+- **No payee:** a Purchase with no payee.
+
+Each item names the QuickBooks transaction IDs, the evidence still missing and a plain client question. **Copy client questions** puts them on the clipboard for a client request. Nothing is recategorized, deleted, merged or posted. Owner or personal purpose is never inferred. Without a capture, the card asks for one rather than reporting "no exceptions".

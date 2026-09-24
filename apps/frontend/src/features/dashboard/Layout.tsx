@@ -15,6 +15,7 @@ const groups: { label: string; items: { to: string; label: string; icon: IconNam
       { to: "/dashboard/settlements/new", label: "Stripe payouts", icon: "stripe" },
     ],
   },
+  { label: "Measure", items: [{ to: "/dashboard/measure", label: "Human effort", icon: "measure" }] },
   { label: "Firm", items: [{ to: "/dashboard/firm", label: "Firm settings", icon: "firm" }] },
   {
     label: "Examples",

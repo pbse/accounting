@@ -5,6 +5,7 @@ import { Home } from "./features/marketing/Home";
 import { Contact } from "./features/marketing/Contact";
 import { Login } from "./features/auth/Login";
 import { WorkspaceGate } from "./features/dashboard/Access";
+import { EffortTracker } from "./features/closes/Effort";
 
 const ClientRequest = lazy(() => import("./features/closes/ClientRequest"));
 const WorkspaceLayout = lazy(() => import("./features/dashboard/Layout"));
@@ -14,13 +15,22 @@ const ClosesList = lazy(() => import("./features/closes/ClosesList"));
 const ClientClose = lazy(() => import("./features/closes/ClientClose"));
 const WorkpaperView = lazy(() => import("./features/closes/WorkpaperView"));
 const Firm = lazy(() => import("./features/closes/Firm"));
+const Measure = lazy(() => import("./features/closes/Measure"));
 
 function Gated({ children }: { children: ReactNode }) {
   return <WorkspaceGate>{children}</WorkspaceGate>;
 }
 function CloseScoped({ children }: { children: ReactNode }) {
   const [params] = useSearchParams();
-  return params.get("close") ? <Gated>{children}</Gated> : children;
+  const close = params.get("close");
+  return close ? (
+    <Gated>
+      <EffortTracker closeId={close} activity="prepare" />
+      {children}
+    </Gated>
+  ) : (
+    children
+  );
 }
 const Reconciliation = lazy(() => import("./features/reconciliation/Prepare"));
 const Settlement = lazy(() => import("./features/settlements/Prepare"));
@@ -60,6 +70,7 @@ export function App() {
             <Route path="closes/:id" element={<Gated><ClientClose /></Gated>} />
             <Route path="closes/:id/workpapers/:paperId" element={<Gated><WorkpaperView /></Gated>} />
             <Route path="firm" element={<Gated><Firm /></Gated>} />
+            <Route path="measure" element={<Gated><Measure /></Gated>} />
             <Route path="reconciliations/new" element={<CloseScoped><Reconciliation /></CloseScoped>} />
             <Route path="settlements/new" element={<CloseScoped><Settlement /></CloseScoped>} />
             <Route path="accruals/new" element={<CloseScoped><AccrualPreparation /></CloseScoped>} />

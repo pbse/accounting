@@ -482,7 +482,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if proposal, ok := RecognizeExport(intake, period); ok {
+		if proposal, ok := RecognizeExport(intake, period, false); ok {
 			body, _ := json.Marshal(proposal)
 			if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET proposal=$2,revision=revision+1,agent_claim=NULL WHERE job_id=$1`, id, string(body)); err != nil {
 				return false, err

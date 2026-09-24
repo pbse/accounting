@@ -88,6 +88,9 @@ func billCorrectionCurrent(ctx context.Context, db *sql.DB, closeID string, item
 	if err != nil || !reflect.DeepEqual(live, before) {
 		return quickbooks.Bill{}, errors.New("Live Bill differs from the reviewed capture; refresh before correcting")
 	}
+	if _, err := sandbox.OpenPeriod(ctx, before.TxnDate); err != nil {
+		return quickbooks.Bill{}, err
+	}
 	selected := false
 	for _, line := range before.Line {
 		selected = selected || line.ID == item.TargetLineID && line.AccountBasedExpenseLineDetail.AccountRef.Value != item.TargetAccountID
@@ -209,6 +212,10 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 			live, err := sandbox.ReadBill(r.Context(), billID)
 			if err != nil || len(captured.TxnDate) < 7 || captured.TxnDate[:7] != period || !reflect.DeepEqual(captured, live) {
 				problem(w, 409, "Bill is unsupported or differs from the captured close month. Refresh transactions and review it.")
+				return
+			}
+			if _, err := sandbox.OpenPeriod(r.Context(), captured.TxnDate); err != nil {
+				problem(w, 409, err.Error())
 				return
 			}
 			selected := false
