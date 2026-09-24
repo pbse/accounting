@@ -130,6 +130,16 @@ func (s Sandbox) Prepare(ctx context.Context, paper prepaids.Workpaper) (Journal
 	return journal, err
 }
 func (s Sandbox) PrepareObserved(ctx context.Context, paper prepaids.Workpaper) (Journal, LedgerObservation, error) {
+	return s.prepare(ctx, paper, true)
+}
+
+// ObserveAfterWrite rereads balances for readback; period eligibility only gates new writes.
+func (s Sandbox) ObserveAfterWrite(ctx context.Context, paper prepaids.Workpaper) (LedgerObservation, error) {
+	_, observation, err := s.prepare(ctx, paper, false)
+	return observation, err
+}
+
+func (s Sandbox) prepare(ctx context.Context, paper prepaids.Workpaper, beforeWrite bool) (Journal, LedgerObservation, error) {
 	var observation LedgerObservation
 	if paper.Input.Method != prepaids.Method || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" || paper.Input.CancellationMethod != "" {
 		if !s.Production {
@@ -148,11 +158,13 @@ func (s Sandbox) PrepareObserved(ctx context.Context, paper prepaids.Workpaper) 
 		return Journal{}, observation, errors.New("QuickBooks company name does not match the configured client")
 	}
 	observation.Company = company.CompanyInfo.CompanyName
-	closed, err := s.OpenPeriod(ctx, paper.Proposal.Date)
-	if err != nil {
-		return Journal{}, observation, err
+	if beforeWrite {
+		closed, err := s.OpenPeriod(ctx, paper.Proposal.Date)
+		if err != nil {
+			return Journal{}, observation, err
+		}
+		observation.ClosedThrough = closed
 	}
-	observation.ClosedThrough = closed
 	for _, mapping := range []struct{ id, name, classification string }{{s.DebitAccount, paper.Proposal.DebitAccount, "Asset"}, {s.CreditAccount, paper.Proposal.CreditAccount, "Expense"}} {
 		var result struct {
 			Account struct {

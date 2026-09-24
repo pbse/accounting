@@ -154,6 +154,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	var journal quickbooks.Journal
 	uncertain := false
 	closedThrough := ""
+	closeOnWrite := false
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host != "quickbooks.api.intuit.com" {
 			t.Fatalf("wrong production host: %s", r.URL.Host)
@@ -163,7 +164,11 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/companyinfo/"):
 			result = map[string]any{"CompanyInfo": map[string]string{"CompanyName": "Production fixture"}}
 		case strings.HasSuffix(r.URL.Path, "/preferences"):
-			result = map[string]any{"Preferences": map[string]any{"AccountingInfoPrefs": map[string]string{"BookCloseDate": closedThrough}}}
+			through := closedThrough
+			if closeOnWrite && writes > 0 {
+				through = "2099-12-31"
+			}
+			result = map[string]any{"Preferences": map[string]any{"AccountingInfoPrefs": map[string]string{"BookCloseDate": through}}}
 		case strings.HasSuffix(r.URL.Path, "/account/10"), strings.HasSuffix(r.URL.Path, "/account/20"):
 			prepaid := strings.HasSuffix(r.URL.Path, "/account/10")
 			id, name, class, balance := "20", "Software", "Expense", "0"
@@ -250,11 +255,13 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		t.Fatalf("a closed or changed closing date must stop the write: %d", writes)
 	}
 	closedThrough = ""
+	closeOnWrite = true
 	var posted productionPosting
 	json.Unmarshal(call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 200), &posted)
 	if writes != 1 || posted.State != "verified" || posted.ExternalID != "456" || len(posted.LedgerAfter) == 0 {
 		t.Fatalf("expected one verified durable attempt: %+v writes=%d", posted, writes)
 	}
+	closeOnWrite = false
 	call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 409)
 	failReadback = true
 	call(path, map[string]string{"action": "verify"}, 422)

@@ -731,7 +731,7 @@ func verifyProduction(w http.ResponseWriter, r *http.Request, db *sql.DB, client
 	}
 	var after quickbooks.LedgerObservation
 	if err == nil {
-		_, after, err = client.PrepareObserved(r.Context(), paper)
+		after, err = client.ObserveAfterWrite(r.Context(), paper)
 		if err == nil && !ledgerAfterMatches(record.LedgerBefore, after, journal.Line[0].Amount) {
 			err = errors.New("Journal exists, but account balances do not match the expected effect; investigate other activity or report lag")
 		}

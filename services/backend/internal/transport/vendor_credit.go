@@ -232,7 +232,11 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			fresh, e := sandbox.PrepareVendorCredit(r.Context(), credit.VendorRef.Value, credit.APAccountRef.Value, credit.Line[0].AccountBasedExpenseLineDetail.AccountRef.Value, paper.Input.PrepaidAccount, credit.TxnDate, amount, item.Reference)
-			if e != nil || vendorCreditDigest(sandbox.Realm, paperID, review, sourceDigest, fresh) != item.Digest {
+			if e != nil {
+				problem(w, 409, e.Error())
+				return
+			}
+			if vendorCreditDigest(sandbox.Realm, paperID, review, sourceDigest, fresh) != item.Digest {
 				problem(w, 409, "Provider identity or account mapping changed.")
 				return
 			}
