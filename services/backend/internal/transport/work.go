@@ -131,7 +131,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Client search is too long.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), workSelect+` WHERE `+workScope+` AND (`+predicate+`) ORDER BY CASE WHEN j.state IN ('needs_confirmation','failed') THEN 0 WHEN `+issues+` THEN 1 WHEN j.state='waiting_client' THEN 2 WHEN j.state IN ('waiting_evidence','interpreting','queued') THEN 3 ELSE 4 END,(c.owner<>'' AND c.owner=$5) DESC,c.due_on NULLS LAST,`+priorityOrder+`,j.id DESC LIMIT 101`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r))
+		rows, err := db.QueryContext(r.Context(), workSelect+` WHERE `+workScope+` AND (`+predicate+`) ORDER BY CASE WHEN j.state IN ('needs_confirmation','failed') THEN 0 WHEN (`+predicates["blocked"]+`) OR `+issues+` THEN 1 WHEN j.state='waiting_client' THEN 2 WHEN j.state IN ('waiting_evidence','interpreting','queued') THEN 3 ELSE 4 END,(c.owner<>'' AND c.owner=$5) DESC,c.due_on NULLS LAST,`+priorityOrder+`,j.id DESC LIMIT 101`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r))
 		if err != nil {
 			problem(w, 503, "Work inbox unavailable.")
 			return

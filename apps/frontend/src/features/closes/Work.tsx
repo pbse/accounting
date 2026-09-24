@@ -353,12 +353,12 @@ export function Work({
 
 function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void }) {
   const [selected, setSelected] = useState<string[]>([]);
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<QueueItem[]>();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState<{ workpaper_id: string; review_id?: string; error?: string }[]>([]);
   const [error, setError] = useState("");
-  const chosen = (items ?? []).filter((item) => selected.includes(item.workpaper_id));
+  const chosen = confirming ?? [];
   const label = (item: QueueItem) => `${item.entity} · ${item.period} · ${kindLabels[item.kind] ?? item.kind} #${item.workpaper_id}`;
   async function approve() {
     setBusy(true);
@@ -370,7 +370,7 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
       });
       setResults(data.results);
       setSelected([]);
-      setConfirming(false);
+      setConfirming(undefined);
       setNote("");
       onDone();
     } catch (e) {
@@ -393,7 +393,7 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
                 disabled={!!item.bulk_reason || busy || (!selected.includes(item.workpaper_id) && selected.length >= 20)}
                 checked={selected.includes(item.workpaper_id)}
                 onChange={(e) => {
-                  setConfirming(false);
+                  setConfirming(undefined);
                   setSelected((current) => (e.target.checked ? [...current, item.workpaper_id] : current.filter((id) => id !== item.workpaper_id)));
                 }}
               />
@@ -416,7 +416,7 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
       </div>
       {selected.length > 0 && !confirming && (
         <div className="toolbar">
-          <button type="button" className="primary" onClick={() => setConfirming(true)}>
+          <button type="button" className="primary" onClick={() => setConfirming((items ?? []).filter((item) => selected.includes(item.workpaper_id)))}>
             Approve {selected.length} selected
           </button>
           <button type="button" onClick={() => setSelected([])}>
@@ -456,7 +456,7 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
             <button type="button" className="primary" disabled={busy || !note.trim()} onClick={() => void approve()}>
               {busy ? "Approving…" : `Approve ${chosen.length === 1 ? "1 draft" : `${chosen.length} drafts`}`}
             </button>
-            <button type="button" disabled={busy} onClick={() => setConfirming(false)}>
+            <button type="button" disabled={busy} onClick={() => setConfirming(undefined)}>
               Back
             </button>
           </div>

@@ -36,11 +36,18 @@ const bulkReason = `CASE
  ELSE '' END`
 
 // decideReview applies one decision inside the caller's transaction; the caller has locked the close.
-func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, decision, note, expectedDigest, expectedReview string, bulk bool) (string, int, string) {
+const decisionMessage = "Choose approve or request changes and explain your decision (1–2,000 bytes)."
+
+func validDecision(decision, note string) bool {
 	note = strings.TrimSpace(note)
-	if (decision != "approved" && decision != "changes_requested") || len(note) == 0 || len(note) > 2000 {
-		return "", 422, "Choose approve or request changes and explain your decision (1–2,000 bytes)."
+	return (decision == "approved" || decision == "changes_requested") && len(note) > 0 && len(note) <= 2000
+}
+
+func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, decision, note, expectedDigest, expectedReview string, bulk bool) (string, int, string) {
+	if !validDecision(decision, note) {
+		return "", 422, decisionMessage
 	}
+	note = strings.TrimSpace(note)
 	var digest, state, version, reason string
 	var raw []byte
 	err := tx.QueryRowContext(ctx, `SELECT digest,review_state,review_id,paper,`+bulkReason+` FROM workpaper_review_state w WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&digest, &state, &version, &raw, &reason)
@@ -169,6 +176,10 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 			ExpectedReviewID string `json:"expected_review_id"`
 		}
 		if !decode(w, r, &input) {
+			return
+		}
+		if !validDecision(input.Decision, input.Note) {
+			problem(w, 422, decisionMessage)
 			return
 		}
 		tx, err := db.BeginTx(r.Context(), nil)
