@@ -81,6 +81,19 @@ The local agent recognizes exact labeled facts. To propose an accrual locally, p
 - **Per-client enablement.** Loan drafts save only when the client's effective procedure (a firm default or a client override under **Approved procedures and client overrides**) enables loan schedules with this method. A disabled client override stops new loan drafts for that client even when the firm default is on. The procedure's instructions carry the firm's cadence and fee treatment.
 - Drafts with any proposed entry are reviewed individually, never in bulk. Variable rates within a month, fees and debt issuance costs, and posting to QuickBooks are not supported.
 
+## Owner-related reclassifications
+
+**Owner item** (`/dashboard/owners/new`, method `owner_reclass_v1`) handles one owner-related transaction in the close month.
+
+- **An unanswered purpose stays a question.** Choose "Not yet" to save a specific client question with a blocker and no entry (PRD Appendix F).
+- **An answer becomes one proposed entry, dated month-end.** Record what the client said and where, and name the booked and owner accounts.
+  - The business paid a personal cost: debit the owner account (draw or distribution, or "Due from owner" with a cited repayment confirmation), credit the account it was booked to, for the personal share (100% − business use).
+  - The owner paid a business cost: debit the expense, credit the owner account (contribution, or "Due to owner" with a cited reimbursement confirmation), for the business share. The ledger must show it isn't already booked or reimbursed.
+- **The entity type decides the owner accounts.** It is recorded per client under **Owner treatments**; a firm default carries only policy and account names. Drafts must match the client's recorded type. Account names are suggested per type (Owner's draw, Partner draws, Shareholder distributions, Dividends paid) and stay editable.
+  - A C corporation distribution needs a cited dividend declaration.
+  - A partnership draw or contribution needs the partner and that partner's account.
+- Earlier periods need the firm's prior-period approval and aren't handled here. Tax treatment (constructive dividends, basis tracking, reasonable salary) is never decided. Nothing is posted.
+
 ## Review, carry-forward and posting boundaries
 
 Saved drafts retain method, example confirmation, credit/balance references, selected evidence revisions and any reversal proposal. The ZIP package includes their inputs and calculation outputs; prepaid CSV adds a credit column. Source changes invalidate reviews through the same existing path.

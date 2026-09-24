@@ -2,6 +2,7 @@ package transport
 
 import (
 	"close.local/backend/internal/loans"
+	"close.local/backend/internal/owners"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
@@ -342,6 +343,14 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			err = preparation.Strict(input.Input, &value)
 			if err == nil {
 				paper, err = reconciliation.Prepare(value)
+			}
+			entity = strings.TrimSpace(value.Entity)
+			period = value.ClosePeriod
+		case "owner":
+			var value owners.Input
+			err = preparation.Strict(input.Input, &value)
+			if err == nil {
+				paper, err = owners.Prepare(value)
 			}
 			entity = strings.TrimSpace(value.Entity)
 			period = value.ClosePeriod

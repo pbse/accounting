@@ -74,6 +74,26 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		}
 		return errors.New(issue)
 	}
+	if kind == "owner" {
+		var entityType struct {
+			Input struct {
+				EntityType string `json:"entity_type"`
+			} `json:"input"`
+		}
+		json.Unmarshal(paper, &entityType)
+		var recorded string
+		err := q.QueryRowContext(ctx, `SELECT CASE WHEN p.enabled THEN p.method ELSE '' END FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='owner' AND lower(p.client_entity)=lower(c.entity) ORDER BY p.id DESC LIMIT 1`, closeID).Scan(&recorded)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if recorded == "" {
+			return fmt.Errorf("Record this client's entity type under Owner treatments before preparing owner reclassifications")
+		}
+		if recorded != entityType.Input.EntityType {
+			return fmt.Errorf("The draft's entity type differs from the client's recorded entity type (%s)", recorded)
+		}
+		return nil
+	}
 	if kind == "loan" {
 		var enabled bool
 		var approved string

@@ -55,3 +55,7 @@ Choose **Accounting basis** in **Approved procedures and client overrides** to r
 - **The close header shows the effective basis** and whether a client override sets it. Prepaid and accrual actions are hidden for cash and modified-cash clients.
 - **Rollout exception:** a firm that hasn't set any basis keeps today's behavior (each prepaid or accrual draft confirms accrual basis) until it publishes a firm default.
 
+## Owner treatments per client
+
+Record each client's entity type under **Owner treatments** (a client override): sole proprietor or single-member LLC, partnership, S corporation, or C corporation. The firm default can hold the firm's owner policy and account naming, but never an entity type; that is a fact about one client. Owner reclassification drafts are refused until the client's entity type is recorded, and must use it.
+

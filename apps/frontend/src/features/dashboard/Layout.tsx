@@ -12,6 +12,7 @@ const groups: { label: string; items: { to: string; label: string; icon: IconNam
       { to: "/dashboard/prepaids/new", label: "Prepaid schedule", icon: "prepaid" },
       { to: "/dashboard/accruals/new", label: "Accrued expense", icon: "accrual" },
       { to: "/dashboard/loans/new", label: "Loan schedule", icon: "loan" },
+      { to: "/dashboard/owners/new", label: "Owner items", icon: "owner" },
       { to: "/dashboard/reconciliations/new", label: "Statement reconciliation", icon: "reconcile" },
       { to: "/dashboard/settlements/new", label: "Stripe payouts", icon: "stripe" },
     ],
