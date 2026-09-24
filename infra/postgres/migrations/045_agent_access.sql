@@ -7,7 +7,6 @@ CREATE TABLE agent_access (
  subject text NOT NULL CHECK (left(subject,5)='user_' AND length(subject) BETWEEN 6 AND 200),
  state text NOT NULL CHECK (state IN ('requested','approved','declined','revoked')),
  scope text NOT NULL CHECK (scope IN ('read','prepare')),
- all_clients boolean NOT NULL,
  member_access_id bigint NOT NULL REFERENCES organization_member_access(id),
  reason text NOT NULL CHECK (length(reason) BETWEEN 10 AND 2000),
  actor text NOT NULL,

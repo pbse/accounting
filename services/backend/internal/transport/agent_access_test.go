@@ -129,7 +129,7 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 		t.Fatalf("a token for another resource must be refused with the metadata pointer: %d %s", response.StatusCode, response.Header.Get("WWW-Authenticate"))
 	}
 
-	decide(member, nil, map[string]any{"action": "request", "scope": "read", "all_clients": true, "reason": "Connect my assistant", "confirmed": true}, 422)
+	decide(member, nil, map[string]any{"action": "request", "scope": "admin", "reason": "Connect my assistant", "confirmed": true}, 422)
 	request := decide(member, nil, map[string]any{"action": "request", "scope": "read", "reason": "Connect my assistant", "confirmed": true}, 200)
 	if response := initialize(agentToken); response.StatusCode != 403 {
 		t.Fatalf("a pending request is not access: %d", response.StatusCode)
@@ -153,6 +153,12 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 			out = append(out, tool.Name)
 		}
 		return out
+	}
+	list := httptest.NewRequest("GET", "/v1/closes/agent-access", nil).WithContext(auth.WithActor(context.Background(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: admin}, Organization: org, Permissions: adminPerms}))
+	listed := httptest.NewRecorder()
+	grants.ServeHTTP(listed, list)
+	if listed.Code != 200 || !strings.Contains(listed.Body.String(), `"effective_scope":"read"`) || !strings.Contains(listed.Body.String(), member) {
+		t.Fatalf("administrators must see each member's access in force: %d %s", listed.Code, listed.Body.String())
 	}
 	session := connect()
 	if list := names(session); slices.Contains(list, "prepare_close") || slices.Contains(list, "request_approval") || !slices.Contains(list, "list_closes") {

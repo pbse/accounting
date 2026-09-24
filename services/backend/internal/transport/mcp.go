@@ -230,8 +230,7 @@ func mcpHandler(store http.Handler, token string, db *sql.DB) http.Handler {
 		if err != nil && oauth != nil {
 			raw, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if claims, e := oauth.Verify(r.Context(), raw); e == nil {
-				var all bool
-				if scope, all, e = agentGrant(r.Context(), db, claims.Organization, claims.Subject); e != nil {
+				if scope, e = agentGrant(r.Context(), db, claims.Organization, claims.Subject); e != nil {
 					problem(w, 503, "Agent access unavailable.")
 					return
 				}
@@ -239,14 +238,12 @@ func mcpHandler(store http.Handler, token string, db *sql.DB) http.Handler {
 					problem(w, 403, "Ask a firm administrator to approve agent access for your account under Firm settings.")
 					return
 				}
-				// The tool table is the only reachable surface; these permissions only satisfy its routes.
+				// The tool table is the only reachable surface; this permission only satisfies its routes.
+				// Without clients:all the boundary limits the agent to the member's assigned clients.
 				granted := *claims
 				granted.Permissions = nil
 				if scope == "prepare" {
-					granted.Permissions = append(granted.Permissions, "workpapers:review")
-				}
-				if all {
-					granted.Permissions = append(granted.Permissions, "clients:all")
+					granted.Permissions = []string{"workpapers:review"}
 				}
 				actor, err = &granted, nil
 			}

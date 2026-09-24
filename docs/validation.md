@@ -411,11 +411,11 @@ Author: Claude Opus 5.5. Migration 045 adds `agent_access`, `current_agent_acces
 - `TestOAuthResourceTokensMustNameTheResource`: an AuthKit token is refused without the MCP audience, with another audience, from another issuer, or without `sid`.
 - `TestAgentsActOnlyUnderAnApprovedMemberGrant` runs against a real HTTP server, with AuthKit keys served through a swapped transport:
   - no grant, or only a pending request → 403; a token for another resource → 401 with the metadata pointer;
-  - "all clients" refused without the member's own firm-wide access; self-approval refused; an administrator can't widen a request;
+  - an unknown scope and self-approval are refused; an administrator can't widen a request; the administrator list shows each member's access in force (observed red with the earlier invalid SQL);
   - read approval → only read tools, and `list_closes` shows the assigned client but not the other one;
   - a pending upgrade keeps read access; an approved upgrade adds the prepare tools;
   - re-enrollment doesn't revive the old grant;
   - protected resource metadata is served.
-- Observed red with the membership binding off, the pending-request rule off, widening allowed, the firm-wide check off, scope filtering off, the grant requirement off, and the audience check off.
+- Observed red with the membership binding off, the pending-request rule off, widening allowed, scope filtering off, the grant requirement off, and the audience check off. Agents never receive firm-wide access; decisions are serialized with the firm row lock.
 - Full `internal/transport` and `internal/auth` packages pass; frontend typecheck passes. The Firm settings card couldn't be exercised in a browser: hosted sign-in isn't available locally, where the card shows the workspace-token note.
 

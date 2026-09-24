@@ -5,19 +5,19 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"slices"
 	"strings"
 
 	"close.local/backend/internal/auth"
 )
 
-// agentGrant returns the member's approved agent access while their membership is unchanged.
-func agentGrant(ctx context.Context, db *sql.DB, org, subject string) (scope string, allClients bool, err error) {
-	err = db.QueryRowContext(ctx, `SELECT scope,all_clients FROM effective_agent_access WHERE organization_id=$1 AND subject=$2`, org, subject).Scan(&scope, &allClients)
+// agentGrant returns the member's approved agent scope while their membership is unchanged.
+// Agents see only the member's assigned clients; firm-wide access is never extended to them.
+func agentGrant(ctx context.Context, db *sql.DB, org, subject string) (scope string, err error) {
+	err = db.QueryRowContext(ctx, `SELECT scope FROM effective_agent_access WHERE organization_id=$1 AND subject=$2`, org, subject).Scan(&scope)
 	if err == sql.ErrNoRows {
-		return "", false, nil
+		return "", nil
 	}
-	return scope, allClients, err
+	return scope, err
 }
 
 func registerAgentAccess(mux *http.ServeMux, db *sql.DB) {
@@ -28,19 +28,19 @@ func registerAgentAccess(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var mine, members []byte
-		const withEffective = `to_jsonb(a)||jsonb_build_object('effective_scope',e.scope,'effective_all_clients',e.all_clients) FROM current_agent_access a LEFT JOIN effective_agent_access e ON e.organization_id=a.organization_id AND e.subject=a.subject`
-		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT `+withEffective+` WHERE a.organization_id=$1 AND a.subject=$2),'null'::jsonb)`, a.Organization, a.Subject).Scan(&mine); err != nil {
+		const row, from = `to_jsonb(a)||jsonb_build_object('effective_scope',e.scope)`, ` FROM current_agent_access a LEFT JOIN effective_agent_access e ON e.organization_id=a.organization_id AND e.subject=a.subject`
+		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT `+row+from+` WHERE a.organization_id=$1 AND a.subject=$2),'null'::jsonb)`, a.Organization, a.Subject).Scan(&mine); err != nil {
 			problem(w, 503, "Agent access unavailable.")
 			return
 		}
 		members = []byte("[]")
 		if canManageMembers(r) {
-			if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(`+withEffective+` ORDER BY a.id DESC),'[]'::jsonb) WHERE a.organization_id=$1`, a.Organization).Scan(&members); err != nil {
+			if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(`+row+` ORDER BY a.id DESC),'[]'::jsonb)`+from+` WHERE a.organization_id=$1`, a.Organization).Scan(&members); err != nil {
 				problem(w, 503, "Agent access unavailable.")
 				return
 			}
 		}
-		jsonReply(w, 200, map[string]any{"mine": json.RawMessage(mine), "members": json.RawMessage(members), "firm_wide": slices.Contains(a.Permissions, "clients:all")})
+		jsonReply(w, 200, map[string]any{"mine": json.RawMessage(mine), "members": json.RawMessage(members)})
 	})
 	mux.HandleFunc("POST /v1/closes/agent-access", func(w http.ResponseWriter, r *http.Request) {
 		a := auth.Actor(r.Context())
@@ -52,7 +52,6 @@ func registerAgentAccess(mux *http.ServeMux, db *sql.DB) {
 			Action     string `json:"action"`
 			Subject    string `json:"subject"`
 			Scope      string `json:"scope"`
-			AllClients bool   `json:"all_clients"`
 			PreviousID string `json:"previous_id"`
 			Reason     string `json:"reason"`
 			Confirmed  bool   `json:"confirmed"`
@@ -80,14 +79,19 @@ func registerAgentAccess(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
+		// One decision at a time per firm, so a stale approval cannot land after a revocation.
+		var org string
+		if err = tx.QueryRowContext(r.Context(), `SELECT id FROM organizations WHERE id=$1 AND enabled FOR UPDATE`, a.Organization).Scan(&org); err != nil {
+			problem(w, 403, "Organization unavailable.")
+			return
+		}
 		var member string
 		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted`, a.Organization, target).Scan(&member); err != nil {
 			problem(w, 409, "Agent access is only for current firm members.")
 			return
 		}
 		var current struct{ ID, State, Scope, Member string }
-		var currentAll bool
-		err = tx.QueryRowContext(r.Context(), `SELECT id::text,state,scope,all_clients,member_access_id::text FROM current_agent_access WHERE organization_id=$1 AND subject=$2`, a.Organization, target).Scan(&current.ID, &current.State, &current.Scope, &currentAll, &current.Member)
+		err = tx.QueryRowContext(r.Context(), `SELECT id::text,state,scope,member_access_id::text FROM current_agent_access WHERE organization_id=$1 AND subject=$2`, a.Organization, target).Scan(&current.ID, &current.State, &current.Scope, &current.Member)
 		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Agent access unavailable.")
 			return
@@ -96,12 +100,11 @@ func registerAgentAccess(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Agent access changed. Refresh before deciding.")
 			return
 		}
-		state, scope, all := "", in.Scope, in.AllClients
+		state, scope := "", in.Scope
 		switch in.Action {
 		case "request":
-			// Only the member's own session can ask for firm-wide agent access, and only if it has firm-wide access itself.
-			if (scope != "read" && scope != "prepare") || (all && !slices.Contains(a.Permissions, "clients:all")) {
-				problem(w, 422, "Choose read or prepare; all clients needs your own firm-wide access.")
+			if scope != "read" && scope != "prepare" {
+				problem(w, 422, "Choose read or prepare.")
 				return
 			}
 			state = "requested"
@@ -111,7 +114,7 @@ func registerAgentAccess(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			// An administrator can narrow a request, never widen it.
-			if (scope != "read" && scope != "prepare") || (scope == "prepare" && current.Scope == "read") || (all && !currentAll) {
+			if (scope != "read" && scope != "prepare") || (scope == "prepare" && current.Scope == "read") {
 				problem(w, 422, "An approval can narrow the member's request but not widen it.")
 				return
 			}
@@ -121,10 +124,10 @@ func registerAgentAccess(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "There is no agent access to revoke.")
 				return
 			}
-			state, scope, all = "revoked", current.Scope, currentAll
+			state, scope = "revoked", current.Scope
 		}
 		var id string
-		if err = tx.QueryRowContext(r.Context(), `INSERT INTO agent_access(organization_id,subject,state,scope,all_clients,member_access_id,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text`, a.Organization, target, state, scope, all, member, in.Reason, a.Subject).Scan(&id); err != nil || tx.Commit() != nil {
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO agent_access(organization_id,subject,state,scope,member_access_id,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, a.Organization, target, state, scope, member, in.Reason, a.Subject).Scan(&id); err != nil || tx.Commit() != nil {
 			problem(w, 503, "Agent access change could not be confirmed. Refresh before retrying.")
 			return
 		}
