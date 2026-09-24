@@ -4,6 +4,7 @@ package ledger
 import (
 	"fmt"
 	"math/big"
+	"strings"
 )
 
 type BalanceException struct {
@@ -39,4 +40,24 @@ func WrongSide(accountID, name, class string, net *big.Rat, currency, basis stri
 		Finding:  fmt.Sprintf("%s (%s) shows a %s %s %s, opposite its normal side.", name, class, shown, side, basis),
 		NextStep: "Cause unverified: review this account's activity in the ledger before any correction. Common causes are a misposted payment, a refund or a duplicate. Nothing is changed.",
 		Question: fmt.Sprintf("Our records show a %s %s %s in %s at month-end. Do you know of an advance, refund or overpayment that explains it?", shown, side, basis, name)}
+}
+
+// Net returns debit minus credit from report cells; a blank cell counts as zero.
+func Net(debit, credit string) (*big.Rat, error) {
+	net := new(big.Rat)
+	for i, value := range []string{debit, credit} {
+		value = strings.ReplaceAll(strings.TrimSpace(value), ",", "")
+		if value == "" {
+			continue
+		}
+		amount, ok := new(big.Rat).SetString(value)
+		if !ok {
+			return nil, fmt.Errorf("amount %q is not a number", value)
+		}
+		if i == 1 {
+			amount.Neg(amount)
+		}
+		net.Add(net, amount)
+	}
+	return net, nil
 }

@@ -3,7 +3,6 @@ package quickbooks
 import (
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"slices"
 	"strings"
 
@@ -79,18 +78,10 @@ func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]ledger.BalanceE
 			if account.class == "Equity" && (strings.Contains(lower, "draw") || strings.Contains(lower, "distribution")) {
 				continue
 			}
-			net := new(big.Rat)
-			for index, sign := range map[int]int64{debit: 1, credit: -1} {
-				value := strings.ReplaceAll(strings.TrimSpace(row.ColData[index].Value), ",", "")
-				if value == "" {
-					continue
-				}
-				cell, ok := new(big.Rat).SetString(value)
-				if !ok {
-					invalid = fmt.Errorf("trial balance amount %q for %s is not a number", value, account.name)
-					return
-				}
-				net.Add(net, cell.Mul(cell, big.NewRat(sign, 1)))
+			net, err := ledger.Net(row.ColData[debit].Value, row.ColData[credit].Value)
+			if err != nil {
+				invalid = fmt.Errorf("trial balance %v for %s", err, account.name)
+				return
 			}
 			if item := ledger.WrongSide(row.ColData[0].ID, account.name, account.class, net, report.Header.Currency, "balance"); item != nil {
 				out = append(out, *item)

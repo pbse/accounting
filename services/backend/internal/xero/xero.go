@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -270,20 +269,9 @@ func WrongSide(payload json.RawMessage) (string, []ledger.BalanceException, erro
 		if class == "" || row.System == "RETAINEDEARNINGS" || strings.Contains(lower, "accumulated") || class == "Equity" && (strings.Contains(lower, "draw") || strings.Contains(lower, "distribution")) {
 			continue
 		}
-		net := new(big.Rat)
-		for _, cell := range []struct {
-			value string
-			sign  int64
-		}{{row.YTDDebit, 1}, {row.YTDCredit, -1}} {
-			value, sign := strings.ReplaceAll(strings.TrimSpace(cell.value), ",", ""), cell.sign
-			if value == "" {
-				continue
-			}
-			amount, ok := new(big.Rat).SetString(value)
-			if !ok {
-				return "", nil, fmt.Errorf("Xero Trial Balance amount %q for %s is not a number", value, row.Name)
-			}
-			net.Add(net, amount.Mul(amount, big.NewRat(sign, 1)))
+		net, err := ledger.Net(row.YTDDebit, row.YTDCredit)
+		if err != nil {
+			return "", nil, fmt.Errorf("Xero Trial Balance %v for %s", err, row.Name)
 		}
 		basis := "balance"
 		if class == "Revenue" || class == "Expense" {
