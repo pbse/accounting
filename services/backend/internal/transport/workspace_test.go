@@ -105,6 +105,11 @@ func TestWorkCountsAndReviewQueueMatchTheirLists(t *testing.T) {
 	if queue.Count != 1 || len(queue.Items) != 1 || queue.Items[0]["workpaper_id"] != current {
 		t.Fatalf("queue should hold only the current, linked, unblocked draft %s: %+v", current, queue)
 	}
+	var record savedPaper
+	json.Unmarshal(get("/v1/closes/"+closeID+"/workpapers/"+current+"?record=1"), &record)
+	if record.ID != current || record.Kind != "prepaid" || record.ReviewState != "pending" || record.Digest != "current" {
+		t.Fatalf("a queued draft outside the close's latest page must still open: %+v", record)
+	}
 	var closes struct {
 		Closes []savedClose `json:"closes"`
 	}

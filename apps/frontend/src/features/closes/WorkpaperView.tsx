@@ -250,15 +250,25 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
 export default function WorkpaperView() {
   const { id, paperId } = useParams();
   const { close, papers, more, error, loading, reload } = useClose(id);
+  const [older, setOlder] = useState<Paper>();
+  const [olderError, setOlderError] = useState("");
+  const listed = papers.find((paper) => paper.id === paperId);
+  useEffect(() => {
+    setOlder(undefined);
+    setOlderError("");
+    if (loading || listed || !close) return;
+    let live = true;
+    workspaceRequest(`/${close.id}/workpapers/${paperId}?record=1`)
+      .then((record: Paper) => live && setOlder(record))
+      .catch((e) => live && setOlderError(e instanceof Error ? e.message : "Workpaper unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [close, paperId, listed, loading]);
   if (loading && !close) return <p role="status">Opening workpaper…</p>;
-  if (error) return <p role="alert">{error}</p>;
-  const saved = papers.find((paper) => paper.id === paperId);
-  if (!close || !saved)
-    return (
-      <p role="alert">
-        This draft is not among the latest 100 in the close. <Link to={`/dashboard/closes/${id}?tab=workpapers`}>Return to the close</Link>
-      </p>
-    );
+  if (error || olderError) return <p role="alert">{error || olderError}</p>;
+  const saved = listed ?? older;
+  if (!close || !saved) return <p role="status">Opening workpaper…</p>;
   const queue = papers.filter(readyForReview);
   const position = queue.findIndex((paper) => paper.id === saved.id);
   const next = queue[position + 1] ?? (position === -1 ? queue[0] : undefined);
@@ -304,7 +314,7 @@ export default function WorkpaperView() {
       </div>
       {more && <p className="note">Review navigation covers the latest 100 drafts in this close.</p>}
       <div className="canvas">
-        <EvidencePane closeId={close.id} sources={saved.paper.sources ?? []} />
+        <EvidencePane key={saved.id} closeId={close.id} sources={saved.paper.sources ?? []} />
         <div className="stack">
           {blockers.length > 0 && (
             <section role="status">
@@ -318,9 +328,18 @@ export default function WorkpaperView() {
           )}
           <section aria-label="Prepared calculation">
             <h2>Prepared calculation</h2>
-            <WorkpaperResult close={close} saved={saved} />
+            <WorkpaperResult key={saved.id} close={close} saved={saved} />
           </section>
-          <ReviewDecision key={saved.id} closeId={close.id} paperId={saved.id} onChange={() => void reload()} autoLoad />
+          <ReviewDecision
+            key={saved.id}
+            closeId={close.id}
+            paperId={saved.id}
+            onChange={() => {
+              void reload();
+              if (older) void workspaceRequest(`/${close.id}/workpapers/${saved.id}?record=1`).then(setOlder);
+            }}
+            autoLoad
+          />
           <details>
             <summary>Original inputs and full calculation</summary>
             <pre>{JSON.stringify(saved.paper, null, 2)}</pre>
