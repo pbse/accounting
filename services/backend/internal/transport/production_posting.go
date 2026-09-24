@@ -84,6 +84,61 @@ func productionActor(w http.ResponseWriter, r *http.Request, permission string) 
 	}
 	return a, true
 }
+
+// refusal is an error with the HTTP status and message to show.
+type refusal struct {
+	status  int
+	message string
+}
+
+func (r refusal) Error() string { return r.message }
+
+func refuse(w http.ResponseWriter, err error) {
+	var r refusal
+	if errors.As(err, &r) {
+		problem(w, r.status, r.message)
+		return
+	}
+	problem(w, 503, "Production company unavailable.")
+}
+
+// productionClient opens a client's production company under its grant: the saved grant when verifying an
+// earlier attempt, otherwise the current one, which must be unexpired and cover kind when kind is given.
+// The client's currency comes from the connection.
+func productionClient(ctx context.Context, db *sql.DB, org, entity, kind, savedGrant string) (quickbooks.Sandbox, productionGrant, string, error) {
+	var g productionGrant
+	var err error
+	if savedGrant != "" {
+		g, err = scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.id=$1 AND g.organization_id=$2 AND lower(g.client_entity)=lower($3)`, savedGrant, org, entity))
+	} else {
+		g, err = readProductionGrant(ctx, db, org, entity)
+	}
+	if err != nil || (kind != "" && time.Now().After(g.Expires)) {
+		return quickbooks.Sandbox{}, g, "", refusal{409, "An unexpired client-specific production grant is required for new decisions."}
+	}
+	if kind != "" && !slices.Contains(g.Kinds, kind) {
+		return quickbooks.Sandbox{}, g, "", refusal{409, "This client's production grant does not cover " + kind + " drafts. Ask for a new grant that includes them."}
+	}
+	var encrypted []byte
+	var expires time.Time
+	var currency sql.NullString
+	connectionID := g.ConnectionID
+	if kind == "" {
+		err = db.QueryRowContext(ctx, `SELECT id::text,credential,access_expires_at,home_currency FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND environment='production' AND state='active' AND realm=$3 AND company_name=$2`, org, entity, g.Realm).Scan(&connectionID, &encrypted, &expires, &currency)
+	} else {
+		err = db.QueryRowContext(ctx, `SELECT credential,access_expires_at,home_currency FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND environment='production' AND state='active' AND realm=$4 AND company_name=$3`, connectionID, org, entity, g.Realm).Scan(&encrypted, &expires, &currency)
+	}
+	if err != nil || time.Until(expires) < 2*time.Minute {
+		return quickbooks.Sandbox{}, g, "", refusal{409, "Refresh the active production connection before posting."}
+	}
+	raw, err := secrets.Open(org+"/qbo/"+connectionID, encrypted)
+	var credentials quickbooks.Credentials
+	if err != nil || json.Unmarshal(raw, &credentials) != nil || credentials.Access == "" {
+		return quickbooks.Sandbox{}, g, "", refusal{503, "Production credential unavailable."}
+	}
+	return quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Accounts: g.AccountIDs, Production: true, Currency: currency.String}, g, connectionID, nil
+}
+
 func productionScope(ctx context.Context, db *sql.DB, closeID, org string) (string, error) {
 	var entity string
 	err := db.QueryRowContext(ctx, `SELECT entity FROM client_closes WHERE id::text=$1 AND organization_id=$2`, closeID, org).Scan(&entity)
@@ -122,6 +177,9 @@ func postingKinds() []string {
 }
 
 var postableKinds = []string{"prepaid", "accrual", "loan", "owner", "settlement"}
+
+// A grant may also cover native QuickBooks corrections, which are not journals.
+var grantKinds = append(slices.Clone(postableKinds), "bill_correction", "vendor_credit")
 
 // postable returns the approved month-end entries a non-prepaid draft posts together and its source reference.
 // An accrual's next-month reversal is not posted.
@@ -511,7 +569,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		}
 		kindsOK := len(in.Kinds) > 0
 		for i, kind := range in.Kinds {
-			kindsOK = kindsOK && slices.Contains(postableKinds, kind) && !slices.Contains(in.Kinds[:i], kind)
+			kindsOK = kindsOK && slices.Contains(grantKinds, kind) && !slices.Contains(in.Kinds[:i], kind)
 		}
 		if in.Action != "grant" || in.Confirmation != "GRANT PRODUCTION POSTING" || !accountsOK || !kindsOK || amountErr != nil || amount <= 0 || in.ExpiresAt.Before(time.Now()) || in.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) || len(strings.TrimSpace(in.Reason)) < 10 || len(in.Reason) > 2000 {
 			problem(w, 422, "Confirm 2–20 distinct account IDs, the draft kinds covered, a positive limit, expiry within 30 days and a reason of at least 10 characters.")
@@ -609,39 +667,19 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		record, recordErr := readProductionPosting(r.Context(), db, r.PathValue("id"), r.PathValue("paper"))
-		var g productionGrant
-		if in.Action == "verify" && recordErr == nil {
-			g, err = scanGrant(db.QueryRowContext(r.Context(), `SELECT `+grantColumns+` WHERE g.id=$1 AND g.organization_id=$2 AND lower(g.client_entity)=lower($3)`, record.GrantID, a.Organization, entity))
-		} else {
-			g, err = readProductionGrant(r.Context(), db, a.Organization, entity)
-		}
-		if err != nil || (in.Action != "verify" && time.Now().After(g.Expires)) {
-			problem(w, 409, "An unexpired client-specific production grant is required for new decisions.")
-			return
-		}
-		if in.Action != "verify" && !slices.Contains(g.Kinds, kind) {
-			problem(w, 409, "This client's production grant does not cover "+kind+" drafts. Ask for a new grant that includes them.")
-			return
-		}
-		var encrypted []byte
-		var expires time.Time
-		connectionID := g.ConnectionID
+		savedGrant, decision := "", kind
 		if in.Action == "verify" {
-			err = db.QueryRowContext(r.Context(), `SELECT id::text,credential,access_expires_at FROM quickbooks_connections WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND environment='production' AND state='active' AND realm=$3 AND company_name=$2`, a.Organization, entity, g.Realm).Scan(&connectionID, &encrypted, &expires)
-		} else {
-			err = db.QueryRowContext(r.Context(), `SELECT credential,access_expires_at FROM quickbooks_connections WHERE id=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND environment='production' AND state='active' AND realm=$4 AND company_name=$3`, connectionID, a.Organization, entity, g.Realm).Scan(&encrypted, &expires)
+			decision = ""
+			if recordErr == nil {
+				savedGrant = record.GrantID
+			}
 		}
-		if err != nil || time.Until(expires) < 2*time.Minute {
-			problem(w, 409, "Refresh the active production connection before posting.")
+		client, g, _, err := productionClient(r.Context(), db, a.Organization, entity, decision, savedGrant)
+		if err != nil {
+			refuse(w, err)
 			return
 		}
-		raw, err := secrets.Open(a.Organization+"/qbo/"+connectionID, encrypted)
-		var credentials quickbooks.Credentials
-		if err != nil || json.Unmarshal(raw, &credentials) != nil || credentials.Access == "" {
-			problem(w, 503, "Production credential unavailable.")
-			return
-		}
-		client := quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Accounts: g.AccountIDs, Production: true, Currency: head.Input.Currency}
+		client.Currency = head.Input.Currency
 		if in.Action == "verify" {
 			if recordErr != nil || record.State == "preview" || record.State == "approved" {
 				problem(w, 409, "No saved external journal is available. Never retry an unknown write.")
