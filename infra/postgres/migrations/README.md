@@ -31,3 +31,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `048_xero.sql` adds read-only Xero connections and month-end Trial Balance snapshots, with the same row-level security as 047. Apply after 047 with API/worker stopped. See [Xero month-end Trial Balance](../../../docs/xero-onboarding.md).
 
 `049_quickbooks_change_hints.sql` records when Intuit reports a change for a connected company, so the scheduler refreshes early. Apply after 048 with API/worker stopped; `/readyz` checks it. See [QuickBooks onboarding](../../../docs/quickbooks-onboarding.md).
+
+`050_daily_books.sql` stores each transaction capture's exceptions and the capture last reviewed per close, with row-level security like 047. Apply after 049 with API/worker stopped; `/readyz` checks it. See [Work inbox](../../../docs/work-inbox.md#daily-books).
