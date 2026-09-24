@@ -125,6 +125,8 @@ export default function PrepareLoan() {
     </label>
   );
   const setPayment = (index: number, key: keyof LoanPayment, value: string) => setPayments((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
+  const setRateChange = (index: number, key: keyof LoanRateChange, value: string) => setRateChanges((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
+  const setFee = (index: number, key: keyof LoanFee, value: string) => setFees((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
   return (
     <>
       <h1>Prepare a loan schedule</h1>
@@ -180,9 +182,9 @@ export default function PrepareLoan() {
               <tbody>
                 {rateChanges.map((c, index) => (
                   <tr key={index}>
-                    <td><input aria-label={`Rate change ${index + 1} date`} type="date" value={c.effective} onChange={(e) => setRateChanges((rows) => rows.map((row, i) => (i === index ? { ...row, effective: e.target.value } : row)))} /></td>
-                    <td><input aria-label={`Rate change ${index + 1} rate`} inputMode="decimal" value={c.annual_rate} onChange={(e) => setRateChanges((rows) => rows.map((row, i) => (i === index ? { ...row, annual_rate: e.target.value } : row)))} /></td>
-                    <td><input aria-label={`Rate change ${index + 1} notice`} maxLength={200} value={c.reference} onChange={(e) => setRateChanges((rows) => rows.map((row, i) => (i === index ? { ...row, reference: e.target.value } : row)))} /></td>
+                    <td><input aria-label={`Rate change ${index + 1} date`} type="date" value={c.effective} onChange={(e) => setRateChange(index, "effective", e.target.value)} /></td>
+                    <td><input aria-label={`Rate change ${index + 1} rate`} inputMode="decimal" value={c.annual_rate} onChange={(e) => setRateChange(index, "annual_rate", e.target.value)} /></td>
+                    <td><input aria-label={`Rate change ${index + 1} notice`} maxLength={200} value={c.reference} onChange={(e) => setRateChange(index, "reference", e.target.value)} /></td>
                     <td><button type="button" onClick={() => setRateChanges((rows) => rows.filter((_, i) => i !== index))}>Remove</button></td>
                   </tr>
                 ))}
@@ -196,10 +198,10 @@ export default function PrepareLoan() {
               <tbody>
                 {fees.map((f, index) => (
                   <tr key={index}>
-                    <td><input aria-label={`Fee ${index + 1} date`} type="date" value={f.date} onChange={(e) => setFees((rows) => rows.map((row, i) => (i === index ? { ...row, date: e.target.value } : row)))} /></td>
-                    <td><input aria-label={`Fee ${index + 1} amount`} inputMode="decimal" value={f.amount} onChange={(e) => setFees((rows) => rows.map((row, i) => (i === index ? { ...row, amount: e.target.value } : row)))} /></td>
-                    <td><input aria-label={`Fee ${index + 1} description`} maxLength={200} value={f.description} onChange={(e) => setFees((rows) => rows.map((row, i) => (i === index ? { ...row, description: e.target.value } : row)))} /></td>
-                    <td><input aria-label={`Fee ${index + 1} statement line`} maxLength={200} value={f.reference} onChange={(e) => setFees((rows) => rows.map((row, i) => (i === index ? { ...row, reference: e.target.value } : row)))} /></td>
+                    <td><input aria-label={`Fee ${index + 1} date`} type="date" value={f.date} onChange={(e) => setFee(index, "date", e.target.value)} /></td>
+                    <td><input aria-label={`Fee ${index + 1} amount`} inputMode="decimal" value={f.amount} onChange={(e) => setFee(index, "amount", e.target.value)} /></td>
+                    <td><input aria-label={`Fee ${index + 1} description`} maxLength={200} value={f.description} onChange={(e) => setFee(index, "description", e.target.value)} /></td>
+                    <td><input aria-label={`Fee ${index + 1} statement line`} maxLength={200} value={f.reference} onChange={(e) => setFee(index, "reference", e.target.value)} /></td>
                     <td><button type="button" onClick={() => setFees((rows) => rows.filter((_, i) => i !== index))}>Remove</button></td>
                   </tr>
                 ))}
