@@ -217,8 +217,12 @@ func registerRecurring(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Could not inspect current evidence.")
 			return
 		}
-		if snapshot.ID == "" || snapshot.ID != in.SnapshotID || !snapshot.Active {
+		if snapshot.ID == "" {
 			problem(w, 409, "Period evidence changed. Refresh the comparison.")
+			return
+		}
+		if snapshot.ID != in.SnapshotID || !snapshot.Active {
+			problemCode(w, 409, "SOURCE_STALE", "Period evidence changed. Refresh the comparison.")
 			return
 		}
 		var selected *recurringItem
@@ -260,7 +264,7 @@ func registerRecurring(mux *http.ServeMux, db *sql.DB) {
 		}
 		base := len(selected.Paper.CarryForward.SourceIDs)
 		if len(selected.Paper.Sources) < base {
-			problem(w, 409, "Carried source lineage changed.")
+			problemCode(w, 409, "SOURCE_STALE", "Carried source lineage changed.")
 			return
 		}
 		sources := append([]preparation.Source{}, selected.Paper.Sources[:base]...)

@@ -374,8 +374,13 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 		}
 		if in.SourceID != "" {
 			var current string
-			if db.QueryRowContext(r.Context(), `SELECT digest FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND purpose='procedure' AND extraction_state='ready' AND superseded_by IS NULL`, in.SourceID, r.PathValue("id")).Scan(&current) != nil || current != digest {
-				problem(w, 409, "Policy source changed while drafting. Select its current revision.")
+			e := db.QueryRowContext(r.Context(), `SELECT digest FROM evidence WHERE id::text=$1 AND close_id::text=$2 AND purpose='procedure' AND extraction_state='ready' AND superseded_by IS NULL`, in.SourceID, r.PathValue("id")).Scan(&current)
+			if e != nil && e != sql.ErrNoRows {
+				problem(w, 503, "Could not verify the policy source.")
+				return
+			}
+			if e != nil || current != digest {
+				problemCode(w, 409, "SOURCE_STALE", "Policy source changed while drafting. Select its current revision.")
 				return
 			}
 		}
@@ -603,8 +608,12 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 		if d.SourceID != "" {
 			var digest string
 			err = tx.QueryRowContext(r.Context(), `SELECT e.digest FROM evidence e JOIN client_closes c ON c.id=e.close_id WHERE e.id::text=$1 AND c.organization_id=$2 AND e.purpose='procedure' AND e.superseded_by IS NULL AND e.extraction_state='ready' FOR SHARE OF e`, d.SourceID, org).Scan(&digest)
+			if err != nil && err != sql.ErrNoRows {
+				problem(w, 503, "Could not verify the policy document.")
+				return
+			}
 			if err != nil || digest != d.SourceDigest {
-				problem(w, 409, "Policy document changed. Draft from the current source.")
+				problemCode(w, 409, "SOURCE_STALE", "Policy document changed. Draft from the current source.")
 				return
 			}
 		} else {

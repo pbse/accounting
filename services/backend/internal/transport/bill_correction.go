@@ -305,8 +305,13 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			var currentCapture string
-			if tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture) != nil || currentCapture != item.CaptureID {
-				problem(w, 409, "Transaction capture changed. Review a new correction.")
+			e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture)
+			if e != nil && e != sql.ErrNoRows {
+				problem(w, 503, "Could not verify the transaction capture.")
+				return
+			}
+			if e != nil || currentCapture != item.CaptureID {
+				problemCode(w, 409, "SOURCE_STALE", "Transaction capture changed. Review a new correction.")
 				return
 			}
 			result, err := tx.ExecContext(r.Context(), `UPDATE bill_corrections SET state='executing',attempted_by=$2,attempted_at=now() WHERE id::text=$1 AND digest=$3 AND state='approved' AND approval_expires_at>now() AND approved_by IS NOT NULL AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$4 AND subject=bill_corrections.approved_by AND granted)`, item.ID, a.Subject, item.Digest, a.Organization)
@@ -328,13 +333,13 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 			defer stop()
 			if writeErr != nil {
 				_, _ = db.ExecContext(persist, `UPDATE bill_corrections SET state='unknown',last_error=$2 WHERE id::text=$1 AND state='executing'`, item.ID, writeErr.Error())
-				problem(w, 502, "Bill write outcome is uncertain. Inspect QuickBooks before any further action.")
+				problemCode(w, 502, "EXECUTION_UNKNOWN", "Bill write outcome is uncertain. Inspect QuickBooks before any further action.")
 				return
 			}
 			readback, readErr := sandbox.VerifyBillCorrection(r.Context(), before, item.TargetLineID, item.TargetAccountID)
 			if readErr != nil {
 				_, _ = db.ExecContext(persist, `UPDATE bill_corrections SET state='unknown',last_error=$2 WHERE id::text=$1 AND state='executing'`, item.ID, readErr.Error())
-				problem(w, 502, "Bill update returned, but canonical readback is unverified.")
+				problemCode(w, 502, "EXECUTION_UNKNOWN", "Bill update returned, but canonical readback is unverified.")
 				return
 			}
 			body, _ := json.Marshal(readback)

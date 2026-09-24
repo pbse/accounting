@@ -286,7 +286,9 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 200)
 	actor.Permissions = []string{"clients:all", "posting:execute"}
 	uncertain = true
-	call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 502)
+	if body := call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 502); !strings.Contains(string(body), `"code":"EXECUTION_UNKNOWN"`) {
+		t.Fatalf("an uncertain write must say its outcome is unknown: %s", body)
+	}
 	call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 409)
 	var state string
 	if err = db.QueryRow(`SELECT state FROM production_postings WHERE workpaper_id=$1`, paperID).Scan(&state); err != nil || state != "unknown" || writes != 2 {
