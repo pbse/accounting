@@ -137,15 +137,15 @@ type reportRows struct {
 
 // TrialBalanceAccount returns the exact reported cells for one prepaid account.
 // The reviewer, not the report parser, interprets debit/credit signs and cutoff.
-func TrialBalanceAccount(accounts, report json.RawMessage, accountID string) (string, string, json.RawMessage, error) {
-	return trialBalanceAccount(accounts, report, accountID, "PrepaidExpenses")
+func TrialBalanceAccount(accounts, report json.RawMessage, accountID, currency string) (string, string, json.RawMessage, error) {
+	return trialBalanceAccount(accounts, report, accountID, currency, "PrepaidExpenses")
 }
 
-func TrialBalanceLiability(accounts, report json.RawMessage, accountID string) (string, string, json.RawMessage, error) {
-	return trialBalanceAccount(accounts, report, accountID, "Other Current Liability")
+func TrialBalanceLiability(accounts, report json.RawMessage, accountID, currency string) (string, string, json.RawMessage, error) {
+	return trialBalanceAccount(accounts, report, accountID, currency, "Other Current Liability")
 }
 
-func trialBalanceAccount(accounts, report json.RawMessage, accountID, requiredType string) (string, string, json.RawMessage, error) {
+func trialBalanceAccount(accounts, report json.RawMessage, accountID, currency, requiredType string) (string, string, json.RawMessage, error) {
 	var directory []struct {
 		ID             string `json:"Id"`
 		Name           string
@@ -171,8 +171,8 @@ func trialBalanceAccount(accounts, report json.RawMessage, accountID, requiredTy
 	if json.Unmarshal(report, &root) != nil {
 		return "", "", nil, fmt.Errorf("Trial Balance is invalid")
 	}
-	if root.Header.Currency != "USD" || root.Header.ReportBasis != "Accrual" {
-		return "", "", nil, fmt.Errorf("This comparison requires a USD accrual Trial Balance")
+	if root.Header.Currency != currency || root.Header.ReportBasis != "Accrual" {
+		return "", "", nil, fmt.Errorf("This comparison requires an accrual Trial Balance in the schedule's currency, %s", currency)
 	}
 	var location string
 	var cells json.RawMessage

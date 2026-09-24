@@ -43,7 +43,17 @@ type Sandbox struct {
 	Accounts   []string
 	Client     *http.Client
 	Production bool
+	// Currency is the client's home currency; empty means USD.
+	Currency string
 }
+
+func (s Sandbox) currency() string {
+	if s.Currency == "" {
+		return "USD"
+	}
+	return s.Currency
+}
+
 type LedgerAccount struct {
 	ID             string      `json:"id"`
 	Name           string      `json:"name"`
@@ -192,7 +202,7 @@ func (s Sandbox) readAccount(ctx context.Context, id string) (account, error) {
 		return account{}, err
 	}
 	a := result.Account
-	if a.ID != id || !a.Active || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != "USD") {
+	if a.ID != id || !a.Active || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != s.currency()) {
 		return account{}, errors.New("QuickBooks account mapping, active status, classification or currency no longer matches the proposal")
 	}
 	if s.Production {
@@ -259,7 +269,7 @@ func (s Sandbox) PrepareEntries(ctx context.Context, entries []prepaids.Adjustme
 	if s.Production {
 		note = "Reviewed close / "
 	}
-	journal := Journal{TxnDate: entries[0].Date, CurrencyRef: Reference{"USD"}, PrivateNote: note + strings.TrimSpace(reference)}
+	journal := Journal{TxnDate: entries[0].Date, CurrencyRef: Reference{s.currency()}, PrivateNote: note + strings.TrimSpace(reference)}
 	for _, entry := range entries {
 		debit, err := resolve(entry.DebitAccount)
 		if err != nil {
@@ -319,7 +329,7 @@ func (s Sandbox) VerifyReadback(ctx context.Context, id string, expected Journal
 		return Journal{}, err
 	}
 	actual := result.JournalEntry
-	if actual.ID != id || actual.TxnDate != expected.TxnDate || actual.CurrencyRef.Value != "USD" || actual.PrivateNote != expected.PrivateNote || len(actual.Line) != len(expected.Line) {
+	if actual.ID != id || actual.TxnDate != expected.TxnDate || actual.CurrencyRef != expected.CurrencyRef || actual.PrivateNote != expected.PrivateNote || len(actual.Line) != len(expected.Line) {
 		return Journal{}, errors.New("Journal readback does not match the approved draft")
 	}
 	used := map[int]bool{}

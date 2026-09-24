@@ -73,7 +73,7 @@ func (s Sandbox) PrepareVendorCredit(ctx context.Context, vendorID, apID, prepai
 			return VendorCredit{}, err
 		}
 		a := response.Account
-		if a.ID != expected.id || !a.Active || a.AccountType != expected.kind || a.AccountSubType != expected.subtype || (expected.name != "" && a.Name != expected.name && a.FullyQualifiedName != expected.name) || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != "USD") {
+		if a.ID != expected.id || !a.Active || a.AccountType != expected.kind || a.AccountSubType != expected.subtype || (expected.name != "" && a.Name != expected.name && a.FullyQualifiedName != expected.name) || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != s.currency()) {
 			return VendorCredit{}, errors.New("Vendor credit account identity, type, active status, name or currency changed")
 		}
 	}
@@ -91,7 +91,7 @@ func (s Sandbox) PrepareVendorCredit(ctx context.Context, vendorID, apID, prepai
 	if len(existing.QueryResponse.VendorCredit) > 0 {
 		return VendorCredit{}, errors.New("A QuickBooks VendorCredit already uses this reference; inspect the booked credit before preparing")
 	}
-	credit := VendorCredit{DocNumber: source, TxnDate: date, VendorRef: Reference{vendorID}, VendorName: vendor.Vendor.DisplayName, APAccountRef: Reference{apID}, CurrencyRef: Reference{"USD"}, PrivateNote: "Reviewed supplier credit / " + source}
+	credit := VendorCredit{DocNumber: source, TxnDate: date, VendorRef: Reference{vendorID}, VendorName: vendor.Vendor.DisplayName, APAccountRef: Reference{apID}, CurrencyRef: Reference{s.currency()}, PrivateNote: "Reviewed supplier credit / " + source}
 	line := CreditLine{Amount: json.Number(amount), DetailType: "AccountBasedExpenseLineDetail"}
 	line.AccountBasedExpenseLineDetail.AccountRef = Reference{prepaidID}
 	credit.Line = []CreditLine{line}

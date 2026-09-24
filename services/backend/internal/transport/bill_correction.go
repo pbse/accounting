@@ -228,7 +228,7 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 			}
 			name, err := sandbox.ValidateExpenseAccount(r.Context(), in.TargetAccountID)
 			if err != nil {
-				problem(w, 422, "Choose a different active USD expense account.")
+				problem(w, 422, "Choose a different active expense account in the client's currency.")
 				return
 			}
 			before, _ := json.Marshal(live)

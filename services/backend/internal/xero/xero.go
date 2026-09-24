@@ -173,6 +173,26 @@ type Balance struct {
 	System    string `json:"system_account,omitempty"`
 }
 
+// Profile returns the organisation's base currency and first fiscal month from a snapshot.
+func Profile(payload json.RawMessage) (string, int, error) {
+	var snapshot struct {
+		Organisation struct {
+			Organisations []struct {
+				BaseCurrency          string
+				FinancialYearEndMonth int
+			}
+		}
+	}
+	if json.Unmarshal(payload, &snapshot) != nil || len(snapshot.Organisation.Organisations) != 1 {
+		return "", 0, errors.New("Xero organisation currency or financial year is unreadable")
+	}
+	o := snapshot.Organisation.Organisations[0]
+	if o.BaseCurrency == "" || o.FinancialYearEndMonth < 1 || o.FinancialYearEndMonth > 12 {
+		return "", 0, errors.New("Xero organisation currency or financial year is unreadable")
+	}
+	return o.BaseCurrency, o.FinancialYearEndMonth%12 + 1, nil
+}
+
 func Balances(payload json.RawMessage) (currency, date string, rows []Balance, err error) {
 	var snapshot struct {
 		Date         string

@@ -54,10 +54,10 @@ func Propose(sources []IntakeSource) Proposal {
 		p.Sources = append(p.Sources, s.Source)
 	}
 	definitions := []struct{ field, label, question string }{
-		{"amount", "Invoice amount", "What is the invoice amount in USD, excluding any unsupported credits?"},
+		{"amount", "Invoice amount", "What is the invoice amount in the client's home currency, excluding any unsupported credits?"},
 		{"service_start", "Service start", "What is the service start date (YYYY-MM-DD)?"},
 		{"service_end", "Service end", "What is the service end date (YYYY-MM-DD)?"},
-		{"currency", "Currency", "Which currency is the invoice in? This method supports USD only."},
+		{"currency", "Currency", "Which currency is the invoice in? This method supports the client's home currency only."},
 		{"expense_account", "Expense account", "Which expense account contains the original invoice booking?"},
 		{"prepaid_account", "Prepaid account", "Which prepaid asset account should receive the remaining balance?"},
 	}

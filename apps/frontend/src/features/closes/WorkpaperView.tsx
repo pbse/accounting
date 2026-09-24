@@ -18,9 +18,10 @@ import type { Plan } from "./Planning";
 import { Posting, ProductionPosting } from "./Posting";
 import { ReviewDecision } from "./ReviewDecision";
 import { VendorCredit } from "./VendorCredit";
-import { workspaceRequest } from "./workspace";
+import { money, workspaceRequest } from "./workspace";
 
-export type Close = { id: string; entity: string; period: string; basis?: "cash" | "modified_cash" | "accrual"; basis_scope?: "client" | "firm" } & Plan;
+export type Profile = { currency: string; fiscal_year_start: number; state: "detected" | "none" | "unknown" | "conflict" };
+export type Close = { id: string; entity: string; period: string; basis?: "cash" | "modified_cash" | "accrual"; basis_scope?: "client" | "firm"; profile?: Profile } & Plan;
 type Saved<K, P> = { kind: K; paper: P & { sources?: Source[]; revises?: string; blockers?: string[] } };
 export type Paper = { id: string; created_at: string; review_state: string } & (
   | Saved<"prepaid", PrepaidWorkpaper>
@@ -207,7 +208,7 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
         <section>
           <h3>Carried schedule · fresh review required</h3>
           <p>
-            From <Link to={`/dashboard/closes/${paper.carry_forward.close_id}`}>{paper.carry_forward.period} · draft #{paper.carry_forward.paper_id}</Link>. Opening scheduled prepaid balance: ${paper.carry_forward.opening_balance} USD.
+            From <Link to={`/dashboard/closes/${paper.carry_forward.close_id}`}>{paper.carry_forward.period} · draft #{paper.carry_forward.paper_id}</Link>. Opening scheduled prepaid balance: {money(paper.carry_forward.opening_balance, paper.input.currency)}.
           </p>
           <p>
             Schedule only: this is not a verified ledger opening balance. No journal is proposed. Review current contracts, credits, account mappings and prior postings before accounting action. To correct the schedule, revise and review its predecessor, then carry that new version forward.
@@ -215,15 +216,15 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
         </section>
       ) : (
         <p>
-          Method: {paper.input.method}, final-month rounding. {paper.input.booked_balance ? `Booked prepaid $${paper.input.booked_balance} · ${paper.input.booking_reference}.` : "Fully expensed with no prior adjustments."} {paper.input.credit_amount ? `Credit $${paper.input.credit_amount} effective ${paper.input.credit_period} · ${paper.input.credit_reference}.` : ""} {paper.input.cancellation_method ? `Cancellation ${paper.input.cancellation_method} effective ${paper.input.cancellation_period} · ${paper.input.cancellation_reference}.` : ""}
+          Method: {paper.input.method}, final-month rounding. {paper.input.booked_balance ? `Booked prepaid ${money(paper.input.booked_balance, paper.input.currency)} · ${paper.input.booking_reference}.` : "Fully expensed with no prior adjustments."} {paper.input.credit_amount ? `Credit ${money(paper.input.credit_amount, paper.input.currency)} effective ${paper.input.credit_period} · ${paper.input.credit_reference}.` : ""} {paper.input.cancellation_method ? `Cancellation ${paper.input.cancellation_method} effective ${paper.input.cancellation_period} · ${paper.input.cancellation_reference}.` : ""}
         </p>
       )}
       <p>
-        Period expense: ${paper.period_expense}; recognized: ${paper.recognized_expense}; remaining: ${paper.prepaid_balance} USD.
+        Period expense: {money(paper.period_expense, paper.input.currency)}; recognized: {money(paper.recognized_expense, paper.input.currency)}; remaining: {money(paper.prepaid_balance, paper.input.currency)}.
       </p>
       <p>
         {paper.proposal
-          ? `Draft adjustment ${paper.proposal.date}: debit ${paper.proposal.debit_account}, credit ${paper.proposal.credit_account}, $${paper.proposal.amount}.`
+          ? `Draft adjustment ${paper.proposal.date}: debit ${paper.proposal.debit_account}, credit ${paper.proposal.credit_account}, ${money(paper.proposal.amount, paper.input.currency)}.`
           : "No reclassification proposed."}
       </p>
       <table>
@@ -231,9 +232,9 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
         <thead>
           <tr>
             <th>Month</th>
-            <th>Expense USD</th>
-            <th>Remaining USD</th>
-            <th>Credit USD</th>
+            <th>Expense {paper.input.currency}</th>
+            <th>Remaining {paper.input.currency}</th>
+            <th>Credit {paper.input.currency}</th>
           </tr>
         </thead>
         <tbody>

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { workspaceRequest } from "./workspace";
+import { money, workspaceRequest } from "./workspace";
 
 type Connection = { id: string; state: string; realm: string; company_name: string; error: string };
 type Grant = { id?: string; state?: string; realm?: string; company?: string; account_ids?: string[]; kinds?: string[]; max_amount?: string; expires_at?: string; reason?: string };
 type Status = { production_configured: boolean; hosted: boolean; data: { production_connection: Connection | null } };
 
-export function ProductionAccess({ closeId, entity }: { closeId: string; entity: string }) {
+export function ProductionAccess({ closeId, entity, currency }: { closeId: string; entity: string; currency: string }) {
   const [status, setStatus] = useState<Status>();
   const [grant, setGrant] = useState<Grant>();
   const [error, setError] = useState("");
@@ -85,7 +85,7 @@ export function ProductionAccess({ closeId, entity }: { closeId: string; entity:
       {c && <button disabled={busy || !confirmed} onClick={() => void connectionAction("disconnect")}>Disconnect production company locally</button>}
       <h4>Client-specific production grant</h4>
       {grant?.id ? <>
-        <p>Grant #{grant.id}: accounts {grant.account_ids?.join(", ")}; covers {grant.kinds?.join(", ")} drafts; maximum ${grant.max_amount} per journal; expires {grant.expires_at ? new Date(grant.expires_at).toLocaleString() : "unknown"}.</p>
+        <p>Grant #{grant.id}: accounts {grant.account_ids?.join(", ")}; covers {grant.kinds?.join(", ")} drafts; maximum {money(grant.max_amount, currency)} per journal; expires {grant.expires_at ? new Date(grant.expires_at).toLocaleString() : "unknown"}.</p>
         <p>Reason: {grant.reason}</p>
         <label>Type REVOKE PRODUCTION GRANT<input value={phrase} onChange={e => setPhrase(e.target.value)} autoComplete="off" /></label>
         <button disabled={busy || phrase !== "REVOKE PRODUCTION GRANT"} onClick={() => void grantAction("revoke")}>Revoke this grant</button>
@@ -98,7 +98,7 @@ export function ProductionAccess({ closeId, entity }: { closeId: string; entity:
           ))}
           <small>Kinds other than prepaid also need the server to enable them after the QuickBooks sandbox balance check.</small>
         </fieldset>
-        <label>Maximum journal total (USD)<input value={limit} onChange={e => setLimit(e.target.value)} inputMode="decimal" /></label>
+        <label>Maximum journal total ({currency})<input value={limit} onChange={e => setLimit(e.target.value)} inputMode="decimal" /></label>
         <label>Grant expiry date and time (within 30 days)<input type="datetime-local" value={expiry} onChange={e => setExpiry(e.target.value)} /></label>
         <label>Reason<input value={reason} onChange={e => setReason(e.target.value)} maxLength={2000} /></label>
         <label>Type GRANT PRODUCTION POSTING<input value={phrase} onChange={e => setPhrase(e.target.value)} autoComplete="off" /></label>

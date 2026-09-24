@@ -520,3 +520,14 @@ Author: Claude Opus 5.5. No migration.
 
 - `TestStripeFeeEntryCoversFeesOfPayoutsDepositedThisMonth`: with every payout traced, the fees of payouts deposited in September (4.95 + 21.10 + the 2.00 billing fee row + 1.17 = 29.22) are proposed as debit Stripe fees, credit Sales on 2026-09-30; the 4.46 of fees of a payout in transit and one deposited 2 October are named and left for October; booking 30.00 proposes 0.78 back; booking 29.22 proposes nothing; an untraced month proposes nothing and names the fees of untraced payouts separately; a payout deposited on 31 August is not a September fee; without the entry nothing is proposed. A missing rule, the same account twice, missing or negative booked fees and a blank fee account are refused. Observed red without the fee rows, without deferring after-month-end or in-transit payouts, with the entry never reversed, without blocker suppression, without the rule requirement, without the booked-fees check, when an August deposit counted and when untraced fees were described as deferred.
 - `TestYearEndHandoffRollsForwardApprovedWork` now includes an approved Stripe settlement's fee entry in `adjustments.csv`. Observed red with settlements excluded.
+
+## Client currency and fiscal year (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 051. Review: GPT-6 Sol (medium) plan and code review; adopted the full ISO 4217 minor-unit list, the currency check before production posting, and keeping bill corrections labeled as the USD sandbox.
+
+- `TestQuickBooksScopedOAuthRefreshAndSnapshots` now checks that connecting reads Preferences and the client profile becomes CAD with a July fiscal start. Observed red when the month or the stored profile is dropped.
+- `TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance` now checks that a snapshot records NZD and a financial year ending in March (start April). Observed red with the end month used as the start and with the profile not stored.
+- `TestLearnedRuleRequiresApprovedExampleBeforeActivation` now checks that a USD prepaid is refused for a client whose books are kept in CAD and a CAD one passes. Observed red without the guard.
+- `TestYearEndHandoffRollsForwardApprovedWork` now checks that a July fiscal year anchored in May 2026 covers 11 months from 2025-07 and is named FY2026. Observed red without the prior-year rollback and with the calendar-year query bound.
+- `TestProductionPostingSingleDurableAttempt` now posts a CAD prepaid: refused while the company's currency is unknown, then posted with a CAD journal once it is detected. Observed red with a USD journal, with the client currency not passed and without the posting check.
+- `TestTrialBalanceAccountRequiresUniquePrepaidRow` refuses a Trial Balance in another currency (observed red without the check); `TestCurrencyNeedsThreeLettersAndTwoDecimals` accepts USD, CAD and GBP and refuses JPY, KWD, XOF, IQD and lowercase codes (observed red with the refusal list shortened).

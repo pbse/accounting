@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { workspaceRequest } from "./workspace";
+import { money as show, workspaceRequest } from "./workspace";
 
 type Item = {
   id: string;
@@ -22,13 +22,13 @@ const cents = (value: string) => {
   return BigInt(whole) * 100n + BigInt((fraction + "00").slice(0, 2));
 };
 const money = (value: bigint) => `${value / 100n}.${String(value % 100n).padStart(2, "0")}`;
-const difference = (scheduled: string, entered: string) => {
+const difference = (scheduled: string, entered: string, currency: string) => {
   const actual = cents(entered), expected = cents(scheduled);
   if (actual === null || expected === null) return "Enter a valid amount to compare.";
-  return `Difference: $${money(actual > expected ? actual - expected : expected - actual)} ${actual > expected ? "booked above schedule" : actual < expected ? "schedule above booked" : "matched"}.`;
+  return `Difference: ${show(money(actual > expected ? actual - expected : expected - actual), currency)} ${actual > expected ? "booked above schedule" : actual < expected ? "schedule above booked" : "matched"}.`;
 };
 
-export function Recurring({ closeId, onPrepared }: { closeId: string; onPrepared: () => void }) {
+export function Recurring({ closeId, currency, onPrepared }: { closeId: string; currency: string; onPrepared: () => void }) {
   const [preview, setPreview] = useState<Preview>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -66,14 +66,14 @@ export function Recurring({ closeId, onPrepared }: { closeId: string; onPrepared
       {preview.items.length === 0 && <p>No carried prepaid schedules need a current-period balance comparison.</p>}
       {preview.items.map(item => <form key={item.id} onSubmit={e => void prepare(e, item)}>
         <fieldset disabled={busy || !!item.blocker}>
-          <legend>Carried schedule #{item.id} · expected closing prepaid ${item.scheduled_balance}</legend>
+          <legend>Carried schedule #{item.id} · expected closing prepaid {show(item.scheduled_balance, currency)}</legend>
           {item.blocker ? <p role="status">{item.blocker}</p> : <>
             <p>QuickBooks prepaid account: {item.account_name} (#{item.account_id}). Trial Balance location: {item.location}.</p>
             <p>Reported cells: {item.cells?.map((c, i) => `${item.columns?.[i] || `Column ${i + 1}`}: ${c.value || "—"}`).join(" · ")}. Check the debit/credit signs, account mapping and report cutoff in the downloaded snapshot.</p>
-            <label>Confirmed booked prepaid balance at this month’s cutoff (USD)
+            <label>Confirmed booked prepaid balance at this month’s cutoff ({currency})
               <input name="booked_balance" required inputMode="decimal" maxLength={13} pattern="(0|[1-9][0-9]*)(\.[0-9]{1,2})?" value={balances[item.id] ?? ""} onChange={e => setBalances(current => ({ ...current, [item.id]: e.target.value }))} />
             </label>
-            <output>{difference(item.scheduled_balance, balances[item.id] ?? "")}</output>
+            <output>{difference(item.scheduled_balance, balances[item.id] ?? "", currency)}</output>
             <label><input name="confirmed" type="checkbox" required /> The client’s accounting professional confirmed this account, cutoff, booked balance, supported method and synthetic examples. Prepare a new draft for review; do not post it.</label>
             <button className="primary">Prepare reviewed comparison</button>
           </>}

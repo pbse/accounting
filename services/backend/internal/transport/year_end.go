@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,14 +22,29 @@ import (
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
 	"close.local/backend/internal/prepaids"
+	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/reconciliation"
 )
 
-// The anchor close's client, every close from January of its year through its month.
-const yearCloses = `SELECT c.id,c.period FROM client_closes a JOIN client_closes c ON c.organization_id=a.organization_id AND lower(c.entity)=lower(a.entity) AND c.period BETWEEN left(a.period,4)||'-01' AND a.period WHERE a.id::text=$1`
+// The anchor close's client, every close from the first month of its fiscal year ($2) through its month.
+const yearCloses = `SELECT c.id,c.period FROM client_closes a JOIN client_closes c ON c.organization_id=a.organization_id AND lower(c.entity)=lower(a.entity) AND c.period BETWEEN $2 AND a.period WHERE a.id::text=$1`
 
 var yearEndHTML = template.Must(template.New("year").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Year-end handoff</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ccc;padding:.4rem;text-align:left}@media print{section{break-inside:avoid}}</style><h1>{{.Entity}} · {{.Year}} year-end handoff</h1><p>Saved-work snapshot: {{.Cut}}. Covers {{.From}} through {{.Through}}.</p><p>Supporting schedules, roll-forwards, reconciled balances, adjustment history and open questions from approved work in this app, for the firm's tax and audit work. This is not an audit opinion or a tax return. Stored posting receipts are not a fresh QuickBooks read. Only the latest version of each workpaper is used; an unapproved latest version is listed as an open question, never replaced by an older one.</p><h2>Months</h2><table><tr><th>Month</th><th>Close</th><th>Sign-off</th><th>Blockers</th></tr>{{range .Months}}<tr><td>{{index . 0}}</td><td>{{index . 1}}</td><td>{{index . 2}}</td><td>{{index . 4}}</td></tr>{{end}}</table><h2>Open questions · {{len .Questions}}</h2>{{if not .Questions}}<p>None.</p>{{end}}<ul>{{range .Questions}}<li>{{index . 0}} · {{index . 1}}: {{index . 2}}</li>{{end}}</ul><h2>Files</h2><ul><li>prepaids.csv and loans.csv: monthly roll-forwards from approved schedules</li><li>reconciliations.csv: approved reconciled balances</li><li>adjustments.csv: entries proposed by approved workpapers</li><li>postings.csv: every stored production posting record, including ones tied to older versions</li><li>open-questions.csv, months.csv, workpapers/{month}/: the approved workpapers</li><li>checksums.sha256: run shasum -a 256 -c checksums.sha256 after extracting</li></ul></html>`))
+
+// fiscalYear returns the first month of the fiscal year holding anchor and its label, named for the year it ends.
+func fiscalYear(anchor string, start int) (string, string) {
+	a, _ := time.Parse("2006-01", anchor)
+	from := time.Date(a.Year(), time.Month(start), 1, 0, 0, 0, 0, time.UTC)
+	if from.After(a) {
+		from = from.AddDate(-1, 0, 0)
+	}
+	label := strconv.Itoa(from.AddDate(0, 11, 0).Year())
+	if start != 1 {
+		label = "FY" + label
+	}
+	return from.Format("2006-01"), label
+}
 
 func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -51,8 +67,14 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Could not read the close.")
 			return
 		}
+		profile, err := preparation.ClientProfile(ctx, tx, r.PathValue("id"))
+		if err != nil || profile.State == "conflict" {
+			problem(w, 409, "This client's connected ledgers report different fiscal years or currencies; disconnect the wrong one first.")
+			return
+		}
+		from, year := fiscalYear(anchor, profile.FiscalStart)
 		closes := map[string]string{}
-		rows, err := tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT id::text,period FROM y`, r.PathValue("id"))
+		rows, err := tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT id::text,period FROM y`, r.PathValue("id"), from)
 		if err == nil {
 			for rows.Next() {
 				var id, period string
@@ -75,9 +97,8 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 		ask := func(period, where, question string) {
 			questions = append(questions, []string{period, csvText(where), csvText(question)})
 		}
-		year := anchor[:4]
 		months := [][]string{}
-		for period := year + "-01"; period <= anchor; period = shiftMonth(period, 1) {
+		for period := from; period <= anchor; period = shiftMonth(period, 1) {
 			id, ok := closes[period]
 			if !ok {
 				months = append(months, []string{period, "", "no close", "", ""})
@@ -105,7 +126,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 		type slot struct{ period, kind, key string }
 		latest := map[slot]paper{}
 		order := []slot{}
-		rows, err = tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT y.period,w.id::text,w.kind,w.review_state,w.paper FROM y JOIN workpaper_review_state w ON w.close_id=y.id WHERE w.kind IN ('prepaid','accrual','loan','owner','reconciliation','settlement') ORDER BY y.period,w.id`, r.PathValue("id"))
+		rows, err = tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT y.period,w.id::text,w.kind,w.review_state,w.paper FROM y JOIN workpaper_review_state w ON w.close_id=y.id WHERE w.kind IN ('prepaid','accrual','loan','owner','reconciliation','settlement') ORDER BY y.period,w.id`, r.PathValue("id"), from)
 		if err != nil {
 			problem(w, 503, "Could not read saved workpapers.")
 			return
@@ -186,7 +207,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 					ask(p.period, where, fmt.Sprintf("%s has an approved %s workpaper, but this schedule has no %s row.", wp.Input.SourceReference, previous.period, previous.period))
 				case approvedBefore && !sameAmount(before.PrepaidBalance, prior.Remaining):
 					ask(p.period, where, fmt.Sprintf("Roll-forward break: %s closed %s at %s, but this schedule shows %s for %s.", wp.Input.SourceReference, previous.period, before.PrepaidBalance, prior.Remaining, previous.period))
-				case !approvedBefore && !pending && prior != nil && previous.period >= year+"-01" && closes[previous.period] != "":
+				case !approvedBefore && !pending && prior != nil && previous.period >= from && closes[previous.period] != "":
 					ask(p.period, where, fmt.Sprintf("%s has a %s balance in this schedule but no %s workpaper.", wp.Input.SourceReference, previous.period, previous.period))
 				}
 				prepaidRows = append(prepaidRows, []string{p.period, csvText(wp.Input.SourceReference), csvText(wp.Input.PrepaidAccount), csvText(wp.Input.ExpenseAccount), credit, wp.PeriodExpense, wp.PrepaidBalance, wp.Input.Currency, p.id})
@@ -203,7 +224,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 				switch {
 				case approvedBefore && !sameAmount(before.Input.ClosingPrincipal, wp.Input.OpeningPrincipal):
 					ask(p.period, where, fmt.Sprintf("Roll-forward break: %s closed %s at %s principal, but this month opens at %s.", wp.Input.Lender, previous.period, before.Input.ClosingPrincipal, wp.Input.OpeningPrincipal))
-				case !approvedBefore && !pending && previous.period >= year+"-01" && closes[previous.period] != "" && !sameAmount(wp.Input.OpeningPrincipal, "0"):
+				case !approvedBefore && !pending && previous.period >= from && closes[previous.period] != "" && !sameAmount(wp.Input.OpeningPrincipal, "0"):
 					ask(p.period, where, fmt.Sprintf("%s opens %s with %s principal, but %s has no loan workpaper.", wp.Input.Lender, p.period, wp.Input.OpeningPrincipal, previous.period))
 				}
 				principal, interest := new(big.Rat), new(big.Rat)
@@ -261,7 +282,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 		}
 
 		postings := [][]string{{"period", "posting_id", "workpaper_id", "state", "external_id", "verified_at", "lines"}}
-		rows, err = tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT y.period,p.id::text,p.workpaper_id::text,p.state,COALESCE(p.external_id,''),COALESCE(p.verified_at::text,''),p.journal FROM y JOIN production_postings p ON p.close_id=y.id ORDER BY y.period,p.id`, r.PathValue("id"))
+		rows, err = tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT y.period,p.id::text,p.workpaper_id::text,p.state,COALESCE(p.external_id,''),COALESCE(p.verified_at::text,''),p.journal FROM y JOIN production_postings p ON p.close_id=y.id ORDER BY y.period,p.id`, r.PathValue("id"), from)
 		if err != nil {
 			problem(w, 503, "Could not read production posting records.")
 			return
@@ -294,7 +315,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 		}
 
 		var page bytes.Buffer
-		if err = yearEndHTML.Execute(&page, map[string]any{"Entity": entity, "Year": year, "Cut": cut.UTC().Format(time.RFC3339), "From": year + "-01", "Through": anchor, "Months": months, "Questions": questions}); err != nil {
+		if err = yearEndHTML.Execute(&page, map[string]any{"Entity": entity, "Year": year, "Cut": cut.UTC().Format(time.RFC3339), "From": from, "Through": anchor, "Months": months, "Questions": questions}); err != nil {
 			problem(w, 500, "Could not render the handoff summary.")
 			return
 		}

@@ -245,4 +245,19 @@ func TestLearnedRuleRequiresApprovedExampleBeforeActivation(t *testing.T) {
 	if err = preparation.CheckProcedureMethod(context.Background(), db, closeID, "prepaid", otherRaw); err == nil {
 		t.Fatal("new work could bypass the approved method")
 	}
+	var connection string
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,environment,home_currency,fiscal_year_start) VALUES($1,$2,'Synthetic client','fixture','active',$3,now(),'123','production','CAD',1) RETURNING id::text`, closeID, org, rand.Text()).Scan(&connection))
+	defer db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, connection)
+	usd, err := prepaids.Prepare(in)
+	must(err)
+	usdRaw, _ := json.Marshal(usd)
+	if err = preparation.CheckProcedureMethod(context.Background(), db, closeID, "prepaid", usdRaw); err == nil || !strings.Contains(err.Error(), "kept in CAD") {
+		t.Fatalf("a USD draft for a client whose books are kept in CAD must be refused: %v", err)
+	}
+	cad := in
+	cad.Currency = "CAD"
+	cadPaper, err := prepaids.Prepare(cad)
+	must(err)
+	cadRaw, _ := json.Marshal(cadPaper)
+	must(preparation.CheckProcedureMethod(context.Background(), db, closeID, "prepaid", cadRaw))
 }

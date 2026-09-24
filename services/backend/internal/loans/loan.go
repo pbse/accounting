@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/prepaids"
 )
 
@@ -170,7 +171,7 @@ func Prepare(in Input) (Workpaper, error) {
 	if strings.EqualFold(in.LoanAccount, in.InterestAccount) {
 		return fail("Loan and interest accounts must differ.")
 	}
-	if (in.Method != Method && in.Method != VariableMethod) || in.Currency != "USD" || !in.MethodConfirmed || !in.RateConfirmed || !in.BookingConfirmed {
+	if (in.Method != Method && in.Method != VariableMethod) || !ledger.ValidCurrency(in.Currency) || !in.MethodConfirmed || !in.RateConfirmed || !in.BookingConfirmed {
 		return fail("Confirm the lender-statement method, the rate and day-count from the note, and the month-end book balances (USD only).")
 	}
 	if _, ok := DayCounts[in.DayCount]; !ok {
@@ -334,7 +335,7 @@ func Prepare(in Input) (Workpaper, error) {
 		}
 		result.Schedule = append(result.Schedule, row)
 		if interest != expected {
-			result.Questions = append(result.Questions, fmt.Sprintf("The lender charged $%s interest on %s; the rate (%s) gives $%s for %d days. Check for a rate change, fees or a different day-count before relying on the split.", prepaids.Money(interest), p.Date, strings.Join(rates, " then "), prepaids.Money(expected), days))
+			result.Questions = append(result.Questions, fmt.Sprintf("The lender charged %s interest on %s; the rate (%s) gives %s for %d days. Check for a rate change, fees or a different day-count before relying on the split.", ledger.Show(prepaids.Money(interest), in.Currency), p.Date, strings.Join(rates, " then "), ledger.Show(prepaids.Money(expected), in.Currency), days))
 		}
 		outstanding -= principal
 		addFees(date)
@@ -346,7 +347,7 @@ func Prepare(in Input) (Workpaper, error) {
 	}
 	addFees(monthEnd)
 	if outstanding != closing {
-		result.Blockers = append(result.Blockers, fmt.Sprintf("The statement does not tie: opening $%s less principal paid gives $%s, but the lender shows $%s.", prepaids.Money(opening), prepaids.Money(outstanding), prepaids.Money(closing)))
+		result.Blockers = append(result.Blockers, fmt.Sprintf("The statement does not tie: opening %s less principal paid gives %s, but the lender shows %s.", ledger.Show(prepaids.Money(opening), in.Currency), ledger.Show(prepaids.Money(outstanding), in.Currency), ledger.Show(prepaids.Money(closing), in.Currency)))
 	}
 	in.OpeningPrincipal, in.ClosingPrincipal, in.BookBalance = prepaids.Money(opening), prepaids.Money(closing), prepaids.Money(book)
 	entry := func(delta int64, increase, decrease string) {
@@ -420,7 +421,7 @@ func Prepare(in Input) (Workpaper, error) {
 		if difference < 0 {
 			more = "less"
 		}
-		result.Questions = append(result.Questions, fmt.Sprintf("The ledger shows $%s %s loan principal than the lender's statement. Find the cause (a payment booked to another account, a missing payment or fees) before any adjustment; nothing is proposed for it.", prepaids.Money(max(difference, -difference)), more))
+		result.Questions = append(result.Questions, fmt.Sprintf("The ledger shows %s %s loan principal than the lender's statement. Find the cause (a payment booked to another account, a missing payment or fees) before any adjustment; nothing is proposed for it.", ledger.Show(prepaids.Money(max(difference, -difference)), in.Currency), more))
 	}
 	if len(result.Blockers) > 0 {
 		result.Proposals = []prepaids.Adjustment{}

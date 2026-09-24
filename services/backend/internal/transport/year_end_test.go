@@ -172,4 +172,22 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	if strings.Contains(questions, "Roll-forward break: Insurance") || strings.Contains(questions, "New Bank") {
 		t.Fatalf("a credit in the saved schedule is not a break, and a loan opening at zero is new:\n%s", questions)
 	}
+	_, err = db.Exec(`UPDATE quickbooks_connections SET home_currency='USD',fiscal_year_start=7 WHERE id=$1`, connection)
+	must(err)
+	w = httptest.NewRecorder()
+	apiWithStore(db, token).ServeHTTP(w, r)
+	archive, err = zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	must(err)
+	for _, f := range archive.File {
+		if f.Name == "months.csv" {
+			rc, e := f.Open()
+			must(e)
+			body, _ := io.ReadAll(rc)
+			rc.Close()
+			files[f.Name] = string(body)
+		}
+	}
+	if got := table("months.csv"); len(got) != 11 || got[0][0] != "2025-07" || !strings.Contains(w.Header().Get("Content-Disposition"), "-FY2026.zip") {
+		t.Fatalf("a July fiscal year runs from the prior July through the anchor month: %v %s", got, w.Header().Get("Content-Disposition"))
+	}
 }

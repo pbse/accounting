@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/prepaids"
 )
 
@@ -23,6 +24,7 @@ type Input struct {
 	TransactionDate              string `json:"transaction_date"`
 	Payee                        string `json:"payee"`
 	Amount                       string `json:"amount"`
+	Currency                     string `json:"currency,omitempty"`
 	LedgerReference              string `json:"ledger_reference"`
 	Direction                    string `json:"direction"`
 	PurposeStatus                string `json:"purpose_status"`
@@ -82,6 +84,13 @@ func Prepare(in Input) (Workpaper, error) {
 		return fail("Enter the transaction amount as a positive amount with at most two decimals.")
 	}
 	in.Amount = prepaids.Money(amount)
+	// Owner items predate currency support; an unspecified currency is the original USD.
+	if in.Currency == "" {
+		in.Currency = "USD"
+	}
+	if !ledger.ValidCurrency(in.Currency) {
+		return fail("Use the client's home currency as a three-letter code with two decimals, such as USD or CAD.")
+	}
 	personal := in.Direction == "personal_paid_by_business"
 	if !personal && in.Direction != "business_paid_personally" {
 		return fail("Choose whether the business paid a personal cost or the owner paid a business cost.")
@@ -92,9 +101,9 @@ func Prepare(in Input) (Workpaper, error) {
 			return fail("An open question cannot carry a treatment or the client's answer.")
 		}
 		if personal {
-			result.Question = fmt.Sprintf("What was the $%s payment to %s on %s for? If it was personal, will you repay the business?", in.Amount, in.Payee, in.TransactionDate)
+			result.Question = fmt.Sprintf("What was the %s payment to %s on %s for? If it was personal, will you repay the business?", ledger.Show(in.Amount, in.Currency), in.Payee, in.TransactionDate)
 		} else {
-			result.Question = fmt.Sprintf("Did you personally pay $%s to %s on %s for the business, and should the business reimburse you?", in.Amount, in.Payee, in.TransactionDate)
+			result.Question = fmt.Sprintf("Did you personally pay %s to %s on %s for the business, and should the business reimburse you?", ledger.Show(in.Amount, in.Currency), in.Payee, in.TransactionDate)
 		}
 		result.Blockers = append(result.Blockers, "The client has not confirmed the purpose; nothing is proposed.")
 		result.Input = in

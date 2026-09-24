@@ -119,6 +119,8 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 			}
 			if strings.Contains(r.URL.Path, "companyinfo") {
 				raw = `{"CompanyInfo":{"Id":"1","CompanyName":"Synthetic company"}}`
+			} else if strings.HasSuffix(r.URL.Path, "/preferences") {
+				raw = `{"Preferences":{"CurrencyPrefs":{"HomeCurrency":{"value":"CAD"}},"AccountingInfoPrefs":{"FiscalYearStartMonth":"July"}}}`
 			} else if strings.Contains(r.URL.Path, "/reports/") {
 				name := strings.TrimPrefix(r.URL.Path, "/v3/company/123/reports/")
 				if r.URL.Query().Get("start_date") != "2026-09-01" || r.URL.Query().Get("end_date") != "2026-09-30" || r.URL.Query().Get("accounting_method") != "Accrual" {
@@ -209,6 +211,9 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 		t.Fatal("token exposed")
 	}
 	action("confirm", 200)
+	if p, err := preparation.ClientProfile(context.Background(), db, closeID); err != nil || p != (preparation.Profile{Currency: "CAD", FiscalStart: 7, State: "detected"}) {
+		t.Fatalf("connecting reads the company's home currency and fiscal year: %+v %v", p, err)
+	}
 	actor.Organization = other
 	call("GET", base, nil, 404)
 	actor.Organization = org

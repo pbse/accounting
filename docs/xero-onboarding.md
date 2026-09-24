@@ -24,6 +24,8 @@ Deleting the close that opened a connection waits until the connection is discon
 
 ## Exceptions
 
+Each snapshot also records the organisation's base currency and financial year, which set the client's draft currency and year-end handoff the same way QuickBooks does. Until the first snapshot, drafts are held to USD.
+
 The close's exceptions use the most recently captured month-end snapshot, QuickBooks or Xero, to list accounts on the wrong side of their normal balance. Xero has no contra-account subtype, so accounts named "accumulated" are skipped, along with retained earnings and owner drawings; revenue and expense accounts are judged on their year-to-date movement.
 
 ## Not included

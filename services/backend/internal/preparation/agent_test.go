@@ -29,7 +29,7 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{"id": "response-fixture", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": output}}}}, "usage": map[string]int{"input_tokens": 100, "output_tokens": 50}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
 	})}
-	p, err := interpret(context.Background(), client, "fixture-key", "fixture-model", "Example", "2026-09", "1", sources)
+	p, err := interpret(context.Background(), client, "fixture-key", "fixture-model", "Example", "2026-09", "USD", "1", sources)
 	if err != nil || p.Engine != "openai" || p.Facts[0].Value != "1200.00" || p.Facts[1].Candidates[0].Location != "line 2" || len(p.Sources) != 2 || p.Facts[2].Question == "" || p.InputTokens != 100 {
 		t.Fatal("Missing validated proposals or provenance", p, err)
 	}
@@ -53,7 +53,7 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 	client.Transport = agentRoundTrip(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"incomplete","output":[]}`)), Header: http.Header{}}, nil
 	})
-	if _, err = interpret(context.Background(), client, "fixture-key", "fixture-model", "Example", "2026-09", "1", sources); err == nil {
+	if _, err = interpret(context.Background(), client, "fixture-key", "fixture-model", "Example", "2026-09", "USD", "1", sources); err == nil {
 		t.Fatal("Incomplete response accepted")
 	}
 }
@@ -153,7 +153,7 @@ func TestRecognizeExportLeavesTheReconciliationRoleToTheReviewer(t *testing.T) {
 		return []IntakeSource{{Source: Source{ID: "1", Role: "invoice"}, Content: content}}
 	}
 	p, ok := RecognizeExport(intake("id,date,amount\nB1,2026-09-05,-50.00\nB2,2026-09-02,200.00\n"), "2026-09", true)
-	if !ok || p.Kind != "reconciliation" || p.Engine != "recognized_export" || !strings.Contains(p.Summary, "2 transactions dated 2026-09-02 to 2026-09-05, net $150.00") || !strings.Contains(p.Summary, "bank statement or the ledger export") {
+	if !ok || p.Kind != "reconciliation" || p.Engine != "recognized_export" || !strings.Contains(p.Summary, "2 transactions dated 2026-09-02 to 2026-09-05, net 150.00") || !strings.Contains(p.Summary, "bank statement or the ledger export") {
 		t.Fatalf("an id,date,amount CSV must be proposed as a reconciliation with an unconfirmed role: %+v", p)
 	}
 	if p, ok = RecognizeExport(intake("id,date,amount\nB1,2026-10-01,5.00\n"), "2026-09", true); !ok || p.Kind != "unsupported" || len(p.Questions) != 1 {

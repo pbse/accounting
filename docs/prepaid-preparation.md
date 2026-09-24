@@ -4,7 +4,7 @@
 
 Turn entered invoice terms into a calculated, reviewable draft through one Go capability: `POST /v1/workpapers:prepare`. React calls the same typed API future agents will call. The operation is bounded, deterministic and synchronous; no queue/model is needed to divide a known amount.
 
-Supported method: USD, accrual basis, whole calendar months, equal monthly allocation, round down to cents with any residual assigned to the final month. The user must confirm the method and that the full invoice was booked to the specified expense account, with no prior adjustments or credits. These confirmations record assumptions in the exported draft, not authenticated accounting approval or ledger verification.
+Supported method: the client's home currency, accrual basis, whole calendar months, equal monthly allocation, round down to cents with any residual assigned to the final month. The user must confirm the method and that the full invoice was booked to the specified expense account, with no prior adjustments or credits. These confirmations record assumptions in the exported draft, not authenticated accounting approval or ledger verification.
 
 Acceptance: the PRD's $12,000/12-month example produces $1,000 expense and $11,000 prepaid at the first month-end; uneven cents conserve the invoice total; unsupported periods and missing confirmations block preparation; editing inputs hides the previous result; source reference and assumptions travel with the JSON export; CSV contains the complete schedule. No zero-value adjustment is proposed at the end of the service period.
 

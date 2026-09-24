@@ -15,7 +15,7 @@ func TestBillCorrectionPreservesSimpleBillAndChecksReadback(t *testing.T) {
 	if err := json.Unmarshal([]byte(beforeJSON), &before); err != nil {
 		t.Fatal(err)
 	}
-	if !simpleBill(before) {
+	if !simpleBill(before, "USD") {
 		t.Fatal("supported Bill was rejected")
 	}
 	sandbox := Sandbox{Realm: "123", Token: "synthetic", Entity: "Example LLC", DebitAccount: "7", CreditAccount: "8"}

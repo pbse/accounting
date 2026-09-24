@@ -2,6 +2,7 @@ package transport
 
 import (
 	"close.local/backend/internal/accruals"
+	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
 	"close.local/backend/internal/preparation"
@@ -296,7 +297,7 @@ func rehearseProduction(items []rehearsalInput, hasMore bool) closeRehearsal {
 		var journal quickbooks.Journal
 		var change map[string]*big.Rat
 		err := json.Unmarshal(p.Journal, &journal)
-		if err == nil && journal.CurrencyRef.Value != "USD" {
+		if err == nil && !ledger.ValidCurrency(journal.CurrencyRef.Value) {
 			err = fmt.Errorf("saved journal currency is unsupported")
 		}
 		if err == nil {
@@ -589,6 +590,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			Input struct {
 				Entity      string `json:"entity"`
 				ClosePeriod string `json:"close_period"`
+				Currency    string `json:"currency"`
 			} `json:"input"`
 		}
 		if json.Unmarshal(paperRaw, &head) != nil || strings.TrimSpace(head.Input.Entity) != entity || head.Input.ClosePeriod != period {
@@ -632,7 +634,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Production credential unavailable.")
 			return
 		}
-		client := quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Accounts: g.AccountIDs, Production: true}
+		client := quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Accounts: g.AccountIDs, Production: true, Currency: head.Input.Currency}
 		if in.Action == "verify" {
 			if recordErr != nil || record.State == "preview" || record.State == "approved" {
 				problem(w, 409, "No saved external journal is available. Never retry an unknown write.")
@@ -655,6 +657,10 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		}
 		if in.Action != "preview" && in.Action != "approve" && in.Action != "execute" {
 			problem(w, 422, "Choose preview, approve, execute or verify.")
+			return
+		}
+		if err = preparation.CurrencyIssue(r.Context(), db, r.PathValue("id"), paperRaw); err != nil {
+			problem(w, 409, err.Error())
 			return
 		}
 		var journal quickbooks.Journal

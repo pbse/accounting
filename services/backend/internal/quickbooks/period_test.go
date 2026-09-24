@@ -57,18 +57,21 @@ func TestSearchLedgerKeepsAccountAndOriginalLocations(t *testing.T) {
 func TestTrialBalanceAccountRequiresUniquePrepaidRow(t *testing.T) {
 	accounts := json.RawMessage(`[{"Id":"7","Name":"Prepaid insurance","AccountSubType":"PrepaidExpenses"},{"Id":"8","Name":"Cash","AccountSubType":"Checking"}]`)
 	report := json.RawMessage(`{"Header":{"Currency":"USD","ReportBasis":"Accrual"},"Rows":{"Row":[{"type":"Data","ColData":[{"id":"8","value":"Cash"},{"value":"100.00"}]},{"Rows":{"Row":[{"type":"Data","ColData":[{"id":"7","value":"Prepaid insurance"},{"value":"40.00"}]}]}}]}}`)
-	name, location, cells, err := TrialBalanceAccount(accounts, report, "7")
+	name, location, cells, err := TrialBalanceAccount(accounts, report, "7", "USD")
 	if err != nil || name != "Prepaid insurance" || location != "reports.TrialBalance.Rows.Row[1].Rows.Row[0]" || !strings.Contains(string(cells), "40.00") {
 		t.Fatalf("wrong account selection: %s %s %s %v", name, location, cells, err)
 	}
-	if _, _, _, err := TrialBalanceAccount(accounts, report, "8"); err == nil {
+	if _, _, _, err := TrialBalanceAccount(accounts, report, "7", "CAD"); err == nil {
+		t.Fatal("trial balance in another currency accepted")
+	}
+	if _, _, _, err := TrialBalanceAccount(accounts, report, "8", "USD"); err == nil {
 		t.Fatal("non-prepaid account accepted")
 	}
-	if _, _, _, err := TrialBalanceAccount(accounts, report, "9"); err == nil {
+	if _, _, _, err := TrialBalanceAccount(accounts, report, "9", "USD"); err == nil {
 		t.Fatal("missing account accepted as zero")
 	}
 	duplicate := json.RawMessage(strings.Replace(string(report), `{"type":"Data","ColData":[{"id":"8","value":"Cash"},{"value":"100.00"}]`, `{"type":"Data","ColData":[{"id":"7","value":"Prepaid insurance"},{"value":"40.00"}]`, 1))
-	if _, _, _, err := TrialBalanceAccount(accounts, duplicate, "7"); err == nil {
+	if _, _, _, err := TrialBalanceAccount(accounts, duplicate, "7", "USD"); err == nil {
 		t.Fatal("duplicate row accepted")
 	}
 }

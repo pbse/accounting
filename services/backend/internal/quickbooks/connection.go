@@ -126,20 +126,50 @@ func readSandboxLimit(ctx context.Context, realm, token, path string, limit int6
 func Company(ctx context.Context, realm, token string) (string, error) {
 	return CompanyFor(ctx, "sandbox", realm, token)
 }
-func CompanyFor(ctx context.Context, environment, realm, token string) (string, error) {
+
+func companyRead(ctx context.Context, environment, realm, token, path string) ([]byte, error) {
 	if environment != "sandbox" && environment != "production" {
-		return "", errors.New("Invalid QuickBooks environment")
+		return nil, errors.New("Invalid QuickBooks environment")
 	}
 	host := "sandbox-quickbooks.api.intuit.com"
 	if environment == "production" {
 		host = "quickbooks.api.intuit.com"
 	}
 	if !ValidRealm(realm) {
-		return "", errors.New("Invalid company identifier")
+		return nil, errors.New("Invalid company identifier")
 	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+host+"/v3/company/"+realm+"/companyinfo/"+realm, nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+host+"/v3/company/"+realm+path, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	raw, err := readResponse(req, 2*1024*1024)
+	return readResponse(req, 2*1024*1024)
+}
+
+// ProfileFor reads the company's home currency and first fiscal month (1-12).
+func ProfileFor(ctx context.Context, environment, realm, token string) (string, int, error) {
+	raw, err := companyRead(ctx, environment, realm, token, "/preferences")
+	if err != nil {
+		return "", 0, err
+	}
+	var result struct {
+		Preferences struct {
+			CurrencyPrefs struct {
+				HomeCurrency struct {
+					Value string `json:"value"`
+				}
+			}
+			AccountingInfoPrefs struct{ FiscalYearStartMonth string }
+		}
+	}
+	json.Unmarshal(raw, &result)
+	month, err := time.Parse("January", result.Preferences.AccountingInfoPrefs.FiscalYearStartMonth)
+	currency := result.Preferences.CurrencyPrefs.HomeCurrency.Value
+	if err != nil || currency == "" {
+		return "", 0, errors.New("QuickBooks company currency or fiscal year could not be read")
+	}
+	return currency, int(month.Month()), nil
+}
+
+func CompanyFor(ctx context.Context, environment, realm, token string) (string, error) {
+	raw, err := companyRead(ctx, environment, realm, token, "/companyinfo/"+realm)
 	if err != nil {
 		return "", err
 	}

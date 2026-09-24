@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router";
 import { apiBaseUrl } from "../../lib/api";
 import { authenticationHeaders } from "../auth/Auth";
 import { SaveDraft } from "../closes/SaveDraft";
+import { money, useCurrency } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { EntityType, OwnerInput, OwnerWorkpaper } from "../../../../../packages/contracts/owner";
@@ -26,16 +27,16 @@ export function OwnerResult({ result }: { result: OwnerWorkpaper }) {
     <section>
       <h3>Owner reclassification · {input.transaction_reference} · {input.close_period}</h3>
       <p>
-        {entityTypes[input.entity_type]} · ${input.amount} to {input.payee} on {input.transaction_date} · ledger {input.ledger_reference}
+        {entityTypes[input.entity_type]} · {money(input.amount, input.currency)} to {input.payee} on {input.transaction_date} · ledger {input.ledger_reference}
         {input.partner ? ` · partner ${input.partner}` : ""}
       </p>
       {result.blockers.map((b) => <p role="alert" key={b}>{b}</p>)}
       {result.question && <p>Question for the client: {result.question}</p>}
       {input.purpose_status === "answered" && (
         <>
-          <p>Client said: “{input.stated_purpose}” ({input.client_confirmation_reference}). Business use {input.business_use_percent}%; reclassified portion ${result.portion}.</p>
+          <p>Client said: “{input.stated_purpose}” ({input.client_confirmation_reference}). Business use {input.business_use_percent}%; reclassified portion {money(result.portion, input.currency)}.</p>
           {result.proposal ? (
-            <p>Proposed entry: {result.proposal.date} · debit {result.proposal.debit_account}, credit {result.proposal.credit_account}, ${result.proposal.amount} USD.</p>
+            <p>Proposed entry: {result.proposal.date} · debit {result.proposal.debit_account}, credit {result.proposal.credit_account}, {money(result.proposal.amount, input.currency)}.</p>
           ) : (
             <p>No entry: nothing is reclassified at this business-use percentage.</p>
           )}
@@ -48,6 +49,7 @@ export function OwnerResult({ result }: { result: OwnerWorkpaper }) {
 
 export default function PrepareOwner() {
   const [params] = useSearchParams();
+  const currency = useCurrency(params.get("close"));
   const form = useRef<HTMLFormElement>(null);
   const revision = useRevision(form);
   const [entityType, setEntityType] = useState<EntityType | "">("");
@@ -100,6 +102,7 @@ export default function PrepareOwner() {
     const answered = status === "answered";
     const input = {
       ...Object.fromEntries(["entity", "close_period", "transaction_reference", "transaction_date", "payee", "amount", "ledger_reference"].map((n) => [n, text(n)])),
+      currency,
       entity_type: entityType,
       direction,
       purpose_status: status,
@@ -155,7 +158,7 @@ export default function PrepareOwner() {
             {field("transaction_reference", "Transaction reference", "text", "For example QuickBooks Purchase 1072")}
             {field("transaction_date", "Transaction date", "date")}
             {field("payee", "Payee")}
-            {field("amount", "Amount (USD)")}
+            {field("amount", `Amount (${currency})`)}
             {field("ledger_reference", "Ledger evidence", "text", "Where the ledger shows how it is booked")}
           </div>
           <label>

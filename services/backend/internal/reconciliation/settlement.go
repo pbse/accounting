@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/prepaids"
 )
 
@@ -142,7 +143,8 @@ func exportDate(value string) (string, bool) {
 }
 
 // Payouts are the report's own automatic_payout_id batches; rows without one are never assigned.
-func stripePayouts(source, period string) ([]*payoutGroup, map[string]*totals, []string, error) {
+// Every row must be in one currency: the given one, or the first row's when none is given.
+func stripePayouts(source, period, currency string) ([]*payoutGroup, map[string]*totals, []string, error) {
 	reader := csv.NewReader(strings.NewReader(source))
 	header, err := reader.Read()
 	index, ok := stripeHeader(header)
@@ -172,14 +174,17 @@ func stripePayouts(source, period string) ([]*payoutGroup, map[string]*totals, [
 			return nil, nil, nil, fmt.Errorf("Stripe row %d needs a unique balance transaction ID.", row)
 		}
 		seen[id] = true
-		if !strings.EqualFold(field("currency"), "usd") {
-			return nil, nil, nil, fmt.Errorf("Stripe row %d (%s) is in %.8q; this method reconciles USD payouts only.", row, id, field("currency"))
+		if currency == "" {
+			currency = strings.ToUpper(field("currency"))
+		}
+		if !strings.EqualFold(field("currency"), currency) || !ledger.ValidCurrency(currency) {
+			return nil, nil, nil, fmt.Errorf("Stripe row %d (%s) is in %.8q; this workpaper reconciles one two-decimal currency (%s) per export.", row, id, field("currency"), currency)
 		}
 		gross, grossErr := cents(field("gross"))
 		fee, feeErr := cents(field("fee"))
 		net, netErr := cents(field("net"))
 		if grossErr != nil || feeErr != nil || netErr != nil {
-			return nil, nil, nil, fmt.Errorf("Stripe row %d (%s) needs gross, fee and net as USD decimals.", row, id)
+			return nil, nil, nil, fmt.Errorf("Stripe row %d (%s) needs gross, fee and net as decimals.", row, id)
 		}
 		if gross-fee != net {
 			return nil, nil, nil, fmt.Errorf("Stripe row %d (%s): net does not equal gross minus fee. Download a fresh, unedited export.", row, id)
@@ -239,7 +244,7 @@ func StripeReportSummary(source, period string) (string, bool, error) {
 	if _, ok := stripeHeader(header); err != nil || !ok {
 		return "", false, nil
 	}
-	groups, _, unassigned, err := stripePayouts(source, period)
+	groups, _, unassigned, err := stripePayouts(source, period, "")
 	if err != nil {
 		return "", true, err
 	}
@@ -267,8 +272,8 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 			return fail("Entity, bank account and both source references require 1–200 characters.")
 		}
 	}
-	if input.Currency != "USD" || !input.MethodConfirmed || !input.CoverageConfirmed {
-		return fail("Confirm the USD automatic-payout method and that both files cover the full close month.")
+	if !ledger.ValidCurrency(input.Currency) || !input.MethodConfirmed || !input.CoverageConfirmed {
+		return fail("Confirm the automatic-payout method in the client's home currency and that both files cover the full close month.")
 	}
 	month, err := time.Parse("2006-01", input.ClosePeriod)
 	if err != nil {
@@ -286,7 +291,7 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 	if len(input.ReviewedDeposits)+len(input.InTransit) > 100 {
 		return fail("Review at most 100 payouts per workpaper.")
 	}
-	groups, categories, unassigned, err := stripePayouts(input.ReportCSV, input.ClosePeriod)
+	groups, categories, unassigned, err := stripePayouts(input.ReportCSV, input.ClosePeriod, input.Currency)
 	if err != nil {
 		return fail("Stripe export: %s", err.Error())
 	}
@@ -317,7 +322,7 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 		}
 		amount, _ := cents(row.Amount)
 		if amount != group.total.net || day(row.Date).Before(day(group.date).AddDate(0, 0, -1)) {
-			return fail("Bank row %s must carry exactly $%s and post no earlier than one day before payout %s is expected.", row.ID, money(group.total.net), group.id)
+			return fail("Bank row %s must carry exactly %s and post no earlier than one day before payout %s is expected.", row.ID, ledger.Show(money(group.total.net), input.Currency), group.id)
 		}
 		used[row.ID] = true
 		reviewed[item.PayoutID] = item
@@ -364,12 +369,12 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 			payout.Status, payout.Deposit = "matched", &row
 		case len(found) == 0:
 			payout.Status = "unmatched"
-			result.Blockers = append(result.Blockers, fmt.Sprintf("Payout %s ($%s, expected %s) has no bank row of exactly that amount from one day before to four days after. Find the deposit, or mark it in transit with evidence.", group.id, payout.Net, group.date))
+			result.Blockers = append(result.Blockers, fmt.Sprintf("Payout %s (%s, expected %s) has no bank row of exactly that amount from one day before to four days after. Find the deposit, or mark it in transit with evidence.", group.id, ledger.Show(payout.Net, input.Currency), group.date))
 		default:
 			payout.Status = "ambiguous"
-			message := fmt.Sprintf("Payout %s ($%s, expected %s) could be bank row %s. Choose its deposit with a reason.", group.id, payout.Net, group.date, strings.Join(found, " or "))
+			message := fmt.Sprintf("Payout %s (%s, expected %s) could be bank row %s. Choose its deposit with a reason.", group.id, ledger.Show(payout.Net, input.Currency), group.date, strings.Join(found, " or "))
 			if len(found) == 1 {
-				message = fmt.Sprintf("Payout %s ($%s, expected %s) matches bank row %s, but another payout of the same amount does too. Choose each deposit with a reason.", group.id, payout.Net, group.date, found[0])
+				message = fmt.Sprintf("Payout %s (%s, expected %s) matches bank row %s, but another payout of the same amount does too. Choose each deposit with a reason.", group.id, ledger.Show(payout.Net, input.Currency), group.date, found[0])
 			}
 			result.Blockers = append(result.Blockers, message)
 		}
@@ -386,7 +391,7 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 	result.Categories = sortedCategories(categories)
 	for _, category := range result.Categories {
 		if !ordinaryCategories[category.Category] {
-			result.Questions = append(result.Questions, fmt.Sprintf("Stripe category %s (%d rows, net $%s) is outside ordinary charges, refunds, disputes and fees. Confirm its treatment before recording these deposits.", category.Category, category.Count, category.Net))
+			result.Questions = append(result.Questions, fmt.Sprintf("Stripe category %s (%d rows, net %s) is outside ordinary charges, refunds, disputes and fees. Confirm its treatment before recording these deposits.", category.Category, category.Count, ledger.Show(category.Net, input.Currency)))
 		}
 	}
 	if len(unassigned) > 0 {
@@ -421,10 +426,10 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 		}
 		result.Fees = money(fees)
 		if deferred != 0 {
-			result.Questions = append(result.Questions, fmt.Sprintf("Fees of $%s belong to payouts in transit or deposited outside this month; they are left for the month their deposit is booked.", money(deferred)))
+			result.Questions = append(result.Questions, fmt.Sprintf("Fees of %s belong to payouts in transit or deposited outside this month; they are left for the month their deposit is booked.", ledger.Show(money(deferred), input.Currency)))
 		}
 		if untraced != 0 {
-			result.Questions = append(result.Questions, fmt.Sprintf("Fees of $%s belong to payouts not yet traced to a deposit; trace them before the fee entry is proposed.", money(untraced)))
+			result.Questions = append(result.Questions, fmt.Sprintf("Fees of %s belong to payouts not yet traced to a deposit; trace them before the fee entry is proposed.", ledger.Show(money(untraced), input.Currency)))
 		}
 		if delta := fees - bookedFees; len(result.Blockers) == 0 && delta != 0 {
 			result.Proposal = &prepaids.Adjustment{Date: monthEnd, DebitAccount: input.FeeEntry.FeeAccount, CreditAccount: input.FeeEntry.DepositAccount, Amount: money(delta)}
