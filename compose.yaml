@@ -23,6 +23,8 @@ services:
       EMAIL_INTAKE_KEY: ${EMAIL_INTAKE_KEY:-}
       DATABASE_URL: postgres://close:local-development-only@postgres:5432/close?sslmode=disable
       WORKSPACE_TOKEN: ${WORKSPACE_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       SECRETS_KEY: ${SECRETS_KEY:-}
       QBO_CLIENT_ID: ${QBO_CLIENT_ID:-}
       QBO_CLIENT_SECRET: ${QBO_CLIENT_SECRET:-}

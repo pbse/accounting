@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,61 @@ import (
 	"close.local/backend/internal/preparation"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+func TestModelProcedureDraftUsesOnlySelectedSource(t *testing.T) {
+	document := "Policy: Equal full months for annual prepaid insurance."
+	quote := "Equal full months for annual prepaid insurance."
+	output := map[string]string{"instructions": "Apply equal full months to annual prepaid insurance; confirm exclusions with the accountant.", "quote": quote}
+	escapedDocument := ""
+	calls := 0
+	client := &http.Client{Transport: modelRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		raw, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Store bool `json:"store"`
+			Input []struct {
+				Content string `json:"content"`
+			} `json:"input"`
+		}
+		if r.URL.String() != "https://api.openai.com/v1/responses" || json.Unmarshal(raw, &payload) != nil || payload.Store || len(payload.Input) != 2 || strings.Contains(string(raw), "synthetic-key") || strings.Contains(string(raw), "Foreign client") {
+			t.Fatal("model request exceeded its source boundary")
+		}
+		if calls <= 2 && !strings.Contains(payload.Input[1].Content, document) || calls == 3 && (strings.Contains(payload.Input[1].Content, document) || !strings.Contains(payload.Input[1].Content, "input.expense_account")) {
+			t.Fatal("wrong model source context")
+		}
+		if calls == 4 {
+			var contextData map[string]any
+			if json.Unmarshal([]byte(payload.Input[1].Content), &contextData) != nil || contextData["document"] != escapedDocument {
+				t.Fatal("bounded document was not sent intact")
+			}
+		}
+		result, _ := json.Marshal(output)
+		body, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"content": []any{map[string]string{"type": "output_text", "text": string(result)}}}}})
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}, nil
+	})}
+	instructions, cited, err := modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, document, nil)
+	if err != nil || cited != quote || !strings.Contains(instructions, "equal full months") {
+		t.Fatal("grounded proposal was lost", err)
+	}
+	output["quote"] = "A passage absent from the policy source"
+	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, document, nil); err == nil {
+		t.Fatal("fabricated citation was accepted")
+	}
+	output = map[string]string{"instructions": "Reviewer changed the expense account; confirm policy and applicability.", "quote": ""}
+	edits := []paperChange{{Field: "input.expense_account", Before: "Old", After: "New"}}
+	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, "", edits); err != nil {
+		t.Fatal("bounded approved edits could not be drafted", err)
+	}
+	edits[0].After = strings.Repeat("A", 17000)
+	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, "", edits); err == nil || calls != 3 {
+		t.Fatal("oversized edit payload reached the model")
+	}
+	escapedDocument = "Policy: " + strings.Repeat("<", 16384-len("Policy: ")-len(quote)-1) + "\n" + quote
+	output = map[string]string{"instructions": "Review annual insurance under the cited equal-month policy.", "quote": quote}
+	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, escapedDocument, nil); err != nil || calls != 4 {
+		t.Fatal("valid 16 KiB policy was rejected after JSON escaping", err)
+	}
+}
 
 func TestLearnedExampleMustReplayExactApprovedResult(t *testing.T) {
 	in := prepaids.Input{Entity: "Synthetic", SourceReference: "Policy example", Amount: "1200.00", ServiceStart: "2026-01-01", ServiceEnd: "2026-12-31", ClosePeriod: "2026-01", Currency: "USD", Basis: "accrual", ExpenseAccount: "Expense", PrepaidAccount: "Prepaid", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true}
@@ -140,6 +196,24 @@ func TestLearnedRuleRequiresApprovedExampleBeforeActivation(t *testing.T) {
 	base := "/v1/closes/" + closeID + "/procedures/drafts"
 	var draft learnedDraft
 	must(json.Unmarshal(call("POST", base, map[string]any{"client_entity": "Synthetic client", "kind": "prepaid", "method": prepaids.Method, "source_id": sourceID, "from_edits": false}, 200), &draft))
+	if draft.Engine != "local" {
+		t.Fatal("unconfigured proposal was not labeled local")
+	}
+	t.Setenv("OPENAI_API_KEY", "mock-only-key")
+	t.Setenv("OPENAI_MODEL", "mock-only-model")
+	previousTransport := http.DefaultTransport
+	defer func() { http.DefaultTransport = previousTransport }()
+	http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
+		result, _ := json.Marshal(map[string]string{"instructions": "Proposed equal-month policy; accountant must review applicability.", "quote": document})
+		body, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"content": []any{map[string]string{"type": "output_text", "text": string(result)}}}}})
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}, nil
+	})
+	call("POST", base, map[string]any{"client_entity": "Synthetic client", "kind": "prepaid", "method": prepaids.Method, "source_id": "", "from_edits": true}, 422)
+	var modeled learnedDraft
+	must(json.Unmarshal(call("POST", base, map[string]any{"client_entity": "Synthetic client", "kind": "prepaid", "method": prepaids.Method, "source_id": sourceID, "from_edits": false}, 200), &modeled))
+	if modeled.Engine != "openai" || modeled.Model != "mock-only-model" || modeled.SourceQuote != document || modeled.ActivatedID != "" {
+		t.Fatal("model draft was not saved with inactive provenance")
+	}
 	var impact struct {
 		PreviousID string `json:"previous_id"`
 		Digest     string `json:"impact_digest"`
