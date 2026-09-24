@@ -87,6 +87,17 @@ func TestTransactionChecksReuseEvidenceAndRefreshIndexedRows(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT state FROM quickbooks_entity_syncs WHERE id=$1`, third.id).Scan(&state); err != nil || state != "unchanged" {
 		t.Fatalf("same indexed content created a revision: %s %v", state, err)
 	}
+	// An unchanged capture keeps its own open items; a bill now past due raises a question without new evidence.
+	sixth := job()
+	withOpen := capture("1")
+	withOpen.OpenItems = map[string][]json.RawMessage{"Bill": {json.RawMessage(`{"Id":"b9","DocNumber":"B-9","DueDate":"` + time.Now().UTC().AddDate(0, -3, 0).Format("2006-01-02") + `","Balance":75,"VendorRef":{"value":"4","name":"Paper Co"}}`)}}
+	if err := completeSync(ctx, db, sixth, withOpen); err != nil {
+		t.Fatal(err)
+	}
+	var kinds string
+	if err := db.QueryRowContext(ctx, `SELECT state||':'||(SELECT string_agg(e->>'type',',' ORDER BY e->>'type') FROM jsonb_array_elements(exceptions) e)||':'||jsonb_array_length(payload->'open_items'->'Bill') FROM quickbooks_entity_syncs WHERE id=$1`, sixth.id).Scan(&kinds); err != nil || kinds != "unchanged:past_due_payable,uncategorized:1" {
+		t.Fatalf("open items change the questions, not the transaction evidence: %q %v", kinds, err)
+	}
 	// Each finished capture records its exceptions; an unchanged one carries the previous capture's.
 	for _, j := range []syncClaim{second, third} {
 		var kinds string

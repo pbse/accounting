@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -21,10 +22,13 @@ type EntityCapture struct {
 	StartedAt    time.Time                    `json:"started_at"`
 	FinishedAt   time.Time                    `json:"finished_at"`
 	Completeness string                       `json:"completeness"`
+	// Invoices and bills still open at capture time, dated on or before month-end. Their balances
+	// change with later payments, so they are kept out of the transaction evidence digest.
+	OpenItems map[string][]json.RawMessage `json:"open_items,omitempty"`
 }
 
-func periodCount(ctx context.Context, realm, token, kind, first, last string) (int, error) {
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE TxnDate >= '%s' AND TxnDate <= '%s'", kind, first, last)
+func periodCount(ctx context.Context, realm, token, kind, where string) (int, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", kind, where)
 	raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(query), 1024*1024)
 	if err != nil {
 		return 0, err
@@ -63,7 +67,7 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 	}
 	result.Settings = raw
 	for _, kind := range periodEntityTypes {
-		before, err := periodCount(ctx, realm, token, kind, first, last)
+		before, err := periodCount(ctx, realm, token, kind, fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", first, last))
 		if err != nil {
 			return result, fmt.Errorf("%s transaction count: %w", kind, err)
 		}
@@ -122,10 +126,21 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 			}
 		}
 		result.Records[kind], result.Counts[kind] = rows, len(rows)
-		after, err := periodCount(ctx, realm, token, kind, first, last)
+		after, err := periodCount(ctx, realm, token, kind, fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", first, last))
 		if err != nil || before != len(rows) || after != before {
 			return result, fmt.Errorf("%s transaction count changed or pagination was incomplete; retry the capture", kind)
 		}
+	}
+	// Open items only add questions; if a read fails, the transaction capture still completes and says so.
+	result.OpenItems = map[string][]json.RawMessage{}
+	unread := []string{}
+	for _, kind := range []string{"Invoice", "Bill"} {
+		items, err := openItems(ctx, realm, token, kind, last)
+		if err != nil {
+			unread = append(unread, err.Error())
+			continue
+		}
+		result.OpenItems[kind] = items
 	}
 	check, err := readSandboxLimit(ctx, realm, token, "/preferences", 2*1024*1024)
 	if err != nil {
@@ -142,5 +157,46 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 	}
 	result.FinishedAt = time.Now().UTC()
 	result.Completeness = "All supported types were paged and provider counts agreed before and after each type. Reads are sequential, not an atomic ledger snapshot; later edits require refresh."
+	if len(unread) > 0 {
+		result.Completeness += " Open items were not fully read, so their overdue questions are missing: " + strings.Join(unread, "; ") + "."
+	}
 	return result, nil
+}
+
+// openItems pages through a type's records with a balance, dated on or before month-end.
+func openItems(ctx context.Context, realm, token, kind, last string) ([]json.RawMessage, error) {
+	where := fmt.Sprintf("WHERE Balance > '0' AND TxnDate <= '%s'", last)
+	before, err := periodCount(ctx, realm, token, kind, where)
+	if err != nil {
+		return nil, fmt.Errorf("Open %s count: %w", kind, err)
+	}
+	if before > 2500 {
+		return nil, fmt.Errorf("Open %s records exceed the 2500-record limit", kind)
+	}
+	rows, seen := []json.RawMessage{}, map[string]bool{}
+	for position := 1; position <= before; position += 500 {
+		raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(fmt.Sprintf("SELECT * FROM %s %s ORDERBY Id STARTPOSITION %d MAXRESULTS 500", kind, where, position)), 8*1024*1024)
+		if err != nil {
+			return nil, fmt.Errorf("Open %s page %d: %w", kind, position, err)
+		}
+		var response struct{ QueryResponse map[string]json.RawMessage }
+		var page []json.RawMessage
+		if json.Unmarshal(raw, &response) != nil || (len(response.QueryResponse[kind]) > 0 && json.Unmarshal(response.QueryResponse[kind], &page) != nil) {
+			return nil, fmt.Errorf("Open %s page is invalid", kind)
+		}
+		for _, record := range page {
+			var item struct {
+				ID string `json:"Id"`
+			}
+			if json.Unmarshal(record, &item) != nil || item.ID == "" || seen[item.ID] {
+				return nil, fmt.Errorf("Open %s identity is inconsistent", kind)
+			}
+			seen[item.ID] = true
+			rows = append(rows, record)
+		}
+	}
+	if after, err := periodCount(ctx, realm, token, kind, where); err != nil || after != before || len(rows) != before {
+		return nil, fmt.Errorf("Open %s records changed during capture; retry", kind)
+	}
+	return rows, nil
 }

@@ -1,8 +1,10 @@
 package quickbooks
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFindExceptionsRaisesQuestionsWithoutConcluding(t *testing.T) {
@@ -51,5 +53,28 @@ func TestFindExceptionsRaisesQuestionsWithoutConcluding(t *testing.T) {
 	}
 	if len(found["no_payee"]) != 1 || found["no_payee"][0].ProviderIDs[0] != "301" {
 		t.Fatalf("only the payee-less purchase needs a payee: %+v", found["no_payee"])
+	}
+}
+
+func TestOpenItemExceptionsAskAboutOldInvoicesAndBills(t *testing.T) {
+	item := func(id, due, balance, name string) json.RawMessage {
+		return json.RawMessage(`{"Id":"` + id + `","DocNumber":"N` + id + `","DueDate":"` + due + `","Balance":` + balance + `,"CustomerRef":{"value":"1","name":"` + name + `"},"VendorRef":{"value":"2","name":"` + name + `"}}`)
+	}
+	monthEnd := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	found := OpenItemExceptions(map[string][]json.RawMessage{
+		// 75 and 120 days past due, 30 days (not yet), no due date, and a zero balance.
+		"Invoice": {item("1", "2026-07-17", "1200", "Acme"), item("2", "2026-06-02", "300.5", "Birch"), item("3", "2026-08-31", "90", "Cedar"), json.RawMessage(`{"Id":"4","Balance":10}`), item("5", "2026-01-01", "0", "Dune")},
+		// 45 days past due, and 20 days.
+		"Bill": {item("6", "2026-08-16", "450", "Paper Co"), item("7", "2026-09-10", "80", "Ink Co")},
+	}, monthEnd)
+	got := []string{}
+	for _, e := range found {
+		got = append(got, e.Type+":"+e.ProviderIDs[0]+":"+e.Amount)
+	}
+	if strings.Join(got, ",") != "past_due_receivable:1:1200.00,past_due_receivable:2:300.50,past_due_payable:6:450.00" {
+		t.Fatalf("only invoices over 60 days and bills over 30 days past due at month-end: %v", got)
+	}
+	if strings.Contains(found[0].NextStep, "write-off") || !strings.Contains(found[1].NextStep, "write-off") || !strings.Contains(found[0].Question, "75 days past due") {
+		t.Fatalf("the policy note starts past 90 days: %+v", found[:2])
 	}
 }

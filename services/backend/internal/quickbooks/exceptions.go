@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math/big"
 	"regexp"
 	"slices"
 	"sort"
@@ -189,5 +190,56 @@ func FindExceptions(rows []TransactionRow) []Exception {
 		}
 		return out[i].Dates[0] < out[j].Dates[0]
 	})
+	return out
+}
+
+// OpenItemExceptions asks about invoices more than 60 days and bills more than 30 days past due at
+// month-end. Balances are as of the capture, so an item paid since then raises nothing.
+func OpenItemExceptions(open map[string][]json.RawMessage, monthEnd time.Time) []Exception {
+	out := []Exception{}
+	for _, kind := range []string{"Invoice", "Bill"} {
+		for _, raw := range open[kind] {
+			var item struct {
+				ID                     string `json:"Id"`
+				DocNumber, DueDate     string
+				Balance                json.Number
+				CustomerRef, VendorRef ref
+				CurrencyRef            ref
+			}
+			if json.Unmarshal(raw, &item) != nil {
+				continue
+			}
+			due, err := time.Parse("2006-01-02", item.DueDate)
+			balance, ok := new(big.Rat).SetString(item.Balance.String())
+			if err != nil || !ok || balance.Sign() <= 0 {
+				continue
+			}
+			days := int(monthEnd.Sub(due).Hours() / 24)
+			number := item.DocNumber
+			if number == "" {
+				number = item.ID
+			}
+			shown := amount(TransactionRow{Amount: balance.FloatString(2), Currency: item.CurrencyRef.Value})
+			e := Exception{Kind: kind, ProviderIDs: []string{item.ID}, Dates: []string{item.DueDate}, Amount: balance.FloatString(2)}
+			switch {
+			case kind == "Invoice" && days > 60:
+				e.Type, e.Counterparty = "past_due_receivable", item.CustomerRef.Name
+				e.Finding = fmt.Sprintf("Invoice %s to %s has %s open, %d days past due at month-end.", number, e.Counterparty, shown, days)
+				e.NextStep = "Missing: the client's view on collection. Nothing is written off."
+				if days > 90 {
+					e.NextStep += " Past 90 days, check the firm's allowance or write-off policy before the close."
+				}
+				e.Question = fmt.Sprintf("Is invoice %s to %s (%s, %d days past due) still collectible, and was anything agreed about payment?", number, e.Counterparty, shown, days)
+			case kind == "Bill" && days > 30:
+				e.Type, e.Counterparty = "past_due_payable", item.VendorRef.Name
+				e.Finding = fmt.Sprintf("Bill %s from %s has %s open, %d days past due at month-end.", number, e.Counterparty, shown, days)
+				e.NextStep = "Missing: whether it is still owed or was paid outside QuickBooks. Nothing is paid or changed."
+				e.Question = fmt.Sprintf("Is bill %s from %s (%s, %d days past due) still owed, or was it paid outside QuickBooks?", number, e.Counterparty, shown, days)
+			default:
+				continue
+			}
+			out = append(out, e)
+		}
+	}
 	return out
 }

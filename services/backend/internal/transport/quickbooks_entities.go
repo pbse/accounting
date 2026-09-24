@@ -154,9 +154,13 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		} else if items != nil {
 			balances["items"] = items
 		}
-		var captureID, evidenceID, finished string
-		err = db.QueryRowContext(r.Context(), `SELECT s.id::text,s.evidence_id::text,s.finished_at::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(id) FROM quickbooks_entity_syncs WHERE close_id=s.close_id AND state='completed')`, r.PathValue("id")).Scan(&captureID, &evidenceID, &finished)
+		// The latest finished capture, as Daily Books reads it; an unchanged one reuses its predecessor's rows.
+		var captureID, evidenceID, finished, rowsSync string
+		var stored []byte
+		err = db.QueryRowContext(r.Context(), `SELECT s.id::text,s.evidence_id::text,s.finished_at::text,s.exceptions,
+ COALESCE((SELECT c.id::text FROM quickbooks_entity_syncs c WHERE c.close_id=s.close_id AND c.evidence_id=s.evidence_id AND c.state='completed' ORDER BY c.id DESC LIMIT 1),'')
+ FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
+ WHERE s.close_id::text=$1 AND s.id=(SELECT max(id) FROM quickbooks_entity_syncs WHERE close_id=s.close_id AND state IN ('completed','unchanged'))`, r.PathValue("id")).Scan(&captureID, &evidenceID, &finished, &stored, &rowsSync)
 		if err == sql.ErrNoRows {
 			jsonReply(w, 200, map[string]any{"capture": nil, "items": []any{}, "balances": balances})
 			return
@@ -165,12 +169,18 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Transaction index unavailable.")
 			return
 		}
-		scanned, err := quickbooks.CapturedRows(r.Context(), db, captureID)
+		scanned, err := quickbooks.CapturedRows(r.Context(), db, rowsSync)
 		if err != nil {
 			problem(w, 503, "Transaction index unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": captureID, "evidence_id": evidenceID, "finished_at": finished}, "scanned": len(scanned), "items": quickbooks.FindExceptions(scanned), "balances": balances})
+		// Stored findings include open invoices and bills; a capture from before they were recorded is scanned now.
+		found := quickbooks.FindExceptions(scanned)
+		if stored != nil && json.Unmarshal(stored, &found) != nil {
+			problem(w, 503, "Recorded exceptions are unreadable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": captureID, "evidence_id": evidenceID, "finished_at": finished}, "scanned": len(scanned), "items": found, "balances": balances})
 	})
 	mux.HandleFunc("GET "+path+"/{sync}", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
