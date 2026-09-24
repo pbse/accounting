@@ -26,8 +26,8 @@ type EntityCapture struct {
 	OpenItems map[string][]json.RawMessage `json:"open_items,omitempty"`
 }
 
-func periodCount(ctx context.Context, realm, token, kind, first, last string) (int, error) {
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE TxnDate >= '%s' AND TxnDate <= '%s'", kind, first, last)
+func periodCount(ctx context.Context, realm, token, kind, where string) (int, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", kind, where)
 	raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(query), 1024*1024)
 	if err != nil {
 		return 0, err
@@ -66,7 +66,7 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 	}
 	result.Settings = raw
 	for _, kind := range periodEntityTypes {
-		before, err := periodCount(ctx, realm, token, kind, first, last)
+		before, err := periodCount(ctx, realm, token, kind, fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", first, last))
 		if err != nil {
 			return result, fmt.Errorf("%s transaction count: %w", kind, err)
 		}
@@ -125,7 +125,7 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 			}
 		}
 		result.Records[kind], result.Counts[kind] = rows, len(rows)
-		after, err := periodCount(ctx, realm, token, kind, first, last)
+		after, err := periodCount(ctx, realm, token, kind, fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", first, last))
 		if err != nil || before != len(rows) || after != before {
 			return result, fmt.Errorf("%s transaction count changed or pagination was incomplete; retry the capture", kind)
 		}
@@ -159,19 +159,7 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 // openItems pages through a type's records with a balance, dated on or before month-end.
 func openItems(ctx context.Context, realm, token, kind, last string) ([]json.RawMessage, error) {
 	where := fmt.Sprintf("WHERE Balance > '0' AND TxnDate <= '%s'", last)
-	count := func() (int, error) {
-		raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(fmt.Sprintf("SELECT COUNT(*) FROM %s %s", kind, where)), 1024*1024)
-		var response struct {
-			QueryResponse struct {
-				TotalCount *int `json:"totalCount"`
-			} `json:"QueryResponse"`
-		}
-		if err != nil || json.Unmarshal(raw, &response) != nil || response.QueryResponse.TotalCount == nil {
-			return 0, fmt.Errorf("Open %s count is unavailable", kind)
-		}
-		return *response.QueryResponse.TotalCount, nil
-	}
-	before, err := count()
+	before, err := periodCount(ctx, realm, token, kind, where)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +188,7 @@ func openItems(ctx context.Context, realm, token, kind, last string) ([]json.Raw
 			rows = append(rows, record)
 		}
 	}
-	if after, err := count(); err != nil || after != before || len(rows) != before {
+	if after, err := periodCount(ctx, realm, token, kind, where); err != nil || after != before || len(rows) != before {
 		return nil, fmt.Errorf("Open %s records changed during capture; retry", kind)
 	}
 	return rows, nil
