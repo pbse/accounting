@@ -91,6 +91,13 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 	if got := scan(); got.Balances.Snapshot == nil || got.Balances.Snapshot.Source != "xero" || got.Balances.Snapshot.ID != xeroSnapshot || len(got.Balances.Items) != 1 || got.Balances.Items[0].Account != "Operating Account" {
 		t.Fatalf("a Xero snapshot captured after the QuickBooks one supplies the balances: %+v", got)
 	}
+	// A later row that was captured earlier does not replace the most recent capture.
+	if _, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d',$3,'fixture',now()-interval '2 hours')`, closeID, xeroConnection, xeroPayload); err != nil {
+		t.Fatal(err)
+	}
+	if got := scan(); got.Balances.Snapshot == nil || got.Balances.Snapshot.ID != xeroSnapshot {
+		t.Fatalf("the most recently captured Xero snapshot is used, not the highest ID: %+v", got)
+	}
 	if _, err = db.Exec(`UPDATE xero_snapshots SET captured_at=now()-interval '1 hour' WHERE id=$1`, xeroSnapshot); err != nil {
 		t.Fatal(err)
 	}
