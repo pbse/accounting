@@ -10,7 +10,15 @@ export function readCredits(data: FormData): NonNullable<PrepaidInput["credits"]
   })).filter(c => Object.values(c).some(Boolean));
 }
 
-export function PrepaidMethodFields({values={},credits=[]}: {values?: Record<string,string>;credits?: NonNullable<PrepaidInput["credits"]>}) {
+export type Schedule = "" | NonNullable<PrepaidInput["schedule"]>;
+// Deferred revenue and depreciation reuse the straight-line prepaid schedule under their own names.
+export const scheduleTerms: Record<Schedule, Record<"name" | "source" | "amount" | "start" | "end" | "expense" | "balance" | "booked" | "blank" | "recognized" | "remaining", string>> = {
+  "": { name: "Prepaid", source: "Invoice reference and source location", amount: "Invoice amount", start: "Service starts", end: "Service ends", expense: "Expense account", balance: "Prepaid account", booked: "Booked prepaid balance", blank: "Fully expensed; no prior adjustments or credits.", recognized: "Expense", remaining: "Remaining prepaid" },
+  deferred_revenue: { name: "Deferred revenue", source: "Customer invoice or contract reference", amount: "Amount billed in advance", start: "Service starts", end: "Service ends", expense: "Revenue account", balance: "Deferred revenue account", booked: "Booked deferred revenue balance", blank: "Booked straight to revenue; no prior adjustments or credits.", recognized: "Revenue", remaining: "Remaining deferred revenue" },
+  depreciation: { name: "Depreciation", source: "Asset and purchase invoice reference", amount: "Asset cost", start: "Depreciation starts (first day of the in-service month for equal months)", end: "Last day of the useful life", expense: "Depreciation expense account", balance: "Accumulated depreciation account", booked: "Booked accumulated depreciation", blank: "", recognized: "Depreciation", remaining: "Remaining to depreciate" },
+};
+
+export function PrepaidMethodFields({values={},credits=[],schedule=""}: {values?: Record<string,string>;credits?: NonNullable<PrepaidInput["credits"]>;schedule?: Schedule}) {
   const [creditRows, setCreditRows] = useState(Array.from({length:Math.max(1,credits.length)},(_,i)=>i));
   return <>
     <label>Allocation method<select name="method" required defaultValue="" onChange={e=>{
@@ -26,18 +34,26 @@ export function PrepaidMethodFields({values={},credits=[]}: {values?: Record<str
         <tr><td>$100 January–March 2028 equal full months, cancel February with full refund</td><td>January expense $33.33; February refund $66.67; remaining prepaid zero. Confirm the refund was booked before preparing.</td></tr>
         <tr><td>Same cancellation, no refund</td><td>January expense $33.33; February write-off expense $66.67; remaining prepaid zero. Confirm the booked balance before the proposed write-off.</td></tr>
         <tr><td>$120 January–March, $10 effective and recorded February, $5 effective January and recorded March</td><td>Revised schedule: January $38.33, February $33.33, March $33.34; total expense $105. Current close true-up compares the revised target with the booked prepaid balance; prior-period journals are not silently changed.</td></tr>
+        <tr><td>Deferred revenue: 12,000 billed for September 2026–August 2027; booked liability 12,000</td><td>September earns 1,000: debit deferred revenue / credit revenue 1,000.</td></tr>
+        <tr><td>Depreciation: 3,600 laptop, September 2026–August 2029, equal months, salvage 360, booked accumulated depreciation 0</td><td>90.00 a month: debit depreciation expense / credit accumulated depreciation 90.00.</td></tr>
       </tbody></table>
     </details>
+    {schedule === "depreciation" ? <>
+      <label>Booked accumulated depreciation<input name="booked_balance" required defaultValue={values.booked_balance ?? ""} inputMode="decimal" maxLength={13} placeholder="Enter 0.00 explicitly if none" /></label>
+      <label>Ledger balance and cutoff reference<input name="booking_reference" required defaultValue={values.booking_reference ?? ""} maxLength={200} /></label>
+      <label>Salvage value (optional)<input name="salvage_value" defaultValue={values.salvage_value ?? ""} inputMode="decimal" maxLength={13} /></label>
+      <label><input name="examples_confirmed" type="checkbox" required /> I reviewed these synthetic examples and the client's approved treatment. This confirms a draft method, not final workpaper or posting approval.</label>
+    </> : <>
     <details><summary>Cancellation at a month boundary (optional)</summary>
       <p>Choose one reviewed treatment. Full refund assumes the remaining prepaid was refunded and booked; enter the balance after that entry (zero). No refund expenses the remaining prepaid in the cancellation month; enter the balance before any proposed write-off, or zero if already written off. Both require a ledger and cancellation source reference. Credits cannot be combined with a cancellation.</p>
-      <label>Treatment<select name="cancellation_method" defaultValue={values.cancellation_method ?? ""}><option value="">No cancellation</option><option value="full_refund_month_boundary_v1">Full refund of remaining prepaid</option><option value="no_refund_month_boundary_v1">No refund; write off remaining prepaid</option></select></label>
+      <label>Treatment<select name="cancellation_method" defaultValue={values.cancellation_method ?? ""}><option value="">No cancellation</option><option value="full_refund_month_boundary_v1">Full refund of the remaining balance</option><option value="no_refund_month_boundary_v1">No refund; recognize the remaining balance</option></select></label>
       <label>Effective cancellation month<input name="cancellation_period" type="month" defaultValue={values.cancellation_period ?? ""} /></label>
       <label>Cancellation/refund evidence and treatment reference<input name="cancellation_reference" maxLength={200} defaultValue={values.cancellation_reference ?? ""} /></label>
     </details>
     <label><input name="examples_confirmed" type="checkbox" required /> I reviewed these synthetic examples and the client's approved treatment. This confirms a draft method, not final workpaper or posting approval.</label>
     <details><summary>Credits and prior adjustments (optional)</summary>
       <p>Enter the current prepaid debit balance after all invoice, credit and adjusting entries through this close. The proposal is only the difference from the scheduled target. Blank means a fully expensed invoice with no credits or prior entries.</p>
-      <label>Booked prepaid balance<input name="booked_balance" defaultValue={values.booked_balance ?? ""} inputMode="decimal" maxLength={13} placeholder="Enter 0.00 explicitly if zero" /></label>
+      <label>{scheduleTerms[schedule].booked}<input name="booked_balance" defaultValue={values.booked_balance ?? ""} inputMode="decimal" maxLength={13} placeholder="Enter 0.00 explicitly if zero" /></label>
       <label>Ledger balance and cutoff reference<input name="booking_reference" defaultValue={values.booking_reference ?? ""} maxLength={200} /></label>
       <p>The single-credit fields below retain the original prospective method. For multiple or retrospective credits, use the separate reviewed rows. A retrospective credit revises the analytical schedule from its effective month; only the current-close difference from the confirmed booked balance is proposed. Prior-period journals are never changed automatically. Do not combine credit methods or cancellation.</p>
       <label>Credit amount<input name="credit_amount" defaultValue={values.credit_amount ?? ""} inputMode="decimal" maxLength={13} /></label>
@@ -53,7 +69,8 @@ export function PrepaidMethodFields({values={},credits=[]}: {values?: Record<str
       </fieldset>)}
       <button type="button" disabled={creditRows.length >= 20} onClick={() => setCreditRows(rows => [...rows, Math.max(...rows) + 1])}>Add another credit</button>
     </details>
+    </>}
     <label><input name="method_confirmed" type="checkbox" required /> Confirm the selected method, inclusive dates, each credit's effective and booked month, current-close true-up and final-month rounding under the client's approved rule.</label>
-    <label><input name="booking_confirmed" type="checkbox" required /> Confirm accrual basis in the client's home currency and that net invoice cost is recorded between the stated expense and prepaid accounts. The balance includes all credits and prior adjustments through this close; a blank balance means fully expensed with no credits or adjustments.</label>
+    <label><input name="booking_confirmed" type="checkbox" required /> Confirm accrual basis in the client's home currency and that the amount is recorded between the two stated accounts. The balance includes all credits and prior adjustments through this close; a blank balance means fully expensed with no credits or adjustments.</label>
   </>;
 }

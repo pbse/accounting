@@ -9,6 +9,8 @@ export type PrepaidInput = {
   basis: "accrual";
   expense_account: string;
   prepaid_account: string;
+  schedule?: "deferred_revenue" | "depreciation";
+  salvage_value?: string;
   method: "equal_full_months_v1" | "actual_days_v1";
   examples_confirmed?: boolean;
   credit_amount?: string;
