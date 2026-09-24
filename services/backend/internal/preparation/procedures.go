@@ -1,6 +1,7 @@
 package preparation
 
 import (
+	"close.local/backend/internal/loans"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -31,6 +32,17 @@ func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Pr
 func CheckProcedureMethod(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID, kind string, paper []byte) error {
+	if kind == "loan" {
+		var enabled bool
+		var approved string
+		err := q.QueryRowContext(ctx, `SELECT p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='loan' AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID).Scan(&enabled, &approved)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == sql.ErrNoRows || !enabled || approved != loans.Method {
+			return fmt.Errorf("Loan schedules need the firm's approved loan procedure for this client (a firm default or client override) before drafts are saved")
+		}
+	}
 	var method string
 	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT p.method FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),(SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1),'')`, closeID, kind).Scan(&method)
 	if err != nil || method == "" {
@@ -83,6 +95,8 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		}
 	} else if p.Kind == "accrual" {
 		text += "Supported method: fixed_incurred_amount_v1 or actual_invoice_true_up_v1. Cite the prior estimate and actual invoice; the true-up requires the client accountant's approved rule reference. Confirm incurred amount, booked liability and reversal choice; never infer estimates.\n"
+	} else if p.Kind == "loan" {
+		text += "Supported method: lender_statement_v1. The lender statement's principal/interest split is authoritative; recomputed interest raises questions. Accrued interest and current portion entries need the preparer's per-draft choices and balances that tie to the lender.\n"
 	} else {
 		text += "Supported methods: exact_bank_month_v1 uses positive deposits; card_liability_month_v1 uses positive charges and negative payments/credits under a cited accountant-approved card rule. Both begin with unique exact-date and signed-amount CSV candidates. Grouped matches, net splits, tolerances, timing and clearing items, and transfers require cited accountant-approved rules and source review. Native reconciliation status is separately observed.\n"
 	}

@@ -365,3 +365,13 @@ Author: Claude Opus 5.5. Adds `github.com/modelcontextprotocol/go-sdk` v1.8.0 an
 - Full `internal/transport` and `internal/auth` packages pass; frontend typecheck passes.
 - Browser, local services: an agent's `request_approval` sent over MCP with curl appeared in Work → Ready for your review as "Approval requested" with its note. Long queue lines now truncate instead of running under the status column.
 
+## Loan schedules (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 042 adds the `loan` workpaper and procedure kinds.
+
+- `TestLenderSplitIsCheckedAndOnlySupportedEntriesAreProposed` (two payments in a month): note-rate interest is recomputed on the principal outstanding (620.00, 276.50). The lender's 280.00 is a question, and the split is unchanged. Accrued interest is 19.67 for one day, and the current portion reclass is 2,000.00. A 1,000.00 book difference is a question that blocks the reclass, and an over-accrual reverses 5.33. An untied statement blocks and proposes no entry (observed red when entries survived a blocker). An unconfirmed rate, or an ambiguous "30_360", is refused.
+- `TestDayCountConventions` covers Actual/360, Actual/365, 30/360 bond basis (31st-day rule) and 30E/360.
+- `TestLoanDraftsNeedTheClientsApprovedLoanProcedure` (PostgreSQL): a disabled client loan procedure refuses the save, an enabled one allows it, and disabling it again refuses new drafts. A saved loan with an entry is ineligible for bulk approval. Publishing a loan procedure requires the `lender_statement_v1` method.
+- Observed red with the 30/360 bond D2 rule changed, the tie-out off, accrual counted from the paid-through date instead of the last payment, the reclass gate off, interest computed on opening principal, the procedure gate off, bulk exclusion off, and the publish method rule off.
+- Browser: published a firm-default loan procedure in Settings, which showed the approved method boundary. The calculator example showed the schedule, question, accrual and reclass. Saving was refused while the procedure was disabled and saved once enabled, and the draft opened on the review canvas.
+

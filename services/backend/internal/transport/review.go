@@ -29,7 +29,7 @@ func reviewActor(w http.ResponseWriter, r *http.Request) (string, bool) {
 
 // Bulk review only covers drafts that change nothing in the ledger and carry no reviewer judgment.
 const bulkReason = `CASE
- WHEN COALESCE(w.paper->'proposal','null'::jsonb)<>'null'::jsonb THEN 'Proposes a ledger adjustment'
+ WHEN COALESCE(w.paper->'proposal','null'::jsonb)<>'null'::jsonb OR jsonb_array_length(COALESCE(w.paper->'proposals','[]'::jsonb))>0 THEN 'Proposes a ledger adjustment'
  WHEN jsonb_array_length(COALESCE(w.paper->'questions','[]'::jsonb))>0 THEN 'Has open questions'
  WHEN EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(w.paper->'payouts','[]'::jsonb)) p WHERE p->>'status'<>'matched') THEN 'Includes reviewer-chosen or in-transit payouts'
  WHEN jsonb_array_length(COALESCE(w.paper->'input'->'reviewed_matches','[]'::jsonb))+jsonb_array_length(COALESCE(w.paper->'input'->'prior_outstanding','[]'::jsonb))+jsonb_array_length(COALESCE(w.paper->'input'->'current_outstanding','[]'::jsonb))+jsonb_array_length(COALESCE(w.paper->'input'->'transfers','[]'::jsonb))>0 THEN 'Includes reviewer classifications'
