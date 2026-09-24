@@ -422,7 +422,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			fresh, _ := json.Marshal(freshSources)
 			prior, _ := json.Marshal(proposal.Sources)
 			if string(fresh) != string(prior) {
-				problem(w, 409, "Intake evidence changed. Review fresh proposals first.")
+				problemCode(w, 409, "SOURCE_STALE", "Intake evidence changed. Review fresh proposals first.")
 				return
 			}
 			for _, s := range sources {

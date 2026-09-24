@@ -50,7 +50,18 @@ func jsonReply(w http.ResponseWriter, status int, value any) {
 	json.NewEncoder(w).Encode(value)
 }
 func problem(w http.ResponseWriter, status int, message string) {
-	jsonReply(w, status, map[string]string{"message": message})
+	code := map[int]string{401: "UNAUTHENTICATED", 403: "SCOPE_DENIED", 404: "NOT_FOUND", 409: "CONFLICT", 410: "EXPIRED", 429: "LIMIT_REACHED"}[status]
+	if code == "" && status >= 500 {
+		code = "UNAVAILABLE"
+	} else if code == "" {
+		code = "INVALID_REQUEST"
+	}
+	problemCode(w, status, code, message)
+}
+
+// problemCode names a condition the branch proves, such as SOURCE_STALE or EXECUTION_UNKNOWN.
+func problemCode(w http.ResponseWriter, status int, code, message string) {
+	jsonReply(w, status, map[string]string{"code": code, "message": message})
 }
 func jobProblem(w http.ResponseWriter, err error, message string) {
 	if err != nil && strings.Contains(err.Error(), "Firm active job limit reached") {

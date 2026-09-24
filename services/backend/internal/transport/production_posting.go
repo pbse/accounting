@@ -678,7 +678,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if callErr != nil {
-				problem(w, 502, "Production outcome unknown. Investigate the saved request ID in QuickBooks; do not repost.")
+				problemCode(w, 502, "EXECUTION_UNKNOWN", "Production outcome unknown. Investigate the saved request ID in QuickBooks; do not repost.")
 				return
 			}
 			verifyProduction(w, r, db, client, paper, productionPosting{posting: posting{ID: record.ID, ExternalID: id, State: "unknown"}, LedgerBefore: record.LedgerBefore}, journal)

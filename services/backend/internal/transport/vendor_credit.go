@@ -317,7 +317,7 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if callErr != nil {
-				problem(w, 502, "Posting outcome is unknown. Investigate; do not retry.")
+				problemCode(w, 502, "EXECUTION_UNKNOWN", "Posting outcome is unknown. Investigate; do not retry.")
 				return
 			}
 			readback, e := sandbox.VerifyVendorCredit(r.Context(), id, credit)
@@ -325,7 +325,7 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 			defer finish()
 			if e != nil {
 				db.ExecContext(receipt, `UPDATE vendor_credit_postings SET last_error=$2 WHERE id::text=$1`, item.ID, e.Error())
-				problem(w, 502, "VendorCredit ID was returned but readback is unverified.")
+				problemCode(w, 502, "EXECUTION_UNKNOWN", "VendorCredit ID was returned but readback is unverified.")
 				return
 			}
 			body, _ := json.Marshal(readback)

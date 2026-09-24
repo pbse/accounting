@@ -169,7 +169,9 @@ func TestWorkInboxCoordinator(t *testing.T) {
 	input := map[string]any{"amount": "600.00", "service_start": "2026-09-01", "service_end": "2027-08-31", "currency": "USD", "basis": "accrual", "expense_account": "Insurance", "prepaid_account": "Prepaid insurance", "method": "equal_full_months_v1", "method_confirmed": true, "booking_confirmed": true}
 	confirm := map[string]any{"revision": revision, "input": input, "facts_confirmed": true}
 	call("POST", path+"/confirm", confirm, 200)
-	call("POST", path+"/confirm", confirm, 409)
+	if body := call("POST", path+"/confirm", confirm, 409); !bytes.Contains(body, []byte(`"code":"CONFLICT"`)) {
+		t.Fatalf("a repeated confirmation needs a machine-readable conflict: %s", body)
+	}
 	if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
 		t.Fatal("Calculation failed", e)
 	}
@@ -213,5 +215,7 @@ func TestWorkInboxCoordinator(t *testing.T) {
 	replacement := upload(strings.Replace(invoice, "1200.00", "3600.00", 1))
 	call("POST", base+"/evidence/"+second["id"]+"/replace", map[string]string{"replacement_id": replacement["id"], "reason": "Corrected invoice"}, 200)
 	confirm["revision"] = secondRevision
-	call("POST", base+"/work/"+second["job_id"]+"/confirm", confirm, 409)
+	if body := call("POST", base+"/work/"+second["job_id"]+"/confirm", confirm, 409); !bytes.Contains(body, []byte(`"code":"SOURCE_STALE"`)) {
+		t.Fatalf("replaced evidence must be reported as stale: %s", body)
+	}
 }

@@ -348,3 +348,11 @@ Author: Claude Opus 5.5. Stacked on posting safety. No migration.
 - `TestRecognizeExportLeavesTheReconciliationRoleToTheReviewer`: an `id,date,amount` CSV becomes a `reconciliation` proposal with its row count, date range and net total; a header-only CSV is zero movement (observed red when it was rejected); a row outside the month stays unsupported with the reason; an invoice is not recognized; the agent path does not short-circuit CSVs, so `TestAgentAnswersResumeAndInventoryFence` keeps its paired statement, ledger and balances (it failed while the agent path recognized them). Observed red with the CSV check removed. `TestStripeExportIsRecognizedPreparedAndExported` still passes.
 - Browser, with a local API, worker and Vite on the disposable database: the Overview card listed a no-payee purchase, a CloudSuite pair two days apart and an Uncategorized Bill, and left the monthly rent payment alone. A close without a capture showed the capture prompt. An uploaded bank CSV showed **Recognized reconciliation CSV** with no confirm form, and its button opened the reconciliation page with the job continuation.
 
+## Machine-readable error codes (2026-09-24)
+
+Author: Claude Opus 5.5. Stacked on exception investigation. No migration; messages and statuses are unchanged.
+
+- Every `problem()` response now carries a status-derived `code`. `SOURCE_STALE` is used only where the branch proves a replaced or changed source (9 sites plus the replaced-source branch of Work actions, split from its not-yet-extracted case). `EXECUTION_UNKNOWN` covers the 7 uncertain-outcome or unverified-readback provider writes.
+- `TestWorkInboxCoordinator` asserts `CONFLICT` on a repeated confirmation and `SOURCE_STALE` after the source is replaced. `TestProductionPostingSingleDurableAttempt` asserts `EXECUTION_UNKNOWN` on the lost response. Observed red with `code` removed from `problem()`, with the replaced source reported as `CONFLICT`, and with the production site left on the status default.
+- Plan reviewed once by GPT-6 Sol (medium). Adopted: no generic Idempotency-Key cache (replay would bypass revoked access and could release an unresolved write), named codes only where the branch proves them, and schemas deferred to the first exposed capability.
+

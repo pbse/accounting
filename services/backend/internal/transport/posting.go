@@ -217,12 +217,12 @@ func registerPosting(mux *http.ServeMux, db *sql.DB) {
 					return
 				}
 				if callErr != nil {
-					problem(w, 502, "Execution outcome is unknown. No automatic retry is permitted. Refresh posting status for investigation.")
+					problemCode(w, 502, "EXECUTION_UNKNOWN", "Execution outcome is unknown. No automatic retry is permitted. Refresh posting status for investigation.")
 					return
 				}
 				if err = sandbox.Verify(r.Context(), id, journal); err != nil {
 					db.ExecContext(persist, `UPDATE sandbox_postings SET last_error=$2 WHERE id=$1`, record.ID, err.Error())
-					problem(w, 502, "Entry was returned but readback is unverified. Use Verify saved entry; do not post again.")
+					problemCode(w, 502, "EXECUTION_UNKNOWN", "Entry was returned but readback is unverified. Use Verify saved entry; do not post again.")
 					return
 				}
 				if _, err = db.ExecContext(persist, `UPDATE sandbox_postings SET state='verified',last_error='',verified_at=now() WHERE id=$1`, record.ID); err != nil {

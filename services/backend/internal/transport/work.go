@@ -231,13 +231,17 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "This work is already preparing or finished. Refresh its status.")
 			return
 		}
-		var current bool
-		if err = tx.QueryRowContext(r.Context(), `SELECT superseded_by IS NULL AND extraction_state='ready' FROM evidence WHERE id=$1 AND close_id=$2`, sourceID, closeID).Scan(&current); err != nil {
+		var replaced, ready bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT superseded_by IS NOT NULL,extraction_state='ready' FROM evidence WHERE id=$1 AND close_id=$2`, sourceID, closeID).Scan(&replaced, &ready); err != nil {
 			problem(w, 503, "Could not verify the source.")
 			return
 		}
-		if action != "cancel" && action != "revoke_link" && !current {
-			problem(w, 409, "The source must be current and fully extracted. Retry extraction or use its replacement.")
+		if action != "cancel" && action != "revoke_link" && (replaced || !ready) {
+			code := "CONFLICT"
+			if replaced {
+				code = "SOURCE_STALE"
+			}
+			problemCode(w, 409, code, "The source must be current and fully extracted. Retry extraction or use its replacement.")
 			return
 		}
 		var fresh preparation.Proposal
@@ -260,7 +264,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			oldSources, _ := json.Marshal(proposed.Sources)
 			newSources, _ := json.Marshal(fresh.Sources)
 			if string(oldSources) != string(newSources) {
-				problem(w, 409, "Source evidence changed. Refresh proposals before confirming.")
+				problemCode(w, 409, "SOURCE_STALE", "Source evidence changed. Refresh proposals before confirming.")
 				return
 			}
 		}

@@ -312,7 +312,7 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if scopeDigest(raw, coverage) != in.Digest {
-			problem(w, 409, "Evidence changed. Refresh and inspect the current scope.")
+			problemCode(w, 409, "SOURCE_STALE", "Evidence changed. Refresh and inspect the current scope.")
 			return
 		}
 		raw = scopeSources(raw)
