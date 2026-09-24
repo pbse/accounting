@@ -531,3 +531,9 @@ Author: Claude Opus 5.5. Migration 051. Review: GPT-6 Sol (medium) plan and code
 - `TestYearEndHandoffRollsForwardApprovedWork` now checks that a July fiscal year anchored in May 2026 covers 11 months from 2025-07 and is named FY2026. Observed red without the prior-year rollback and with the calendar-year query bound.
 - `TestProductionPostingSingleDurableAttempt` now posts a CAD prepaid: refused while the company's currency is unknown, then posted with a CAD journal once it is detected. Observed red with a USD journal, with the client currency not passed and without the posting check.
 - `TestTrialBalanceAccountRequiresUniquePrepaidRow` refuses a Trial Balance in another currency (observed red without the check); `TestCurrencyNeedsThreeLettersAndTwoDecimals` accepts USD, CAD and GBP and refuses JPY, KWD, XOF, IQD and lowercase codes (observed red with the refusal list shortened).
+
+## Stripe fee entry posting (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 052.
+
+- `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.

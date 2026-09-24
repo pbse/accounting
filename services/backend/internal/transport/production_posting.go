@@ -22,6 +22,7 @@ import (
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/reconciliation"
 	"close.local/backend/internal/secrets"
 )
 
@@ -120,7 +121,7 @@ func postingKinds() []string {
 	return kinds
 }
 
-var postableKinds = []string{"prepaid", "accrual", "loan", "owner"}
+var postableKinds = []string{"prepaid", "accrual", "loan", "owner", "settlement"}
 
 // postable returns the approved month-end entries a non-prepaid draft posts together and its source reference.
 // An accrual's next-month reversal is not posted.
@@ -146,6 +147,12 @@ func postable(kind string, raw []byte, period string) ([]prepaids.Adjustment, st
 			return nil, "", fmt.Errorf("This owner item proposes no entry to post; an open question is never posted")
 		}
 		entries, source = []prepaids.Adjustment{*paper.Proposal}, paper.Input.TransactionReference
+	case "settlement":
+		var paper reconciliation.SettlementWorkpaper
+		if json.Unmarshal(raw, &paper) != nil || len(paper.Blockers) > 0 || paper.Proposal == nil {
+			return nil, "", fmt.Errorf("This settlement proposes no fee entry to post")
+		}
+		entries, source = []prepaids.Adjustment{*paper.Proposal}, paper.Input.ReportReference
 	default:
 		return nil, "", fmt.Errorf("This work type has no postable entries")
 	}
@@ -581,7 +588,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		}
 		var paperRaw []byte
 		var paperDigest, period, kind string
-		err = db.QueryRowContext(r.Context(), `SELECT w.paper,w.digest,w.kind,c.period FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind IN ('prepaid','accrual','loan','owner') AND c.organization_id=$3`, r.PathValue("paper"), r.PathValue("id"), a.Organization).Scan(&paperRaw, &paperDigest, &kind, &period)
+		err = db.QueryRowContext(r.Context(), `SELECT w.paper,w.digest,w.kind,c.period FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind IN ('prepaid','accrual','loan','owner','settlement') AND c.organization_id=$3`, r.PathValue("paper"), r.PathValue("id"), a.Organization).Scan(&paperRaw, &paperDigest, &kind, &period)
 		if err != nil {
 			problem(w, 404, "Saved workpaper with postable entries not found.")
 			return
@@ -684,9 +691,24 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, err.Error())
 			return
 		}
+		// A settlement's report reference includes an editable location; its report file identifies the source.
+		var report string
+		if kind == "settlement" {
+			var cited struct{ Sources []preparation.Source }
+			json.Unmarshal(paperRaw, &cited)
+			for _, s := range cited.Sources {
+				if s.Role == "processor_report" {
+					report = s.ID
+				}
+			}
+		}
+		key := source
+		if report != "" {
+			key = "stripe report evidence " + report
+		}
 		// A newer draft of the same source, of any kind, supersedes this one.
 		var newer bool
-		err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND id>$2 AND lower(trim(COALESCE(paper->'input'->>'source_reference',paper->'input'->>'transaction_reference')))=$3)`, r.PathValue("id"), r.PathValue("paper"), strings.ToLower(strings.TrimSpace(source))).Scan(&newer)
+		err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND id>$2 AND (lower(trim(COALESCE(paper->'input'->>'source_reference',paper->'input'->>'transaction_reference',paper->'input'->>'report_reference')))=$3 OR ($4<>'' AND paper->'sources' @> jsonb_build_array(jsonb_build_object('role','processor_report','id',$4::text)))))`, r.PathValue("id"), r.PathValue("paper"), strings.ToLower(strings.TrimSpace(source)), report).Scan(&newer)
 		if err != nil || newer {
 			problem(w, 409, "A newer source draft exists or source freshness could not be checked.")
 			return
@@ -711,7 +733,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		if in.Action == "preview" {
 			j, _ := json.Marshal(journal)
 			b, _ := json.Marshal(observed)
-			sourceKey := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(source)))))
+			sourceKey := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(key)))))
 			var otherIntent string
 			err = db.QueryRowContext(r.Context(), `SELECT id::text FROM production_postings WHERE close_id::text=$1 AND source_key=$2 AND workpaper_id::text<>$3`, r.PathValue("id"), sourceKey, r.PathValue("paper")).Scan(&otherIntent)
 			if err == nil {

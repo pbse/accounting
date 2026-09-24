@@ -34,11 +34,11 @@ Every QuickBooks write (production and sandbox JournalEntry, sandbox VendorCredi
 
 Firms can require independent review (Firm settings, `org:manage`, hosted firms only; migration 040). With it on, nobody may approve a draft they prepared (created the preparation job, confirmed its intake, or saved it directly), drafts without a recorded preparer cannot be approved, and production posting approval and execution require that the current approval met the rule. Each policy change is recorded with its reason, actor and time. The shared local development workspace cannot enable the policy.
 
-## Enabling accrual, loan and owner posting
+## Enabling accrual, loan, owner and Stripe fee posting
 
-These kinds stay off until `PRODUCTION_POSTING_KINDS` lists them (default `prepaid`), for example `prepaid,accrual,loan,owner`. Turn a kind on only after observing QuickBooks behavior in the sandbox company:
+These kinds stay off until `PRODUCTION_POSTING_KINDS` lists them (default `prepaid`), for example `prepaid,accrual,loan,owner,settlement`. Turn a kind on only after observing QuickBooks behavior in the sandbox company:
 
-1. Post a test journal in the sandbox that touches each account type the kind uses: Expense and Liability for accruals and loan interest, Liability-to-Liability for current portion, Equity or Asset against Expense for owner items.
+1. Post a test journal in the sandbox that touches each account type the kind uses: Expense and Liability for accruals and loan interest, Liability-to-Liability for current portion, Equity or Asset against Expense for owner items, Expense against Revenue (or the deposit account) for Stripe fee entries.
 2. Read each account's `CurrentBalance` before and after. Verification expects debit-normal types (Asset, Expense) to rise on debits, and credit-normal types (Liability, Equity, Revenue) to rise on credits.
 3. If QuickBooks doesn't move a balance this way, don't enable the kind: every readback would fail and leave postings unverified.
 
