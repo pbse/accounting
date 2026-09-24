@@ -1,6 +1,9 @@
 package transport
 
 import (
+	"close.local/backend/internal/accruals"
+	"close.local/backend/internal/loans"
+	"close.local/backend/internal/owners"
 	"close.local/backend/internal/preparation"
 	"context"
 	"crypto/sha256"
@@ -10,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -24,8 +28,8 @@ type productionGrant struct {
 	ID           string    `json:"id"`
 	Realm        string    `json:"realm"`
 	Company      string    `json:"company"`
-	PrepaidID    string    `json:"prepaid_account_id"`
-	ExpenseID    string    `json:"expense_account_id"`
+	AccountIDs   []string  `json:"account_ids"`
+	Kinds        []string  `json:"kinds"`
 	MaxAmount    string    `json:"max_amount"`
 	Expires      time.Time `json:"expires_at"`
 	Reason       string    `json:"reason"`
@@ -83,10 +87,115 @@ func productionScope(ctx context.Context, db *sql.DB, closeID, org string) (stri
 	err := db.QueryRowContext(ctx, `SELECT entity FROM client_closes WHERE id::text=$1 AND organization_id=$2`, closeID, org).Scan(&entity)
 	return entity, err
 }
-func readProductionGrant(ctx context.Context, db *sql.DB, org, entity string) (productionGrant, error) {
+
+const grantColumns = `g.id::text,g.realm,x.company_name,to_jsonb(g.account_ids)::text,to_jsonb(g.kinds)::text,g.max_amount::text,g.expires_at,g.reason,g.granted_by,g.connection_id::text FROM production_posting_grants g JOIN quickbooks_connections x ON x.id=g.connection_id`
+
+func scanGrant(row *sql.Row) (productionGrant, error) {
 	var g productionGrant
-	err := db.QueryRowContext(ctx, `SELECT g.id::text,g.realm,x.company_name,g.prepaid_account_id,g.expense_account_id,g.max_amount::text,g.expires_at,g.reason,g.granted_by,g.connection_id::text FROM production_posting_grants g JOIN quickbooks_connections x ON x.id=g.connection_id WHERE g.organization_id=$1 AND lower(g.client_entity)=lower($2) AND g.revoked_at IS NULL LIMIT 1`, org, entity).Scan(&g.ID, &g.Realm, &g.Company, &g.PrepaidID, &g.ExpenseID, &g.MaxAmount, &g.Expires, &g.Reason, &g.GrantedBy, &g.ConnectionID)
+	var accounts, kinds string
+	err := row.Scan(&g.ID, &g.Realm, &g.Company, &accounts, &kinds, &g.MaxAmount, &g.Expires, &g.Reason, &g.GrantedBy, &g.ConnectionID)
+	if err == nil && (json.Unmarshal([]byte(accounts), &g.AccountIDs) != nil || json.Unmarshal([]byte(kinds), &g.Kinds) != nil) {
+		err = fmt.Errorf("saved grant is invalid")
+	}
 	return g, err
+}
+
+func readProductionGrant(ctx context.Context, db *sql.DB, org, entity string) (productionGrant, error) {
+	return scanGrant(db.QueryRowContext(ctx, `SELECT `+grantColumns+` WHERE g.organization_id=$1 AND lower(g.client_entity)=lower($2) AND g.revoked_at IS NULL LIMIT 1`, org, entity))
+}
+
+// postingKinds are the draft kinds enabled for production posting. New kinds stay off until the
+// operator has observed QuickBooks balance behavior for their account classifications in the sandbox.
+func postingKinds() []string {
+	kinds := []string{}
+	for _, kind := range strings.Split(os.Getenv("PRODUCTION_POSTING_KINDS"), ",") {
+		if kind = strings.TrimSpace(kind); kind != "" {
+			kinds = append(kinds, kind)
+		}
+	}
+	if len(kinds) == 0 {
+		return []string{"prepaid"}
+	}
+	return kinds
+}
+
+var postableKinds = []string{"prepaid", "accrual", "loan", "owner"}
+
+// postable returns the approved month-end entries a non-prepaid draft posts together and its source reference.
+// An accrual's next-month reversal is not posted.
+func postable(kind string, raw []byte, period string) ([]prepaids.Adjustment, string, error) {
+	var entries []prepaids.Adjustment
+	var source string
+	switch kind {
+	case "accrual":
+		var paper accruals.Workpaper
+		if json.Unmarshal(raw, &paper) != nil || paper.Proposal == nil {
+			return nil, "", fmt.Errorf("This accrual proposes no entry to post")
+		}
+		entries, source = []prepaids.Adjustment{*paper.Proposal}, paper.Input.SourceReference
+	case "loan":
+		var paper loans.Workpaper
+		if json.Unmarshal(raw, &paper) != nil || len(paper.Blockers) > 0 || len(paper.Proposals) == 0 {
+			return nil, "", fmt.Errorf("This loan schedule proposes no entry to post")
+		}
+		entries, source = paper.Proposals, paper.Input.SourceReference
+	case "owner":
+		var paper owners.Workpaper
+		if json.Unmarshal(raw, &paper) != nil || paper.Proposal == nil {
+			return nil, "", fmt.Errorf("This owner item proposes no entry to post; an open question is never posted")
+		}
+		entries, source = []prepaids.Adjustment{*paper.Proposal}, paper.Input.TransactionReference
+	default:
+		return nil, "", fmt.Errorf("This work type has no postable entries")
+	}
+	month, err := time.Parse("2006-01", period)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, entry := range entries {
+		if entry.Date != month.AddDate(0, 1, -1).Format("2006-01-02") {
+			return nil, "", fmt.Errorf("Only entries dated at the close month-end can be posted")
+		}
+	}
+	return entries, source, nil
+}
+
+// effects returns each account's signed balance change: debit-normal classifications rise on debits.
+func effects(journal quickbooks.Journal, accounts []quickbooks.LedgerAccount) (map[string]*big.Rat, error) {
+	class := map[string]string{}
+	for _, a := range accounts {
+		class[a.ID] = a.Classification
+	}
+	out, debits, credits := map[string]*big.Rat{}, new(big.Rat), new(big.Rat)
+	for _, line := range journal.Line {
+		amount, ok := new(big.Rat).SetString(string(line.Amount))
+		id := line.JournalEntryLineDetail.AccountRef.Value
+		c, known := class[id]
+		posting := line.JournalEntryLineDetail.PostingType
+		if !ok || amount.Sign() <= 0 || !known || line.DetailType != "JournalEntryLineDetail" || (posting != "Debit" && posting != "Credit") || !new(big.Rat).Mul(amount, big.NewRat(100, 1)).IsInt() {
+			return nil, fmt.Errorf("saved journal is invalid")
+		}
+		debitNormal := c == "Asset" || c == "Expense"
+		if !debitNormal && c != "Liability" && c != "Equity" && c != "Revenue" {
+			return nil, fmt.Errorf("account classification %q is unsupported", c)
+		}
+		if posting == "Debit" {
+			debits.Add(debits, amount)
+		} else {
+			credits.Add(credits, amount)
+		}
+		if (posting == "Debit") != debitNormal {
+			amount.Neg(amount)
+		}
+		if out[id] == nil {
+			out[id] = new(big.Rat)
+		}
+		out[id].Add(out[id], amount)
+	}
+	if debits.Cmp(credits) != 0 || debits.Sign() == 0 {
+		return nil, fmt.Errorf("saved journal is unbalanced")
+	}
+	return out, nil
 }
 
 type productionReader interface {
@@ -102,14 +211,14 @@ func readProductionPosting(ctx context.Context, db productionReader, closeID, pa
 	}
 	if err == nil {
 		var journal quickbooks.Journal
-		if json.Unmarshal(p.Journal, &journal) != nil || len(journal.Line) != 2 {
+		if json.Unmarshal(p.Journal, &journal) != nil {
 			return p, fmt.Errorf("saved journal is invalid")
 		}
-		p.Projected, err = projectedBalances(p.LedgerBefore, journal.Line[0].Amount)
+		p.Projected, err = projectedBalances(p.LedgerBefore, journal)
 	}
 	if err == nil {
 		var raw []byte
-		err = db.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(id::text ORDER BY id),'[]'::jsonb) FROM production_postings WHERE connection_id::text=$1 AND id::text<>$2 AND (state IN ('executing','unknown') OR (state='approved' AND approval_expires_at>now())) AND (ledger_before->'prepaid'->>'id' IN ($3,$4) OR ledger_before->'expense'->>'id' IN ($3,$4))`, p.ConnectionID, p.ID, p.LedgerBefore.Prepaid.ID, p.LedgerBefore.Expense.ID).Scan(&raw)
+		err = db.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(id::text ORDER BY id),'[]'::jsonb) FROM production_postings WHERE connection_id::text=$1 AND id::text<>$2 AND (state IN ('executing','unknown') OR (state='approved' AND approval_expires_at>now())) AND `+sharesAccount, p.ConnectionID, p.ID, accountIDs(p.LedgerBefore)).Scan(&raw)
 		if err == nil {
 			err = json.Unmarshal(raw, &p.Conflicts)
 		}
@@ -117,26 +226,35 @@ func readProductionPosting(ctx context.Context, db productionReader, closeID, pa
 	return p, err
 }
 
-func projectedBalances(before quickbooks.LedgerObservation, amount json.Number) (map[string]string, error) {
-	delta, ok := new(big.Rat).SetString(string(amount))
-	if !ok || delta.Sign() <= 0 {
-		return nil, fmt.Errorf("journal amount is invalid")
+// sharesAccount matches intents whose saved observation touches any of the JSON array of account IDs in $3.
+const sharesAccount = `EXISTS(SELECT 1 FROM jsonb_array_elements(ledger_before->'accounts') a WHERE a->>'id' IN (SELECT jsonb_array_elements_text($3::jsonb)))`
+
+func accountIDs(o quickbooks.LedgerObservation) string {
+	ids := []string{}
+	for _, a := range o.Accounts {
+		ids = append(ids, a.ID)
+	}
+	raw, _ := json.Marshal(ids)
+	return string(raw)
+}
+
+// projectedBalances maps each touched account ID to its balance after the journal.
+func projectedBalances(before quickbooks.LedgerObservation, journal quickbooks.Journal) (map[string]string, error) {
+	change, err := effects(journal, before.Accounts)
+	if err != nil {
+		return nil, err
 	}
 	out := map[string]string{}
-	for _, item := range []struct {
-		name, balance string
-		sign          int64
-	}{{"prepaid", string(before.Prepaid.Balance), 1}, {"expense", string(before.Expense.Balance), -1}} {
-		current, valid := new(big.Rat).SetString(item.balance)
-		if !valid {
+	for _, account := range before.Accounts {
+		current, valid := new(big.Rat).SetString(string(account.Balance))
+		if !valid || change[account.ID] == nil {
 			return nil, fmt.Errorf("versioned balance is invalid")
 		}
-		projected := new(big.Rat).Add(current, new(big.Rat).Mul(delta, big.NewRat(item.sign, 1)))
-		cents := new(big.Rat).Mul(projected, big.NewRat(100, 1))
-		if !cents.IsInt() {
+		projected := new(big.Rat).Add(current, change[account.ID])
+		if !new(big.Rat).Mul(projected, big.NewRat(100, 1)).IsInt() {
 			return nil, fmt.Errorf("projected balance is not exact cents")
 		}
-		out[item.name] = projected.FloatString(2)
+		out[account.ID] = projected.FloatString(2)
 	}
 	return out, nil
 }
@@ -176,34 +294,33 @@ func rehearseProduction(items []rehearsalInput, hasMore bool) closeRehearsal {
 			continue
 		}
 		var journal quickbooks.Journal
-		if json.Unmarshal(p.Journal, &journal) != nil || journal.CurrencyRef.Value != "USD" || len(journal.Line) != 2 || journal.Line[0].DetailType != "JournalEntryLineDetail" || journal.Line[1].DetailType != "JournalEntryLineDetail" || journal.Line[0].JournalEntryLineDetail.PostingType != "Debit" || journal.Line[1].JournalEntryLineDetail.PostingType != "Credit" || journal.Line[0].JournalEntryLineDetail.AccountRef.Value != p.LedgerBefore.Prepaid.ID || journal.Line[1].JournalEntryLineDetail.AccountRef.Value != p.LedgerBefore.Expense.ID || p.LedgerBefore.Prepaid.ID == p.LedgerBefore.Expense.ID {
+		var change map[string]*big.Rat
+		err := json.Unmarshal(p.Journal, &journal)
+		if err == nil && journal.CurrencyRef.Value != "USD" {
+			err = fmt.Errorf("saved journal currency is unsupported")
+		}
+		if err == nil {
+			change, err = effects(journal, p.LedgerBefore.Accounts)
+		}
+		if err != nil || len(change) != len(p.LedgerBefore.Accounts) {
 			out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" has an incompatible saved journal.")
 			continue
 		}
-		amount, err := prepaids.Amount(string(journal.Line[0].Amount))
-		other, otherErr := prepaids.Amount(string(journal.Line[1].Amount))
-		if err != nil || otherErr != nil || amount <= 0 || amount != other {
-			out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" has an invalid or unbalanced amount.")
-			continue
-		}
-		for _, effect := range []struct {
-			account quickbooks.LedgerAccount
-			delta   int64
-		}{{p.LedgerBefore.Prepaid, amount}, {p.LedgerBefore.Expense, -amount}} {
-			balance, valid := new(big.Rat).SetString(string(effect.account.Balance))
-			if !valid || !new(big.Rat).Mul(balance, big.NewRat(100, 1)).IsInt() || effect.account.ID == "" || effect.account.SyncToken == "" {
+		for _, account := range p.LedgerBefore.Accounts {
+			balance, valid := new(big.Rat).SetString(string(account.Balance))
+			if !valid || !new(big.Rat).Mul(balance, big.NewRat(100, 1)).IsInt() || account.ID == "" || account.SyncToken == "" {
 				out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" lacks a valid versioned account balance.")
 				continue
 			}
-			current := accounts[effect.account.ID]
+			current := accounts[account.ID]
 			if current == nil {
-				current = &rehearsalAccount{ID: effect.account.ID, Name: effect.account.Name, SyncToken: effect.account.SyncToken, baseline: balance, change: new(big.Rat)}
-				accounts[effect.account.ID] = current
-			} else if current.baseline.Cmp(balance) != 0 || current.SyncToken != effect.account.SyncToken || current.Name != effect.account.Name {
-				out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" uses a different balance or version for account #"+effect.account.ID+".")
+				current = &rehearsalAccount{ID: account.ID, Name: account.Name, SyncToken: account.SyncToken, baseline: balance, change: new(big.Rat)}
+				accounts[account.ID] = current
+			} else if current.baseline.Cmp(balance) != 0 || current.SyncToken != account.SyncToken || current.Name != account.Name {
+				out.Blockers = append(out.Blockers, "Draft #"+item.PaperID+" uses a different balance or version for account #"+account.ID+".")
 				continue
 			}
-			current.change.Add(current.change, new(big.Rat).SetFrac(big.NewInt(effect.delta), big.NewInt(100)))
+			current.change.Add(current.change, change[account.ID])
 		}
 	}
 	if len(out.Blockers) > 0 {
@@ -222,18 +339,15 @@ func productionDigest(grantID, paperDigest string, j quickbooks.Journal, o quick
 	raw, _ := json.Marshal([]any{grantID, paperDigest, j, o})
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
-func ledgerAfterMatches(before, after quickbooks.LedgerObservation, amount json.Number) bool {
-	delta, ok := new(big.Rat).SetString(string(amount))
-	if !ok || delta.Sign() <= 0 || after.Company != before.Company || after.Prepaid.ID != before.Prepaid.ID || after.Expense.ID != before.Expense.ID {
+func ledgerAfterMatches(before, after quickbooks.LedgerObservation, journal quickbooks.Journal) bool {
+	projected, err := projectedBalances(before, journal)
+	if err != nil || after.Company != before.Company || len(after.Accounts) != len(before.Accounts) {
 		return false
 	}
-	for _, item := range []struct {
-		old, next json.Number
-		sign      int64
-	}{{before.Prepaid.Balance, after.Prepaid.Balance, 1}, {before.Expense.Balance, after.Expense.Balance, -1}} {
-		old, a := new(big.Rat).SetString(string(item.old))
-		next, b := new(big.Rat).SetString(string(item.next))
-		if !a || !b || next.Cmp(new(big.Rat).Add(old, new(big.Rat).Mul(delta, big.NewRat(item.sign, 1)))) != 0 {
+	for i, account := range after.Accounts {
+		next, ok := new(big.Rat).SetString(string(account.Balance))
+		want, _ := new(big.Rat).SetString(projected[account.ID])
+		if !ok || account.ID != before.Accounts[i].ID || want == nil || next.Cmp(want) != 0 {
 			return false
 		}
 	}
@@ -353,8 +467,8 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			Action       string    `json:"action"`
 			ConnectionID string    `json:"connection_id"`
 			GrantID      string    `json:"grant_id"`
-			PrepaidID    string    `json:"prepaid_account_id"`
-			ExpenseID    string    `json:"expense_account_id"`
+			AccountIDs   []string  `json:"account_ids"`
+			Kinds        []string  `json:"kinds"`
 			MaxAmount    string    `json:"max_amount"`
 			Reason       string    `json:"reason"`
 			Confirmation string    `json:"confirmation"`
@@ -382,8 +496,16 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		amount, amountErr := prepaids.Amount(in.MaxAmount)
-		if in.Action != "grant" || in.Confirmation != "GRANT PRODUCTION POSTING" || !quickbooks.ValidRealm(in.PrepaidID) || !quickbooks.ValidRealm(in.ExpenseID) || in.PrepaidID == in.ExpenseID || amountErr != nil || amount <= 0 || in.ExpiresAt.Before(time.Now()) || in.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) || len(strings.TrimSpace(in.Reason)) < 10 || len(in.Reason) > 2000 {
-			problem(w, 422, "Confirm distinct account IDs, a positive limit, expiry within 30 days and a reason of at least 10 characters.")
+		accountsOK := len(in.AccountIDs) >= 2 && len(in.AccountIDs) <= 20
+		for i, id := range in.AccountIDs {
+			accountsOK = accountsOK && quickbooks.ValidRealm(id) && !slices.Contains(in.AccountIDs[:i], id)
+		}
+		kindsOK := len(in.Kinds) > 0
+		for i, kind := range in.Kinds {
+			kindsOK = kindsOK && slices.Contains(postableKinds, kind) && !slices.Contains(in.Kinds[:i], kind)
+		}
+		if in.Action != "grant" || in.Confirmation != "GRANT PRODUCTION POSTING" || !accountsOK || !kindsOK || amountErr != nil || amount <= 0 || in.ExpiresAt.Before(time.Now()) || in.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) || len(strings.TrimSpace(in.Reason)) < 10 || len(in.Reason) > 2000 {
+			problem(w, 422, "Confirm 2–20 distinct account IDs, the draft kinds covered, a positive limit, expiry within 30 days and a reason of at least 10 characters.")
 			return
 		}
 		var realm, company string
@@ -393,7 +515,9 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var id string
-		err = db.QueryRowContext(r.Context(), `INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,prepaid_account_id,expense_account_id,max_amount,expires_at,reason,granted_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, a.Organization, entity, in.ConnectionID, realm, in.PrepaidID, in.ExpenseID, in.MaxAmount, in.ExpiresAt, strings.TrimSpace(in.Reason), a.Subject).Scan(&id)
+		accounts, _ := json.Marshal(in.AccountIDs)
+		kinds, _ := json.Marshal(in.Kinds)
+		err = db.QueryRowContext(r.Context(), `INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,account_ids,kinds,max_amount,expires_at,reason,granted_by) VALUES($1,$2,$3,$4,ARRAY(SELECT jsonb_array_elements_text($5::jsonb)),ARRAY(SELECT jsonb_array_elements_text($6::jsonb)),$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, a.Organization, entity, in.ConnectionID, realm, string(accounts), string(kinds), in.MaxAmount, in.ExpiresAt, strings.TrimSpace(in.Reason), a.Subject).Scan(&id)
 		if err != nil {
 			problem(w, 409, "A current grant exists or the grant could not be saved. Refresh before deciding.")
 			return
@@ -454,26 +578,39 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var paperRaw []byte
-		var paperDigest, period string
-		err = db.QueryRowContext(r.Context(), `SELECT w.paper,w.digest,c.period FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind='prepaid' AND c.organization_id=$3`, r.PathValue("paper"), r.PathValue("id"), a.Organization).Scan(&paperRaw, &paperDigest, &period)
+		var paperDigest, period, kind string
+		err = db.QueryRowContext(r.Context(), `SELECT w.paper,w.digest,w.kind,c.period FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind IN ('prepaid','accrual','loan','owner') AND c.organization_id=$3`, r.PathValue("paper"), r.PathValue("id"), a.Organization).Scan(&paperRaw, &paperDigest, &kind, &period)
 		if err != nil {
-			problem(w, 404, "Saved prepaid workpaper not found.")
+			problem(w, 404, "Saved workpaper with postable entries not found.")
 			return
 		}
-		var paper prepaids.Workpaper
-		if json.Unmarshal(paperRaw, &paper) != nil || paper.Input.Entity != entity || paper.Input.ClosePeriod != period {
+		var head struct {
+			Input struct {
+				Entity      string `json:"entity"`
+				ClosePeriod string `json:"close_period"`
+			} `json:"input"`
+		}
+		if json.Unmarshal(paperRaw, &head) != nil || strings.TrimSpace(head.Input.Entity) != entity || head.Input.ClosePeriod != period {
 			problem(w, 409, "Workpaper client or period does not match this close.")
+			return
+		}
+		if !slices.Contains(postingKinds(), kind) {
+			problem(w, 409, "Production posting for "+kind+" drafts is not enabled yet. It turns on after QuickBooks balance behavior is checked in the sandbox.")
 			return
 		}
 		record, recordErr := readProductionPosting(r.Context(), db, r.PathValue("id"), r.PathValue("paper"))
 		var g productionGrant
 		if in.Action == "verify" && recordErr == nil {
-			err = db.QueryRowContext(r.Context(), `SELECT g.id::text,g.realm,x.company_name,g.prepaid_account_id,g.expense_account_id,g.max_amount::text,g.expires_at,g.reason,g.granted_by,g.connection_id::text FROM production_posting_grants g JOIN quickbooks_connections x ON x.id=g.connection_id WHERE g.id=$1 AND g.organization_id=$2 AND lower(g.client_entity)=lower($3)`, record.GrantID, a.Organization, entity).Scan(&g.ID, &g.Realm, &g.Company, &g.PrepaidID, &g.ExpenseID, &g.MaxAmount, &g.Expires, &g.Reason, &g.GrantedBy, &g.ConnectionID)
+			g, err = scanGrant(db.QueryRowContext(r.Context(), `SELECT `+grantColumns+` WHERE g.id=$1 AND g.organization_id=$2 AND lower(g.client_entity)=lower($3)`, record.GrantID, a.Organization, entity))
 		} else {
 			g, err = readProductionGrant(r.Context(), db, a.Organization, entity)
 		}
 		if err != nil || (in.Action != "verify" && time.Now().After(g.Expires)) {
 			problem(w, 409, "An unexpired client-specific production grant is required for new decisions.")
+			return
+		}
+		if in.Action != "verify" && !slices.Contains(g.Kinds, kind) {
+			problem(w, 409, "This client's production grant does not cover "+kind+" drafts. Ask for a new grant that includes them.")
 			return
 		}
 		var encrypted []byte
@@ -494,7 +631,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Production credential unavailable.")
 			return
 		}
-		client := quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, DebitAccount: g.PrepaidID, CreditAccount: g.ExpenseID, Production: true}
+		client := quickbooks.Sandbox{Realm: g.Realm, Token: credentials.Access, Entity: entity, Accounts: g.AccountIDs, Production: true}
 		if in.Action == "verify" {
 			if recordErr != nil || record.State == "preview" || record.State == "approved" {
 				problem(w, 409, "No saved external journal is available. Never retry an unknown write.")
@@ -512,31 +649,54 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Saved posting intent is invalid.")
 				return
 			}
-			verifyProduction(w, r, db, client, paper, record, expected)
+			verifyProduction(w, r, db, client, record, expected)
 			return
 		}
 		if in.Action != "preview" && in.Action != "approve" && in.Action != "execute" {
 			problem(w, 422, "Choose preview, approve, execute or verify.")
 			return
 		}
-		var newer bool
-		err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND id>$2 AND kind='prepaid' AND lower(trim(paper->'input'->>'source_reference'))=$3)`, r.PathValue("id"), r.PathValue("paper"), strings.ToLower(strings.TrimSpace(paper.Input.SourceReference))).Scan(&newer)
-		if err != nil || newer {
-			problem(w, 409, "A newer source draft exists or source freshness could not be checked.")
-			return
+		var journal quickbooks.Journal
+		var observed quickbooks.LedgerObservation
+		var source string
+		if kind == "prepaid" {
+			var paper prepaids.Workpaper
+			if json.Unmarshal(paperRaw, &paper) != nil {
+				problem(w, 409, "Saved workpaper is invalid.")
+				return
+			}
+			source = paper.Input.SourceReference
+			journal, observed, err = client.PrepareObserved(r.Context(), paper)
+		} else {
+			var entries []prepaids.Adjustment
+			if entries, source, err = postable(kind, paperRaw, period); err == nil {
+				journal, observed, err = client.PrepareEntries(r.Context(), entries, source)
+			}
 		}
-		journal, observed, err := client.PrepareObserved(r.Context(), paper)
 		if err != nil {
 			problem(w, 422, err.Error())
 			return
 		}
-		amount, err := prepaids.Amount(string(journal.Line[0].Amount))
-		if err != nil {
-			problem(w, 422, "Unsupported journal amount.")
+		// A newer draft of the same source, of any kind, supersedes this one.
+		var newer bool
+		err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND id>$2 AND lower(trim(COALESCE(paper->'input'->>'source_reference',paper->'input'->>'transaction_reference')))=$3)`, r.PathValue("id"), r.PathValue("paper"), strings.ToLower(strings.TrimSpace(source))).Scan(&newer)
+		if err != nil || newer {
+			problem(w, 409, "A newer source draft exists or source freshness could not be checked.")
 			return
 		}
+		var total int64
+		for _, line := range journal.Line {
+			cents, e := prepaids.Amount(string(line.Amount))
+			if e != nil {
+				problem(w, 422, "Unsupported journal amount.")
+				return
+			}
+			if line.JournalEntryLineDetail.PostingType == "Debit" {
+				total += cents
+			}
+		}
 		limit, err := prepaids.Amount(g.MaxAmount)
-		if err != nil || amount > limit {
+		if err != nil || total > limit {
 			problem(w, 409, "Journal exceeds this client's grant limit.")
 			return
 		}
@@ -544,7 +704,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		if in.Action == "preview" {
 			j, _ := json.Marshal(journal)
 			b, _ := json.Marshal(observed)
-			sourceKey := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(paper.Input.SourceReference)))))
+			sourceKey := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(source)))))
 			var otherIntent string
 			err = db.QueryRowContext(r.Context(), `SELECT id::text FROM production_postings WHERE close_id::text=$1 AND source_key=$2 AND workpaper_id::text<>$3`, r.PathValue("id"), sourceKey, r.PathValue("paper")).Scan(&otherIntent)
 			if err == nil {
@@ -607,7 +767,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "A current accountant-approved workpaper is required.")
 			return
 		}
-		if basis, e := preparation.BasisIssue(r.Context(), tx, closeID, "prepaid", nil); e != nil || basis != "" {
+		if basis, e := preparation.BasisIssue(r.Context(), tx, closeID, kind, paperRaw); e != nil || basis != "" {
 			if e != nil {
 				problem(w, 503, "The client's accounting basis could not be checked. No write was made.")
 			} else {
@@ -635,7 +795,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var competing bool
-		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM production_postings WHERE connection_id::text=$1 AND id::text<>$2 AND (state IN ('executing','unknown') OR (state='approved' AND approval_expires_at>now())) AND (ledger_before->'prepaid'->>'id' IN ($3,$4) OR ledger_before->'expense'->>'id' IN ($3,$4)))`, record.ConnectionID, record.ID, record.LedgerBefore.Prepaid.ID, record.LedgerBefore.Expense.ID).Scan(&competing); err != nil || competing {
+		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM production_postings WHERE connection_id::text=$1 AND id::text<>$2 AND (state IN ('executing','unknown') OR (state='approved' AND approval_expires_at>now())) AND `+sharesAccount+`)`, record.ConnectionID, record.ID, accountIDs(record.LedgerBefore)).Scan(&competing); err != nil || competing {
 			problem(w, 409, "Another approved or unsettled posting now uses these accounts. Refresh before deciding.")
 			return
 		}
@@ -690,7 +850,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 				problemCode(w, 502, "EXECUTION_UNKNOWN", "Production outcome unknown. Investigate the saved request ID in QuickBooks; do not repost.")
 				return
 			}
-			verifyProduction(w, r, db, client, paper, productionPosting{posting: posting{ID: record.ID, ExternalID: id, State: "unknown"}, LedgerBefore: record.LedgerBefore}, journal)
+			verifyProduction(w, r, db, client, productionPosting{posting: posting{ID: record.ID, ExternalID: id, State: "unknown"}, LedgerBefore: record.LedgerBefore}, journal)
 			return
 		}
 		p, e := readProductionPosting(r.Context(), db, r.PathValue("id"), r.PathValue("paper"))
@@ -701,7 +861,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		jsonReply(w, 200, p)
 	})
 }
-func verifyProduction(w http.ResponseWriter, r *http.Request, db *sql.DB, client quickbooks.Sandbox, paper prepaids.Workpaper, record productionPosting, journal quickbooks.Journal) {
+func verifyProduction(w http.ResponseWriter, r *http.Request, db *sql.DB, client quickbooks.Sandbox, record productionPosting, journal quickbooks.Journal) {
 	readback, err := client.VerifyReadback(r.Context(), record.ExternalID, journal)
 	if err == nil {
 		persist, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
@@ -740,8 +900,8 @@ func verifyProduction(w http.ResponseWriter, r *http.Request, db *sql.DB, client
 	}
 	var after quickbooks.LedgerObservation
 	if err == nil {
-		after, err = client.ObserveAfterWrite(r.Context(), paper)
-		if err == nil && !ledgerAfterMatches(record.LedgerBefore, after, journal.Line[0].Amount) {
+		after, err = client.ObserveAfterWrite(r.Context(), record.LedgerBefore)
+		if err == nil && !ledgerAfterMatches(record.LedgerBefore, after, journal) {
 			err = errors.New("Journal exists, but account balances do not match the expected effect; investigate other activity or report lag")
 		}
 	}

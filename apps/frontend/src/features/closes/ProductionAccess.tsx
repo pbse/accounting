@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
 type Connection = { id: string; state: string; realm: string; company_name: string; error: string };
-type Grant = { id?: string; state?: string; realm?: string; company?: string; prepaid_account_id?: string; expense_account_id?: string; max_amount?: string; expires_at?: string; reason?: string };
+type Grant = { id?: string; state?: string; realm?: string; company?: string; account_ids?: string[]; kinds?: string[]; max_amount?: string; expires_at?: string; reason?: string };
 type Status = { production_configured: boolean; hosted: boolean; data: { production_connection: Connection | null } };
 
 export function ProductionAccess({ closeId, entity }: { closeId: string; entity: string }) {
@@ -11,8 +11,8 @@ export function ProductionAccess({ closeId, entity }: { closeId: string; entity:
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
-  const [prepaid, setPrepaid] = useState("");
-  const [expense, setExpense] = useState("");
+  const [accounts, setAccounts] = useState("");
+  const [kinds, setKinds] = useState<string[]>(["prepaid"]);
   const [limit, setLimit] = useState("");
   const [expiry, setExpiry] = useState("");
   const [reason, setReason] = useState("");
@@ -55,7 +55,7 @@ export function ProductionAccess({ closeId, entity }: { closeId: string; entity:
     try {
       await workspaceRequest(`/${closeId}/production-grant`, {
         action, connection_id: status?.data.production_connection?.id, grant_id: grant?.id,
-        prepaid_account_id: prepaid, expense_account_id: expense, max_amount: limit,
+        account_ids: accounts.split(/[\s,]+/).filter(Boolean), kinds, max_amount: limit,
         expires_at: expiry ? new Date(expiry).toISOString() : undefined,
         reason, confirmation: phrase,
       });
@@ -69,7 +69,7 @@ export function ProductionAccess({ closeId, entity }: { closeId: string; entity:
   const callbackHere = callback.get("qbo_env") === "production" && callback.has("qbo_code");
   return <details open={callbackHere}>
     <summary>Production QuickBooks authorization and client grant</summary>
-    <p>Production posting is always a separate human decision. The connected QuickBooks company name must exactly match the close client <strong>{entity}</strong>. The grant limits this client to two account IDs, a maximum journal amount and an expiry.</p>
+    <p>Production posting is always a separate human decision. The connected QuickBooks company name must exactly match the close client <strong>{entity}</strong>. The grant limits this client to listed account IDs, the draft kinds it covers, a maximum journal total and an expiry.</p>
     <button disabled={busy} onClick={() => void load()}>Refresh production status</button>
     {error && <p role="alert">{error}</p>}
     {!status ? <p>Loading…</p> : <>
@@ -85,15 +85,20 @@ export function ProductionAccess({ closeId, entity }: { closeId: string; entity:
       {c && <button disabled={busy || !confirmed} onClick={() => void connectionAction("disconnect")}>Disconnect production company locally</button>}
       <h4>Client-specific production grant</h4>
       {grant?.id ? <>
-        <p>Grant #{grant.id}: prepaid account {grant.prepaid_account_id}, expense account {grant.expense_account_id}; maximum ${grant.max_amount}; expires {grant.expires_at ? new Date(grant.expires_at).toLocaleString() : "unknown"}.</p>
+        <p>Grant #{grant.id}: accounts {grant.account_ids?.join(", ")}; covers {grant.kinds?.join(", ")} drafts; maximum ${grant.max_amount} per journal; expires {grant.expires_at ? new Date(grant.expires_at).toLocaleString() : "unknown"}.</p>
         <p>Reason: {grant.reason}</p>
         <label>Type REVOKE PRODUCTION GRANT<input value={phrase} onChange={e => setPhrase(e.target.value)} autoComplete="off" /></label>
         <button disabled={busy || phrase !== "REVOKE PRODUCTION GRANT"} onClick={() => void grantAction("revoke")}>Revoke this grant</button>
       </> : <>
         <p>No active grant. A user with client access and posting approval permission must choose exact account IDs from the production Chart of Accounts.</p>
-        <label>Prepaid asset account ID<input value={prepaid} onChange={e => setPrepaid(e.target.value)} inputMode="numeric" /></label>
-        <label>Expense account ID<input value={expense} onChange={e => setExpense(e.target.value)} inputMode="numeric" /></label>
-        <label>Maximum journal amount (USD)<input value={limit} onChange={e => setLimit(e.target.value)} inputMode="decimal" /></label>
+        <label>Account IDs the grant allows (2–20, from the Chart of Accounts)<input value={accounts} onChange={e => setAccounts(e.target.value)} placeholder="For example 30, 31, 32" /></label>
+        <fieldset><legend>Draft kinds this grant covers</legend>
+          {[["prepaid", "Prepaid schedules"], ["accrual", "Accrued expenses"], ["loan", "Loan schedules"], ["owner", "Owner items"]].map(([kind, label]) => (
+            <label key={kind}><input type="checkbox" checked={kinds.includes(kind)} onChange={e => setKinds(e.target.checked ? [...kinds, kind] : kinds.filter(k => k !== kind))} /> {label}</label>
+          ))}
+          <small>Kinds other than prepaid also need the server to enable them after the QuickBooks sandbox balance check.</small>
+        </fieldset>
+        <label>Maximum journal total (USD)<input value={limit} onChange={e => setLimit(e.target.value)} inputMode="decimal" /></label>
         <label>Grant expiry date and time (within 30 days)<input type="datetime-local" value={expiry} onChange={e => setExpiry(e.target.value)} /></label>
         <label>Reason<input value={reason} onChange={e => setReason(e.target.value)} maxLength={2000} /></label>
         <label>Type GRANT PRODUCTION POSTING<input value={phrase} onChange={e => setPhrase(e.target.value)} autoComplete="off" /></label>

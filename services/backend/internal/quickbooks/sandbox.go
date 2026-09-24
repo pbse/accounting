@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,20 +39,22 @@ type Journal struct {
 }
 type Sandbox struct {
 	Realm, Token, Entity, DebitAccount, CreditAccount string
-	Client                                            *http.Client
-	Production                                        bool
+	// Accounts are the account IDs a production grant allows; sandbox posting uses the debit/credit pair.
+	Accounts   []string
+	Client     *http.Client
+	Production bool
 }
 type LedgerAccount struct {
-	ID        string      `json:"id"`
-	Name      string      `json:"name"`
-	Balance   json.Number `json:"balance"`
-	SyncToken string      `json:"sync_token"`
+	ID             string      `json:"id"`
+	Name           string      `json:"name"`
+	Classification string      `json:"classification"`
+	Balance        json.Number `json:"balance"`
+	SyncToken      string      `json:"sync_token"`
 }
 type LedgerObservation struct {
-	Company       string        `json:"company"`
-	Prepaid       LedgerAccount `json:"prepaid"`
-	Expense       LedgerAccount `json:"expense"`
-	ClosedThrough string        `json:"closed_through,omitempty"`
+	Company       string          `json:"company"`
+	Accounts      []LedgerAccount `json:"accounts"`
+	ClosedThrough string          `json:"closed_through,omitempty"`
 }
 
 // OpenPeriod reads the company's book closing date and refuses a transaction dated on or before it.
@@ -82,8 +85,21 @@ func (s Sandbox) OpenPeriod(ctx context.Context, date string) (string, error) {
 
 var identifier = regexp.MustCompile(`^[0-9]{1,30}$`)
 
+func (s Sandbox) allowed() []string {
+	if len(s.Accounts) > 0 {
+		return s.Accounts
+	}
+	return []string{s.DebitAccount, s.CreditAccount}
+}
+
 func (s Sandbox) Ready() bool {
-	return identifier.MatchString(s.Realm) && s.Token != "" && s.Entity != "" && identifier.MatchString(s.DebitAccount) && identifier.MatchString(s.CreditAccount) && s.DebitAccount != s.CreditAccount
+	ids := s.allowed()
+	for i, id := range ids {
+		if !identifier.MatchString(id) || slices.Contains(ids[:i], id) {
+			return false
+		}
+	}
+	return identifier.MatchString(s.Realm) && s.Token != "" && s.Entity != "" && len(ids) >= 2
 }
 func (s Sandbox) request(ctx context.Context, method, path string, body any, result any) error {
 	if !s.Ready() {
@@ -129,81 +145,156 @@ func (s Sandbox) Prepare(ctx context.Context, paper prepaids.Workpaper) (Journal
 	journal, _, err := s.PrepareObserved(ctx, paper)
 	return journal, err
 }
+
+// PrepareObserved builds the full-month prepaid journal: debit an Asset, credit an Expense.
 func (s Sandbox) PrepareObserved(ctx context.Context, paper prepaids.Workpaper) (Journal, LedgerObservation, error) {
-	return s.prepare(ctx, paper, true)
-}
-
-// ObserveAfterWrite rereads balances for readback; period eligibility only gates new writes.
-func (s Sandbox) ObserveAfterWrite(ctx context.Context, paper prepaids.Workpaper) (LedgerObservation, error) {
-	_, observation, err := s.prepare(ctx, paper, false)
-	return observation, err
-}
-
-func (s Sandbox) prepare(ctx context.Context, paper prepaids.Workpaper, beforeWrite bool) (Journal, LedgerObservation, error) {
-	var observation LedgerObservation
 	if paper.Input.Method != prepaids.Method || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" || paper.Input.CancellationMethod != "" {
 		if !s.Production {
-			return Journal{}, observation, errors.New("This accounting method supports draft review only; sandbox posting has not been enabled for it")
+			return Journal{}, LedgerObservation{}, errors.New("This accounting method supports draft review only; sandbox posting has not been enabled for it")
 		}
-		return Journal{}, observation, errors.New("Only the initial full-month prepaid method is enabled for posting")
+		return Journal{}, LedgerObservation{}, errors.New("Only the initial full-month prepaid method is enabled for posting")
 	}
-	if !s.Ready() || paper.Proposal == nil || paper.Input.Entity != s.Entity {
-		return Journal{}, observation, errors.New("This draft must match the confirmed company and have a positive prepaid proposal")
+	if paper.Proposal == nil || paper.Input.Entity != s.Entity {
+		return Journal{}, LedgerObservation{}, errors.New("This draft must match the confirmed company and have a positive prepaid proposal")
 	}
+	journal, observation, err := s.PrepareEntries(ctx, []prepaids.Adjustment{*paper.Proposal}, paper.Input.SourceReference)
+	if err != nil {
+		return journal, observation, err
+	}
+	for _, line := range journal.Line {
+		want := map[string]string{"Debit": "Asset", "Credit": "Expense"}[line.JournalEntryLineDetail.PostingType]
+		for _, account := range observation.Accounts {
+			if account.ID == line.JournalEntryLineDetail.AccountRef.Value && account.Classification != want {
+				return Journal{}, observation, errors.New("QuickBooks account mapping, active status, classification or currency no longer matches the proposal")
+			}
+		}
+	}
+	return journal, observation, nil
+}
+
+type account struct {
+	LedgerAccount
+	fullName string
+}
+
+func (s Sandbox) readAccount(ctx context.Context, id string) (account, error) {
+	var result struct {
+		Account struct {
+			ID                                       string `json:"Id"`
+			Name, FullyQualifiedName, Classification string
+			Active                                   bool
+			CurrencyRef                              Reference
+			CurrentBalance                           json.Number
+			SyncToken                                string
+		}
+	}
+	if err := s.request(ctx, "GET", "/account/"+id, nil, &result); err != nil {
+		return account{}, err
+	}
+	a := result.Account
+	if a.ID != id || !a.Active || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != "USD") {
+		return account{}, errors.New("QuickBooks account mapping, active status, classification or currency no longer matches the proposal")
+	}
+	if s.Production {
+		if _, ok := new(big.Rat).SetString(string(a.CurrentBalance)); !ok || a.SyncToken == "" {
+			return account{}, errors.New("Current account balance or version is unavailable; production posting is blocked")
+		}
+	}
+	return account{LedgerAccount{ID: a.ID, Name: a.Name, Classification: a.Classification, Balance: a.CurrentBalance, SyncToken: a.SyncToken}, a.FullyQualifiedName}, nil
+}
+
+func (s Sandbox) company(ctx context.Context) error {
 	var company struct{ CompanyInfo struct{ CompanyName string } }
 	if err := s.request(ctx, "GET", "/companyinfo/"+s.Realm, nil, &company); err != nil {
-		return Journal{}, observation, err
+		return err
 	}
 	if company.CompanyInfo.CompanyName != s.Entity {
-		return Journal{}, observation, errors.New("QuickBooks company name does not match the configured client")
+		return errors.New("QuickBooks company name does not match the configured client")
 	}
-	observation.Company = company.CompanyInfo.CompanyName
-	if beforeWrite {
-		closed, err := s.OpenPeriod(ctx, paper.Proposal.Date)
+	return nil
+}
+
+// PrepareEntries builds one journal for same-date approved entries. Each account name must match exactly
+// one allowed account; the observation holds the touched accounts' versioned balances.
+func (s Sandbox) PrepareEntries(ctx context.Context, entries []prepaids.Adjustment, reference string) (Journal, LedgerObservation, error) {
+	observation := LedgerObservation{Company: s.Entity, Accounts: []LedgerAccount{}}
+	if !s.Ready() || len(entries) == 0 {
+		return Journal{}, observation, errors.New("QuickBooks is not configured or there is nothing to post")
+	}
+	if err := s.company(ctx); err != nil {
+		return Journal{}, observation, err
+	}
+	for _, entry := range entries[1:] {
+		if entry.Date != entries[0].Date {
+			return Journal{}, observation, errors.New("Entries posted together must share one date")
+		}
+	}
+	closed, err := s.OpenPeriod(ctx, entries[0].Date)
+	if err != nil {
+		return Journal{}, observation, err
+	}
+	observation.ClosedThrough = closed
+	byName := map[string][]account{}
+	for _, id := range s.allowed() {
+		a, err := s.readAccount(ctx, id)
 		if err != nil {
 			return Journal{}, observation, err
 		}
-		observation.ClosedThrough = closed
-	}
-	for _, mapping := range []struct{ id, name, classification string }{{s.DebitAccount, paper.Proposal.DebitAccount, "Asset"}, {s.CreditAccount, paper.Proposal.CreditAccount, "Expense"}} {
-		var result struct {
-			Account struct {
-				ID                                       string `json:"Id"`
-				Name, FullyQualifiedName, Classification string
-				Active                                   bool
-				CurrencyRef                              Reference
-				CurrentBalance                           json.Number
-				SyncToken                                string
+		for _, name := range []string{a.Name, a.fullName} {
+			if name != "" && !slices.ContainsFunc(byName[name], func(x account) bool { return x.ID == a.ID }) {
+				byName[name] = append(byName[name], a)
 			}
 		}
-		if err := s.request(ctx, "GET", "/account/"+mapping.id, nil, &result); err != nil {
-			return Journal{}, observation, err
-		}
-		account := result.Account
-		if account.ID != mapping.id || !account.Active || account.Classification != mapping.classification || (account.Name != mapping.name && account.FullyQualifiedName != mapping.name) || (account.CurrencyRef.Value != "" && account.CurrencyRef.Value != "USD") {
-			return Journal{}, observation, errors.New("QuickBooks account mapping, active status, classification or currency no longer matches the proposal")
-		}
-		if s.Production {
-			if _, ok := new(big.Rat).SetString(string(account.CurrentBalance)); !ok || account.SyncToken == "" {
-				return Journal{}, observation, errors.New("Current account balance or version is unavailable; production posting is blocked")
-			}
-		}
-		saved := LedgerAccount{ID: account.ID, Name: account.Name, Balance: account.CurrentBalance, SyncToken: account.SyncToken}
-		if mapping.id == s.DebitAccount {
-			observation.Prepaid = saved
-		} else {
-			observation.Expense = saved
-		}
 	}
-	p := paper.Proposal
+	touched := map[string]LedgerAccount{}
+	resolve := func(name string) (string, error) {
+		found := byName[name]
+		if len(found) != 1 {
+			return "", fmt.Errorf("Account %q must match exactly one account allowed by this client's production grant", name)
+		}
+		touched[found[0].ID] = found[0].LedgerAccount
+		return found[0].ID, nil
+	}
 	note := "Close sandbox test / "
 	if s.Production {
 		note = "Reviewed close / "
 	}
-	return Journal{TxnDate: p.Date, CurrencyRef: Reference{"USD"}, PrivateNote: note + strings.TrimSpace(paper.Input.SourceReference), Line: []Line{
-		{json.Number(p.Amount), "JournalEntryLineDetail", Detail{"Debit", Reference{s.DebitAccount}}},
-		{json.Number(p.Amount), "JournalEntryLineDetail", Detail{"Credit", Reference{s.CreditAccount}}},
-	}}, observation, nil
+	journal := Journal{TxnDate: entries[0].Date, CurrencyRef: Reference{"USD"}, PrivateNote: note + strings.TrimSpace(reference)}
+	for _, entry := range entries {
+		debit, err := resolve(entry.DebitAccount)
+		if err != nil {
+			return Journal{}, observation, err
+		}
+		credit, err := resolve(entry.CreditAccount)
+		if err != nil {
+			return Journal{}, observation, err
+		}
+		if debit == credit {
+			return Journal{}, observation, errors.New("An entry's debit and credit accounts must differ")
+		}
+		journal.Line = append(journal.Line, Line{json.Number(entry.Amount), "JournalEntryLineDetail", Detail{"Debit", Reference{debit}}}, Line{json.Number(entry.Amount), "JournalEntryLineDetail", Detail{"Credit", Reference{credit}}})
+	}
+	for _, a := range touched {
+		observation.Accounts = append(observation.Accounts, a)
+	}
+	slices.SortFunc(observation.Accounts, func(a, b LedgerAccount) int { return strings.Compare(a.ID, b.ID) })
+	return journal, observation, nil
+}
+
+// ObserveAfterWrite rereads the observed accounts for readback; period eligibility only gates new writes.
+func (s Sandbox) ObserveAfterWrite(ctx context.Context, before LedgerObservation) (LedgerObservation, error) {
+	after := LedgerObservation{Company: s.Entity, Accounts: []LedgerAccount{}}
+	if err := s.company(ctx); err != nil {
+		return after, err
+	}
+	for _, previous := range before.Accounts {
+		a, err := s.readAccount(ctx, previous.ID)
+		if err != nil {
+			return after, err
+		}
+		after.Accounts = append(after.Accounts, a.LedgerAccount)
+	}
+	return after, nil
 }
 func (s Sandbox) Create(ctx context.Context, journal Journal, requestID string) (string, error) {
 	var result struct{ JournalEntry Journal }
@@ -228,7 +319,7 @@ func (s Sandbox) VerifyReadback(ctx context.Context, id string, expected Journal
 		return Journal{}, err
 	}
 	actual := result.JournalEntry
-	if actual.ID != id || actual.TxnDate != expected.TxnDate || actual.CurrencyRef.Value != "USD" || actual.PrivateNote != expected.PrivateNote || len(actual.Line) != 2 {
+	if actual.ID != id || actual.TxnDate != expected.TxnDate || actual.CurrencyRef.Value != "USD" || actual.PrivateNote != expected.PrivateNote || len(actual.Line) != len(expected.Line) {
 		return Journal{}, errors.New("Journal readback does not match the approved draft")
 	}
 	used := map[int]bool{}
