@@ -42,6 +42,38 @@ func TestProductionLedgerEffect(t *testing.T) {
 	}
 }
 
+func TestCloseRehearsalCombinesOnlyCompatibleSnapshots(t *testing.T) {
+	before := quickbooks.LedgerObservation{Company: "Client", Prepaid: quickbooks.LedgerAccount{ID: "10", Name: "Prepaid", Balance: "100.00", SyncToken: "3"}, Expense: quickbooks.LedgerAccount{ID: "20", Name: "Expense", Balance: "50.00", SyncToken: "7"}}
+	entry := func(id, amount string, observed quickbooks.LedgerObservation) rehearsalInput {
+		journal, _ := json.Marshal(quickbooks.Journal{CurrencyRef: quickbooks.Reference{Value: "USD"}, Line: []quickbooks.Line{
+			{Amount: json.Number(amount), DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: quickbooks.Detail{PostingType: "Debit", AccountRef: quickbooks.Reference{Value: "10"}}},
+			{Amount: json.Number(amount), DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: quickbooks.Detail{PostingType: "Credit", AccountRef: quickbooks.Reference{Value: "20"}}},
+		}})
+		return rehearsalInput{PaperID: id, ReviewState: "approved", Posting: productionPosting{posting: posting{ID: id, State: "preview", Journal: journal, Realm: "123"}, ConnectionID: "42", LedgerBefore: observed}}
+	}
+	first, second := entry("1", "10.00", before), entry("2", "5.00", before)
+	got := rehearseProduction([]rehearsalInput{first, second}, false)
+	if len(got.Blockers) != 0 || len(got.Accounts) != 2 || got.Accounts[0].Projected != "115.00" || got.Accounts[1].Projected != "35.00" {
+		t.Fatalf("wrong combined close: %+v", got)
+	}
+	first.Posting.Conflicts = []string{"2"}
+	if got = rehearseProduction([]rehearsalInput{first, second}, false); len(got.Blockers) != 0 {
+		t.Fatalf("included same-close proposal should be combined: %+v", got)
+	}
+	first.Posting.Conflicts = nil
+	changed := before
+	changed.Prepaid.SyncToken = "4"
+	got = rehearseProduction([]rehearsalInput{first, entry("2", "5.00", changed)}, false)
+	if len(got.Blockers) == 0 || len(got.Accounts) != 0 {
+		t.Fatalf("mixed account versions should block combined state: %+v", got)
+	}
+	first.Posting.Conflicts = []string{"999"}
+	got = rehearseProduction([]rehearsalInput{first, second}, false)
+	if len(got.Blockers) == 0 || len(got.Accounts) != 0 {
+		t.Fatalf("competing posting outside this close should block combined state: %+v", got)
+	}
+}
+
 func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
@@ -196,6 +228,15 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	accountVersion = "2"
 	call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 409)
 	json.Unmarshal(call(path, map[string]string{"action": "preview"}, 200), &preview)
+	rehearsalRequest := httptest.NewRequest("GET", "/v1/closes/"+closeID+"/proposed-state", nil).WithContext(auth.WithActor(context.Background(), actor))
+	rehearsalResponse := httptest.NewRecorder()
+	mux.ServeHTTP(rehearsalResponse, rehearsalRequest)
+	var rehearsal struct {
+		Rehearsal closeRehearsal `json:"rehearsal"`
+	}
+	if rehearsalResponse.Code != 200 || json.Unmarshal(rehearsalResponse.Body.Bytes(), &rehearsal) != nil || rehearsal.Rehearsal.IntentCount != 1 || len(rehearsal.Rehearsal.Accounts) != 2 {
+		t.Fatalf("saved close rehearsal unavailable: %d %s", rehearsalResponse.Code, rehearsalResponse.Body.String())
+	}
 	call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 200)
 	actor.Permissions = []string{"clients:all", "posting:execute"}
 	var posted productionPosting

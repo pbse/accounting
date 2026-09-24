@@ -31,6 +31,37 @@ const workSelect = `SELECT j.id::text,j.close_id::text,c.entity,c.period,j.state
  ) issues),'[]'::jsonb) FROM preparation_jobs j LEFT JOIN preparation_intakes i ON i.job_id=j.id JOIN client_closes c ON c.id=j.close_id LEFT JOIN evidence e ON e.id=i.source_id`
 
 func registerWork(mux *http.ServeMux, db *sql.DB) {
+	mux.HandleFunc("GET /v1/closes/dependencies", func(w http.ResponseWriter, r *http.Request) {
+		search := strings.TrimSpace(r.URL.Query().Get("client"))
+		if len(search) > 200 {
+			problem(w, 422, "Client search is too long.")
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,COALESCE(w.paper->'carry_forward'->>'paper_id',w.paper->'recurring_accrual'->>'paper_id','') FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4) AND w.review_state='source_changed' AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text) ORDER BY w.id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+		if err != nil {
+			problem(w, 503, "Dependency review unavailable.")
+			return
+		}
+		defer rows.Close()
+		items := []map[string]string{}
+		for rows.Next() {
+			var id, closeID, entity, period, kind, upstream string
+			if err := rows.Scan(&id, &closeID, &entity, &period, &kind, &upstream); err != nil {
+				problem(w, 503, "Dependency review unavailable.")
+				return
+			}
+			items = append(items, map[string]string{"workpaper_id": id, "close_id": closeID, "entity": entity, "period": period, "kind": kind, "upstream_workpaper_id": upstream})
+		}
+		if rows.Err() != nil {
+			problem(w, 503, "Dependency review unavailable.")
+			return
+		}
+		more := len(items) > 100
+		if more {
+			items = items[:100]
+		}
+		jsonReply(w, 200, map[string]any{"items": items, "has_more": more})
+	})
 	read := func(w http.ResponseWriter, r *http.Request) {
 		view := r.URL.Query().Get("view")
 		if view == "" {

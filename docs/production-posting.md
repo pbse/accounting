@@ -20,7 +20,7 @@ After Intuit returns a journal ID, the API reads that journal by ID and verifies
 
 The close readiness digest and review ZIP include production attempt states and stored receipts. `executing` or `unknown` blocks sign-off. Export is a saved snapshot, not a new provider read.
 
-The close page's **Proposed ledger effects** panel also lists saved, unexecuted journal previews with their captured account balances, SyncTokens, projected balances, review state and competing intents. It is a view of each versioned preview, not a fresh QuickBooks query or a summed close balance. Refresh the individual preview before approval or posting; the server rechecks live preconditions at execution.
+The close page's **Close ledger rehearsal** lists saved, unexecuted production journal previews and combines their effects by account against one versioned balance. It requires the same QuickBooks company, connection, account ID, SyncToken and exact balance across every contributing intent. A different snapshot, more than 100 open proposals, or an uncertain execution blocks the combined result; workpapers needing accountant review remain identified. The preview is one read-only database snapshot, not a fresh QuickBooks query or an official trial balance. It excludes sandbox Bill/VendorCredit corrections and already verified postings. Refresh each individual preview before approval or posting; the server rechecks live preconditions at execution. Overlapping approved intents may still block individual posting even when their combined arithmetic can be rehearsed.
 
 ## Local and staged validation
 

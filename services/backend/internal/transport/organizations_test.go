@@ -101,6 +101,24 @@ func TestOrganizationIsolation(t *testing.T) {
 	if a.ID == b.ID {
 		t.Fatal("firms shared close identity")
 	}
+	var staleA, staleB string
+	if err = db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','missing-source','{"sources":[{"id":"0","digest":"missing"}]}') RETURNING id::text`, a.ID).Scan(&staleA); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','missing-source','{"sources":[{"id":"0","digest":"missing"}]}') RETURNING id::text`, b.ID).Scan(&staleB); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []struct{ token, own, other string }{{tokenA, staleA, staleB}, {tokenB, staleB, staleA}} {
+		var dependencies struct {
+			Items []struct {
+				WorkpaperID string `json:"workpaper_id"`
+			} `json:"items"`
+		}
+		json.Unmarshal(call(scope.token, "GET", "/v1/closes/dependencies", "", 200), &dependencies)
+		if len(dependencies.Items) != 1 || dependencies.Items[0].WorkpaperID != scope.own {
+			t.Fatalf("dependency review crossed firms or omitted own work: %+v", dependencies)
+		}
+	}
 	for _, test := range []struct {
 		token      string
 		own, other savedClose
@@ -112,7 +130,7 @@ func TestOrganizationIsolation(t *testing.T) {
 		if len(list.Closes) != 1 || list.Closes[0].ID != test.own.ID {
 			t.Fatalf("portfolio leaked: %+v", list)
 		}
-		for _, path := range []string{"", "/export", "/evidence", "/work", "/carry-forward", "/workpapers/1", "/evidence/1/download"} {
+		for _, path := range []string{"", "/export", "/evidence", "/work", "/carry-forward", "/proposed-state", "/workpapers/1", "/evidence/1/download"} {
 			call(test.token, "GET", "/v1/closes/"+test.other.ID+path, "", 404)
 		}
 		for _, path := range []string{"/workpapers", "/evidence", "/carry-forward", "/work/1/answer", "/workpapers/1/reviews"} {
@@ -122,11 +140,22 @@ func TestOrganizationIsolation(t *testing.T) {
 	}
 	restricted := signPermissions(orgA, []string{"workpapers:review", "close:signoff"})
 	call(restricted, "GET", "/v1/closes/"+a.ID, "", 404)
+	var restrictedDependencies struct {
+		Items []map[string]any `json:"items"`
+	}
+	json.Unmarshal(call(restricted, "GET", "/v1/closes/dependencies", "", 200), &restrictedDependencies)
+	if len(restrictedDependencies.Items) != 0 {
+		t.Fatal("unassigned client dependency leaked")
+	}
 	var access struct {
 		ID string `json:"id"`
 	}
 	json.Unmarshal(call(tokenA, "POST", "/v1/closes/access", `{"subject":"user_reviewer","entity":"Shared client name","granted":true,"reason":"Synthetic assigned accountant","confirmed":true}`, 200), &access)
 	call(restricted, "GET", "/v1/closes/"+a.ID, "", 200)
+	json.Unmarshal(call(restricted, "GET", "/v1/closes/dependencies", "", 200), &restrictedDependencies)
+	if len(restrictedDependencies.Items) != 1 || restrictedDependencies.Items[0]["workpaper_id"] != staleA {
+		t.Fatal("assigned client dependency missing")
+	}
 	call(restricted, "GET", "/v1/closes/"+b.ID, "", 404)
 	call(restricted, "POST", "/v1/closes", `{"entity":"Unassigned client","period":"2026-09"}`, 403)
 	call(restricted, "POST", "/v1/closes/access", `{}`, 403)
