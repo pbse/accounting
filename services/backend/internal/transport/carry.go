@@ -1,11 +1,13 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"time"
 
 	"close.local/backend/internal/prepaids"
@@ -58,8 +60,8 @@ func unresolvedCarry(ctx context.Context, tx *sql.Tx, closeID string) ([]unresol
 	return items, preparation.Digest(raw), nil
 }
 
-func registerCarry(mux *http.ServeMux, db *sql.DB) {
-	handler := func(w http.ResponseWriter, r *http.Request) {
+func carryHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Items            []carryItem `json:"items"`
 			ProcedureIDs     []string    `json:"procedure_ids"`
@@ -334,6 +336,45 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]any{"close_id": target, "period": next, "job_ids": jobs})
 	}
+}
+
+func registerCarry(mux *http.ServeMux, db *sql.DB) {
+	handler := carryHandler(db)
 	mux.HandleFunc("GET /v1/closes/{id}/carry-forward", handler)
 	mux.HandleFunc("POST /v1/closes/{id}/carry-forward", handler)
+}
+
+// autoCarry queues every eligible reviewed schedule not yet carried (up to the 20-item limit) for
+// next-month preparation, through the same preview and carry-forward rules as the page, as the requesting
+// reviewer. It returns how many were queued, or false when the carry-forward could not run.
+func autoCarry(db *sql.DB, r *http.Request, closeID string) (int, bool) {
+	carry := carryHandler(db)
+	call := func(method string, body []byte) *httptest.ResponseRecorder {
+		req, _ := http.NewRequestWithContext(r.Context(), method, "/v1/closes/"+closeID+"/carry-forward", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.SetPathValue("id", closeID)
+		out := httptest.NewRecorder()
+		carry(out, req)
+		return out
+	}
+	var preview struct {
+		Items []carryItem `json:"items"`
+	}
+	if got := call("GET", nil); got.Code != 200 || json.Unmarshal(got.Body.Bytes(), &preview) != nil {
+		return 0, false
+	}
+	eligible := []carryItem{}
+	for _, item := range preview.Items {
+		if item.Eligible && item.JobID == "" && len(eligible) < 20 {
+			eligible = append(eligible, item)
+		}
+	}
+	if len(eligible) == 0 {
+		return 0, true
+	}
+	body, _ := json.Marshal(map[string]any{"items": eligible, "confirmed": true})
+	if call("POST", body).Code != 200 {
+		return 0, false
+	}
+	return len(eligible), true
 }

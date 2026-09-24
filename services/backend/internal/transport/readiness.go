@@ -262,6 +262,7 @@ func registerReadiness(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Close changed. Refresh readiness and review the new snapshot.")
 			return
 		}
+		signedOff := false
 		switch r.PathValue("action") {
 		case "scope":
 			if current.State != "open" {
@@ -304,6 +305,7 @@ func registerReadiness(mux *http.ServeMux, db *sql.DB) {
 			raw, _ := json.Marshal(s)
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_scopes(close_id,scope,actor) VALUES($1,$2,$3)`, r.PathValue("id"), string(raw), actor)
 		case "signoff":
+			signedOff = in.Action == "sign"
 			in.Note = strings.TrimSpace(in.Note)
 			if !in.Confirmed || len(in.Note) < 1 || len(in.Note) > 2000 || (in.Action != "sign" && in.Action != "reopen") {
 				problem(w, 422, "Confirm the scoped decision and record a reason (1–2,000 bytes).")
@@ -331,7 +333,16 @@ func registerReadiness(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Decision could not be confirmed. Refresh readiness/history before retrying.")
 			return
 		}
-		jsonReply(w, 200, map[string]bool{"saved": true})
+		reply := map[string]any{"saved": true}
+		// A signed-off month prepares the next one: reviewed schedules are queued for next-month preparation.
+		if signedOff {
+			carried, ok := autoCarry(db, r, r.PathValue("id"))
+			reply["carried"] = carried
+			if !ok {
+				reply["carry_error"] = "Next month could not be started automatically. Open Carry work into the next month."
+			}
+		}
+		jsonReply(w, 200, reply)
 	}
 	mux.HandleFunc("GET /v1/closes/{id}/readiness", handler)
 	mux.HandleFunc("POST /v1/closes/{id}/{action}", handler)

@@ -2,6 +2,8 @@
 
 From a client close, open **Carry work into the next month** and select **Preview next month**. Select up to 20 eligible prepaid schedules **or** up to three enabled current firm procedures, optionally include unresolved follow-up, acknowledge the scope, and queue preparation. Schedules and procedures are separate actions because applying a newer procedure can invalidate a carried schedule. The app opens the next calendar month's close, creating it if needed while preserving existing work.
 
+Signing off a close does this automatically: every eligible reviewed schedule that is not already carried (up to 20) is queued for next-month preparation, under the same rules and as the reviewer who signed off; the worker then prepares each draft for review. The sign-off still stands if the carry-forward cannot run; the page says how many were queued, or that next month needs to be started from **Carry work into the next month**. Loans are not carried: next month needs the lender's new statement.
+
 ## What carries forward
 
 Only a current, approved prepaid workpaper with linked evidence and service coverage in the next month is eligible. Fully amortized schedules and unreviewed/stale versions are explained in the preview. Reconciliation requires new monthly evidence and is excluded. The preview inspects at most 100 prepaid workpaper versions; larger histories stop explicitly.
