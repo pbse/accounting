@@ -85,3 +85,101 @@ func TestDayCountConventions(t *testing.T) {
 		t.Fatalf("interest %d", got)
 	}
 }
+
+func variable() Input {
+	in := base()
+	in.Method = VariableMethod
+	in.Payments = []Payment{{Date: "2026-09-15", Principal: "1500.00", Interest: "645.00"}}
+	in.ClosingPrincipal, in.BookBalance = "118500.00", "118500.00"
+	in.AccrueInterest, in.AccruedInterestAccount, in.BookedAccruedInterest = false, "", ""
+	in.ReclassCurrentPortion, in.PrincipalDueNext12Months, in.ScheduleReference, in.CurrentPortionAccount, in.BookedCurrentPortion = false, "", "", "", ""
+	return in
+}
+
+func TestRateChangesSplitTheInterestWindow(t *testing.T) {
+	// 12,000,000¢ × (6.000% × 16 days + 6.500% × 15 days) / 360 = 64,500¢.
+	in := variable()
+	in.RateChanges = []RateChange{{Effective: "2026-09-01", AnnualRate: "6.500", Reference: "Rate notice Aug 2026"}}
+	paper, err := Prepare(in)
+	if err != nil || len(paper.Questions) != 0 || paper.Schedule[0].ExpectedInterest != "645.00" || strings.Join(paper.Schedule[0].Rates, ",") != "6.000%,6.500%" || paper.Method != VariableMethod {
+		t.Fatalf("a rate change from 1 September explains the lender's interest: %v %+v", err, paper)
+	}
+	if paper, _ = Prepare(variable()); len(paper.Questions) != 1 || !strings.Contains(paper.Questions[0], "6.000%") {
+		t.Fatalf("without the rate change the lender's interest is a question: %v", paper.Questions)
+	}
+	// A rate effective on the payment date covers that one day: 30 days at 6.000% plus 1 day at 6.500% = 621.67.
+	in = variable()
+	in.Payments[0].Interest = "621.67"
+	in.RateChanges = []RateChange{{Effective: "2026-09-15", AnnualRate: "6.500", Reference: "Rate notice Sep 2026"}}
+	if paper, err = Prepare(in); err != nil || len(paper.Questions) != 0 {
+		t.Fatalf("a rate applies from its effective date: %v %v %+v", err, paper.Questions, paper.Schedule)
+	}
+	// 30/360 bond basis counts 29 January → 15 February as 16 days: 2 at 6.000% and 14 at 6.500% = 343.33.
+	in = variable()
+	in.DayCount, in.ClosePeriod, in.InterestPaidThrough = "30_360_bond", "2027-02", "2027-01-29"
+	in.Payments = []Payment{{Date: "2027-02-15", Principal: "1500.00", Interest: "343.33"}}
+	in.RateChanges = []RateChange{{Effective: "2027-02-01", AnnualRate: "6.500", Reference: "Rate notice Jan 2027"}}
+	if paper, err = Prepare(in); err != nil || len(paper.Questions) != 0 || paper.Schedule[0].Days != 16 {
+		t.Fatalf("a split window keeps the convention's day count: %v %v %+v", err, paper.Questions, paper.Schedule)
+	}
+	// Actual/365: 26,301.37¢ + 26,712.33¢ rounds once to 530.14, not 530.13 segment by segment.
+	in = variable()
+	in.DayCount, in.OpeningPrincipal, in.ClosingPrincipal, in.BookBalance = "actual_365", "100000.00", "98500.00", "98500.00"
+	in.Payments[0].Interest = "530.14"
+	in.RateChanges = []RateChange{{Effective: "2026-09-01", AnnualRate: "6.500", Reference: "Rate notice Aug 2026"}}
+	if paper, err = Prepare(in); err != nil || len(paper.Questions) != 0 {
+		t.Fatalf("interest is rounded once per window: %v %v", err, paper.Questions)
+	}
+}
+
+func TestFeesAddedToTheBalanceBearInterestAndAreProposed(t *testing.T) {
+	// A 250.00 fee on 5 September bears interest for 10 days: 42,000¢ + 20,041.67¢ = 620.42.
+	in := variable()
+	in.Payments[0].Interest = "620.42"
+	in.Fees = []Fee{{Date: "2026-09-05", Amount: "250", Description: "Late fee", Reference: "Statement line 4"}}
+	in.ClosingPrincipal, in.FeeAccount, in.BookedFees = "118750.00", "Loan fees", "0"
+	paper, err := Prepare(in)
+	if err != nil || len(paper.Questions) != 0 || len(paper.Blockers) != 0 || paper.Fees != "250.00" || paper.BookDifference != "0.00" {
+		t.Fatalf("the fee ties the statement and bears interest from the next day: %v %+v", err, paper)
+	}
+	if len(paper.Proposals) != 1 || paper.Proposals[0].DebitAccount != "Loan fees" || paper.Proposals[0].CreditAccount != "Loan payable" || paper.Proposals[0].Amount != "250.00" {
+		t.Fatalf("the unbooked fee is proposed against the loan: %+v", paper.Proposals)
+	}
+	// A fee on the payment date comes after the payment, so this window's interest is unchanged.
+	in.Fees[0].Date, in.Payments[0].Interest = "2026-09-15", "620.00"
+	if paper, err = Prepare(in); err != nil || len(paper.Questions) != 0 || len(paper.Blockers) != 0 {
+		t.Fatalf("a same-day fee follows the payment: %v %v %v", err, paper.Questions, paper.Blockers)
+	}
+	// A fee after the last payment is still part of the statement's closing principal.
+	in.Fees[0].Date = "2026-09-25"
+	if paper, err = Prepare(in); err != nil || len(paper.Blockers) != 0 || len(paper.Questions) != 0 {
+		t.Fatalf("a fee after the last payment ties the statement: %v %v %v", err, paper.Blockers, paper.Questions)
+	}
+	in.Fees[0].Date = "2026-09-15"
+	// More booked than charged reverses the entry for the excess.
+	in.BookedFees, in.BookBalance = "300.00", "118800.00"
+	if paper, err = Prepare(in); err != nil || len(paper.Proposals) != 1 || paper.Proposals[0].DebitAccount != "Loan payable" || paper.Proposals[0].Amount != "50.00" || paper.BookDifference != "0.00" {
+		t.Fatalf("over-booked fees are proposed back: %v %+v", err, paper)
+	}
+	for name, change := range map[string]func(*Input){
+		"fixed method":        func(in *Input) { in.Method = Method },
+		"no fee account":      func(in *Input) { in.FeeAccount = "" },
+		"fee account is loan": func(in *Input) { in.FeeAccount = "Loan payable" },
+		"no booked fees":      func(in *Input) { in.BookedFees = "" },
+		"fee next month":      func(in *Input) { in.Fees[0].Date = "2026-10-01" },
+		"rate before window": func(in *Input) {
+			in.RateChanges = []RateChange{{Effective: "2026-08-10", AnnualRate: "6.500", Reference: "Notice"}}
+		},
+		"rate without source": func(in *Input) { in.RateChanges = []RateChange{{Effective: "2026-09-01", AnnualRate: "6.500"}} },
+		"rates out of order": func(in *Input) {
+			in.RateChanges = []RateChange{{Effective: "2026-09-10", AnnualRate: "6.500", Reference: "N1"}, {Effective: "2026-09-02", AnnualRate: "7.000", Reference: "N2"}}
+		},
+	} {
+		bad := in
+		bad.Fees = append([]Fee(nil), in.Fees...)
+		change(&bad)
+		if _, err := Prepare(bad); err == nil {
+			t.Fatalf("%s must be refused", name)
+		}
+	}
+}
