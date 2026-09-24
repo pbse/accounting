@@ -356,6 +356,15 @@ Author: Claude Opus 5.5. Stacked on exception investigation. No migration; messa
 - `TestWorkInboxCoordinator` asserts `CONFLICT` on a repeated confirmation and `SOURCE_STALE` after the source is replaced. `TestProductionPostingSingleDurableAttempt` asserts `EXECUTION_UNKNOWN` on the lost response. Observed red with `code` removed from `problem()`, with the replaced source reported as `CONFLICT`, and with the production site left on the status default.
 - Plan reviewed once by GPT-6 Sol (medium). Adopted: no generic Idempotency-Key cache (replay would bypass revoked access and could release an unresolved write), named codes only where the branch proves them, and schemas deferred to the first exposed capability.
 
+## MCP access (2026-09-24)
+
+Author: Claude Opus 5.5. Adds `github.com/modelcontextprotocol/go-sdk` v1.8.0 and migration 041 (`approval_requests`).
+
+- `TestMCPToolsUseTheSignedInPersonsAccess` runs against a real HTTP server. The official SDK client connects on protocol 2026-07-28 and lists the tools; none approves, signs off or posts. `list_closes` returns the person's close, while another firm's close returns `NOT_FOUND`. `add_evidence` starts one intake job. `request_approval` reaches the review queue without recording a review, and is refused (`CONFLICT`) for a draft with blockers that the queue hides. A configured origin listed after a comma and space is served. A raw `initialize` for 2025-06-18 is served, with `Cache-Control: no-store` (observed red without the override, since the SDK sets `no-cache`). Mismatched MCP headers get 400, no token gets 401 with `WWW-Authenticate`, and an untrusted `Origin` gets 403.
+- Observed red with the caller's credentials not forwarded to the replayed call, with the origin check off, with stateful mode (the client fell back to 2025-11-25), and with MCP authentication off.
+- Full `internal/transport` and `internal/auth` packages pass; frontend typecheck passes.
+- Browser, local services: an agent's `request_approval` sent over MCP with curl appeared in Work → Ready for your review as "Approval requested" with its note. Long queue lines now truncate instead of running under the status column.
+
 ## Loan schedules (2026-09-24)
 
 Author: Claude Opus 5.5. Migration 042 adds the `loan` workpaper and procedure kinds.

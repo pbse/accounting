@@ -1096,6 +1096,9 @@ a.row:hover {
   gap: 0.75rem;
   min-width: 0;
 }
+.row-main > span {
+  min-width: 0;
+}
 .row-main strong,
 .row-main small {
   display: block;
