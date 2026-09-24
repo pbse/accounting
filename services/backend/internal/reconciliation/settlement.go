@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/prepaids"
 )
 
 const SettlementMethod = "stripe_automatic_payouts_v1"
@@ -24,6 +26,16 @@ type SettlementInput struct {
 	CoverageConfirmed bool              `json:"coverage_confirmed"`
 	ReviewedDeposits  []ReviewedDeposit `json:"reviewed_deposits,omitempty"`
 	InTransit         []InTransit       `json:"in_transit,omitempty"`
+	FeeEntry          *FeeEntry         `json:"fee_entry,omitempty"`
+}
+
+// FeeEntry applies a client accountant's rule for deposits booked net of Stripe fees: the fees of
+// payouts deposited this month are moved from the deposit account to a fee expense account.
+type FeeEntry struct {
+	FeeAccount     string `json:"fee_account"`
+	DepositAccount string `json:"deposit_account"`
+	BookedFees     string `json:"booked_fees"`
+	RuleReference  string `json:"rule_reference"`
 }
 type ReviewedDeposit struct {
 	PayoutID string `json:"payout_id"`
@@ -57,15 +69,17 @@ type Payout struct {
 	Policy       string          `json:"policy_reference,omitempty"`
 }
 type SettlementWorkpaper struct {
-	Status     string          `json:"status"`
-	Method     string          `json:"method"`
-	Input      SettlementInput `json:"input"`
-	Payouts    []Payout        `json:"payouts"`
-	Categories []CategoryTotal `json:"categories"`
-	Total      CategoryTotal   `json:"total"`
-	Unassigned []string        `json:"unassigned"`
-	Questions  []string        `json:"questions"`
-	Blockers   []string        `json:"blockers"`
+	Status     string               `json:"status"`
+	Method     string               `json:"method"`
+	Input      SettlementInput      `json:"input"`
+	Payouts    []Payout             `json:"payouts"`
+	Categories []CategoryTotal      `json:"categories"`
+	Total      CategoryTotal        `json:"total"`
+	Unassigned []string             `json:"unassigned"`
+	Questions  []string             `json:"questions"`
+	Blockers   []string             `json:"blockers"`
+	Fees       string               `json:"fees,omitempty"`
+	Proposal   *prepaids.Adjustment `json:"proposal,omitempty"`
 }
 
 var stripeColumns = []string{"balance_transaction_id", "currency", "gross", "fee", "net", "reporting_category", "automatic_payout_id", "automatic_payout_effective_at"}
@@ -260,6 +274,15 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 	if err != nil {
 		return fail("Choose a valid close month.")
 	}
+	var bookedFees int64
+	if f := input.FeeEntry; f != nil {
+		f.FeeAccount, f.DepositAccount, f.RuleReference = strings.TrimSpace(f.FeeAccount), strings.TrimSpace(f.DepositAccount), strings.TrimSpace(f.RuleReference)
+		booked, err := cents(strings.TrimSpace(f.BookedFees))
+		if f.FeeAccount == "" || len(f.FeeAccount) > 200 || f.DepositAccount == "" || len(f.DepositAccount) > 200 || strings.EqualFold(f.FeeAccount, f.DepositAccount) || len(f.RuleReference) < 5 || len(f.RuleReference) > 200 || err != nil || booked < 0 {
+			return fail("A Stripe fee entry needs a fee expense account, the separate account the net deposits were booked to, the fees already booked this month (enter zero explicitly) and the client accountant's rule reference.")
+		}
+		f.BookedFees, bookedFees = money(booked), booked
+	}
 	if len(input.ReviewedDeposits)+len(input.InTransit) > 100 {
 		return fail("Review at most 100 payouts per workpaper.")
 	}
@@ -373,6 +396,36 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 			shown = shown[:5]
 		}
 		result.Blockers = append(result.Blockers, fmt.Sprintf("Stripe rows without an automatic payout ID: %d (%s). This method traces automatic payouts only; reconcile manual or instant payouts against transaction history.", len(unassigned), strings.Join(shown, ", ")))
+	}
+	if input.FeeEntry != nil {
+		// Only payouts whose deposit landed this month were booked net this month. Their fees are the
+		// per-transaction fees plus Stripe fees charged as their own rows (category "fee", negative gross).
+		monthEnd := month.AddDate(0, 1, -1).Format("2006-01-02")
+		var fees, deferred int64
+		for _, payout := range result.Payouts {
+			fee, _ := cents(payout.Fee)
+			for _, category := range payout.Categories {
+				if category.Category == "fee" {
+					gross, _ := cents(category.Gross)
+					fee -= gross
+				}
+			}
+			if (payout.Status == "matched" || payout.Status == "reviewed") && payout.Deposit != nil && payout.Deposit.Date <= monthEnd {
+				fees += fee
+			} else {
+				deferred += fee
+			}
+		}
+		result.Fees = money(fees)
+		if deferred != 0 {
+			result.Questions = append(result.Questions, fmt.Sprintf("Fees of $%s belong to payouts in transit or deposited after month-end; they are left for the month their deposit is booked.", money(deferred)))
+		}
+		if delta := fees - bookedFees; len(result.Blockers) == 0 && delta != 0 {
+			result.Proposal = &prepaids.Adjustment{Date: monthEnd, DebitAccount: input.FeeEntry.FeeAccount, CreditAccount: input.FeeEntry.DepositAccount, Amount: money(delta)}
+			if delta < 0 {
+				result.Proposal.DebitAccount, result.Proposal.CreditAccount, result.Proposal.Amount = input.FeeEntry.DepositAccount, input.FeeEntry.FeeAccount, money(-delta)
+			}
+		}
 	}
 	return result, nil
 }

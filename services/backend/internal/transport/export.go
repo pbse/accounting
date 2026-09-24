@@ -456,7 +456,11 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			}
 			summary.Source = paper.Input.ReportReference + " / " + paper.Input.BankReference
 			summary.Method = paper.Method
-			summary.Issues = append(append([]string{"USD Stripe automatic payouts traced to " + paper.Input.BankAccount + ". Matched deposits are candidates until this workpaper is approved; in-transit payouts cite an accountant rule. No journal is proposed."}, paper.Blockers...), paper.Questions...)
+			entry := "No journal is proposed."
+			if e := paper.Proposal; e != nil {
+				entry = fmt.Sprintf("Proposed fee entry under %s: debit %s, credit %s, $%s on %s.", paper.Input.FeeEntry.RuleReference, e.DebitAccount, e.CreditAccount, e.Amount, e.Date)
+			}
+			summary.Issues = append(append([]string{"USD Stripe automatic payouts traced to " + paper.Input.BankAccount + ". Matched deposits are candidates until this workpaper is approved; in-transit payouts cite an accountant rule. " + entry}, paper.Blockers...), paper.Questions...)
 			records := [][]string{{"Payout", "Expected", "Transactions", "Gross USD", "Fee USD", "Net USD", "Status", "Bank row", "Bank date", "After month-end", "Candidates", "Rule", "Reason"}}
 			for _, payout := range paper.Payouts {
 				row, date, late := "", "", ""

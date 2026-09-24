@@ -117,3 +117,52 @@ func TestStripeReportSummaryRecognizesOnlyPayoutExports(t *testing.T) {
 		t.Fatal("a recognized export for another month must explain the mismatch")
 	}
 }
+
+func TestStripeFeeEntryCoversFeesOfPayoutsDepositedThisMonth(t *testing.T) {
+	resolved := func(entry *FeeEntry) SettlementInput {
+		input := settlementInput(stripeReport(settlementRows...))
+		input.ReviewedDeposits = []ReviewedDeposit{{PayoutID: "po_E", BankID: "B6", Reason: "Stripe dashboard trace ID matches B6"}, {PayoutID: "po_F", BankID: "B5", Reason: "Stripe dashboard trace ID matches B5"}}
+		input.InTransit = []InTransit{{PayoutID: "po_G", PolicyReference: "Firm deposits-in-transit rule", Reason: "October statement line 2 shows $77.00 on Oct 6"}}
+		input.FeeEntry = entry
+		return input
+	}
+	entry := func(booked string) *FeeEntry {
+		return &FeeEntry{FeeAccount: "Stripe fees", DepositAccount: "Sales", BookedFees: booked, RuleReference: "Engagement letter §4: book Stripe revenue gross"}
+	}
+	// po_A 4.95 + po_B 21.10 and its 2.00 billing fee row + po_C 1.17; po_G (in transit, 3.00) and
+	// po_D (deposited 2 October, 1.46) are left for October.
+	paper, err := PrepareSettlement(resolved(entry("0")))
+	if err != nil || paper.Fees != "29.22" || paper.Proposal == nil || paper.Proposal.DebitAccount != "Stripe fees" || paper.Proposal.CreditAccount != "Sales" || paper.Proposal.Amount != "29.22" || paper.Proposal.Date != "2026-09-30" {
+		t.Fatalf("fees of payouts deposited this month move from the deposit account to fees: %v %+v %+v", err, paper.Proposal, paper.Fees)
+	}
+	if !strings.Contains(strings.Join(paper.Questions, " "), "$4.46") {
+		t.Fatalf("deferred fees are named: %v", paper.Questions)
+	}
+	if paper, _ = PrepareSettlement(resolved(entry("30.00"))); paper.Proposal == nil || paper.Proposal.DebitAccount != "Sales" || paper.Proposal.Amount != "0.78" {
+		t.Fatalf("more booked than charged proposes the excess back: %+v", paper.Proposal)
+	}
+	if paper, _ = PrepareSettlement(resolved(entry("29.22"))); paper.Proposal != nil {
+		t.Fatalf("fees already booked need no entry: %+v", paper.Proposal)
+	}
+	blocked := settlementInput(stripeReport(settlementRows...))
+	blocked.FeeEntry = entry("0")
+	if paper, _ = PrepareSettlement(blocked); len(paper.Blockers) == 0 || paper.Proposal != nil {
+		t.Fatalf("an unresolved trace proposes nothing: %v %+v", paper.Blockers, paper.Proposal)
+	}
+	if paper, _ = PrepareSettlement(resolved(nil)); paper.Proposal != nil || paper.Fees != "" {
+		t.Fatalf("without the rule nothing is proposed: %+v", paper)
+	}
+	for name, change := range map[string]func(*FeeEntry){
+		"no rule":          func(e *FeeEntry) { e.RuleReference = "" },
+		"same accounts":    func(e *FeeEntry) { e.DepositAccount = "stripe fees" },
+		"no booked fees":   func(e *FeeEntry) { e.BookedFees = "" },
+		"negative booking": func(e *FeeEntry) { e.BookedFees = "-1.00" },
+		"no fee account":   func(e *FeeEntry) { e.FeeAccount = " " },
+	} {
+		e := entry("0")
+		change(e)
+		if _, err := PrepareSettlement(resolved(e)); err == nil {
+			t.Fatalf("%s must be refused", name)
+		}
+	}
+}
