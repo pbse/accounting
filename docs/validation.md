@@ -531,3 +531,10 @@ Author: Claude Opus 5.5. Migration 051. Review: GPT-6 Sol (medium) plan and code
 - `TestYearEndHandoffRollsForwardApprovedWork` now checks that a July fiscal year anchored in May 2026 covers 11 months from 2025-07 and is named FY2026. Observed red without the prior-year rollback and with the calendar-year query bound.
 - `TestProductionPostingSingleDurableAttempt` now posts a CAD prepaid: refused while the company's currency is unknown, then posted with a CAD journal once it is detected. Observed red with a USD journal, with the client currency not passed and without the posting check.
 - `TestTrialBalanceAccountRequiresUniquePrepaidRow` refuses a Trial Balance in another currency (observed red without the check); `TestCurrencyNeedsThreeLettersAndTwoDecimals` accepts USD, CAD and GBP and refuses JPY, KWD, XOF, IQD and lowercase codes (observed red with the refusal list shortened).
+
+## Holding and clearing balances (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted clearing only on balance-sheet accounts, reconciliation wording that allows deposits in transit, the opposite-side clue, updated labels, the check placed after the existing account filters, and gathering the account's month ledger rows as evidence. Receipt-level missing documents stay out of this slice: the product has never read QuickBooks attachments live, and missing statements are handled by coverage requests.
+
+- `TestHoldingAccountsWithABalanceNeedReconciliation`: from a QuickBooks Trial Balance, Undeposited Funds (1,200.00 debit), Ask My Accountant (35.00) and a Stripe clearing credit (15.00, also flagged as opposite its normal side) are one reconciliation item each; a zero payroll clearing account, a normal checking account and a "Clearing Revenue" income account are not. Observed red without the check, with "clearing" matched on every account, without the opposite-side clue and without the undeposited-funds next step.
+- `TestWrongSideReadsYTDColumnsWithXeroRules` now includes a Xero Suspense liability holding 80.00. Observed red without the Xero check.

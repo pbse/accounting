@@ -83,7 +83,9 @@ func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]ledger.BalanceE
 				invalid = fmt.Errorf("trial balance %v for %s", err, account.name)
 				return
 			}
-			if item := ledger.WrongSide(row.ColData[0].ID, account.name, account.class, net, report.Header.Currency, "balance"); item != nil {
+			if item := ledger.Holding(row.ColData[0].ID, account.name, account.class, net, report.Header.Currency, "balance"); item != nil {
+				out = append(out, *item)
+			} else if item := ledger.WrongSide(row.ColData[0].ID, account.name, account.class, net, report.Header.Currency, "balance"); item != nil {
 				out = append(out, *item)
 			}
 		}

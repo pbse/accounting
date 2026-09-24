@@ -65,6 +65,7 @@ func TestWrongSideReadsYTDColumnsWithXeroRules(t *testing.T) {
 	add("880", "Owner A Drawings", "EQUITY", "", "250.00", "")
 	add("429", "General Expenses", "EXPENSE", "", "", "40.00")
 	add("091", "Petty Cash", "ASSET", "", "70.00", "70.00")
+	add("850", "Suspense", "LIABILITY", "", "", "80.00")
 	add("999", "Not in chart", "", "", "10.00", "")
 	payload := func(header ...string) json.RawMessage {
 		cells := []any{}
@@ -76,8 +77,11 @@ func TestWrongSideReadsYTDColumnsWithXeroRules(t *testing.T) {
 		return raw
 	}
 	_, found, err := WrongSide(payload("Account", "Debit", "Credit", "YTD Debit", "YTD Credit"))
-	if err != nil || len(found) != 2 {
-		t.Fatalf("only the overdrawn bank and the expense credit are candidates: %v %+v", err, found)
+	if err != nil || len(found) != 3 {
+		t.Fatalf("only the overdrawn bank, the expense credit and the suspense balance are candidates: %v %+v", err, found)
+	}
+	if found[2].Account != "Suspense" || found[2].Type != "holding_balance" || !strings.Contains(found[2].Finding, "$80.00 credit balance at month-end") {
+		t.Fatalf("a suspense account with a balance needs reconciliation: %+v", found[2])
 	}
 	if found[0].Account != "Business Bank Account" || found[0].Side != "credit" || found[0].Amount != "1200.00" || !strings.Contains(found[0].Finding, "$1200.00 credit balance,") {
 		t.Fatalf("a balance-sheet account shows its balance: %+v", found[0])
