@@ -55,9 +55,9 @@ func TestLoanDraftsNeedTheClientsApprovedLoanProcedure(t *testing.T) {
 	save := map[string]any{"kind": "loan", "input": input}
 	path := "/v1/closes/" + closeID + "/workpapers"
 	// Client overrides win over any firm default, so the test does not depend on firm settings.
-	override := func(enabled bool) {
+	override := func(enabled bool, method ...string) {
 		t.Helper()
-		if _, e := db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor,method) VALUES('local-development',$1,'loan','Reclassify the current portion at fiscal year-end.',$2,'Synthetic loan override','fixture','lender_statement_v1')`, entity, enabled); e != nil {
+		if _, e := db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor,method) VALUES('local-development',$1,'loan','Reclassify the current portion at fiscal year-end.',$2,'Synthetic loan override','fixture',$3)`, entity, enabled, append(method, "lender_statement_v1")[0]); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -75,6 +75,17 @@ func TestLoanDraftsNeedTheClientsApprovedLoanProcedure(t *testing.T) {
 	if body := call(path, save, 409); !strings.Contains(string(body), "approved loan procedure") {
 		t.Fatalf("disabling the client's loan procedure must stop new drafts: %s", body)
 	}
+	// Rate changes need the separately approved variable-rate procedure.
+	override(true)
+	input["book_balance"], input["method"] = "118000.00", "lender_statement_variable_v1"
+	input["rate_changes"] = []map[string]string{{"effective": "2026-09-01", "annual_rate": "6.500", "reference": "Rate notice Aug 2026"}}
+	if body := call(path, save, 409); !strings.Contains(string(body), "differs from the approved procedure") {
+		t.Fatalf("a variable-rate draft needs the variable-rate procedure: %s", body)
+	}
+	override(true, "lender_statement_variable_v1")
+	call(path, save, 200)
+	input["method"] = "lender_statement_v1"
+	delete(input, "rate_changes")
 	var reason string
 	if err = db.QueryRow(`SELECT `+bulkReason+` FROM workpaper_review_state w WHERE id::text=$1`, saved.ID).Scan(&reason); err != nil || reason != "Proposes a ledger adjustment" {
 		t.Fatalf("a loan with proposed entries must be reviewed individually: %q %v", reason, err)

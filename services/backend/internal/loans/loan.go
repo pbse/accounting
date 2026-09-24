@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,11 +16,28 @@ import (
 
 const Method = "lender_statement_v1"
 
+// VariableMethod also checks dated rate changes and lender fees added to the loan balance.
+// The product requires a separately approved procedure for these treatments.
+const VariableMethod = "lender_statement_variable_v1"
+
 var DayCounts = map[string]string{
 	"actual_360":  "Actual/360",
 	"actual_365":  "Actual/365 (fixed)",
 	"30_360_bond": "30/360 bond basis (US, no February rule)",
 	"30e_360":     "30E/360 (Eurobond)",
+}
+
+type RateChange struct {
+	Effective  string `json:"effective"`
+	AnnualRate string `json:"annual_rate"`
+	Reference  string `json:"reference"`
+}
+
+type Fee struct {
+	Date        string `json:"date"`
+	Amount      string `json:"amount"`
+	Description string `json:"description"`
+	Reference   string `json:"reference"`
 }
 
 type Payment struct {
@@ -29,43 +47,48 @@ type Payment struct {
 }
 
 type Input struct {
-	Entity                   string    `json:"entity"`
-	ClosePeriod              string    `json:"close_period"`
-	Lender                   string    `json:"lender"`
-	SourceReference          string    `json:"source_reference"`
-	AgreementReference       string    `json:"agreement_reference"`
-	Currency                 string    `json:"currency"`
-	AnnualRate               string    `json:"annual_rate"`
-	DayCount                 string    `json:"day_count"`
-	OpeningPrincipal         string    `json:"opening_principal"`
-	InterestPaidThrough      string    `json:"interest_paid_through"`
-	Payments                 []Payment `json:"payments"`
-	ClosingPrincipal         string    `json:"closing_principal"`
-	BookBalance              string    `json:"book_balance"`
-	LoanAccount              string    `json:"loan_account"`
-	InterestAccount          string    `json:"interest_account"`
-	AccrueInterest           bool      `json:"accrue_interest"`
-	AccruedInterestAccount   string    `json:"accrued_interest_account,omitempty"`
-	BookedAccruedInterest    string    `json:"booked_accrued_interest,omitempty"`
-	ReclassCurrentPortion    bool      `json:"reclass_current_portion"`
-	PrincipalDueNext12Months string    `json:"principal_due_next_12_months,omitempty"`
-	ScheduleReference        string    `json:"schedule_reference,omitempty"`
-	CurrentPortionAccount    string    `json:"current_portion_account,omitempty"`
-	BookedCurrentPortion     string    `json:"booked_current_portion,omitempty"`
-	Method                   string    `json:"method"`
-	MethodConfirmed          bool      `json:"method_confirmed"`
-	RateConfirmed            bool      `json:"rate_confirmed"`
-	BookingConfirmed         bool      `json:"booking_confirmed"`
+	Entity                   string       `json:"entity"`
+	ClosePeriod              string       `json:"close_period"`
+	Lender                   string       `json:"lender"`
+	SourceReference          string       `json:"source_reference"`
+	AgreementReference       string       `json:"agreement_reference"`
+	Currency                 string       `json:"currency"`
+	AnnualRate               string       `json:"annual_rate"`
+	DayCount                 string       `json:"day_count"`
+	OpeningPrincipal         string       `json:"opening_principal"`
+	InterestPaidThrough      string       `json:"interest_paid_through"`
+	Payments                 []Payment    `json:"payments"`
+	RateChanges              []RateChange `json:"rate_changes,omitempty"`
+	Fees                     []Fee        `json:"fees,omitempty"`
+	FeeAccount               string       `json:"fee_account,omitempty"`
+	BookedFees               string       `json:"booked_fees,omitempty"`
+	ClosingPrincipal         string       `json:"closing_principal"`
+	BookBalance              string       `json:"book_balance"`
+	LoanAccount              string       `json:"loan_account"`
+	InterestAccount          string       `json:"interest_account"`
+	AccrueInterest           bool         `json:"accrue_interest"`
+	AccruedInterestAccount   string       `json:"accrued_interest_account,omitempty"`
+	BookedAccruedInterest    string       `json:"booked_accrued_interest,omitempty"`
+	ReclassCurrentPortion    bool         `json:"reclass_current_portion"`
+	PrincipalDueNext12Months string       `json:"principal_due_next_12_months,omitempty"`
+	ScheduleReference        string       `json:"schedule_reference,omitempty"`
+	CurrentPortionAccount    string       `json:"current_portion_account,omitempty"`
+	BookedCurrentPortion     string       `json:"booked_current_portion,omitempty"`
+	Method                   string       `json:"method"`
+	MethodConfirmed          bool         `json:"method_confirmed"`
+	RateConfirmed            bool         `json:"rate_confirmed"`
+	BookingConfirmed         bool         `json:"booking_confirmed"`
 }
 
 type Row struct {
-	Date             string `json:"date"`
-	PrincipalBefore  string `json:"principal_before"`
-	Days             int64  `json:"days"`
-	Principal        string `json:"principal"`
-	Interest         string `json:"interest"`
-	ExpectedInterest string `json:"expected_interest"`
-	Difference       string `json:"difference"`
+	Date             string   `json:"date"`
+	PrincipalBefore  string   `json:"principal_before"`
+	Days             int64    `json:"days"`
+	Principal        string   `json:"principal"`
+	Interest         string   `json:"interest"`
+	ExpectedInterest string   `json:"expected_interest"`
+	Difference       string   `json:"difference"`
+	Rates            []string `json:"rates,omitempty"`
 }
 
 type Accrual struct {
@@ -82,6 +105,7 @@ type Workpaper struct {
 	Schedule        []Row                 `json:"schedule"`
 	AccruedInterest *Accrual              `json:"accrued_interest,omitempty"`
 	BookDifference  string                `json:"book_difference"`
+	Fees            string                `json:"fees,omitempty"`
 	Proposals       []prepaids.Adjustment `json:"proposals"`
 	Questions       []string              `json:"questions"`
 	Blockers        []string              `json:"blockers"`
@@ -113,15 +137,26 @@ func Days(convention string, from, to time.Time) int64 {
 
 // Interest is principal × rate × days / basis, rounded half-up to the cent.
 func Interest(principal, rateMilli, days int64, convention string) int64 {
+	num := new(big.Int).Mul(big.NewInt(principal), big.NewInt(rateMilli))
+	return rounded(num.Mul(num, big.NewInt(days)), convention)
+}
+
+// rounded divides a sum of principal × rate × days by the basis once, half-up to the cent.
+func rounded(num *big.Int, convention string) int64 {
 	basis := int64(360)
 	if convention == "actual_365" {
 		basis = 365
 	}
-	num := new(big.Int).Mul(big.NewInt(principal), big.NewInt(rateMilli))
-	num.Mul(num, big.NewInt(days))
 	den := big.NewInt(100 * 1000 * basis)
-	num.Mul(num, big.NewInt(2)).Add(num, den)
+	num = new(big.Int).Mul(num, big.NewInt(2))
+	num.Add(num, den)
 	return num.Quo(num, den.Mul(den, big.NewInt(2))).Int64()
+}
+
+func parseRate(text string) int64 {
+	whole, fraction, _ := strings.Cut(text, ".")
+	rate, _ := strconv.ParseInt(whole+(fraction + "000")[:3], 10, 64)
+	return rate
 }
 
 func Prepare(in Input) (Workpaper, error) {
@@ -135,7 +170,7 @@ func Prepare(in Input) (Workpaper, error) {
 	if strings.EqualFold(in.LoanAccount, in.InterestAccount) {
 		return fail("Loan and interest accounts must differ.")
 	}
-	if in.Method != Method || in.Currency != "USD" || !in.MethodConfirmed || !in.RateConfirmed || !in.BookingConfirmed {
+	if (in.Method != Method && in.Method != VariableMethod) || in.Currency != "USD" || !in.MethodConfirmed || !in.RateConfirmed || !in.BookingConfirmed {
 		return fail("Confirm the lender-statement method, the rate and day-count from the note, and the month-end book balances (USD only).")
 	}
 	if _, ok := DayCounts[in.DayCount]; !ok {
@@ -149,8 +184,7 @@ func Prepare(in Input) (Workpaper, error) {
 	if !ratePattern.MatchString(in.AnnualRate) {
 		return fail("Enter the annual rate as a percent with at most three decimals, for example 6.250.")
 	}
-	whole, fraction, _ := strings.Cut(in.AnnualRate, ".")
-	rateMilli, _ := strconv.ParseInt(whole+(fraction + "000")[:3], 10, 64)
+	rateMilli := parseRate(in.AnnualRate)
 	if rateMilli == 0 {
 		return fail("A zero-rate loan has no interest to check; prepare it as a reconciliation instead.")
 	}
@@ -183,11 +217,96 @@ func Prepare(in Input) (Workpaper, error) {
 	if len(in.Payments) > 31 {
 		return fail("At most 31 payments per month are supported.")
 	}
-	result := Workpaper{Status: "draft", Method: Method, Schedule: []Row{}, Proposals: []prepaids.Adjustment{}, Questions: []string{}, Blockers: []string{}}
+	if len(in.RateChanges) > 12 || len(in.Fees) > 12 {
+		return fail("At most 12 rate changes and 12 fees per month are supported.")
+	}
+	if len(in.RateChanges)+len(in.Fees) > 0 && in.Method != VariableMethod {
+		return fail("Rate changes and fees added to the loan balance need the firm's approved variable-rate loan procedure.")
+	}
+	// A rate applies from its effective date; days are counted (from, to], so the old rate covers the day before.
+	type change struct {
+		at   time.Time
+		rate int64
+	}
+	changes := []change{}
+	for i := range in.RateChanges {
+		c := &in.RateChanges[i]
+		c.Reference = strings.TrimSpace(c.Reference)
+		at, err := time.Parse("2006-01-02", c.Effective)
+		if err != nil || !at.After(paidThrough) || at.After(monthEnd) || (i > 0 && !at.After(changes[i-1].at)) || !ratePattern.MatchString(c.AnnualRate) || c.Reference == "" || len(c.Reference) > 200 {
+			return fail("Rate change %d needs an effective date after interest was paid through and by month-end, in date order, a rate such as 6.500, and the notice it comes from.", i+1)
+		}
+		changes = append(changes, change{at, parseRate(c.AnnualRate)})
+	}
+	// A fee is added to the balance at the end of its day: it bears interest from the next day, and a
+	// payment on the same day is applied before it.
+	type charge struct {
+		at     time.Time
+		amount int64
+	}
+	charges, totalFees := []charge{}, int64(0)
+	for i := range in.Fees {
+		f := &in.Fees[i]
+		f.Description, f.Reference = strings.TrimSpace(f.Description), strings.TrimSpace(f.Reference)
+		at, err := time.Parse("2006-01-02", f.Date)
+		cents, amountErr := prepaids.Amount(f.Amount)
+		if err != nil || at.Format("2006-01") != in.ClosePeriod || !at.After(paidThrough) || amountErr != nil || cents == 0 || f.Description == "" || len(f.Description) > 200 || f.Reference == "" || len(f.Reference) > 200 {
+			return fail("Fee %d needs a date in the close month after interest was paid through, a positive amount, a description and the statement line it comes from. Fees paid in cash with a payment are already in the books and are not entered here.", i+1)
+		}
+		f.Amount = prepaids.Money(cents)
+		charges, totalFees = append(charges, charge{at, cents}), totalFees+cents
+	}
+	slices.SortStableFunc(charges, func(a, b charge) int { return a.at.Compare(b.at) })
+	result := Workpaper{Status: "draft", Method: in.Method, Schedule: []Row{}, Proposals: []prepaids.Adjustment{}, Questions: []string{}, Blockers: []string{}}
 	if paidThrough.After(monthEnd) || paidThrough.Before(month.AddDate(0, 0, -62)) {
 		result.Blockers = append(result.Blockers, "Interest paid-through date must fall between two months before this month and month-end, so opening principal is known for the whole window.")
 	}
-	outstanding, last := opening, paidThrough
+	outstanding, last, charged := opening, paidThrough, 0
+	rateOn := func(day time.Time) int64 {
+		rate := rateMilli
+		for _, c := range changes {
+			if !c.at.After(day) {
+				rate = c.rate
+			}
+		}
+		return rate
+	}
+	addFees := func(through time.Time) {
+		for ; charged < len(charges) && !charges[charged].at.After(through); charged++ {
+			outstanding += charges[charged].amount
+		}
+	}
+	// window is the expected interest for (from, to], split where a rate changes or a fee is added.
+	window := func(from, to time.Time) (int64, []string) {
+		points := []time.Time{to}
+		for _, c := range changes {
+			if b := c.at.AddDate(0, 0, -1); b.After(from) && b.Before(to) {
+				points = append(points, b)
+			}
+		}
+		for _, f := range charges {
+			if f.at.After(from) && f.at.Before(to) {
+				points = append(points, f.at)
+			}
+		}
+		slices.SortFunc(points, func(a, b time.Time) int { return a.Compare(b) })
+		sum, rates, cur := new(big.Int), []string{}, from
+		for _, b := range points {
+			if b.After(cur) {
+				rate := rateOn(b)
+				term := new(big.Int).Mul(big.NewInt(outstanding), big.NewInt(rate))
+				sum.Add(sum, term.Mul(term, big.NewInt(Days(in.DayCount, cur, b))))
+				if label := fmt.Sprintf("%d.%03d%%", rate/1000, rate%1000); !slices.Contains(rates, label) {
+					rates = append(rates, label)
+				}
+				cur = b
+			}
+			if b.Before(to) {
+				addFees(b)
+			}
+		}
+		return rounded(sum, in.DayCount), rates
+	}
 	for i := range in.Payments {
 		p := &in.Payments[i]
 		date, err := time.Parse("2006-01-02", p.Date)
@@ -202,19 +321,29 @@ func Prepare(in Input) (Workpaper, error) {
 		if err != nil {
 			return Workpaper{}, err
 		}
+		days := Days(in.DayCount, last, date)
+		expected, rates := window(last, date)
 		if principal > outstanding {
 			return fail("Payment %d principal exceeds the principal outstanding.", i+1)
 		}
-		days := Days(in.DayCount, last, date)
-		expected := Interest(outstanding, rateMilli, days, in.DayCount)
 		p.Principal, p.Interest = prepaids.Money(principal), prepaids.Money(interest)
-		result.Schedule = append(result.Schedule, Row{Date: p.Date, PrincipalBefore: prepaids.Money(outstanding), Days: days, Principal: p.Principal, Interest: p.Interest, ExpectedInterest: prepaids.Money(expected), Difference: signed(interest - expected)})
+		row := Row{Date: p.Date, PrincipalBefore: prepaids.Money(outstanding), Days: days, Principal: p.Principal, Interest: p.Interest, ExpectedInterest: prepaids.Money(expected), Difference: signed(interest - expected)}
+		if len(changes)+len(charges) > 0 {
+			row.Rates = rates
+		}
+		result.Schedule = append(result.Schedule, row)
 		if interest != expected {
-			result.Questions = append(result.Questions, fmt.Sprintf("The lender charged $%s interest on %s; the note's rate gives $%s for %d days. Check for a rate change, fees or a different day-count before relying on the split.", prepaids.Money(interest), p.Date, prepaids.Money(expected), days))
+			result.Questions = append(result.Questions, fmt.Sprintf("The lender charged $%s interest on %s; the rate (%s) gives $%s for %d days. Check for a rate change, fees or a different day-count before relying on the split.", prepaids.Money(interest), p.Date, strings.Join(rates, " then "), prepaids.Money(expected), days))
 		}
 		outstanding -= principal
+		addFees(date)
 		last = date
 	}
+	var accrued int64
+	if in.AccrueInterest {
+		accrued, _ = window(last, monthEnd)
+	}
+	addFees(monthEnd)
 	if outstanding != closing {
 		result.Blockers = append(result.Blockers, fmt.Sprintf("The statement does not tie: opening $%s less principal paid gives $%s, but the lender shows $%s.", prepaids.Money(opening), prepaids.Money(outstanding), prepaids.Money(closing)))
 	}
@@ -237,11 +366,26 @@ func Prepare(in Input) (Workpaper, error) {
 		}
 		in.BookedAccruedInterest = prepaids.Money(booked)
 		days := Days(in.DayCount, last, monthEnd)
-		accrued := Interest(closing, rateMilli, days, in.DayCount)
 		result.AccruedInterest = &Accrual{From: last.Format("2006-01-02"), To: monthEnd.Format("2006-01-02"), Days: days, Amount: prepaids.Money(accrued)}
 		entry(accrued-booked, in.InterestAccount, in.AccruedInterestAccount)
 	} else if in.AccruedInterestAccount != "" || in.BookedAccruedInterest != "" {
 		return fail("Accrued interest fields require choosing to accrue interest.")
+	}
+	// The statement's fees go to a fee expense account; the ones not yet booked are proposed against the loan.
+	var unbookedFees int64
+	in.FeeAccount = strings.TrimSpace(in.FeeAccount)
+	if len(charges) > 0 {
+		if in.FeeAccount == "" || len(in.FeeAccount) > 200 || strings.EqualFold(in.FeeAccount, in.LoanAccount) || strings.EqualFold(in.FeeAccount, in.InterestAccount) || strings.EqualFold(in.FeeAccount, in.AccruedInterestAccount) || strings.EqualFold(in.FeeAccount, strings.TrimSpace(in.CurrentPortionAccount)) {
+			return fail("Name a separate fee expense account for fees added to the loan balance.")
+		}
+		booked, _, err := amount(in.BookedFees, "the fees already booked to the loan this month, including zero", true)
+		if err != nil {
+			return Workpaper{}, err
+		}
+		in.BookedFees, result.Fees, unbookedFees = prepaids.Money(booked), prepaids.Money(totalFees), totalFees-booked
+		entry(unbookedFees, in.FeeAccount, in.LoanAccount)
+	} else if in.FeeAccount != "" || in.BookedFees != "" {
+		return fail("A fee account and booked fees require at least one fee added to the loan balance.")
 	}
 	// A separate current portion account counts toward the loan balance every month; it is reclassified only when confirmed.
 	var bookedCurrent int64
@@ -262,13 +406,13 @@ func Prepare(in Input) (Workpaper, error) {
 			return fail("Cite the lender's amortization schedule and the principal due in the next 12 months to reclassify.")
 		}
 		in.PrincipalDueNext12Months = prepaids.Money(due)
-		if book+bookedCurrent == closing {
+		if book+unbookedFees+bookedCurrent == closing {
 			entry(min(due, closing)-bookedCurrent, in.LoanAccount, in.CurrentPortionAccount)
 		}
 	} else if in.PrincipalDueNext12Months != "" || in.ScheduleReference != "" {
 		return fail("Principal due in 12 months and the schedule reference require confirming this is a reclassification month.")
 	}
-	difference := book + bookedCurrent - closing
+	difference := book + unbookedFees + bookedCurrent - closing
 	result.BookDifference = signed(difference)
 	if difference != 0 {
 		more := "more"

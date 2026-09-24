@@ -139,7 +139,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 		}
 
 		prepaidRows := [][]string{{"period", "source", "prepaid_account", "expense_account", "credit", "period_expense", "closing_balance", "currency", "workpaper_id"}}
-		loanRows := [][]string{{"period", "lender", "loan_account", "opening_principal", "principal_paid", "interest_paid", "closing_principal", "currency", "workpaper_id"}}
+		loanRows := [][]string{{"period", "lender", "loan_account", "opening_principal", "principal_paid", "fees_added", "interest_paid", "closing_principal", "currency", "workpaper_id"}}
 		recRows := [][]string{{"period", "account", "account_type", "statement_closing", "ledger_closing", "closing_difference", "status", "workpaper_id"}}
 		adjustments := [][]string{{"period", "kind", "workpaper_id", "date", "debit_account", "credit_account", "amount"}}
 		files := map[string][]byte{}
@@ -211,7 +211,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 					addAmount(principal, row.Principal)
 					addAmount(interest, row.Interest)
 				}
-				loanRows = append(loanRows, []string{p.period, csvText(wp.Input.Lender), csvText(wp.Input.LoanAccount), wp.Input.OpeningPrincipal, principal.FloatString(2), interest.FloatString(2), wp.Input.ClosingPrincipal, wp.Input.Currency, p.id})
+				loanRows = append(loanRows, []string{p.period, csvText(wp.Input.Lender), csvText(wp.Input.LoanAccount), wp.Input.OpeningPrincipal, principal.FloatString(2), wp.Fees, interest.FloatString(2), wp.Input.ClosingPrincipal, wp.Input.Currency, p.id})
 				for _, text := range append(wp.Questions, wp.Blockers...) {
 					ask(p.period, where, text)
 				}
