@@ -25,3 +25,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `036_procedure_model_drafting.sql` records whether a proposal came from the local prompt or the configured OpenAI model. Apply after 035 before deploying model drafting. It does not activate, revise or approve any existing rule.
 
 `037_settlements.sql` permits Stripe settlement drafts. Apply after 036 with API/worker stopped; `/readyz` checks it. See [settlement reconciliation](../../../docs/settlement-reconciliation.md).
+
+`048_xero.sql` adds read-only Xero connections and month-end Trial Balance snapshots, with the same row-level security as 047. Apply after 047 with API/worker stopped. See [Xero month-end Trial Balance](../../../docs/xero-onboarding.md).

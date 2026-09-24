@@ -31,6 +31,7 @@ func API() http.Handler { return apiWithStore(nil, "") }
 func apiWithStore(db *sql.DB, token string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/quickbooks/callback", func(w http.ResponseWriter, r *http.Request) { quickbooksReturn(w, r, db) })
+	mux.HandleFunc("GET /v1/xero/callback", func(w http.ResponseWriter, r *http.Request) { xeroReturn(w, r, db) })
 	mux.HandleFunc("POST /internal/forwarded-email", receiveForwardedEmail(db))
 	mux.HandleFunc("POST /internal/email-reply", receiveEmailReply(db))
 	mux.HandleFunc("GET /healthz", health)

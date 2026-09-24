@@ -27,11 +27,12 @@ func main() {
 		log.Fatal(err)
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `LOCK TABLE quickbooks_connections,email_connections,email_outbox IN ACCESS EXCLUSIVE MODE`); err != nil {
+	if _, err = tx.ExecContext(ctx, `LOCK TABLE quickbooks_connections,xero_connections,email_connections,email_outbox IN ACCESS EXCLUSIVE MODE`); err != nil {
 		log.Fatal("Could not isolate rotation; no changes committed: ", err)
 	}
 	queries := []struct{ table, column, scope, query string }{
 		{"quickbooks_connections", "credential", "qbo", `SELECT id::text,organization_id,credential FROM quickbooks_connections WHERE credential IS NOT NULL FOR UPDATE`},
+		{"xero_connections", "credential", "xero", `SELECT id::text,organization_id,credential FROM xero_connections WHERE credential IS NOT NULL FOR UPDATE`},
 		{"email_connections", "credential", "resend", `SELECT id::text,organization_id,credential FROM email_connections FOR UPDATE`},
 		{"email_connections", "webhook_secret", "resend-webhook", `SELECT id::text,organization_id,webhook_secret FROM email_connections WHERE webhook_secret IS NOT NULL FOR UPDATE`},
 		{"email_outbox", "payload", "email", `SELECT m.id,o.organization_id,m.payload FROM email_outbox m JOIN email_connections o ON o.id=m.connection_id FOR UPDATE OF m`},
@@ -54,7 +55,7 @@ func main() {
 				break
 			}
 			scope := org + "/" + q.scope
-			if q.scope == "qbo" || q.scope == "resend-webhook" || q.scope == "email" {
+			if q.scope == "qbo" || q.scope == "xero" || q.scope == "resend-webhook" || q.scope == "email" {
 				scope += "/" + id
 			}
 			plain, openErr := secrets.OpenPrevious(scope, encrypted)

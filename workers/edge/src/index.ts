@@ -14,6 +14,9 @@ export class CapabilityAPI extends Container<Env> {
     QBO_CLIENT_ID: this.env.QBO_CLIENT_ID ?? "",
     QBO_CLIENT_SECRET: this.env.QBO_CLIENT_SECRET ?? "",
     QBO_REDIRECT_URI: this.env.QBO_REDIRECT_URI ?? "",
+    XERO_CLIENT_ID: this.env.XERO_CLIENT_ID ?? "",
+    XERO_CLIENT_SECRET: this.env.XERO_CLIENT_SECRET ?? "",
+    XERO_REDIRECT_URI: this.env.XERO_REDIRECT_URI ?? "",
     PUBLIC_APP_URL: this.env.PUBLIC_APP_URL ?? "",
     EMAIL_INTAKE_ADDRESS: this.env.EMAIL_INTAKE_ADDRESS ?? "",
     EMAIL_INTAKE_KEY: this.env.EMAIL_INTAKE_KEY ?? "",
@@ -46,6 +49,9 @@ interface Env {
   QBO_CLIENT_ID?: string;
   QBO_CLIENT_SECRET?: string;
   QBO_REDIRECT_URI?: string;
+  XERO_CLIENT_ID?: string;
+  XERO_CLIENT_SECRET?: string;
+  XERO_REDIRECT_URI?: string;
   WORKOS_CLIENT_ID?: string;
   WORKOS_ORGANIZATION_ID?: string;
   WORKOS_ISSUER?: string;
