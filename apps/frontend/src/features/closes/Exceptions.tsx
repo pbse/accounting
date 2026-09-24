@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 
 type Found = {
-  type: "possible_duplicate" | "uncategorized" | "no_payee";
+  type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding";
   kind: string;
   provider_ids: string[];
   dates: string[];
@@ -12,12 +12,19 @@ type Found = {
   next_step: string;
   question: string;
 };
-type Scan = { capture: { id: string; evidence_id: string; finished_at: string } | null; scanned?: number; items: Found[] };
+type Balance = { account_id: string; account: string; side: string; amount: string; currency: string; finding: string; next_step: string; question: string };
+type Scan = {
+  capture: { id: string; evidence_id: string; finished_at: string } | null;
+  scanned?: number;
+  items: Found[];
+  balances: { snapshot: { id: string; captured_at: string; stale: boolean } | null; items: Balance[]; error?: string };
+};
 
 const labels: Record<Found["type"], [string, string]> = {
   possible_duplicate: ["Possible duplicate", "warn"],
   uncategorized: ["Holding account", "info"],
   no_payee: ["No payee", "info"],
+  inconsistent_coding: ["Inconsistent coding", "info"],
 };
 
 export function Exceptions({ closeId }: { closeId: string }) {
@@ -34,9 +41,11 @@ export function Exceptions({ closeId }: { closeId: string }) {
     };
   }, [closeId]);
   if (!scan) return error ? <p role="alert">{error}</p> : null;
-  async function copy(items: Found[]) {
+  const balances = scan.balances;
+  const questions = [...scan.items, ...balances.items].map((item) => item.question);
+  async function copy(items: string[]) {
     try {
-      await navigator.clipboard.writeText(items.map((item) => `- ${item.question}`).join("\n"));
+      await navigator.clipboard.writeText(items.map((question) => `- ${question}`).join("\n"));
       setCopied(`Copied ${items.length} question${items.length === 1 ? "" : "s"}. Paste them into a client request.`);
     } catch {
       setCopied("The browser blocked the clipboard. Select the questions below and copy them.");
@@ -46,19 +55,20 @@ export function Exceptions({ closeId }: { closeId: string }) {
     <section aria-label="Exceptions the agent found">
       <div className="section-title">
         <h2>Exceptions the agent found</h2>
-        {scan.items.length > 0 && (
+        {questions.length > 0 && (
           <span>
-            <button type="button" onClick={() => void copy(scan.items)}>
+            <button type="button" onClick={() => void copy(questions)}>
               Copy client questions
             </button>{" "}
             <Link to="?tab=requests#client-request">Draft a client request</Link>
           </span>
         )}
       </div>
+      {copied && <p role="status">{copied}</p>}
       {!scan.capture ? (
         <p className="empty">
           Capture this month's QuickBooks transactions on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every
-          transaction for possible duplicates, holding-account postings and payments without a payee.
+          transaction for possible duplicates, holding-account postings, payments without a payee and payees coded to different accounts.
         </p>
       ) : (
         <>
@@ -67,9 +77,8 @@ export function Exceptions({ closeId }: { closeId: string }) {
             {scan.capture.evidence_id}). Each item is a question with the evidence still missing, not a conclusion. Nothing is changed in
             QuickBooks.
           </p>
-          {copied && <p role="status">{copied}</p>}
           {scan.items.length === 0 ? (
-            <p className="empty">No possible duplicates, holding-account postings or payments without a payee in this capture.</p>
+            <p className="empty">No possible duplicates, holding-account postings, payments without a payee or inconsistent coding in this capture.</p>
           ) : (
             <div className="rows">
               <div className="rows-head">
@@ -88,6 +97,51 @@ export function Exceptions({ closeId }: { closeId: string }) {
                   <span>{item.question}</span>
                   <small>
                     {item.kind} {item.provider_ids.map((id) => `#${id}`).join(", ")}
+                  </small>
+                  <span />
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      <h3>Balances opposite their normal side</h3>
+      {!balances.snapshot ? (
+        <p className="empty">
+          Capture a period snapshot on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every Trial Balance account for a
+          balance opposite its normal side, such as a credit in receivables or an overdrawn bank account.
+        </p>
+      ) : (
+        <>
+          <p>
+            From the Trial Balance in snapshot #{balances.snapshot.id}, captured {new Date(balances.snapshot.captured_at).toLocaleString()}.
+            Contra accounts, retained earnings and owner draws are skipped because they normally sit on the opposite side.
+          </p>
+          {balances.snapshot.stale && (
+            <p role="status">This snapshot's source was replaced or the connection is no longer active. Capture a new snapshot before relying on it.</p>
+          )}
+          {balances.error ? (
+            <p role="alert">The agent could not read this Trial Balance: {balances.error}.</p>
+          ) : balances.items.length === 0 ? (
+            <p className="empty">Every classified account in this Trial Balance sits on its normal side.</p>
+          ) : (
+            <div className="rows">
+              <div className="rows-head">
+                <span>What the agent found</span>
+                <span>Question for the client</span>
+                <span>Balance</span>
+                <span />
+              </div>
+              {balances.items.map((item) => (
+                <div className="row" key={item.account_id}>
+                  <div>
+                    <span className="status warn">Abnormal balance</span>
+                    <p>{item.finding}</p>
+                    <small>{item.next_step}</small>
+                  </div>
+                  <span>{item.question}</span>
+                  <small>
+                    {item.amount} {item.currency} {item.side}
                   </small>
                   <span />
                 </div>

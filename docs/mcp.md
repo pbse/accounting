@@ -37,7 +37,7 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 | `list_work`, `review_queue` | Ranked preparation work; drafts ready for review, with approval requests |
 | `list_evidence`, `read_evidence_text` | Documents on a close and their extracted text |
 | `get_workpaper` | One draft: inputs, results, cited sources, blockers and questions |
-| `find_exceptions` | Questions from the latest QuickBooks capture |
+| `find_exceptions` | Questions from the latest QuickBooks capture and abnormal Trial Balance balances |
 | `get_readiness` | What still blocks sign-off |
 | `list_client_requests`, `draft_client_request` | Client request drafts; save a new draft (not sent or approved) |
 | `open_close` | Open or return the close for a client and month |

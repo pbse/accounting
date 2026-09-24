@@ -23,18 +23,27 @@ import (
 )
 
 func TestProductionLedgerEffect(t *testing.T) {
-	before := quickbooks.LedgerObservation{Company: "Client", Prepaid: quickbooks.LedgerAccount{ID: "10", Balance: "10.00"}, Expense: quickbooks.LedgerAccount{ID: "20", Balance: "5"}}
-	after := quickbooks.LedgerObservation{Company: "Client", Prepaid: quickbooks.LedgerAccount{ID: "10", Balance: "1010"}, Expense: quickbooks.LedgerAccount{ID: "20", Balance: "-995.00"}}
-	if !ledgerAfterMatches(before, after, "1000.00") {
+	before := quickbooks.LedgerObservation{Company: "Client", Accounts: []quickbooks.LedgerAccount{{ID: "10", Classification: "Asset", Balance: "10.00"}, {ID: "20", Classification: "Expense", Balance: "5"}}}
+	after := quickbooks.LedgerObservation{Company: "Client", Accounts: []quickbooks.LedgerAccount{{ID: "10", Classification: "Asset", Balance: "1010"}, {ID: "20", Classification: "Expense", Balance: "-995.00"}}}
+	journal := quickbooks.Journal{Line: []quickbooks.Line{
+		{Amount: "1000.00", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: quickbooks.Detail{PostingType: "Debit", AccountRef: quickbooks.Reference{Value: "10"}}},
+		{Amount: "1000.00", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: quickbooks.Detail{PostingType: "Credit", AccountRef: quickbooks.Reference{Value: "20"}}},
+	}}
+	if !ledgerAfterMatches(before, after, journal) {
 		t.Fatal("exact ledger delta rejected")
 	}
-	projected, err := projectedBalances(before, "1000.00")
-	if err != nil || projected["prepaid"] != "1010.00" || projected["expense"] != "-995.00" {
+	projected, err := projectedBalances(before, journal)
+	if err != nil || projected["10"] != "1010.00" || projected["20"] != "-995.00" {
 		t.Fatalf("wrong proposed balances: %v %v", projected, err)
 	}
-	after.Expense.Balance = "-994.99"
-	if ledgerAfterMatches(before, after, "1000.00") {
+	after.Accounts[1].Balance = "-994.99"
+	if ledgerAfterMatches(before, after, journal) {
 		t.Fatal("incorrect ledger delta accepted")
+	}
+	after.Accounts[1].Balance = "-995.00"
+	after.Accounts[1].Name = "Renamed after approval"
+	if ledgerAfterMatches(before, after, journal) {
+		t.Fatal("an account renamed around the write must not verify")
 	}
 	raw, _ := json.Marshal(productionPosting{posting: posting{State: "verified"}})
 	if !strings.Contains(string(raw), `"state":"verified"`) {
@@ -43,7 +52,7 @@ func TestProductionLedgerEffect(t *testing.T) {
 }
 
 func TestCloseRehearsalCombinesOnlyCompatibleSnapshots(t *testing.T) {
-	before := quickbooks.LedgerObservation{Company: "Client", Prepaid: quickbooks.LedgerAccount{ID: "10", Name: "Prepaid", Balance: "100.00", SyncToken: "3"}, Expense: quickbooks.LedgerAccount{ID: "20", Name: "Expense", Balance: "50.00", SyncToken: "7"}}
+	before := quickbooks.LedgerObservation{Company: "Client", Accounts: []quickbooks.LedgerAccount{{ID: "10", Name: "Prepaid", Classification: "Asset", Balance: "100.00", SyncToken: "3"}, {ID: "20", Name: "Expense", Classification: "Expense", Balance: "50.00", SyncToken: "7"}}}
 	entry := func(id, amount string, observed quickbooks.LedgerObservation) rehearsalInput {
 		journal, _ := json.Marshal(quickbooks.Journal{CurrencyRef: quickbooks.Reference{Value: "USD"}, Line: []quickbooks.Line{
 			{Amount: json.Number(amount), DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: quickbooks.Detail{PostingType: "Debit", AccountRef: quickbooks.Reference{Value: "10"}}},
@@ -62,7 +71,8 @@ func TestCloseRehearsalCombinesOnlyCompatibleSnapshots(t *testing.T) {
 	}
 	first.Posting.Conflicts = nil
 	changed := before
-	changed.Prepaid.SyncToken = "4"
+	changed.Accounts = []quickbooks.LedgerAccount{before.Accounts[0], before.Accounts[1]}
+	changed.Accounts[0].SyncToken = "4"
 	got = rehearseProduction([]rehearsalInput{first, entry("2", "5.00", changed)}, false)
 	if len(got.Blockers) == 0 || len(got.Accounts) != 0 {
 		t.Fatalf("mixed account versions should block combined state: %+v", got)
@@ -143,7 +153,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		return w.Body.Bytes()
 	}
 	grantPath := "/v1/closes/" + closeID + "/production-grant"
-	call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "prepaid_account_id": "10", "expense_account_id": "20", "max_amount": "20000", "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic client authority", "confirmation": "GRANT PRODUCTION POSTING"}, 200)
+	call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "account_ids": []string{"10", "20"}, "kinds": []string{"prepaid"}, "max_amount": "20000", "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic client authority", "confirmation": "GRANT PRODUCTION POSTING"}, 200)
 	original := http.DefaultTransport
 	defer func() { http.DefaultTransport = original }()
 	writes := 0
