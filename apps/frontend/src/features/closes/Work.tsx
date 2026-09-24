@@ -109,7 +109,7 @@ const tones: Record<string, string> = {
   waiting_evidence: "status info",
   completed: "status ok",
 };
-type QueueItem = Plan & { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string; digest: string; review_id: string; bulk_reason: string };
+type QueueItem = Plan & { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string; digest: string; review_id: string; bulk_reason: string; approval_note?: string };
 const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement" };
 
 function Kpi({ icon, tone, label, value, caption, onClick }: { icon: IconName; tone: string; label: string; value?: number; caption: string; onClick: () => void }) {
@@ -404,9 +404,10 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
                   {kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}
                   {item.bulk_reason ? ` · review individually: ${item.bulk_reason.toLowerCase()}` : ""}
                 </small>
+                {item.approval_note && <small title={item.approval_note}>Approval requested: {item.approval_note}</small>}
               </span>
             </span>
-            <span className="status warn">Awaiting review</span>
+            <span className="status warn">{item.approval_note ? "Approval requested" : "Awaiting review"}</span>
             <PlanChips plan={item} />
             <Link className="button" to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
               Review

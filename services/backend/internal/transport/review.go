@@ -220,6 +220,35 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 		jsonReply(w, 200, map[string]string{"id": id, "decision": input.Decision})
 	})
 	// Each item is its own transaction with a fresh access check, so one stale draft cannot block the rest.
+	// An approval request is not an approval: it only asks a person to review this draft.
+	mux.HandleFunc("POST /v1/closes/{id}/workpapers/{paper}/approval-request", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Note string `json:"note"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		in.Note = strings.TrimSpace(in.Note)
+		if len(in.Note) < 5 || len(in.Note) > 1000 {
+			problem(w, 422, "Say what the reviewer should check (5–1,000 characters).")
+			return
+		}
+		requester := "local-workspace (development)"
+		if a := auth.Actor(r.Context()); a != nil && a.Organization != "" {
+			requester = a.Subject
+		}
+		var id string
+		err := db.QueryRowContext(r.Context(), `INSERT INTO approval_requests(close_id,workpaper_id,requested_by,note) SELECT close_id,id,$3,$4 FROM workpaper_review_state WHERE close_id::text=$1 AND id::text=$2 AND review_state='pending' AND jsonb_array_length(COALESCE(paper->'sources','[]'))>0 AND jsonb_array_length(COALESCE(paper->'blockers','[]'))=0 RETURNING id::text`, r.PathValue("id"), r.PathValue("paper"), requester, in.Note).Scan(&id)
+		if err == sql.ErrNoRows {
+			problem(w, 409, "Only a current draft with evidence and no blockers can be sent for approval. Resolve its blockers first.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "Could not record the approval request.")
+			return
+		}
+		jsonReply(w, 200, map[string]string{"id": id, "state": "requested"})
+	})
 	mux.HandleFunc("POST /v1/closes/review-batch", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := reviewActor(w, r)
 		if !ok {
