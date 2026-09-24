@@ -601,6 +601,20 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "A current accountant-approved workpaper is required.")
 			return
 		}
+		var reviewer string
+		if err = tx.QueryRowContext(r.Context(), `SELECT actor FROM workpaper_reviews WHERE workpaper_id::text=$1 ORDER BY id DESC LIMIT 1`, r.PathValue("paper")).Scan(&reviewer); err != nil {
+			problem(w, 409, "A current accountant-approved workpaper is required.")
+			return
+		}
+		issue, err := independenceIssue(r.Context(), tx, closeID, r.PathValue("paper"), reviewer)
+		if err != nil {
+			problem(w, 503, "Firm review policy could not be checked. No write was made.")
+			return
+		}
+		if issue != "" {
+			problem(w, 409, "Posting needs an approval that meets the firm's independent-review policy. "+issue)
+			return
+		}
 		err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM production_posting_grants WHERE id=$1 AND revoked_at IS NULL AND expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=production_posting_grants.organization_id AND subject=production_posting_grants.granted_by AND granted) FOR UPDATE`, g.ID).Scan(&currentGrant)
 		if err != nil {
 			problem(w, 409, "Production grant expired or was revoked.")

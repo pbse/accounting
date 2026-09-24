@@ -106,6 +106,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerReadiness(mux, db)
 	registerPlanning(mux, db)
 	registerEffort(mux, db)
+	registerIndependence(mux, db)
 	registerProcedures(mux, db)
 	registerProcedureLearning(mux, db)
 	registerAccess(mux, db)
@@ -348,7 +349,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		}
 		digest := fmt.Sprintf("%x", sha256.Sum256(body))
 		var saved savedPaper
-		err = db.QueryRowContext(r.Context(), `INSERT INTO workpapers(close_id,kind,digest,paper) SELECT id,$2,$3,$4 FROM client_closes WHERE id::text=$1 AND entity=$5 AND period=$6 ON CONFLICT(close_id,kind,digest) DO UPDATE SET digest=workpapers.digest RETURNING id::text,kind,created_at,paper`, r.PathValue("id"), input.Kind, digest, string(body), entity, period).Scan(&saved.ID, &saved.Kind, &saved.CreatedAt, &saved.Paper)
+		err = db.QueryRowContext(r.Context(), `INSERT INTO workpapers(close_id,kind,digest,paper,created_by) SELECT id,$2,$3,$4,$7 FROM client_closes WHERE id::text=$1 AND entity=$5 AND period=$6 ON CONFLICT(close_id,kind,digest) DO UPDATE SET digest=workpapers.digest RETURNING id::text,kind,created_at,paper`, r.PathValue("id"), input.Kind, digest, string(body), entity, period, subject(r)).Scan(&saved.ID, &saved.Kind, &saved.CreatedAt, &saved.Paper)
 		if err == sql.ErrNoRows {
 			problem(w, 409, "The workpaper client and month must match the selected close.")
 			return

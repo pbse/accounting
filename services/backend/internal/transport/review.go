@@ -85,6 +85,15 @@ func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, deci
 			return "", 503, "Could not invalidate supplier credit approval."
 		}
 	}
+	if decision == "approved" {
+		issue, err := independenceIssue(ctx, tx, closeID, paperID, actor)
+		if err != nil {
+			return "", 503, "Firm review policy could not be checked."
+		}
+		if issue != "" {
+			return "", 409, issue
+		}
+	}
 	var id string
 	if err = tx.QueryRowContext(ctx, `INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, paperID, digest, decision, note, actor).Scan(&id); err != nil {
 		return "", 503, "Review save could not be confirmed. Reload history before retrying."

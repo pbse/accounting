@@ -330,3 +330,11 @@ Author: Claude Opus 5.5. Stacked on close planning; migration 039 applied only t
 
 - `TestEffortCapsCreditAndSeparatesWaiting`: three 30-second beats in one minute credit at most 60 seconds (robust to a minute boundary); unknown activities, oversized beats and another firm's close are rejected; a recorded 15-minute entry adds to human minutes; client wait counts only the answered request (delivery to first reply ≈ 2 h) and reports one delivered request without a reply while ignoring an undelivered one; the monthly report's median uses the measured close only and the quiet close reports no total. Observed red with the 60-second cap removed (app and constraint) and with unmeasured closes counted as zero.
 - Browser: Measure page (median 21 min, 1 of 3 measured, unmeasured rows) and the close's Human effort card with tracked, recorded and waiting figures.
+
+## Posting safety: closing date and independent review (2026-09-24)
+
+Author: Claude Opus 5.5. Stacked on human effort measurement; migration 040 applied only to the disposable database.
+
+- `TestOpenPeriodFollowsTheCompanyClosingDate`: refuses a date equal to the closing date, allows the day after, allows no closing date, and blocks a missing Preferences block or malformed date. Observed red when a date on the closing date was allowed.
+- `TestProductionPostingSingleDurableAttempt` now also proves that a closing date on or after the journal date refuses execution (422) and a changed but earlier closing date rejects the stale intent (409), both with zero writes, before the original single verified write. `TestVendorCreditRefusesAClosedPeriodBeforeAnyWrite` stops before any vendor, account or write request. Sandbox posting and Bill mocks serve Preferences.
+- `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`: under the policy the job's creator, the direct saver and drafts without provenance are refused; another member approves; the posting gate refuses a preparer's approval; policy changes need org:manage on a hosted firm, are recorded, and the local workspace cannot enable the policy (database constraint). Observed red with the check disabled.

@@ -153,6 +153,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	failReadback := false
 	var journal quickbooks.Journal
 	uncertain := false
+	closedThrough := ""
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host != "quickbooks.api.intuit.com" {
 			t.Fatalf("wrong production host: %s", r.URL.Host)
@@ -161,6 +162,8 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		switch {
 		case strings.Contains(r.URL.Path, "/companyinfo/"):
 			result = map[string]any{"CompanyInfo": map[string]string{"CompanyName": "Production fixture"}}
+		case strings.HasSuffix(r.URL.Path, "/preferences"):
+			result = map[string]any{"Preferences": map[string]any{"AccountingInfoPrefs": map[string]string{"BookCloseDate": closedThrough}}}
 		case strings.HasSuffix(r.URL.Path, "/account/10"), strings.HasSuffix(r.URL.Path, "/account/20"):
 			prepaid := strings.HasSuffix(r.URL.Path, "/account/10")
 			id, name, class, balance := "20", "Software", "Expense", "0"
@@ -239,6 +242,14 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	}
 	call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 200)
 	actor.Permissions = []string{"clients:all", "posting:execute"}
+	closedThrough = "2099-12-31"
+	call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 422)
+	closedThrough = "2000-01-31"
+	call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 409)
+	if writes != 0 {
+		t.Fatalf("a closed or changed closing date must stop the write: %d", writes)
+	}
+	closedThrough = ""
 	var posted productionPosting
 	json.Unmarshal(call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 200), &posted)
 	if writes != 1 || posted.State != "verified" || posted.ExternalID != "456" || len(posted.LedgerAfter) == 0 {

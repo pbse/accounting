@@ -20,6 +20,8 @@ func TestVendorCreditChecksAccountsAndCanonicalReadback(t *testing.T) {
 		switch r.URL.Path {
 		case "/v3/company/123/companyinfo/123":
 			body = `{"CompanyInfo":{"CompanyName":"Example LLC"}}`
+		case "/v3/company/123/preferences":
+			body = `{"Preferences":{"AccountingInfoPrefs":{"BookCloseDate":"2026-08-31"}}}`
 		case "/v3/company/123/vendor/21":
 			body = `{"Vendor":{"Id":"21","Active":true,"DisplayName":"Supplier"}}`
 		case "/v3/company/123/account/5":
@@ -63,6 +65,8 @@ func TestVendorCreditBlocksAnExistingProviderReference(t *testing.T) {
 		switch r.URL.Path {
 		case "/v3/company/123/companyinfo/123":
 			body = `{"CompanyInfo":{"CompanyName":"Example LLC"}}`
+		case "/v3/company/123/preferences":
+			body = `{"Preferences":{"AccountingInfoPrefs":{"BookCloseDate":"2026-08-31"}}}`
 		case "/v3/company/123/vendor/21":
 			body = `{"Vendor":{"Id":"21","Active":true,"DisplayName":"Supplier"}}`
 		case "/v3/company/123/account/5":
@@ -78,5 +82,21 @@ func TestVendorCreditBlocksAnExistingProviderReference(t *testing.T) {
 	})}
 	if _, err := sandbox.PrepareVendorCredit(context.Background(), "21", "5", "7", "Prepaid service", "2026-09-15", "25.00", "CN-7"); err == nil {
 		t.Fatal("an already booked supplier credit was accepted")
+	}
+}
+
+func TestVendorCreditRefusesAClosedPeriodBeforeAnyWrite(t *testing.T) {
+	sandbox := Sandbox{Realm: "123", Token: "synthetic", Entity: "Example LLC", DebitAccount: "7", CreditAccount: "8"}
+	sandbox.Client = &http.Client{Transport: vendorCreditRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body := `{"CompanyInfo":{"CompanyName":"Example LLC"}}`
+		if r.URL.Path == "/v3/company/123/preferences" {
+			body = `{"Preferences":{"AccountingInfoPrefs":{"BookCloseDate":"2026-09-30"}}}`
+		} else if r.URL.Path != "/v3/company/123/companyinfo/123" {
+			t.Fatalf("closed period must stop before %s", r.URL.String())
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	if _, err := sandbox.PrepareVendorCredit(context.Background(), "21", "5", "7", "Prepaid service", "2026-09-15", "25.00", "Credit CN-7"); err == nil || !strings.Contains(err.Error(), "closed through 2026-09-30") {
+		t.Fatalf("a credit dated inside the closed period must be refused: %v", err)
 	}
 }
