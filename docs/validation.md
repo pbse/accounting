@@ -466,6 +466,14 @@ Author: Claude Opus 5.5. Migration 048.
 - One-off key rotation: a Xero credential sealed with the old key was re-encrypted by `cmd/rotate-secrets` ("Re-encrypted and checked 1 records") and opened with the new key.
 - One-off row-level security check: the Xero test passed as a non-superuser, non-owner role through the tenant connection wrapper, and `TestRowLevelSecurityIsolatesFirms` confirms both Xero tables have policies for the runtime role.
 
+## Wrong-side balances from Xero (2026-09-24)
+
+Author: Claude Opus 5.5. No migration.
+
+- `TestWrongSideReadsYTDColumnsWithXeroRules`: from Xero's YTD columns, flags an overdrawn bank as a balance and an expense credit as a year-to-date balance; skips a receivable on its normal side, an account with equal YTD debit and credit, accumulated depreciation, retained earnings (system account), owner drawings and an account missing from the chart. A report without YTD Credit and an unreadable amount both fail the check. Observed red with each skip removed, without the year-to-date wording, without the YTD Credit requirement and with the credit column ignored.
+- The QuickBooks decision moved into `internal/ledger`; `TestAbnormalBalancesReadTheTrialBalanceColumns` and `TestFindExceptionsRaisesQuestionsWithoutConcluding` pass unchanged.
+- `TestExceptionsScanTheWholeLatestCapture` (PostgreSQL): a Xero snapshot captured after the QuickBooks one supplies the balances with source `xero`; when the QuickBooks snapshot is newer it supplies them instead; a later Xero row captured earlier does not replace the most recent capture. Observed red in each case.
+
 ## QuickBooks return tab and posting fixture (2026-09-24)
 
 Author: Claude Opus 5.5. No migration.

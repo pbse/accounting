@@ -27,6 +27,8 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
+		db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM xero_connections WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, closeID)
@@ -40,8 +42,8 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 		Scanned  int                     `json:"scanned"`
 		Items    []struct{ Type string } `json:"items"`
 		Balances struct {
-			Snapshot *struct{ ID string }       `json:"snapshot"`
-			Items    []struct{ Account string } `json:"items"`
+			Snapshot *struct{ ID, Source string } `json:"snapshot"`
+			Items    []struct{ Account string }   `json:"items"`
 		} `json:"balances"`
 	}) {
 		t.Helper()
@@ -76,6 +78,31 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 	latest := snapshot(`{"value":"150.00"},{"value":""}`, `{"value":"20.00"},{"value":""}`)
 	if got := scan(); got.Capture != nil || got.Balances.Snapshot == nil || got.Balances.Snapshot.ID != latest || len(got.Balances.Items) != 1 || got.Balances.Items[0].Account != "Business card" {
 		t.Fatalf("balances come from the latest period snapshot even without a capture: %+v", got)
+	}
+	var xeroConnection, xeroSnapshot string
+	if err = db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) SELECT id,organization_id,entity,'fixture','active',$2,now(),'t-1' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&xeroConnection); err != nil {
+		t.Fatal(err)
+	}
+	xeroPayload := `{"date":"2026-09-30","organisation":{"Organisations":[{"BaseCurrency":"USD"}]},"accounts":{"Accounts":[{"AccountID":"a-1","Code":"090","Name":"Operating Account","Class":"ASSET"}]},
+		"trial_balance":{"Reports":[{"Rows":[{"RowType":"Header","Cells":[{"Value":"Account"},{"Value":"Debit"},{"Value":"Credit"},{"Value":"YTD Debit"},{"Value":"YTD Credit"}]},{"RowType":"Row","Cells":[{"Value":"Operating Account","Attributes":[{"Id":"account","Value":"a-1"}]},{"Value":""},{"Value":""},{"Value":""},{"Value":"45.00"}]}]}]}}`
+	if err = db.QueryRow(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d',$3,'fixture',now()+interval '1 minute') RETURNING id::text`, closeID, xeroConnection, xeroPayload).Scan(&xeroSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if got := scan(); got.Balances.Snapshot == nil || got.Balances.Snapshot.Source != "xero" || got.Balances.Snapshot.ID != xeroSnapshot || len(got.Balances.Items) != 1 || got.Balances.Items[0].Account != "Operating Account" {
+		t.Fatalf("a Xero snapshot captured after the QuickBooks one supplies the balances: %+v", got)
+	}
+	// A later row that was captured earlier does not replace the most recent capture.
+	if _, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d',$3,'fixture',now()-interval '2 hours')`, closeID, xeroConnection, xeroPayload); err != nil {
+		t.Fatal(err)
+	}
+	if got := scan(); got.Balances.Snapshot == nil || got.Balances.Snapshot.ID != xeroSnapshot {
+		t.Fatalf("the most recently captured Xero snapshot is used, not the highest ID: %+v", got)
+	}
+	if _, err = db.Exec(`UPDATE xero_snapshots SET captured_at=now()-interval '1 hour' WHERE id=$1`, xeroSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if got := scan(); got.Balances.Snapshot == nil || got.Balances.Snapshot.Source != "quickbooks" || got.Balances.Snapshot.ID != latest {
+		t.Fatalf("a newer QuickBooks snapshot supplies the balances instead: %+v", got)
 	}
 	if err = db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at) VALUES($1,$2,'2026-09','fixture','completed',$3,now()) RETURNING id::text`, closeID, connection, evidenceID).Scan(&syncID); err != nil {
 		t.Fatal(err)
