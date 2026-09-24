@@ -161,7 +161,7 @@ func CSVSummary(source, period string) (string, bool, error) {
 		return "", true, err
 	}
 	if len(rows) == 0 {
-		return "", true, fmt.Errorf("the CSV has no transactions")
+		return fmt.Sprintf("Reconciliation CSV with no transactions in %s. It could be the bank statement or the ledger export; choose which on the reconciliation page.", period), true, nil
 	}
 	first, last := rows[0].Date, rows[0].Date
 	for _, row := range rows {

@@ -33,6 +33,13 @@ type Exception struct {
 
 var holdingAccount = regexp.MustCompile(`(?i)uncategori[sz]ed|ask my accountant|suspense`)
 
+func amount(row TransactionRow) string {
+	if row.Currency == "" || row.Currency == "USD" {
+		return "$" + row.Amount
+	}
+	return row.Amount + " " + row.Currency
+}
+
 type ref struct{ Value, Name string }
 
 // FindExceptions raises questions from captured ledger rows. It never concludes that
@@ -80,15 +87,15 @@ func FindExceptions(rows []TransactionRow) []Exception {
 		}
 		if p.account != "" {
 			out = append(out, Exception{Type: "uncategorized", Kind: row.Kind, ProviderIDs: []string{row.ProviderID}, Dates: []string{row.Date}, Amount: row.Amount, Counterparty: p.counterparty.Name, Account: p.account,
-				Finding:  fmt.Sprintf("%s %s for $%s with %s is posted to %s.", row.Kind, row.ProviderID, row.Amount, who, p.account),
+				Finding:  fmt.Sprintf("%s %s for %s with %s is posted to %s.", row.Kind, row.ProviderID, amount(row), who, p.account),
 				NextStep: "Missing: the receipt or client answer showing what it paid for. Then choose the account under the firm's procedure; nothing has been recategorized.",
-				Question: fmt.Sprintf("What was the $%s transaction with %s on %s for?", row.Amount, who, row.Date)})
+				Question: fmt.Sprintf("What was the %s transaction with %s on %s for?", amount(row), who, row.Date)})
 		}
 		if row.Kind == "Purchase" && p.counterparty.Value == "" {
 			out = append(out, Exception{Type: "no_payee", Kind: row.Kind, ProviderIDs: []string{row.ProviderID}, Dates: []string{row.Date}, Amount: row.Amount,
-				Finding:  fmt.Sprintf("Purchase %s for $%s on %s has no payee.", row.ProviderID, row.Amount, row.Date),
+				Finding:  fmt.Sprintf("Purchase %s for %s on %s has no payee.", row.ProviderID, amount(row), row.Date),
 				NextStep: "Missing: the receipt or bank detail naming who was paid. Its category is unconfirmed until then.",
-				Question: fmt.Sprintf("Who was paid $%s on %s, and what was it for?", row.Amount, row.Date)})
+				Question: fmt.Sprintf("Who was paid %s on %s, and what was it for?", amount(row), row.Date)})
 		}
 		if p.counterparty.Value != "" && row.Amount != "" {
 			key := row.Kind + "\x00" + p.counterparty.Value + "\x00" + row.Currency + "\x00" + row.Amount
@@ -111,7 +118,7 @@ func FindExceptions(rows []TransactionRow) []Exception {
 		// Nearby equal payments are a question; monthly recurring payments are never flagged.
 		for start := 0; start < len(group); {
 			end := start + 1
-			for end < len(group) && group[end].date.Sub(group[end-1].date) <= 3*24*time.Hour {
+			for end < len(group) && group[end].date.Sub(group[start].date) <= 3*24*time.Hour {
 				end++
 			}
 			if end-start > 1 {
@@ -121,9 +128,9 @@ func FindExceptions(rows []TransactionRow) []Exception {
 					item.ProviderIDs = append(item.ProviderIDs, p.row.ProviderID)
 					item.Dates = append(item.Dates, p.row.Date)
 				}
-				item.Finding = fmt.Sprintf("%d %s transactions with %s for $%s within three days (%s).", end-start, first.row.Kind, first.counterparty.Name, first.row.Amount, strings.Join(item.Dates, ", "))
+				item.Finding = fmt.Sprintf("%d %s transactions with %s for %s within three days (%s).", end-start, first.row.Kind, first.counterparty.Name, amount(first.row), strings.Join(item.Dates, ", "))
 				item.NextStep = "Missing: a separate invoice or receipt for each, or the client's answer. Both may be genuine; nothing is deleted or merged."
-				item.Question = fmt.Sprintf("We see %d payments of $%s with %s on %s. Were they all intended?", end-start, first.row.Amount, first.counterparty.Name, strings.Join(item.Dates, " and "))
+				item.Question = fmt.Sprintf("We see %d payments of %s with %s on %s. Were they all intended?", end-start, amount(first.row), first.counterparty.Name, strings.Join(item.Dates, " and "))
 				out = append(out, item)
 			}
 			start = end

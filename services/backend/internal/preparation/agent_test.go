@@ -159,6 +159,9 @@ func TestRecognizeExportLeavesTheReconciliationRoleToTheReviewer(t *testing.T) {
 	if p, ok = RecognizeExport(intake("id,date,amount\nB1,2026-10-01,5.00\n"), "2026-09"); !ok || p.Kind != "unsupported" || len(p.Questions) != 1 {
 		t.Fatalf("a malformed reconciliation CSV must stay visibly unsupported: %+v", p)
 	}
+	if p, ok = RecognizeExport(intake("id,date,amount\n"), "2026-09"); !ok || p.Kind != "reconciliation" || !strings.Contains(p.Summary, "no transactions") {
+		t.Fatalf("a header-only CSV is zero movement, not an error: %+v", p)
+	}
 	if _, ok = RecognizeExport(intake("Invoice amount: 1200.00\nService start: 2026-09-01"), "2026-09"); ok {
 		t.Fatal("an invoice is not a recognized export")
 	}

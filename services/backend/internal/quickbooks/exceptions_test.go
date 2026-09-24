@@ -1,6 +1,9 @@
 package quickbooks
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFindExceptionsRaisesQuestionsWithoutConcluding(t *testing.T) {
 	row := func(kind, id, date, amount, record string) TransactionRow {
@@ -13,7 +16,10 @@ func TestFindExceptionsRaisesQuestionsWithoutConcluding(t *testing.T) {
 		row("Purchase", "103", "2026-09-30", "49.00", software),
 		row("Purchase", "104", "2026-09-03", "49.00", `{"EntityRef":{"value":"8","name":"Other vendor"},"Line":[]}`),
 		{Kind: "Purchase", ProviderID: "105", Date: "2026-09-03", Currency: "EUR", Amount: "49.00", Record: []byte(software)},
-		row("Bill", "201", "2026-09-10", "310.00", `{"VendorRef":{"value":"9","name":"Printer Co"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99","name":"Uncategorized Expense"}}}]}`),
+		{Kind: "Bill", ProviderID: "201", Date: "2026-09-10", Currency: "EUR", Amount: "310.00", Record: []byte(`{"VendorRef":{"value":"9","name":"Printer Co"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99","name":"Uncategorized Expense"}}}]}`)},
+		row("Purchase", "501", "2026-09-20", "75.00", `{"EntityRef":{"value":"11","name":"Courier"},"Line":[]}`),
+		row("Purchase", "502", "2026-09-23", "75.00", `{"EntityRef":{"value":"11","name":"Courier"},"Line":[]}`),
+		row("Purchase", "503", "2026-09-26", "75.00", `{"EntityRef":{"value":"11","name":"Courier"},"Line":[]}`),
 		row("Purchase", "301", "2026-09-12", "18.50", `{"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"61","name":"Meals"}}}]}`),
 		row("JournalEntry", "401", "2026-09-30", "1000.00", `{"Line":[{"JournalEntryLineDetail":{"AccountRef":{"value":"12","name":"Prepaid expense"}}}]}`),
 	}
@@ -21,10 +27,13 @@ func TestFindExceptionsRaisesQuestionsWithoutConcluding(t *testing.T) {
 	for _, item := range FindExceptions(rows) {
 		found[item.Type] = append(found[item.Type], item)
 	}
-	if len(found["possible_duplicate"]) != 1 || len(found["possible_duplicate"][0].ProviderIDs) != 2 || found["possible_duplicate"][0].ProviderIDs[1] != "102" {
+	if len(found["possible_duplicate"]) != 2 || len(found["possible_duplicate"][0].ProviderIDs) != 2 || found["possible_duplicate"][0].ProviderIDs[1] != "102" {
 		t.Fatalf("only the nearby same-vendor pair is a possible duplicate: %+v", found["possible_duplicate"])
 	}
-	if len(found["uncategorized"]) != 1 || found["uncategorized"][0].Account != "Uncategorized Expense" || found["uncategorized"][0].Question == "" {
+	if courier := found["possible_duplicate"][1]; len(courier.ProviderIDs) != 2 || courier.ProviderIDs[1] != "502" {
+		t.Fatalf("a cluster must fit within three days of its first payment: %+v", courier)
+	}
+	if len(found["uncategorized"]) != 1 || found["uncategorized"][0].Account != "Uncategorized Expense" || !strings.Contains(found["uncategorized"][0].Question, "310.00 EUR") {
 		t.Fatalf("holding-account posting must become a question: %+v", found["uncategorized"])
 	}
 	if len(found["no_payee"]) != 1 || found["no_payee"][0].ProviderIDs[0] != "301" {
