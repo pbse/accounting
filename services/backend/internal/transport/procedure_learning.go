@@ -225,7 +225,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		in.ClientEntity = strings.TrimSpace(in.ClientEntity)
-		if !learnedMethod(in.Kind, in.Method) || (in.SourceID == "") == in.FromEdits || len(in.ClientEntity) > 200 {
+		if !learnedMethod(in.Kind, in.Method) || (in.SourceID != "") == in.FromEdits || len(in.ClientEntity) > 200 {
 			problem(w, 422, "Choose a supported method and exactly one document or prior-edit source.")
 			return
 		}
