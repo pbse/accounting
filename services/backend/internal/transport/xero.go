@@ -39,7 +39,8 @@ func xeroReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 503, "Configure the exact HTTPS application origin.")
 		return
 	}
-	origin.Path = "/dashboard/closes/" + closeID
+	// The Xero panel lives on the Evidence tab.
+	origin.Path, origin.RawQuery = "/dashboard/closes/"+closeID, "tab=evidence"
 	origin.Fragment = url.Values{"xero_code": {q.Get("code")}, "xero_state": {q.Get("state")}}.Encode()
 	http.Redirect(w, r, origin.String(), http.StatusSeeOther)
 }
@@ -267,6 +268,7 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Xero status unavailable.")
 			return
 		}
+		out["hosted"] = true
 		jsonReply(w, 200, out)
 	})
 }

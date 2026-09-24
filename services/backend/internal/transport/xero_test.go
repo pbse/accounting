@@ -137,14 +137,14 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	}
 	back := httptest.NewRecorder()
 	xeroReturn(back, httptest.NewRequest("GET", "/v1/xero/callback?code=c1&state="+url.QueryEscape(state), nil), db)
-	if back.Code != 303 || !strings.HasPrefix(back.Header().Get("Location"), "https://app.example.test/dashboard/closes/"+september+"#") {
+	if back.Code != 303 || !strings.HasPrefix(back.Header().Get("Location"), "https://app.example.test/dashboard/closes/"+september+"?tab=evidence#") {
 		t.Fatalf("the sign-in returns to its close: %d %s", back.Code, back.Header().Get("Location"))
 	}
 	call("user_other", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)
 	status := call("user_accountant", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 200)
 	connection := status["connection"].(map[string]any)
 	tenants, _ := json.Marshal(connection["tenants"])
-	if connection["state"] != "choose_tenant" || strings.Contains(string(tenants), "t-old") || strings.Contains(string(tenants), "t-practice") || !strings.Contains(string(tenants), "t-a") || !strings.Contains(string(tenants), "t-b") {
+	if status["hosted"] != true || connection["state"] != "choose_tenant" || strings.Contains(string(tenants), "t-old") || strings.Contains(string(tenants), "t-practice") || !strings.Contains(string(tenants), "t-a") || !strings.Contains(string(tenants), "t-b") {
 		t.Fatalf("only organisations from this sign-in are offered: %s", tenants)
 	}
 	call("user_accountant", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)

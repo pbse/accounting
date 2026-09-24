@@ -18,9 +18,6 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
   const [confirmed, setConfirmed] = useState(false);
   const [tenant, setTenant] = useState("");
   const [callback] = useState(() => new URLSearchParams(window.location.hash.slice(1)));
-  useEffect(() => {
-    if (callback.has("xero_code")) window.history.replaceState(null, "", window.location.pathname + window.location.search);
-  }, [callback]);
   async function load() {
     try {
       setStatus(await workspaceRequest(`/${closeId}/xero`));
@@ -48,6 +45,8 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
         return;
       }
       if (name === "callback") {
+        // Keep the code in the address until the exchange succeeds, so a reload can retry it.
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
         callback.delete("xero_code");
         callback.delete("xero_state");
       }
