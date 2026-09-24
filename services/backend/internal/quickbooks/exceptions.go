@@ -3,6 +3,7 @@ package quickbooks
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -150,30 +151,21 @@ func FindExceptions(rows []TransactionRow) []Exception {
 			start = end
 		}
 	}
-	payees := make([]string, 0, len(coding))
-	for payee := range coding {
-		payees = append(payees, payee)
-	}
-	sort.Strings(payees)
 	// Different transactions with one payee coded to different accounts is a question, not an error.
-	for _, payee := range payees {
+	for _, payee := range slices.Sorted(maps.Keys(coding)) {
 		group := coding[payee]
 		accounts := []string{}
 		distinct := map[string]bool{}
 		for _, p := range group {
 			distinct[strings.Join(p.coded, "\x00")] = true
-			for _, name := range p.coded {
-				if !slices.Contains(accounts, name) {
-					accounts = append(accounts, name)
-				}
-			}
+			accounts = append(accounts, p.coded...)
 		}
 		if len(distinct) < 2 {
 			continue
 		}
 		sort.Slice(group, func(i, j int) bool { return group[i].row.Date < group[j].row.Date })
 		slices.Sort(accounts)
-		item := Exception{Type: "inconsistent_coding", Kind: group[0].row.Kind, Counterparty: group[0].counterparty.Name, Account: strings.Join(accounts, ", ")}
+		item := Exception{Type: "inconsistent_coding", Kind: group[0].row.Kind, Counterparty: group[0].counterparty.Name, Account: strings.Join(slices.Compact(accounts), ", ")}
 		for _, p := range group {
 			item.ProviderIDs = append(item.ProviderIDs, p.row.ProviderID)
 			item.Dates = append(item.Dates, p.row.Date)
