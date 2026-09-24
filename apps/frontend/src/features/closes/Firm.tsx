@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Icon } from "../dashboard/Icon";
+import { AgentAccess } from "./AgentAccess";
 import { ClientAccess } from "./ClientAccess";
 import { isEnrollmentError } from "./ClosesList";
 import { EmailSettings } from "./Email";
@@ -99,6 +100,7 @@ export default function Firm() {
       {loaded && !error && (
         <div className="stack">
           <IndependentReview />
+          <AgentAccess />
           <FirmOperations />
           <ClientAccess entities={entities} />
           <EmailSettings />

@@ -43,3 +43,33 @@ func TestVerifiedOrganizationSession(t *testing.T) {
 		t.Fatal("development token bypassed WorkOS")
 	}
 }
+
+func TestOAuthResourceTokensMustNameTheResource(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := Verifier{Issuer: "https://auth.example.com", JWKSURL: "https://auth.example.com/oauth2/jwks", Audience: "https://api.example.com/mcp", keys: map[string]*rsa.PublicKey{"test": &key.PublicKey}, fetched: time.Now()}
+	sign := func(audience []string, issuer, session string) string {
+		t.Helper()
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_test", Issuer: issuer, Audience: audience, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}, Session: session, Organization: "org_firm"})
+		token.Header["kid"] = "test"
+		raw, _ := token.SignedString(key)
+		return raw
+	}
+	for _, c := range []struct {
+		audience        []string
+		issuer, session string
+		valid           bool
+	}{
+		{[]string{"https://api.example.com/mcp"}, verifier.Issuer, "consent_1", true},
+		{nil, verifier.Issuer, "consent_1", false},
+		{[]string{"client_other"}, verifier.Issuer, "consent_1", false},
+		{[]string{"https://api.example.com/mcp"}, "https://api.workos.com/", "consent_1", false},
+		{[]string{"https://api.example.com/mcp"}, verifier.Issuer, "", false},
+	} {
+		if _, err := verifier.Verify(context.Background(), sign(c.audience, c.issuer, c.session)); (err == nil) != c.valid {
+			t.Fatalf("audience %v issuer %s session %q: %v", c.audience, c.issuer, c.session, err)
+		}
+	}
+}
