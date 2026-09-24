@@ -419,3 +419,17 @@ Author: Claude Opus 5.5. Migration 045 adds `agent_access`, `current_agent_acces
 - Observed red with the membership binding off, the pending-request rule off, widening allowed, scope filtering off, the grant requirement off, and the audience check off. Agents never receive firm-wide access; decisions are serialized with the firm row lock.
 - Full `internal/transport` and `internal/auth` packages pass; frontend typecheck passes. The Firm settings card couldn't be exercised in a browser: hosted sign-in isn't available locally, where the card shows the workspace-token note.
 
+## Posting beyond prepaids (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 046 moves production grants to account and kind lists.
+
+- `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (mocked production QuickBooks):
+  - loan posting is refused until `PRODUCTION_POSTING_KINDS` enables it, and a grant covers only the kinds it names;
+  - the grant limit applies to the journal's 2,019.67 total debits;
+  - the loan's two entries post as one four-line journal. Projected and verified balances are 119.67 for the expense and 19.67, 98,000.00 and 20,000.00 for the liabilities;
+  - an owner account name matching two granted accounts is refused, with no write.
+- `TestProductionPostingSingleDurableAttempt` and the rehearsal tests pass on the new grant and observation shapes, including closing-date and readback cases.
+- The migration's intent rewrite was checked on a synthetic legacy row: `{prepaid, expense}` became `accounts` with Asset and Expense classifications, in both `ledger_before` and `ledger_after`.
+- Observed red with liability signs treated as debit-normal, ambiguous names allowed, the limit on the largest line instead of the total, the release gate off, and the grant-kind check off.
+- Not verified live: how QuickBooks moves `CurrentBalance` per account type. New kinds stay off until the sandbox check in production-posting.md.
+

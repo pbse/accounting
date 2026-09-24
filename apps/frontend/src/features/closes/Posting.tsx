@@ -195,8 +195,8 @@ export function Posting({
 type ProductionIntent = Intent & {
   id?: string;
   grant_id?: string;
-  ledger_before?: unknown;
-  projected_balances?: { prepaid: string; expense: string };
+  ledger_before?: { company: string; accounts: { id: string; name: string; classification: string; balance: string }[] };
+  projected_balances?: Record<string, string>;
   other_open_intents?: string[];
   ledger_after?: unknown;
   verified_at?: string;
@@ -237,8 +237,11 @@ export function ProductionPosting({ closeId, paperId }: { closeId: string; paper
       {intent.external_id && <p>QuickBooks journal #{intent.external_id}</p>}
       {intent.verified_at && <p>Canonical readback saved {new Date(intent.verified_at).toLocaleString()}</p>}
       {intent.journal && <details open><summary>Exact journal to review</summary><pre>{JSON.stringify(intent.journal, null, 2)}</pre></details>}
-      {intent.ledger_before && <details open><summary>Prepaid and expense ledger preconditions</summary><pre>{JSON.stringify(intent.ledger_before, null, 2)}</pre></details>}
-      {intent.projected_balances && <p>Proposed effect on these versioned account balances: prepaid ${intent.projected_balances.prepaid}; expense ${intent.projected_balances.expense}. This is a preview, not an official financial statement.</p>}
+      {intent.ledger_before?.accounts && <table>
+        <thead><tr><th>Account</th><th>Type</th><th>Balance now</th><th>After this journal</th></tr></thead>
+        <tbody>{intent.ledger_before.accounts.map(account => <tr key={account.id}><td>{account.name} · #{account.id}</td><td>{account.classification}</td><td>${account.balance}</td><td>${intent.projected_balances?.[account.id] ?? "—"}</td></tr>)}</tbody>
+      </table>}
+      {intent.projected_balances && <p>A preview from versioned balances, not an official financial statement. Every balance is rechecked before approval and posting.</p>}
       {(intent.other_open_intents?.length ?? 0) > 0 && <p role="alert">Other open proposals use these accounts: #{intent.other_open_intents?.join(", #")}. Resolve them before approving or posting.</p>}
       {intent.ledger_after && <details><summary>Saved canonical readback and balances</summary><pre>{JSON.stringify(intent.ledger_after, null, 2)}</pre></details>}
       {intent.state === "not_prepared" && <button disabled={busy} onClick={() => void run("preview")}>Prepare production preview</button>}
