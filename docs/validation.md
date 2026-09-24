@@ -532,6 +532,16 @@ Author: Claude Opus 5.5. Migration 051. Review: GPT-6 Sol (medium) plan and code
 - `TestProductionPostingSingleDurableAttempt` now posts a CAD prepaid: refused while the company's currency is unknown, then posted with a CAD journal once it is detected. Observed red with a USD journal, with the client currency not passed and without the posting check.
 - `TestTrialBalanceAccountRequiresUniquePrepaidRow` refuses a Trial Balance in another currency (observed red without the check); `TestCurrencyNeedsThreeLettersAndTwoDecimals` accepts USD, CAD and GBP and refuses JPY, KWD, XOF, IQD and lowercase codes (observed red with the refusal list shortened).
 
+## Deferred revenue and depreciation (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan and code review; adopted the reversed deferred revenue entry, required accumulated depreciation, schedule-only carry, schedule-aware Trial Balance accounts and labels, and draft-only posting. Not adopted: rewording the procedure account hints, because only intake-prepared prepaids read them and the rule-based intake parses those labels.
+
+- `TestDeferredRevenueRecognizesTheEarnedMonth`: 12,000 billed for 12 months with 12,000 booked proposes debit deferred revenue, credit revenue 1,000; with no booked balance, 11,000 is deferred. Observed red without the reversed entry.
+- `TestDepreciationTruesUpAccumulatedDepreciation`: a 3,600 asset over 36 months depreciates 100.00 (90.00 with 360 salvage), proposes debit depreciation expense, credit accumulated depreciation, needs no entry when 100.00 is already booked, refuses a missing balance, salvage at cost and credits, and carries without a ledger balance. Observed red without the accumulated conversion, the salvage exclusion, the required balance and the carry exception.
+- `TestDeferredRevenueAndDepreciationStayDraftOnly`: a deferred revenue draft is refused before any QuickBooks call. Observed red without the refusal.
+- `TestRecurringComparisonRefreshesOnlyCurrentPeriod` (PostgreSQL) now runs for a prepaid and a depreciation schedule: the refresh finds the AccumulatedDepreciation account, shows 80.00 expected accumulated depreciation after January, proposes 10.00 against 70.00 booked and nothing against 80.00. Observed red with the prepaid subtype only and without the accumulated target.
+- `TestYearEndHandoffRollsForwardApprovedWork` checks the new `schedule` column in `prepaids.csv`. Observed red when blank. The columns `period_expense` and `closing_balance` are renamed `period_amount` and `scheduled_remaining`, since they hold revenue or depreciation for the new schedules (code review finding).
+
 ## Holding and clearing balances (2026-09-24)
 
 Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted clearing only on balance-sheet accounts, reconciliation wording that allows deposits in transit, the opposite-side clue, updated labels, the check placed after the existing account filters, and gathering the account's month ledger rows as evidence. Receipt-level missing documents stay out of this slice: the product has never read QuickBooks attachments live, and missing statements are handled by coverage requests.

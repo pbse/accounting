@@ -158,7 +158,7 @@ func (s Sandbox) Prepare(ctx context.Context, paper prepaids.Workpaper) (Journal
 
 // PrepareObserved builds the full-month prepaid journal: debit an Asset, credit an Expense.
 func (s Sandbox) PrepareObserved(ctx context.Context, paper prepaids.Workpaper) (Journal, LedgerObservation, error) {
-	if paper.Input.Method != prepaids.Method || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" || paper.Input.CancellationMethod != "" {
+	if paper.Input.Method != prepaids.Method || paper.Input.Schedule != "" || paper.Input.CreditAmount != "" || paper.Input.BookedBalance != "" || paper.Input.CancellationMethod != "" {
 		if !s.Production {
 			return Journal{}, LedgerObservation{}, errors.New("This accounting method supports draft review only; sandbox posting has not been enabled for it")
 		}

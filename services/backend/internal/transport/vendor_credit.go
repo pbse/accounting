@@ -54,7 +54,7 @@ func reviewedSupplierCredit(ctx context.Context, db vendorCreditQuerier, closeID
 	var raw []byte
 	var state, reviewID, digest, entity, period string
 	err := db.QueryRowContext(ctx, `SELECT w.paper,w.review_state,w.review_id,w.digest,c.entity,c.period FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind='prepaid'`, paperID, closeID).Scan(&raw, &state, &reviewID, &digest, &entity, &period)
-	if err != nil || state != "approved" || json.Unmarshal(raw, &paper) != nil || paper.Input.Entity != entity || paper.Input.ClosePeriod != period || paper.Input.Currency != "USD" || paper.Input.CancellationMethod != "" || paper.Input.PrepaidAccount == "" {
+	if err != nil || state != "approved" || json.Unmarshal(raw, &paper) != nil || paper.Input.Entity != entity || paper.Input.ClosePeriod != period || paper.Input.Currency != "USD" || paper.Input.Schedule != "" || paper.Input.CancellationMethod != "" || paper.Input.PrepaidAccount == "" {
 		return paper, "", "", "", fmt.Errorf("A current approved USD prepaid credit workpaper is required")
 	}
 	var newer bool

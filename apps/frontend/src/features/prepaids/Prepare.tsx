@@ -1,4 +1,4 @@
-import { PrepaidMethodFields, readCredits } from "./MethodFields";
+import { PrepaidMethodFields, readCredits, scheduleTerms, type Schedule } from "./MethodFields";
 import { useRevision } from "../closes/useRevision";
 import { SourceReview } from "../closes/Evidence";
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -24,6 +24,8 @@ function download(contents: string, name: string, type: string) {
 export default function Prepare() {
   const [params] = useSearchParams();
   const currency = useCurrency(params.get("close"));
+  const schedule = (params.get("schedule") ?? "") as Schedule;
+  const terms = scheduleTerms[schedule] ?? scheduleTerms[""];
   const form = useRef<HTMLFormElement>(null);
   const revision = useRevision(form);
   const resultHeading = useRef<HTMLHeadingElement>(null);
@@ -81,6 +83,8 @@ export default function Prepare() {
       expense_account: text("expense_account"),
       prepaid_account: text("prepaid_account"),
       currency,
+      ...(schedule && { schedule }),
+      ...(text("salvage_value") && { salvage_value: text("salvage_value") }),
       basis: "accrual",
       method: text("method") as PrepaidInput["method"],
       examples_confirmed: data.has("examples_confirmed"),
@@ -127,7 +131,7 @@ export default function Prepare() {
 
   return (
     <>
-      <p className="eyebrow">PREPAIDS / DRAFT PREPARATION</p>
+      <p className="eyebrow">{terms.name.toUpperCase()} / DRAFT PREPARATION</p>
       <h1>From invoice to review-ready calculation.</h1>
       <p className="intro">
         Enter the source terms and confirm the method. We’ll calculate the
@@ -177,6 +181,7 @@ export default function Prepare() {
               references are entered by you; Close has not verified the document
               or ledger.
             </p>
+            {schedule === "" && <>
             <button
               type="button"
               className="example-button"
@@ -188,6 +193,7 @@ export default function Prepare() {
             <button type="button" onClick={()=>loadExample("credit")}>Use synthetic credit and prior-balance example</button>
             <button type="button" onClick={()=>loadExample("refund")}>Use synthetic full-refund cancellation</button>
             <button type="button" onClick={()=>loadExample("writeoff")}>Use synthetic no-refund cancellation</button>
+            </>}
             <div className="form-grid">
               <label>
                 Client / entity
@@ -200,7 +206,7 @@ export default function Prepare() {
                 />
               </label>
               <label>
-                Invoice reference and source location
+                {terms.source}
                 <input
                   name="source_reference"
                   required
@@ -210,7 +216,7 @@ export default function Prepare() {
                 />
               </label>
               <label>
-                Invoice amount ({currency})
+                {terms.amount} ({currency})
                 <input
                   name="amount"
                   required
@@ -229,17 +235,17 @@ export default function Prepare() {
                 />
               </label>
               <label>
-                Service starts
+                {terms.start}
                 <input name="service_start" type="date" required />
                 <small>Inclusive start; equal-month method requires the first day.</small>
               </label>
               <label>
-                Service ends
+                {terms.end}
                 <input name="service_end" type="date" required />
                 <small>Inclusive end; up to 120 calendar months.</small>
               </label>
               <label>
-                Expense account
+                {terms.expense}
                 <input
                   name="expense_account"
                   required
@@ -248,7 +254,7 @@ export default function Prepare() {
                 />
               </label>
               <label>
-                Prepaid account
+                {terms.balance}
                 <input
                   name="prepaid_account"
                   required
@@ -260,7 +266,7 @@ export default function Prepare() {
           </fieldset>
           <fieldset disabled={busy || !revision.ready}>
             <legend>2. Confirm this method applies</legend>
-            <PrepaidMethodFields key={revision.savedInput ? "revision-loaded" : "new"} values={revision.savedInput as Record<string,string> | undefined} credits={revision.savedInput?.credits as PrepaidInput["credits"] | undefined} />
+            <PrepaidMethodFields key={revision.savedInput ? "revision-loaded" : "new"} values={revision.savedInput as Record<string,string> | undefined} credits={revision.savedInput?.credits as PrepaidInput["credits"] | undefined} schedule={schedule} />
           </fieldset>
           {error && (
             <p className="form-error" role="alert">
@@ -287,7 +293,7 @@ export default function Prepare() {
             PREPARED DRAFT / {result.input.close_period}
           </p>
           <h2 ref={resultHeading} tabIndex={-1}>
-            {result.input.entity} · prepaid workpaper
+            {result.input.entity} · {terms.name.toLowerCase()} workpaper
           </h2>
           <p className="note">
             Export or save this draft before leaving or refreshing. Editing the
@@ -311,18 +317,19 @@ export default function Prepare() {
                 <dd>{result.input.method} · residual in final month.</dd>
                 {result.input.cancellation_method && <><dt>Cancellation</dt><dd>{result.input.cancellation_method} effective {result.input.cancellation_period} · {result.input.cancellation_reference}</dd></>}
                 {!!result.input.credits?.length && <><dt>Reviewed credit rule</dt><dd>{result.input.accountant_rule_reference}</dd><dt>Credits</dt><dd>{result.input.credits.map(c => `${money(c.amount, result.input.currency)} effective ${c.effective_period}, booked ${c.recorded_period} · ${c.reference}`).join("; ")}</dd></>}
+                {result.input.salvage_value && <><dt>Salvage value</dt><dd>{money(result.input.salvage_value, result.input.currency)}</dd></>}
                 <dt>Booking assumption</dt>
-                <dd>{result.input.booked_balance ? `Ledger prepaid: ${money(result.input.booked_balance, result.input.currency)} · ${result.input.booking_reference}` : "Fully expensed; no prior adjustments or credits."}</dd>
+                <dd>{result.input.booked_balance ? `${terms.booked}: ${money(result.input.booked_balance, result.input.currency)} · ${result.input.booking_reference}` : terms.blank}</dd>
               </dl>
             </section>
             <section>
               <h3>Calculated at month-end</h3>
               <dl>
-                <dt>Expense this month</dt>
+                <dt>{terms.recognized} this month</dt>
                 <dd>{money(result.period_expense, result.input.currency)}</dd>
-                <dt>Expense through this month</dt>
+                <dt>{terms.recognized} through this month</dt>
                 <dd>{money(result.recognized_expense, result.input.currency)}</dd>
-                <dt>Remaining prepaid</dt>
+                <dt>{terms.remaining}</dt>
                 <dd>{money(result.prepaid_balance, result.input.currency)}</dd>
               </dl>
               <p className="source-label">
@@ -360,7 +367,7 @@ export default function Prepare() {
               </table>
             ) : (
               <p>
-                The scheduled prepaid balance matches the confirmed booked balance. No adjustment is proposed.
+                The scheduled balance matches the confirmed booked balance. No adjustment is proposed.
               </p>
             )}
           </section>
@@ -373,7 +380,7 @@ export default function Prepare() {
               <thead>
                 <tr>
                   <th scope="col">Period</th>
-                  <th scope="col">Expense ({result.input.currency})</th>
+                  <th scope="col">{terms.recognized} ({result.input.currency})</th>
                   <th scope="col">Remaining ({result.input.currency})</th><th scope="col">Credit ({result.input.currency})</th>
                 </tr>
               </thead>
