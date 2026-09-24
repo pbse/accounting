@@ -24,6 +24,18 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer r.MultipartForm.RemoveAll()
+		purpose := r.FormValue("purpose")
+		if purpose != "" && purpose != "procedure" {
+			problem(w, 422, "Choose a supported evidence purpose.")
+			return
+		}
+		if purpose == "procedure" {
+			if _, ok := learnedPermission(w, r); !ok {
+				return
+			}
+		} else {
+			purpose = "work"
+		}
 		if len(r.MultipartForm.File) != 1 || len(r.MultipartForm.File["file"]) != 1 {
 			problem(w, 400, "Choose one file.")
 			return
@@ -81,13 +93,24 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				state = "queued"
 				original = body
 			}
-			err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,created_by,original,extraction_state) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, closeID, name, digest, content, subject, original, state).Scan(&id)
+			err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,created_by,original,extraction_state,purpose) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text`, closeID, name, digest, content, subject, original, state, purpose).Scan(&id)
+		}
+		if err == nil && !added {
+			var currentPurpose string
+			if err = tx.QueryRowContext(r.Context(), `SELECT purpose FROM evidence WHERE id::text=$1 AND close_id=$2`, id, closeID).Scan(&currentPurpose); err != nil {
+				problem(w, 503, "Evidence purpose unavailable.")
+				return
+			}
+			if currentPurpose != purpose {
+				problem(w, 409, "This file already has a different evidence purpose. Use its existing source or choose distinct content.")
+				return
+			}
 		}
 		jobID := ""
-		if err == nil {
+		if err == nil && purpose == "work" {
 			jobID, err = preparation.StartIntake(r.Context(), tx, closeID, id, auth.Actor(r.Context()).Subject)
 		}
-		if err == nil && added {
+		if err == nil && added && purpose == "work" {
 			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.id::text<>$2 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai' AND (jsonb_array_length(COALESCE(i.proposal->'questions','[]'))>0 OR EXISTS(SELECT 1 FROM jsonb_array_elements(i.proposal->'facts') f WHERE COALESCE(f->>'question','')<>''))`, closeID, jobID)
 		}
 		if err != nil {
@@ -108,7 +131,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'bytes',COALESCE(octet_length(original),octet_length(content)),'procedure_id',procedure_id::text,'procedure_kind',(SELECT kind FROM procedure_versions WHERE id=procedure_id),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'digest',digest,'bytes',COALESCE(octet_length(original),octet_length(content)),'purpose',purpose,'procedure_id',procedure_id::text,'procedure_kind',(SELECT kind FROM procedure_versions WHERE id=procedure_id),'content',CASE WHEN $2 AND superseded_by IS NULL THEN content ELSE '' END,'extraction_state',extraction_state,'extraction_error',extraction_error,'created_at',created_at,'superseded_by',superseded_by::text,'replacement_reason',replacement_reason,'replaced_at',replaced_at) ORDER BY id DESC),'[]'::jsonb) FROM evidence WHERE close_id::text=$1`, r.PathValue("id"), inspect).Scan(&body)
 		if err != nil {
 			problem(w, 503, "Could not load evidence.")
 			return

@@ -178,7 +178,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, map[string]any{"kind": kind, "client_entity": client, "previous_id": previous, "impact_digest": digest, "total_closes": total, "has_more": total > len(items), "closes": items})
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) ORDER BY id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) ORDER BY id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r))
 		if err != nil {
 			problem(w, 503, "Firm procedures unavailable.")
 			return
@@ -187,7 +187,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		items := []preparation.Procedure{}
 		for rows.Next() {
 			var p preparation.Procedure
-			if err = rows.Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt); err != nil {
+			if err = rows.Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt); err != nil {
 				problem(w, 503, "Could not read procedures.")
 				return
 			}
@@ -226,7 +226,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		in.Reason = strings.TrimSpace(in.Reason)
 		in.ExpenseAccount = strings.TrimSpace(in.ExpenseAccount)
 		in.PrepaidAccount = strings.TrimSpace(in.PrepaidAccount)
-		if !in.Confirmed || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
+		if !in.Confirmed || in.Method != "" || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
 			problem(w, 422, "Confirm a supported procedure, bounded instructions, a reason and optional single-line prepaid account names.")
 			return
 		}
@@ -265,6 +265,14 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		if prior != in.PreviousID {
 			problem(w, 409, "Procedure changed. Refresh and review the latest version first.")
 			return
+		}
+		if in.Enabled {
+			var learned bool
+			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM procedure_versions WHERE organization_id=$1 AND kind=$2 AND method<>'' AND (client_entity='' OR lower(client_entity)=lower($3)))`, org, in.Kind, in.ClientEntity).Scan(&learned)
+			if err != nil || learned {
+				problem(w, 409, "An active method rule requires a new reviewed draft and regression example. Use procedure learning.")
+				return
+			}
 		}
 		digest, _, impactErr := procedureScopeDigest(r.Context(), tx, org, in.ClientEntity, in.Kind, prior)
 		if impactErr != nil || in.ImpactDigest == "" || in.ImpactDigest != digest {

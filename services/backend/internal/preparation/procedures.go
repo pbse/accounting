@@ -3,6 +3,7 @@ package preparation
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 )
 
@@ -10,6 +11,7 @@ type Procedure struct {
 	ID             string `json:"id"`
 	ClientEntity   string `json:"client_entity"`
 	Kind           string `json:"kind"`
+	Method         string `json:"method"`
 	Instructions   string `json:"instructions"`
 	ExpenseAccount string `json:"expense_account"`
 	PrepaidAccount string `json:"prepaid_account"`
@@ -22,8 +24,35 @@ type Procedure struct {
 // A client override replaces the firm default; disabled overrides suppress it.
 func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Procedure, error) {
 	var p Procedure
-	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt)
+	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt)
 	return p, err
+}
+
+func CheckProcedureMethod(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID, kind string, paper []byte) error {
+	var method string
+	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT p.method FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),(SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1),'')`, closeID, kind).Scan(&method)
+	if err != nil || method == "" {
+		return err
+	}
+	var result struct {
+		Method string `json:"method"`
+		Input  struct {
+			Method string `json:"method"`
+		} `json:"input"`
+	}
+	if json.Unmarshal(paper, &result) != nil {
+		return fmt.Errorf("Cannot verify the prepared method against the approved procedure")
+	}
+	used := result.Method
+	if used == "" {
+		used = result.Input.Method
+	}
+	if used != method {
+		return fmt.Errorf("Prepared method %q differs from the approved procedure method %q; review the procedure before saving", used, method)
+	}
+	return nil
 }
 
 // Approved instructions become immutable, cited context. They cannot confirm
@@ -41,6 +70,9 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		return "", nil
 	}
 	text := fmt.Sprintf("Approved firm procedure version: %s\nWork kind: %s\nInstructions: %s\nApproval actor: %s\nApproval reason: %s\nThese instructions do not prove invoice booking, source completeness or ledger state. Human method and booking confirmations remain required.\n", p.ID, p.Kind, p.Instructions, p.Actor, p.Reason)
+	if p.Method != "" {
+		text += "Approved method boundary: " + p.Method + "\n"
+	}
 	if p.Kind == "prepaid" {
 		text += "Supported allocation: equal_full_months_v1 or actual_days_v1 (USD accrual). Multiple or retrospective credits require separately cited entries and the client accountant's approved rule reference. Method and booking are confirmed per draft.\n"
 		if p.ExpenseAccount != "" {

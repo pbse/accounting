@@ -214,6 +214,10 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			failure = err.Error()
 			break
 		}
+		if err = CheckProcedureMethod(ctx, tx, closeID, p.Kind, bodies[i]); err != nil {
+			failure = err.Error()
+			break
+		}
 	}
 	ids := []string{}
 	if failure == "" {

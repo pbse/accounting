@@ -98,6 +98,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerRecurringAccrual(mux, db)
 	registerReadiness(mux, db)
 	registerProcedures(mux, db)
+	registerProcedureLearning(mux, db)
 	registerAccess(mux, db)
 	registerMembers(mux, db)
 	registerOrganizationRevocation(mux, db)
@@ -325,6 +326,10 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		body, err := json.Marshal(paper)
 		if err != nil {
 			problem(w, 500, "Could not encode the workpaper.")
+			return
+		}
+		if err = preparation.CheckProcedureMethod(r.Context(), db, r.PathValue("id"), input.Kind, body); err != nil {
+			problem(w, 409, err.Error())
 			return
 		}
 		digest := fmt.Sprintf("%x", sha256.Sum256(body))

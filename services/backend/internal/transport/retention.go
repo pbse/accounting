@@ -45,6 +45,20 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
 	if err != nil {
 		return out, err
 	}
+	var activeRule bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(
+ SELECT 1 FROM procedure_drafts d JOIN procedure_versions p ON p.id=d.activated_version_id
+ WHERE d.organization_id=$2 AND p.enabled AND p.id=(
+  SELECT max(v.id) FROM procedure_versions v
+  WHERE v.organization_id=p.organization_id AND lower(v.client_entity)=lower(p.client_entity) AND v.kind=p.kind
+ ) AND (
+  EXISTS(SELECT 1 FROM evidence e WHERE e.close_id::text=$1 AND e.id=d.source_evidence_id)
+  OR EXISTS(SELECT 1 FROM procedure_example_approvals a JOIN workpapers w ON w.id=a.workpaper_id WHERE a.draft_id=d.id AND w.close_id::text=$1)
+  OR EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id::text=$1 AND d.source_draft_ids ? w.id::text)
+ ))`, closeID, org).Scan(&activeRule)
+	if err != nil {
+		return out, err
+	}
 	if out.RetainUntil == "" {
 		out.Blockers = append(out.Blockers, "Set an approved retention date for this close.")
 	} else if !due {
@@ -68,6 +82,7 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
 		{grants, "Revoke production posting grants opened from this close."},
 		{shared, "A QuickBooks connection opened here is used by another close."},
 		{unmapped, "Historical email delivery events need close attribution before any close in this firm can be deleted."},
+		{activeRule, "An active procedure rule depends on this close. Publish a disabled version after accountant review before deleting its source."},
 	} {
 		if condition.active {
 			out.Blockers = append(out.Blockers, condition.message)
@@ -193,6 +208,7 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM vendor_credit_postings WHERE close_id=$1`,
 			`DELETE FROM bill_corrections WHERE close_id=$1`,
 			`DELETE FROM sandbox_postings WHERE close_id=$1`,
+			`DELETE FROM procedure_example_approvals WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`,
 			`DELETE FROM workpapers WHERE close_id=$1`,
 			`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`,
 			`DELETE FROM quickbooks_snapshots WHERE close_id=$1`,
@@ -201,6 +217,7 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM production_posting_grants WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
 			`DELETE FROM quickbooks_connections WHERE close_id=$1`,
 			`DELETE FROM client_attachments WHERE close_id=$1`,
+			`UPDATE procedure_drafts SET source_evidence_id=NULL,source_digest='',source_quote='' WHERE source_evidence_id IN (SELECT id FROM evidence WHERE close_id=$1)`,
 			`DELETE FROM evidence WHERE close_id=$1`,
 			`DELETE FROM preparation_plans WHERE close_id=$1`,
 			`DELETE FROM close_preparations WHERE close_id=$1`,

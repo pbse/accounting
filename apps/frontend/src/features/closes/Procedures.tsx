@@ -1,10 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
+import { ProcedureLearning } from "./ProcedureLearning";
 
 type Version = {
   id: string;
   client_entity: string;
   kind: string;
+  method: string;
   instructions: string;
   expense_account: string;
   prepaid_account: string;
@@ -196,6 +198,7 @@ export function Procedures({
                         : "Disabled for new context"}
                     </p>
                     <p>{v.instructions}</p>
+                    {v.method && <p>Approved method boundary: {v.method}</p>}
                     {v.expense_account && (
                       <p>Expense account: {v.expense_account}</p>
                     )}
@@ -347,6 +350,7 @@ export function Procedures({
               ))}
             </ol>
           </details>
+          <ProcedureLearning closeId={closeId} entity={entity} onActivated={() => { void load(); onApplied(); }} />
         </>
       )}
     </details>
