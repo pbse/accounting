@@ -51,6 +51,9 @@ func readProcedureImpact(ctx context.Context, tx *sql.Tx, closeID, kind string) 
 	return out, nil
 }
 
+// Kinds whose procedure names its reviewed method directly; other methods come from procedure learning.
+var fixedMethods = map[string][]string{"loan": {loans.Method}, "basis": {"cash", "modified_cash", "accrual"}}
+
 func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/procedures/suggestion", func(w http.ResponseWriter, r *http.Request) {
 		kind := r.URL.Query().Get("kind")
@@ -136,7 +139,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/procedures", func(w http.ResponseWriter, r *http.Request) {
 		if kind := r.URL.Query().Get("impact_kind"); kind != "" {
 			client := strings.TrimSpace(r.URL.Query().Get("client_entity"))
-			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan") || len(client) > 200 {
+			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis") || len(client) > 200 {
 				problem(w, 422, "Choose a supported procedure scope.")
 				return
 			}
@@ -227,8 +230,8 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 		in.Reason = strings.TrimSpace(in.Reason)
 		in.ExpenseAccount = strings.TrimSpace(in.ExpenseAccount)
 		in.PrepaidAccount = strings.TrimSpace(in.PrepaidAccount)
-		// A loan procedure enables the reviewed loan method for its scope; other methods come from procedure learning.
-		if !in.Confirmed || in.Method != map[string]string{"loan": loans.Method}[in.Kind] || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
+		methodOK := slices.Contains(fixedMethods[in.Kind], in.Method) || (fixedMethods[in.Kind] == nil && in.Method == "")
+		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
 			problem(w, 422, "Confirm a supported procedure, bounded instructions, a reason and optional single-line prepaid account names.")
 			return
 		}
@@ -268,7 +271,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Procedure changed. Refresh and review the latest version first.")
 			return
 		}
-		if in.Enabled && in.Kind != "loan" {
+		if in.Enabled && fixedMethods[in.Kind] == nil {
 			var learned bool
 			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM procedure_versions WHERE organization_id=$1 AND kind=$2 AND method<>'' AND (client_entity='' OR lower(client_entity)=lower($3)))`, org, in.Kind, in.ClientEntity).Scan(&learned)
 			if err != nil || learned {

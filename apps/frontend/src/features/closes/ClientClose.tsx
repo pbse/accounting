@@ -56,16 +56,23 @@ function Kpi({ icon, tone, label, value, caption, to }: { icon: IconName; tone: 
   );
 }
 
+const basisLabels = { cash: "Cash basis", modified_cash: "Modified cash basis", accrual: "Accrual basis" };
+
 function PrepareActions({ close }: { close: Close }) {
   const query = `close=${close.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}`;
+  const accrualWork = close.basis !== "cash" && close.basis !== "modified_cash";
   return (
     <div className="title-actions">
-      <Link className="button primary" to={`/dashboard/prepaids/new?${query}`}>
-        Prepare a prepaid
-      </Link>
-      <Link className="button" to={`/dashboard/accruals/new?${query}`}>
-        Accrued expense
-      </Link>
+      {accrualWork && (
+        <>
+          <Link className="button primary" to={`/dashboard/prepaids/new?${query}`}>
+            Prepare a prepaid
+          </Link>
+          <Link className="button" to={`/dashboard/accruals/new?${query}`}>
+            Accrued expense
+          </Link>
+        </>
+      )}
       <Link className="button" to={`/dashboard/loans/new?${query}`}>
         Loan schedule
       </Link>
@@ -156,6 +163,7 @@ export default function ClientClose() {
             <h1>{close.entity}</h1>
             <p>
               Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
+              {close.basis && <span className="chip" style={{ marginLeft: "0.5rem" }} title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
             </p>
           </span>
         </div>

@@ -18,7 +18,7 @@ import { ReviewDecision } from "./ReviewDecision";
 import { VendorCredit } from "./VendorCredit";
 import { workspaceRequest } from "./workspace";
 
-export type Close = { id: string; entity: string; period: string } & Plan;
+export type Close = { id: string; entity: string; period: string; basis?: "cash" | "modified_cash" | "accrual"; basis_scope?: "client" | "firm" } & Plan;
 type Saved<K, P> = { kind: K; paper: P & { sources?: Source[]; revises?: string; blockers?: string[] } };
 export type Paper = { id: string; created_at: string; review_state: string } & (
   | Saved<"prepaid", PrepaidWorkpaper>
