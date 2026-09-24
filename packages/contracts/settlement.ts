@@ -15,6 +15,12 @@ export type SettlementInput = {
     policy_reference: string;
     reason: string;
   }[];
+  fee_entry?: {
+    fee_account: string;
+    deposit_account: string;
+    booked_fees: string;
+    rule_reference: string;
+  };
 };
 export type SettlementCategory = {
   category: string;
@@ -47,4 +53,6 @@ export type SettlementWorkpaper = {
   unassigned: string[];
   questions: string[];
   blockers: string[];
+  fees?: string;
+  proposal?: { date: string; debit_account: string; credit_account: string; amount: string };
 };
