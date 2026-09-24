@@ -32,10 +32,7 @@ func WrongSide(accountID, name, class string, net *big.Rat, currency, basis stri
 		side = "debit"
 	}
 	amount := new(big.Rat).Abs(net).FloatString(2)
-	shown := amount + " " + currency
-	if currency == "" || currency == "USD" {
-		shown = "$" + amount
-	}
+	shown := Show(amount, currency)
 	return &BalanceException{Type: "abnormal_balance", AccountID: accountID, Account: name, Side: side, Amount: amount, Currency: currency,
 		Finding:  fmt.Sprintf("%s (%s) shows a %s %s %s, opposite its normal side.", name, class, shown, side, basis),
 		NextStep: "Cause unverified: review this account's activity in the ledger before any correction. Common causes are a misposted payment, a refund or a duplicate. Nothing is changed.",

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
-import { workspaceRequest } from "../closes/workspace";
+import { useCurrency, workspaceRequest } from "../closes/workspace";
 import type { EvidenceFile } from "../closes/Evidence";
 import { SaveDraft } from "../closes/SaveDraft";
 import { useRevision } from "../closes/useRevision";
@@ -22,8 +22,8 @@ const statusLabel: Record<SettlementPayout["status"], string> = {
   ambiguous: "Choose a deposit",
 };
 
-const usd = (value: string) =>
-  Number(value).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const money = (value: string, currency: string) =>
+  Number(value).toLocaleString("en-US", { style: "currency", currency });
 
 const exampleReport = `automatic_payout_effective_at,automatic_payout_id,available_on,balance_transaction_id,created,currency,description,fee,gross,net,reporting_category
 2026-09-03 00:00:00,po_example_1,2026-09-03 00:00:00,txn_example_1,2026-08-31 10:12:00,usd,Invoice 1041,14.80,500.00,485.20,charge
@@ -70,7 +70,7 @@ function PayoutDecision({
   return (
     <fieldset disabled={busy}>
       <legend>
-        {payout.id} · {usd(payout.net)} expected {payout.expected_date}
+        {payout.id} · {money(payout.net, input.currency)} expected {payout.expected_date}
       </legend>
       {payout.candidate_ids.length > 0 ? (
         <div role="radiogroup" aria-label={`Bank deposit for ${payout.id}`}>
@@ -196,11 +196,11 @@ export function SettlementResult({
           <h4>Stripe paid out</h4>
           <dl>
             <dt>Gross activity</dt>
-            <dd>{usd(result.total.gross)}</dd>
+            <dd>{money(result.total.gross, input.currency)}</dd>
             <dt>Fees on transactions</dt>
-            <dd>{usd(result.total.fee)}</dd>
+            <dd>{money(result.total.fee, input.currency)}</dd>
             <dt>Net paid out</dt>
-            <dd>{usd(result.total.net)}</dd>
+            <dd>{money(result.total.net, input.currency)}</dd>
             <dt>Payouts · transactions</dt>
             <dd>
               {payouts.length} · {result.total.count}
@@ -218,7 +218,7 @@ export function SettlementResult({
             </dd>
             <dt>Method</dt>
             <dd>
-              USD automatic payouts; exact net amount, one day before to four
+              {input.currency} automatic payouts; exact net amount, one day before to four
               days after the expected date.
             </dd>
           </dl>
@@ -268,9 +268,9 @@ export function SettlementResult({
                 <th>{p.id}</th>
                 <td>{p.expected_date}</td>
                 <td>{p.count}</td>
-                <td>{usd(p.gross)}</td>
-                <td>{usd(p.fee)}</td>
-                <td>{usd(p.net)}</td>
+                <td>{money(p.gross, input.currency)}</td>
+                <td>{money(p.fee, input.currency)}</td>
+                <td>{money(p.net, input.currency)}</td>
                 <td>
                   {p.deposit
                     ? `${p.deposit.id} · ${p.deposit.date}${late(p) ? " · after month-end" : ""}`
@@ -351,9 +351,9 @@ export function SettlementResult({
               <tr key={c.category}>
                 <th>{c.category === "all" ? "Total" : c.category}</th>
                 <td>{c.count}</td>
-                <td>{usd(c.gross)}</td>
-                <td>{usd(c.fee)}</td>
-                <td>{usd(c.net)}</td>
+                <td>{money(c.gross, input.currency)}</td>
+                <td>{money(c.fee, input.currency)}</td>
+                <td>{money(c.net, input.currency)}</td>
               </tr>
             ))}
           </tbody>
@@ -362,7 +362,7 @@ export function SettlementResult({
           <p key={p.id} className="source-label">
             {p.id}:{" "}
             {p.categories
-              .map((c) => `${c.count} ${c.category} ${usd(c.net)}`)
+              .map((c) => `${c.count} ${c.category} ${money(c.net, input.currency)}`)
               .join(" · ")}
           </p>
         ))}
@@ -371,11 +371,11 @@ export function SettlementResult({
         <section>
           <h4>Stripe fee entry</h4>
           <p>
-            Fees of payouts deposited in {input.close_period}: {usd(result.fees ?? "0.00")}; already booked: {usd(input.fee_entry.booked_fees)}. Rule: {input.fee_entry.rule_reference}.
+            Fees of payouts deposited in {input.close_period}: {money(result.fees ?? "0.00", input.currency)}; already booked: {money(input.fee_entry.booked_fees, input.currency)}. Rule: {input.fee_entry.rule_reference}.
           </p>
           {result.proposal ? (
             <p>
-              Proposed {result.proposal.date}: debit {result.proposal.debit_account}, credit {result.proposal.credit_account}, {usd(result.proposal.amount)}.
+              Proposed {result.proposal.date}: debit {result.proposal.debit_account}, credit {result.proposal.credit_account}, {money(result.proposal.amount, input.currency)}.
             </p>
           ) : (
             <p>{result.blockers.length > 0 ? "No entry is proposed until every payout is traced." : "No entry is needed; the booked fees match."}</p>
@@ -395,6 +395,7 @@ export function SettlementResult({
 
 export default function Prepare() {
   const [params] = useSearchParams();
+  const currency = useCurrency(params.get("close"));
   const close = params.get("close");
   const form = useRef<HTMLFormElement>(null);
   const revision = useRevision(form);
@@ -494,7 +495,7 @@ export default function Prepare() {
     void calculate({
       entity: text("entity"),
       close_period: text("close_period"),
-      currency: "USD",
+      currency,
       bank_account: text("bank_account"),
       report_reference: report.name,
       bank_reference: bank.name,
@@ -660,7 +661,7 @@ export default function Prepare() {
             <label className="checkbox-label">
               <input type="checkbox" name="method_confirmed" required />
               <span>
-                USD automatic payouts. Stripe's payout ID defines each batch; a
+                {currency} automatic payouts. Stripe's payout ID defines each batch; a
                 bank row is only a candidate when it carries exactly the
                 payout's net amount from one day before to four days after the
                 expected date.
@@ -693,7 +694,7 @@ export default function Prepare() {
                   <input name="deposit_account" required maxLength={200} />
                 </label>
                 <label>
-                  Fees already booked this month (USD; enter zero explicitly)
+                  Fees already booked this month ({currency}; enter zero explicitly)
                   <input name="booked_fees" required inputMode="decimal" />
                 </label>
                 <label>

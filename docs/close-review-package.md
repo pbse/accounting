@@ -24,7 +24,7 @@ The draft package is not firm sign-off. The signed binder proves that the app re
 
 ## Year-end handoff
 
-Select **Download year-end handoff** on any close. It covers that client's closes from January of the close's year through its month (`GET /v1/closes/{id}/year-end`), read from one consistent database snapshot with no provider calls.
+Select **Download year-end handoff** on any close. It covers that client's closes from the first month of its fiscal year through the close's month, as read from the connected QuickBooks or Xero company (calendar year when none is connected; a conflict between them blocks the download) (`GET /v1/closes/{id}/year-end`), read from one consistent database snapshot with no provider calls.
 
 The ZIP contains:
 

@@ -255,7 +255,13 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, err.Error())
 				return
 			}
-			if _, err = db.ExecContext(ctx, `INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6)`, r.PathValue("id"), id, tenant, period, string(payload), a.Subject); err != nil {
+			currency, fiscalStart, err := xero.Profile(payload)
+			if err != nil {
+				problem(w, 422, err.Error())
+				return
+			}
+			if _, err = db.ExecContext(ctx, `WITH s AS (INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6))
+ UPDATE xero_connections SET home_currency=$7,fiscal_year_start=$8 WHERE id=$2`, r.PathValue("id"), id, tenant, period, string(payload), a.Subject, currency, fiscalStart); err != nil {
 				problem(w, 503, "The Trial Balance was read but could not be saved. Capture again.")
 				return
 			}

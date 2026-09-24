@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router";
 import { apiBaseUrl } from "../../lib/api";
 import { authenticationHeaders } from "../auth/Auth";
 import { SaveDraft } from "../closes/SaveDraft";
+import { money, useCurrency } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { LoanFee, LoanInput, LoanPayment, LoanRateChange, LoanWorkpaper } from "../../../../../packages/contracts/loan";
@@ -27,17 +28,17 @@ export function LoanResult({ result }: { result: LoanWorkpaper }) {
         <tbody>
           {result.schedule.length === 0 && <tr><td colSpan={7}>No payments this month.</td></tr>}
           {result.schedule.map((row) => (
-            <tr key={row.date}><td>{row.date}</td><td>${row.principal_before}</td><td>{row.days}</td><td>${row.principal}</td><td>${row.interest}</td><td>${row.expected_interest}</td><td>{row.difference === "0.00" ? "—" : `$${row.difference}`}</td>{rated && <td>{row.rates?.join(" then ")}</td>}</tr>
+            <tr key={row.date}><td>{row.date}</td><td>{money(row.principal_before, input.currency)}</td><td>{row.days}</td><td>{money(row.principal, input.currency)}</td><td>{money(row.interest, input.currency)}</td><td>{money(row.expected_interest, input.currency)}</td><td>{row.difference === "0.00" ? "—" : `${money(row.difference, input.currency)}`}</td>{rated && <td>{row.rates?.join(" then ")}</td>}</tr>
           ))}
         </tbody>
       </table>
       </div>
-      <p>Lender principal: ${input.opening_principal} opening{result.fees && ` + $${result.fees} fees added`} → ${input.closing_principal} closing. Books differ by ${result.book_difference}.</p>
-      {input.fees?.map((f) => <p key={f.date + f.reference}>Fee {f.date}: {f.description}, ${f.amount} ({f.reference}).</p>)}
-      {result.accrued_interest && <p>Accrued interest {result.accrued_interest.from} → {result.accrued_interest.to}: {result.accrued_interest.days} {result.accrued_interest.days === 1 ? "day" : "days"}, ${result.accrued_interest.amount}.</p>}
+      <p>Lender principal: {money(input.opening_principal, input.currency)} opening{result.fees && ` + ${money(result.fees, input.currency)} fees added`} → {money(input.closing_principal, input.currency)} closing. Books differ by {money(result.book_difference, input.currency)}.</p>
+      {input.fees?.map((f) => <p key={f.date + f.reference}>Fee {f.date}: {f.description}, {money(f.amount, input.currency)} ({f.reference}).</p>)}
+      {result.accrued_interest && <p>Accrued interest {result.accrued_interest.from} → {result.accrued_interest.to}: {result.accrued_interest.days} {result.accrued_interest.days === 1 ? "day" : "days"}, {money(result.accrued_interest.amount, input.currency)}.</p>}
       {result.questions.length > 0 && <><h4>Questions before approval</h4><ul>{result.questions.map((q) => <li key={q}>{q}</li>)}</ul></>}
       <h4>Proposed entries</h4>
-      {result.proposals.length === 0 ? <p>No entry is proposed.</p> : <ul>{result.proposals.map((e, i) => <li key={i}>{e.date} · debit {e.debit_account}, credit {e.credit_account}, ${e.amount} USD</li>)}</ul>}
+      {result.proposals.length === 0 ? <p>No entry is proposed.</p> : <ul>{result.proposals.map((e, i) => <li key={i}>{e.date} · debit {e.debit_account}, credit {e.credit_account}, {money(e.amount, input.currency)}</li>)}</ul>}
       <p>Draft only. Nothing is posted; book the approved entries in QuickBooks.</p>
     </section>
   );
@@ -49,6 +50,7 @@ const blankFee: LoanFee = { date: "", amount: "", description: "", reference: ""
 
 export default function PrepareLoan() {
   const [params] = useSearchParams();
+  const currency = useCurrency(params.get("close"));
   const form = useRef<HTMLFormElement>(null);
   const revision = useRevision(form);
   const [payments, setPayments] = useState<LoanPayment[]>([{ ...blank }]);
@@ -102,7 +104,7 @@ export default function PrepareLoan() {
       reclass_current_portion: reclass === "true",
       ...optional(["principal_due_next_12_months", "schedule_reference"], reclass === "true"),
       ...optional(["current_portion_account", "booked_current_portion"], reclass === "true" || !!text("current_portion_account")),
-      currency: "USD",
+      currency,
       method,
       method_confirmed: data.has("method_confirmed"),
       rate_confirmed: data.has("rate_confirmed"),
@@ -159,11 +161,11 @@ export default function PrepareLoan() {
           <div className="form-grid">
             {field("source_reference", "Statement reference")}
             {field("interest_paid_through", "Interest paid through", "date", "Before this month's first payment")}
-            {field("opening_principal", "Principal on that date (USD)")}
-            {field("closing_principal", "Lender's closing principal (USD)")}
+            {field("opening_principal", `Principal on that date (${currency})`)}
+            {field("closing_principal", `Lender's closing principal (${currency})`)}
           </div>
           <table>
-            <thead><tr><th>Payment date</th><th>Principal (USD)</th><th>Interest (USD)</th><th /></tr></thead>
+            <thead><tr><th>Payment date</th><th>Principal ({currency})</th><th>Interest ({currency})</th><th /></tr></thead>
             <tbody>
               {payments.map((payment, index) => (
                 <tr key={index}>
@@ -196,7 +198,7 @@ export default function PrepareLoan() {
           <button type="button" disabled={rateChanges.length >= 12} onClick={() => { setRateChanges((rows) => [...rows, { ...blankRate }]); setMethod("lender_statement_variable_v1"); }}>Add rate change</button>
           {fees.length > 0 && (
             <table>
-              <thead><tr><th>Date added</th><th>Amount (USD)</th><th>Description</th><th>Statement line</th><th /></tr></thead>
+              <thead><tr><th>Date added</th><th>Amount ({currency})</th><th>Description</th><th>Statement line</th><th /></tr></thead>
               <tbody>
                 {fees.map((f, index) => (
                   <tr key={index}>
@@ -216,10 +218,10 @@ export default function PrepareLoan() {
           <legend>Ledger and month-end entries</legend>
           <div className="form-grid">
             {field("loan_account", "Loan account")}
-            {field("book_balance", "Loan account balance at month-end (USD)")}
+            {field("book_balance", `Loan account balance at month-end (${currency})`)}
             {field("interest_account", "Interest expense account")}
             {fees.length > 0 && field("fee_account", "Fee expense account")}
-            {fees.length > 0 && field("booked_fees", "Fees already booked to the loan this month (USD; enter zero explicitly)")}
+            {fees.length > 0 && field("booked_fees", `Fees already booked to the loan this month (${currency}; enter zero explicitly)`)}
           </div>
           <label>
             Accrue interest to month-end?
@@ -229,7 +231,7 @@ export default function PrepareLoan() {
               <option value="false">No</option>
             </select>
           </label>
-          {accrue === "true" && <div className="form-grid">{field("accrued_interest_account", "Accrued interest account")}{field("booked_accrued_interest", "Booked accrued interest (USD; enter zero explicitly)")}</div>}
+          {accrue === "true" && <div className="form-grid">{field("accrued_interest_account", "Accrued interest account")}{field("booked_accrued_interest", `Booked accrued interest (${currency}; enter zero explicitly)`)}</div>}
           <label>
             Reclassify the current portion this month?
             <select value={reclass} onChange={(e) => setReclass(e.target.value)} required>
@@ -238,8 +240,8 @@ export default function PrepareLoan() {
               <option value="false">No</option>
             </select>
           </label>
-          {reclass === "true" && <div className="form-grid">{field("principal_due_next_12_months", "Principal due in the next 12 months (USD)")}{field("schedule_reference", "Amortization schedule reference")}</div>}
-          {reclass !== "" && <div className="form-grid">{field("current_portion_account", "Current portion account", "text", reclass === "true" ? undefined : "Only if part of the loan is kept in its own account", reclass === "true")}{field("booked_current_portion", "Booked current portion (USD)", "text", "Counts toward the loan balance", reclass === "true")}</div>}
+          {reclass === "true" && <div className="form-grid">{field("principal_due_next_12_months", `Principal due in the next 12 months (${currency})`)}{field("schedule_reference", "Amortization schedule reference")}</div>}
+          {reclass !== "" && <div className="form-grid">{field("current_portion_account", "Current portion account", "text", reclass === "true" ? undefined : "Only if part of the loan is kept in its own account", reclass === "true")}{field("booked_current_portion", `Booked current portion (${currency})`, "text", "Counts toward the loan balance", reclass === "true")}</div>}
           <label>
             Loan procedure approved for this client
             <select value={method} onChange={(e) => setMethod(e.target.value as LoanInput["method"])}>

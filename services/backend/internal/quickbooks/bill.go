@@ -52,8 +52,8 @@ func (line *BillLine) UnmarshalJSON(raw []byte) error {
 	return json.Unmarshal(raw, (*plain)(line))
 }
 
-func simpleBill(b Bill) bool {
-	if !identifier.MatchString(b.ID) || b.SyncToken == "" || b.TxnDate == "" || !identifier.MatchString(b.VendorRef.Value) || b.CurrencyRef.Value != "USD" || len(b.Line) < 1 || len(b.Line) > 10 || len(b.LinkedTxn) > 0 || len(b.TxnTaxDetail) > 0 {
+func simpleBill(b Bill, currency string) bool {
+	if !identifier.MatchString(b.ID) || b.SyncToken == "" || b.TxnDate == "" || !identifier.MatchString(b.VendorRef.Value) || b.CurrencyRef.Value != currency || len(b.Line) < 1 || len(b.Line) > 10 || len(b.LinkedTxn) > 0 || len(b.TxnTaxDetail) > 0 {
 		return false
 	}
 	total, totalOK := new(big.Rat).SetString(string(b.TotalAmt))
@@ -82,7 +82,7 @@ func (s Sandbox) ReadBill(ctx context.Context, id string) (Bill, error) {
 	if err := s.request(ctx, "GET", "/bill/"+id, nil, &result); err != nil {
 		return Bill{}, err
 	}
-	if result.Bill.ID != id || !simpleBill(result.Bill) {
+	if result.Bill.ID != id || !simpleBill(result.Bill, s.currency()) {
 		return Bill{}, errors.New("Only a current, unpaid USD Bill with up to ten simple account-based expense lines is supported")
 	}
 	return result.Bill, nil
@@ -105,14 +105,14 @@ func (s Sandbox) ValidateExpenseAccount(ctx context.Context, id string) (string,
 		return "", err
 	}
 	a := result.Account
-	if a.ID != id || !a.Active || a.Classification != "Expense" || a.Name == "" || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != "USD") {
-		return "", errors.New("Target account is not an active USD expense account")
+	if a.ID != id || !a.Active || a.Classification != "Expense" || a.Name == "" || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != s.currency()) {
+		return "", errors.New("Target account is not an active expense account in the client's currency")
 	}
 	return a.Name, nil
 }
 
 func (s Sandbox) CorrectBillAccount(ctx context.Context, before Bill, lineID, target string) (Bill, error) {
-	if s.Production || !simpleBill(before) || !identifier.MatchString(target) {
+	if s.Production || !simpleBill(before, s.currency()) || !identifier.MatchString(target) {
 		return Bill{}, errors.New("The approved sandbox Bill correction is invalid")
 	}
 	lines := append([]BillLine(nil), before.Line...)

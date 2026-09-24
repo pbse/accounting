@@ -131,7 +131,7 @@ func recurringPreview(ctx context.Context, tx *sql.Tx, closeID string) (recurrin
 				item.Blocker = "No exact prepaid account name matches the carried schedule. Resolve the mapping."
 			}
 			if item.Blocker == "" {
-				_, item.Location, item.Cells, err = quickbooks.TrialBalanceAccount(payload.Accounts, payload.Reports["TrialBalance"], item.AccountID)
+				_, item.Location, item.Cells, err = quickbooks.TrialBalanceAccount(payload.Accounts, payload.Reports["TrialBalance"], item.AccountID, item.Paper.Input.Currency)
 				if err != nil {
 					item.Blocker = err.Error()
 				} else {

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
-import { workspaceRequest } from "../closes/workspace";
+import { useCurrency, workspaceRequest } from "../closes/workspace";
 import type { EvidenceFile } from "../closes/Evidence";
 import { SaveDraft } from "../closes/SaveDraft";
 import type {
@@ -36,7 +36,7 @@ function Lines({
             <tr>
               <th>ID</th>
               <th>Date</th>
-              <th>Signed USD</th>
+              <th>Signed amount</th>
             </tr>
           </thead>
           <tbody>
@@ -69,7 +69,7 @@ export function ReconciliationResult({
       </p>
       <p>
         {result.input.entity} · {result.input.account} ·{" "}
-        {result.input.close_period} · USD · {result.input.account_type === "credit_card" ? "card liability" : "bank cash"}
+        {result.input.close_period} · {result.input.currency} · {result.input.account_type === "credit_card" ? "card liability" : "bank cash"}
       </p>
       <p>
         Statement: {result.input.statement_reference}. Ledger:{" "}
@@ -172,6 +172,7 @@ export function ReconciliationResult({
 }
 export default function Prepare() {
   const [params] = useSearchParams();
+  const currency = useCurrency(params.get("close"));
   const form = useRef<HTMLFormElement>(null);
   const revision = useRevision(form);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -242,7 +243,7 @@ export default function Prepare() {
       account_type: text("account_type") as ReconciliationInput["account_type"],
       card_rule_reference: text("card_rule_reference"),
       close_period: text("close_period"),
-      currency: "USD",
+      currency,
       statement_reference: text("statement_reference"),
       ledger_reference: text("ledger_reference"),
       expected_pages: Number(text("expected_pages")),
@@ -307,7 +308,7 @@ export default function Prepare() {
       <p className="eyebrow">STATEMENT RECONCILIATION / PREPARATION</p>
       <h1>See what ties. Investigate what doesn’t.</h1>
       <p>
-        Import one full month of a USD bank or credit-card account. Bank deposits increase cash;
+        Import one full month of a {currency} bank or credit-card account. Bank deposits increase cash;
         card charges increase the liability. Bank withdrawals, card payments and card credits decrease it.
         Normalize both CSVs to the selected sign convention before review.
       </p>
@@ -489,7 +490,7 @@ export default function Prepare() {
                 ] as const
               ).map(([name, label]) => (
                 <label key={name}>
-                  {label} (USD)
+                  {label} ({currency})
                   <input
                     name={name}
                     inputMode="decimal"
@@ -536,7 +537,7 @@ export default function Prepare() {
             <p>A saved source-linked workpaper also requires the QuickBooks report as separate PDF or text evidence. The app does not read or change QuickBooks' native reconciliation flag.</p>
             <label className="checkbox-label">
               <input name="policy_confirmed" type="checkbox" required />
-              <span>I confirm the same entity, account and full USD month on both sources. Bank deposits are positive and withdrawals negative; card charges are positive and payments or credits negative. The selected method and exact match candidates need accountant review.</span>
+              <span>I confirm the same entity, account and full {currency} month on both sources. Bank deposits are positive and withdrawals negative; card charges are positive and payments or credits negative. The selected method and exact match candidates need accountant review.</span>
             </label>
           </fieldset>
           {error && <p role="alert">{error}</p>}
@@ -584,7 +585,7 @@ export default function Prepare() {
                 <label>Ledger IDs, comma-separated<input required value={selection.ledger} onChange={(e) => setSelection({ ...selection, ledger: e.target.value })} /></label>
                 <label>Reviewed method<select value={selection.method} onChange={(e) => setSelection({ ...selection, method: e.target.value as ReviewedMatch["method"] })}><option value="exact">Exact</option><option value="split">Net split settlement</option><option value="tolerance">Approved tolerance</option></select></label>
                 {selection.method !== "exact" && <label>Date window, days<input type="number" min="0" max="31" value={selection.days} onChange={(e) => setSelection({ ...selection, days: e.target.value })} /></label>}
-                {selection.method === "tolerance" && <label>Maximum amount difference, USD<input inputMode="decimal" value={selection.amount} onChange={(e) => setSelection({ ...selection, amount: e.target.value })} /></label>}
+                {selection.method === "tolerance" && <label>Maximum amount difference, {currency}<input inputMode="decimal" value={selection.amount} onChange={(e) => setSelection({ ...selection, amount: e.target.value })} /></label>}
                 <label>Why do these original records belong together?<textarea required minLength={5} maxLength={500} value={selection.reason} onChange={(e) => setSelection({ ...selection, reason: e.target.value })} /></label>
                 <button>Confirm reviewed group and recalculate</button>
               </fieldset>
@@ -610,7 +611,7 @@ export default function Prepare() {
             <label>Reviewed treatment<select value={timing.treatment} onChange={(e) => setTiming({ ...timing, treatment: e.target.value as "timing" | "clearing", clearingRef: "" })}><option value="timing">Timing difference</option><option value="clearing">Clearing account item</option></select></label>
             {timing.treatment === "clearing" && <label>Clearing-account source reference<input maxLength={200} value={timing.clearingRef} onChange={(e) => setTiming({ ...timing, clearingRef: e.target.value })} placeholder="Source and account showing the unsettled item" /></label>}
             <label>Source row ID<input value={timing.id} onChange={(e) => setTiming({ ...timing, id: e.target.value })} placeholder="Current row ID or prior item ID" /></label>
-            <label>Prior item signed amount (USD)<input inputMode="decimal" value={timing.amount} onChange={(e) => setTiming({ ...timing, amount: e.target.value })} /></label>
+            <label>Prior item signed amount ({currency})<input inputMode="decimal" value={timing.amount} onChange={(e) => setTiming({ ...timing, amount: e.target.value })} /></label>
             <label>Current-period clearing row ID on opposite source (optional)<input value={timing.clearedBy} onChange={(e) => setTiming({ ...timing, clearedBy: e.target.value })} /></label>
             <label>Prior workpaper or statement citation<input maxLength={200} value={timing.source} onChange={(e) => setTiming({ ...timing, source: e.target.value })} /></label>
             <label>Accountant-approved rule reference<input maxLength={200} value={timing.policy} onChange={(e) => setTiming({ ...timing, policy: e.target.value })} /></label>

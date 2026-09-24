@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { authenticationHeaders, authKitClientId } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
 // Kept in memory only. Refreshing requires unlocking again; never bake a token into frontend config.
@@ -41,4 +41,21 @@ export async function workspaceRequest(
   if (!response.ok)
     throw new Error(result.message ?? "The workspace is unavailable.");
   return result;
+}
+
+// Matches the server: "$12.00" in US dollars, "12.00 CAD" otherwise.
+export const money = (amount = "", currency = "USD") =>
+  currency === "USD" ? `$${amount}` : `${amount} ${currency}`;
+
+// The client's home currency as its connected ledger reports it; USD until known.
+export function useCurrency(close: string | null) {
+  const [currency, setCurrency] = useState("USD");
+  useEffect(() => {
+    if (close)
+      workspaceRequest(`/${encodeURIComponent(close)}`).then(
+        (data) => setCurrency(data.close?.profile?.currency ?? "USD"),
+        () => undefined,
+      );
+  }, [close]);
+  return currency;
 }

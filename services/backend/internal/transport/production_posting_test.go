@@ -116,7 +116,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 			}
 		}
 	}()
-	paper, err := prepaids.Prepare(prepaids.Input{Entity: "Production fixture", SourceReference: "Synthetic annual invoice", Amount: "12000", ServiceStart: "2026-09-01", ServiceEnd: "2027-08-31", ClosePeriod: "2026-09", Currency: "USD", Basis: "accrual", ExpenseAccount: "Software", PrepaidAccount: "Prepaid", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true})
+	paper, err := prepaids.Prepare(prepaids.Input{Entity: "Production fixture", SourceReference: "Synthetic annual invoice", Amount: "12000", ServiceStart: "2026-09-01", ServiceEnd: "2027-08-31", ClosePeriod: "2026-09", Currency: "CAD", Basis: "accrual", ExpenseAccount: "Software", PrepaidAccount: "Prepaid", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 			if laterBalance {
 				balance = "9999"
 			}
-			result = map[string]any{"Account": map[string]any{"Id": id, "Name": name, "Active": true, "Classification": class, "SyncToken": accountVersion, "CurrentBalance": json.RawMessage(balance)}}
+			result = map[string]any{"Account": map[string]any{"Id": id, "Name": name, "Active": true, "Classification": class, "CurrencyRef": map[string]string{"value": "CAD"}, "SyncToken": accountVersion, "CurrentBalance": json.RawMessage(balance)}}
 		case r.Method == "POST":
 			writes++
 			var state string
@@ -237,6 +237,12 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header)}, nil
 	})
 	path := "/v1/closes/" + closeID + "/workpapers/" + paperID + "/production-posting"
+	if refused := call(path, map[string]string{"action": "preview"}, 409); !strings.Contains(string(refused), "kept in USD") {
+		t.Fatalf("a CAD draft cannot post to a company not yet known to keep CAD books: %s", refused)
+	}
+	if _, err = db.Exec(`UPDATE quickbooks_connections SET home_currency='CAD',fiscal_year_start=1 WHERE id=$1`, connectionID); err != nil {
+		t.Fatal(err)
+	}
 	var preview productionPosting
 	json.Unmarshal(call(path, map[string]string{"action": "preview"}, 200), &preview)
 	call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 409)
@@ -268,7 +274,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	closeOnWrite = true
 	var posted productionPosting
 	json.Unmarshal(call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 200), &posted)
-	if writes != 1 || posted.State != "verified" || posted.ExternalID != "456" || len(posted.LedgerAfter) == 0 {
+	if writes != 1 || posted.State != "verified" || posted.ExternalID != "456" || len(posted.LedgerAfter) == 0 || journal.CurrencyRef.Value != "CAD" {
 		t.Fatalf("expected one verified durable attempt: %+v writes=%d", posted, writes)
 	}
 	closeOnWrite = false

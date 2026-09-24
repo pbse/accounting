@@ -2,6 +2,7 @@ package preparation
 
 import (
 	"close.local/backend/internal/loans"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -29,6 +30,62 @@ func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Pr
 	var p Procedure
 	err := tx.QueryRowContext(ctx, `SELECT p.id::text,p.client_entity,p.kind,p.method,p.instructions,p.expense_account,p.prepaid_account,p.enabled,p.reason,p.actor,p.created_at::text FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&p.ID, &p.ClientEntity, &p.Kind, &p.Method, &p.Instructions, &p.ExpenseAccount, &p.PrepaidAccount, &p.Enabled, &p.Reason, &p.Actor, &p.CreatedAt)
 	return p, err
+}
+
+// Profile is the client's home currency and first fiscal month from its active ledger connections.
+// State is detected, none (no ledger connected), unknown (a connection predates detection; USD) or conflict.
+type Profile struct {
+	Currency    string `json:"currency"`
+	FiscalStart int    `json:"fiscal_year_start"`
+	State       string `json:"state"`
+}
+
+func ClientProfile(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID string) (Profile, error) {
+	p := Profile{Currency: "USD", FiscalStart: 1}
+	var total, known, currencies, starts int
+	var currency sql.NullString
+	var start sql.NullInt64
+	err := q.QueryRowContext(ctx, `WITH c AS (SELECT organization_id,entity FROM client_closes WHERE id::text=$1),
+ x AS (SELECT q.home_currency,q.fiscal_year_start FROM quickbooks_connections q JOIN c ON c.organization_id=q.organization_id AND lower(q.client_entity)=lower(c.entity) WHERE q.state='active'
+ UNION ALL SELECT r.home_currency,r.fiscal_year_start FROM xero_connections r JOIN c ON c.organization_id=r.organization_id AND lower(r.client_entity)=lower(c.entity) WHERE r.state='active')
+ SELECT count(*),count(home_currency),count(DISTINCT home_currency),count(DISTINCT fiscal_year_start),min(home_currency),min(fiscal_year_start) FROM x`, closeID).Scan(&total, &known, &currencies, &starts, &currency, &start)
+	switch {
+	case err != nil:
+		return p, err
+	case total == 0:
+		p.State = "none"
+	case currencies > 1 || starts > 1:
+		p.State = "conflict"
+	case known < total:
+		p.State = "unknown"
+	default:
+		p.State, p.Currency, p.FiscalStart = "detected", currency.String, int(start.Int64)
+	}
+	return p, nil
+}
+
+// CurrencyIssue refuses a draft that is not in the client's detected home currency.
+func CurrencyIssue(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID string, paper []byte) error {
+	profile, err := ClientProfile(ctx, q, closeID)
+	if err != nil {
+		return err
+	}
+	var money struct {
+		Input struct{ Currency string } `json:"input"`
+	}
+	json.Unmarshal(paper, &money)
+	currency := cmp.Or(money.Input.Currency, "USD")
+	if profile.State == "conflict" {
+		return fmt.Errorf("This client's connected ledgers report different home currencies or fiscal years; disconnect the wrong one before saving drafts")
+	}
+	if profile.State != "none" && currency != profile.Currency {
+		return fmt.Errorf("This draft is in %s but the client's books are kept in %s; prepare it in %s", currency, profile.Currency, profile.Currency)
+	}
+	return nil
 }
 
 // BasisIssue refuses work the client's approved basis does not support. Firms that have
@@ -73,6 +130,9 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 			return err
 		}
 		return errors.New(issue)
+	}
+	if err := CurrencyIssue(ctx, q, closeID, paper); err != nil {
+		return err
 	}
 	if kind == "owner" {
 		var entityType struct {
@@ -148,7 +208,7 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		text += "Approved method boundary: " + p.Method + "\n"
 	}
 	if p.Kind == "prepaid" {
-		text += "Supported allocation: equal_full_months_v1 or actual_days_v1 (USD accrual). Multiple or retrospective credits require separately cited entries and the client accountant's approved rule reference. Method and booking are confirmed per draft.\n"
+		text += "Supported allocation: equal_full_months_v1 or actual_days_v1 (accrual, client's home currency). Multiple or retrospective credits require separately cited entries and the client accountant's approved rule reference. Method and booking are confirmed per draft.\n"
 		if p.ExpenseAccount != "" {
 			text += "Expense account: " + p.ExpenseAccount + "\n"
 		}

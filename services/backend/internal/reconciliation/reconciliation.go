@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/ledger"
 )
 
 type Input struct {
@@ -125,7 +127,7 @@ var amountPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]{0,9})(\.[0-9]{1,2})?$`)
 
 func cents(value string) (int64, error) {
 	if !amountPattern.MatchString(value) {
-		return 0, fmt.Errorf("amounts must be USD decimals with at most two fractional digits and at most 10 whole digits")
+		return 0, fmt.Errorf("amounts must be decimals with at most two fractional digits and at most 10 whole digits")
 	}
 	negative := strings.HasPrefix(value, "-")
 	value = strings.TrimPrefix(value, "-")
@@ -167,7 +169,7 @@ func CSVSummary(source, period string) (string, bool, error) {
 	for _, row := range rows {
 		first, last = min(first, row.Date), max(last, row.Date)
 	}
-	return fmt.Sprintf("Reconciliation CSV with %d transactions dated %s to %s, net $%s. It could be the bank statement or the ledger export; choose which on the reconciliation page.", len(rows), first, last, money(total)), true, nil
+	return fmt.Sprintf("Reconciliation CSV with %d transactions dated %s to %s, net %s. It could be the bank statement or the ledger export; choose which on the reconciliation page.", len(rows), first, last, money(total)), true, nil
 }
 func datedLines(source string, first, last time.Time, dateError string) ([]Line, int64, error) {
 	reader := csv.NewReader(strings.NewReader(source))
@@ -498,8 +500,8 @@ func Prepare(input Input) (Workpaper, error) {
 			return fail("Entity, account and both source references require 1–200 characters.")
 		}
 	}
-	if input.Currency != "USD" || !input.PolicyConfirmed || (input.AccountType != "" && input.AccountType != "bank" && input.AccountType != "credit_card") {
-		return fail("Confirm the USD account method, complete month boundaries and signed movements.")
+	if !ledger.ValidCurrency(input.Currency) || !input.PolicyConfirmed || (input.AccountType != "" && input.AccountType != "bank" && input.AccountType != "credit_card") {
+		return fail("Confirm the account method in the client's home currency, complete month boundaries and signed movements.")
 	}
 	if input.AccountType == "credit_card" {
 		if len(strings.TrimSpace(input.CardRuleReference)) < 5 || len(input.CardRuleReference) > 200 {

@@ -98,7 +98,7 @@ func recurringAccrualPreview(ctx context.Context, tx *sql.Tx, closeID, org strin
 				item.Blocker = "No exact current-liability account matches the prior rule."
 			}
 			if item.Blocker == "" {
-				_, item.Location, item.Cells, err = quickbooks.TrialBalanceLiability(payload.Accounts, payload.Reports["TrialBalance"], item.AccountID)
+				_, item.Location, item.Cells, err = quickbooks.TrialBalanceLiability(payload.Accounts, payload.Reports["TrialBalance"], item.AccountID, item.Paper.Input.Currency)
 				if err != nil {
 					item.Blocker = err.Error()
 				}

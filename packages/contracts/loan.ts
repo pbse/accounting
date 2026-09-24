@@ -4,7 +4,7 @@ export type LoanRateChange = { effective: string; annual_rate: string; reference
 export type LoanFee = { date: string; amount: string; description: string; reference: string };
 export type LoanMethod = "lender_statement_v1" | "lender_statement_variable_v1";
 export type LoanInput = {
-  entity: string; close_period: string; lender: string; source_reference: string; agreement_reference: string; currency: "USD";
+  entity: string; close_period: string; lender: string; source_reference: string; agreement_reference: string; currency: string;
   annual_rate: string; day_count: "actual_360" | "actual_365" | "30_360_bond" | "30e_360";
   opening_principal: string; interest_paid_through: string; payments: LoanPayment[]; closing_principal: string; book_balance: string;
   rate_changes?: LoanRateChange[]; fees?: LoanFee[]; fee_account?: string; booked_fees?: string;

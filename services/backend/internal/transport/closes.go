@@ -31,8 +31,9 @@ type savedClose struct {
 	Assigned  bool   `json:"assigned,omitempty"`
 	OwnedByMe bool   `json:"owned_by_me,omitempty"`
 	// Basis is the client's approved accounting basis; BasisScope says whether a client override sets it.
-	Basis      string `json:"basis,omitempty"`
-	BasisScope string `json:"basis_scope,omitempty"`
+	Basis      string               `json:"basis,omitempty"`
+	BasisScope string               `json:"basis_scope,omitempty"`
+	Profile    *preparation.Profile `json:"profile,omitempty"`
 }
 
 const closePlanning = `COALESCE(due_on::text,''),priority,owner<>'',owner<>'' AND owner=`
@@ -268,6 +269,12 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		if more {
 			papers = papers[:100]
 		}
+		profile, err := preparation.ClientProfile(r.Context(), db, item.ID)
+		if err != nil {
+			problem(w, 503, "Could not read the client's currency.")
+			return
+		}
+		item.Profile = &profile
 		jsonReply(w, 200, map[string]any{"close": item, "workpapers": papers, "has_more": more})
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/reconciliation/prior-items", func(w http.ResponseWriter, r *http.Request) {

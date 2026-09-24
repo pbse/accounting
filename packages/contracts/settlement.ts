@@ -1,7 +1,7 @@
 export type SettlementInput = {
   entity: string;
   close_period: string;
-  currency: "USD";
+  currency: string;
   bank_account: string;
   report_reference: string;
   bank_reference: string;

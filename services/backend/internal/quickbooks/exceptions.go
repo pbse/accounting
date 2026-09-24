@@ -1,6 +1,7 @@
 package quickbooks
 
 import (
+	"close.local/backend/internal/ledger"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -37,10 +38,7 @@ type Exception struct {
 var holdingAccount = regexp.MustCompile(`(?i)uncategori[sz]ed|ask my accountant|suspense`)
 
 func amount(row TransactionRow) string {
-	if row.Currency == "" || row.Currency == "USD" {
-		return "$" + row.Amount
-	}
-	return row.Amount + " " + row.Currency
+	return ledger.Show(row.Amount, row.Currency)
 }
 
 type ref struct{ Value, Name, Type string }

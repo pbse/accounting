@@ -21,7 +21,7 @@ import { EffortCard, EffortTracker, type Activity } from "./Effort";
 import { PlanChips, PlanningControls } from "./Planning";
 import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
-import { needsAttention, paperLabels, readyForReview, ReviewPill, useClose, type Close, type Paper } from "./WorkpaperView";
+import { needsAttention, paperLabels, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
 
 const tabs = [
   ["overview", "Overview"],
@@ -58,6 +58,12 @@ function Kpi({ icon, tone, label, value, caption, to }: { icon: IconName; tone: 
 }
 
 const basisLabels = { cash: "Cash basis", modified_cash: "Modified cash basis", accrual: "Accrual basis" };
+
+function profileLabel(p: Profile) {
+  if (p.state === "conflict") return "Connected ledgers disagree on currency or fiscal year; disconnect the wrong one";
+  if (p.state === "unknown") return "USD assumed until the ledger's currency is read: reconnect QuickBooks, or capture a Xero snapshot";
+  return `${p.currency} · fiscal year starts ${new Date(2000, p.fiscal_year_start - 1).toLocaleString("en-US", { month: "long" })}`;
+}
 
 function PrepareActions({ close }: { close: Close }) {
   const query = `close=${close.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}`;
@@ -177,6 +183,7 @@ export default function ClientClose() {
             <p>
               Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
               {close.basis && <span className="chip" style={{ marginLeft: "0.5rem" }} title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
+              {close.profile && close.profile.state !== "none" && <span className="chip" style={{ marginLeft: "0.5rem" }} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
             </p>
           </span>
         </div>
@@ -251,8 +258,8 @@ export default function ClientClose() {
             ))}
           </div>
           {more && <p className="note">Showing the 100 most recent drafts. Older records remain saved.</p>}
-          <Recurring key={`recurring-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
-          <RecurringAccruals closeId={close.id} onPrepared={() => void reload()} />
+          <Recurring key={`recurring-${close.id}`} closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
+          <RecurringAccruals closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
           <CarryForward key={close.id} closeId={close.id} />
           <BillCorrection closeId={close.id} />
         </div>
@@ -276,7 +283,7 @@ export default function ClientClose() {
       {tab === "settings" && (
         <div className="stack">
           <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} onApplied={() => void reload()} />
-          <ProductionAccess closeId={close.id} entity={close.entity} />
+          <ProductionAccess closeId={close.id} entity={close.entity} currency={close.profile?.currency ?? "USD"} />
           <RetentionControls close={close} onDeleted={setDeleted} />
         </div>
       )}

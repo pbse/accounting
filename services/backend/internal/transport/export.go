@@ -3,6 +3,7 @@ package transport
 import (
 	"archive/zip"
 	"bytes"
+	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
 	"context"
@@ -353,11 +354,11 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			json.Unmarshal(saved.Paper, &carried)
 			summary.Source = paper.Input.SourceReference
 			summary.Method = paper.Input.Method
-			summary.Issues = []string{"USD accrual basis; selected method, any credit and booked balance are user-confirmed. Review all ledger and credit evidence.", "Draft calculation; not firm approval or authorization to post."}
+			summary.Issues = []string{paper.Input.Currency + " accrual basis; selected method, any credit and booked balance are user-confirmed. Review all ledger and credit evidence.", "Draft calculation; not firm approval or authorization to post."}
 			if carried.CarryForward != nil {
-				summary.Issues = []string{"Carried schedule only; opening scheduled prepaid balance " + carried.CarryForward.OpeningBalance + " USD is not a verified ledger balance.", "Prior-period draft #" + carried.CarryForward.PaperID + " from close #" + carried.CarryForward.CloseID + "; fresh review required. No journal proposal or inherited approval."}
+				summary.Issues = []string{"Carried schedule only; opening scheduled prepaid balance " + carried.CarryForward.OpeningBalance + " " + paper.Input.Currency + " is not a verified ledger balance.", "Prior-period draft #" + carried.CarryForward.PaperID + " from close #" + carried.CarryForward.CloseID + "; fresh review required. No journal proposal or inherited approval."}
 			}
-			records := [][]string{{"Period", "Expense USD", "Remaining USD", "Credit USD"}}
+			records := [][]string{{"Period", "Expense " + paper.Input.Currency, "Remaining " + paper.Input.Currency, "Credit " + paper.Input.Currency}}
 			for _, row := range paper.Schedule {
 				records = append(records, []string{row.Period, row.Expense, row.Remaining, row.Credit})
 			}
@@ -379,7 +380,7 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			}
 			summary.Source = paper.Input.StatementReference + " / " + paper.Input.LedgerReference
 			summary.Method = paper.Method
-			summary.Issues = append([]string{"USD " + paper.Method + "; match candidates are not confirmed matches or native reconciliation."}, paper.Blockers...)
+			summary.Issues = append([]string{paper.Input.Currency + " " + paper.Method + "; match candidates are not confirmed matches or native reconciliation."}, paper.Blockers...)
 			if len(paper.Blockers) == 0 {
 				summary.Issues = append(summary.Issues, "No arithmetic blockers in imported rows; source completeness still requires review.")
 			}
@@ -394,7 +395,7 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 				name  string
 				lines []reconciliation.Line
 			}{{"statement", paper.UnmatchedStatement}, {"ledger", paper.UnmatchedLedger}} {
-				records = [][]string{{"ID", "Date", "Amount USD"}}
+				records = [][]string{{"ID", "Date", "Amount " + paper.Input.Currency}}
 				for _, line := range source.lines {
 					records = append(records, []string{csvText(line.ID), line.Date, line.Amount})
 				}
@@ -429,7 +430,7 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 				summary.Issues = append(summary.Issues, "Client question: "+paper.Question)
 			}
 			if paper.Proposal != nil {
-				summary.Issues = append(summary.Issues, fmt.Sprintf("Proposed %s: Dr %s / Cr %s %s USD", paper.Proposal.Date, paper.Proposal.DebitAccount, paper.Proposal.CreditAccount, paper.Proposal.Amount))
+				summary.Issues = append(summary.Issues, fmt.Sprintf("Proposed %s: Dr %s / Cr %s %s", paper.Proposal.Date, paper.Proposal.DebitAccount, paper.Proposal.CreditAccount, ledger.Show(paper.Proposal.Amount, paper.Input.Currency)))
 			}
 		case "loan":
 			var paper loans.Workpaper
@@ -440,9 +441,9 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			summary.Method = paper.Method + " · " + loans.DayCounts[paper.Input.DayCount]
 			summary.Issues = append(append([]string{"The lender statement's principal/interest split is authoritative; recomputed interest only raises questions. Proposed entries are not posted."}, paper.Blockers...), paper.Questions...)
 			for _, entry := range paper.Proposals {
-				summary.Issues = append(summary.Issues, fmt.Sprintf("Proposed %s: Dr %s / Cr %s %s USD", entry.Date, entry.DebitAccount, entry.CreditAccount, entry.Amount))
+				summary.Issues = append(summary.Issues, fmt.Sprintf("Proposed %s: Dr %s / Cr %s %s", entry.Date, entry.DebitAccount, entry.CreditAccount, ledger.Show(entry.Amount, paper.Input.Currency)))
 			}
-			records := [][]string{{"Payment date", "Principal before USD", "Days", "Principal USD", "Lender interest USD", "Note-rate interest USD", "Difference USD"}}
+			records := [][]string{{"Payment date", "Principal before " + paper.Input.Currency, "Days", "Principal " + paper.Input.Currency, "Lender interest " + paper.Input.Currency, "Note-rate interest " + paper.Input.Currency, "Difference " + paper.Input.Currency}}
 			for _, row := range paper.Schedule {
 				records = append(records, []string{row.Date, row.PrincipalBefore, fmt.Sprint(row.Days), row.Principal, row.Interest, row.ExpectedInterest, row.Difference})
 			}
@@ -458,10 +459,10 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			summary.Method = paper.Method
 			entry := "No journal is proposed."
 			if e := paper.Proposal; e != nil {
-				entry = fmt.Sprintf("Proposed fee entry under %s: debit %s, credit %s, $%s on %s.", paper.Input.FeeEntry.RuleReference, e.DebitAccount, e.CreditAccount, e.Amount, e.Date)
+				entry = fmt.Sprintf("Proposed fee entry under %s: debit %s, credit %s, %s on %s.", paper.Input.FeeEntry.RuleReference, e.DebitAccount, e.CreditAccount, ledger.Show(e.Amount, paper.Input.Currency), e.Date)
 			}
-			summary.Issues = append(append([]string{"USD Stripe automatic payouts traced to " + paper.Input.BankAccount + ". Matched deposits are candidates until this workpaper is approved; in-transit payouts cite an accountant rule. " + entry}, paper.Blockers...), paper.Questions...)
-			records := [][]string{{"Payout", "Expected", "Transactions", "Gross USD", "Fee USD", "Net USD", "Status", "Bank row", "Bank date", "After month-end", "Candidates", "Rule", "Reason"}}
+			summary.Issues = append(append([]string{paper.Input.Currency + " Stripe automatic payouts traced to " + paper.Input.BankAccount + ". Matched deposits are candidates until this workpaper is approved; in-transit payouts cite an accountant rule. " + entry}, paper.Blockers...), paper.Questions...)
+			records := [][]string{{"Payout", "Expected", "Transactions", "Gross " + paper.Input.Currency, "Fee " + paper.Input.Currency, "Net " + paper.Input.Currency, "Status", "Bank row", "Bank date", "After month-end", "Candidates", "Rule", "Reason"}}
 			for _, payout := range paper.Payouts {
 				row, date, late := "", "", ""
 				if payout.Deposit != nil {
@@ -475,7 +476,7 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			if err = csvFile(root+"-payouts.csv", records); err != nil {
 				return nil, err
 			}
-			records = [][]string{{"Stripe category", "Transactions", "Gross USD", "Fee USD", "Net USD"}}
+			records = [][]string{{"Stripe category", "Transactions", "Gross " + paper.Input.Currency, "Fee " + paper.Input.Currency, "Net " + paper.Input.Currency}}
 			for _, category := range append(paper.Categories, paper.Total) {
 				records = append(records, []string{csvText(category.Category), fmt.Sprint(category.Count), category.Gross, category.Fee, category.Net})
 			}

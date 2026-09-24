@@ -8,6 +8,7 @@ import type {
 } from "../../../../../packages/contracts/prepaid";
 import { useSearchParams } from "react-router";
 import { SaveDraft } from "../closes/SaveDraft";
+import { money, useCurrency } from "../closes/workspace";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
 
@@ -22,6 +23,7 @@ function download(contents: string, name: string, type: string) {
 
 export default function Prepare() {
   const [params] = useSearchParams();
+  const currency = useCurrency(params.get("close"));
   const form = useRef<HTMLFormElement>(null);
   const revision = useRevision(form);
   const resultHeading = useRef<HTMLHeadingElement>(null);
@@ -78,7 +80,7 @@ export default function Prepare() {
       close_period: text("close_period"),
       expense_account: text("expense_account"),
       prepaid_account: text("prepaid_account"),
-      currency: "USD",
+      currency,
       basis: "accrual",
       method: text("method") as PrepaidInput["method"],
       examples_confirmed: data.has("examples_confirmed"),
@@ -208,7 +210,7 @@ export default function Prepare() {
                 />
               </label>
               <label>
-                Invoice amount (USD)
+                Invoice amount ({currency})
                 <input
                   name="amount"
                   required
@@ -300,7 +302,7 @@ export default function Prepare() {
                 <dt>Source status</dt>
                 <dd>User-supplied; not independently verified.</dd>
                 <dt>Invoice amount</dt>
-                <dd>${result.input.amount} USD</dd>
+                <dd>{money(result.input.amount, result.input.currency)}</dd>
                 <dt>Service dates</dt>
                 <dd>
                   {result.input.service_start} → {result.input.service_end}
@@ -308,23 +310,23 @@ export default function Prepare() {
                 <dt>Method</dt>
                 <dd>{result.input.method} · residual in final month.</dd>
                 {result.input.cancellation_method && <><dt>Cancellation</dt><dd>{result.input.cancellation_method} effective {result.input.cancellation_period} · {result.input.cancellation_reference}</dd></>}
-                {!!result.input.credits?.length && <><dt>Reviewed credit rule</dt><dd>{result.input.accountant_rule_reference}</dd><dt>Credits</dt><dd>{result.input.credits.map(c => `$${c.amount} effective ${c.effective_period}, booked ${c.recorded_period} · ${c.reference}`).join("; ")}</dd></>}
+                {!!result.input.credits?.length && <><dt>Reviewed credit rule</dt><dd>{result.input.accountant_rule_reference}</dd><dt>Credits</dt><dd>{result.input.credits.map(c => `${money(c.amount, result.input.currency)} effective ${c.effective_period}, booked ${c.recorded_period} · ${c.reference}`).join("; ")}</dd></>}
                 <dt>Booking assumption</dt>
-                <dd>{result.input.booked_balance ? `Ledger prepaid: $${result.input.booked_balance} · ${result.input.booking_reference}` : "Fully expensed; no prior adjustments or credits."}</dd>
+                <dd>{result.input.booked_balance ? `Ledger prepaid: ${money(result.input.booked_balance, result.input.currency)} · ${result.input.booking_reference}` : "Fully expensed; no prior adjustments or credits."}</dd>
               </dl>
             </section>
             <section>
               <h3>Calculated at month-end</h3>
               <dl>
                 <dt>Expense this month</dt>
-                <dd>${result.period_expense}</dd>
+                <dd>{money(result.period_expense, result.input.currency)}</dd>
                 <dt>Expense through this month</dt>
-                <dd>${result.recognized_expense}</dd>
+                <dd>{money(result.recognized_expense, result.input.currency)}</dd>
                 <dt>Remaining prepaid</dt>
-                <dd>${result.prepaid_balance}</dd>
+                <dd>{money(result.prepaid_balance, result.input.currency)}</dd>
               </dl>
               <p className="source-label">
-                USD amounts calculated in exact cents. This preview assumes the
+                {result.input.currency} amounts calculated in exact cents. This preview assumes the
                 stated initial booking; no ledger balance has been read.
               </p>
             </section>
@@ -339,8 +341,8 @@ export default function Prepare() {
                 <thead>
                   <tr>
                     <th scope="col">Account</th>
-                    <th scope="col">Debit (USD)</th>
-                    <th scope="col">Credit (USD)</th>
+                    <th scope="col">Debit ({result.input.currency})</th>
+                    <th scope="col">Credit ({result.input.currency})</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -371,8 +373,8 @@ export default function Prepare() {
               <thead>
                 <tr>
                   <th scope="col">Period</th>
-                  <th scope="col">Expense (USD)</th>
-                  <th scope="col">Remaining (USD)</th><th scope="col">Credit (USD)</th>
+                  <th scope="col">Expense ({result.input.currency})</th>
+                  <th scope="col">Remaining ({result.input.currency})</th><th scope="col">Credit ({result.input.currency})</th>
                 </tr>
               </thead>
               <tbody>
@@ -409,7 +411,7 @@ export default function Prepare() {
               onClick={() =>
                 download(
                   [
-                    "Period,Expense USD,Remaining USD,Credit or refund USD",
+                    `Period,Expense ${result.input.currency},Remaining ${result.input.currency},Credit or refund ${result.input.currency}`,
                     ...result.schedule.map(
                       (row) => `${row.period},${row.expense},${row.remaining},${row.credit ?? "0.00"}`,
                     ),

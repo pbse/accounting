@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/secrets"
 	"close.local/backend/internal/xero"
 	"github.com/golang-jwt/jwt/v5"
@@ -96,7 +98,7 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 				{"tenantId": "t-practice", "tenantName": "A practice", "tenantType": "PRACTICE", "authEventId": "event-now"},
 			})
 		case strings.HasSuffix(r.URL.Path, "/Organisation"):
-			return reply(200, map[string]any{"Organisations": []any{map[string]string{"Name": "Harbor Holdings Ltd", "BaseCurrency": "NZD"}}})
+			return reply(200, map[string]any{"Organisations": []any{map[string]any{"Name": "Harbor Holdings Ltd", "BaseCurrency": "NZD", "FinancialYearEndMonth": 3}}})
 		case strings.HasSuffix(r.URL.Path, "/Accounts"):
 			return reply(200, map[string]any{"Accounts": []any{map[string]string{"AccountID": "a-090", "Code": "090", "Name": "Business Bank Account", "Class": "ASSET"}}})
 		case strings.HasSuffix(r.URL.Path, "/Reports/TrialBalance"):
@@ -157,6 +159,9 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	latest, _ := json.Marshal(status["latest"])
 	if len(dates) != 1 || dates[0] != "2026-09-30" || tenantHeaders[0] != "t-b" || !strings.Contains(string(latest), `"currency":"NZD"`) || !strings.Contains(string(latest), `"ytd_debit":"1250.00"`) {
 		t.Fatalf("the month-end Trial Balance of the chosen organisation is captured: %v %v %s", dates, tenantHeaders, latest)
+	}
+	if p, err := preparation.ClientProfile(context.Background(), db, september); err != nil || p != (preparation.Profile{Currency: "NZD", FiscalStart: 4, State: "detected"}) {
+		t.Fatalf("a snapshot records the organisation's base currency and financial year: %+v %v", p, err)
 	}
 	var intact bool
 	must(db.QueryRow(`SELECT bool_and(digest=encode(sha256(convert_to(payload::text,'UTF8')),'hex')) FROM xero_snapshots WHERE close_id=$1`, september).Scan(&intact))

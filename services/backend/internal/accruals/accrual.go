@@ -1,6 +1,7 @@
 package accruals
 
 import (
+	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/prepaids"
 	"fmt"
 	"strings"
@@ -54,8 +55,8 @@ func Prepare(in Input) (Workpaper, error) {
 	if strings.EqualFold(in.ExpenseAccount, in.LiabilityAccount) {
 		return empty, fmt.Errorf("Expense and liability accounts must differ")
 	}
-	if (in.Method != Method && in.Method != ActualMethod && in.Method != RecurringMethod) || in.Currency != "USD" || in.Basis != "accrual" || !in.MethodConfirmed || !in.BookingConfirmed || !in.ExamplesConfirmed {
-		return empty, fmt.Errorf("Select and confirm a supported USD accrual method, booked liability, synthetic examples and reversal choice")
+	if (in.Method != Method && in.Method != ActualMethod && in.Method != RecurringMethod) || !ledger.ValidCurrency(in.Currency) || in.Basis != "accrual" || !in.MethodConfirmed || !in.BookingConfirmed || !in.ExamplesConfirmed {
+		return empty, fmt.Errorf("Select and confirm a supported accrual method in the client's home currency, booked liability, synthetic examples and reversal choice")
 	}
 	period, err := time.Parse("2006-01", in.ClosePeriod)
 	if err != nil || period.Year() < 1000 || period.Year() > 9998 {

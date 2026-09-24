@@ -5,7 +5,7 @@ export type PrepaidInput = {
   service_start: string;
   service_end: string;
   close_period: string;
-  currency: "USD";
+  currency: string;
   basis: "accrual";
   expense_account: string;
   prepaid_account: string;

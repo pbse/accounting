@@ -4,7 +4,7 @@ export type ReconciliationInput = {
   account_type?: "bank" | "credit_card";
   card_rule_reference?: string;
   close_period: string;
-  currency: "USD";
+  currency: string;
   statement_reference: string;
   ledger_reference: string;
   expected_pages: number;

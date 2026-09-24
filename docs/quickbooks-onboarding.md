@@ -19,7 +19,7 @@ Open a client close → **QuickBooks sandbox ledger evidence**. Confirm the inte
 
 After consent, the API validates the unexpired attempt and redirects to the original close with authorization data in the URL fragment. The app removes that fragment and keeps the response in component memory. Choose **Complete authorization** while signed in as the initiating user. The backend rechecks the firm/client/user/state, records a durable exchange claim, consumes the state once, and encrypts the returned tokens.
 
-Inspect the returned sandbox company name and realm ID. Only then choose **Confirm this company belongs to the client**. A confirmed connection is shared across periods of that same case-insensitive client label within its organization. No client rename/merge capability is implied.
+Inspect the returned sandbox company name and realm ID. Connecting also reads the company's home currency and first fiscal month from its Preferences; the close page shows them, drafts in another currency are refused, and the year-end handoff follows that fiscal year. Currencies without two decimals (such as JPY) are not supported. Only then choose **Confirm this company belongs to the client**. A confirmed connection is shared across periods of that same case-insensitive client label within its organization. No client rename/merge capability is implied.
 
 If the browser reloads before completion, authentication expires, consent is cancelled, or the ten-minute attempt expires, return to the client, disconnect the old attempt and start again. The app does not store authorization codes in local storage or infer approval from document content.
 

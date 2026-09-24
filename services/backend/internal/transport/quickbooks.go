@@ -273,13 +273,18 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				fail(e.Error())
 				return
 			}
+			currency, fiscalStart, e := quickbooks.ProfileFor(ctx, environment, in.Realm, credentials.Access)
+			if e != nil {
+				fail(e.Error())
+				return
+			}
 			raw, _ := json.Marshal(credentials)
 			encrypted, e = secrets.Seal(aad, raw)
 			if e != nil {
 				fail(e.Error())
 				return
 			}
-			result, err = db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='pending_confirmation',realm=$2,company_name=$3,credential=$4,access_expires_at=$5,updated_at=now(),error='' WHERE id=$1 AND state='exchanging'`, id, in.Realm, company, encrypted, time.Now().Add(time.Duration(credentials.Expires)*time.Second))
+			result, err = db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='pending_confirmation',realm=$2,company_name=$3,credential=$4,access_expires_at=$5,home_currency=$6,fiscal_year_start=$7,updated_at=now(),error='' WHERE id=$1 AND state='exchanging'`, id, in.Realm, company, encrypted, time.Now().Add(time.Duration(credentials.Expires)*time.Second), currency, fiscalStart)
 			if err == nil {
 				n, _ = result.RowsAffected()
 				if n != 1 {

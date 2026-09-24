@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/ledger"
 )
 
 const Method = "equal_full_months_v1"
@@ -101,8 +103,8 @@ func Prepare(input Input) (Workpaper, error) {
 	if strings.EqualFold(input.ExpenseAccount, input.PrepaidAccount) {
 		return empty, invalid("prepaid_account", "Choose a prepaid account different from the expense account.")
 	}
-	if input.Currency != "USD" {
-		return empty, invalid("currency", "This method supports USD only.")
+	if !ledger.ValidCurrency(input.Currency) {
+		return empty, invalid("currency", "Use the client's home currency as a three-letter code with two decimals, such as USD, CAD or GBP.")
 	}
 	if input.Basis != "accrual" {
 		return empty, invalid("basis", "This method requires accrual-basis accounting.")
@@ -337,7 +339,7 @@ func ScheduleOnly(input Input) (Workpaper, error) {
 // Amount accepts bounded nonnegative exact cents, shared by supported schedules.
 func Amount(value string) (int64, error) {
 	if !moneyPattern.MatchString(value) {
-		return 0, fmt.Errorf("Enter a nonnegative USD amount with at most two decimals, up to 9999999999.99.")
+		return 0, fmt.Errorf("Enter a nonnegative amount with at most two decimals, up to 9999999999.99.")
 	}
 	dollars, fraction, _ := strings.Cut(value, ".")
 	whole, _ := strconv.ParseInt(dollars, 10, 64)
