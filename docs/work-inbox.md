@@ -79,3 +79,9 @@ The close Overview scans every row of the latest completed QuickBooks transactio
 - **No payee:** a Purchase with no payee.
 
 Each item names the QuickBooks transaction IDs, the evidence still missing and a plain client question. **Copy client questions** puts them on the clipboard for a client request. Nothing is recategorized, deleted, merged or posted. Owner or personal purpose is never inferred. Without a capture, the card asks for one rather than reporting "no exceptions".
+
+## Daily books
+
+Work lists **Daily books**: for each accessible client's unsigned current- or prior-month close, the exceptions the latest QuickBooks transaction capture found that were not in the capture last marked reviewed. Captures run daily and soon after QuickBooks reports a change, so new duplicates, holding-account postings, payments without a payee and inconsistent coding surface during the month instead of at close. Each capture records its findings when it finishes; a capture with unchanged evidence carries the previous findings. A finding is the same when its type, transaction kind and QuickBooks IDs match; after reconnecting to a different company, everything counts as new. Clients with the most new findings come first, up to 100.
+
+**Mark reviewed** sets the baseline to the latest capture. It is refused if a newer capture finished in the meantime, and it is a review marker only: it approves nothing and changes nothing in QuickBooks. Open the close's exceptions to answer or ask the client. Balance checks still use month-end snapshots captured on demand, and Xero data is not refreshed daily.

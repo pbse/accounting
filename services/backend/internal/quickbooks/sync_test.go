@@ -52,7 +52,7 @@ func TestTransactionChecksReuseEvidenceAndRefreshIndexedRows(t *testing.T) {
 		return j
 	}
 	capture := func(revision string) EntityCapture {
-		item := json.RawMessage(fmt.Sprintf(`{"Id":"bill-1","SyncToken":%q,"TxnDate":%q,"MetaData":{"LastUpdatedTime":"2026-09-01T12:00:00Z"},"TotalAmt":100}`, revision, period+"-01"))
+		item := json.RawMessage(fmt.Sprintf(`{"Id":"bill-1","SyncToken":%q,"TxnDate":%q,"MetaData":{"LastUpdatedTime":"2026-09-01T12:00:00Z"},"TotalAmt":100,"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"1","name":"Uncategorized Expense"}}}]}`, revision, period+"-01"))
 		return EntityCapture{Realm: "123", Period: period, Types: []string{"Bill"}, Counts: map[string]int{"Bill": 1}, Records: map[string][]json.RawMessage{"Bill": {item}}, Settings: json.RawMessage(`{"Preferences":{"Id":"1","SyncToken":"1"}}`), StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC(), Completeness: "synthetic checked read"}
 	}
 	first := job()
@@ -86,6 +86,13 @@ func TestTransactionChecksReuseEvidenceAndRefreshIndexedRows(t *testing.T) {
 	}
 	if err := db.QueryRowContext(ctx, `SELECT state FROM quickbooks_entity_syncs WHERE id=$1`, third.id).Scan(&state); err != nil || state != "unchanged" {
 		t.Fatalf("same indexed content created a revision: %s %v", state, err)
+	}
+	// Each finished capture records its exceptions; an unchanged one carries the previous capture's.
+	for _, j := range []syncClaim{second, third} {
+		var kinds string
+		if err := db.QueryRowContext(ctx, `SELECT COALESCE((SELECT string_agg(e->>'type',',') FROM jsonb_array_elements(exceptions) e),'none') FROM quickbooks_entity_syncs WHERE id=$1`, j.id).Scan(&kinds); err != nil || kinds != "uncategorized" {
+			t.Fatalf("capture %s must record its exceptions: %q %v", j.id, kinds, err)
+		}
 	}
 	fourth := job()
 	if err := completeSync(ctx, db, fourth, capture("2")); err != nil {

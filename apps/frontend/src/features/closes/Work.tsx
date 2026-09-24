@@ -282,6 +282,7 @@ export function Work({
                 ))}
               </div>
               {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
+              <DailyBooks />
             </>
           )}
           <div className="toolbar" id="work-list">
@@ -348,6 +349,70 @@ export function Work({
         </>
       )}
     </section>
+  );
+}
+
+type Daily = { close_id: string; entity: string; period: string; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[] };
+
+// New exceptions from this and last month's captures since each client was last reviewed.
+function DailyBooks() {
+  const [items, setItems] = useState<Daily[]>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  async function load() {
+    try {
+      setItems((await workspaceRequest("/daily")).items);
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Daily books are unavailable.");
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+  async function reviewed(item: Daily) {
+    setBusy(item.close_id);
+    try {
+      await workspaceRequest(`/${item.close_id}/daily-review`, { sync_id: item.sync_id });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The review could not be saved.");
+    } finally {
+      setBusy("");
+    }
+  }
+  const open = items?.filter((item) => item.new.length > 0) ?? [];
+  return (
+    <>
+      <div className="section-title" id="daily-books">
+        <h2>Daily books</h2>
+        <small>New since each client's last review. Captures refresh daily and after QuickBooks changes.</small>
+      </div>
+      <div className="rows" aria-label="Daily books">
+        {!items && !error && <p role="status" className="empty">Checking captures…</p>}
+        {error && <p role="alert" className="empty">{error}</p>}
+        {items && open.length === 0 && <p className="empty">No new exceptions since the last review.</p>}
+        {open.map((item) => (
+          <div className="row" key={item.close_id}>
+            <span className="row-main">
+              <Avatar label={item.entity} />
+              <span>
+                <strong>{item.entity} · {item.period}</strong>
+                <small>
+                  {item.new.length} new of {item.total} · captured {new Date(item.captured_at).toLocaleString()}
+                  {item.requested_by === "quickbooks-change-hint" ? " after a QuickBooks change" : ""}
+                </small>
+              </span>
+            </span>
+            <small>{item.new.slice(0, 2).map((e) => e.question).join(" ")}</small>
+            <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open exceptions</Link>
+            <button type="button" disabled={busy === item.close_id} onClick={() => void reviewed(item)}>
+              Mark reviewed
+            </button>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
