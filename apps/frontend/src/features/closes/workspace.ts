@@ -1,9 +1,21 @@
+import { useSyncExternalStore } from "react";
 import { authenticationHeaders, authKitClientId } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
 // Kept in memory only. Refreshing requires unlocking again; never bake a token into frontend config.
 let token = "";
+const listeners = new Set<() => void>();
 export function unlock(value: string) {
   token = value;
+  listeners.forEach((listener) => listener());
+}
+export function useUnlocked() {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => token !== "",
+  );
 }
 export async function workspaceRequest(
   path: string,

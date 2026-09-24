@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 
 type Review = {
@@ -17,10 +18,12 @@ export function ReviewDecision({
   closeId,
   paperId,
   onChange,
+  autoLoad = false,
 }: {
   closeId: string;
   paperId: string;
   onChange: () => void;
+  autoLoad?: boolean;
 }) {
   const [review, setReview] = useState<Review>();
   const [comparison, setComparison] = useState<{
@@ -46,6 +49,9 @@ export function ReviewDecision({
       setBusy(false);
     }
   }
+  useEffect(() => {
+    if (autoLoad) void load();
+  }, [autoLoad]);
   async function decide(decision: string) {
     if (!review) return;
     setBusy(true);
@@ -57,7 +63,9 @@ export function ReviewDecision({
         digest: review.digest,
         expected_review_id: review.review_id,
       });
+      setNote("");
       onChange();
+      if (autoLoad) void load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save decision.");
     } finally {
@@ -72,9 +80,11 @@ export function ReviewDecision({
         posting or sign off the close. Local-token decisions are attributed to
         the shared development workspace.
       </p>
-      <button disabled={busy} onClick={() => void load()}>
-        {review ? "Reload review" : "Review decision and history"}
-      </button>
+      {!autoLoad && (
+        <button disabled={busy} onClick={() => void load()}>
+          {review ? "Reload review" : "Review decision and history"}
+        </button>
+      )}
       {error && <p role="alert">{error}</p>}
       {review && (
         <>
@@ -140,9 +150,9 @@ export function ReviewDecision({
             </section>
           )}
           <p>
-            <a href="#client-request">
+            <Link to={`/dashboard/closes/${closeId}?tab=requests#client-request`}>
               Draft a consolidated request for information
-            </a>
+            </Link>
           </p>
           <label>
             Review note

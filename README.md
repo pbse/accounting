@@ -90,7 +90,11 @@ The frontend is one SPA with separate public and product features:
 - `/`: marketing homepage (`src/features/marketing`).
 - `/contact`: reach-out page; contact details intentionally unset.
 - `/login`: sign-in landing page (`src/features/auth`); AuthKit sign-in when configured; credentials are handled by WorkOS.
-- `/dashboard`, `/dashboard/close`, `/dashboard/review`: product workspace (`src/features/dashboard` and `review`).
+- `/dashboard`: Work — decisions, a cross-client review queue, re-review and the agent command (`src/features/closes/Work.tsx`).
+- `/dashboard/closes`, `/dashboard/closes/:id?tab=…`: client closes and one close split into Overview, Workpapers, Evidence, Requests, Close & sign-off and Settings.
+- `/dashboard/closes/:id/workpapers/:paperId`: review canvas — linked evidence with cited lines beside the calculation and the decision.
+- `/dashboard/firm`: firm membership, client access, email sender and operations.
+- `/dashboard/close`, `/dashboard/review`: labeled synthetic examples.
 
 React Router handles links and browser history; Cloudflare's existing SPA fallback supports direct URL loads. The dashboard is loaded separately from marketing and only it requests workpaper data. Reference pages are public synthetic examples. Saved client data requires the private workspace token.
 

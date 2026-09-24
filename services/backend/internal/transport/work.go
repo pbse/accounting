@@ -8,6 +8,7 @@ import (
 	"net/mail"
 	"slices"
 	"strings"
+	"time"
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/prepaids"
@@ -28,9 +29,49 @@ const workSelect = `SELECT j.id::text,j.close_id::text,c.entity,c.period,j.state
   SELECT jsonb_array_elements_text(COALESCE(w.paper->'blockers','[]'::jsonb)) AS problem FROM workpaper_review_state w WHERE w.close_id=j.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text)
   UNION ALL SELECT 'Draft #'||w.id||': '||replace(w.review_state,'_',' ') FROM workpaper_review_state w WHERE w.close_id=j.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND w.review_state IN ('source_changed','changes_requested')
  UNION ALL SELECT 'Email delivery: '||m.state||' / '||m.delivery||'. '||m.error FROM email_delivery m JOIN work_requests q ON q.id=m.request_id WHERE EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND rj.job_id=j.id) AND (m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))
- ) issues),'[]'::jsonb) FROM preparation_jobs j LEFT JOIN preparation_intakes i ON i.job_id=j.id JOIN client_closes c ON c.id=j.close_id LEFT JOIN evidence e ON e.id=i.source_id`
+ ) issues),'[]'::jsonb)` + workFrom
+
+const workFrom = ` FROM preparation_jobs j LEFT JOIN preparation_intakes i ON i.job_id=j.id JOIN client_closes c ON c.id=j.close_id LEFT JOIN evidence e ON e.id=i.source_id`
+const workScope = `c.organization_id=$3 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$5 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($1='' OR j.close_id::text=$1) AND ($2='' OR c.entity ILIKE '%'||$2||'%' OR c.period=$2)`
+
+var workViews = []string{"active", "needs_confirmation", "blocked", "running", "waiting_client", "completed", "all"}
 
 func registerWork(mux *http.ServeMux, db *sql.DB) {
+	// Drafts an accountant can approve now. The review view already marks revised predecessors as changed.
+	mux.HandleFunc("GET /v1/closes/review-queue", func(w http.ResponseWriter, r *http.Request) {
+		search := strings.TrimSpace(r.URL.Query().Get("client"))
+		if len(search) > 200 {
+			problem(w, 422, "Client search is too long.")
+			return
+		}
+		where := ` FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4) AND w.review_state='pending' AND jsonb_array_length(COALESCE(w.paper->'sources','[]'))>0 AND jsonb_array_length(COALESCE(w.paper->'blockers','[]'))=0`
+		var count int
+		if err := db.QueryRowContext(r.Context(), `SELECT count(*)`+where, organization(r), firmAccess(r), subject(r), search).Scan(&count); err != nil {
+			problem(w, 503, "Review queue unavailable.")
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.created_at`+where+` ORDER BY w.id DESC LIMIT 100`, organization(r), firmAccess(r), subject(r), search)
+		if err != nil {
+			problem(w, 503, "Review queue unavailable.")
+			return
+		}
+		defer rows.Close()
+		items := []map[string]any{}
+		for rows.Next() {
+			var id, closeID, entity, period, kind string
+			var created time.Time
+			if err := rows.Scan(&id, &closeID, &entity, &period, &kind, &created); err != nil {
+				problem(w, 503, "Review queue unavailable.")
+				return
+			}
+			items = append(items, map[string]any{"workpaper_id": id, "close_id": closeID, "entity": entity, "period": period, "kind": kind, "created_at": created})
+		}
+		if rows.Err() != nil {
+			problem(w, 503, "Review queue unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"items": items, "count": count})
+	})
 	mux.HandleFunc("GET /v1/closes/dependencies", func(w http.ResponseWriter, r *http.Request) {
 		search := strings.TrimSpace(r.URL.Query().Get("client"))
 		if len(search) > 200 {
@@ -67,24 +108,18 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		if view == "" {
 			view = "all"
 		}
-		predicate := ""
 		issues := `EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=j.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND (w.review_state IN ('source_changed','changes_requested') OR jsonb_array_length(COALESCE(w.paper->'blockers','[]'))>0))`
-		switch view {
-		case "all":
-			predicate = "true"
-		case "active":
-			predicate = "j.state NOT IN ('completed','cancelled') OR " + issues
-		case "needs_confirmation":
-			predicate = "j.state='needs_confirmation'"
-		case "blocked":
-			predicate = "j.state='failed' OR e.superseded_by IS NOT NULL OR i.proposal->>'kind'='unsupported' OR EXISTS(SELECT 1 FROM email_delivery m JOIN work_requests q ON q.id=m.request_id WHERE EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND rj.job_id=j.id) AND (m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))) OR " + issues
-		case "running":
-			predicate = "j.state IN ('waiting_evidence','interpreting','queued')"
-		case "waiting_client":
-			predicate = "j.state='waiting_client'"
-		case "completed":
-			predicate = "j.state='completed'"
-		default:
+		predicates := map[string]string{
+			"active":             "j.state NOT IN ('completed','cancelled') OR " + issues,
+			"needs_confirmation": "j.state='needs_confirmation'",
+			"blocked":            "j.state='failed' OR e.superseded_by IS NOT NULL OR i.proposal->>'kind'='unsupported' OR EXISTS(SELECT 1 FROM email_delivery m JOIN work_requests q ON q.id=m.request_id WHERE EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND rj.job_id=j.id) AND (m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))) OR " + issues,
+			"running":            "j.state IN ('waiting_evidence','interpreting','queued')",
+			"waiting_client":     "j.state='waiting_client'",
+			"completed":          "j.state='completed'",
+			"all":                "true",
+		}
+		predicate, ok := predicates[view]
+		if !ok {
 			problem(w, 422, "Unknown inbox view.")
 			return
 		}
@@ -93,7 +128,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Client search is too long.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), workSelect+` WHERE c.organization_id=$3 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$5 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($1='' OR j.close_id::text=$1) AND ($2='' OR c.entity ILIKE '%'||$2||'%' OR c.period=$2) AND (`+predicate+`) ORDER BY CASE WHEN j.state IN ('needs_confirmation','failed') THEN 0 WHEN j.state='waiting_client' THEN 1 WHEN j.state IN ('waiting_evidence','interpreting','queued') THEN 2 ELSE 3 END,j.id DESC LIMIT 101`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r))
+		rows, err := db.QueryContext(r.Context(), workSelect+` WHERE `+workScope+` AND (`+predicate+`) ORDER BY CASE WHEN j.state IN ('needs_confirmation','failed') THEN 0 WHEN j.state='waiting_client' THEN 1 WHEN j.state IN ('waiting_evidence','interpreting','queued') THEN 2 ELSE 3 END,j.id DESC LIMIT 101`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r))
 		if err != nil {
 			problem(w, 503, "Work inbox unavailable.")
 			return
@@ -119,7 +154,21 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		if more {
 			items = items[:100]
 		}
-		jsonReply(w, 200, map[string]any{"items": items, "has_more": more})
+		filters := make([]string, len(workViews))
+		totals := make([]any, len(workViews))
+		for i, name := range workViews {
+			filters[i] = "count(*) FILTER (WHERE " + predicates[name] + ")"
+			totals[i] = new(int)
+		}
+		if err = db.QueryRowContext(r.Context(), `SELECT `+strings.Join(filters, ",")+workFrom+` WHERE `+workScope, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r)).Scan(totals...); err != nil {
+			problem(w, 503, "Could not count work.")
+			return
+		}
+		counts := map[string]int{}
+		for i, name := range workViews {
+			counts[name] = *totals[i].(*int)
+		}
+		jsonReply(w, 200, map[string]any{"items": items, "has_more": more, "counts": counts})
 	}
 	mux.HandleFunc("GET /v1/closes/work", read)
 	mux.HandleFunc("GET /v1/closes/{id}/work", read)
