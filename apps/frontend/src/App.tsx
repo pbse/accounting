@@ -10,6 +10,7 @@ import { EffortTracker } from "./features/closes/Effort";
 const ClientRequest = lazy(() => import("./features/closes/ClientRequest"));
 const WorkspaceLayout = lazy(() => import("./features/dashboard/Layout"));
 const AccrualPreparation = lazy(() => import("./features/accruals/Prepare"));
+const LoanPreparation = lazy(() => import("./features/loans/Prepare"));
 const PrepaidPreparation = lazy(() => import("./features/prepaids/Prepare"));
 const ClosesList = lazy(() => import("./features/closes/ClosesList"));
 const ClientClose = lazy(() => import("./features/closes/ClientClose"));
@@ -74,6 +75,7 @@ export function App() {
             <Route path="reconciliations/new" element={<CloseScoped><Reconciliation /></CloseScoped>} />
             <Route path="settlements/new" element={<CloseScoped><Settlement /></CloseScoped>} />
             <Route path="accruals/new" element={<CloseScoped><AccrualPreparation /></CloseScoped>} />
+            <Route path="loans/new" element={<CloseScoped><LoanPreparation /></CloseScoped>} />
             <Route path="prepaids/new" element={<CloseScoped><PrepaidPreparation /></CloseScoped>} />
           </Route>
         </Routes>

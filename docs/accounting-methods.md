@@ -68,6 +68,19 @@ Example: supported liability $1,200, booked $200 → debit expense / credit liab
 
 The local agent recognizes exact labeled facts. To propose an accrual locally, put `Preparation kind: accrual` on its own line in the primary source, followed by labels such as `Amount:`, `Service start:`, `Service end:`, `Currency:`, `Expense account:`, `Liability account:`, `Booked balance:`, `Booking reference:` and `Estimation basis:`. This classifies a proposal only. OpenAI interpretation supports the same fields with verified citations when configured. Neither path accepts approval flags from document text; conflicting candidates remain visible for review.
 
+## Loan schedules
+
+**Loan schedule** (`/dashboard/loans/new`, method `lender_statement_v1`) checks one month of a loan against the lender's statement.
+
+- **The lender's split is used as stated.** Each payment's principal and interest come from the statement. Interest is recomputed from the note's rate and exact day-count (Actual/360, Actual/365, 30/360 bond basis or 30E/360) on the principal outstanding for (previous paid-through date, payment date]. Any difference becomes a question ("check for a rate change, fees or a different day-count"); the split is never changed.
+- **The statement must tie.** If opening principal less principal paid does not equal the lender's closing principal, the draft is blocked.
+- **A book-vs-lender difference is a question, never an entry.** Nothing proves the difference is interest; the preparer finds the cause first.
+- **Proposed entries, dated month-end, never posted:**
+  - Accrued interest from the last paid-through date to month-end on the closing principal, less the booked accrued interest, when the preparer chooses to accrue (accrual-basis clients).
+  - Current portion reclassification to the principal due in the next 12 months (capped at the balance), from the lender's amortization schedule, only when the preparer confirms this is a reclassification month and the loan and current portion accounts together equal the lender's balance.
+- **Per-client enablement.** Loan drafts save only when the client's effective procedure (a firm default or a client override under **Approved procedures and client overrides**) enables loan schedules with this method. A disabled client override stops new loan drafts for that client even when the firm default is on. The procedure's instructions carry the firm's cadence and fee treatment.
+- Drafts with any proposed entry are reviewed individually, never in bulk. Variable rates within a month, fees and debt issuance costs, and posting to QuickBooks are not supported.
+
 ## Review, carry-forward and posting boundaries
 
 Saved drafts retain method, example confirmation, credit/balance references, selected evidence revisions and any reversal proposal. The ZIP package includes their inputs and calculation outputs; prepaid CSV adds a credit column. Source changes invalidate reviews through the same existing path.

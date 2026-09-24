@@ -3,6 +3,7 @@ package transport
 import (
 	"archive/zip"
 	"bytes"
+	"close.local/backend/internal/loans"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -413,6 +414,24 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 				records = append(records, []string{item.Side, csvText(item.ID), item.Kind, csvText(strings.Join(item.CandidateIDs, "; ")), fmt.Sprint(item.CandidateCount), csvText(strings.Join(groups, "; ")), fmt.Sprint(item.GroupCount), csvText(strings.Join(splits, "; ")), fmt.Sprint(item.SplitCount), csvText(item.Question)})
 			}
 			if err = csvFile(root+"-exceptions.csv", records); err != nil {
+				return nil, err
+			}
+		case "loan":
+			var paper loans.Workpaper
+			if err = json.Unmarshal(saved.Paper, &paper); err != nil {
+				return nil, err
+			}
+			summary.Source = paper.Input.SourceReference + " / " + paper.Input.AgreementReference
+			summary.Method = paper.Method + " · " + loans.DayCounts[paper.Input.DayCount]
+			summary.Issues = append(append([]string{"The lender statement's principal/interest split is authoritative; recomputed interest only raises questions. Proposed entries are not posted."}, paper.Blockers...), paper.Questions...)
+			for _, entry := range paper.Proposals {
+				summary.Issues = append(summary.Issues, fmt.Sprintf("Proposed %s: Dr %s / Cr %s %s USD", entry.Date, entry.DebitAccount, entry.CreditAccount, entry.Amount))
+			}
+			records := [][]string{{"Payment date", "Principal before USD", "Days", "Principal USD", "Lender interest USD", "Note-rate interest USD", "Difference USD"}}
+			for _, row := range paper.Schedule {
+				records = append(records, []string{row.Date, row.PrincipalBefore, fmt.Sprint(row.Days), row.Principal, row.Interest, row.ExpectedInterest, row.Difference})
+			}
+			if err = csvFile(root+"-payments.csv", records); err != nil {
 				return nil, err
 			}
 		case "settlement":

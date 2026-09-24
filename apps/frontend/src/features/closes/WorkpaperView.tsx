@@ -4,11 +4,13 @@ import type { AccrualWorkpaper } from "../../../../../packages/contracts/accrual
 import type { PrepaidWorkpaper } from "../../../../../packages/contracts/prepaid";
 import type { ReconciliationWorkpaper } from "../../../../../packages/contracts/reconciliation";
 import type { SettlementWorkpaper } from "../../../../../packages/contracts/settlement";
+import type { LoanWorkpaper } from "../../../../../packages/contracts/loan";
 import { AccrualResult } from "../accruals/Prepare";
 import { EffortTracker } from "./Effort";
 import { Icon } from "../dashboard/Icon";
 import { ReconciliationResult } from "../reconciliation/Prepare";
 import { SettlementResult } from "../settlements/Prepare";
+import { LoanResult } from "../loans/Prepare";
 import type { Source } from "./Evidence";
 import type { Plan } from "./Planning";
 import { Posting, ProductionPosting } from "./Posting";
@@ -23,10 +25,11 @@ export type Paper = { id: string; created_at: string; review_state: string } & (
   | Saved<"accrual", AccrualWorkpaper>
   | Saved<"reconciliation", ReconciliationWorkpaper>
   | Saved<"settlement", SettlementWorkpaper>
+  | Saved<"loan", LoanWorkpaper>
 );
 
-export const paperLabels = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement" };
-export const paperPaths = { prepaid: "prepaids", accrual: "accruals", reconciliation: "reconciliations", settlement: "settlements" };
+export const paperLabels = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", loan: "Loan schedule" };
+export const paperPaths = { prepaid: "prepaids", accrual: "accruals", reconciliation: "reconciliations", settlement: "settlements", loan: "loans" };
 const reviewLabels: Record<string, [string, string]> = {
   pending: ["Awaiting review", "pill muted"],
   approved: ["Approved", "pill"],
@@ -189,6 +192,7 @@ function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[]
 export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
   if (saved.kind === "settlement") return <SettlementResult result={saved.paper} />;
   if (saved.kind === "accrual") return <AccrualResult result={saved.paper} />;
+  if (saved.kind === "loan") return <LoanResult result={saved.paper} />;
   if (saved.kind === "reconciliation") return <ReconciliationResult result={saved.paper} />;
   const paper = saved.paper;
   return (

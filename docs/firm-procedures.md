@@ -1,6 +1,6 @@
 # Approved procedures and client accounting authority
 
-The client’s accounting professional approves accounting treatment. This feature records approved instructions and optional account names for the existing supported prepaid and reconciliation methods. It does not enable new arithmetic methods, invent materiality thresholds or treat instructions as proof of ledger booking.
+The client’s accounting professional approves accounting treatment. This feature records approved instructions and optional account names for the supported prepaid, accrual and reconciliation methods, and enables loan schedules per client (a loan procedure pins the `lender_statement_v1` method; see accounting-methods.md). It does not enable new arithmetic methods, invent materiality thresholds or treat instructions as proof of ledger booking.
 
 ## Use the flow
 

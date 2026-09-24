@@ -66,6 +66,9 @@ function PrepareActions({ close }: { close: Close }) {
       <Link className="button" to={`/dashboard/accruals/new?${query}`}>
         Accrued expense
       </Link>
+      <Link className="button" to={`/dashboard/loans/new?${query}`}>
+        Loan schedule
+      </Link>
       <Link className="button" to={`/dashboard/reconciliations/new?${query}`}>
         Statement reconciliation
       </Link>

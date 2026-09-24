@@ -1390,3 +1390,9 @@ a.row:hover {
 .app-shell .planning select {
   width: 11rem;
 }
+.table-scroll {
+  overflow-x: auto;
+}
+.table-scroll td {
+  white-space: nowrap;
+}

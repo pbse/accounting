@@ -3,6 +3,7 @@ package preparation
 
 import (
 	"bytes"
+	"close.local/backend/internal/loans"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -91,6 +92,19 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 			return nil, fmt.Errorf("Client and period must match this close")
 		}
 		paper, err := reconciliation.Prepare(in)
+		if err != nil {
+			return nil, err
+		}
+		value = paper
+	case "loan":
+		var in loans.Input
+		if err := Strict(p.Input, &in); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(in.Entity) != entity || in.ClosePeriod != period || p.CarryForward != nil || p.RecurringAccrual != nil {
+			return nil, fmt.Errorf("Client and period must match this close")
+		}
+		paper, err := loans.Prepare(in)
 		if err != nil {
 			return nil, err
 		}

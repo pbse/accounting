@@ -1,6 +1,7 @@
 package preparation
 
 import (
+	"close.local/backend/internal/loans"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -31,6 +32,17 @@ func CurrentProcedure(ctx context.Context, tx *sql.Tx, closeID, kind string) (Pr
 func CheckProcedureMethod(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID, kind string, paper []byte) error {
+	if kind == "loan" {
+		var enabled bool
+		var approved string
+		err := q.QueryRowContext(ctx, `SELECT p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='loan' AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID).Scan(&enabled, &approved)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == sql.ErrNoRows || !enabled || approved != loans.Method {
+			return fmt.Errorf("Loan schedules need the firm's approved loan procedure for this client (a firm default or client override) before drafts are saved")
+		}
+	}
 	var method string
 	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT p.method FROM evidence e JOIN procedure_versions p ON p.id=e.procedure_id WHERE e.close_id::text=$1 AND p.kind=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1),(SELECT p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1),'')`, closeID, kind).Scan(&method)
 	if err != nil || method == "" {
