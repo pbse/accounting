@@ -27,6 +27,10 @@ func main() {
 		log.Fatal(err)
 	}
 	defer tx.Rollback()
+	// Row-level security admits every firm only when this operator transaction says so.
+	if _, err = tx.ExecContext(ctx, `SELECT set_config('app.organization','*',true)`); err != nil {
+		log.Fatal(err)
+	}
 	if _, err = tx.ExecContext(ctx, `LOCK TABLE quickbooks_connections,email_connections,email_outbox IN ACCESS EXCLUSIVE MODE`); err != nil {
 		log.Fatal("Could not isolate rotation; no changes committed: ", err)
 	}

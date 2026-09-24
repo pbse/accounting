@@ -78,7 +78,7 @@ Follow [deployment](deployment.md) and [AuthKit/sandbox setup](auth-sandbox-stag
 
 Before admitting client data, verify with **two** hosted organizations: sign-in, same-named client/month creation, denied cross-firm URLs, isolated Work, upload/extraction, preparation, review, client reply, carry-forward and export. Restart the worker mid-job and verify one durable outcome. Then rehearse database restore and verify access isolation again. Local mocks and a successful deployment are not substitutes for these checks.
 
-Current controls include application-enforced organization ownership, authenticated roles and membership, same-close source validation, durable jobs, malware-scanning gates, firm resource caps, deletion preview/holds and an operational snapshot. Optional webhook alert delivery is implemented; PostgreSQL row-level security, contractual backup expiry and hosted recovery verification remain outstanding. Do not treat this guide or code as enterprise certification. See [operations and recovery](operations.md).
+Current controls include application-enforced organization ownership, authenticated roles and membership, same-close source validation, durable jobs, malware-scanning gates, firm resource caps, deletion preview/holds and an operational snapshot. Optional webhook alert delivery and PostgreSQL row-level security for the runtime role are implemented; contractual backup expiry and hosted recovery verification remain outstanding. Do not treat this guide or code as enterprise certification. See [operations and recovery](operations.md).
 
 ## Troubleshooting
 

@@ -39,7 +39,7 @@ The table above records delivered slices, not full PRD coverage. The remaining *
 | COM-01/02 | Cloudflare Email Routing can hold text replies from approved outbound messages and requires reviewer release; unmatched senders cannot resume work. Real sender and routing activation remain unverified. |
 | ACT-01/02, PKG-01/02 | A reviewed current-period supplier credit can create one sandbox QuickBooks VendorCredit with exact vendor/accounts and canonical readback; production authority remains separate. Recurring accruals refresh, and the binder now includes portable PDF workpapers. Other native corrections still need approved rules and provider validation. |
 | §7, §15, Appendix C | Work recognizes bounded natural-language view, explanation, rehearsal and up-to-10-close action phrases, with the existing per-close confirmation boundary. Agent attempts expose durable evidence-selection checkpoints and token counts. Open-ended model intent and scoped MCP access remain separate. |
-| Appendix E | Durable minimal-metadata webhook alert attempts, offline key rotation and the existing synthetic restore rehearsal are code-backed. Database RLS, backup expiry verification, hosted alert/restore activation and provider reconciliation still require work. |
+| Appendix E | Durable minimal-metadata webhook alert attempts, offline key rotation and the existing synthetic restore rehearsal are code-backed. Row-level security for the API and worker runtime role is enforced (migration 047). Backup expiry verification needs a provisioned PostgreSQL provider and its retention contract; hosted alert/restore activation and provider reconciliation still require work. |
 
 The later **R3** code remains:
 

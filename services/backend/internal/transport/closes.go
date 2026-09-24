@@ -424,7 +424,7 @@ func ConfiguredAPI() (http.Handler, func(), error) {
 	} else if len(os.Getenv("WORKSPACE_TOKEN")) < 32 {
 		return nil, nil, fmt.Errorf("WORKSPACE_TOKEN must contain at least 32 characters when DATABASE_URL is set")
 	}
-	db, err := sql.Open("pgx", url)
+	db, err := OpenTenantDB(url, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid database configuration")
 	}

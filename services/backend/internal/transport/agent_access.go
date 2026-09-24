@@ -8,11 +8,14 @@ import (
 	"strings"
 
 	"close.local/backend/internal/auth"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // agentGrant returns the member's approved agent scope while their membership is unchanged.
 // Agents see only the member's assigned clients; firm-wide access is never extended to them.
 func agentGrant(ctx context.Context, db *sql.DB, org, subject string) (scope string, err error) {
+	// The token is verified but not yet a workspace actor; read only that firm's grant.
+	ctx = auth.WithActor(ctx, &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org})
 	err = db.QueryRowContext(ctx, `SELECT scope FROM effective_agent_access WHERE organization_id=$1 AND subject=$2`, org, subject).Scan(&scope)
 	if err == sql.ErrNoRows {
 		return "", nil

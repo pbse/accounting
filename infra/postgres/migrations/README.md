@@ -25,3 +25,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `036_procedure_model_drafting.sql` records whether a proposal came from the local prompt or the configured OpenAI model. Apply after 035 before deploying model drafting. It does not activate, revise or approve any existing rule.
 
 `037_settlements.sql` permits Stripe settlement drafts. Apply after 036 with API/worker stopped; `/readyz` checks it. See [settlement reconciliation](../../../docs/settlement-reconciliation.md).
+
+`047_row_level_security.sql` enables row-level security on every public table and sets every public view to check it as the caller. Apply with API/worker stopped, as the owning role; run API and worker as a separate non-owner role without superuser or BYPASSRLS. `/readyz` checks the migration, and hosted readiness checks the runtime role. See [operations](../../../docs/operations.md#row-level-security).
