@@ -95,6 +95,8 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		}
 	} else if p.Kind == "accrual" {
 		text += "Supported method: fixed_incurred_amount_v1 or actual_invoice_true_up_v1. Cite the prior estimate and actual invoice; the true-up requires the client accountant's approved rule reference. Confirm incurred amount, booked liability and reversal choice; never infer estimates.\n"
+	} else if p.Kind == "loan" {
+		text += "Supported method: lender_statement_v1. The lender statement's principal/interest split is authoritative; recomputed interest raises questions. Accrued interest and current portion entries need the preparer's per-draft choices and balances that tie to the lender.\n"
 	} else {
 		text += "Supported methods: exact_bank_month_v1 uses positive deposits; card_liability_month_v1 uses positive charges and negative payments/credits under a cited accountant-approved card rule. Both begin with unique exact-date and signed-amount CSV candidates. Grouped matches, net splits, tolerances, timing and clearing items, and transfers require cited accountant-approved rules and source review. Native reconciliation status is separately observed.\n"
 	}

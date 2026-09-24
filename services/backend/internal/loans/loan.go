@@ -277,6 +277,9 @@ func Prepare(in Input) (Workpaper, error) {
 		}
 		result.Questions = append(result.Questions, fmt.Sprintf("The ledger shows $%s %s loan principal than the lender's statement. Find the cause (a payment booked to another account, a missing payment or fees) before any adjustment; nothing is proposed for it.", prepaids.Money(max(difference, -difference)), more))
 	}
+	if len(result.Blockers) > 0 {
+		result.Proposals = []prepaids.Adjustment{}
+	}
 	result.Input = in
 	return result, nil
 }

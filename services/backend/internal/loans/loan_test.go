@@ -48,7 +48,7 @@ func TestLenderSplitIsCheckedAndOnlySupportedEntriesAreProposed(t *testing.T) {
 
 	in = base()
 	in.ClosingPrincipal = "118100.00"
-	if paper, err = Prepare(in); err != nil || len(paper.Blockers) != 1 || !strings.Contains(paper.Blockers[0], "does not tie") {
+	if paper, err = Prepare(in); err != nil || len(paper.Blockers) != 1 || !strings.Contains(paper.Blockers[0], "does not tie") || len(paper.Proposals) != 0 {
 		t.Fatalf("an untied statement must block: %v %+v", err, paper.Blockers)
 	}
 	in = base()

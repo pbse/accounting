@@ -73,7 +73,7 @@ The local agent recognizes exact labeled facts. To propose an accrual locally, p
 **Loan schedule** (`/dashboard/loans/new`, method `lender_statement_v1`) checks one month of a loan against the lender's statement.
 
 - **The lender's split is used as stated.** Each payment's principal and interest come from the statement. Interest is recomputed from the note's rate and exact day-count (Actual/360, Actual/365, 30/360 bond basis or 30E/360) on the principal outstanding for (previous paid-through date, payment date]. Any difference becomes a question ("check for a rate change, fees or a different day-count"); the split is never changed.
-- **The statement must tie.** If opening principal less principal paid does not equal the lender's closing principal, the draft is blocked.
+- **The statement must tie.** If opening principal less principal paid does not equal the lender's closing principal, the draft is blocked and no entry is proposed.
 - **A book-vs-lender difference is a question, never an entry.** Nothing proves the difference is interest; the preparer finds the cause first.
 - **Proposed entries, dated month-end, never posted:**
   - Accrued interest from the last paid-through date to month-end on the closing principal, less the booked accrued interest, when the preparer chooses to accrue (accrual-basis clients).
