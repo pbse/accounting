@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
+import { LedgerSelection } from "./Coverage";
 
 type Found = {
   type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding" | "past_due_receivable" | "past_due_payable";
@@ -12,7 +13,7 @@ type Found = {
   next_step: string;
   question: string;
 };
-type Balance = { account_id: string; account: string; side: string; amount: string; currency: string; finding: string; next_step: string; question: string };
+type Balance = { type: "abnormal_balance" | "holding_balance"; account_id: string; account: string; side: string; amount: string; currency: string; finding: string; next_step: string; question: string };
 type Scan = {
   capture: { id: string; evidence_id: string; finished_at: string } | null;
   scanned?: number;
@@ -108,11 +109,12 @@ export function Exceptions({ closeId }: { closeId: string }) {
           )}
         </>
       )}
-      <h3>Balances opposite their normal side</h3>
+      <h3>Balances to review</h3>
       {!balances.snapshot ? (
         <p className="empty">
           Capture a period snapshot on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every Trial Balance account for a
-          balance opposite its normal side, such as a credit in receivables or an overdrawn bank account.
+          balance opposite its normal side, such as a credit in receivables or an overdrawn bank account, and for suspense, clearing,
+          undeposited-funds or uncategorized accounts that still hold a balance.
         </p>
       ) : (
         <>
@@ -126,7 +128,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
           {balances.error ? (
             <p role="alert">The agent could not read this Trial Balance: {balances.error}.</p>
           ) : balances.items.length === 0 ? (
-            <p className="empty">Every classified account in this Trial Balance sits on its normal side.</p>
+            <p className="empty">Every classified account in this Trial Balance sits on its normal side, and no holding or clearing account carries a balance.</p>
           ) : (
             <div className="rows">
               <div className="rows-head">
@@ -138,9 +140,15 @@ export function Exceptions({ closeId }: { closeId: string }) {
               {balances.items.map((item) => (
                 <div className="row" key={item.account_id}>
                   <div>
-                    <span className="status warn">Abnormal balance</span>
+                    <span className="status warn">{item.type === "holding_balance" ? "Needs reconciliation" : "Abnormal balance"}</span>
                     <p>{item.finding}</p>
                     <small>{item.next_step}</small>
+                    {item.type === "holding_balance" && balances.snapshot?.source === "quickbooks" && (
+                      <details>
+                        <summary>This month's ledger rows in {item.account}</summary>
+                        <LedgerSelection closeId={closeId} snapshotId={balances.snapshot.id} accountId={item.account_id} stale={balances.snapshot.stale} suggestions={[]} />
+                      </details>
+                    )}
                   </div>
                   <span>{item.question}</span>
                   <small>

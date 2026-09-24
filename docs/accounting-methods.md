@@ -56,6 +56,15 @@ The accountant chooses one of two explicit treatments for the effective close mo
 
 Synthetic example: $100 allocated equally over January–March 2028 produces January expense $33.33. A February full refund shows $66.67 refunded, February expense $0 and prepaid $0. A February cancellation without refund shows February expense $66.67 and prepaid $0; if the booked prepaid debit balance is $66.67, the proposed write-off is $66.67. Both examples require client-accountant approval before use.
 
+## Deferred revenue and depreciation
+
+Both use the prepaid schedule's straight-line math (equal full months or actual days, cents rounded down, residual in the final month) under the client's approved prepaid method. Open them from **Deferred revenue** or **Depreciation** on the close page.
+
+- **Deferred revenue**: the amount billed in advance over the contract's service period, between a revenue account and a deferred revenue liability. The entry recognizes the earned month: 12,000 billed for September 2026–August 2027 with 12,000 booked proposes debit deferred revenue, credit revenue 1,000 at September 30. A blank booked balance means the invoice was booked straight to revenue, so the unearned part is deferred. Customer credits and cancellations work as they do for prepaids.
+- **Depreciation**: straight-line depreciation of an asset's cost less any salvage value, between depreciation expense and accumulated depreciation. Equal months use the full-month convention (start on the first day of the in-service month); the end is the last day of the useful life, inclusive. The booked accumulated depreciation is required, including an explicit 0.00. A 3,600 laptop over September 2026–August 2029 depreciates 100.00 a month, or 90.00 with a 360 salvage value. Disposals, impairments and other conventions are not supported.
+
+Carry-forward and **Refresh recurring schedules** work for both; the refresh reads the client's DeferredRevenue or AccumulatedDepreciation account from the Trial Balance. Both stay draft-only: book the approved entry in the ledger.
+
 ## Fixed incurred accruals
 
 `fixed_incurred_amount_v1` prepares a supported **closing accrued liability**, not an automatic estimate from a missing invoice. Supply service start/end, completed by close month-end; the evidence/approved estimation basis; target liability; current booked liability credit balance (explicit zero is allowed); ledger reference; and distinct expense/liability accounts.

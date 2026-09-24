@@ -353,12 +353,12 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			}
 			json.Unmarshal(saved.Paper, &carried)
 			summary.Source = paper.Input.SourceReference
-			summary.Method = paper.Input.Method
+			summary.Method = strings.TrimPrefix(paper.Input.Schedule+" · "+paper.Input.Method, " · ")
 			summary.Issues = []string{paper.Input.Currency + " accrual basis; selected method, any credit and booked balance are user-confirmed. Review all ledger and credit evidence.", "Draft calculation; not firm approval or authorization to post."}
 			if carried.CarryForward != nil {
-				summary.Issues = []string{"Carried schedule only; opening scheduled prepaid balance " + carried.CarryForward.OpeningBalance + " " + paper.Input.Currency + " is not a verified ledger balance.", "Prior-period draft #" + carried.CarryForward.PaperID + " from close #" + carried.CarryForward.CloseID + "; fresh review required. No journal proposal or inherited approval."}
+				summary.Issues = []string{"Carried schedule only; opening scheduled balance " + carried.CarryForward.OpeningBalance + " " + paper.Input.Currency + " is not a verified ledger balance.", "Prior-period draft #" + carried.CarryForward.PaperID + " from close #" + carried.CarryForward.CloseID + "; fresh review required. No journal proposal or inherited approval."}
 			}
-			records := [][]string{{"Period", "Expense " + paper.Input.Currency, "Remaining " + paper.Input.Currency, "Credit " + paper.Input.Currency}}
+			records := [][]string{{"Period", map[string]string{"": "Expense", prepaids.DeferredRevenue: "Revenue", prepaids.Depreciation: "Depreciation"}[paper.Input.Schedule] + " " + paper.Input.Currency, "Remaining " + paper.Input.Currency, "Credit " + paper.Input.Currency}}
 			for _, row := range paper.Schedule {
 				records = append(records, []string{row.Period, row.Expense, row.Remaining, row.Credit})
 			}

@@ -21,7 +21,7 @@ import { EffortCard, EffortTracker, type Activity } from "./Effort";
 import { PlanChips, PlanningControls } from "./Planning";
 import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
-import { needsAttention, paperLabels, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
+import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
 
 const tabs = [
   ["overview", "Overview"],
@@ -77,6 +77,12 @@ function PrepareActions({ close }: { close: Close }) {
           </Link>
           <Link className="button" to={`/dashboard/accruals/new?${query}`}>
             Accrued expense
+          </Link>
+          <Link className="button" to={`/dashboard/prepaids/new?${query}&schedule=deferred_revenue`}>
+            Deferred revenue
+          </Link>
+          <Link className="button" to={`/dashboard/prepaids/new?${query}&schedule=depreciation`}>
+            Depreciation
           </Link>
         </>
       )}
@@ -241,7 +247,7 @@ export default function ClientClose() {
                     <Icon name="file" size={16} />
                   </span>
                   <span>
-                    <strong>{paperLabels[paper.kind]}</strong>
+                    <strong>{paperLabel(paper)}</strong>
                     <small>
                       Draft #{paper.id}
                       {paper.paper.revises ? ` · revises #${paper.paper.revises}` : ""}
