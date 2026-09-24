@@ -8,6 +8,8 @@ export class CapabilityAPI extends Container<Env> {
     TEXT_SCANNER_URL: this.env.TEXT_SCANNER_URL ?? "",
     FRONTEND_ORIGIN: this.env.FRONTEND_ORIGIN ?? "",
     DATABASE_URL: this.env.DATABASE_URL ?? "",
+    OPENAI_API_KEY: this.env.OPENAI_API_KEY ?? "",
+    OPENAI_MODEL: this.env.OPENAI_MODEL ?? "",
     SECRETS_KEY: this.env.SECRETS_KEY ?? "",
     QBO_CLIENT_ID: this.env.QBO_CLIENT_ID ?? "",
     QBO_CLIENT_SECRET: this.env.QBO_CLIENT_SECRET ?? "",
@@ -35,6 +37,8 @@ interface Env {
   UPLOAD_SCAN_KEY?: string;
   FRONTEND_ORIGIN?: string;
   DATABASE_URL?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_MODEL?: string;
   SECRETS_KEY?: string;
   PUBLIC_APP_URL?: string;
   EMAIL_INTAKE_ADDRESS?: string;

@@ -21,3 +21,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `023_production_posting.sql` separates production OAuth connections from sandbox connections and adds client-specific grants plus durable one-attempt production intents. Apply after 022 with API/worker stopped. No live grant or credential is created by the migration; see [production posting](../../../docs/production-posting.md).
 
 `035_procedure_learning.sql` adds tenant-scoped procedure proposals and accountant-approved regression examples. Apply after 034 with API/worker stopped. Existing approved versions retain their current behavior; learned method rules activate only through the review flow in [firm procedures](../../../docs/firm-procedures.md).
+
+`036_procedure_model_drafting.sql` records whether a proposal came from the local prompt or the configured OpenAI model. Apply after 035 before deploying model drafting. It does not activate, revise or approve any existing rule.

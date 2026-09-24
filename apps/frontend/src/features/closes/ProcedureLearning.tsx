@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
 import type { EvidenceFile } from "./Evidence";
 
-type Draft = { id:string; client_entity:string; kind:string; method:string; instructions:string; expense_account:string; prepaid_account:string; source_id:string; source_close_id:string; source_quote:string; source_draft_ids:string[]; source_edits:{id:string;close_id:string}[]; activated_version_id:string; example_count:number; revision:number };
+type Draft = { id:string; client_entity:string; kind:string; method:string; instructions:string; expense_account:string; prepaid_account:string; source_id:string; source_close_id:string; source_quote:string; source_draft_ids:string[]; source_edits:{id:string;close_id:string}[]; activated_version_id:string; example_count:number; revision:number; engine:string; model:string };
 type Example = { id:string; close_id:string; entity:string; period:string; digest:string; review_id:string; approved_by:string; reason:string };
 type Impact = { previous_id:string; impact_digest:string; total_closes:number; has_more:boolean; closes:{close_id:string;entity:string;period:string;draft_count:number;pinned_source_id:string}[] };
 const methods:Record<string,{value:string;label:string}[]> = {
@@ -46,7 +46,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
     try {
       const d=await workspaceRequest(base,{client_entity:scope==="client"?entity:"",kind,method,source_id:fromEdits?"":source,from_edits:fromEdits}) as Draft;
       await load();await choose(d);
-      setMessage("Unapproved proposal saved. Inspect its source and rewrite the instructions before approving an example.");
+      setMessage(`${d.engine==="openai"?"AI draft":"Local review prompt"} saved as an inactive proposal. Inspect its source and rewrite the instructions before approving an example.`);
     } catch(e){setError(e instanceof Error?e.message:"Could not draft the rule.");}
     finally{setBusy(false);}
   }
@@ -111,6 +111,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
   return <details onToggle={e=>{if(e.currentTarget.open)void load();}}>
     <summary>Learn a procedure from evidence or reviewer edits</summary>
     <p>A proposal is never policy. Choose a supported method, inspect and edit the draft, approve a current workpaper example, then preview affected clients.</p>
+    <p>When OpenAI is configured, drafting sends the selected policy text (up to 16 KiB) or up to 30 approved field edits to OpenAI. Without it, drafting creates a local review prompt. No draft activates itself.</p>
     {error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
     <fieldset disabled={busy}><legend>Start an unapproved rule</legend>
       <form onSubmit={e=>void upload(e)}><label>Upload firm checklist or policy <input name="file" type="file" accept=".txt,.csv,.pdf" required/></label><button>Save policy source</button></form>
@@ -127,6 +128,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
     <ul>{drafts.map(d=><li key={d.id}><button type="button" onClick={()=>void choose(d)}>#{d.id} · {d.client_entity||"Firm default"} · {d.method} · {d.activated_version_id?"activated v"+d.activated_version_id:"inactive"}</button></li>)}</ul>
     {selected&&<section>
       <h4>Proposal #{selected.id}</h4>
+      <p>{selected.engine==="openai"?`AI draft · ${selected.model}`:"Local review prompt"} · {selected.activated_version_id?"activated after accountant approval":"inactive until accountant approval"}</p>
       <p>Source: {selected.source_id?<><a href={"/dashboard/closes/"+selected.source_close_id}>Document #{selected.source_id} in its close</a> <button type="button" onClick={()=>void inspectSource()}>Inspect extracted source</button></>:<>Reviewer drafts {selected.source_edits.map(edit=><a key={edit.id} href={"/dashboard/closes/"+edit.close_id}>#{edit.id} </a>)}</>}. {selected.source_quote&&<>Cited passage: “{selected.source_quote}”</>}</p>
       {sourceText&&<pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:"20rem",overflow:"auto"}}>{sourceText}</pre>}
       <p>Method boundary: {selected.method}. {selected.example_count} approved example(s).</p>
