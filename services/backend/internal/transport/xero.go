@@ -115,14 +115,6 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Client close not found.")
 			return
 		}
-		reply := func() {
-			out, err := status(ctx, r.PathValue("id"))
-			if err != nil {
-				problem(w, 503, "Xero status unavailable.")
-				return
-			}
-			jsonReply(w, 200, out)
-		}
 		if in.Action == "connect" {
 			if !xero.Configured() {
 				problem(w, 503, "Configure the Xero app first.")
@@ -270,6 +262,11 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, fmt.Sprintf("Unsupported Xero action %q.", in.Action))
 			return
 		}
-		reply()
+		out, err := status(ctx, r.PathValue("id"))
+		if err != nil {
+			problem(w, 503, "Xero status unavailable.")
+			return
+		}
+		jsonReply(w, 200, out)
 	})
 }
