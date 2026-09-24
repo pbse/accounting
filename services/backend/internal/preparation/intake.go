@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/reconciliation"
 )
 
 type Candidate struct {
@@ -111,6 +113,29 @@ func Propose(sources []IntakeSource) Proposal {
 	return p
 }
 
+// RecognizeExport identifies a known structured export without a model. The file
+// selects the work type only; it cannot confirm policy or authorize execution.
+func RecognizeExport(sources []IntakeSource, period string) (Proposal, bool) {
+	for _, s := range sources {
+		if s.Role != "invoice" {
+			continue
+		}
+		summary, ok, err := reconciliation.StripeReportSummary(s.Content, period)
+		if !ok {
+			return Proposal{}, false
+		}
+		p := Proposal{Kind: "settlement", Engine: "recognized_export", Summary: summary, Facts: []Fact{}, Sources: []Source{}}
+		for _, source := range sources {
+			p.Sources = append(p.Sources, source.Source)
+		}
+		if err != nil {
+			p.Kind, p.Summary, p.Questions = "unsupported", "This Stripe payout export cannot be traced yet.", []string{err.Error()}
+		}
+		return p, true
+	}
+	return Proposal{}, false
+}
+
 // StartIntake is in the upload transaction, so an accepted file cannot lose its job.
 func StartIntake(ctx context.Context, tx *sql.Tx, closeID, sourceID, actor string) (string, error) {
 	for _, kind := range []string{"prepaid", "reconciliation", "accrual"} {
@@ -162,7 +187,7 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	var id, closeID, entity string
+	var id, closeID, entity, period string
 	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.state='waiting_evidence' AND (e.extraction_state IN ('ready','failed') OR e.superseded_by IS NOT NULL) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j SKIP LOCKED LIMIT 1`).Scan(&id, &closeID)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -170,7 +195,7 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT id::text,entity FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&closeID, &entity); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT id::text,entity,period FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&closeID, &entity, &period); err != nil {
 		return false, err
 	}
 	var ready bool
@@ -185,7 +210,10 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	proposed := Propose(sources)
+	proposed, recognized := RecognizeExport(sources, period)
+	if !recognized {
+		proposed = Propose(sources)
+	}
 	for _, source := range sources {
 		if source.Role == "invoice" {
 			if blocked, ok := blockedIdentity(source.ID, entity, sources); ok {

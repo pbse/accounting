@@ -95,6 +95,19 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 			return nil, err
 		}
 		value = paper
+	case "settlement":
+		var in reconciliation.SettlementInput
+		if err := Strict(p.Input, &in); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(in.Entity) != entity || in.ClosePeriod != period || p.CarryForward != nil || p.RecurringAccrual != nil {
+			return nil, fmt.Errorf("Client and period must match this close")
+		}
+		paper, err := reconciliation.PrepareSettlement(in)
+		if err != nil {
+			return nil, err
+		}
+		value = paper
 	default:
 		return nil, fmt.Errorf("Unsupported preparation kind")
 	}

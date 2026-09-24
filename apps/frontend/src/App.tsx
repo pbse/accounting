@@ -11,6 +11,7 @@ const AccrualPreparation = lazy(() => import("./features/accruals/Prepare"));
 const PrepaidPreparation = lazy(() => import("./features/prepaids/Prepare"));
 const Closes = lazy(() => import("./features/closes/Closes"));
 const Reconciliation = lazy(() => import("./features/reconciliation/Prepare"));
+const Settlement = lazy(() => import("./features/settlements/Prepare"));
 const Dashboard = lazy(() => import("./features/dashboard/Dashboard"));
 
 export function App() {
@@ -46,6 +47,7 @@ export function App() {
             <Route path="closes" element={<Closes />} />
             <Route path="closes/:id" element={<Closes />} />
             <Route path="reconciliations/new" element={<Reconciliation />} />
+            <Route path="settlements/new" element={<Settlement />} />
             <Route path="accruals/new" element={<AccrualPreparation />} />
             <Route path="prepaids/new" element={<PrepaidPreparation />} />
           </Route>

@@ -32,6 +32,11 @@ import { unlock, workspaceRequest } from "./workspace";
 import type { PrepaidWorkpaper } from "../../../../../packages/contracts/prepaid";
 import type { ReconciliationWorkpaper } from "../../../../../packages/contracts/reconciliation";
 import { ReconciliationResult } from "../reconciliation/Prepare";
+import type { SettlementWorkpaper } from "../../../../../packages/contracts/settlement";
+import { SettlementResult } from "../settlements/Prepare";
+
+const paperLabels = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement" };
+const paperPaths = { prepaid: "prepaids", accrual: "accruals", reconciliation: "reconciliations", settlement: "settlements" };
 
 type Close = { id: string; entity: string; period: string };
 type Paper = { id: string; created_at: string; review_state: string } & (
@@ -46,6 +51,10 @@ type Paper = { id: string; created_at: string; review_state: string } & (
   | {
       kind: "reconciliation";
       paper: ReconciliationWorkpaper & { sources?: Source[]; revises?: string };
+    }
+  | {
+      kind: "settlement";
+      paper: SettlementWorkpaper & { sources?: Source[]; revises?: string };
     }
 );
 export default function Closes() {
@@ -304,6 +313,7 @@ export default function Closes() {
             >
               Prepare statement reconciliation
             </Link>
+            <Link className="button" to={`/dashboard/settlements/new?close=${close.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}`}>Trace Stripe payouts</Link>
           </div>
           <section>
             <h2>Take the close into review</h2>
@@ -355,16 +365,14 @@ export default function Closes() {
             .map((saved) => (
               <details key={saved.id}>
                 <summary>
-                  {saved.kind === "prepaid"
-                    ? "Prepaid schedule"
-                    : saved.kind === "accrual" ? "Accrued expense" : "Statement reconciliation"}{" "}
+                  {paperLabels[saved.kind]}{" "}
                   · draft #{saved.id} ·{" "}
                   {new Date(saved.created_at).toLocaleString()} ·{" "}
                   {saved.review_state.replaceAll("_", " ")}
                 </summary>
                 {!(saved.kind === "prepaid" && saved.paper.carry_forward) && (
                   <Link
-                    to={`/dashboard/${saved.kind === "prepaid" ? "prepaids" : saved.kind === "accrual" ? "accruals" : "reconciliations"}/new?close=${close.id}&revise=${saved.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}`}
+                    to={`/dashboard/${paperPaths[saved.kind]}/new?close=${close.id}&revise=${saved.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}`}
                   >
                     Revise and recalculate
                   </Link>
@@ -386,7 +394,7 @@ export default function Closes() {
                     sources={saved.paper.sources}
                   />
                 )}
-                {saved.kind === "accrual" ? <AccrualResult result={saved.paper} /> : saved.kind === "reconciliation" ? (
+                {saved.kind === "settlement" ? <SettlementResult result={saved.paper} /> : saved.kind === "accrual" ? <AccrualResult result={saved.paper} /> : saved.kind === "reconciliation" ? (
                   <ReconciliationResult result={saved.paper} />
                 ) : (
                   <>

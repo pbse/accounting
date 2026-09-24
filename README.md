@@ -152,4 +152,6 @@ Close-wide scope and recovery: [coordinator flow](docs/close-coordinator.md) · 
 
 QuickBooks per-client setup: [sandbox OAuth and account snapshots](docs/quickbooks-onboarding.md).
 
+Stripe payouts traced to bank deposits from exports: [settlement reconciliation](docs/settlement-reconciliation.md).
+
 Coverage resolution, consolidated requests and mandatory scanned client attachments: [complete workflow and scanner setup](docs/coverage-requests.md).

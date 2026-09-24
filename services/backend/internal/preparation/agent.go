@@ -476,6 +476,23 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		}
 		return true, tx.Commit()
 	}
+	// A recognized export needs no model call; it is proposed inside this locked transaction.
+	if _, blocked := blockedIdentity(primary, entity, sources); !blocked {
+		intake, err := IntakeSources(ctx, tx, id)
+		if err != nil {
+			return false, err
+		}
+		if proposal, ok := RecognizeExport(intake, period); ok {
+			body, _ := json.Marshal(proposal)
+			if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET proposal=$2,revision=revision+1,agent_claim=NULL WHERE job_id=$1`, id, string(body)); err != nil {
+				return false, err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='needs_confirmation',error='' WHERE id=$1`, id); err != nil {
+				return false, err
+			}
+			return true, tx.Commit()
+		}
+	}
 	claim := rand.Text()
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET agent_claim=$2,agent_started_at=now(),agent_attempts=agent_attempts+1 WHERE job_id=$1`, id, claim); err != nil {
 		return false, err

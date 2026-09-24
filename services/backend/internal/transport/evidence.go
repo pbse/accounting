@@ -258,7 +258,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			selectedIDs[s.ID] = true
-			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "clearing" && s.Role != "procedure" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") {
+			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "clearing" && s.Role != "procedure" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") || (p.Kind == "settlement" && s.Role != "processor_report" && s.Role != "bank") {
 				problem(w, 422, "Unsupported source role.")
 				return
 			}
@@ -340,6 +340,26 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 							in.CurrentOutstanding[i].ClearingRef = s.Name + " · " + s.Location
 						}
 					}
+				}
+			}
+			p.Input, _ = json.Marshal(in)
+		}
+		if p.Kind == "settlement" {
+			if content["processor_report"] == "" || content["bank"] == "" {
+				problem(w, 422, "Choose the Stripe payout export and the bank CSV as separate evidence.")
+				return
+			}
+			var in reconciliation.SettlementInput
+			if err := preparation.Strict(p.Input, &in); err != nil {
+				problem(w, 422, err.Error())
+				return
+			}
+			in.ReportCSV, in.BankCSV = content["processor_report"], content["bank"]
+			for _, s := range p.Sources {
+				if s.Role == "processor_report" {
+					in.ReportReference = s.Name + " · " + s.Location
+				} else if s.Role == "bank" {
+					in.BankReference = s.Name + " · " + s.Location
 				}
 			}
 			p.Input, _ = json.Marshal(in)

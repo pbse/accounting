@@ -145,6 +145,10 @@ func money(n int64) string {
 	return fmt.Sprintf("%d.%02d", n/100, n%100)
 }
 func lines(source, period string) ([]Line, int64, error) {
+	month, _ := time.Parse("2006-01", period)
+	return datedLines(source, month, month.AddDate(0, 1, -1), "transaction dates must be within the close month")
+}
+func datedLines(source string, first, last time.Time, dateError string) ([]Line, int64, error) {
 	reader := csv.NewReader(strings.NewReader(source))
 	reader.FieldsPerRecord = 3
 	header, err := reader.Read()
@@ -171,8 +175,8 @@ func lines(source, period string) ([]Line, int64, error) {
 		}
 		seen[id] = true
 		date, err := time.Parse("2006-01-02", row[1])
-		if err != nil || date.Format("2006-01") != period {
-			return nil, 0, fmt.Errorf("transaction dates must be within the close month")
+		if err != nil || date.Before(first) || date.After(last) {
+			return nil, 0, fmt.Errorf("%s", dateError)
 		}
 		n, err := cents(row[2])
 		if err != nil {
