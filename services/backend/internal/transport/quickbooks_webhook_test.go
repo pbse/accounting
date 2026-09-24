@@ -65,8 +65,15 @@ func TestQuickBooksWebhookMarksOnlyActiveSandboxCompanies(t *testing.T) {
 		mac.Write([]byte(body))
 		return base64.StdEncoding.EncodeToString(mac.Sum(nil))
 	}
+	at := "2026-09-24T12:00:00Z"
 	event := func(realm, kind string) string {
-		return `{"specversion":"1.0","id":"` + rand.Text() + `","source":"intuit.dsnBgbseACLLRZNxo2dfc4evmEJdxde58xeeYcZliOU=","type":"` + kind + `","datacontenttype":"application/json","time":"2026-09-24T12:00:00Z","intuitentityid":"42","intuitaccountid":"` + realm + `","data":{}}`
+		return `{"specversion":"1.0","id":"` + rand.Text() + `","source":"intuit.dsnBgbseACLLRZNxo2dfc4evmEJdxde58xeeYcZliOU=","type":"` + kind + `","datacontenttype":"application/json","time":"` + at + `","intuitentityid":"42","intuitaccountid":"` + realm + `","data":{}}`
+	}
+	changed := func() string {
+		t.Helper()
+		var out string
+		must(db.QueryRow(`SELECT to_char(changed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') FROM quickbooks_connections WHERE id=$1`, first).Scan(&out))
+		return out
 	}
 	valid := "[" + event(realm1, "qbo.bill.updated.v1") + "," + event(realm2, "billing.updated") + "]"
 	t.Setenv("QBO_WEBHOOK_VERIFIER", "")
@@ -77,7 +84,8 @@ func TestQuickBooksWebhookMarksOnlyActiveSandboxCompanies(t *testing.T) {
 	if code := post(valid, sign(valid+" ")); code != 401 || marked() != "" {
 		t.Fatalf("a wrong signature is refused and marks nothing: %d %q", code, marked())
 	}
-	for _, bad := range []string{`{"not":"an array"}`, "[" + event(realm2, "qbo.bill.updated") + "," + `{"specversion":"1.0","type":"qbo.bill.updated.v1","intuitaccountid":"` + realm2 + `"}` + "]"} {
+	for _, bad := range []string{`{"not":"an array"}`, "[" + event(realm2, "qbo.bill.updated") + "," + `{"specversion":"1.0","type":"qbo.bill.updated.v1","time":"2026-09-24T12:00:00Z","intuitaccountid":"` + realm2 + `"}` + "]",
+		`[{"specversion":"1.0","id":"no-time","type":"qbo.bill.updated.v1","intuitaccountid":"` + realm2 + `"}]`} {
 		if code := post(bad, sign(bad)); code != 400 || marked() != "" {
 			t.Fatalf("a notification without a valid CloudEvent is refused: %d %q", code, marked())
 		}
@@ -88,5 +96,18 @@ func TestQuickBooksWebhookMarksOnlyActiveSandboxCompanies(t *testing.T) {
 	both := "[" + event(realm1, "qbo.invoice.created.v1") + "," + event(realm2, "qbo.account.updated.v1") + "]"
 	if code := post(both, sign(both)); code != 200 || marked() != "AB" {
 		t.Fatalf("one notification can mark several companies: %d %q", code, marked())
+	}
+	if got := changed(); got != "2026-09-24T12:00:00Z" {
+		t.Fatalf("the change time is recorded, not the delivery time: %s", got)
+	}
+	at = "2026-09-20T08:00:00Z"
+	older := "[" + event(realm1, "qbo.bill.updated.v1") + "]"
+	if code := post(older, sign(older)); code != 200 || changed() != "2026-09-24T12:00:00Z" {
+		t.Fatalf("a late or replayed event never moves the change time back: %d %s", code, changed())
+	}
+	at = "2099-01-01T00:00:00Z"
+	future := "[" + event(realm1, "qbo.bill.updated.v1") + "]"
+	if code := post(future, sign(future)); code != 200 || changed() >= "2099" {
+		t.Fatalf("a change time in the future is capped at now: %d %s", code, changed())
 	}
 }
