@@ -34,13 +34,15 @@ func WithActor(ctx context.Context, actor *Claims) context.Context {
 
 type Verifier struct {
 	ClientID, Organization, Issuer string
-	mu                             sync.Mutex
-	keys                           map[string]*rsa.PublicKey
-	fetched                        time.Time
+	// JWKSURL and Audience configure an OAuth resource (MCP): its own key set, and an audience the token must name.
+	JWKSURL, Audience string
+	mu                sync.Mutex
+	keys              map[string]*rsa.PublicKey
+	fetched           time.Time
 }
 
 func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
-	if len(raw) > 16384 || v.ClientID == "" || v.Issuer == "" {
+	if len(raw) > 16384 || (v.ClientID == "" && v.JWKSURL == "") || v.Issuer == "" {
 		return nil, errors.New("authentication unavailable")
 	}
 	claims := new(Claims)
@@ -52,7 +54,11 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 		v.mu.Lock()
 		defer v.mu.Unlock()
 		if time.Since(v.fetched) > time.Minute {
-			req, err := http.NewRequestWithContext(ctx, "GET", "https://api.workos.com/sso/jwks/"+v.ClientID, nil)
+			jwks := v.JWKSURL
+			if jwks == "" {
+				jwks = "https://api.workos.com/sso/jwks/" + v.ClientID
+			}
+			req, err := http.NewRequestWithContext(ctx, "GET", jwks, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -101,7 +107,11 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 	if err != nil || claims.Subject == "" || claims.Session == "" || claims.Organization == "" || claims.Organization == "local-development" || (v.Organization != "" && claims.Organization != v.Organization) {
 		return nil, errors.New("invalid session or organization")
 	}
-	if len(claims.Audience) > 0 && !slices.Contains(claims.Audience, v.ClientID) {
+	if v.Audience != "" {
+		if !slices.Contains(claims.Audience, v.Audience) {
+			return nil, errors.New("wrong audience")
+		}
+	} else if len(claims.Audience) > 0 && !slices.Contains(claims.Audience, v.ClientID) {
 		return nil, errors.New("wrong audience")
 	}
 	return claims, nil

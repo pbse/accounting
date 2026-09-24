@@ -404,3 +404,18 @@ Author: Claude Opus 5.5. Migration 044 adds the `owner` workpaper and procedure 
 - Observed red with the split inverted, the business-cost direction reversed, the C corp and repayment rules off, the firm default counted, the type check off, and the publish rule off.
 - Browser: recorded Harbor Dental as an S corporation under Owner treatments. The owner item prefilled "Shareholder distributions", prepared Dr Shareholder distributions / Cr Meals 86.40, and saved.
 
+## Agent access for hosted MCP (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 045 adds `agent_access`, `current_agent_access` and `effective_agent_access`.
+
+- `TestOAuthResourceTokensMustNameTheResource`: an AuthKit token is refused without the MCP audience, with another audience, from another issuer, or without `sid`.
+- `TestAgentsActOnlyUnderAnApprovedMemberGrant` runs against a real HTTP server, with AuthKit keys served through a swapped transport:
+  - no grant, or only a pending request → 403; a token for another resource → 401 with the metadata pointer;
+  - "all clients" refused without the member's own firm-wide access; self-approval refused; an administrator can't widen a request;
+  - read approval → only read tools, and `list_closes` shows the assigned client but not the other one;
+  - a pending upgrade keeps read access; an approved upgrade adds the prepare tools;
+  - re-enrollment doesn't revive the old grant;
+  - protected resource metadata is served.
+- Observed red with the membership binding off, the pending-request rule off, widening allowed, the firm-wide check off, scope filtering off, the grant requirement off, and the audience check off.
+- Full `internal/transport` and `internal/auth` packages pass; frontend typecheck passes. The Firm settings card couldn't be exercised in a browser: hosted sign-in isn't available locally, where the card shows the workspace-token note.
+

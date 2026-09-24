@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"close.local/backend/internal/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -112,9 +114,6 @@ func (t mcpTool) handle(store http.Handler) mcp.ToolHandler {
 			return toolProblem("INVALID_REQUEST", "Arguments do not form a valid request."), nil
 		}
 		call.Header.Set("Content-Type", contentType)
-		if req.Extra != nil {
-			call.Header.Set("Authorization", req.Extra.Header.Get("Authorization"))
-		}
 		recorder := httptest.NewRecorder()
 		store.ServeHTTP(recorder, call)
 		result := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: recorder.Body.String()}}, IsError: recorder.Code >= 400}
@@ -148,10 +147,33 @@ func toolProblem(code, message string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(raw)}}, StructuredContent: value, IsError: true}
 }
 
-// mcpHandler serves MCP (current and earlier protocol revisions) on the same sign-in as the API.
-func mcpHandler(store http.Handler, token string) http.Handler {
+type mcpScope struct{}
+
+// mcpOAuth verifies hosted MCP sign-in through WorkOS AuthKit; nil unless configured.
+func mcpOAuth() *auth.Verifier {
+	domain, resource := strings.TrimRight(os.Getenv("WORKOS_AUTHKIT_DOMAIN"), "/"), os.Getenv("MCP_RESOURCE_URL")
+	if !strings.HasPrefix(domain, "https://") || !strings.HasPrefix(resource, "https://") {
+		return nil
+	}
+	return &auth.Verifier{Issuer: domain, JWKSURL: domain + "/oauth2/jwks", Audience: resource, Organization: os.Getenv("WORKOS_ORGANIZATION_ID")}
+}
+
+// mcpMetadataURL is the resource's protected resource metadata (RFC 9728).
+func mcpMetadataURL(resource string) string {
+	u, err := url.Parse(resource)
+	if err != nil {
+		return ""
+	}
+	u.Path = "/.well-known/oauth-protected-resource" + u.Path
+	return u.String()
+}
+
+func mcpServer(store http.Handler, include func(mcpTool) bool) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "close-preparation", Title: "Close preparation", Version: "1"}, &mcp.ServerOptions{Instructions: mcpInstructions})
 	for _, t := range mcpTools {
+		if !include(t) {
+			continue
+		}
 		schema := map[string]any{"type": "object", "properties": t.props, "additionalProperties": false}
 		if t.required != nil {
 			schema["required"] = t.required
@@ -159,7 +181,21 @@ func mcpHandler(store http.Handler, token string) http.Handler {
 		destructive := false
 		server.AddTool(&mcp.Tool{Name: t.name, Title: t.title, Description: t.description, InputSchema: schema, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: t.readOnly, IdempotentHint: t.readOnly || t.idempotent, DestructiveHint: &destructive}}, t.handle(store))
 	}
-	protocol := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 8 << 20})
+	return server
+}
+
+// mcpHandler serves MCP (current and earlier protocol revisions). The workspace token and session tokens
+// sign in as for the API; hosted OAuth tokens act only under the member's approved agent access.
+func mcpHandler(store http.Handler, token string, db *sql.DB) http.Handler {
+	full := mcpServer(store, func(mcpTool) bool { return true })
+	read := mcpServer(store, func(t mcpTool) bool { return t.readOnly })
+	protocol := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		if r.Context().Value(mcpScope{}) == "read" {
+			return read
+		}
+		return full
+	}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 8 << 20})
+	oauth := mcpOAuth()
 	origins := []string{}
 	for _, origin := range strings.Split(os.Getenv("MCP_ALLOWED_ORIGINS")+","+os.Getenv("FRONTEND_ORIGIN"), ",") {
 		if origin = strings.TrimSpace(origin); origin != "" {
@@ -185,13 +221,43 @@ func mcpHandler(store http.Handler, token string) http.Handler {
 				return
 			}
 		}
-		if len(token) < 32 && verifier.ClientID == "" {
+		if len(token) < 32 && verifier.ClientID == "" && oauth == nil {
 			problem(w, 503, "MCP requires configured workspace authentication.")
 			return
 		}
-		if _, err := verifier.Authenticate(r, token); err != nil {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			problem(w, 401, "Send the workspace bearer token or a signed-in session token.")
+		actor, err := verifier.Authenticate(r, token)
+		scope := "prepare"
+		if err != nil && oauth != nil {
+			raw, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if claims, e := oauth.Verify(r.Context(), raw); e == nil {
+				var all bool
+				if scope, all, e = agentGrant(r.Context(), db, claims.Organization, claims.Subject); e != nil {
+					problem(w, 503, "Agent access unavailable.")
+					return
+				}
+				if scope == "" {
+					problem(w, 403, "Ask a firm administrator to approve agent access for your account under Firm settings.")
+					return
+				}
+				// The tool table is the only reachable surface; these permissions only satisfy its routes.
+				granted := *claims
+				granted.Permissions = nil
+				if scope == "prepare" {
+					granted.Permissions = append(granted.Permissions, "workpapers:review")
+				}
+				if all {
+					granted.Permissions = append(granted.Permissions, "clients:all")
+				}
+				actor, err = &granted, nil
+			}
+		}
+		if err != nil {
+			challenge := "Bearer"
+			if oauth != nil {
+				challenge += ` resource_metadata="` + mcpMetadataURL(oauth.Audience) + `"`
+			}
+			w.Header().Set("WWW-Authenticate", challenge)
+			problem(w, 401, "Sign in to connect an agent: the workspace token locally, or your firm's agent sign-in.")
 			return
 		}
 		key := sha256.Sum256([]byte(r.Header.Get("Authorization")))
@@ -206,6 +272,6 @@ func mcpHandler(store http.Handler, token string) http.Handler {
 			problem(w, 429, "Too many MCP requests. Wait a minute and retry.")
 			return
 		}
-		protocol.ServeHTTP(noStore{w}, r)
+		protocol.ServeHTTP(noStore{w}, r.WithContext(context.WithValue(auth.WithActor(r.Context(), actor), mcpScope{}, scope)))
 	})
 }

@@ -123,6 +123,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerPlanning(mux, db)
 	registerEffort(mux, db)
 	registerIndependence(mux, db)
+	registerAgentAccess(mux, db)
 	registerProcedures(mux, db)
 	registerProcedureLearning(mux, db)
 	registerAccess(mux, db)
@@ -399,12 +400,15 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 503, "Saved closes require a configured database and workspace authentication.")
 			return
 		}
-		actor, err := verifier.Authenticate(r, token)
-		if err != nil {
-			problem(w, 401, "Sign in with an authorized workspace account, or unlock local development access.")
-			return
+		// Only MCP tool dispatch sets an actor before this point, after its own verification and grant check.
+		if auth.Actor(r.Context()) == nil {
+			actor, err := verifier.Authenticate(r, token)
+			if err != nil {
+				problem(w, 401, "Sign in with an authorized workspace account, or unlock local development access.")
+				return
+			}
+			r = r.WithContext(auth.WithActor(r.Context(), actor))
 		}
-		r = r.WithContext(auth.WithActor(r.Context(), actor))
 		scoped.ServeHTTP(w, r)
 	})
 }
