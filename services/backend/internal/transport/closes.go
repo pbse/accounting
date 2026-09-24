@@ -139,6 +139,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerQuickBooks(mux, db)
 	registerQuickBooksEntities(mux, db)
 	registerXero(mux, db)
+	registerDaily(mux, db)
 	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
 	mux.HandleFunc("GET /v1/closes/{id}/binder", exportClose(db, true))
 	mux.HandleFunc("GET /v1/closes/{id}/year-end", yearEndHandoff(db))
