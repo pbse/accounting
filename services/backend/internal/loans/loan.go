@@ -295,7 +295,8 @@ func Prepare(in Input) (Workpaper, error) {
 			if b.After(cur) {
 				rate := rateOn(b)
 				term := new(big.Int).Mul(big.NewInt(outstanding), big.NewInt(rate))
-				sum.Add(sum, term.Mul(term, big.NewInt(Days(in.DayCount, cur, b))))
+				// 30/360 is not additive across month ends, so segments are differences of counts from the window start.
+				sum.Add(sum, term.Mul(term, big.NewInt(Days(in.DayCount, from, b)-Days(in.DayCount, from, cur))))
 				if label := fmt.Sprintf("%d.%03d%%", rate/1000, rate%1000); !slices.Contains(rates, label) {
 					rates = append(rates, label)
 				}

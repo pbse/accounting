@@ -54,6 +54,7 @@ export default function PrepareLoan() {
   const [payments, setPayments] = useState<LoanPayment[]>([{ ...blank }]);
   const [rateChanges, setRateChanges] = useState<LoanRateChange[]>([]);
   const [fees, setFees] = useState<LoanFee[]>([]);
+  const [method, setMethod] = useState<LoanInput["method"]>("lender_statement_v1");
   const [accrue, setAccrue] = useState("");
   const [reclass, setReclass] = useState("");
   const [result, setResult] = useState<LoanWorkpaper>();
@@ -65,6 +66,7 @@ export default function PrepareLoan() {
     setPayments(saved.payments?.length ? saved.payments : [{ ...blank }]);
     setRateChanges(saved.rate_changes ?? []);
     setFees(saved.fees ?? []);
+    if (saved.method) setMethod(saved.method);
     setAccrue(String(!!saved.accrue_interest));
     setReclass(String(!!saved.reclass_current_portion));
   }, [revision.savedInput]);
@@ -101,7 +103,7 @@ export default function PrepareLoan() {
       ...optional(["principal_due_next_12_months", "schedule_reference"], reclass === "true"),
       ...optional(["current_portion_account", "booked_current_portion"], reclass === "true" || !!text("current_portion_account")),
       currency: "USD",
-      method: rateChanges.length || fees.length ? "lender_statement_variable_v1" : "lender_statement_v1",
+      method,
       method_confirmed: data.has("method_confirmed"),
       rate_confirmed: data.has("rate_confirmed"),
       booking_confirmed: data.has("booking_confirmed"),
@@ -191,7 +193,7 @@ export default function PrepareLoan() {
               </tbody>
             </table>
           )}
-          <button type="button" disabled={rateChanges.length >= 12} onClick={() => setRateChanges((rows) => [...rows, { ...blankRate }])}>Add rate change</button>
+          <button type="button" disabled={rateChanges.length >= 12} onClick={() => { setRateChanges((rows) => [...rows, { ...blankRate }]); setMethod("lender_statement_variable_v1"); }}>Add rate change</button>
           {fees.length > 0 && (
             <table>
               <thead><tr><th>Date added</th><th>Amount (USD)</th><th>Description</th><th>Statement line</th><th /></tr></thead>
@@ -208,7 +210,7 @@ export default function PrepareLoan() {
               </tbody>
             </table>
           )}
-          <button type="button" disabled={fees.length >= 12} onClick={() => setFees((rows) => [...rows, { ...blankFee }])}>Add fee</button>
+          <button type="button" disabled={fees.length >= 12} onClick={() => { setFees((rows) => [...rows, { ...blankFee }]); setMethod("lender_statement_variable_v1"); }}>Add fee</button>
         </fieldset>
         <fieldset disabled={busy || !revision.ready}>
           <legend>Ledger and month-end entries</legend>
@@ -238,6 +240,14 @@ export default function PrepareLoan() {
           </label>
           {reclass === "true" && <div className="form-grid">{field("principal_due_next_12_months", "Principal due in the next 12 months (USD)")}{field("schedule_reference", "Amortization schedule reference")}</div>}
           {reclass !== "" && <div className="form-grid">{field("current_portion_account", "Current portion account", "text", reclass === "true" ? undefined : "Only if part of the loan is kept in its own account", reclass === "true")}{field("booked_current_portion", "Booked current portion (USD)", "text", "Counts toward the loan balance", reclass === "true")}</div>}
+          <label>
+            Loan procedure approved for this client
+            <select value={method} onChange={(e) => setMethod(e.target.value as LoanInput["method"])}>
+              <option value="lender_statement_v1">Lender statement, fixed rate</option>
+              <option value="lender_statement_variable_v1">Lender statement with rate changes and fees added to the balance</option>
+            </select>
+            <small>Must match the client's approved loan procedure to save. Rate changes and fees need the second one.</small>
+          </label>
           <label><input name="method_confirmed" type="checkbox" required /> The lender's statement is the source of each payment's principal and interest; this schedule only checks it.</label>
           <label><input name="rate_confirmed" type="checkbox" required /> The rate and day-count method are from the note, any rate change is from the lender's notice, and opening principal is the balance on the interest-paid-through date.</label>
           <label><input name="booking_confirmed" type="checkbox" required /> Book balances are the ledger's month-end balances for these accounts.</label>

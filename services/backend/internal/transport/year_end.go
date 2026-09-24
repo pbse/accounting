@@ -211,7 +211,11 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 					addAmount(principal, row.Principal)
 					addAmount(interest, row.Interest)
 				}
-				loanRows = append(loanRows, []string{p.period, csvText(wp.Input.Lender), csvText(wp.Input.LoanAccount), wp.Input.OpeningPrincipal, principal.FloatString(2), wp.Fees, interest.FloatString(2), wp.Input.ClosingPrincipal, wp.Input.Currency, p.id})
+				fees := wp.Fees
+				if fees == "" {
+					fees = "0.00"
+				}
+				loanRows = append(loanRows, []string{p.period, csvText(wp.Input.Lender), csvText(wp.Input.LoanAccount), wp.Input.OpeningPrincipal, principal.FloatString(2), fees, interest.FloatString(2), wp.Input.ClosingPrincipal, wp.Input.Currency, p.id})
 				for _, text := range append(wp.Questions, wp.Blockers...) {
 					ask(p.period, where, text)
 				}

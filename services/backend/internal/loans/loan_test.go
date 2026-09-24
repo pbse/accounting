@@ -114,6 +114,14 @@ func TestRateChangesSplitTheInterestWindow(t *testing.T) {
 	if paper, err = Prepare(in); err != nil || len(paper.Questions) != 0 {
 		t.Fatalf("a rate applies from its effective date: %v %v %+v", err, paper.Questions, paper.Schedule)
 	}
+	// 30/360 bond basis counts 29 January → 15 February as 16 days: 2 at 6.000% and 14 at 6.500% = 343.33.
+	in = variable()
+	in.DayCount, in.ClosePeriod, in.InterestPaidThrough = "30_360_bond", "2027-02", "2027-01-29"
+	in.Payments = []Payment{{Date: "2027-02-15", Principal: "1500.00", Interest: "343.33"}}
+	in.RateChanges = []RateChange{{Effective: "2027-02-01", AnnualRate: "6.500", Reference: "Rate notice Jan 2027"}}
+	if paper, err = Prepare(in); err != nil || len(paper.Questions) != 0 || paper.Schedule[0].Days != 16 {
+		t.Fatalf("a split window keeps the convention's day count: %v %v %+v", err, paper.Questions, paper.Schedule)
+	}
 	// Actual/365: 26,301.37¢ + 26,712.33¢ rounds once to 530.14, not 530.13 segment by segment.
 	in = variable()
 	in.DayCount, in.OpeningPrincipal, in.ClosingPrincipal, in.BookBalance = "actual_365", "100000.00", "98500.00", "98500.00"
