@@ -315,14 +315,6 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			}
 			entity = strings.TrimSpace(value.Entity)
 			period = value.ClosePeriod
-		case "settlement":
-			var value reconciliation.SettlementInput
-			err = preparation.Strict(input.Input, &value)
-			if err == nil {
-				paper, err = reconciliation.PrepareSettlement(value)
-			}
-			entity = strings.TrimSpace(value.Entity)
-			period = value.ClosePeriod
 		default:
 			problem(w, 422, "Unsupported workpaper kind.")
 			return

@@ -170,9 +170,11 @@ export function SettlementResult({
   const headline =
     payouts.length === 0
       ? "No automatic payouts in this export."
-      : open.length === 0
-        ? `All ${payouts.length} payouts traced to ${input.bank_account}.`
-        : `${payouts.length - open.length} of ${payouts.length} payouts traced to ${input.bank_account}. ${open.length} ${open.length === 1 ? "needs" : "need"} your decision.`;
+      : open.length === 0 && result.unassigned.length > 0
+        ? `All ${payouts.length} payouts traced to ${input.bank_account}, but ${result.unassigned.length} Stripe ${result.unassigned.length === 1 ? "row has" : "rows have"} no payout ID and still ${result.unassigned.length === 1 ? "blocks" : "block"} approval.`
+        : open.length === 0
+          ? `All ${payouts.length} payouts traced to ${input.bank_account}.`
+          : `${payouts.length - open.length} of ${payouts.length} payouts traced to ${input.bank_account}. ${open.length} ${open.length === 1 ? "needs" : "need"} your decision.`;
   const undo = (payout: SettlementPayout) =>
     onDecide?.({
       ...input,
@@ -381,6 +383,7 @@ export default function Prepare() {
   const revision = useRevision(form);
   const heading = useRef<HTMLHeadingElement>(null);
   const preselected = useRef(false);
+  const latest = useRef({ report: "", bank: "" });
   const [files, setFiles] = useState<EvidenceFile[]>([]);
   const [report, setReport] = useState<Chosen>();
   const [bank, setBank] = useState<Chosen>();
@@ -405,16 +408,20 @@ export default function Prepare() {
         .catch((e) => setError(e.message));
   }, [close]);
 
-  async function choose(id: string, set: (value?: Chosen) => void) {
+  async function choose(id: string, slot: "report" | "bank") {
+    const set = slot === "report" ? setReport : setBank;
+    latest.current[slot] = id;
+    set(undefined);
     const file = files.find((f) => f.id === id);
-    if (!file || !close) return set(undefined);
+    if (!file || !close) return;
     try {
-      const text = await workspaceRequest(
+      const blob = await workspaceRequest(
         `/${close}/evidence/${id}/text`,
         undefined,
         true,
       );
-      set({ id, name: file.name, text: await text.text() });
+      const text = await blob.text();
+      if (latest.current[slot] === id) set({ id, name: file.name, text });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Evidence is unavailable.");
     }
@@ -431,8 +438,8 @@ export default function Prepare() {
       bankId = others[0].id;
       setAutoPicked(others[0].name);
     }
-    if (reportId) void choose(reportId, setReport);
-    if (bankId) void choose(bankId, setBank);
+    if (reportId) void choose(reportId, "report");
+    if (bankId) void choose(bankId, "bank");
   }, [revision.ready, files]);
 
   async function calculate(input: SettlementInput) {
@@ -503,43 +510,42 @@ export default function Prepare() {
     setResult(undefined);
     setError("");
   }
-  const picker = (
-    label: string,
-    hint: string,
-    chosen: Chosen | undefined,
-    set: (value?: Chosen) => void,
-  ) => (
-    <label>
-      {label}
-      {close ? (
-        <select
-          value={chosen?.id ?? ""}
-          required
-          onChange={(e) => {
-            setAutoPicked("");
-            void choose(e.target.value, set);
-          }}
-        >
-          <option value="">Choose a CSV from this close</option>
-          {csvFiles.map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.name} · #{f.id}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <input
-          type="file"
-          accept=".csv,text/csv"
-          onChange={(e) => readFile(e.target.files?.[0], set)}
-        />
-      )}
-      <small>
-        {chosen && !close && <strong>Loaded {chosen.name}. </strong>}
-        {hint}
-      </small>
-    </label>
-  );
+  const picker = (label: string, hint: string, slot: "report" | "bank") => {
+    const chosen = slot === "report" ? report : bank;
+    const set = slot === "report" ? setReport : setBank;
+    return (
+      <label>
+        {label}
+        {close ? (
+          <select
+            value={chosen?.id ?? latest.current[slot]}
+            required
+            onChange={(e) => {
+              setAutoPicked("");
+              void choose(e.target.value, slot);
+            }}
+          >
+            <option value="">Choose a CSV from this close</option>
+            {csvFiles.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name} · #{f.id}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => readFile(e.target.files?.[0], set)}
+          />
+        )}
+        <small>
+          {chosen && !close && <strong>Loaded {chosen.name}. </strong>}
+          {hint}
+        </small>
+      </label>
+    );
+  };
   return (
     <>
       <p className="eyebrow">STRIPE SETTLEMENT / PREPARATION</p>
@@ -590,14 +596,12 @@ export default function Prepare() {
               {picker(
                 "Stripe payout export",
                 "Stripe Dashboard → Reports → Payout reconciliation → Download → Itemized. Use the full download, not one category.",
-                report,
-                setReport,
+                "report",
               )}
               {picker(
                 "Bank CSV",
                 "Columns id,date,amount with deposits positive. Include the first four days of next month so late deposits can match.",
-                bank,
-                setBank,
+                "bank",
               )}
               <label>
                 Bank account

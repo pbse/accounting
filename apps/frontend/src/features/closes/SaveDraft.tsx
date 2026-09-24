@@ -46,6 +46,7 @@ export function SaveDraft({
     );
   return (
     <section>
+      {kind !== "settlement" && <>
       <h3>Keep this workpaper</h3>
       <p>
         Save an immutable draft to this client close. No approval or posting
@@ -76,6 +77,7 @@ export function SaveDraft({
       >
         {busy ? "Saving…" : saved ? "Saved" : "Save draft to close"}
       </button>
+      </>}
       <h3>Prepare from linked evidence</h3>
       <p>
         Confirm the values against uploaded evidence, then save instructions for

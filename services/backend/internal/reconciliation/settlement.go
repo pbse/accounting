@@ -159,7 +159,7 @@ func stripePayouts(source, period string) ([]*payoutGroup, map[string]*totals, [
 		}
 		seen[id] = true
 		if !strings.EqualFold(field("currency"), "usd") {
-			return nil, nil, nil, fmt.Errorf("Stripe row %d (%s) is in %q; this method reconciles USD payouts only.", row, id, field("currency"))
+			return nil, nil, nil, fmt.Errorf("Stripe row %d (%s) is in %.8q; this method reconciles USD payouts only.", row, id, field("currency"))
 		}
 		gross, grossErr := cents(field("gross"))
 		fee, feeErr := cents(field("fee"))
