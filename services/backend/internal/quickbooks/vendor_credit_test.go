@@ -25,9 +25,9 @@ func TestVendorCreditChecksAccountsAndCanonicalReadback(t *testing.T) {
 		case "/v3/company/123/vendor/21":
 			body = `{"Vendor":{"Id":"21","Active":true,"DisplayName":"Supplier"}}`
 		case "/v3/company/123/account/5":
-			body = `{"Account":{"Id":"5","Name":"Accounts Payable","AccountType":"Accounts Payable","AccountSubType":"AccountsPayable","Active":true,"CurrencyRef":{"value":"USD"}}}`
+			body = `{"Account":{"Id":"5","Name":"Accounts Payable","AccountType":"Accounts Payable","AccountSubType":"AccountsPayable","Active":true,"CurrencyRef":{"value":"USD"},"CurrentBalance":0,"SyncToken":"1"}}`
 		case "/v3/company/123/account/7":
-			body = `{"Account":{"Id":"7","Name":"Prepaid service","AccountType":"Other Current Asset","AccountSubType":"PrepaidExpenses","Active":true,"CurrencyRef":{"value":"USD"}}}`
+			body = `{"Account":{"Id":"7","Name":"Prepaid service","AccountType":"Other Current Asset","AccountSubType":"PrepaidExpenses","Active":true,"CurrencyRef":{"value":"USD"},"CurrentBalance":0,"SyncToken":"1"}}`
 		case "/v3/company/123/query":
 			if !strings.Contains(r.URL.Query().Get("query"), "DocNumber = 'Credit CN-7'") {
 				t.Fatal("provider duplicate check did not use the exact credit reference")
@@ -56,6 +56,19 @@ func TestVendorCreditChecksAccountsAndCanonicalReadback(t *testing.T) {
 	if _, err = sandbox.VerifyVendorCredit(context.Background(), "33", changed); err == nil {
 		t.Fatal("amount mismatch was accepted")
 	}
+	// Production credits the accounts the client's grant allows, not the sandbox's configured prepaid account.
+	production := sandbox
+	production.Production, production.DebitAccount, production.Accounts = true, "", []string{"5", "9"}
+	if _, err = production.PrepareVendorCredit(context.Background(), "21", "5", "7", "Prepaid service", "2026-09-15", "25.00", "Credit CN-7"); err == nil || !strings.Contains(err.Error(), "allowed") {
+		t.Fatalf("a production credit to an account outside the grant was prepared: %v", err)
+	}
+	production.Accounts = []string{"5", "7"}
+	if id, err := production.AccountNamed(context.Background(), "Prepaid service"); err != nil || id != "7" {
+		t.Fatalf("the granted prepaid account is found by name: %q %v", id, err)
+	}
+	if _, err = production.PrepareVendorCredit(context.Background(), "21", "5", "7", "Prepaid service", "2026-09-15", "25.00", "Credit CN-7"); err != nil {
+		t.Fatalf("a production credit between granted accounts is prepared: %v", err)
+	}
 }
 
 func TestVendorCreditBlocksAnExistingProviderReference(t *testing.T) {
@@ -70,9 +83,9 @@ func TestVendorCreditBlocksAnExistingProviderReference(t *testing.T) {
 		case "/v3/company/123/vendor/21":
 			body = `{"Vendor":{"Id":"21","Active":true,"DisplayName":"Supplier"}}`
 		case "/v3/company/123/account/5":
-			body = `{"Account":{"Id":"5","Name":"Accounts Payable","AccountType":"Accounts Payable","AccountSubType":"AccountsPayable","Active":true,"CurrencyRef":{"value":"USD"}}}`
+			body = `{"Account":{"Id":"5","Name":"Accounts Payable","AccountType":"Accounts Payable","AccountSubType":"AccountsPayable","Active":true,"CurrencyRef":{"value":"USD"},"CurrentBalance":0,"SyncToken":"1"}}`
 		case "/v3/company/123/account/7":
-			body = `{"Account":{"Id":"7","Name":"Prepaid service","AccountType":"Other Current Asset","AccountSubType":"PrepaidExpenses","Active":true,"CurrencyRef":{"value":"USD"}}}`
+			body = `{"Account":{"Id":"7","Name":"Prepaid service","AccountType":"Other Current Asset","AccountSubType":"PrepaidExpenses","Active":true,"CurrencyRef":{"value":"USD"},"CurrentBalance":0,"SyncToken":"1"}}`
 		case "/v3/company/123/query":
 			body = `{"QueryResponse":{"VendorCredit":[{"Id":"33","DocNumber":"CN-7"}]}}`
 		default:

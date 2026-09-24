@@ -37,3 +37,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `051_client_profile.sql` stores each QuickBooks and Xero connection's home currency and first fiscal month, read at connect time (QuickBooks) or at each snapshot (Xero). Apply after 050 with API/worker stopped; existing connections stay unknown (USD only) until reconnected or snapshotted. `/readyz` checks it.
 
 `052_settlement_posting.sql` lets a production grant cover Stripe settlement fee entries. Apply after 051 with API/worker stopped; `/readyz` checks it.
+
+`053_production_corrections.sql` lets a production grant cover Bill expense corrections and supplier credits and records the grant on each attempt. Apply after 052 with API/worker stopped; `/readyz` checks it.

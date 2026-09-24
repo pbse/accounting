@@ -64,8 +64,13 @@ func TestBillCorrectionPreservesSimpleBillAndChecksReadback(t *testing.T) {
 	if _, err := sandbox.VerifyBillCorrection(context.Background(), before, "2", "9"); err == nil {
 		t.Fatal("changed amount passed readback")
 	}
-	sandbox.Production = true
-	if _, err := sandbox.CorrectBillAccount(context.Background(), before, "2", "9"); err == nil {
-		t.Fatal("production Bill update was allowed")
+	before.TotalAmt = "100"
+	sandbox.Production, sandbox.Accounts = true, []string{"7", "9"}
+	if _, err := sandbox.CorrectBillAccount(context.Background(), before, "2", "9"); err == nil || !strings.Contains(err.Error(), "production grant") {
+		t.Fatalf("a production recode out of an account the grant does not allow was sent: %v", err)
+	}
+	sandbox.Accounts = []string{"8", "9"}
+	if _, err := sandbox.CorrectBillAccount(context.Background(), before, "2", "9"); err != nil {
+		t.Fatalf("a production recode between two granted accounts is sent: %v", err)
 	}
 }

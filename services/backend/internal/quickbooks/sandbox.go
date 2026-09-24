@@ -213,6 +213,24 @@ func (s Sandbox) readAccount(ctx context.Context, id string) (account, error) {
 	return account{LedgerAccount{ID: a.ID, Name: a.Name, Classification: a.Classification, Balance: a.CurrentBalance, SyncToken: a.SyncToken}, a.FullyQualifiedName}, nil
 }
 
+// AccountNamed returns the one allowed account with this name or full name.
+func (s Sandbox) AccountNamed(ctx context.Context, name string) (string, error) {
+	var found []string
+	for _, id := range s.allowed() {
+		a, err := s.readAccount(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if name != "" && (a.Name == name || a.fullName == name) {
+			found = append(found, a.ID)
+		}
+	}
+	if len(found) != 1 {
+		return "", fmt.Errorf("Account %q must match exactly one account allowed by this client's production grant", name)
+	}
+	return found[0], nil
+}
+
 func (s Sandbox) company(ctx context.Context) error {
 	var company struct{ CompanyInfo struct{ CompanyName string } }
 	if err := s.request(ctx, "GET", "/companyinfo/"+s.Realm, nil, &company); err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"reflect"
+	"slices"
 )
 
 type Bill struct {
@@ -75,22 +76,22 @@ func simpleBill(b Bill, currency string) bool {
 }
 
 func (s Sandbox) ReadBill(ctx context.Context, id string) (Bill, error) {
-	if s.Production || !identifier.MatchString(id) {
-		return Bill{}, errors.New("An exact sandbox Bill ID is required")
+	if !identifier.MatchString(id) {
+		return Bill{}, errors.New("An exact Bill ID is required")
 	}
 	var result struct{ Bill Bill }
 	if err := s.request(ctx, "GET", "/bill/"+id, nil, &result); err != nil {
 		return Bill{}, err
 	}
 	if result.Bill.ID != id || !simpleBill(result.Bill, s.currency()) {
-		return Bill{}, errors.New("Only a current, unpaid USD Bill with up to ten simple account-based expense lines is supported")
+		return Bill{}, errors.New("Only a current, unpaid Bill in the client's currency with up to ten simple account-based expense lines is supported")
 	}
 	return result.Bill, nil
 }
 
 func (s Sandbox) ValidateExpenseAccount(ctx context.Context, id string) (string, error) {
-	if s.Production || !identifier.MatchString(id) {
-		return "", errors.New("An exact sandbox expense account ID is required")
+	if !identifier.MatchString(id) || s.Production && !slices.Contains(s.Accounts, id) {
+		return "", errors.New("Choose an exact expense account allowed by this client's production grant")
 	}
 	var result struct {
 		Account struct {
@@ -112,8 +113,8 @@ func (s Sandbox) ValidateExpenseAccount(ctx context.Context, id string) (string,
 }
 
 func (s Sandbox) CorrectBillAccount(ctx context.Context, before Bill, lineID, target string) (Bill, error) {
-	if s.Production || !simpleBill(before, s.currency()) || !identifier.MatchString(target) {
-		return Bill{}, errors.New("The approved sandbox Bill correction is invalid")
+	if !simpleBill(before, s.currency()) || !identifier.MatchString(target) {
+		return Bill{}, errors.New("The approved Bill correction is invalid")
 	}
 	lines := append([]BillLine(nil), before.Line...)
 	found := false
@@ -121,6 +122,10 @@ func (s Sandbox) CorrectBillAccount(ctx context.Context, before Bill, lineID, ta
 		if lines[i].ID == lineID {
 			if lines[i].AccountBasedExpenseLineDetail.AccountRef.Value == target {
 				return Bill{}, errors.New("Target account must differ from the selected Bill line")
+			}
+			// A recode moves the line out of one account and into another; a production grant must allow both.
+			if s.Production && (!slices.Contains(s.Accounts, target) || !slices.Contains(s.Accounts, lines[i].AccountBasedExpenseLineDetail.AccountRef.Value)) {
+				return Bill{}, errors.New("Both the Bill line's current and target expense accounts must be allowed by this client's production grant")
 			}
 			lines[i].AccountBasedExpenseLineDetail.AccountRef = Reference{target}
 			found = true
