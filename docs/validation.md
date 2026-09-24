@@ -419,6 +419,15 @@ Author: Claude Opus 5.5. Migration 045 adds `agent_access`, `current_agent_acces
 - Observed red with the membership binding off, the pending-request rule off, widening allowed, scope filtering off, the grant requirement off, and the audience check off. Agents never receive firm-wide access; decisions are serialized with the firm row lock.
 - Full `internal/transport` and `internal/auth` packages pass; frontend typecheck passes. The Firm settings card couldn't be exercised in a browser: hosted sign-in isn't available locally, where the card shows the workspace-token note.
 
+## Deeper exception finding (2026-09-24)
+
+Author: Claude Opus 5.5. No migration.
+
+- `TestAbnormalBalancesReadTheTrialBalanceColumns`: from a Trial Balance in either Debit/Credit column order, flags a receivable credit, a credit-card debit and an overdrawn bank; skips accumulated depreciation, a retained-earnings deficit, an owner draw, a normal expense and an account of unknown type. A EUR report yields a EUR question, and an unreadable amount fails the check instead of passing as normal. Observed red with expenses treated as credit-normal, with contra subtypes, owner draws or unknown types not skipped, with the Debit column not found, with the currency dropped and with unreadable amounts skipped.
+- `TestFindExceptionsRaisesQuestionsWithoutConcluding` now also flags one vendor whose three purchases and one bill went to two accounts (each account named once) without mixing in a customer with the same ID, flags two accounts that share a name, and does not flag one split purchase or the same split in a different line order. Observed red with transaction counts in place of distinct account sets, with unsorted sets, with repeated account names, with the payee type dropped from the key, with VendorRef not treated as a vendor and with sets compared by account name.
+- `TestExceptionsScanTheWholeLatestCapture` (PostgreSQL): without a snapshot `balances.snapshot` is null; with two period snapshots and no transaction capture, balance items come from the newer snapshot. Observed red with the oldest snapshot chosen and with balances dropped when no capture exists.
+- No personal-spending check: nothing in the captured data separates a personal purchase from a business one, so purpose stays a client question.
+
 ## Posting beyond prepaids (2026-09-24)
 
 Author: Claude Opus 5.5. Migration 046 moves production grants to account and kind lists.

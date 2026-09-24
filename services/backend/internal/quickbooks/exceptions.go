@@ -3,7 +3,9 @@ package quickbooks
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -40,7 +42,7 @@ func amount(row TransactionRow) string {
 	return row.Amount + " " + row.Currency
 }
 
-type ref struct{ Value, Name string }
+type ref struct{ Value, Name, Type string }
 
 // FindExceptions raises questions from captured ledger rows. It never concludes that
 // a transaction is wrong, a duplicate or personal; each item needs evidence or an answer.
@@ -49,9 +51,12 @@ func FindExceptions(rows []TransactionRow) []Exception {
 		row          TransactionRow
 		counterparty ref
 		account      string
+		coded        []string
 		date         time.Time
 	}
 	groups := map[string][]parsed{}
+	coding := map[string][]parsed{}
+	accountNames := map[string]string{}
 	var out []Exception
 	for _, row := range rows {
 		var record struct {
@@ -65,14 +70,25 @@ func FindExceptions(rows []TransactionRow) []Exception {
 		for _, candidate := range []*ref{record.EntityRef, record.VendorRef, record.CustomerRef} {
 			if candidate != nil && candidate.Value != "" {
 				p.counterparty = *candidate
+				if candidate == record.VendorRef {
+					p.counterparty.Type = "Vendor"
+				}
 				break
 			}
 		}
 		for _, line := range record.Line {
 			for key, raw := range line {
 				var detail struct{ AccountRef ref }
-				if strings.HasSuffix(key, "Detail") && json.Unmarshal(raw, &detail) == nil && holdingAccount.MatchString(detail.AccountRef.Name) && p.account == "" {
-					p.account = detail.AccountRef.Name
+				if !strings.HasSuffix(key, "Detail") || json.Unmarshal(raw, &detail) != nil || detail.AccountRef.Name == "" {
+					continue
+				}
+				if holdingAccount.MatchString(detail.AccountRef.Name) {
+					if p.account == "" {
+						p.account = detail.AccountRef.Name
+					}
+				} else if key == "AccountBasedExpenseLineDetail" && detail.AccountRef.Value != "" && !slices.Contains(p.coded, detail.AccountRef.Value) {
+					p.coded = append(p.coded, detail.AccountRef.Value)
+					accountNames[detail.AccountRef.Value] = detail.AccountRef.Name
 				}
 			}
 		}
@@ -96,6 +112,11 @@ func FindExceptions(rows []TransactionRow) []Exception {
 				Finding:  fmt.Sprintf("Purchase %s for %s on %s has no payee.", row.ProviderID, amount(row), row.Date),
 				NextStep: "Missing: the receipt or bank detail naming who was paid. Its category is unconfirmed until then.",
 				Question: fmt.Sprintf("Who was paid %s on %s, and what was it for?", amount(row), row.Date)})
+		}
+		if (row.Kind == "Purchase" || row.Kind == "Bill") && p.counterparty.Value != "" && len(p.coded) > 0 {
+			slices.Sort(p.coded)
+			payee := p.counterparty.Type + "\x00" + p.counterparty.Value
+			coding[payee] = append(coding[payee], p)
 		}
 		if p.counterparty.Value != "" && row.Amount != "" {
 			key := row.Kind + "\x00" + p.counterparty.Value + "\x00" + row.Currency + "\x00" + row.Amount
@@ -135,6 +156,32 @@ func FindExceptions(rows []TransactionRow) []Exception {
 			}
 			start = end
 		}
+	}
+	// Different transactions with one payee coded to different accounts is a question, not an error.
+	for _, payee := range slices.Sorted(maps.Keys(coding)) {
+		group := coding[payee]
+		accounts := []string{}
+		distinct := map[string]bool{}
+		for _, p := range group {
+			distinct[strings.Join(p.coded, "\x00")] = true
+			for _, id := range p.coded {
+				accounts = append(accounts, accountNames[id])
+			}
+		}
+		if len(distinct) < 2 {
+			continue
+		}
+		sort.Slice(group, func(i, j int) bool { return group[i].row.Date < group[j].row.Date })
+		slices.Sort(accounts)
+		item := Exception{Type: "inconsistent_coding", Kind: group[0].row.Kind, Counterparty: group[0].counterparty.Name, Account: strings.Join(slices.Compact(accounts), ", ")}
+		for _, p := range group {
+			item.ProviderIDs = append(item.ProviderIDs, p.row.ProviderID)
+			item.Dates = append(item.Dates, p.row.Date)
+		}
+		item.Finding = fmt.Sprintf("%d transactions with %s are coded to different accounts: %s.", len(group), item.Counterparty, item.Account)
+		item.NextStep = "Missing: the firm's or client's rule for which account these purchases belong in. Nothing is recategorized."
+		item.Question = fmt.Sprintf("Purchases from %s went to %s this month. Which account should they use?", item.Counterparty, item.Account)
+		out = append(out, item)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Type != out[j].Type {
