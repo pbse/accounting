@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { authKitClientId } from "../auth/Auth";
 import { Avatar, Icon } from "../dashboard/Icon";
 import { FirmEnrollment } from "./Enterprise";
+import { PlanChips } from "./Planning";
 import { workspaceRequest } from "./workspace";
 import type { Close } from "./WorkpaperView";
 
@@ -95,7 +96,7 @@ export default function ClosesList() {
         <div className="rows-head">
           <span>Client</span>
           <span>Close month</span>
-          <span />
+          <span>Plan</span>
           <span />
         </div>
         {loading && <p role="status" className="empty">Loading closes…</p>}
@@ -107,7 +108,9 @@ export default function ClosesList() {
               <strong>{item.entity}</strong>
             </span>
             <span className="chip">{item.period}</span>
-            <span />
+            <span>
+              <PlanChips plan={item} />
+            </span>
             <Icon name="arrow" size={16} />
           </Link>
         ))}

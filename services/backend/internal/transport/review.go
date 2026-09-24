@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -25,6 +26,65 @@ func reviewActor(w http.ResponseWriter, r *http.Request) (string, bool) {
 	}
 	return "local-workspace (development)", true
 }
+
+// Bulk review only covers drafts that change nothing in the ledger and carry no reviewer judgment.
+const bulkReason = `CASE
+ WHEN COALESCE(w.paper->'proposal','null'::jsonb)<>'null'::jsonb THEN 'Proposes a ledger adjustment'
+ WHEN jsonb_array_length(COALESCE(w.paper->'questions','[]'::jsonb))>0 THEN 'Has open questions'
+ WHEN EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(w.paper->'payouts','[]'::jsonb)) p WHERE p->>'status'<>'matched') THEN 'Includes reviewer-chosen or in-transit payouts'
+ WHEN jsonb_array_length(COALESCE(w.paper->'input'->'reviewed_matches','[]'::jsonb))+jsonb_array_length(COALESCE(w.paper->'input'->'prior_outstanding','[]'::jsonb))+jsonb_array_length(COALESCE(w.paper->'input'->'current_outstanding','[]'::jsonb))+jsonb_array_length(COALESCE(w.paper->'input'->'transfers','[]'::jsonb))>0 THEN 'Includes reviewer classifications'
+ ELSE '' END`
+
+// decideReview applies one decision inside the caller's transaction; the caller has locked the close.
+func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, decision, note, expectedDigest, expectedReview string, bulk bool) (string, int, string) {
+	note = strings.TrimSpace(note)
+	if (decision != "approved" && decision != "changes_requested") || len(note) == 0 || len(note) > 2000 {
+		return "", 422, "Choose approve or request changes and explain your decision (1–2,000 bytes)."
+	}
+	var digest, state, version, reason string
+	var raw []byte
+	err := tx.QueryRowContext(ctx, `SELECT digest,review_state,review_id,paper,`+bulkReason+` FROM workpaper_review_state w WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&digest, &state, &version, &raw, &reason)
+	if err == sql.ErrNoRows {
+		return "", 404, "Workpaper not found."
+	}
+	if err != nil {
+		return "", 503, "Could not read current workpaper."
+	}
+	if expectedDigest != digest || expectedReview != version {
+		return "", 409, "This workpaper or its review changed. Reload the review before deciding."
+	}
+	var paper struct {
+		Sources  []preparation.Source `json:"sources"`
+		Blockers []string             `json:"blockers"`
+	}
+	if json.Unmarshal(raw, &paper) != nil {
+		return "", 500, "Invalid saved workpaper."
+	}
+	if decision == "approved" && (state == "source_changed" || len(paper.Sources) == 0 || len(paper.Blockers) > 0) {
+		return "", 409, "Approval requires current linked evidence and no unresolved calculation blockers. Prepare a revised draft first."
+	}
+	if bulk && (decision != "approved" || state != "pending" || reason != "") {
+		return "", 409, "Review this draft individually: " + strings.ToLower(reason) + "."
+	}
+	if decision == "changes_requested" {
+		var active bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sandbox_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown'))`, paperID).Scan(&active); err != nil || active {
+			return "", 409, "Resolve the outstanding sandbox execution before changing review status."
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE sandbox_postings SET state='preview',approved_by=NULL,approval_expires_at=NULL WHERE workpaper_id::text=$1 AND state='approved'`, paperID); err != nil {
+			return "", 503, "Could not invalidate posting approval."
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE vendor_credit_postings SET state='preview',approved_by=NULL,approval_expires_at=NULL WHERE workpaper_id::text=$1 AND state='approved'`, paperID); err != nil {
+			return "", 503, "Could not invalidate supplier credit approval."
+		}
+	}
+	var id string
+	if err = tx.QueryRowContext(ctx, `INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, paperID, digest, decision, note, actor).Scan(&id); err != nil {
+		return "", 503, "Review save could not be confirmed. Reload history before retrying."
+	}
+	return id, 0, ""
+}
+
 func registerReview(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/workpapers/{paper}", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("record") == "1" {
@@ -111,11 +171,6 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 		if !decode(w, r, &input) {
 			return
 		}
-		input.Note = strings.TrimSpace(input.Note)
-		if (input.Decision != "approved" && input.Decision != "changes_requested") || len(input.Note) == 0 || len(input.Note) > 2000 {
-			problem(w, 422, "Choose approve or request changes and explain your decision (1–2,000 bytes).")
-			return
-		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Review storage unavailable.")
@@ -127,55 +182,67 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		var digest, state, version string
-		var raw []byte
-		err = tx.QueryRowContext(r.Context(), `SELECT digest,review_state,review_id,paper FROM workpaper_review_state WHERE id::text=$1 AND close_id=$2`, r.PathValue("paper"), closeID).Scan(&digest, &state, &version, &raw)
-		if err == sql.ErrNoRows {
-			problem(w, 404, "Workpaper not found.")
+		id, status, message := decideReview(r.Context(), tx, closeID, r.PathValue("paper"), actor, input.Decision, input.Note, input.Digest, input.ExpectedReviewID, false)
+		if status != 0 {
+			problem(w, status, message)
 			return
 		}
-		if err != nil {
-			problem(w, 503, "Could not read current workpaper.")
-			return
-		}
-		if input.Digest != digest || input.ExpectedReviewID != version {
-			problem(w, 409, "This workpaper or its review changed. Reload the review before deciding.")
-			return
-		}
-		var paper struct {
-			Sources  []preparation.Source `json:"sources"`
-			Blockers []string             `json:"blockers"`
-		}
-		if json.Unmarshal(raw, &paper) != nil {
-			problem(w, 500, "Invalid saved workpaper.")
-			return
-		}
-		if input.Decision == "approved" && (state == "source_changed" || len(paper.Sources) == 0 || len(paper.Blockers) > 0) {
-			problem(w, 409, "Approval requires current linked evidence and no unresolved calculation blockers. Prepare a revised draft first.")
-			return
-		}
-		if input.Decision == "changes_requested" {
-			var active bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM sandbox_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown'))`, r.PathValue("paper")).Scan(&active); err != nil || active {
-				problem(w, 409, "Resolve the outstanding sandbox execution before changing review status.")
-				return
-			}
-			if _, err = tx.ExecContext(r.Context(), `UPDATE sandbox_postings SET state='preview',approved_by=NULL,approval_expires_at=NULL WHERE workpaper_id::text=$1 AND state='approved'`, r.PathValue("paper")); err != nil {
-				problem(w, 503, "Could not invalidate posting approval.")
-				return
-			}
-			if _, err = tx.ExecContext(r.Context(), `UPDATE vendor_credit_postings SET state='preview',approved_by=NULL,approval_expires_at=NULL WHERE workpaper_id::text=$1 AND state='approved'`, r.PathValue("paper")); err != nil {
-				problem(w, 503, "Could not invalidate supplier credit approval.")
-				return
-			}
-		}
-		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, r.PathValue("paper"), digest, input.Decision, input.Note, actor).Scan(&id)
-		if err != nil || tx.Commit() != nil {
+		if tx.Commit() != nil {
 			problem(w, 503, "Review save could not be confirmed. Reload history before retrying.")
 			return
 		}
 		jsonReply(w, 200, map[string]string{"id": id, "decision": input.Decision})
+	})
+	// Each item is its own transaction with a fresh access check, so one stale draft cannot block the rest.
+	mux.HandleFunc("POST /v1/closes/review-batch", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := reviewActor(w, r)
+		if !ok {
+			return
+		}
+		var input struct {
+			Note  string `json:"note"`
+			Items []struct {
+				CloseID          string `json:"close_id"`
+				WorkpaperID      string `json:"workpaper_id"`
+				Digest           string `json:"digest"`
+				ExpectedReviewID string `json:"expected_review_id"`
+			} `json:"items"`
+		}
+		if !decode(w, r, &input) {
+			return
+		}
+		if len(input.Items) < 1 || len(input.Items) > 20 {
+			problem(w, 422, "Select between 1 and 20 drafts.")
+			return
+		}
+		results := []map[string]any{}
+		for _, item := range input.Items {
+			result := map[string]any{"close_id": item.CloseID, "workpaper_id": item.WorkpaperID}
+			id, status, message := func() (string, int, string) {
+				tx, err := db.BeginTx(r.Context(), nil)
+				if err != nil {
+					return "", 503, "Review storage unavailable."
+				}
+				defer tx.Rollback()
+				var closeID string
+				err = tx.QueryRowContext(r.Context(), `SELECT c.id::text FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE c.id::text=$1 AND c.organization_id=$2 AND o.enabled AND ($2='local-development' OR EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=$2 AND m.subject=$3 AND m.granted)) AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) FOR UPDATE OF c`, item.CloseID, organization(r), subject(r), firmAccess(r)).Scan(&closeID)
+				if err != nil {
+					return "", 404, "Close not found or no longer accessible."
+				}
+				id, status, message := decideReview(r.Context(), tx, closeID, item.WorkpaperID, actor, "approved", input.Note, item.Digest, item.ExpectedReviewID, true)
+				if status == 0 && tx.Commit() != nil {
+					return "", 503, "Review save could not be confirmed. Reload history before retrying."
+				}
+				return id, status, message
+			}()
+			if status == 0 {
+				result["review_id"] = id
+			} else {
+				result["error"] = message
+			}
+			results = append(results, result)
+		}
+		jsonReply(w, 200, map[string]any{"results": results})
 	})
 	mux.HandleFunc("POST /v1/closes/{id}/evidence/{evidence}/replace", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := reviewActor(w, r)

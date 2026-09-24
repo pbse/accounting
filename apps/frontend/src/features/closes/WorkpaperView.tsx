@@ -9,12 +9,13 @@ import { Icon } from "../dashboard/Icon";
 import { ReconciliationResult } from "../reconciliation/Prepare";
 import { SettlementResult } from "../settlements/Prepare";
 import type { Source } from "./Evidence";
+import type { Plan } from "./Planning";
 import { Posting, ProductionPosting } from "./Posting";
 import { ReviewDecision } from "./ReviewDecision";
 import { VendorCredit } from "./VendorCredit";
 import { workspaceRequest } from "./workspace";
 
-export type Close = { id: string; entity: string; period: string };
+export type Close = { id: string; entity: string; period: string } & Plan;
 type Saved<K, P> = { kind: K; paper: P & { sources?: Source[]; revises?: string; blockers?: string[] } };
 export type Paper = { id: string; created_at: string; review_state: string } & (
   | Saved<"prepaid", PrepaidWorkpaper>

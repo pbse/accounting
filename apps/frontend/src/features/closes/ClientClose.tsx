@@ -15,6 +15,7 @@ import { Readiness } from "./Readiness";
 import { Recurring } from "./Recurring";
 import { RecurringAccruals } from "./RecurringAccruals";
 import { Requests } from "./Requests";
+import { PlanChips, PlanningControls } from "./Planning";
 import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
 import { needsAttention, paperLabels, readyForReview, ReviewPill, useClose, type Close, type Paper } from "./WorkpaperView";
@@ -146,11 +147,14 @@ export default function ClientClose() {
           <Avatar label={close.entity} />
           <span>
             <h1>{close.entity}</h1>
-            <p>Close month {close.period} · prepared work stays a draft until an accountant approves it</p>
+            <p>
+              Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
+            </p>
           </span>
         </div>
         <PrepareActions close={close} />
       </div>
+      <PlanningControls key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}`} closeId={close.id} plan={close} onSaved={() => void reload()} />
       <div className="kpis">
         <Kpi icon="review" tone="" label="Ready for review" value={ready.length} caption={`Current drafts with evidence and no blockers${latest}`} to={`${base}?tab=workpapers&filter=ready`} />
         <Kpi icon="blocked" tone="red" label="Needs attention" value={attention.length} caption={`Blockers, changes requested or evidence changed${latest}`} to={`${base}?tab=workpapers&filter=attention`} />
