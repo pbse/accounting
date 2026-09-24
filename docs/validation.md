@@ -472,3 +472,10 @@ Author: Claude Opus 5.5. No migration.
 
 - `TestQuickBooksScopedOAuthRefreshAndSnapshots`: a sandbox authorization returns to the close's Evidence tab and a production authorization to its Settings tab, where each panel lives. Observed red with each tab removed or swapped.
 - `TestSandboxAttemptIsDurableAndNotRepeated` now creates its close in the same firm as its actor. It still calls the posting handler directly on a plain connection, so it proves posting behavior, not row-level security; the dedicated RLS test covers that.
+
+## QuickBooks change hints (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 049.
+
+- `TestQuickBooksWebhookMarksOnlyActiveSandboxCompanies` (PostgreSQL): without a verifier the endpoint returns 503; a wrong signature returns 401; a body that is not an array, or has no event with CloudEvents 1.0 fields and a `qbo.<entity>.<operation>.v<n>` type, returns 400; none of these mark anything. A valid event marks only the active sandbox connection for its company, not a production or disconnected one with the same company, and an invalid event beside it is ignored; one notification marks two companies. Observed red without the signature check, the sandbox filter, the active filter or the event validation.
+- `TestChangeHintsRefreshAfterTheCaptureThatMissedThem` (PostgreSQL): a change before the last capture started queues nothing inside the daily window; a later change queues one `quickbooks-change-hint` refresh, not duplicated; a change after a refresh was queued but before it started is not repeated; a change during a running capture queues a refresh once it finishes. Observed red without the hint condition and when comparing with queue time instead of start time.

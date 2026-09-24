@@ -24,17 +24,19 @@ func scheduleSync(ctx context.Context, db *sql.DB) error {
 		return nil
 	}
 	_, err := db.ExecContext(ctx, `WITH due AS (
- SELECT c.id AS close_id,x.id AS connection_id,c.period FROM client_closes c
+ SELECT c.id AS close_id,x.id AS connection_id,c.period,x.changed_at>COALESCE(latest.started_at,'-infinity') AS hinted FROM client_closes c
  JOIN organizations o ON o.id=c.organization_id AND o.enabled
  JOIN quickbooks_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity)
+ -- A change hint after the newest capture started makes the close due before its daily refresh.
+ LEFT JOIN LATERAL (SELECT s.started_at FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period ORDER BY s.id DESC LIMIT 1) latest ON true
  WHERE x.environment='sandbox' AND x.state='active' AND x.credential IS NOT NULL
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
  AND NOT EXISTS (SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period AND s.state IN ('queued','running'))
- AND NOT EXISTS (SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period AND s.created_at>now()-interval '24 hours')
+ AND (NOT EXISTS (SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period AND s.created_at>now()-interval '24 hours') OR x.changed_at>COALESCE(latest.started_at,'-infinity'))
  ORDER BY c.id FOR UPDATE OF c SKIP LOCKED LIMIT 10
  ) INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by)
- SELECT close_id,connection_id,period,'scheduled-quickbooks-refresh' FROM due
+ SELECT close_id,connection_id,period,CASE WHEN hinted THEN 'quickbooks-change-hint' ELSE 'scheduled-quickbooks-refresh' END FROM due
  ON CONFLICT(close_id,connection_id,period) WHERE state IN ('queued','running') DO NOTHING`)
 	return err
 }

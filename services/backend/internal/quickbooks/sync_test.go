@@ -105,3 +105,90 @@ func TestTransactionChecksReuseEvidenceAndRefreshIndexedRows(t *testing.T) {
 		t.Fatal("historical indexed rows were retained after refresh", err)
 	}
 }
+
+func TestChangeHintsRefreshAfterTheCaptureThatMissedThem(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	t.Setenv("QBO_CLIENT_ID", "synthetic")
+	t.Setenv("QBO_CLIENT_SECRET", "synthetic")
+	t.Setenv("QBO_REDIRECT_URI", "https://api.example.test/v1/quickbooks/callback")
+	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
+	ctx := context.Background()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_hint" + rand.Text()
+	var closeID, connectionID string
+	_, err = db.ExecContext(ctx, `INSERT INTO organizations(id,name) VALUES($1,'Synthetic change hints')`, org)
+	must(err)
+	must(db.QueryRowContext(ctx, `INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Hint client',$2) RETURNING id::text`, org, time.Now().UTC().Format("2006-01")).Scan(&closeID))
+	must(db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,credential,environment) VALUES($1,$2,'Hint client','fixture','active',$3,now(),'123','\x00','sandbox') RETURNING id::text`, closeID, org, rand.Text()).Scan(&connectionID))
+	defer func() {
+		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, connectionID)
+		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
+		db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
+	}()
+	// A capture that started ten minutes ago and has completed.
+	_, err = db.ExecContext(ctx, `INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,started_at,finished_at,created_at) SELECT id,$2,period,'fixture','completed',now()-interval '10 minutes',now()-interval '5 minutes',now()-interval '11 minutes' FROM client_closes WHERE id=$1`, closeID, connectionID)
+	must(err)
+	queued := func() []string {
+		t.Helper()
+		must(scheduleSync(ctx, db))
+		rows, err := db.QueryContext(ctx, `SELECT requested_by FROM quickbooks_entity_syncs WHERE close_id=$1 AND state='queued'`, closeID)
+		must(err)
+		defer rows.Close()
+		out := []string{}
+		for rows.Next() {
+			var by string
+			rows.Scan(&by)
+			out = append(out, by)
+		}
+		return out
+	}
+	hint := func(ago string) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, `UPDATE quickbooks_connections SET changed_at=now()-$2::interval WHERE id=$1`, connectionID, ago)
+		must(err)
+	}
+	hint("20 minutes")
+	if got := queued(); len(got) != 0 {
+		t.Fatalf("a change before the last capture started needs no refresh inside the daily window: %v", got)
+	}
+	hint("1 minute")
+	if got := queued(); len(got) != 1 || got[0] != "quickbooks-change-hint" {
+		t.Fatalf("a change after the last capture started queues one early refresh: %v", got)
+	}
+	if got := queued(); len(got) != 1 {
+		t.Fatalf("a queued refresh is not duplicated: %v", got)
+	}
+	// A change arrives after that refresh was queued but before it started; the capture covers it.
+	_, err = db.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET state='completed',created_at=now()-interval '5 minutes',started_at=now()-interval '1 minute',finished_at=now() WHERE close_id=$1 AND state='queued'`, closeID)
+	must(err)
+	hint("2 minutes")
+	if got := queued(); len(got) != 0 {
+		t.Fatalf("a capture that started after the hint is not repeated: %v", got)
+	}
+	// A change that arrives while a capture runs is picked up once it finishes.
+	_, err = db.ExecContext(ctx, `INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,started_at) SELECT id,$2,period,'fixture','running',now()-interval '2 minutes' FROM client_closes WHERE id=$1`, closeID, connectionID)
+	must(err)
+	hint("1 minute")
+	if got := queued(); len(got) != 0 {
+		t.Fatalf("nothing is queued while a capture runs: %v", got)
+	}
+	_, err = db.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET state='completed',finished_at=now() WHERE close_id=$1 AND state='running'`, closeID)
+	must(err)
+	if got := queued(); len(got) != 1 || got[0] != "quickbooks-change-hint" {
+		t.Fatalf("a change during a capture queues a refresh after it: %v", got)
+	}
+}
