@@ -19,14 +19,12 @@ const rowSecurityEnforced = `SELECT NOT r.rolsuper AND NOT r.rolbypassrls
 
 type systemKey struct{}
 
-// SystemContext marks work that is not tied to one signed-in firm: token-checked public
-// routes, provider webhooks and operator actions. Row-level security then admits every firm.
-func SystemContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, systemKey{}, true)
-}
-
+// system marks work not tied to one signed-in firm: token-checked public routes and
+// provider webhooks. Row-level security then admits every firm.
 func system(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { next(w, r.WithContext(SystemContext(r.Context()))) }
+	return func(w http.ResponseWriter, r *http.Request) {
+		next(w, r.WithContext(context.WithValue(r.Context(), systemKey{}, true)))
+	}
 }
 
 func tenantOf(ctx context.Context, fallback string) string {
