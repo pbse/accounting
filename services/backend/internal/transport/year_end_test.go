@@ -98,6 +98,7 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	for _, kind := range []string{"bank", "credit_card"} {
 		save(mar, "reconciliation", reconciliation.Workpaper{Status: "reconciled", Input: reconciliation.Input{Account: "Operating", AccountType: kind, StatementClosing: "900.00", LedgerClosing: "900.00"}, ClosingDifference: "0.00"}, true)
 	}
+	save(mar, "settlement", reconciliation.SettlementWorkpaper{Status: "draft", Input: reconciliation.SettlementInput{ReportReference: "stripe-mar.csv"}, Proposal: &prepaids.Adjustment{Date: "2026-03-31", DebitAccount: "Stripe fees", CreditAccount: "Sales", Amount: "29.22"}}, true)
 	save(open(local, entity, "2025-12"), "prepaid", prepaid("Last year", "10.00", "0.00"), true)
 	save(open(local, "Another client "+rand.Text(), "2026-02"), "prepaid", prepaid("Another client", "10.00", "0.00"), true)
 	save(open(other, entity, "2026-02"), "prepaid", prepaid("Other firm", "10.00", "0.00"), true)
@@ -158,6 +159,9 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	}
 	if got := table("postings.csv"); len(got) != 1 || got[0][2] != olderSoftware || got[0][3] != "verified" || got[0][6] != "Debit account 21 30; Credit account 20 30" {
 		t.Fatalf("the verified posting on an older version stays in the history: %v", got)
+	}
+	if !strings.Contains(files["adjustments.csv"], "2026-03,settlement,") || !strings.Contains(files["adjustments.csv"], "Stripe fees,Sales,29.22") {
+		t.Fatalf("an approved Stripe fee entry is part of the adjustment history:\n%s", files["adjustments.csv"])
 	}
 	questions := files["open-questions.csv"]
 	for _, want := range []string{"Roll-forward break: Maintenance closed 2026-01 at 500.00, but this schedule shows 450.00", "Roll-forward break: First Bank closed 2026-01 at 118000.00 principal, but this month opens at 117500.00", "latest prepaid version for software is pending, not approved", "Hosting has a 2026-02 balance in this schedule but no 2026-02 workpaper", "No close exists for this month", "Warranty has an approved 2026-01 workpaper, but this schedule has no 2026-01 row", "Second Bank opens 2026-03 with 5000.00 principal, but 2026-02 has no loan workpaper"} {
