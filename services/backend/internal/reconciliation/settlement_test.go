@@ -146,8 +146,16 @@ func TestStripeFeeEntryCoversFeesOfPayoutsDepositedThisMonth(t *testing.T) {
 	}
 	blocked := settlementInput(stripeReport(settlementRows...))
 	blocked.FeeEntry = entry("0")
-	if paper, _ = PrepareSettlement(blocked); len(paper.Blockers) == 0 || paper.Proposal != nil {
-		t.Fatalf("an unresolved trace proposes nothing: %v %+v", paper.Blockers, paper.Proposal)
+	if paper, _ = PrepareSettlement(blocked); len(paper.Blockers) == 0 || paper.Proposal != nil || !strings.Contains(strings.Join(paper.Questions, " "), "$3.00 belong to payouts not yet traced") {
+		t.Fatalf("an unresolved trace proposes nothing and names the untraced fees: %v %+v %v", paper.Blockers, paper.Proposal, paper.Questions)
+	}
+	// A payout expected on 1 October whose deposit posted on 30 September belongs to September's deposits,
+	// while one expected on 1 September and deposited on 31 August was booked in August.
+	early := resolved(entry("0"))
+	early.ReportCSV = stripeReport(append(append([]string{}, settlementRows...), "2026-09-01 00:00:00,po_H,2026-09-01 00:00:00,txn_20,2026-08-29 08:00:00,usd,Invoice 90,5.00,100.00,95.00,charge,")...)
+	early.BankCSV = settlementBank + "\nB9,2026-08-31,95.00"
+	if paper, err = PrepareSettlement(early); err != nil || paper.Fees != "29.22" || !strings.Contains(strings.Join(paper.Questions, " "), "$9.46") {
+		t.Fatalf("a deposit dated before the close month is not this month's fee: %v %s %v", err, paper.Fees, paper.Questions)
 	}
 	if paper, _ = PrepareSettlement(resolved(nil)); paper.Proposal != nil || paper.Fees != "" {
 		t.Fatalf("without the rule nothing is proposed: %+v", paper)

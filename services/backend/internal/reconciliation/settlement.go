@@ -401,7 +401,7 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 		// Only payouts whose deposit landed this month were booked net this month. Their fees are the
 		// per-transaction fees plus Stripe fees charged as their own rows (category "fee", negative gross).
 		monthEnd := month.AddDate(0, 1, -1).Format("2006-01-02")
-		var fees, deferred int64
+		var fees, deferred, untraced int64
 		for _, payout := range result.Payouts {
 			fee, _ := cents(payout.Fee)
 			for _, category := range payout.Categories {
@@ -410,15 +410,21 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 					fee -= gross
 				}
 			}
-			if (payout.Status == "matched" || payout.Status == "reviewed") && payout.Deposit != nil && payout.Deposit.Date <= monthEnd {
+			switch {
+			case payout.Status == "unmatched" || payout.Status == "ambiguous":
+				untraced += fee
+			case payout.Deposit != nil && strings.HasPrefix(payout.Deposit.Date, input.ClosePeriod+"-"):
 				fees += fee
-			} else {
+			default:
 				deferred += fee
 			}
 		}
 		result.Fees = money(fees)
 		if deferred != 0 {
-			result.Questions = append(result.Questions, fmt.Sprintf("Fees of $%s belong to payouts in transit or deposited after month-end; they are left for the month their deposit is booked.", money(deferred)))
+			result.Questions = append(result.Questions, fmt.Sprintf("Fees of $%s belong to payouts in transit or deposited outside this month; they are left for the month their deposit is booked.", money(deferred)))
+		}
+		if untraced != 0 {
+			result.Questions = append(result.Questions, fmt.Sprintf("Fees of $%s belong to payouts not yet traced to a deposit; trace them before the fee entry is proposed.", money(untraced)))
 		}
 		if delta := fees - bookedFees; len(result.Blockers) == 0 && delta != 0 {
 			result.Proposal = &prepaids.Adjustment{Date: monthEnd, DebitAccount: input.FeeEntry.FeeAccount, CreditAccount: input.FeeEntry.DepositAccount, Amount: money(delta)}
