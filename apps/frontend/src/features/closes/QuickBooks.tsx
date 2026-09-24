@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 
 type Connection = {
   id: string;
+  environment: "sandbox" | "production";
   state: string;
   realm: string;
   company_name: string;
@@ -21,6 +23,7 @@ type Snapshot = {
 };
 type Status = {
   configured: boolean;
+  production_configured: boolean;
   hosted: boolean;
   data: { connection: Connection | null; snapshots: Snapshot[] };
 };
@@ -180,11 +183,14 @@ export function QuickBooks({
     }
   }
   const c = status?.data.connection;
+  // Books are read from the client's production company once connected; it is connected and confirmed under Settings.
+  const production = c ? c.environment === "production" : !!status?.production_configured;
+  const company = production ? "production company" : "sandbox company";
   return (
     <details open={callback.has("qbo_code") && callback.get("qbo_env") !== "production"}>
-      <summary>QuickBooks sandbox ledger evidence</summary>
+      <summary>QuickBooks ledger evidence</summary>
       <p>
-        Connect the sandbox company for {entity}. This reader cannot post
+        Reads {entity}'s QuickBooks {company}. This reader cannot post
         journals. Intuit's accounting permission is broader than read-only; this
         app uses these credentials only for the fixed read operations here.
       </p>
@@ -207,7 +213,7 @@ export function QuickBooks({
               works without QuickBooks.
             </p>
           )}
-          {!status.configured && (
+          {!status.configured && !status.production_configured && (
             <p>
               Sandbox OAuth is not configured. Follow the QuickBooks onboarding
               guide before connecting.
@@ -243,11 +249,14 @@ export function QuickBooks({
                 />{" "}
                 I authorize this action for {entity}
                 {c?.realm
-                  ? ` and sandbox company ${c.company_name} (${c.realm})`
+                  ? ` and ${company} ${c.company_name} (${c.realm})`
                   : ""}
                 .
               </label>
-              {!c && (
+              {production && c?.state !== "active" && (
+                <p>Connect and confirm the client's QuickBooks company under <Link to="?tab=settings">Settings → Production QuickBooks</Link>; its books are then read here.</p>
+              )}
+              {!c && !production && (
                 <button
                   disabled={!confirmed || !status.configured}
                   onClick={() => void action("connect")}
@@ -263,7 +272,7 @@ export function QuickBooks({
                   Complete authorization
                 </button>
               )}
-              {c?.state === "pending_confirmation" && (
+              {c?.state === "pending_confirmation" && !production && (
                 <button
                   disabled={!confirmed}
                   onClick={() => void action("confirm")}
@@ -304,7 +313,7 @@ export function QuickBooks({
             app in Intuit as well to remove provider authorization.
           </p>
           <h3>Captured ledger evidence</h3>
-          <p>For active sandbox connections, the worker checks unsigned-off current and prior-month closes automatically every 24 hours. It retries interrupted checks and records failures here. Identical captures reuse the current evidence; changed captures reopen dependent sandbox approvals. A partial read is never offered as complete evidence.</p>
+          <p>For the active connection, the worker checks unsigned-off current and prior-month closes automatically every 24 hours. It retries interrupted checks and records failures here. Identical captures reuse the current evidence; changed captures reopen dependent sandbox approvals. A partial read is never offered as complete evidence.</p>
           {syncs.length === 0 ? <p>No transaction capture requested.</p> : (
             <ul>{syncs.map((s) => <li key={s.id}>
               {s.period} transactions · {s.state.replaceAll("_", " ")} · attempt {s.attempts}/3

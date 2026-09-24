@@ -25,7 +25,7 @@ func registerDaily(mux *http.ServeMux, db *sql.DB) {
 		rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period,s.id::text,s.finished_at,s.requested_by,s.exceptions,
  CASE WHEN b.connection_id=s.connection_id THEN b.exceptions END,d.reviewed_at
  FROM client_closes c
- JOIN LATERAL (SELECT * FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('completed','unchanged') AND s.exceptions IS NOT NULL ORDER BY s.id DESC LIMIT 1) s ON true
+ JOIN LATERAL (SELECT * FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('completed','unchanged') AND s.exceptions IS NOT NULL AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("c.id")+`,s.connection_id) ORDER BY s.id DESC LIMIT 1) s ON true
  LEFT JOIN daily_reviews d ON d.close_id=c.id LEFT JOIN quickbooks_entity_syncs b ON b.id=d.sync_id
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
@@ -105,7 +105,7 @@ func registerDaily(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM quickbooks_entity_syncs WHERE close_id=$1::bigint AND state IN ('completed','unchanged') AND exceptions IS NOT NULL ORDER BY id DESC LIMIT 1),'')`, closeID).Scan(&latest); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM quickbooks_entity_syncs WHERE close_id=$1::bigint AND state IN ('completed','unchanged') AND exceptions IS NOT NULL AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1),'')`, closeID).Scan(&latest); err != nil {
 			problem(w, 503, "Review storage unavailable.")
 			return
 		}

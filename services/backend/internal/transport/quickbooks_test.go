@@ -82,6 +82,7 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	exchanges, refreshes, pages := 0, 0, 0
 	failRefresh, failPage := false, false
 	periodMode, badPeriod, largePeriod := false, false, false
+	connectDuringRead := false
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
 		var raw string
 		switch r.URL.Host {
@@ -119,6 +120,12 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 			}
 			if strings.Contains(r.URL.Path, "companyinfo") {
 				raw = `{"CompanyInfo":{"Id":"1","CompanyName":"Synthetic company"}}`
+				if connectDuringRead {
+					connectDuringRead = false
+					if _, e := db.Exec(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment) VALUES($1,$2,'QBO synthetic client','user_accountant','authorizing',$3,now()+interval '10 minutes','production')`, closeID, org, rand.Text()); e != nil {
+						t.Fatal(e)
+					}
+				}
 			} else if strings.HasSuffix(r.URL.Path, "/preferences") {
 				raw = `{"Preferences":{"CurrencyPrefs":{"HomeCurrency":{"value":"CAD"}},"AccountingInfoPrefs":{"FiscalYearStartMonth":"July"}}}`
 			} else if strings.Contains(r.URL.Path, "/reports/") {
@@ -202,6 +209,14 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE oauth_digest=$1`, preparation.Digest([]byte(productionState))); err != nil {
 		t.Fatal(err)
 	}
+	var production string
+	if err = db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment,realm,company_name) VALUES($1,$2,'QBO synthetic client','user_accountant','pending_confirmation',$3,now(),'production','999','Synthetic company') RETURNING id::text`, closeID, org, rand.Text()).Scan(&production); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", base, map[string]any{"action": "confirm", "connection_id": production, "confirmed": true, "realm": "999"}, 409)
+	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, production); err != nil {
+		t.Fatal(err)
+	}
 	action := func(name string, want int) []byte {
 		return call("POST", base, map[string]any{"action": name, "connection_id": start.ID, "confirmed": true, "realm": "123"}, want)
 	}
@@ -213,6 +228,15 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	action("confirm", 200)
 	if p, err := preparation.ClientProfile(context.Background(), db, closeID); err != nil || p != (preparation.Profile{Currency: "CAD", FiscalStart: 7, State: "detected"}) {
 		t.Fatalf("connecting reads the company's home currency and fiscal year: %+v %v", p, err)
+	}
+	if err = db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment,realm,company_name) VALUES($1,$2,'QBO synthetic client','user_accountant','active',$3,now(),'production','999','QBO synthetic client') RETURNING id::text`, closeID, org, rand.Text()).Scan(&production); err != nil {
+		t.Fatal(err)
+	}
+	if refused := action("snapshot", 409); !strings.Contains(string(refused), "production") {
+		t.Fatalf("once production is connected, the sandbox company is no longer read: %s", refused)
+	}
+	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, production); err != nil {
+		t.Fatal(err)
 	}
 	actor.Organization = other
 	call("GET", base, nil, 404)
@@ -231,6 +255,13 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	raw := call("GET", base+"/snapshots/"+result.ID, nil, 200)
 	if !bytes.Contains(raw, []byte("9007199254740993.01")) || !bytes.Contains(raw, []byte("Last account")) {
 		t.Fatal("precision or final page lost")
+	}
+	connectDuringRead = true
+	if refused := action("snapshot", 409); !strings.Contains(string(refused), "No snapshot saved") {
+		t.Fatalf("a read that finishes after production was connected is not saved: %s", refused)
+	}
+	if _, err = db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1 AND environment='production'`, closeID); err != nil {
+		t.Fatal(err)
 	}
 	var digest string
 	db.QueryRow(`SELECT digest FROM quickbooks_snapshots WHERE id=$1`, result.ID).Scan(&digest)

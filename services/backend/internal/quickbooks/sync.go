@@ -19,17 +19,23 @@ type syncClaim struct {
 	attempts                                        int
 }
 
+// ReadingConnection is SQL for the connection a client's books are read from: its production connection
+// unless disconnected, else its sandbox one. close is a SQL expression for the close's id.
+func ReadingConnection(close string) string {
+	return `(SELECT r.id FROM quickbooks_connections r JOIN client_closes rc ON rc.organization_id=r.organization_id AND lower(r.client_entity)=lower(rc.entity) WHERE rc.id=` + close + ` AND r.state<>'disconnected' ORDER BY r.environment='production' DESC,r.id DESC LIMIT 1)`
+}
+
 func scheduleSync(ctx context.Context, db *sql.DB) error {
-	if !OAuthConfigured() {
+	if !OAuthConfigured() && !OAuthConfiguredFor("production") {
 		return nil
 	}
 	_, err := db.ExecContext(ctx, `WITH due AS (
  SELECT c.id AS close_id,x.id AS connection_id,c.period,x.changed_at>COALESCE(latest.started_at,'-infinity') AS hinted FROM client_closes c
  JOIN organizations o ON o.id=c.organization_id AND o.enabled
- JOIN quickbooks_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity)
+ JOIN quickbooks_connections x ON x.id=`+ReadingConnection("c.id")+`
  -- A change hint after the newest capture started makes the close due before its daily refresh.
  LEFT JOIN LATERAL (SELECT s.started_at FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period ORDER BY s.id DESC LIMIT 1) latest ON true
- WHERE x.environment='sandbox' AND x.state='active' AND x.credential IS NOT NULL
+ WHERE x.state='active' AND x.credential IS NOT NULL
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
  AND NOT EXISTS (SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period AND s.state IN ('queued','running'))
@@ -53,35 +59,39 @@ func claimSync(ctx context.Context, db *sql.DB) (syncClaim, error) {
 	return job, err
 }
 
-func syncCredentials(ctx context.Context, db *sql.DB, job syncClaim) (string, string, error) {
+func syncCredentials(ctx context.Context, db *sql.DB, job syncClaim) (string, string, string, error) {
 	var organization, realm, environment, state string
 	var encrypted []byte
 	var expires sql.NullTime
-	err := db.QueryRowContext(ctx, `SELECT x.organization_id,x.realm,x.environment,x.state,x.credential,x.access_expires_at
+	var reading bool
+	err := db.QueryRowContext(ctx, `SELECT x.organization_id,x.realm,x.environment,x.state,x.credential,x.access_expires_at,x.id=`+ReadingConnection("c.id")+`
  FROM quickbooks_connections x JOIN client_closes c ON c.id=$1 AND c.organization_id=x.organization_id AND lower(c.entity)=lower(x.client_entity) JOIN organizations o ON o.id=x.organization_id AND o.enabled
- WHERE x.id=$2 AND c.period=$3`, job.closeID, job.connectionID, job.period).Scan(&organization, &realm, &environment, &state, &encrypted, &expires)
-	if err != nil || state != "active" || environment != "sandbox" || len(encrypted) == 0 {
-		return "", "", errors.New("Connected sandbox company or firm is no longer active")
+ WHERE x.id=$2 AND c.period=$3`, job.closeID, job.connectionID, job.period).Scan(&organization, &realm, &environment, &state, &encrypted, &expires, &reading)
+	if err != nil || state != "active" || len(encrypted) == 0 {
+		return "", "", "", errors.New("Connected QuickBooks company or firm is no longer active")
+	}
+	if !reading {
+		return "", "", "", errors.New("This client's books are now read from its production QuickBooks connection")
 	}
 	aad := organization + "/qbo/" + job.connectionID
 	raw, err := secrets.Open(aad, encrypted)
 	var credentials Credentials
 	if err != nil || json.Unmarshal(raw, &credentials) != nil || credentials.Access == "" || credentials.Refresh == "" {
-		return "", "", errors.New("Encrypted QuickBooks credentials are unavailable")
+		return "", "", "", errors.New("Encrypted QuickBooks credentials are unavailable")
 	}
 	if !expires.Valid || time.Until(expires.Time) < 2*time.Minute {
 		result, err := db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='refreshing',updated_at=now() WHERE id=$1 AND state='active' AND access_expires_at IS NOT DISTINCT FROM $2`, job.connectionID, expires)
 		if err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 		n, _ := result.RowsAffected()
 		if n != 1 {
-			return "", "", errors.New("QuickBooks connection changed during refresh")
+			return "", "", "", errors.New("QuickBooks connection changed during refresh")
 		}
 		credentials, err = RefreshFor(ctx, environment, credentials.Refresh)
 		if err != nil {
 			_, _ = db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='reconnect_required',error='Token refresh did not complete; reconnect before syncing',updated_at=now() WHERE id=$1 AND state='refreshing'`, job.connectionID)
-			return "", "", errors.New("QuickBooks token refresh did not complete; reconnect")
+			return "", "", "", errors.New("QuickBooks token refresh did not complete; reconnect")
 		}
 		raw, _ = json.Marshal(credentials)
 		encrypted, err = secrets.Seal(aad, raw)
@@ -98,10 +108,10 @@ func syncCredentials(ctx context.Context, db *sql.DB, job syncClaim) (string, st
 		}
 		if err != nil {
 			_, _ = db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='reconnect_required',error='Rotated token could not be persisted; reconnect',updated_at=now() WHERE id=$1 AND state='refreshing'`, job.connectionID)
-			return "", "", errors.New("Rotated QuickBooks token could not be persisted; reconnect")
+			return "", "", "", errors.New("Rotated QuickBooks token could not be persisted; reconnect")
 		}
 	}
-	return realm, credentials.Access, nil
+	return environment, realm, credentials.Access, nil
 }
 
 func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture EntityCapture) error {
@@ -128,7 +138,7 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 		return errors.New("Transaction evidence index exceeds the supported size")
 	}
 	var valid bool
-	err = tx.QueryRowContext(ctx, `SELECT s.state='running' AND s.claim=$2 AND c.period=s.period AND x.state='active' AND x.environment='sandbox' AND x.realm=$3 AND o.enabled
+	err = tx.QueryRowContext(ctx, `SELECT s.state='running' AND s.claim=$2 AND c.period=s.period AND x.state='active' AND x.id=`+ReadingConnection("c.id")+` AND x.realm=$3 AND o.enabled
  FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) JOIN organizations o ON o.id=c.organization_id WHERE s.id=$1 FOR UPDATE OF s,c,x`, job.id, job.token, job.realm).Scan(&valid)
 	if err != nil || !valid {
 		return errors.New("Connection, close, or job changed during transaction capture")
@@ -245,11 +255,11 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	work, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()
-	realm, token, err := syncCredentials(work, db, job)
+	environment, realm, token, err := syncCredentials(work, db, job)
 	job.realm = realm
 	if err == nil {
 		var capture EntityCapture
-		capture, err = PeriodEntities(work, realm, token, job.period)
+		capture, err = PeriodEntities(work, environment, realm, token, job.period)
 		if err == nil {
 			err = completeSync(work, db, job, capture)
 		}

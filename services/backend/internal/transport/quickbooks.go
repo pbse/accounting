@@ -150,7 +150,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST "+path+"/snapshots/{snapshot}/ledger", func(w http.ResponseWriter, r *http.Request) { ledgerPage(w, r, true) })
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
-		err := db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'realm',x.realm,'company_name',x.company_name,'confirmed_by',x.confirmed_by,'confirmed_at',x.confirmed_at,'error',x.error,'updated_at',x.updated_at) FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.environment='sandbox' AND x.state<>'disconnected'), 'production_connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error) FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.environment='production' AND x.state<>'disconnected'), 'snapshots',COALESCE((SELECT jsonb_agg(v ORDER BY (v->>'id')::bigint DESC) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'account_count',jsonb_array_length(s.payload->'accounts'),'actor',s.actor,'period',s.payload->>'period','source_id',s.payload->>'source_id') v FROM quickbooks_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 20) recent),'[]'::jsonb)) FROM client_closes c WHERE c.id::text=$1`, r.PathValue("id")).Scan(&raw)
+		err := db.QueryRowContext(r.Context(), `SELECT jsonb_build_object('connection',(SELECT jsonb_build_object('id',x.id::text,'environment',x.environment,'state',x.state,'realm',x.realm,'company_name',x.company_name,'confirmed_by',x.confirmed_by,'confirmed_at',x.confirmed_at,'error',x.error,'updated_at',x.updated_at) FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("c.id")+`), 'production_connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'realm',x.realm,'company_name',x.company_name,'error',x.error) FROM quickbooks_connections x WHERE x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.environment='production' AND x.state<>'disconnected'), 'snapshots',COALESCE((SELECT jsonb_agg(v ORDER BY (v->>'id')::bigint DESC) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'realm',s.realm,'digest',s.digest,'started_at',s.started_at,'captured_at',s.captured_at,'account_count',jsonb_array_length(s.payload->'accounts'),'actor',s.actor,'period',s.payload->>'period','source_id',s.payload->>'source_id') v FROM quickbooks_snapshots s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 20) recent),'[]'::jsonb)) FROM client_closes c WHERE c.id::text=$1`, r.PathValue("id")).Scan(&raw)
 		if err != nil {
 			problem(w, 503, "QuickBooks status unavailable.")
 			return
@@ -216,7 +216,8 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			}
 			token := rand.Text()
 			var id string
-			err := db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment) VALUES($1,$2,$3,$4,'authorizing',$5,now()+interval '10 minutes',$6) ON CONFLICT DO NOTHING RETURNING id::text`, r.PathValue("id"), a.Organization, entity, a.Subject, preparation.Digest([]byte(token)), in.Environment).Scan(&id)
+			// The client lock orders a new connection against snapshot saves that check which connection is read.
+			err := db.QueryRowContext(ctx, `WITH l AS (SELECT pg_advisory_xact_lock(hashtext($2||'/'||lower($3)))) INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,environment) SELECT $1::bigint,$2,$3,$4,'authorizing',$5,now()+interval '10 minutes',$6 FROM l ON CONFLICT DO NOTHING RETURNING id::text`, r.PathValue("id"), a.Organization, entity, a.Subject, preparation.Digest([]byte(token)), in.Environment).Scan(&id)
 			if err != nil {
 				problem(w, 409, "A connection or attempt already exists. Refresh; disconnect the old attempt before reconnecting.")
 				return
@@ -296,6 +297,10 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Refresh and confirm the displayed company and exact realm.")
 				return
 			}
+			if environment == "production" && company != entity {
+				problem(w, 409, "The QuickBooks company name must exactly match this client's name before production books are read or posted.")
+				return
+			}
 			result, e := db.ExecContext(ctx, `UPDATE quickbooks_connections SET state='active',confirmed_by=$2,confirmed_at=now(),updated_at=now() WHERE id=$1 AND state='pending_confirmation'`, id, a.Subject)
 			err = e
 			if err == nil {
@@ -309,8 +314,9 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Confirm an active company before reading accounts. Incomplete token attempts require reconnecting.")
 				return
 			}
-			if environment != "sandbox" && in.Action != "refresh" {
-				problem(w, 422, "Production connections are reserved for reviewed posting; capture ledger evidence from sandbox separately.")
+			var reading bool
+			if e := db.QueryRowContext(ctx, `SELECT $1::bigint=`+quickbooks.ReadingConnection("$2::bigint"), id, r.PathValue("id")).Scan(&reading); e != nil || (!reading && in.Action != "refresh") {
+				problem(w, 409, "Read this client's books from its production QuickBooks connection.")
 				return
 			}
 			raw, e := secrets.Open(aad, encrypted)
@@ -357,7 +363,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			started := time.Now()
-			name, e := quickbooks.Company(ctx, realm, credentials.Access)
+			name, e := quickbooks.CompanyFor(ctx, environment, realm, credentials.Access)
 			if e != nil {
 				readFail(e.Error())
 				return
@@ -366,15 +372,15 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				readFail("Company identity changed. Disconnect and confirm the company again.")
 				return
 			}
-			accounts, e := quickbooks.Accounts(ctx, realm, credentials.Access)
+			accounts, e := quickbooks.Accounts(ctx, environment, realm, credentials.Access)
 			if e != nil {
 				readFail(e.Error())
 				return
 			}
-			snapshot := map[string]any{"environment": "sandbox", "realm": realm, "company_name": company, "accounts": accounts, "started_at": started, "completed_at": time.Now(), "scope": "Account records only; current balances are not a period-end ledger or atomic read."}
+			snapshot := map[string]any{"environment": environment, "realm": realm, "company_name": company, "accounts": accounts, "started_at": started, "completed_at": time.Now(), "scope": "Account records only; current balances are not a period-end ledger or atomic read."}
 			var evidence []byte
 			if in.Action == "period_snapshot" {
-				reports, readErr := quickbooks.PeriodReports(ctx, realm, credentials.Access, period)
+				reports, readErr := quickbooks.PeriodReports(ctx, environment, realm, credentials.Access, period)
 				if readErr != nil {
 					readFail(readErr.Error())
 					return
@@ -386,7 +392,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				}
 				snapshot["period"], snapshot["basis"], snapshot["reports"], snapshot["coverage"] = period, "Accrual", reports, coverage
 				snapshot["completed_at"] = time.Now()
-				snapshot["scope"] = "Sequential sandbox account and period report reads, not an atomic or independently verified complete ledger. TransactionList contains reported transactions, not full transaction entities. Account CurrentBalance is current, not month-end. Coverage is proposed evidence needs, never approval or completeness."
+				snapshot["scope"] = "Sequential account and period report reads, not an atomic or independently verified complete ledger. TransactionList contains reported transactions, not full transaction entities. Account CurrentBalance is current, not month-end. Coverage is proposed evidence needs, never approval or completeness."
 				full, marshalErr := json.Marshal(snapshot)
 				if marshalErr != nil || len(full) > 18*1024*1024 {
 					readFail("Period reports exceed the 18 MiB supported snapshot size. No partial ledger was saved.")
@@ -394,7 +400,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				}
 				evidence = full
 				if len(full) > 96*1024 {
-					index := map[string]any{"environment": "sandbox", "realm": realm, "company_name": company, "period": period, "basis": "Accrual", "coverage_item_count": len(coverage), "report_sizes": map[string]int{}, "scope": "Full reports are stored in the immutable snapshot, not this index. Account-scoped ledger pages must be selected separately; no complete ledger or balance is certified."}
+					index := map[string]any{"environment": environment, "realm": realm, "company_name": company, "period": period, "basis": "Accrual", "coverage_item_count": len(coverage), "report_sizes": map[string]int{}, "scope": "Full reports are stored in the immutable snapshot, not this index. Account-scoped ledger pages must be selected separately; no complete ledger or balance is certified."}
 					for name, report := range reports {
 						index["report_sizes"].(map[string]int)[name] = len(report)
 					}
@@ -412,6 +418,11 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			defer tx.Rollback()
+			// Taken first, as the connect insert does, so the two never wait on each other's row locks.
+			if _, e = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1||'/'||lower($2)))`, a.Organization, entity); e != nil {
+				problem(w, 503, "Snapshot storage unavailable.")
+				return
+			}
 			var active bool
 			e = tx.QueryRowContext(ctx, `SELECT x.state='active' AND o.enabled FROM quickbooks_connections x JOIN organizations o ON o.id=x.organization_id WHERE x.id=$1 FOR UPDATE OF x`, id).Scan(&active)
 			if e != nil || !active {
@@ -421,6 +432,11 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			var lockedClose string
 			if e = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&lockedClose); e != nil {
 				problem(w, 503, "Close storage unavailable.")
+				return
+			}
+			var stillReading bool
+			if e = tx.QueryRowContext(ctx, `SELECT $1::bigint=`+quickbooks.ReadingConnection("$2::bigint"), id, lockedClose).Scan(&stillReading); e != nil || !stillReading {
+				problem(w, 409, "This client's books are now read from its production QuickBooks connection. No snapshot saved.")
 				return
 			}
 			if evidence != nil {

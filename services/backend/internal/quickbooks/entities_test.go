@@ -22,7 +22,9 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 	openBillsFail := false
 	changingCount := false
 	countReads := 0
+	hosts := map[string]bool{}
 	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hosts[req.URL.Host] = true
 		body := `{ "Preferences": {"Id":"1","SyncToken":"3"} }`
 		if req.URL.Path != "/v3/company/123/preferences" {
 			query, _ := url.QueryUnescape(req.URL.Query().Get("query"))
@@ -68,24 +70,28 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})
-	capture, err := PeriodEntities(context.Background(), "123", "synthetic", "2026-09")
+	capture, err := PeriodEntities(context.Background(), "sandbox", "123", "synthetic", "2026-09")
 	if err != nil || capture.Counts["Bill"] != 502 || len(capture.Records["Bill"]) != 502 || capture.Limits["records_per_type"] != 2500 || len(capture.OpenItems["Bill"]) != 502 || len(capture.OpenItems["Invoice"]) != 0 {
 		t.Fatalf("complete paged capture: count=%d err=%v", capture.Counts["Bill"], err)
 	}
+	hosts = map[string]bool{}
+	if _, err = PeriodEntities(context.Background(), "production", "123", "synthetic", "2026-09"); err != nil || len(hosts) != 1 || !hosts["quickbooks.api.intuit.com"] {
+		t.Fatalf("a production company is read only from the production host: %v %v", hosts, err)
+	}
 	openBillsFail = true
-	capture, err = PeriodEntities(context.Background(), "123", "synthetic", "2026-09")
+	capture, err = PeriodEntities(context.Background(), "sandbox", "123", "synthetic", "2026-09")
 	openBillsFail = false
 	if err != nil || len(capture.Records["Bill"]) != 502 || capture.OpenItems["Bill"] != nil || !strings.Contains(capture.Completeness, "Open Bill") {
 		t.Fatalf("an unreadable open-item query must not fail the transaction capture: %v %q", err, capture.Completeness)
 	}
 	duplicate = true
-	if _, err := PeriodEntities(context.Background(), "123", "synthetic", "2026-09"); err == nil || !strings.Contains(err.Error(), "revision or period") {
+	if _, err := PeriodEntities(context.Background(), "sandbox", "123", "synthetic", "2026-09"); err == nil || !strings.Contains(err.Error(), "revision or period") {
 		t.Fatalf("duplicate provider ID must block complete capture: %v", err)
 	}
 	duplicate = false
 	changingCount = true
 	countReads = 0
-	if _, err := PeriodEntities(context.Background(), "123", "synthetic", "2026-09"); err == nil || !strings.Contains(err.Error(), "count changed") {
+	if _, err := PeriodEntities(context.Background(), "sandbox", "123", "synthetic", "2026-09"); err == nil || !strings.Contains(err.Error(), "count changed") {
 		t.Fatalf("changed provider count must block capture: %v", err)
 	}
 }

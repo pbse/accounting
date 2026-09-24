@@ -17,7 +17,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 	path := "/v1/closes/{id}/quickbooks/entities"
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(item ORDER BY (item->>'id')::bigint DESC),'[]'::jsonb) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'period',s.period,'state',s.state,'attempts',s.attempts,'error',s.error,'created_at',s.created_at,'finished_at',s.finished_at,'digest',s.digest,'evidence_id',s.evidence_id::text,'counts',s.payload->'counts','started_at',s.payload->'started_at','completeness',s.payload->>'completeness','latest',s.id=(SELECT max(n.id) FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.state='completed')) item FROM quickbooks_entity_syncs s WHERE s.close_id::text=$1 ORDER BY (s.id=(SELECT max(n.id) FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.state='completed')) DESC,s.id DESC LIMIT 20) recent`, r.PathValue("id")).Scan(&raw)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(item ORDER BY (item->>'id')::bigint DESC),'[]'::jsonb) FROM (SELECT jsonb_build_object('id',s.id::text,'connection_id',s.connection_id::text,'period',s.period,'state',s.state,'attempts',s.attempts,'error',s.error,'created_at',s.created_at,'finished_at',s.finished_at,'digest',s.digest,'evidence_id',s.evidence_id::text,'counts',s.payload->'counts','started_at',s.payload->'started_at','completeness',s.payload->>'completeness','latest',s.id=(SELECT max(n.id) FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.state='completed' AND n.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,n.connection_id))) item FROM quickbooks_entity_syncs s WHERE s.close_id::text=$1 ORDER BY (s.id=(SELECT max(n.id) FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.state='completed' AND n.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,n.connection_id))) DESC,s.id DESC LIMIT 20) recent`, r.PathValue("id")).Scan(&raw)
 		if err != nil {
 			problem(w, 503, "Transaction capture status unavailable.")
 			return
@@ -48,9 +48,9 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		var period string
-		err = tx.QueryRowContext(r.Context(), `SELECT c.period FROM client_closes c JOIN quickbooks_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) WHERE c.id::text=$1 AND c.organization_id=$2 AND x.id::text=$3 AND x.environment='sandbox' AND x.state='active' AND x.credential IS NOT NULL FOR UPDATE OF c`, r.PathValue("id"), a.Organization, in.ConnectionID).Scan(&period)
+		err = tx.QueryRowContext(r.Context(), `SELECT c.period FROM client_closes c JOIN quickbooks_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) WHERE c.id::text=$1 AND c.organization_id=$2 AND x.id::text=$3 AND x.id=`+quickbooks.ReadingConnection("c.id")+` AND x.state='active' AND x.credential IS NOT NULL FOR UPDATE OF c`, r.PathValue("id"), a.Organization, in.ConnectionID).Scan(&period)
 		if err != nil {
-			problem(w, 409, "Confirm an active sandbox connection for this client before refreshing transactions.")
+			problem(w, 409, "Refresh transactions from this client's current QuickBooks connection; production is used once connected.")
 			return
 		}
 		var activeID string
@@ -94,7 +94,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		rows, err := db.QueryContext(r.Context(), `SELECT t.kind,t.provider_id,t.revision,t.txn_date::text,t.provider_updated_at::text,COALESCE(t.currency,''),COALESCE(t.amount,''),t.record,s.id::text,s.evidence_id::text
  FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
  JOIN quickbooks_transaction_rows t ON t.sync_id=s.id
- WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(id) FROM quickbooks_entity_syncs WHERE close_id=s.close_id AND state='completed')
+ WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state='completed' AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))
  AND ($2='' OR t.kind=$2) ORDER BY t.txn_date DESC,t.kind,t.provider_id LIMIT 101 OFFSET $3`, r.PathValue("id"), kind, offset)
 		if err != nil {
 			problem(w, 503, "Transaction index unavailable.")
@@ -129,7 +129,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		var stale, xeroStale bool
 		var accounts, trialBalance, xeroPayload []byte
 		err := db.QueryRowContext(r.Context(), `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'TrialBalance' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
- WHERE s.close_id::text=$1 AND s.payload ? 'period' ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &capturedAt, &stale, &accounts, &trialBalance)
+ WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &capturedAt, &stale, &accounts, &trialBalance)
 		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Period snapshot unavailable.")
 			return
@@ -160,7 +160,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		err = db.QueryRowContext(r.Context(), `SELECT s.id::text,s.evidence_id::text,s.finished_at::text,s.exceptions,
  COALESCE((SELECT c.id::text FROM quickbooks_entity_syncs c WHERE c.close_id=s.close_id AND c.evidence_id=s.evidence_id AND c.state='completed' ORDER BY c.id DESC LIMIT 1),'')
  FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.id=(SELECT max(id) FROM quickbooks_entity_syncs WHERE close_id=s.close_id AND state IN ('completed','unchanged'))`, r.PathValue("id")).Scan(&captureID, &evidenceID, &finished, &stored, &rowsSync)
+ WHERE s.close_id::text=$1 AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))`, r.PathValue("id")).Scan(&captureID, &evidenceID, &finished, &stored, &rowsSync)
 		if err == sql.ErrNoRows {
 			jsonReply(w, 200, map[string]any{"capture": nil, "items": []any{}, "balances": balances})
 			return
