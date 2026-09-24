@@ -3,6 +3,7 @@ package transport
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -30,7 +31,7 @@ import (
 // The anchor close's client, every close from the first month of its fiscal year ($2) through its month.
 const yearCloses = `SELECT c.id,c.period FROM client_closes a JOIN client_closes c ON c.organization_id=a.organization_id AND lower(c.entity)=lower(a.entity) AND c.period BETWEEN $2 AND a.period WHERE a.id::text=$1`
 
-var yearEndHTML = template.Must(template.New("year").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Year-end handoff</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ccc;padding:.4rem;text-align:left}@media print{section{break-inside:avoid}}</style><h1>{{.Entity}} · {{.Year}} year-end handoff</h1><p>Saved-work snapshot: {{.Cut}}. Covers {{.From}} through {{.Through}}.</p><p>Supporting schedules, roll-forwards, reconciled balances, adjustment history and open questions from approved work in this app, for the firm's tax and audit work. This is not an audit opinion or a tax return. Stored posting receipts are not a fresh QuickBooks read. Only the latest version of each workpaper is used; an unapproved latest version is listed as an open question, never replaced by an older one.</p><h2>Months</h2><table><tr><th>Month</th><th>Close</th><th>Sign-off</th><th>Blockers</th></tr>{{range .Months}}<tr><td>{{index . 0}}</td><td>{{index . 1}}</td><td>{{index . 2}}</td><td>{{index . 4}}</td></tr>{{end}}</table><h2>Open questions · {{len .Questions}}</h2>{{if not .Questions}}<p>None.</p>{{end}}<ul>{{range .Questions}}<li>{{index . 0}} · {{index . 1}}: {{index . 2}}</li>{{end}}</ul><h2>Files</h2><ul><li>prepaids.csv and loans.csv: monthly roll-forwards from approved schedules</li><li>reconciliations.csv: approved reconciled balances</li><li>adjustments.csv: entries proposed by approved workpapers</li><li>postings.csv: every stored production posting record, including ones tied to older versions</li><li>open-questions.csv, months.csv, workpapers/{month}/: the approved workpapers</li><li>checksums.sha256: run shasum -a 256 -c checksums.sha256 after extracting</li></ul></html>`))
+var yearEndHTML = template.Must(template.New("year").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Year-end handoff</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ccc;padding:.4rem;text-align:left}@media print{section{break-inside:avoid}}</style><h1>{{.Entity}} · {{.Year}} year-end handoff</h1><p>Saved-work snapshot: {{.Cut}}. Covers {{.From}} through {{.Through}}.</p><p>Supporting schedules, roll-forwards, reconciled balances, adjustment history and open questions from approved work in this app, for the firm's tax and audit work. This is not an audit opinion or a tax return. Stored posting receipts are not a fresh QuickBooks read. Only the latest version of each workpaper is used; an unapproved latest version is listed as an open question, never replaced by an older one.</p><h2>Months</h2><table><tr><th>Month</th><th>Close</th><th>Sign-off</th><th>Blockers</th></tr>{{range .Months}}<tr><td>{{index . 0}}</td><td>{{index . 1}}</td><td>{{index . 2}}</td><td>{{index . 4}}</td></tr>{{end}}</table><h2>Open questions · {{len .Questions}}</h2>{{if not .Questions}}<p>None.</p>{{end}}<ul>{{range .Questions}}<li>{{index . 0}} · {{index . 1}}: {{index . 2}}</li>{{end}}</ul><h2>Files</h2><ul><li>prepaids.csv (prepaids, deferred revenue and depreciation, by schedule) and loans.csv: monthly roll-forwards from approved schedules. In prepaids.csv, period_amount is the month's expense, revenue or depreciation and scheduled_remaining is the calculated unexpired prepaid, unearned revenue or cost left to depreciate, not a ledger balance.</li><li>reconciliations.csv: approved reconciled balances</li><li>adjustments.csv: entries proposed by approved workpapers</li><li>postings.csv: every stored production posting record, including ones tied to older versions</li><li>open-questions.csv, months.csv, workpapers/{month}/: the approved workpapers</li><li>checksums.sha256: run shasum -a 256 -c checksums.sha256 after extracting</li></ul></html>`))
 
 // fiscalYear returns the first month of the fiscal year holding anchor and its label, named for the year it ends.
 func fiscalYear(anchor string, start int) (string, string) {
@@ -159,7 +160,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		prepaidRows := [][]string{{"period", "source", "prepaid_account", "expense_account", "credit", "period_expense", "closing_balance", "currency", "workpaper_id"}}
+		prepaidRows := [][]string{{"period", "source", "prepaid_account", "expense_account", "credit", "period_amount", "scheduled_remaining", "currency", "workpaper_id", "schedule"}}
 		loanRows := [][]string{{"period", "lender", "loan_account", "opening_principal", "principal_paid", "fees_added", "interest_paid", "closing_principal", "currency", "workpaper_id"}}
 		recRows := [][]string{{"period", "account", "account_type", "statement_closing", "ledger_closing", "closing_difference", "status", "workpaper_id"}}
 		adjustments := [][]string{{"period", "kind", "workpaper_id", "date", "debit_account", "credit_account", "amount"}}
@@ -210,7 +211,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 				case !approvedBefore && !pending && prior != nil && previous.period >= from && closes[previous.period] != "":
 					ask(p.period, where, fmt.Sprintf("%s has a %s balance in this schedule but no %s workpaper.", wp.Input.SourceReference, previous.period, previous.period))
 				}
-				prepaidRows = append(prepaidRows, []string{p.period, csvText(wp.Input.SourceReference), csvText(wp.Input.PrepaidAccount), csvText(wp.Input.ExpenseAccount), credit, wp.PeriodExpense, wp.PrepaidBalance, wp.Input.Currency, p.id})
+				prepaidRows = append(prepaidRows, []string{p.period, csvText(wp.Input.SourceReference), csvText(wp.Input.PrepaidAccount), csvText(wp.Input.ExpenseAccount), credit, wp.PeriodExpense, wp.PrepaidBalance, wp.Input.Currency, p.id, cmp.Or(wp.Input.Schedule, "prepaid")})
 				propose(p, wp.Proposal)
 			case "loan":
 				var wp loans.Workpaper
@@ -374,12 +375,17 @@ func paperKey(kind string, raw json.RawMessage) string {
 			Account              string `json:"account"`
 			AccountType          string `json:"account_type"`
 			ReportReference      string `json:"report_reference"`
+			Schedule             string `json:"schedule"`
 		} `json:"input"`
 	}
 	json.Unmarshal(raw, &p)
 	in := p.Input
 	parts := []string{in.SourceReference}
 	switch kind {
+	case "prepaid":
+		if in.Schedule != "" {
+			parts = append(parts, in.Schedule)
+		}
 	case "loan":
 		parts = []string{in.Lender, in.LoanAccount}
 	case "owner":

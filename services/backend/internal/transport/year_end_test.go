@@ -151,6 +151,9 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	if got := column("prepaids.csv", 1); got != "2026-01 Insurance, 2026-01 Maintenance, 2026-01 Warranty, 2026-02 Insurance, 2026-02 Maintenance, 2026-02 Warranty, 2026-03 Insurance, 2026-03 Hosting" {
 		t.Fatalf("only this client's approved latest prepaids for the year: %s", got)
 	}
+	if got := column("prepaids.csv", 9); !strings.HasPrefix(got, "2026-01 prepaid, ") {
+		t.Fatalf("each roll-forward row names its schedule: %s", got)
+	}
 	if got := column("loans.csv", 5); got != "2026-01 0.00, 2026-02 0.00, 2026-03 0.00, 2026-03 0.00" {
 		t.Fatalf("fixed-rate loans report zero fees added: %s", got)
 	}

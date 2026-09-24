@@ -1,10 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { money as show, workspaceRequest } from "./workspace";
+import { scheduleTerms, type Schedule } from "../prepaids/MethodFields";
+
+// "prepaid balance", "deferred revenue balance" or "accumulated depreciation", as the ledger holds it.
+const ledgerBalance = (schedule: Schedule = "") => scheduleTerms[schedule].booked.replace("Booked ", "");
 
 type Item = {
   id: string;
   digest: string;
   scheduled_balance: string;
+  schedule?: Schedule;
   account_id?: string;
   account_name?: string;
   location?: string;
@@ -56,21 +61,21 @@ export function Recurring({ closeId, currency, onPrepared }: { closeId: string; 
     finally { setBusy(false); }
   }
   return <details>
-    <summary>Refresh recurring prepaid work</summary>
-    <p>Capture this month’s QuickBooks period reports above, then compare carried schedules with the exact prepaid Trial Balance account. The client’s accounting professional must confirm the month-end booked balance and method before a new draft is prepared. No journal is posted automatically.</p>
+    <summary>Refresh recurring schedules</summary>
+    <p>Capture this month’s QuickBooks period reports above, then compare carried prepaid, deferred revenue and depreciation schedules with each schedule's exact Trial Balance account. The client’s accounting professional must confirm the month-end booked balance and method before a new draft is prepared. No journal is posted automatically.</p>
     <button disabled={busy} onClick={() => void load()}>Compare current period</button>
     {error && <p role="alert">{error}</p>}
     {queued && <p role="status">{queued}</p>}
     {preview && <>
       <p>{preview.snapshot.id ? `QuickBooks ${preview.snapshot.period} snapshot #${preview.snapshot.id}, captured ${new Date(preview.snapshot.captured_at!).toLocaleString()}` : "No current-period QuickBooks snapshot. Capture reports above first."}</p>
-      {preview.items.length === 0 && <p>No carried prepaid schedules need a current-period balance comparison.</p>}
+      {preview.items.length === 0 && <p>No carried schedules need a current-period balance comparison.</p>}
       {preview.items.map(item => <form key={item.id} onSubmit={e => void prepare(e, item)}>
         <fieldset disabled={busy || !!item.blocker}>
-          <legend>Carried schedule #{item.id} · expected closing prepaid {show(item.scheduled_balance, currency)}</legend>
+          <legend>Carried schedule #{item.id} · expected closing {ledgerBalance(item.schedule)} {show(item.scheduled_balance, currency)}</legend>
           {item.blocker ? <p role="status">{item.blocker}</p> : <>
-            <p>QuickBooks prepaid account: {item.account_name} (#{item.account_id}). Trial Balance location: {item.location}.</p>
+            <p>QuickBooks {scheduleTerms[item.schedule ?? ""].balance.toLowerCase()}: {item.account_name} (#{item.account_id}). Trial Balance location: {item.location}.</p>
             <p>Reported cells: {item.cells?.map((c, i) => `${item.columns?.[i] || `Column ${i + 1}`}: ${c.value || "—"}`).join(" · ")}. Check the debit/credit signs, account mapping and report cutoff in the downloaded snapshot.</p>
-            <label>Confirmed booked prepaid balance at this month’s cutoff ({currency})
+            <label>Confirmed booked {ledgerBalance(item.schedule)} at this month’s cutoff ({currency})
               <input name="booked_balance" required inputMode="decimal" maxLength={13} pattern="(0|[1-9][0-9]*)(\.[0-9]{1,2})?" value={balances[item.id] ?? ""} onChange={e => setBalances(current => ({ ...current, [item.id]: e.target.value }))} />
             </label>
             <output>{difference(item.scheduled_balance, balances[item.id] ?? "", currency)}</output>
