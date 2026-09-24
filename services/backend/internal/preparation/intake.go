@@ -120,16 +120,21 @@ func RecognizeExport(sources []IntakeSource, period string) (Proposal, bool) {
 		if s.Role != "invoice" {
 			continue
 		}
+		kind, failed := "settlement", "This Stripe payout export cannot be traced yet."
 		summary, ok, err := reconciliation.StripeReportSummary(s.Content, period)
+		if !ok {
+			kind, failed = "reconciliation", "This reconciliation CSV cannot be reconciled yet."
+			summary, ok, err = reconciliation.CSVSummary(s.Content, period)
+		}
 		if !ok {
 			return Proposal{}, false
 		}
-		p := Proposal{Kind: "settlement", Engine: "recognized_export", Summary: summary, Facts: []Fact{}, Sources: []Source{}}
+		p := Proposal{Kind: kind, Engine: "recognized_export", Summary: summary, Facts: []Fact{}, Sources: []Source{}}
 		for _, source := range sources {
 			p.Sources = append(p.Sources, source.Source)
 		}
 		if err != nil {
-			p.Kind, p.Summary, p.Questions = "unsupported", "This Stripe payout export cannot be traced yet.", []string{err.Error()}
+			p.Kind, p.Summary, p.Questions = "unsupported", failed, []string{err.Error()}
 		}
 		return p, true
 	}

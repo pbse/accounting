@@ -148,6 +148,27 @@ func lines(source, period string) ([]Line, int64, error) {
 	month, _ := time.Parse("2006-01", period)
 	return datedLines(source, month, month.AddDate(0, 1, -1), "transaction dates must be within the close month")
 }
+
+// CSVSummary recognizes the shared id,date,amount format; it cannot tell a bank
+// statement from a ledger export, so the reviewer chooses the role.
+func CSVSummary(source, period string) (string, bool, error) {
+	header, err := csv.NewReader(strings.NewReader(source)).Read()
+	if err != nil || strings.Join(header, ",") != "id,date,amount" {
+		return "", false, nil
+	}
+	rows, total, err := lines(source, period)
+	if err != nil {
+		return "", true, err
+	}
+	if len(rows) == 0 {
+		return "", true, fmt.Errorf("the CSV has no transactions")
+	}
+	first, last := rows[0].Date, rows[0].Date
+	for _, row := range rows {
+		first, last = min(first, row.Date), max(last, row.Date)
+	}
+	return fmt.Sprintf("Reconciliation CSV with %d transactions dated %s to %s, net $%s. It could be the bank statement or the ledger export; choose which on the reconciliation page.", len(rows), first, last, money(total)), true, nil
+}
 func datedLines(source string, first, last time.Time, dateError string) ([]Line, int64, error) {
 	reader := csv.NewReader(strings.NewReader(source))
 	reader.FieldsPerRecord = 3

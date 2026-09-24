@@ -338,3 +338,13 @@ Author: Claude Opus 5.5. Stacked on human effort measurement; migration 040 appl
 - `TestOpenPeriodFollowsTheCompanyClosingDate`: refuses a date equal to the closing date, allows the day after, allows no closing date, and blocks a missing Preferences block or malformed date. Observed red when a date on the closing date was allowed.
 - `TestProductionPostingSingleDurableAttempt` now also proves that a closing date on or after the journal date refuses execution (422) and a changed but earlier closing date rejects the stale intent (409), both with zero writes, before the original single verified write. Books that close after that write still verify: readback does not recheck the closing date (observed red when it did). `TestVendorCreditRefusesAClosedPeriodBeforeAnyWrite` stops before any vendor, account or write request. Sandbox posting and Bill mocks serve Preferences.
 - `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`: under the policy the job's creator, the direct saver and drafts without provenance are refused; another member approves; the posting gate refuses a preparer's approval; policy changes need org:manage on a hosted firm, are recorded, and the local workspace cannot enable the policy (database constraint). Observed red with the check disabled.
+
+## Exception investigation and reconciliation CSV recognition (2026-09-24)
+
+Author: Claude Opus 5.5. Stacked on posting safety. No migration.
+
+- `TestFindExceptionsRaisesQuestionsWithoutConcluding`: flags only the nearby same-vendor pair (not the same payment 26 days later, another vendor, or another currency), the Uncategorized Expense line, and the payee-less Purchase; a JournalEntry without a payee is not flagged. Observed red with a 31-day window and with currency dropped from the grouping.
+- `TestExceptionsScanTheWholeLatestCapture` (PostgreSQL): no capture returns `capture: null`; a capture with three rows reports `scanned: 3` and one possible duplicate.
+- `TestRecognizeExportLeavesTheReconciliationRoleToTheReviewer`: an `id,date,amount` CSV becomes a `reconciliation` proposal with its row count, date range and net total; a row outside the month stays unsupported with the reason; an invoice is not recognized. Observed red with the CSV check removed. `TestStripeExportIsRecognizedPreparedAndExported` still passes.
+- Browser, with a local API, worker and Vite on the disposable database: the Overview card listed a no-payee purchase, a CloudSuite pair two days apart and an Uncategorized Bill, and left the monthly rent payment alone. A close without a capture showed the capture prompt. An uploaded bank CSV showed **Recognized reconciliation CSV** with no confirm form, and its button opened the reconciliation page with the job continuation.
+

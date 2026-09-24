@@ -1054,6 +1054,9 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .section-title h2 {
   margin: 0;
 }
+section > .section-title:first-child {
+  margin-top: 0;
+}
 .rows {
   background: var(--surface);
   border: 1px solid var(--border);

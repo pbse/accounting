@@ -1,0 +1,74 @@
+package transport
+
+import (
+	"crypto/rand"
+	"database/sql"
+	"encoding/json"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	"close.local/backend/internal/preparation"
+)
+
+func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var closeID, connection, evidenceID, syncID string
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Exceptions "+rand.Text()).Scan(&closeID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM evidence WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
+	}()
+	token := strings.Repeat("x", 32)
+	handler := apiWithStore(db, token)
+	scan := func() (out struct {
+		Capture *struct{ ID string }    `json:"capture"`
+		Scanned int                     `json:"scanned"`
+		Items   []struct{ Type string } `json:"items"`
+	}) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/"+closeID+"/quickbooks/exceptions", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("exceptions: %d %s", w.Code, w.Body.String())
+		}
+		return out
+	}
+	if got := scan(); got.Capture != nil || len(got.Items) != 0 {
+		t.Fatalf("without a capture nothing is scanned: %+v", got)
+	}
+	if err = db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&connection); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'capture.json',$2,'{}','fixture') RETURNING id::text`, closeID, preparation.Digest([]byte(rand.Text()))).Scan(&evidenceID); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at) VALUES($1,$2,'2026-09','fixture','completed',$3,now()) RETURNING id::text`, closeID, connection, evidenceID).Scan(&syncID); err != nil {
+		t.Fatal(err)
+	}
+	record := `{"EntityRef":{"value":"7","name":"CloudSuite"},"Line":[]}`
+	for i, kind := range []string{"Purchase", "Purchase", "Bill"} {
+		if _, err = db.Exec(`INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,$2,$3,'0',$4,now(),'USD','49.00',$5)`, syncID, kind, string(rune('1'+i)), "2026-09-0"+string(rune('2'+i)), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := scan()
+	if got.Capture == nil || got.Capture.ID != syncID || got.Scanned != 3 || len(got.Items) != 1 || got.Items[0].Type != "possible_duplicate" {
+		t.Fatalf("every captured row must be scanned and the nearby pair raised: %+v", got)
+	}
+}

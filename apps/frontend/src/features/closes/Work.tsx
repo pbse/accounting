@@ -725,7 +725,7 @@ function WorkDetails({
             {item.proposal.engine === "openai"
               ? "Agent-proposed work and facts"
               : item.proposal.engine === "recognized_export"
-                ? "Recognized Stripe payout export"
+                ? kind === "reconciliation" ? "Recognized reconciliation CSV" : "Recognized Stripe payout export"
                 : "Proposed facts · local extraction"}
           </h3>
           {item.proposal.summary && <p>{item.proposal.summary}</p>}
@@ -791,7 +791,17 @@ function WorkDetails({
               </Link>
             </p>
           )}
-          {kind !== "unsupported" && kind !== "settlement" && (
+          {kind === "reconciliation" && item.proposal.engine === "recognized_export" && (
+            <p>
+              <Link
+                className="button primary"
+                to={`/dashboard/reconciliations/new?close=${item.close_id}&entity=${encodeURIComponent(item.entity)}&period=${item.period}&work=${item.id}&revision=${item.revision}`}
+              >
+                Choose statement or ledger and reconcile →
+              </Link>
+            </p>
+          )}
+          {kind !== "unsupported" && kind !== "settlement" && item.proposal.engine !== "recognized_export" && (
             <form onSubmit={confirm}>
               <fieldset disabled={busy}>
                 <legend>
