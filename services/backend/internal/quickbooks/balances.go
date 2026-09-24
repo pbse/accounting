@@ -14,6 +14,7 @@ type BalanceException struct {
 	Account   string `json:"account"`
 	Side      string `json:"side"`
 	Amount    string `json:"amount"`
+	Currency  string `json:"currency"`
 	Finding   string `json:"finding"`
 	NextStep  string `json:"next_step"`
 	Question  string `json:"question"`
@@ -50,6 +51,7 @@ func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]BalanceExceptio
 		byID[a.ID] = info{a.Name, class, a.AccountSubType}
 	}
 	var report struct {
+		Header  struct{ Currency string }
 		Columns struct {
 			Column []struct{ ColTitle string }
 		}
@@ -71,6 +73,7 @@ func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]BalanceExceptio
 		return nil, fmt.Errorf("trial balance has no Debit and Credit columns")
 	}
 	out := []BalanceException{}
+	var invalid error
 	var visit func(reportRows)
 	visit = func(group reportRows) {
 		for _, row := range group.Row {
@@ -87,35 +90,38 @@ func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]BalanceExceptio
 				continue
 			}
 			net := new(big.Rat)
-			valid := true
 			for index, sign := range map[int]int64{debit: 1, credit: -1} {
 				value := strings.ReplaceAll(strings.TrimSpace(row.ColData[index].Value), ",", "")
 				if value == "" {
 					continue
 				}
-				amount, ok := new(big.Rat).SetString(value)
+				cell, ok := new(big.Rat).SetString(value)
 				if !ok {
-					valid = false
-					break
+					invalid = fmt.Errorf("trial balance amount %q for %s is not a number", value, account.name)
+					return
 				}
-				net.Add(net, amount.Mul(amount, big.NewRat(sign, 1)))
+				net.Add(net, cell.Mul(cell, big.NewRat(sign, 1)))
 			}
 			debitNormal := account.class == "Asset" || account.class == "Expense"
-			if !valid || net.Sign() == 0 || (net.Sign() > 0) == debitNormal {
+			if net.Sign() == 0 || (net.Sign() > 0) == debitNormal {
 				continue
 			}
 			side := "credit"
 			if net.Sign() > 0 {
 				side = "debit"
 			}
-			amount := new(big.Rat).Abs(net).FloatString(2)
-			out = append(out, BalanceException{Type: "abnormal_balance", AccountID: row.ColData[0].ID, Account: account.name, Side: side, Amount: amount,
-				Finding:  fmt.Sprintf("%s (%s) shows a $%s %s balance, opposite its normal side.", account.name, account.class, amount, side),
+			balance := new(big.Rat).Abs(net).FloatString(2)
+			shown := amount(TransactionRow{Amount: balance, Currency: report.Header.Currency})
+			out = append(out, BalanceException{Type: "abnormal_balance", AccountID: row.ColData[0].ID, Account: account.name, Side: side, Amount: balance, Currency: report.Header.Currency,
+				Finding:  fmt.Sprintf("%s (%s) shows a %s %s balance, opposite its normal side.", account.name, account.class, shown, side),
 				NextStep: "Cause unverified: review this account's activity in the captured General Ledger before any correction. Common causes are a misposted payment, a refund or a duplicate. Nothing is changed.",
-				Question: fmt.Sprintf("Our records show a $%s %s balance in %s at month-end. Do you know of an advance, refund or overpayment that explains it?", amount, side, account.name)})
+				Question: fmt.Sprintf("Our records show a %s %s balance in %s at month-end. Do you know of an advance, refund or overpayment that explains it?", shown, side, account.name)})
 		}
 	}
 	visit(report.Rows)
+	if invalid != nil {
+		return nil, invalid
+	}
 	slices.SortFunc(out, func(a, b BalanceException) int { return strings.Compare(a.Account, b.Account) })
 	return out, nil
 }

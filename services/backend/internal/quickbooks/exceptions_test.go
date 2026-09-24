@@ -22,9 +22,13 @@ func TestFindExceptionsRaisesQuestionsWithoutConcluding(t *testing.T) {
 		row("Purchase", "503", "2026-09-26", "75.00", `{"EntityRef":{"value":"11","name":"Courier"},"Line":[]}`),
 		row("Purchase", "301", "2026-09-12", "18.50", `{"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"61","name":"Meals"}}}]}`),
 		row("JournalEntry", "401", "2026-09-30", "1000.00", `{"Line":[{"JournalEntryLineDetail":{"AccountRef":{"value":"12","name":"Prepaid expense"}}}]}`),
-		row("Purchase", "601", "2026-09-05", "30.00", `{"EntityRef":{"value":"12","name":"Staples"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"62","name":"Office supplies"}}}]}`),
-		row("Purchase", "602", "2026-09-20", "45.00", `{"EntityRef":{"value":"12","name":"Staples"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"61","name":"Meals"}}}]}`),
-		row("Purchase", "603", "2026-09-27", "18.00", `{"EntityRef":{"value":"12","name":"Staples"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"62","name":"Office supplies"}}}]}`),
+		row("Purchase", "601", "2026-09-05", "30.00", `{"EntityRef":{"value":"12","name":"Staples","type":"Vendor"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"62","name":"Office supplies"}}}]}`),
+		row("Purchase", "602", "2026-09-20", "45.00", `{"EntityRef":{"value":"12","name":"Staples","type":"Vendor"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"61","name":"Meals"}}}]}`),
+		row("Purchase", "603", "2026-09-27", "18.00", `{"EntityRef":{"value":"12","name":"Staples","type":"Vendor"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"62","name":"Office supplies"}}}]}`),
+		row("Bill", "604", "2026-09-28", "22.00", `{"VendorRef":{"value":"12","name":"Staples"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"62","name":"Office supplies"}}}]}`),
+		row("Purchase", "605", "2026-09-29", "15.00", `{"EntityRef":{"value":"12","name":"Staples customer","type":"Customer"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"61","name":"Meals"}}}]}`),
+		row("Purchase", "801", "2026-09-07", "11.00", `{"EntityRef":{"value":"15","name":"Twin","type":"Vendor"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"80","name":"Supplies"}}}]}`),
+		row("Purchase", "802", "2026-09-08", "12.00", `{"EntityRef":{"value":"15","name":"Twin","type":"Vendor"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"81","name":"Supplies"}}}]}`),
 		row("Purchase", "701", "2026-09-06", "80.00", `{"EntityRef":{"value":"13","name":"Split shop"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"62","name":"Office supplies"}}},{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"61","name":"Meals"}}}]}`),
 		row("Purchase", "702", "2026-09-26", "25.00", `{"EntityRef":{"value":"13","name":"Split shop"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"61","name":"Meals"}}},{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"62","name":"Office supplies"}}}]}`),
 		row("Bill", "202", "2026-09-11", "99.00", `{"VendorRef":{"value":"9","name":"Printer Co"},"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"63","name":"Printing"}}}]}`),
@@ -42,8 +46,8 @@ func TestFindExceptionsRaisesQuestionsWithoutConcluding(t *testing.T) {
 	if len(found["uncategorized"]) != 1 || found["uncategorized"][0].Account != "Uncategorized Expense" || !strings.Contains(found["uncategorized"][0].Question, "310.00 EUR") {
 		t.Fatalf("holding-account posting must become a question: %+v", found["uncategorized"])
 	}
-	if coded := found["inconsistent_coding"]; len(coded) != 1 || coded[0].Counterparty != "Staples" || coded[0].Account != "Meals, Office supplies" || len(coded[0].ProviderIDs) != 3 {
-		t.Fatalf("only Staples, coded differently across two purchases, is a coding question (not one split purchase, not a holding account): %+v", coded)
+	if coded := found["inconsistent_coding"]; len(coded) != 2 || coded[0].Counterparty != "Staples" || coded[0].Account != "Meals, Office supplies" || len(coded[0].ProviderIDs) != 4 || coded[1].Counterparty != "Twin" {
+		t.Fatalf("Staples (purchases and a bill, not the customer with the same ID) and Twin (two accounts named alike) are coding questions; a split purchase is not: %+v", coded)
 	}
 	if len(found["no_payee"]) != 1 || found["no_payee"][0].ProviderIDs[0] != "301" {
 		t.Fatalf("only the payee-less purchase needs a payee: %+v", found["no_payee"])

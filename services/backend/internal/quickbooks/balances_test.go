@@ -3,6 +3,7 @@ package quickbooks
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +40,14 @@ func TestAbnormalBalancesReadTheTrialBalanceColumns(t *testing.T) {
 		if len(found) != 3 || got["Accounts Receivable"] != "credit 150.00" || got["Business card"] != "debit 20.00" || got["Checking"] != "credit 12.00" {
 			t.Fatalf("columns %v: only the receivable credit, card debit and overdrawn bank are candidates: %v", order, got)
 		}
+	}
+	single := func(value string) json.RawMessage {
+		return json.RawMessage(`{"Header":{"Currency":"EUR"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Debit"},{"ColTitle":"Credit"}]},"Rows":{"Row":[{"type":"Data","ColData":[{"id":"1","value":"Accounts Receivable"},{"value":""},{"value":"` + value + `"}]}]}}`)
+	}
+	if found, err := AbnormalBalances(accounts, single("150.00")); err != nil || len(found) != 1 || !strings.Contains(found[0].Question, "150.00 EUR") {
+		t.Fatalf("the question uses the report currency: %+v %v", found, err)
+	}
+	if _, err := AbnormalBalances(accounts, single("n/a")); err == nil {
+		t.Fatal("an unreadable balance must fail the check, not pass as normal")
 	}
 }

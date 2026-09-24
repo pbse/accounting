@@ -12,7 +12,7 @@ type Found = {
   next_step: string;
   question: string;
 };
-type Balance = { account_id: string; account: string; side: string; amount: string; finding: string; next_step: string; question: string };
+type Balance = { account_id: string; account: string; side: string; amount: string; currency: string; finding: string; next_step: string; question: string };
 type Scan = {
   capture: { id: string; evidence_id: string; finished_at: string } | null;
   scanned?: number;
@@ -64,6 +64,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
           </span>
         )}
       </div>
+      {copied && <p role="status">{copied}</p>}
       {!scan.capture ? (
         <p className="empty">
           Capture this month's QuickBooks transactions on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every
@@ -76,7 +77,6 @@ export function Exceptions({ closeId }: { closeId: string }) {
             {scan.capture.evidence_id}). Each item is a question with the evidence still missing, not a conclusion. Nothing is changed in
             QuickBooks.
           </p>
-          {copied && <p role="status">{copied}</p>}
           {scan.items.length === 0 ? (
             <p className="empty">No possible duplicates, holding-account postings, payments without a payee or inconsistent coding in this capture.</p>
           ) : (
@@ -141,7 +141,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
                   </div>
                   <span>{item.question}</span>
                   <small>
-                    ${item.amount} {item.side}
+                    {item.amount} {item.currency} {item.side}
                   </small>
                   <span />
                 </div>
