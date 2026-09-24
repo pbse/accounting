@@ -110,6 +110,10 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 		defer tx.Rollback()
 		var current bool
 		err = tx.QueryRowContext(r.Context(), `SELECT e.superseded_by IS NULL AND e.extraction_state='ready' AND x.state='active' FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=$1 AND s.close_id::text=$2 FOR UPDATE OF e`, snapshot.ID, r.PathValue("id")).Scan(&current)
+		if err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "Could not verify the ledger capture.")
+			return
+		}
 		if err != nil || !current {
 			problemCode(w, 409, "SOURCE_STALE", "Ledger capture changed. Refresh before selecting rows.")
 			return

@@ -217,7 +217,11 @@ func registerRecurring(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Could not inspect current evidence.")
 			return
 		}
-		if snapshot.ID == "" || snapshot.ID != in.SnapshotID || !snapshot.Active {
+		if snapshot.ID == "" {
+			problem(w, 409, "Period evidence changed. Refresh the comparison.")
+			return
+		}
+		if snapshot.ID != in.SnapshotID || !snapshot.Active {
 			problemCode(w, 409, "SOURCE_STALE", "Period evidence changed. Refresh the comparison.")
 			return
 		}
