@@ -27,9 +27,9 @@ type EntityCapture struct {
 	OpenItems map[string][]json.RawMessage `json:"open_items,omitempty"`
 }
 
-func periodCount(ctx context.Context, realm, token, kind, where string) (int, error) {
+func periodCount(ctx context.Context, env, realm, token, kind, where string) (int, error) {
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s %s", kind, where)
-	raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(query), 1024*1024)
+	raw, err := read(ctx, env, realm, token, "/query?query="+url.QueryEscape(query), 1024*1024)
 	if err != nil {
 		return 0, err
 	}
@@ -44,7 +44,7 @@ func periodCount(ctx context.Context, realm, token, kind, where string) (int, er
 	return *response.QueryResponse.TotalCount, nil
 }
 
-func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCapture, error) {
+func PeriodEntities(ctx context.Context, env, realm, token, period string) (EntityCapture, error) {
 	result := EntityCapture{Realm: realm, Period: period, Types: periodEntityTypes, Counts: map[string]int{}, Limits: map[string]int{"records_per_type": 2500, "page_size": 500, "capture_bytes": 12 * 1024 * 1024}, Records: map[string][]json.RawMessage{}}
 	start, err := time.Parse("2006-01", period)
 	if err != nil || start.Format("2006-01") != period {
@@ -52,7 +52,7 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 	}
 	first, last := start.Format("2006-01-02"), start.AddDate(0, 1, -1).Format("2006-01-02")
 	result.StartedAt = time.Now().UTC()
-	raw, err := readSandboxLimit(ctx, realm, token, "/preferences", 2*1024*1024)
+	raw, err := read(ctx, env, realm, token, "/preferences", 2*1024*1024)
 	if err != nil {
 		return result, fmt.Errorf("Company settings: %w", err)
 	}
@@ -67,7 +67,7 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 	}
 	result.Settings = raw
 	for _, kind := range periodEntityTypes {
-		before, err := periodCount(ctx, realm, token, kind, fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", first, last))
+		before, err := periodCount(ctx, env, realm, token, kind, fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", first, last))
 		if err != nil {
 			return result, fmt.Errorf("%s transaction count: %w", kind, err)
 		}
@@ -82,7 +82,7 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 				pageSize = 1
 			}
 			query := fmt.Sprintf("SELECT * FROM %s WHERE TxnDate >= '%s' AND TxnDate <= '%s' ORDERBY Id STARTPOSITION %d MAXRESULTS %d", kind, first, last, position, pageSize)
-			raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(query), 8*1024*1024)
+			raw, err := read(ctx, env, realm, token, "/query?query="+url.QueryEscape(query), 8*1024*1024)
 			if err != nil {
 				return result, fmt.Errorf("%s transaction page %d: %w", kind, position, err)
 			}
@@ -126,7 +126,7 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 			}
 		}
 		result.Records[kind], result.Counts[kind] = rows, len(rows)
-		after, err := periodCount(ctx, realm, token, kind, fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", first, last))
+		after, err := periodCount(ctx, env, realm, token, kind, fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", first, last))
 		if err != nil || before != len(rows) || after != before {
 			return result, fmt.Errorf("%s transaction count changed or pagination was incomplete; retry the capture", kind)
 		}
@@ -135,14 +135,14 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 	result.OpenItems = map[string][]json.RawMessage{}
 	unread := []string{}
 	for _, kind := range []string{"Invoice", "Bill"} {
-		items, err := openItems(ctx, realm, token, kind, last)
+		items, err := openItems(ctx, env, realm, token, kind, last)
 		if err != nil {
 			unread = append(unread, err.Error())
 			continue
 		}
 		result.OpenItems[kind] = items
 	}
-	check, err := readSandboxLimit(ctx, realm, token, "/preferences", 2*1024*1024)
+	check, err := read(ctx, env, realm, token, "/preferences", 2*1024*1024)
 	if err != nil {
 		return result, fmt.Errorf("Company settings recheck: %w", err)
 	}
@@ -164,9 +164,9 @@ func PeriodEntities(ctx context.Context, realm, token, period string) (EntityCap
 }
 
 // openItems pages through a type's records with a balance, dated on or before month-end.
-func openItems(ctx context.Context, realm, token, kind, last string) ([]json.RawMessage, error) {
+func openItems(ctx context.Context, env, realm, token, kind, last string) ([]json.RawMessage, error) {
 	where := fmt.Sprintf("WHERE Balance > '0' AND TxnDate <= '%s'", last)
-	before, err := periodCount(ctx, realm, token, kind, where)
+	before, err := periodCount(ctx, env, realm, token, kind, where)
 	if err != nil {
 		return nil, fmt.Errorf("Open %s count: %w", kind, err)
 	}
@@ -175,7 +175,7 @@ func openItems(ctx context.Context, realm, token, kind, last string) ([]json.Raw
 	}
 	rows, seen := []json.RawMessage{}, map[string]bool{}
 	for position := 1; position <= before; position += 500 {
-		raw, err := readSandboxLimit(ctx, realm, token, "/query?query="+url.QueryEscape(fmt.Sprintf("SELECT * FROM %s %s ORDERBY Id STARTPOSITION %d MAXRESULTS 500", kind, where, position)), 8*1024*1024)
+		raw, err := read(ctx, env, realm, token, "/query?query="+url.QueryEscape(fmt.Sprintf("SELECT * FROM %s %s ORDERBY Id STARTPOSITION %d MAXRESULTS 500", kind, where, position)), 8*1024*1024)
 		if err != nil {
 			return nil, fmt.Errorf("Open %s page %d: %w", kind, position, err)
 		}
@@ -195,7 +195,7 @@ func openItems(ctx context.Context, realm, token, kind, last string) ([]json.Raw
 			rows = append(rows, record)
 		}
 	}
-	if after, err := periodCount(ctx, realm, token, kind, where); err != nil || after != before || len(rows) != before {
+	if after, err := periodCount(ctx, env, realm, token, kind, where); err != nil || after != before || len(rows) != before {
 		return nil, fmt.Errorf("Open %s records changed during capture; retry", kind)
 	}
 	return rows, nil

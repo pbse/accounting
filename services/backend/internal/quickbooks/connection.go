@@ -111,23 +111,8 @@ var realmPattern = regexp.MustCompile(`^[0-9]{1,30}$`)
 
 func ValidRealm(realm string) bool { return realmPattern.MatchString(realm) }
 
-// Sandbox only. This reader exposes fixed GET operations, never arbitrary paths or writes.
-func readSandbox(ctx context.Context, realm, token, path string) ([]byte, error) {
-	return readSandboxLimit(ctx, realm, token, path, 2*1024*1024)
-}
-func readSandboxLimit(ctx context.Context, realm, token, path string, limit int64) ([]byte, error) {
-	if !ValidRealm(realm) {
-		return nil, errors.New("Invalid company identifier")
-	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", "https://sandbox-quickbooks.api.intuit.com/v3/company/"+realm+path, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	return readResponse(req, limit)
-}
-func Company(ctx context.Context, realm, token string) (string, error) {
-	return CompanyFor(ctx, "sandbox", realm, token)
-}
-
-func companyRead(ctx context.Context, environment, realm, token, path string) ([]byte, error) {
+// read performs fixed GET operations against the connection's environment, never arbitrary paths or writes.
+func read(ctx context.Context, environment, realm, token, path string, limit int64) ([]byte, error) {
 	if environment != "sandbox" && environment != "production" {
 		return nil, errors.New("Invalid QuickBooks environment")
 	}
@@ -140,12 +125,12 @@ func companyRead(ctx context.Context, environment, realm, token, path string) ([
 	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://"+host+"/v3/company/"+realm+path, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	return readResponse(req, 2*1024*1024)
+	return readResponse(req, limit)
 }
 
 // ProfileFor reads the company's home currency and first fiscal month (1-12).
 func ProfileFor(ctx context.Context, environment, realm, token string) (string, int, error) {
-	raw, err := companyRead(ctx, environment, realm, token, "/preferences")
+	raw, err := read(ctx, environment, realm, token, "/preferences", 2*1024*1024)
 	if err != nil {
 		return "", 0, err
 	}
@@ -169,7 +154,7 @@ func ProfileFor(ctx context.Context, environment, realm, token string) (string, 
 }
 
 func CompanyFor(ctx context.Context, environment, realm, token string) (string, error) {
-	raw, err := companyRead(ctx, environment, realm, token, "/companyinfo/"+realm)
+	raw, err := read(ctx, environment, realm, token, "/companyinfo/"+realm, 2*1024*1024)
 	if err != nil {
 		return "", err
 	}
@@ -187,12 +172,12 @@ func CompanyFor(ctx context.Context, environment, realm, token string) (string, 
 
 // Account records preserve provider JSON numbers. Pagination is bounded and a
 // partial/inconsistent result is never stored as a complete snapshot.
-func Accounts(ctx context.Context, realm, token string) (json.RawMessage, error) {
+func Accounts(ctx context.Context, env, realm, token string) (json.RawMessage, error) {
 	accounts := []json.RawMessage{}
 	seen := map[string]bool{}
 	for start := 1; start <= 10001; start += 1000 {
 		q := fmt.Sprintf("SELECT * FROM Account WHERE Active IN (true,false) ORDERBY Id STARTPOSITION %d MAXRESULTS 1000", start)
-		raw, err := readSandbox(ctx, realm, token, "/query?query="+url.QueryEscape(q))
+		raw, err := read(ctx, env, realm, token, "/query?query="+url.QueryEscape(q), 2*1024*1024)
 		if err != nil {
 			return nil, err
 		}
