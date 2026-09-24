@@ -27,6 +27,20 @@ func reviewActor(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 func registerReview(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/workpapers/{paper}", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("record") == "1" {
+			var saved savedPaper
+			err := db.QueryRowContext(r.Context(), `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, r.PathValue("paper"), r.PathValue("id")).Scan(&saved.ID, &saved.Kind, &saved.CreatedAt, &saved.Paper, &saved.Digest, &saved.ReviewState, &saved.ReviewID)
+			if err == sql.ErrNoRows {
+				problem(w, 404, "Workpaper not found.")
+				return
+			}
+			if err != nil {
+				problem(w, 503, "Workpaper unavailable.")
+				return
+			}
+			jsonReply(w, 200, saved)
+			return
+		}
 		var raw []byte
 		err := db.QueryRowContext(r.Context(), `SELECT paper FROM workpapers WHERE id::text=$1 AND close_id::text=$2`, r.PathValue("paper"), r.PathValue("id")).Scan(&raw)
 		if err == sql.ErrNoRows {

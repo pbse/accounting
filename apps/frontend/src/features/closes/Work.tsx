@@ -3,9 +3,9 @@ import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, SendRequestEmail, type EmailRecord } from "./Email";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { AccountAccess, authKitClientId } from "../auth/Auth";
+import { Avatar, Icon, type IconName } from "../dashboard/Icon";
 import { SourceReview, type Source } from "./Evidence";
-import { unlock, workspaceRequest } from "./workspace";
+import { workspaceRequest } from "./workspace";
 
 type Fact = {
  optional?: boolean;
@@ -89,6 +89,44 @@ const labels: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+const views: [string, string][] = [
+  ["active", "Active"],
+  ["needs_confirmation", "Decisions"],
+  ["blocked", "Blockers"],
+  ["running", "Running"],
+  ["waiting_client", "Client requests"],
+  ["completed", "Prepared"],
+  ["all", "All"],
+];
+const tones: Record<string, string> = {
+  needs_confirmation: "status warn",
+  failed: "status danger",
+  waiting_client: "status info",
+  queued: "status info",
+  interpreting: "status info",
+  waiting_evidence: "status info",
+  completed: "status ok",
+};
+type QueueItem = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string };
+const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement" };
+
+function Kpi({ icon, tone, label, value, caption, onClick }: { icon: IconName; tone: string; label: string; value?: number; caption: string; onClick: () => void }) {
+  return (
+    <button type="button" className="kpi" onClick={onClick}>
+      <span className="kpi-head">
+        <span className={`kpi-icon ${tone}`}>
+          <Icon name={icon} size={16} />
+        </span>
+        {label}
+      </span>
+      <span className="kpi-body">
+        <span className="kpi-value">{value ?? "–"}</span>
+        <span className="kpi-caption">{caption}</span>
+      </span>
+    </button>
+  );
+}
+
 export function Work({
   closeId,
   onPrepared,
@@ -97,6 +135,7 @@ export function Work({
   onPrepared?: () => void;
 }) {
   const [items, setItems] = useState<WorkItem[]>([]);
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [more, setMore] = useState(false);
@@ -107,6 +146,7 @@ export function Work({
   const [dependencyMore, setDependencyMore] = useState(false);
   const [dependencyError, setDependencyError] = useState("");
   const [dependencyLoaded, setDependencyLoaded] = useState(false);
+  const [queue, setQueue] = useState<{ items: QueueItem[]; count: number }>();
   useEffect(() => {
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -117,6 +157,7 @@ export function Work({
         );
         if (!live) return;
         setItems(data.items);
+        setCounts(data.counts ?? {});
         setMore(data.has_more);
         setError("");
         setLoaded(true);
@@ -144,152 +185,169 @@ export function Work({
     }).catch(e => {
       if (live) { setDependencyError(e instanceof Error ? e.message : "Dependency review unavailable."); setDependencyLoaded(true); }
     });
+    workspaceRequest(`/review-queue?client=${encodeURIComponent(clientSearch)}`).then(data => live && setQueue(data)).catch(() => live && setQueue(undefined));
     return () => { live = false; };
   }, [closeId, clientSearch, refresh]);
+  const show = (view: string) => {
+    setFilter(view);
+    document.getElementById("work-list")?.scrollIntoView({ block: "start" });
+  };
   return (
     <section
       id={closeId ? "close-work" : undefined}
       aria-label="Live Work inbox"
+      className={closeId ? undefined : "bare"}
     >
       {closeId ? (
-        <h2>Work from your evidence</h2>
+        <>
+          <h2>Work from your evidence</h2>
+          <p>
+            Upload evidence to this close. Review proposed facts and questions,
+            confirm assumptions, then preparation runs automatically.
+          </p>
+        </>
       ) : (
         <>
-          <p className="eyebrow">LIVE WORK INBOX</p>
-          <h1>What needs your attention?</h1>
+          <div className="page-title">
+            <div>
+              <span className="kpi-icon" aria-hidden="true">
+                <Icon name="work" />
+              </span>
+              <span>
+                <h1>Work</h1>
+                <p>What needs you, what the agent is handling, and what can finish next.</p>
+              </span>
+            </div>
+            <form
+              className="title-actions"
+              role="search"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setClientSearch(String(new FormData(e.currentTarget).get("client") ?? ""));
+              }}
+            >
+              <input name="client" aria-label="Filter by client or close month" placeholder="Client or YYYY-MM" maxLength={200} />
+              <button>Filter</button>
+              <Link className="button primary" to="/dashboard/closes">
+                Open a client close
+              </Link>
+            </form>
+          </div>
+          <div className="kpis">
+            <Kpi icon="decision" tone="amber" label="Needs your decision" value={counts.needs_confirmation} caption="Proposed facts and questions to confirm" onClick={() => show("needs_confirmation")} />
+            <Kpi icon="review" tone="" label="Ready for review" value={queue?.count} caption="Prepared drafts with evidence and no blockers" onClick={() => document.getElementById("review-queue")?.scrollIntoView({ block: "start" })} />
+            <Kpi icon="waiting" tone="green" label="Waiting on clients" value={counts.waiting_client} caption="Approved requests awaiting a reply" onClick={() => show("waiting_client")} />
+            <Kpi icon="blocked" tone="red" label="Blocked" value={counts.blocked} caption="Failed, replaced or unsupported work" onClick={() => show("blocked")} />
+          </div>
         </>
       )}
-      <p>
-        Upload evidence to a client close. Review proposed facts and questions,
-        confirm assumptions, then preparation runs automatically.
-      </p>
-      {!closeId && (
-        <>
-          <Link className="button primary" to="/dashboard/closes">
-            Open or create a close · upload evidence
-          </Link>
-          {authKitClientId ? (
-            <AccountAccess />
-          ) : (
-            <details open={!loaded}>
-              <summary>Workspace access</summary>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  unlock(String(new FormData(e.currentTarget).get("token")));
-                  e.currentTarget.reset();
-                  setRefresh((n) => n + 1);
-                }}
-              >
-                <label>
-                  Private workspace token
-                  <input
-                    name="token"
-                    type="password"
-                    autoComplete="off"
-                    minLength={32}
-                    required
-                  />
-                </label>
-                <button>Unlock workspace</button>
-              </form>
-              <button
-                onClick={() => {
-                  unlock("");
-                  setItems([]);
-                  setLoaded(false);
-                  setRefresh((n) => n + 1);
-                }}
-              >
-                Lock workspace
-              </button>
-            </details>
-          )}
-        </>
-      )}
-      {!closeId && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setClientSearch(
-              String(new FormData(e.currentTarget).get("client") ?? ""),
-            );
-          }}
-        >
-          <label>
-            Client or close month
-            <input
-              name="client"
-              placeholder="Search clients or YYYY-MM"
-              maxLength={200}
-            />
-          </label>
-          <button>Filter clients</button>
-        </form>
-      )}
-      <button onClick={() => setRefresh((n) => n + 1)}>Refresh inbox</button>
       {error && (
         <p role="alert">{error} Updates paused; refresh to reconnect.</p>
       )}
       {!loaded && !error && <p role="status">Loading work…</p>}
       {loaded && (
         <>
-          <label>
-            Show
-            <select value={filter} onChange={(e) => setFilter(e.target.value)}>
-              <option value="active">Active work</option>
-              <option value="needs_confirmation">Decisions</option>
-              <option value="blocked">Blockers</option>
-              <option value="running">Queued and running</option>
-              <option value="waiting_client">Outstanding requests</option>
-              <option value="completed">Prepared</option>
-              <option value="all">All work</option>
-            </select>
-          </label>
+          {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} hasMore={more} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />}
+          {!closeId && (
+            <>
+              <div className="section-title" id="review-queue">
+                <h2>Ready for your review</h2>
+                {queue && queue.count > queue.items.length && <small>Showing {queue.items.length} of {queue.count}</small>}
+              </div>
+              <div className="rows">
+                {!queue && <p className="empty">Review queue unavailable. Open a close to review its drafts.</p>}
+                {queue && queue.items.length === 0 && <p className="empty">Nothing is waiting for review in this filter.</p>}
+                {queue?.items.map((item) => (
+                  <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
+                    <span className="row-main">
+                      <Avatar label={item.entity} />
+                      <span>
+                        <strong>{item.entity} · {item.period}</strong>
+                        <small>{kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}</small>
+                      </span>
+                    </span>
+                    <span className="status warn">Awaiting review</span>
+                    <small>{new Date(item.created_at).toLocaleDateString()}</small>
+                    <span className="chip">Review</span>
+                  </Link>
+                ))}
+              </div>
+              <div className="section-title" id="dependency-review">
+                <h2>Work needing re-review</h2>
+                <small>Source revisions and inherited schedules reopen review; earlier approvals are not reused.</small>
+              </div>
+              <div className="rows" aria-label="Portfolio dependency review">
+                {!dependencyLoaded && <p role="status" className="empty">Checking dependencies…</p>}
+                {dependencyError && <p role="alert" className="empty">{dependencyError}</p>}
+                {dependencyLoaded && !dependencyError && dependencies.length === 0 && <p className="empty">No current workpapers have a changed dependency in this client filter.</p>}
+                {dependencies.map(item => (
+                  <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
+                    <span className="row-main">
+                      <Avatar label={item.entity} />
+                      <span>
+                        <strong>{item.entity} · {item.period}</strong>
+                        <small>{kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}</small>
+                      </span>
+                    </span>
+                    <span className="status danger">Evidence changed</span>
+                    <small>{item.upstream_workpaper_id ? `Linked to prior draft #${item.upstream_workpaper_id}` : "Linked source changed"}</small>
+                    <Icon name="arrow" size={16} />
+                  </Link>
+                ))}
+              </div>
+              {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
+            </>
+          )}
+          <div className="toolbar" id="work-list">
+            <div className="segmented" role="group" aria-label="Work view">
+              {views.map(([key, label]) => (
+                <button key={key} type="button" aria-pressed={filter === key} onClick={() => setFilter(key)}>
+                  {label}
+                  {counts[key] !== undefined && <span className={key === "needs_confirmation" && counts[key] > 0 ? "count alert" : "count"}>{counts[key]}</span>}
+                </button>
+              ))}
+            </div>
+            <button type="button" onClick={() => setRefresh((n) => n + 1)}>Refresh</button>
+          </div>
           {items.length === 0 && (
-            <p>
+            <p className="empty">
               No work matches this view. Change the filters or upload evidence
               in a client close.
             </p>
           )}
-          {filter === "active" && (
-            <p>
-              <button onClick={() => setFilter("completed")}>
-                View prepared work
-              </button>
-            </p>
-          )}
-          {!closeId && <section id="dependency-review" aria-label="Portfolio dependency review"><h2>Work needing re-review</h2>
-            <p>Source revisions and inherited schedules can reopen a workpaper after preparation. Review the current draft in its close; earlier approvals are not reused.</p>
-            {!dependencyLoaded && <p role="status">Checking dependencies…</p>}
-            {dependencyError && <p role="alert">{dependencyError}</p>}
-            {dependencyLoaded && !dependencyError && dependencies.length === 0 && <p>No current workpapers have a changed dependency in this client filter.</p>}
-            {dependencies.length > 0 && <ul>{dependencies.map(item => <li key={item.workpaper_id}><Link to={`/dashboard/closes/${item.close_id}`}>{item.entity} · {item.period} · {item.kind} draft #{item.workpaper_id}</Link>{item.upstream_workpaper_id ? ` · linked to prior draft #${item.upstream_workpaper_id}` : " · linked source changed"}</li>)}</ul>}
-            {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
-          </section>}
-          {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} hasMore={more} onFilter={setFilter} onChange={() => setRefresh((n) => n + 1)} />}
-          <fieldset disabled={!!error}>
+          <fieldset disabled={!!error} className="rows work-rows">
             {items.map((item) => (
               <details
                 key={item.id}
                 id={`work-${item.id}`}
                 className="work-item"
               >
-                <summary>
-                  {item.entity} · {item.period} · {item.source_name} —{" "}
-                  {item.stale
-                    ? "Source replaced"
-                    : item.blockers.length > 0
-                      ? "Prepared · review blockers"
-                      : (labels[item.state] ?? item.state)}{" "}
-                  · #{item.id}
+                <summary className="row">
+                  <span className="row-main">
+                    <Avatar label={item.entity} />
+                    <span>
+                      <strong>{item.entity} · {item.period}</strong>
+                      <small>{item.source_name} · #{item.id}</small>
+                    </span>
+                  </span>
+                  <span className={item.stale || item.blockers.length > 0 ? "status danger" : (tones[item.state] ?? "status")}>
+                    {item.stale
+                      ? "Source replaced"
+                      : item.blockers.length > 0
+                        ? "Prepared · review blockers"
+                        : (labels[item.state] ?? item.state)}
+                  </span>
+                  <small>{item.proposal.kind && item.proposal.kind !== "unsupported" ? (kindLabels[item.proposal.kind] ?? item.proposal.kind) : ""}</small>
+                  <span className="chip">Open</span>
                 </summary>
-                <WorkDetails
-                  key={`${item.id}:${item.revision}`}
-                  item={item}
-                  onPrepared={onPrepared}
-                  onChange={() => setRefresh((n) => n + 1)}
-                />
+                <div className="work-body">
+                  <WorkDetails
+                    key={`${item.id}:${item.revision}`}
+                    item={item}
+                    onPrepared={onPrepared}
+                    onChange={() => setRefresh((n) => n + 1)}
+                  />
+                </div>
               </details>
             ))}
           </fieldset>
@@ -391,15 +449,17 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
     }
     setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
   }
-  return <details open><summary>Ask Work · find, explain and preview actions</summary>
+  return <details open className="agent-card"><summary><Icon name="agent" /> Ask the agent · find, explain and preview actions</summary>
     <p>Select up to 10 visible closes. Each close is checked again when submitted and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
-    <label>Ask Work<input value={command} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();interpret();}}} placeholder="show blockers · prepare all visible · rehearse Client · YYYY-MM" maxLength={220} /></label><button type="button" disabled={busy || !command.trim()} onClick={interpret}>Find and preview</button>
+    <div className="ask-row"><label>Ask Work<input value={command} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();interpret();}}} placeholder="show blockers · prepare all visible · rehearse Client · YYYY-MM" maxLength={220} /></label><button type="button" className="primary" disabled={busy || !command.trim()} onClick={interpret}>Find and preview</button></div>
     <p>Try “show decisions”, “show dependencies”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, or “prepare/recheck/stop all visible”. Actions always need a preview and confirmation.</p>
     {answer && <p role="status" style={{whiteSpace:"pre-line"}}>{answer}</p>}
     {answerClose && <Link to={`/dashboard/closes/${answerClose}`}>Open close rehearsal</Link>}
+    <details><summary>Choose closes for a portfolio action</summary>
     <label>Command<select value={mode} onChange={e=>{setMode(e.target.value as "prepare"|"stop"|"recheck");setSelected([]);setPreview(undefined);setOutcomes([]);}}><option value="prepare">Prepare selected closes</option><option value="recheck">Recheck failed or pending proposals</option><option value="stop">Stop unresolved work</option></select></label>
     {closes.map(close=><label key={close.id}><input type="checkbox" checked={selected.includes(close.id)} disabled={busy || (!selected.includes(close.id) && selected.length>=10)} onChange={e=>{setPreview(undefined);setOutcomes([]);setSelected(current=>e.target.checked?[...current,close.id]:current.filter(id=>id!==close.id));}} /> {close.label}</label>)}
     <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect(selected,mode)}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
+    </details>
     {preview && <div><h3>Exact {mode} preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} {mode === "prepare" ? "source" : "unresolved"} job{close.count===1?"":"s"}</li>)}</ul>{mode === "stop" && <label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label>}<button type="button" disabled={busy || (mode === "stop" && !reason.trim()) || preview.every(close=>close.count===0)} onClick={()=>void submit()}>{mode === "prepare" ? "Coordinate selected closes" : mode === "recheck" ? "Recheck listed proposals" : "Stop listed work"}</button></div>}
     {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
     {error && <p role="alert">{error}</p>}

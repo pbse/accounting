@@ -26,7 +26,11 @@ export function Authentication({ children }: { children: ReactNode }) {
       clientId={authKitClientId}
       redirectUri={`${window.location.origin}/login`}
       apiHostname={import.meta.env.VITE_WORKOS_API_HOSTNAME || undefined}
-      onRedirectCallback={() => window.location.replace("/dashboard/closes")}
+      onRedirectCallback={() => {
+        const next = sessionStorage.getItem("returnTo") ?? "";
+        sessionStorage.removeItem("returnTo");
+        window.location.replace(next.startsWith("/dashboard") ? next : "/dashboard");
+      }}
     >
       <Session>{children}</Session>
     </AuthKitProvider>
@@ -49,6 +53,7 @@ export function AccountAccess() {
             signOut({ returnTo: window.location.origin });
             return;
           }
+          sessionStorage.setItem("returnTo", window.location.pathname + window.location.search);
           void signIn().catch(() =>
             setError("Sign-in could not start. Please try again."),
           );
