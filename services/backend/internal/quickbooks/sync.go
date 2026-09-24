@@ -134,7 +134,7 @@ func completeSync(ctx context.Context, db *sql.DB, job syncClaim, capture Entity
 		return errors.New("Connection, close, or job changed during transaction capture")
 	}
 	var unchangedSource string
-	err = tx.QueryRowContext(ctx, `SELECT s.evidence_id::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id=$1 AND s.connection_id=$2 AND s.period=$3 AND s.state='completed' AND s.digest=$4 AND (SELECT count(*) FROM quickbooks_transaction_rows t WHERE t.sync_id=s.id)=COALESCE((SELECT sum(value::int) FROM jsonb_each_text(COALESCE(s.payload->'counts','{}'::jsonb))),0) ORDER BY s.id DESC LIMIT 1`, job.closeID, job.connectionID, job.period, captureDigest).Scan(&unchangedSource)
+	err = tx.QueryRowContext(ctx, `SELECT s.evidence_id::text FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id=$1 AND s.connection_id=$2 AND s.period=$3 AND s.state='completed' AND s.digest=$4 AND s.exceptions IS NOT NULL AND (SELECT count(*) FROM quickbooks_transaction_rows t WHERE t.sync_id=s.id)=COALESCE((SELECT sum(value::int) FROM jsonb_each_text(COALESCE(s.payload->'counts','{}'::jsonb))),0) ORDER BY s.id DESC LIMIT 1`, job.closeID, job.connectionID, job.period, captureDigest).Scan(&unchangedSource)
 	if err == nil {
 		summary, _ := json.Marshal(map[string]any{"counts": capture.Counts, "started_at": capture.StartedAt, "finished_at": capture.FinishedAt, "completeness": capture.Completeness})
 		// Unchanged evidence has the same exceptions as the capture that produced it.

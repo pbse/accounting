@@ -282,7 +282,7 @@ export function Work({
                 ))}
               </div>
               {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
-              <DailyBooks />
+              <DailyBooks refresh={refresh} />
             </>
           )}
           <div className="toolbar" id="work-list">
@@ -355,7 +355,7 @@ export function Work({
 type Daily = { close_id: string; entity: string; period: string; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[] };
 
 // New exceptions from this and last month's captures since each client was last reviewed.
-function DailyBooks() {
+function DailyBooks({ refresh }: { refresh: number }) {
   const [items, setItems] = useState<Daily[]>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -369,7 +369,7 @@ function DailyBooks() {
   }
   useEffect(() => {
     void load();
-  }, []);
+  }, [refresh]);
   async function reviewed(item: Daily) {
     setBusy(item.close_id);
     try {
@@ -377,6 +377,7 @@ function DailyBooks() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The review could not be saved.");
+      await load();
     } finally {
       setBusy("");
     }

@@ -111,6 +111,18 @@ func TestTransactionChecksReuseEvidenceAndRefreshIndexedRows(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM quickbooks_transaction_rows WHERE sync_id=$1`, second.id).Scan(&indexed); err != nil || indexed != 0 {
 		t.Fatal("historical indexed rows were retained after refresh", err)
 	}
+	// A capture finished before exceptions were recorded is re-indexed, not reused as unchanged.
+	if _, err := db.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET exceptions=NULL WHERE id=$1`, fourth.id); err != nil {
+		t.Fatal(err)
+	}
+	fifth := job()
+	if err := completeSync(ctx, db, fifth, capture("2")); err != nil {
+		t.Fatal(err)
+	}
+	var recorded bool
+	if err := db.QueryRowContext(ctx, `SELECT state,exceptions IS NOT NULL FROM quickbooks_entity_syncs WHERE id=$1`, fifth.id).Scan(&state, &recorded); err != nil || state != "completed" || !recorded {
+		t.Fatalf("a capture without recorded exceptions must not be reused: %s %v %v", state, recorded, err)
+	}
 }
 
 func TestChangeHintsRefreshAfterTheCaptureThatMissedThem(t *testing.T) {

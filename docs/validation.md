@@ -492,6 +492,6 @@ Author: Claude Opus 5.5. Migration 049.
 
 Author: Claude Opus 5.5. Migration 050.
 
-- `TestTransactionChecksReuseEvidenceAndRefreshIndexedRows` now checks that a completed capture records its exceptions and an unchanged capture carries the same ones. Observed red without either.
+- `TestTransactionChecksReuseEvidenceAndRefreshIndexedRows` now checks that a completed capture records its exceptions and an unchanged capture carries the same ones, and that a capture finished before exceptions were recorded is re-indexed rather than reused. Observed red without each.
 - `TestDailyBooksShowsExceptionsNewSinceTheLastReview` (PostgreSQL, hosted firm actor through the organization boundary): unreviewed closes list every finding, most new first; signed-off and other firms' closes are left out; reviewing an older capture is refused; reviewing the latest clears what it covered; the same IDs reported under another transaction kind, and a new type, are new; after reconnecting, the old baseline no longer applies. Observed red without the kind in the finding key, without the same-connection baseline rule, without the signed-off and firm filters, when an older capture could be reviewed and without ranking by new findings.
 - Browser, with a local API and Vite on the disposable database: Work showed Daily books with one new finding out of two for a client whose change-hint capture added a payment without a payee; **Mark reviewed** cleared it to "No new exceptions since the last review."

@@ -98,11 +98,15 @@ func registerDaily(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		// The same close lock a finishing capture takes, so a review cannot acknowledge a capture that was just replaced.
-		var latest string
-		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT s.id::text FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('completed','unchanged') AND s.exceptions IS NOT NULL ORDER BY s.id DESC LIMIT 1),'') FROM client_closes c WHERE c.id::text=$1 FOR UPDATE OF c`, r.PathValue("id")).Scan(&latest)
-		if err != nil {
+		// Take the lock a finishing capture takes first; the next statement then sees any capture
+		// that finished while this one waited.
+		var closeID, latest string
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
 			problem(w, 404, "Close not found.")
+			return
+		}
+		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM quickbooks_entity_syncs WHERE close_id=$1::bigint AND state IN ('completed','unchanged') AND exceptions IS NOT NULL ORDER BY id DESC LIMIT 1),'')`, closeID).Scan(&latest); err != nil {
+			problem(w, 503, "Review storage unavailable.")
 			return
 		}
 		if latest == "" || latest != in.SyncID {
