@@ -332,6 +332,7 @@ export function Work({
                 </summary>
                 <div className="work-body">
                   <WorkDetails
+                    refresh={refresh}
                     key={`${item.id}:${item.revision}`}
                     item={item}
                     onPrepared={onPrepared}
@@ -658,14 +659,67 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
   </details>;
 }
 
+type Hint = {
+  field: string;
+  proposed: string;
+  in_ledger: boolean | null;
+  procedure: string;
+  procedure_usable: boolean;
+  usual: { value: string; count: number; last_period: string; usable: boolean }[];
+};
+
+// What this client's accountant approved before, and whether QuickBooks has the proposed account. Nothing is filled in by itself.
+function MemoryHint({ hint }: { hint: Hint }) {
+  const use = (value: string) => (event: React.MouseEvent<HTMLButtonElement>) => {
+    const input = event.currentTarget.form?.elements.namedItem(hint.field);
+    if (input instanceof HTMLInputElement) input.value = value;
+  };
+  const same = (value: string) => value.trim().toLowerCase() === hint.proposed.trim().toLowerCase();
+  // Matching the client's most common choice needs no note; otherwise the other choices are worth seeing.
+  const usual = hint.usual.length > 0 && same(hint.usual[0].value) ? [] : hint.usual.filter((u) => !same(u.value));
+  if (hint.in_ledger !== false && !(hint.procedure && !same(hint.procedure)) && usual.length === 0) return null;
+  return (
+    <p className="source-label">
+      {hint.in_ledger === false && <>Not in this QuickBooks snapshot. </>}
+      {hint.procedure && !same(hint.procedure) && (
+        <>
+          Your approved procedure names {hint.procedure}.{" "}
+          {hint.procedure_usable && (
+            <button type="button" onClick={use(hint.procedure)}>
+              Use {hint.procedure}
+            </button>
+          )}{" "}
+        </>
+      )}
+      {usual.length > 0 && (
+        <>
+          Approved before for this client:{" "}
+          {usual.map((u) => (
+            <span key={u.value}>
+              {u.value} ({u.count}×, last {u.last_period}){" "}
+              {u.usable && (
+                <button type="button" onClick={use(u.value)}>
+                  Use
+                </button>
+              )}{" "}
+            </span>
+          ))}
+        </>
+      )}
+    </p>
+  );
+}
+
 function WorkDetails({
   item,
   onChange,
   onPrepared,
+  refresh = 0,
 }: {
   item: WorkItem;
   onChange: () => void;
   onPrepared?: () => void;
+  refresh?: number;
 }) {
   const [busy, setBusy] = useState(false);
   const [replyLink, setReplyLink] = useState("");
@@ -688,6 +742,18 @@ function WorkDetails({
     }`,
   );
   const path = `/${item.close_id}/work/${item.id}`;
+  const [hints, setHints] = useState<Record<string, Hint>>({});
+  useEffect(() => {
+    setHints({});
+    if (item.state !== "needs_confirmation") return;
+    let live = true;
+    workspaceRequest(`${path}/hints`)
+      .then((data: { fields: Hint[] }) => live && setHints(Object.fromEntries(data.fields.map((h) => [h.field, h]))))
+      .catch(() => live && setHints({}));
+    return () => {
+      live = false;
+    };
+  }, [path, item.state, refresh]);
   async function act(action: string, body: object = {}) {
     setBusy(true);
     setError("");
@@ -903,6 +969,7 @@ function WorkDetails({
                       />
                     </label>
                     {f.question && <p>{f.question}</p>}
+                    {hints[f.field] && <MemoryHint hint={hints[f.field]} />}
                     {f.candidates.map((c, i) => (
                       <p className="source-label" key={i}>
                         Evidence #{c.source_id}, {c.location}: <q>{c.quote}</q>

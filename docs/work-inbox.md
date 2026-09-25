@@ -111,6 +111,16 @@ The close Overview compares every asset and liability account in the newest mont
 
 Each account **ties**, **ties after proposed entries** (the month-end entries still to post close the gap), **differs**, waits on a **posting outcome unknown** (checked first, since a write in flight may change the balance), or has **no support yet** with a hint on what support to add. A match against a workpaper that is not approved or has blockers is marked provisional. An entry already posted to the snapshot's company before the capture began is treated as part of the balance; one posted later still counts as pending. Support that names no account, several accounts, or an account that is not an asset or liability is listed rather than counted, as is a workpaper prepared in a currency other than the Trial Balance's, and so are Trial Balance accounts with no class, because the board may then be incomplete. Zero-balance accounts with no support are left off. Equity is not tied, receivables and payables are not compared with aging, and nothing blocks sign-off or changes the ledger.
 
+## Client memory when confirming
+
+When a person confirms a model reading, each account field (prepaid: expense and prepaid account; accrual: expense and liability account; reconciliation: account) can carry a note (`GET /v1/closes/{id}/work/{job}/hints`):
+
+- **Not in this QuickBooks snapshot:** the proposed account matches no single account in the close's newest period snapshot on its reading connection. A stale snapshot, or none, says nothing.
+- **Your approved procedure names X:** the client's current enabled procedure sets that account and the proposal differs.
+- **Approved before for this client:** the accounts in this client's approved workpapers of the same kind over the 12 close months ending with this one, with counts and the last month. It uses the latest recorded review decision, ignores revised versions, and shows the top three. The note is hidden when the proposal already matches the most common choice; otherwise the other choices are shown. Notes are read again when Work is refreshed.
+
+**Use** fills in the input, but only for an account that is a single active account in the current snapshot and agrees with the approved procedure. Nothing is filled in by itself; the person still confirms, and every existing check still applies. No model is called. Changing treatment for good stays with learned procedures.
+
 ## Agent track record
 
 **Measure** shows, per client, how the model's work has held up over the last 12 close months, including this one (`GET /v1/closes/track-record`, MCP `agent_track_record`). It uses only recorded history, with no model call.
