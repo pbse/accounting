@@ -35,6 +35,11 @@ type RateChange struct {
 	Effective  string `json:"effective"`
 	AnnualRate string `json:"annual_rate"`
 	Reference  string `json:"reference"`
+	// A rate set from a published index: the index, the date it was published for, its value and the note's margin.
+	Index     string `json:"index,omitempty"`
+	IndexDate string `json:"index_date,omitempty"`
+	IndexRate string `json:"index_rate,omitempty"`
+	Margin    string `json:"margin,omitempty"`
 }
 
 type Fee struct {
@@ -147,6 +152,15 @@ type Amortization struct {
 }
 
 var ratePattern = regexp.MustCompile(`^\d{1,2}(\.\d{1,3})?$`)
+
+var indexPattern = regexp.MustCompile(`^\d{1,2}(\.\d{1,4})?$`)
+
+// tenThousandths reads a percent such as 3.66 as 36600.
+func tenThousandths(text string) int64 {
+	whole, fraction, _ := strings.Cut(text, ".")
+	n, _ := strconv.ParseInt(whole+(fraction + "0000")[:4], 10, 64)
+	return n
+}
 
 func signed(cents int64) string {
 	if cents < 0 {
@@ -270,6 +284,12 @@ func Prepare(in Input) (Workpaper, error) {
 		at, err := time.Parse("2006-01-02", c.Effective)
 		if err != nil || !at.After(paidThrough) || at.After(monthEnd) || (i > 0 && !at.After(changes[i-1].at)) || !ratePattern.MatchString(c.AnnualRate) || c.Reference == "" || len(c.Reference) > 200 {
 			return fail("Rate change %d needs an effective date after interest was paid through and by month-end, in date order, a rate such as 6.500, and the notice it comes from.", i+1)
+		}
+		if c.Index != "" || c.IndexDate != "" || c.IndexRate != "" || c.Margin != "" {
+			published, err := time.Parse("2006-01-02", c.IndexDate)
+			if (c.Index != "SOFR" && c.Index != "EFFR") || err != nil || published.After(at) || !indexPattern.MatchString(c.IndexRate) || !ratePattern.MatchString(c.Margin) || tenThousandths(c.IndexRate)+tenThousandths(c.Margin) != tenThousandths(c.AnnualRate) {
+				return fail("Rate change %d from an index needs SOFR or EFFR, the date it was published for (on or before the change), the published rate, the note's margin, and a rate equal to their sum. A floor or cap is entered by hand.", i+1)
+			}
 		}
 		changes = append(changes, change{at, parseRate(c.AnnualRate)})
 	}

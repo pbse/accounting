@@ -259,6 +259,11 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			failure = err.Error()
 			break
 		}
+		// A rate from an index is checked again here, in case the published value was revised after queueing.
+		if err = CheckIndexRates(ctx, tx, p.Kind, bodies[i]); err != nil {
+			failure = err.Error()
+			break
+		}
 	}
 	ids := []string{}
 	if failure == "" {

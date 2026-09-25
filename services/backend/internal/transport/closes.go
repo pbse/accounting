@@ -148,6 +148,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerStripe(mux, db)
 	registerAging(mux, db)
 	registerMatching(mux, db)
+	registerIndexRates(mux, db)
 	registerDaily(mux, db)
 	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
 	mux.HandleFunc("GET /v1/closes/{id}/binder", exportClose(db, true))
@@ -409,6 +410,10 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 				return
 			}
 			problem(w, 409, err.Error())
+			return
+		}
+		if err = preparation.CheckIndexRates(r.Context(), db, input.Kind, body); err != nil {
+			refuseIndex(w, err)
 			return
 		}
 		digest := fmt.Sprintf("%x", sha256.Sum256(body))

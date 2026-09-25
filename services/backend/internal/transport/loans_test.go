@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"close.local/backend/internal/preparation"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -27,6 +28,7 @@ func TestLoanDraftsNeedTheClientsApprovedLoanProcedure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
+		db.Exec(`DELETE FROM preparation_jobs WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM procedure_versions WHERE kind='loan' AND organization_id='local-development' AND client_entity=$1`, entity)
 		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
@@ -83,6 +85,37 @@ func TestLoanDraftsNeedTheClientsApprovedLoanProcedure(t *testing.T) {
 		t.Fatalf("a variable-rate draft needs the variable-rate procedure: %s", body)
 	}
 	override(true, "lender_statement_variable_v1")
+	call(path, save, 200)
+	// A rate from an index must be the published value on record: at preview, at save and when a queued job runs.
+	if _, err = db.Exec(`INSERT INTO index_rates(name,effective_date,percent) VALUES('SOFR','2026-08-31',4.0000) ON CONFLICT(name,effective_date) DO UPDATE SET percent=4.0000`); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DELETE FROM index_rates WHERE name='SOFR' AND effective_date='2026-08-31'`)
+	indexed := map[string]string{"effective": "2026-09-01", "annual_rate": "6.600", "reference": "Note §3: SOFR + 2.500%", "index": "SOFR", "index_date": "2026-08-31", "index_rate": "4.10", "margin": "2.500"}
+	input["rate_changes"] = []map[string]string{indexed}
+	if body := call(path, save, 409); !strings.Contains(string(body), "not the published value") {
+		t.Fatalf("a saved index rate must be the published one: %s", body)
+	}
+	if body := call("/v1/loans:prepare", input, 409); !strings.Contains(string(body), "not the published value") {
+		t.Fatalf("the preview checks it too: %s", body)
+	}
+	plans, _ := json.Marshal([]map[string]any{{"kind": "loan", "input": input, "sources": []any{}}})
+	var job, state, failure string
+	if err = db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,'fixture') RETURNING id::text`, closeID, "index "+rand.Text(), string(plans)).Scan(&job); err != nil {
+		t.Fatal(err)
+	}
+	for range 50 {
+		if db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&state); state != "queued" {
+			break
+		}
+		if worked, e := preparation.ProcessOne(t.Context(), db); e != nil || !worked {
+			break
+		}
+	}
+	if db.QueryRow(`SELECT state,error FROM preparation_jobs WHERE id=$1`, job).Scan(&state, &failure); state != "failed" || !strings.Contains(failure, "not the published value") {
+		t.Fatalf("a queued job whose index rate is not the published one fails: %s %s", state, failure)
+	}
+	indexed["index_rate"], indexed["annual_rate"] = "4.00", "6.500"
 	call(path, save, 200)
 	// Debt issuance costs need the procedure that includes them.
 	input["method"] = "lender_statement_costs_v1"
