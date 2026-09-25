@@ -170,4 +170,10 @@ Each transaction capture also reads the invoices and bills still open in QuickBo
 
 The capture also reads a year of customer payments, credit memos and supplier credits up to month-end and keeps those with money still unused (QuickBooks does not document unused amounts as a query filter, so they are selected after reading). An unapplied payment of any age asks what it settles, an open invoice or an advance; a customer credit memo or supplier credit unused for more than 30 days asks whether it will be applied or was refunded. Nothing is applied or changed. A refused or over-limit read is named in the capture's completeness note on the QuickBooks panel.
 
+**Receivables and payables aging** on the close uses the same open items from the latest completed transaction capture. Receivables are grouped by customer and payables by vendor (by QuickBooks ID and currency), and open invoices and bills are aged against the close's month-end by due date: current, 1–30, 31–60, 61–90 and over 90 days. An item without a due date is shown as unaged. An unreadable balance is listed but left out of the totals.
+
+Unapplied payments, unused credit memos and supplier credits are listed apart. What they settle is not known, so they are never netted into an invoice. The balances are the ones at capture time: a document paid after month-end but before the capture is not shown, and unused credits older than a year are not read. The page says so, and flags a capture whose open items were not fully read as incomplete.
+
+**Download statement** gives a customer's CSV with this basis stated, safe to open in a spreadsheet, for the firm to use through its own channel. Nothing is sent, collected, paid or written off; statements to customers and payment runs need their own authority.
+
 Open items are kept out of the transaction evidence digest, so a change that touches only them leaves the transaction evidence and its approvals as they were and records new questions. A payment can still change the balance on an invoice or bill dated in the close month; that record is part of the month's transactions and follows the existing evidence rules.

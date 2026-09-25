@@ -1139,3 +1139,49 @@ Tests (PostgreSQL, mocked Stripe), `TestStripeReportArrivesAsRecognizedEvidence`
 Each check was observed red with its rule removed (19 mutations). The two guards against concurrent captures (in-progress check, inserting request only) each cover a race and have no deterministic test.
 
 Not verified: a live Stripe account, including restricted-key permission combinations, account-details access with that key, a real report's size and timing, and test-mode availability of this report type.
+
+## Receivables and payables aging with customer statements (2026-09-25)
+
+Author: Claude Opus 5.5. No migration. PRD §20 Cash Operations: prepare the supporting records before any follow-up. The past-due, unapplied-payment and open-credit questions already existed. This adds the aging and the customer statement from the open items each QuickBooks transaction capture already stores.
+
+- **`quickbooks.Aging`** (pure): receivables and payables grouped by provider ID and currency, invoices and bills bucketed by days past due at month-end, undated items shown as unaged, unreadable balances listed but not counted, and credits kept apart.
+- **`GET /v1/closes/{id}/aging`:** reads the latest completed or unchanged capture on the reading connection, flags an incomplete open-item read, and labels the figures as capture-time balances.
+- **`/aging/statement`:** a CSV for one customer and currency, stating its basis, with spreadsheet-safe cells. Nothing is sent.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- the "balances at capture time, aged against month-end" basis, instead of claiming month-end balances;
+- the incomplete flag and the one-year credit window stated;
+- grouping by provider ID and currency, with credits apart from the buckets;
+- separate treatment for undated and unreadable items;
+- `csvText` for cells;
+- testing an `unchanged` capture and an incomplete read.
+
+Writing the unit test exposed that one unreadable amount made the whole document decode fail silently; amounts are now read raw so it is listed.
+
+Code review: GPT-6 Sol (high), two delta rounds. Adopted:
+
+- documents without a party stay apart, and a statement needs a customer ID;
+- an undecodable record or an unreadable balance marks the report incomplete;
+- a missing currency takes the connection's home currency, or shows as unknown rather than USD;
+- dates are escaped in the CSV;
+- a statement line without a number shows the QuickBooks ID;
+- each balance is rounded to cents before summing;
+- unique row keys in the panel.
+
+Tests:
+
+- `TestAgingBucketsByDueDateAndKeepsCreditsApart` (pure) covers:
+  - each bucket, an undated invoice and a zero balance dropped;
+  - credits apart, and another currency grouped apart;
+  - an unreadable balance listed but not counted, and an undecodable record counted;
+  - unidentified customers kept apart, a missing currency taking home, and totals of rounded lines;
+  - vendor bills and credits.
+- `TestAgingUsesTheLatestCaptureAndDownloadsAStatement` (PostgreSQL):
+  - The aging waits without a capture, uses the newest capture and flags it incomplete, also for an unreadable record or balance.
+  - The statement escapes a formula-like name and date, states its basis, lists the invoice and names an unnumbered payment by its ID.
+  - An unknown or empty customer gets 404.
+
+Each check was observed red with its rule removed (20 mutations).
+
+Not verified: live QuickBooks open-item payloads, and the panel in a browser.
