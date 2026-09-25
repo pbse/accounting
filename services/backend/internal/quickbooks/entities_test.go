@@ -22,6 +22,7 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 	openBillsFail := false
 	changingCount := false
 	countReads := 0
+	unreadable := false
 	hosts := map[string]bool{}
 	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		hosts[req.URL.Host] = true
@@ -35,6 +36,9 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 			if strings.HasPrefix(query, "SELECT COUNT(*)") {
 				fmt.Sscanf(strings.TrimPrefix(query, "SELECT COUNT(*) FROM "), "%s", &kind)
 				count := 0
+				if kind == "Payment" && strings.Contains(query, "TxnDate >= '2025-10-01'") {
+					count = 2
+				}
 				if kind == "Bill" {
 					count = 502
 					countReads++
@@ -48,6 +52,15 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 			fmt.Sscanf(strings.TrimPrefix(query, "SELECT * FROM "), "%s", &kind)
 			kind = strings.TrimSpace(kind)
 			page := []map[string]any{}
+			if strings.Contains(query, "UnappliedAmt") {
+				t.Fatal("unapplied amounts are not a documented filter")
+			}
+			if kind == "Payment" && strings.Contains(query, "TxnDate >= '2025-10-01'") {
+				page = []map[string]any{{"Id": "p1", "TxnDate": "2026-08-01", "UnappliedAmt": 0}, {"Id": "p2", "TxnDate": "2026-09-15", "UnappliedAmt": 500}}
+				if unreadable {
+					delete(page[1], "UnappliedAmt")
+				}
+			}
 			start := 1
 			if strings.Contains(query, "STARTPOSITION 501") {
 				start = 501
@@ -71,12 +84,18 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})
 	capture, err := PeriodEntities(context.Background(), "sandbox", "123", "synthetic", "2026-09")
-	if err != nil || capture.Counts["Bill"] != 502 || len(capture.Records["Bill"]) != 502 || capture.Limits["records_per_type"] != 2500 || len(capture.OpenItems["Bill"]) != 502 || len(capture.OpenItems["Invoice"]) != 0 {
+	if err != nil || capture.Counts["Bill"] != 502 || len(capture.Records["Bill"]) != 502 || capture.Limits["records_per_type"] != 2500 || len(capture.OpenItems["Bill"]) != 502 || len(capture.OpenItems["Invoice"]) != 0 || len(capture.OpenItems["Payment"]) != 1 {
 		t.Fatalf("complete paged capture: count=%d err=%v", capture.Counts["Bill"], err)
 	}
 	hosts = map[string]bool{}
 	if _, err = PeriodEntities(context.Background(), "production", "123", "synthetic", "2026-09"); err != nil || len(hosts) != 1 || !hosts["quickbooks.api.intuit.com"] {
 		t.Fatalf("a production company is read only from the production host: %v %v", hosts, err)
+	}
+	unreadable = true
+	capture, err = PeriodEntities(context.Background(), "sandbox", "123", "synthetic", "2026-09")
+	unreadable = false
+	if err != nil || capture.OpenItems["Payment"] != nil || !strings.Contains(capture.Completeness, "Open Payment UnappliedAmt is unreadable") {
+		t.Fatalf("a payment without a readable unapplied amount is named, not treated as applied: %v %q", err, capture.Completeness)
 	}
 	openBillsFail = true
 	capture, err = PeriodEntities(context.Background(), "sandbox", "123", "synthetic", "2026-09")

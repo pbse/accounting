@@ -595,3 +595,10 @@ Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; a
 - `TestPlainLanguageWorkRequestsBecomePreviewedCommands`: action/target pairs map to the Work box's own commands and mismatched pairs are refused; with a mocked model, a plain request becomes "why is Acme · 2026-09 waiting?", only the request and visible close labels are sent with `store:false`, a mismatched or unknown answer is refused (422), and a missing model is 503. Observed red when views accept a close, when explain accepts all visible, and when the request is stored.
 - `TestWorkInboxCoordinator` now reaches the route through the organization boundary (503 without a model). Observed red without the allowlist entry.
 
+## Unapplied payments and unused credits (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted `RemainingCredit` for credit memos, reading a year by date and selecting positive unused amounts locally instead of undocumented filters, showing the completeness note, and asking what a payment settles.
+
+- `TestUnappliedPaymentsAndOldCreditsAreAskedAbout`: a 500.00 unapplied payment two days old and a credit memo with 120.00 unused for 45 days are asked about; a supplier credit 10 days old is not. Observed red without the payment question and without the 30-day wait for credits.
+- `TestPeriodEntitiesRequiresCompletePagedRevisions` now checks that open payments are read by date for the year to month-end, never filtered on UnappliedAmt, and that only the payment with money unapplied is kept. Observed red with zero amounts kept and without payments read. A payment without a readable unapplied amount is named in the completeness note instead of being treated as applied (code review finding; observed red without the check), and unchanged captures now show that note too.
+
