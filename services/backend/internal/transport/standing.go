@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// standingNote ends the review note an automatic approval records after "Standing approval #<grant>".
+const standingNote = ": this month's carried schedule, unchanged, approved automatically."
+
 // coveringGrant is SQL for the active standing approval on a paper ($1) or its carry_forward ancestors.
 const coveringGrant = `WITH RECURSIVE chain(id) AS (SELECT $1::bigint UNION SELECT (p.paper->'carry_forward'->>'paper_id')::bigint FROM chain c JOIN workpapers p ON p.id=c.id WHERE p.paper->'carry_forward'->>'paper_id' IS NOT NULL)
  SELECT a.id::text,a.workpaper_id::text,a.review_id::text,a.granted_by,a.reason,a.created_at FROM standing_approvals a JOIN chain c ON c.id=a.workpaper_id JOIN workpapers w ON w.id=$1 JOIN client_closes wc ON wc.id=w.close_id
@@ -201,7 +204,7 @@ func standingApprove(ctx context.Context, db *sql.DB, closeID, paperID string) (
 	if state != "pending" || paper.Revises != "" || len(paper.Proposal) > 0 && string(paper.Proposal) != "null" {
 		return false, nil
 	}
-	if _, status, _ := decideReview(ctx, tx, closeID, paperID, by, "approved", "Standing approval #"+grant+": this month's carried schedule, unchanged, approved automatically.", digest, reviewID, false); status != 0 {
+	if _, status, _ := decideReview(ctx, tx, closeID, paperID, by, "approved", "Standing approval #"+grant+standingNote, digest, reviewID, false); status != 0 {
 		return false, nil
 	}
 	return true, tx.Commit()

@@ -39,6 +39,7 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 | `get_workpaper` | One draft: inputs, results, cited sources, blockers and questions |
 | `find_exceptions` | Questions from the latest QuickBooks capture, abnormal Trial Balance balances and holding or clearing accounts that still hold a balance |
 | `get_readiness` | What still blocks sign-off |
+| `morning_brief` | What the agent did in the past 24 hours across open closes, and which closes need a person today |
 | `agent_track_record` | Per client over 12 months: model proposals people confirmed unchanged, the fields they changed, and how the drafts were judged |
 | `close_brief` | Where a close stands, area by area, with a headline of what needs a person |
 | `tie_out` | Each asset and liability compared with the balance the close's workpapers support |

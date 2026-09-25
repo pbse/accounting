@@ -785,3 +785,24 @@ The test also caught a revoke that did not bind the workpaper to the close in th
   - The page reports a grant resting on a superseded approval as not in effect.
   - Observed red without the revision check, the entry check, the signed-off check, the grant-approval binding, the membership check, the local-development exception, the client check, the approved-state check on grant, the close binding, the enabled-firm check, and the in-effect status.
 
+## Good morning brief (2026-09-25)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- Daily Books questions reported as new since last review, under "Today", from the complete list (Daily Books' own list is capped at 100);
+- counting new drafts, not revisions a person queued;
+- the missing-snapshot check honoring QuickBooks period snapshots and Xero;
+- automatic approvals matched to the exact note, grant and granter;
+- scope applied to every count before ranking;
+- "In the past 24 hours" wording, with no claim that nothing needs the person.
+
+Daily Books' computation was extracted once (`dailyFindings`); its tests pass. Code review adopted: marking Daily Books reviewed refreshes the brief, a failed reload shows its error instead of stale figures, and one scan per close counts ready and attention drafts.
+
+- `TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson` (PostgreSQL):
+  - Counted in the past day: one scheduled month-end snapshot, one new agent draft and one automatic approval.
+  - Not counted: a two-day-old scheduled snapshot, a person's snapshot, a person-queued revision, hand-saved drafts, a human note starting "Standing approval #", and the exact note written by another reviewer.
+  - Harbor (approve 1 draft, no month-end snapshot yet) ranks above Dental (1 new client question since last review).
+  - The current-month close and a Xero-snapshotted close are counted as quiet; another firm's close is invisible.
+  - A member without client grants sees nothing.
+  - Observed red without the 24-hour window, the schedule actor, the revision and hand-saved filters, the exact note, the granter match, the ended-month and Xero rules, the ready-draft evidence rule, the Daily Books merge, and the ranking.
+

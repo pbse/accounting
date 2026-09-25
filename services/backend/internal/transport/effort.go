@@ -118,6 +118,7 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 		jsonReply(w, 200, out)
 	})
 	mux.HandleFunc("GET /v1/closes/track-record", trackRecord(db))
+	mux.HandleFunc("GET /v1/closes/morning", morning(db))
 	mux.HandleFunc("GET /v1/closes/effort", func(w http.ResponseWriter, r *http.Request) {
 		period := r.URL.Query().Get("period")
 		if period != "" {

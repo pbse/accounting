@@ -7,6 +7,7 @@ import { Avatar, Icon, type IconName } from "../dashboard/Icon";
 import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
+import { MorningBrief } from "./Morning";
 
 type Fact = {
  optional?: boolean;
@@ -251,6 +252,7 @@ export function Work({
       {!loaded && !error && <p role="status">Loading work…</p>}
       {loaded && (
         <>
+          {!closeId && <MorningBrief refresh={refresh} />}
           {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} hasMore={more} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />}
           {!closeId && (
             <>
@@ -283,7 +285,7 @@ export function Work({
                 ))}
               </div>
               {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
-              <DailyBooks refresh={refresh} />
+              <DailyBooks refresh={refresh} onReviewed={() => setRefresh((n) => n + 1)} />
             </>
           )}
           <div className="toolbar" id="work-list">
@@ -357,7 +359,7 @@ export function Work({
 type Daily = { close_id: string; entity: string; period: string; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[] };
 
 // New exceptions from this and last month's captures since each client was last reviewed.
-function DailyBooks({ refresh }: { refresh: number }) {
+function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () => void }) {
   const [items, setItems] = useState<Daily[]>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -376,7 +378,7 @@ function DailyBooks({ refresh }: { refresh: number }) {
     setBusy(item.close_id);
     try {
       await workspaceRequest(`/${item.close_id}/daily-review`, { sync_id: item.sync_id });
-      await load();
+      onReviewed();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The review could not be saved.");
       await load();
