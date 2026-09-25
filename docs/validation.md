@@ -820,3 +820,24 @@ The General Ledger traversal was extracted once (`walkLedger`); ledger page sele
   - Different currencies, different companies, and newer Xero books in either month all wait.
   - Observed red without the data-row checks, the duplicate and column checks, the blank-amount and unnamed-amount rules, the Name-column check, the company, currency and Xero checks, the missing-payee suppression, the add-up check, the ordering, the zero-change filter, the single-amount-column rule, the sign match, and the omitted count.
 
+## Good morning brief (2026-09-25)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- Daily Books questions reported as new since last review, under "Today", from the complete list (Daily Books' own list is capped at 100);
+- counting new drafts, not revisions a person queued;
+- the missing-snapshot check honoring QuickBooks period snapshots and Xero;
+- automatic approvals matched to the exact note, grant and granter;
+- scope applied to every count before ranking;
+- "In the past 24 hours" wording, with no claim that nothing needs the person.
+
+Daily Books' computation was extracted once (`dailyFindings`); its tests pass. Code review adopted: marking Daily Books reviewed refreshes the brief, a failed reload shows its error instead of stale figures, and one scan per close counts ready and attention drafts.
+
+- `TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson` (PostgreSQL):
+  - Counted in the past day: one scheduled month-end snapshot, one new agent draft and one automatic approval.
+  - Not counted: a two-day-old scheduled snapshot, a person's snapshot, a person-queued revision, hand-saved drafts, a human note starting "Standing approval #", and the exact note written by another reviewer.
+  - Harbor (approve 1 draft, no month-end snapshot yet) ranks above Dental (1 new client question since last review).
+  - The current-month close and a Xero-snapshotted close are counted as quiet; another firm's close is invisible.
+  - A member without client grants sees nothing.
+  - Observed red without the 24-hour window, the schedule actor, the revision and hand-saved filters, the exact note, the granter match, the ended-month and Xero rules, the ready-draft evidence rule, the Daily Books merge, and the ranking.
+

@@ -149,6 +149,13 @@ A document is not replayed when evidence in the close has changed since it was c
 
 This is a check of interpretation, not of evidence selection. It needs `OPENAI_API_KEY` and `OPENAI_MODEL` and a person's session, and it is not exposed to agents, so model spend stays a person's click. Each person can run one replay at a time. It works best on past closes, whose evidence no longer changes.
 
+## Good morning
+
+The firm's Work page opens with a morning brief (`GET /v1/closes/morning`, MCP `morning_brief`). It covers the unsigned current and prior-month closes the person can access, with no model call.
+
+- **In the past 24 hours:** month-end snapshots the schedule captured, new drafts prepared (a person's revisions and hand-saved drafts are not counted), and carried schedules approved under standing approvals (matched exactly to their grant and granter). It is a rolling day, not "since you last looked".
+- **Needs a person today:** each close's drafts to approve or fix, documents to confirm, failed documents to retry, a missing month-end snapshot for an ended month (QuickBooks or Xero), and Daily Books questions new since the close was last reviewed. Closes are ranked by how much is waiting and the top 20 are shown, with the total. The brief says how many other closes have none of these waiting; tie-out and changes stay on each close.
+
 ## Daily books
 
 Work lists **Daily books**: for each accessible client's unsigned current- or prior-month close, the exceptions the latest QuickBooks transaction capture found that were not in the capture last marked reviewed. Captures run daily and soon after QuickBooks reports a change, so new duplicates, holding-account postings, payments without a payee and inconsistent coding surface during the month instead of at close. Each capture records its findings when it finishes; a capture with unchanged evidence carries the previous findings. A finding is the same when its type, transaction kind and QuickBooks IDs match; after reconnecting to a different company, everything counts as new. Clients with the most new findings come first, up to 100.
