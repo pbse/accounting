@@ -6,7 +6,7 @@ import { workspaceRequest } from "./workspace";
 
 type Member = { id: number; subject: string; granted: boolean; reason: string; actor: string; created_at: string };
 type Alert = { kind: string; close_id: string; item_id: string; state: string; age_minutes: number };
-type Operations = { limits: { closes: number; active_jobs: number }; usage: { closes: number; active_jobs: number }; unmapped_delivery_events: number; undelivered_alerts: number; alerts: Alert[]; has_more: boolean };
+type Operations = { limits: { closes: number; active_jobs: number; model_calls_today: number }; usage: { closes: number; active_jobs: number; model_calls_today: number }; unmapped_delivery_events: number; undelivered_alerts: number; alerts: Alert[]; has_more: boolean };
 type Retention = { retain_until: string; legal_hold: boolean; version: number; deletion_blockers: string[] };
 
 export function FirmEnrollment({ onEnrolled }: { onEnrolled: () => void }) {
@@ -86,7 +86,7 @@ export function FirmOperations() {
     <p>Firm administrators can inspect durable exceptions and enroll or revoke exact WorkOS users. WorkOS still owns identity and roles; client assignments remain separate.</p>
     <button type="button" disabled={busy} onClick={() => void load()}>Refresh operations</button>
     {snapshot && <>
-      <p role="status">Closes {snapshot.usage.closes}/{snapshot.limits.closes} · active jobs {snapshot.usage.active_jobs}/{snapshot.limits.active_jobs} · undelivered external alerts {snapshot.undelivered_alerts} · unmapped historical delivery events {snapshot.unmapped_delivery_events}</p>
+      <p role="status">Closes {snapshot.usage.closes}/{snapshot.limits.closes} · active jobs {snapshot.usage.active_jobs}/{snapshot.limits.active_jobs} · model calls today (UTC) {snapshot.usage.model_calls_today}/{snapshot.limits.model_calls_today} · undelivered external alerts {snapshot.undelivered_alerts} · unmapped historical delivery events {snapshot.unmapped_delivery_events}</p>
       {snapshot.alerts.length === 0 ? <p>No aged or unknown work in this snapshot.</p> : <ul>{snapshot.alerts.map((item) => <li key={`${item.kind}-${item.item_id}`}><Link to={`/dashboard/closes/${item.close_id}`}>{item.kind} #{item.item_id}</Link> · {item.state} · {item.age_minutes} minutes</li>)}</ul>}
       {snapshot.has_more && <p>More than 100 alerts exist. Resolve these, then refresh to see the rest.</p>}
     </>}

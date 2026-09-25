@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -165,5 +166,69 @@ func TestReplayComparesTheCurrentModelWithConfirmedReadings(t *testing.T) {
 		if item.Source == "hiscox.txt" && !strings.Contains(item.Error, "changed during the replay") {
 			t.Fatalf("evidence added during the model call leaves the reading unscored: %+v", item)
 		}
+	}
+
+	// Each run is saved and the latest can be read again.
+	r := httptest.NewRequest("GET", "/v1/closes/"+closeID+"/replay", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	var saved struct {
+		Run *struct {
+			Model string
+			Items []struct {
+				Source string `json:"source_name"`
+			}
+		}
+	}
+	if json.Unmarshal(w.Body.Bytes(), &saved) != nil || saved.Run == nil || saved.Run.Model != "synthetic-model" || len(saved.Run.Items) != 3 {
+		t.Fatalf("the latest replay is saved: %d %s", w.Code, w.Body.String())
+	}
+	runs := func(model string) (n int) {
+		t.Helper()
+		must(db.QueryRow(`SELECT count(*) FROM replay_runs WHERE close_id=$1 AND model=$2 AND actor='scheduled-replay'`, closeID, model).Scan(&n))
+		return n
+	}
+	ctx := context.Background()
+	must(sweepReplays(ctx, db))
+	if runs("synthetic-model") != 0 {
+		t.Fatal("a firm already checked on this model is not replayed again")
+	}
+	t.Setenv("OPENAI_MODEL", "synthetic-model-2")
+	must(sweepReplays(ctx, db))
+	if runs("synthetic-model-2") != 0 {
+		t.Fatal("a run that scores no reading (the late document changed the evidence) does not count as a check")
+	}
+	_, err = db.Exec(`DELETE FROM evidence WHERE close_id=$1 AND name='late.txt'`, closeID)
+	must(err)
+	must(sweepReplays(ctx, db))
+	must(sweepReplays(ctx, db))
+	if runs("synthetic-model-2") != 1 {
+		t.Fatalf("a new model is checked once per firm: %d", runs("synthetic-model-2"))
+	}
+
+	// A confirmation that is not one readable plan is never sent to the model, so it cannot count as scored.
+	_, err = db.Exec(`UPDATE preparation_jobs SET plans='[{}]' WHERE id=(SELECT job_id FROM preparation_intakes WHERE source_id=$1)`, hiscox)
+	must(err)
+	before = fmt.Sprint(calls)
+	for _, item := range replayOnce(200).Items {
+		if item.Source == "hiscox.txt" && !strings.Contains(item.Error, "not one readable plan") {
+			t.Fatalf("an unreadable confirmation is unscored: %+v", item)
+		}
+	}
+	if fmt.Sprint(calls) != before {
+		t.Fatal("no model call is spent on an unreadable confirmation")
+	}
+
+	// At the firm's daily limit nothing is replayed, and the model is not marked checked.
+	defer db.Exec(`UPDATE organizations SET max_model_calls_per_day=2000 WHERE id='local-development'`)
+	_, err = db.Exec(`UPDATE organizations SET max_model_calls_per_day=(SELECT calls FROM model_calls WHERE organization_id='local-development' AND day=(now() AT TIME ZONE 'UTC')::date) WHERE id='local-development'`)
+	must(err)
+	spent := calls
+	replayOnce(429)
+	t.Setenv("OPENAI_MODEL", "synthetic-model-3")
+	must(sweepReplays(ctx, db))
+	if calls != spent || runs("synthetic-model-3") != 0 {
+		t.Fatalf("no model call is made past the limit: %d → %d, %d runs", spent, calls, runs("synthetic-model-3"))
 	}
 }

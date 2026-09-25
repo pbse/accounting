@@ -2,6 +2,7 @@ package transport
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -22,7 +23,8 @@ func morning(db *sql.DB) http.HandlerFunc {
 		args := []any{organization(r), firmAccess(r), subject(r)}
 		var snapshots, drafts, standing int
 		err := db.QueryRowContext(ctx, `SELECT
- (SELECT count(*) FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE `+morningScope+` AND s.actor='scheduled-quickbooks-refresh' AND s.payload ? 'period' AND s.captured_at>now()-interval '24 hours'),
+ (SELECT count(*) FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE `+morningScope+` AND s.actor='scheduled-quickbooks-refresh' AND s.payload ? 'period' AND s.captured_at>now()-interval '24 hours')
+ +(SELECT count(*) FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE `+morningScope+` AND s.actor='scheduled-xero-refresh' AND s.captured_at>now()-interval '24 hours'),
  (SELECT count(*) FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE `+morningScope+` AND w.created_by IS NULL AND COALESCE(w.paper->>'revises','')='' AND w.created_at>now()-interval '24 hours'),
  (SELECT count(*) FROM workpaper_reviews v JOIN workpapers w ON w.id=v.workpaper_id JOIN client_closes c ON c.id=w.close_id JOIN standing_approvals a ON v.note='Standing approval #'||a.id||$4 AND v.actor=a.granted_by
   WHERE `+morningScope+` AND v.decision='approved' AND v.created_at>now()-interval '24 hours')`, append(args, standingNote)...).Scan(&snapshots, &drafts, &standing)
@@ -84,6 +86,34 @@ func morning(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Morning brief unavailable.")
 			return
 		}
+		// The latest automatic check of the current agent on a close this person can open; counts only, no client names.
+		var check map[string]any
+		var model, checkedClose string
+		var items []byte
+		var checked time.Time
+		err = db.QueryRowContext(ctx, `SELECT r.model,r.close_id::text,r.items,r.created_at FROM replay_runs r JOIN client_closes c ON c.id=r.close_id
+ WHERE r.organization_id=$1 AND r.actor='scheduled-replay' AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) ORDER BY r.id DESC LIMIT 1`, args...).Scan(&model, &checkedClose, &items, &checked)
+		if err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "Morning brief unavailable.")
+			return
+		}
+		if err == nil {
+			var readings []struct {
+				Kept  bool
+				Error string
+			}
+			json.Unmarshal(items, &readings)
+			kept, scored := 0, 0
+			for _, reading := range readings {
+				if reading.Error == "" {
+					scored++
+					if reading.Kept {
+						kept++
+					}
+				}
+			}
+			check = map[string]any{"model": model, "close_id": checkedClose, "kept": kept, "scored": scored, "checked_at": checked}
+		}
 		daily, err := dailyFindings(ctx, db, organization(r), firmAccess(r), subject(r))
 		if err != nil {
 			problem(w, 503, "Morning brief unavailable.")
@@ -104,6 +134,6 @@ func morning(db *sql.DB) http.HandlerFunc {
 		})
 		shown := needing[:min(20, len(needing))]
 		jsonReply(w, 200, map[string]any{"since": time.Now().UTC().Add(-24 * time.Hour), "overnight": map[string]int{"month_end_snapshots": snapshots, "drafts_prepared": drafts, "standing_approvals": standing},
-			"closes": shown, "needing": len(needing), "quiet": len(closes) - len(needing)})
+			"closes": shown, "needing": len(needing), "quiet": len(closes) - len(needing), "model_check": check})
 	}
 }

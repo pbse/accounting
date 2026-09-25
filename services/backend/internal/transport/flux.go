@@ -13,16 +13,19 @@ import (
 
 	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/xero"
 )
 
 type fluxMonth struct {
 	Period     string    `json:"period"`
+	Source     string    `json:"source"`
 	SnapshotID string    `json:"snapshot_id"`
 	CapturedAt time.Time `json:"captured_at"`
 	Stale      bool      `json:"stale"`
 	realm      string
 	accounts   json.RawMessage
 	pl, gl     json.RawMessage
+	xero       json.RawMessage
 }
 
 type payeeAmount struct {
@@ -32,6 +35,7 @@ type payeeAmount struct {
 }
 
 // flux explains the largest movements in the Profit and Loss from last month's close to this one, from the payees behind them.
+// Each month uses its close's newest snapshot, from QuickBooks or Xero; Xero snapshots carry no payees.
 func flux(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -42,13 +46,24 @@ func flux(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		month := func(closeID, period string) (*fluxMonth, error) {
-			m := fluxMonth{Period: period}
+			m := fluxMonth{Period: period, Source: "quickbooks"}
 			err := db.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'ProfitAndLoss',s.payload->'reports'->'GeneralLedger' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
  WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &m.Stale, &m.accounts, &m.pl, &m.gl)
+			if err != nil && err != sql.ErrNoRows {
+				return nil, err
+			}
+			x := fluxMonth{Period: period, Source: "xero"}
+			xeroErr := db.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,x.state<>'active',s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&x.SnapshotID, &x.realm, &x.CapturedAt, &x.Stale, &x.xero)
+			if xeroErr != nil && xeroErr != sql.ErrNoRows {
+				return nil, xeroErr
+			}
+			if xeroErr == nil && (err == sql.ErrNoRows || x.CapturedAt.After(m.CapturedAt)) {
+				return &x, nil
+			}
 			if err == sql.ErrNoRows {
 				return nil, nil
 			}
-			return &m, err
+			return &m, nil
 		}
 		this, err := month(r.PathValue("id"), period)
 		if err != nil {
@@ -56,20 +71,7 @@ func flux(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		if this == nil {
-			wait("Capture this month's QuickBooks period snapshot first.")
-			return
-		}
-		xeroNewer := func(closeID string, m *fluxMonth) (bool, error) {
-			var newer bool
-			err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM xero_snapshots WHERE close_id::text=$1 AND captured_at>$2)`, closeID, m.CapturedAt).Scan(&newer)
-			return newer, err
-		}
-		if newer, err := xeroNewer(r.PathValue("id"), this); err != nil || newer {
-			if err != nil {
-				problem(w, 503, "Period snapshot unavailable.")
-				return
-			}
-			wait("This client's newest books come from Xero; changes are explained from QuickBooks only.")
+			wait("Capture this month's QuickBooks period snapshot or Xero Trial Balance first.")
 			return
 		}
 		previous := shiftMonth(period, -1)
@@ -87,23 +89,40 @@ func flux(db *sql.DB) http.HandlerFunc {
 			}
 		}
 		if last == nil {
-			wait("Last month (" + previous + ") has no close with a QuickBooks period snapshot to compare against.")
+			wait("Last month (" + previous + ") has no close with a month-end snapshot to compare against.")
 			return
 		}
-		if newer, err := xeroNewer(priorClose, last); err != nil || newer {
-			if err != nil {
-				problem(w, 503, "Last month's snapshot is unavailable.")
-				return
-			}
-			wait("Last month's newest books come from Xero; changes are explained from QuickBooks only.")
+		if last.Source != this.Source {
+			wait("The two months' newest books come from different ledgers (QuickBooks and Xero), so they are not compared.")
 			return
 		}
 		if last.realm != this.realm {
-			wait("The two months were captured from different QuickBooks companies.")
+			wait("The two months were captured from different companies.")
 			return
 		}
-		currency, now, err := quickbooks.MonthlyActivity(this.pl)
-		lastCurrency, before, lastErr := quickbooks.MonthlyActivity(last.pl)
+		classes := map[string]string{}
+		monthly := func(m *fluxMonth) (string, map[string]quickbooks.Activity, error) {
+			if m.Source == "quickbooks" {
+				var directory []struct {
+					ID             string `json:"Id"`
+					Classification string
+				}
+				json.Unmarshal(m.accounts, &directory)
+				for _, a := range directory {
+					classes[a.ID] = cmp.Or(classes[a.ID], a.Classification)
+				}
+				return quickbooks.MonthlyActivity(m.pl)
+			}
+			currency, rows, err := xero.MonthlyActivity(m.xero)
+			out := map[string]quickbooks.Activity{}
+			for _, row := range rows {
+				out[row.ID] = quickbooks.Activity{Name: row.Name, Amount: row.Net}
+				classes[row.ID] = cmp.Or(classes[row.ID], row.Class)
+			}
+			return currency, out, err
+		}
+		currency, now, err := monthly(this)
+		lastCurrency, before, lastErr := monthly(last)
 		if err == nil {
 			err = lastErr
 		}
@@ -120,15 +139,6 @@ func flux(db *sql.DB) http.HandlerFunc {
 			id, name, class string
 			now, before     *big.Rat
 			delta           *big.Rat
-		}
-		var directory []struct {
-			ID             string `json:"Id"`
-			Classification string
-		}
-		json.Unmarshal(this.accounts, &directory)
-		classes := map[string]string{}
-		for _, a := range directory {
-			classes[a.ID] = a.Classification
 		}
 		changes := []change{}
 		accounts := map[string]bool{}
@@ -164,6 +174,11 @@ func flux(db *sql.DB) http.HandlerFunc {
 		out := []map[string]any{}
 		for _, c := range changes {
 			item := map[string]any{"account_id": c.id, "account": c.name, "class": c.class, "this_month": c.now.FloatString(2), "last_month": c.before.FloatString(2), "change": c.delta.FloatString(2)}
+			if this.Source == "xero" {
+				item["causes_unavailable"] = "Xero month-end snapshots carry no payee detail."
+				out = append(out, item)
+				continue
+			}
 			if nowErr != nil || beforeErr != nil {
 				item["causes_unavailable"] = "The General Ledger could not be read by payee."
 				out = append(out, item)

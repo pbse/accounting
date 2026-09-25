@@ -141,10 +141,48 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 			t.Fatal("Intake failed", e)
 		}
 	}
+	usage := func() (n int) {
+		t.Helper()
+		if e := db.QueryRow(`SELECT COALESCE((SELECT calls FROM model_calls WHERE organization_id='local-development' AND day=(now() AT TIME ZONE 'UTC')::date),0)`).Scan(&n); e != nil {
+			t.Fatal(e)
+		}
+		return n
+	}
+	// At the firm's daily limit the job waits, uncounted and unclaimed, instead of calling the model.
+	if _, err = db.Exec(`INSERT INTO model_calls(organization_id,day,calls) VALUES('local-development',(now() AT TIME ZONE 'UTC')::date,1) ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`UPDATE organizations SET max_model_calls_per_day=2000 WHERE id='local-development'`)
+	if _, err = db.Exec(`UPDATE organizations SET max_model_calls_per_day=$1 WHERE id='local-development'`, usage()); err != nil {
+		t.Fatal(err)
+	}
+	spent := usage()
+	process()
+	var attempts int
+	var message string
+	var retry bool
+	if err = db.QueryRow(`SELECT i.agent_attempts,j.error,i.agent_retry_at>now() FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id WHERE j.id=$1`, job).Scan(&attempts, &message, &retry); err != nil {
+		t.Fatal(err)
+	}
+	if _, state := read(); state != "waiting_evidence" || attempts != 0 || !retry || !strings.Contains(message, "daily model call limit") || calls != 0 || usage() != spent {
+		t.Fatalf("a job past the limit waits without a call or an attempt: %s %d %v %q calls=%d", state, attempts, retry, message, calls)
+	}
+	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || worked {
+		t.Fatal("a job waiting for the limit is not claimed again before its retry time", e)
+	}
+	if _, err = db.Exec(`UPDATE organizations SET max_model_calls_per_day=2000 WHERE id='local-development'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE preparation_intakes SET agent_retry_at=NULL WHERE job_id=$1`, job); err != nil {
+		t.Fatal(err)
+	}
 	process()
 	revision, state := read()
 	if state != "needs_confirmation" {
 		t.Fatal(state)
+	}
+	if calls != 1 || usage() != spent+1 {
+		t.Fatalf("a small inventory costs one counted call: calls=%d usage %d → %d", calls, spent, usage())
 	}
 	input := map[string]any{"amount": "1200.00", "service_start": "2026-09-01", "service_end": "2027-08-31", "currency": "USD", "basis": "accrual", "expense_account": "Insurance expense", "prepaid_account": "Prepaid insurance", "method": "equal_full_months_v1", "method_confirmed": true, "booking_confirmed": true}
 	action := base + "/work/" + job

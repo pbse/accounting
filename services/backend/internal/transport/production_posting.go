@@ -814,7 +814,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var closeID, reviewState, currentGrant string
+		var closeID, currentGrant string
 		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 AND organization_id=$2 FOR UPDATE`, r.PathValue("id"), a.Organization).Scan(&closeID); err != nil {
 			problem(w, 409, "Close changed.")
 			return
@@ -824,9 +824,8 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "Firm or member access was revoked before this posting decision.")
 			return
 		}
-		err = tx.QueryRowContext(r.Context(), `SELECT review_state FROM workpaper_review_state WHERE id::text=$1 AND close_id=$2`, r.PathValue("paper"), closeID).Scan(&reviewState)
-		if err != nil || reviewState != "approved" {
-			problem(w, 409, "A current accountant-approved workpaper is required.")
+		if status, message := draftApproved(r.Context(), tx, closeID, r.PathValue("paper"), a, in.Action == "approve"); status != 0 {
+			problem(w, status, message)
 			return
 		}
 		var reviewer string

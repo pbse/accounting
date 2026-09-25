@@ -44,12 +44,13 @@ func registerOperations(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var maxCloses, maxJobs, closes, jobs, unmapped, undelivered int
-		err = tx.QueryRowContext(r.Context(), `SELECT o.max_closes,o.max_pending_jobs,
+		var maxCloses, maxJobs, maxCalls, closes, jobs, calls, unmapped, undelivered int
+		err = tx.QueryRowContext(r.Context(), `SELECT o.max_closes,o.max_pending_jobs,o.max_model_calls_per_day,
+ COALESCE((SELECT m.calls FROM model_calls m WHERE m.organization_id=o.id AND m.day=(now() AT TIME ZONE 'UTC')::date),0),
  (SELECT count(*) FROM client_closes c WHERE c.organization_id=o.id),
  (SELECT count(*) FROM preparation_jobs j JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND j.state IN ('queued','waiting_evidence','interpreting','needs_confirmation','waiting_client')),
  (SELECT count(*) FROM email_delivery_events e JOIN email_connections x ON x.id=e.connection_id WHERE x.organization_id=o.id AND e.close_id IS NULL)
- FROM organizations o WHERE o.id=$1`, organization(r)).Scan(&maxCloses, &maxJobs, &closes, &jobs, &unmapped)
+ FROM organizations o WHERE o.id=$1`, organization(r)).Scan(&maxCloses, &maxJobs, &maxCalls, &calls, &closes, &jobs, &unmapped)
 		if err != nil {
 			problem(w, 503, "Firm limits unavailable.")
 			return
@@ -84,6 +85,6 @@ func registerOperations(mux *http.ServeMux, db *sql.DB) {
 		if more {
 			alerts = alerts[:100]
 		}
-		jsonReply(w, 200, map[string]any{"limits": map[string]int{"closes": maxCloses, "active_jobs": maxJobs}, "usage": map[string]int{"closes": closes, "active_jobs": jobs}, "unmapped_delivery_events": unmapped, "undelivered_alerts": undelivered, "alerts": alerts, "has_more": more})
+		jsonReply(w, 200, map[string]any{"limits": map[string]int{"closes": maxCloses, "active_jobs": maxJobs, "model_calls_today": maxCalls}, "usage": map[string]int{"closes": closes, "active_jobs": jobs, "model_calls_today": calls}, "unmapped_delivery_events": unmapped, "undelivered_alerts": undelivered, "alerts": alerts, "has_more": more})
 	})
 }

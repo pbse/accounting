@@ -360,7 +360,9 @@ export default function WorkpaperView() {
             }}
             autoLoad
           />
-          {saved.kind === "prepaid" && <StandingApproval key={`standing-${saved.id}-${saved.review_state}`} closeId={close.id} paperId={saved.id} approved={saved.review_state === "approved"} />}
+          {(saved.kind === "prepaid" || saved.kind === "loan" || (saved.kind === "accrual" && saved.paper.input.method === "fixed_recurring_incurred_v1")) && (
+            <StandingApproval key={`standing-${saved.id}-${saved.review_state}`} closeId={close.id} paperId={saved.id} kind={saved.kind} approved={saved.review_state === "approved"} />
+          )}
           <details>
             <summary>Original inputs and full calculation</summary>
             <pre>{JSON.stringify(saved.paper, null, 2)}</pre>

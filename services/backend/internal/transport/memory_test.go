@@ -43,6 +43,8 @@ func TestHintsRememberApprovedAccountsAndCheckTheLedger(t *testing.T) {
 			db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM preparation_jobs WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM xero_connections WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM evidence WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM client_closes WHERE id=$1`, id)
@@ -147,5 +149,15 @@ func TestHintsRememberApprovedAccountsAndCheckTheLedger(t *testing.T) {
 	must(err)
 	if p := read(current, job, 200)["prepaid_account"]; p.InLedger != nil {
 		t.Fatalf("a stale snapshot says nothing about the ledger: %+v", p)
+	}
+
+	// A newer Xero capture supplies the chart of accounts.
+	var xero string
+	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) SELECT id,organization_id,entity,'fixture','active',$2,now(),'t-1' FROM client_closes WHERE id=$1 RETURNING id::text`, current, rand.Text()).Scan(&xero))
+	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d',$3,'fixture',now()+interval '1 minute')`, current, xero,
+		`{"accounts":{"Accounts":[{"AccountID":"x-1","Name":"Prepaid Expenses","Status":"ACTIVE"},{"AccountID":"x-2","Name":"Insurance expense","Status":"ARCHIVED"}]}}`)
+	must(err)
+	if h := read(current, job, 200); h["prepaid_account"].InLedger == nil || !*h["prepaid_account"].InLedger || h["expense_account"].InLedger == nil || !*h["expense_account"].InLedger {
+		t.Fatalf("the proposed accounts are checked against the Xero chart of accounts: %+v", h)
 	}
 }

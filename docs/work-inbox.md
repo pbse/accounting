@@ -145,9 +145,11 @@ Not counted: rule-based and bank-export readings, carried-forward and recurring 
 
 On a close's **Workpapers** tab, **Replay confirmed readings** reads up to 3 of the close's most recently confirmed model readings again with the current model (`POST /v1/closes/{id}/replay`, one model call each). It uses the evidence the agent originally selected, recorded in its checkpoint, and compares each new reading with what the person confirmed. Each document then shows "same as confirmed" or the fields that differ. A value the person confirmed that the new reading leaves out counts as a difference.
 
-A document is not replayed when evidence in the close has changed since it was confirmed, when it names another client, or when its original selection was not recorded. A reading is left unscored if evidence changes while the model is reading. Nothing is saved or changed.
+A document is not replayed when evidence in the close has changed since it was confirmed, when it names another client, or when its original selection was not recorded. A reading is left unscored if evidence changes while the model is reading. Only the comparison is saved (migration 056): the panel shows the latest run for the close (`GET /v1/closes/{id}/replay`), and no reading, job or workpaper changes.
 
-This is a check of interpretation, not of evidence selection. It needs `OPENAI_API_KEY` and `OPENAI_MODEL` and a person's session, and it is not exposed to agents, so model spend stays a person's click. Each person can run one replay at a time. It works best on past closes, whose evidence no longer changes.
+The worker runs the same check once an hour for each enabled firm not yet checked on the current `OPENAI_MODEL`: it replays the close with the firm's newest confirmed model reading, as `scheduled-replay`. A run counts as the firm's check only once it scores at least one reading, so a run where every document was skipped is retried the next hour. Changing `OPENAI_MODEL` makes every firm due again. The morning brief shows the latest automatic check: how many scored readings came out the same, with a link to its close.
+
+This is a check of interpretation, not of evidence selection. It needs `OPENAI_API_KEY` and `OPENAI_MODEL` and a person's session, and it is not exposed to agents. Its calls, like every other model call, count against the firm's daily limit (see operations.md). Each person can run one replay at a time. It works best on past closes, whose evidence no longer changes.
 
 ## Good morning
 

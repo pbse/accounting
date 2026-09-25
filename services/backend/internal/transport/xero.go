@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -134,11 +135,9 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, map[string]string{"id": id, "url": xero.AuthorizationURL(state)})
 			return
 		}
-		var id, state, tenant string
+		var id, state string
 		var tenants json.RawMessage
-		var encrypted []byte
-		var expires sql.NullTime
-		if err := db.QueryRowContext(ctx, `SELECT id::text,state,tenant_id,tenants,credential,access_expires_at FROM xero_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND state<>'disconnected'`, in.ID, a.Organization, entity).Scan(&id, &state, &tenant, &tenants, &encrypted, &expires); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT id::text,state,tenants FROM xero_connections WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND state<>'disconnected'`, in.ID, a.Organization, entity).Scan(&id, &state, &tenants); err != nil {
 			problem(w, 404, "Xero connection not found for this client.")
 			return
 		}
@@ -209,60 +208,9 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		case "snapshot":
-			if state != "active" {
-				problem(w, 409, "Confirm the client's Xero organisation before capturing.")
-				return
-			}
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(95 * time.Second))
-			raw, err := secrets.Open(aad, encrypted)
-			var credentials xero.Credentials
-			if err != nil || json.Unmarshal(raw, &credentials) != nil {
-				problem(w, 503, "Encrypted connection unavailable; check the server key.")
-				return
-			}
-			if !expires.Valid || time.Until(expires.Time) < 2*time.Minute {
-				if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='refreshing',updated_at=now() WHERE id=$1 AND state='active' AND access_expires_at IS NOT DISTINCT FROM $2`, id, expires)) {
-					return
-				}
-				if credentials, err = xero.Refresh(ctx, credentials.Refresh); err != nil {
-					fail(err.Error())
-					return
-				}
-				raw, _ = json.Marshal(credentials)
-				sealed, err := secrets.Seal(aad, raw)
-				if err != nil {
-					fail(err.Error())
-					return
-				}
-				// Xero has already retired the old refresh token; the new one must be saved first.
-				result, err := db.ExecContext(ctx, `UPDATE xero_connections SET credential=$2,access_expires_at=$3,state='active',updated_at=now() WHERE id=$1 AND state='refreshing'`, id, sealed, time.Now().Add(time.Duration(credentials.Expires)*time.Second))
-				if err != nil {
-					fail("Rotated Xero credentials could not be saved. Connect again before continuing.")
-					return
-				}
-				if changed(result, nil) {
-					return
-				}
-			}
-			month, err := time.Parse("2006-01", period)
-			if err != nil {
-				problem(w, 422, "This close has no valid month.")
-				return
-			}
-			payload, err := xero.Capture(ctx, credentials.Access, tenant, month.AddDate(0, 1, -1))
-			if err != nil {
-				db.ExecContext(ctx, `UPDATE xero_connections SET error=$2,updated_at=now() WHERE id=$1`, id, err.Error())
-				problem(w, 422, err.Error())
-				return
-			}
-			currency, fiscalStart, err := xero.Profile(payload)
-			if err != nil {
-				problem(w, 422, err.Error())
-				return
-			}
-			if _, err = db.ExecContext(ctx, `WITH s AS (INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6))
- UPDATE xero_connections SET home_currency=$7,fiscal_year_start=$8 WHERE id=$2`, r.PathValue("id"), id, tenant, period, string(payload), a.Subject, currency, fiscalStart); err != nil {
-				problem(w, 503, "The Trial Balance was read but could not be saved. Capture again.")
+			if err := captureXero(ctx, db, a.Organization, id, r.PathValue("id"), period, a.Subject); err != nil {
+				refuse(w, err)
 				return
 			}
 		default:
@@ -277,4 +225,148 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 		out["hosted"] = true
 		jsonReply(w, 200, out)
 	})
+}
+
+// captureXero saves a connected organisation's Trial Balance as at the close's month end, rotating the
+// token first when it is about to expire. Xero retires a refresh token once used, so the new one is saved
+// before anything else; a refresh that cannot be saved asks for a reconnection.
+func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, actor string) error {
+	var state, tenant string
+	var encrypted []byte
+	var expires sql.NullTime
+	if err := db.QueryRowContext(ctx, `SELECT state,tenant_id,credential,access_expires_at FROM xero_connections WHERE id::text=$1 AND organization_id=$2`, id, org).Scan(&state, &tenant, &encrypted, &expires); err != nil {
+		return refusal{404, "Xero connection not found for this client."}
+	}
+	if state != "active" {
+		return refusal{409, "Confirm the client's Xero organisation before capturing."}
+	}
+	aad := org + "/xero/" + id
+	fail := func(message string) error {
+		persist, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer done()
+		db.ExecContext(persist, `UPDATE xero_connections SET state='reconnect_required',error=$2,updated_at=now() WHERE id=$1 AND state='refreshing'`, id, message)
+		return refusal{422, message}
+	}
+	changed := func(result sql.Result, err error) error {
+		if err != nil {
+			return refusal{503, "Connection storage unavailable."}
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return refusal{409, "The connection changed. Refresh its status."}
+		}
+		return nil
+	}
+	raw, err := secrets.Open(aad, encrypted)
+	var credentials xero.Credentials
+	if err != nil || json.Unmarshal(raw, &credentials) != nil {
+		return refusal{503, "Encrypted connection unavailable; check the server key."}
+	}
+	if !expires.Valid || time.Until(expires.Time) < 2*time.Minute {
+		if err = changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='refreshing',updated_at=now() WHERE id=$1 AND state='active' AND access_expires_at IS NOT DISTINCT FROM $2`, id, expires)); err != nil {
+			return err
+		}
+		if credentials, err = xero.Refresh(ctx, credentials.Refresh); err != nil {
+			return fail(err.Error())
+		}
+		raw, _ = json.Marshal(credentials)
+		sealed, err := secrets.Seal(aad, raw)
+		if err != nil {
+			return fail(err.Error())
+		}
+		result, err := db.ExecContext(ctx, `UPDATE xero_connections SET credential=$2,access_expires_at=$3,state='active',updated_at=now() WHERE id=$1 AND state='refreshing'`, id, sealed, time.Now().Add(time.Duration(credentials.Expires)*time.Second))
+		if err != nil {
+			return fail("Rotated Xero credentials could not be saved. Connect again before continuing.")
+		}
+		if err = changed(result, nil); err != nil {
+			return err
+		}
+	}
+	month, err := time.Parse("2006-01", period)
+	if err != nil {
+		return refusal{422, "This close has no valid month."}
+	}
+	payload, err := xero.Capture(ctx, credentials.Access, tenant, month.AddDate(0, 1, -1))
+	if err != nil {
+		db.ExecContext(ctx, `UPDATE xero_connections SET error=$2,updated_at=now() WHERE id=$1`, id, err.Error())
+		return refusal{422, err.Error()}
+	}
+	currency, fiscalStart, err := xero.Profile(payload)
+	if err != nil {
+		return refusal{422, err.Error()}
+	}
+	if _, err = db.ExecContext(ctx, `WITH s AS (INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6))
+ UPDATE xero_connections SET home_currency=$7,fiscal_year_start=$8 WHERE id=$2`, closeID, id, tenant, period, string(payload), actor, currency, fiscalStart); err != nil {
+		return refusal{503, "The Trial Balance was read but could not be saved. Capture again."}
+	}
+	return nil
+}
+
+// xeroDue is SQL: close c's firm is enabled and the close is open, in the current or prior month, not attempted and not captured in the past day.
+const xeroDue = `EXISTS(SELECT 1 FROM organizations o WHERE o.id=c.organization_id AND o.enabled)
+ AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ AND (c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '24 hours')
+ AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id AND s.captured_at>now()-interval '24 hours')`
+
+// sweepXeroRefresh captures, for up to 10 open current or prior-month closes with an active Xero connection,
+// the month-end Trial Balance when the close has none from the past day. Claiming the close first means
+// one attempt per close a day, whichever worker makes it and however it ends.
+func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
+	if !xero.Configured() {
+		return nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.organization_id,c.period,x.id::text FROM client_closes c
+ JOIN xero_connections x ON x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.credential IS NOT NULL
+ WHERE `+xeroDue+` ORDER BY c.id LIMIT 10`)
+	if err != nil {
+		return err
+	}
+	type due struct{ close, org, period, connection string }
+	closes := []due{}
+	for rows.Next() {
+		var d due
+		if err = rows.Scan(&d.close, &d.org, &d.period, &d.connection); err != nil {
+			break
+		}
+		closes = append(closes, d)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, d := range closes {
+		claim, err := db.ExecContext(ctx, `UPDATE client_closes c SET xero_refresh_at=now() WHERE c.id::text=$1 AND `+xeroDue, d.close)
+		if err != nil {
+			return err
+		}
+		if n, _ := claim.RowsAffected(); n != 1 {
+			continue
+		}
+		run, cancel := context.WithTimeout(ctx, 90*time.Second)
+		err = captureXero(run, db, d.org, d.connection, d.close, d.period, "scheduled-xero-refresh")
+		cancel()
+		if err != nil {
+			log.Print("Scheduled Xero capture did not complete for close ", d.close, ": ", err)
+		}
+	}
+	return nil
+}
+
+// RunXeroRefresh looks for due Xero captures every ten minutes.
+func RunXeroRefresh(ctx context.Context, db *sql.DB) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		if err := sweepXeroRefresh(ctx, db); err != nil && ctx.Err() == nil {
+			log.Print("Scheduled Xero captures could not run: ", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

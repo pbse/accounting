@@ -359,6 +359,9 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 		var instructions, quote string
 		var err error
 		if key != "" {
+			if !modelBudget(w, r, db, 1) {
+				return
+			}
 			engine = "openai"
 			instructions, quote, err = modelProcedureDraft(r.Context(), http.DefaultClient, key, model, in.Kind, in.Method, source, edits)
 		} else {

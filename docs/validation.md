@@ -870,3 +870,50 @@ Mutation checks deleted five redundant checks. The test restores the firm's job 
   - Its draft proposes the 10.00 entry and waits for a person's approval, and the revision is not revised again from the same capture.
   - Observed red without the column checks, the orientation, the already-cited and earlier-comparison skips, the sign-off and enabled-firm rechecks, the savepoint rollback, the whole-cent rule and the system actor. The missing-Credit-column guard fails only by panicking without it.
 
+
+## Finishing the half-built items (2026-09-25)
+
+Author: Claude Opus 5.5. Migration 056. These five items were half-built or waiting on the user's decision. All follow the rule that agents prepare everything and a person approves before any write to an outside system. Nothing here writes to QuickBooks, Xero or email on its own.
+
+- **One approval per entry.** Approving a production or sandbox posting of a pending draft also approves the draft, in the same transaction, for a person holding `workpapers:review`. The usual review checks still apply.
+- **Standing approvals for recurring accruals and loans.** An accrual grant covers its recurring lineage. A loan grant covers later months whose terms all match, with no open question.
+- **Replay.** Each replay is saved. The worker checks each firm once for each new model, and the morning brief shows the result.
+- **Model call limit.** A firm-wide daily cap, reserved atomically before every model call.
+- **Xero.** A daily scheduled month-end capture. Changes from last month now work on two Xero months (no payees), client memory checks Xero accounts, and the morning brief counts Xero captures.
+
+Plan review: GPT-6 Sol (medium). Adopted:
+
+- the agent works out each job's real need (0, 1 or 2 calls) and parks a refused job with a retry time, instead of a claim filter that would strand jobs;
+- a loan grant covers only drafts whose terms all match, not five fields;
+- a scheduled replay counts only once it scores a reading;
+- a per-close claim for scheduled Xero captures, which also limits retries after an error;
+- the permission check before approving a draft through its posting.
+
+Not adopted: a cross-worker lock for scheduled replays. The worst case is one duplicate run of up to 3 calls per model change, and those calls count against the limit.
+
+Code review: GPT-6 Sol (medium), two delta rounds. Adopted:
+
+- the morning brief's model check shows only a close the person can open;
+- the scheduled Xero claim rechecks the firm, the open close and the absence of a recent capture in the same statement, through one shared condition;
+- a standing grant is refused on a paper with open questions;
+- a replay whose confirmation is not one readable plan (empty, malformed, `[null]` or `[{}]`) is unscored before any model call, so it cannot count as the firm's check.
+
+The claim's race with a person's capture or sign-off has no deterministic test. The disabled-firm, question, access and plan checks each have one, observed red without the fix.
+
+Minimalism review removed an unused return value and an unused scan target. It left the duplicated connection-change check in the Xero handler alone, to keep unrelated handler actions out of the diff.
+
+Tests (PostgreSQL):
+
+- `TestProductionPostingSingleDurableAttempt`: without `workpapers:review` a pending draft is refused. With it, one approval records "Approved together with its posting." and the draft becomes approved.
+- `TestStandingApprovalCoversRecurringAccrualsAndSameTermLoans`: approved automatically are a recurring accrual that proposes its entry, and a later loan month on the same terms. Not approved: an accrual outside the lineage, a loan draft from the granting month, a changed rate, and an open question. The existing prepaid test passes unchanged.
+- `TestReplayComparesTheCurrentModelWithConfirmedReadings`: the latest run is saved and readable. A model already checked is not replayed again. A run that scores nothing does not count. A new model is checked once. At the limit, the manual route answers 429 and the worker makes no call and records nothing.
+- `TestAgentAnswersResumeAndInventoryFence`: at the limit the job waits with the reason, no attempt and no call, and is not reclaimed before its retry time. Afterwards, a small inventory costs exactly one counted call.
+- `TestPlainLanguageWorkRequestsBecomePreviewedCommands` now uses the test database, because the route counts its call. It answers 429 at the limit.
+- `TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance`: a close captured by hand in the past day is skipped. An older one is captured once as `scheduled-xero-refresh`, and a close already attempted today is not attempted again. The mock now dates its report from the request.
+- `TestFluxExplainsMovementsByPayee`: a QuickBooks month is not compared with a Xero month. Two Xero months show the revenue movement only, without payees, and exclude balance-sheet accounts.
+- `TestHintsRememberApprovedAccountsAndCheckTheLedger`: a newer Xero capture supplies the chart of accounts.
+- `TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson`: scheduled Xero captures are counted, and the latest automatic model check shows kept out of scored.
+
+Each test was observed red with its rule removed (25 mutations): the review permission and single-approval path, the loan terms, the later-period, questions and prepaid-only proposal rules, the recurring lineage and loan candidates, the reservation, retry time, call count and limit condition, the scored-run and once-per-model rules, the Work route's reservation, the fresh-capture and claim conditions, the ledger-source match, the revenue sign and P&L filter, the Xero payee note, the newest-snapshot order in client memory, and the morning Xero count and kept count.
+
+Not verified: a live Xero organisation (Xero's Debit and Credit columns being the month's movement comes from third-party documentation, not a live report), a live model, and the browser. Sandbox single approval uses the same function as production and is not tested separately. Firm operations' usage line is not tested.

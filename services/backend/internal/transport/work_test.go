@@ -330,8 +330,17 @@ func TestPlainLanguageWorkRequestsBecomePreviewedCommands(t *testing.T) {
 			t.Fatalf("%s/%s: %q %v", c.action, c.target, got, ok)
 		}
 	}
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
 	mux := http.NewServeMux()
-	registerWork(mux, nil)
+	registerWork(mux, db)
 	ask := func(text string, want int) map[string]string {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"text": text, "labels": labels})
@@ -367,6 +376,15 @@ func TestPlainLanguageWorkRequestsBecomePreviewedCommands(t *testing.T) {
 	})
 	if got := ask("what is stuck for acme this month?", 200); got["command"] != "why is Acme · 2026-09 waiting?" {
 		t.Fatalf("a plain request becomes the matching command: %v", got)
+	}
+	defer db.Exec(`UPDATE organizations SET max_model_calls_per_day=2000 WHERE id='local-development'`)
+	_, err = db.Exec(`UPDATE organizations SET max_model_calls_per_day=(SELECT calls FROM model_calls WHERE organization_id='local-development' AND day=(now() AT TIME ZONE 'UTC')::date) WHERE id='local-development'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask("what is stuck for acme this month?", 429)
+	if _, err = db.Exec(`UPDATE organizations SET max_model_calls_per_day=2000 WHERE id='local-development'`); err != nil {
+		t.Fatal(err)
 	}
 	answer = `{"action":"explain","target":"all visible"}`
 	ask("why is everything waiting", 422)

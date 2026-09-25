@@ -7,6 +7,7 @@ type Morning = {
   closes: { close_id: string; entity: string; period: string; needs: string[] }[];
   needing: number;
   quiet: number;
+  model_check: { model: string; close_id: string; kept: number; scored: number; checked_at: string } | null;
 };
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -40,9 +41,15 @@ export function MorningBrief({ refresh }: { refresh: number }) {
       </div>
       <p>
         In the past 24 hours the agent captured {count(done.month_end_snapshots, "month-end snapshot", "month-end snapshots")}, prepared{" "}
-        {count(done.drafts_prepared, "draft", "drafts")} and approved {count(done.standing_approvals, "carried schedule", "carried schedules")} under standing
+        {count(done.drafts_prepared, "draft", "drafts")} and approved {count(done.standing_approvals, "later-month draft", "later-month drafts")} under standing
         approvals.
       </p>
+      {brief.model_check && (
+        <p className={brief.model_check.kept === brief.model_check.scored ? "note" : undefined} role={brief.model_check.kept === brief.model_check.scored ? undefined : "status"}>
+          After the model changed to {brief.model_check.model}, {brief.model_check.kept} of {brief.model_check.scored} past confirmed readings came out the same
+          ({new Date(brief.model_check.checked_at).toLocaleDateString()}). <Link to={`/dashboard/closes/${brief.model_check.close_id}`}>See the readings</Link>.
+        </p>
+      )}
       {brief.needing === 0 ? (
         <p className="empty">No open close has drafts, confirmations, failed documents, missing snapshots or new client questions waiting. Each close still shows its own tie-out and changes.</p>
       ) : (
