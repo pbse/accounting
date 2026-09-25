@@ -355,7 +355,7 @@ func TestPlainLanguageWorkRequestsBecomePreviewedCommands(t *testing.T) {
 	defer func() { http.DefaultTransport = original }()
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
 		var sent struct {
-			Store bool `json:"store"`
+			Store bool                       `json:"store"`
 			Input []struct{ Content string } `json:"input"`
 		}
 		json.NewDecoder(r.Body).Decode(&sent)
