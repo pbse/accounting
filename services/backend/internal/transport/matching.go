@@ -13,7 +13,7 @@ import (
 	"close.local/backend/internal/quickbooks"
 )
 
-const matchingNote = "Leads, not proof: a document and a captured bill or purchase pair only when theirs is the only document and the only transaction with that currency and exact amount. Documents are the prepaid invoices uploaded to this close; transactions are the bills and purchases dated in the close month. Nothing is linked or changed in QuickBooks."
+const matchingNote = "Leads, not proof: a document and a captured bill or purchase pair only when theirs is the only document and the only transaction with that currency and exact amount. Documents are the prepaid invoices uploaded to this close; transactions are the bills and purchases dated in the close month. Nothing is linked or changed in the ledger."
 
 type matchItem struct {
 	ID       string `json:"id"`
@@ -83,21 +83,35 @@ func matchAmount(item *matchItem, raw string) bool {
 
 func registerMatching(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/matching", func(w http.ResponseWriter, r *http.Request) {
-		c, err := latestCapture(r.Context(), db, r.PathValue("id"))
-		if err == sql.ErrNoRows {
-			jsonReply(w, 200, map[string]any{"state": "waiting", "reason": "Capture this month's QuickBooks transactions first; matching reads the bills and purchases that capture holds."})
-			return
-		}
+		books, err := latestXeroBooks(r.Context(), db, r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Matching unavailable.")
 			return
 		}
-		rows, err := quickbooks.CapturedRows(r.Context(), db, c.RowsSync)
-		if err != nil {
-			problem(w, 503, "Matching unavailable.")
-			return
+		var rows []quickbooks.TransactionRow
+		var home, captured string
+		if books != nil {
+			if books.Unread != "" {
+				jsonReply(w, 200, map[string]any{"state": "waiting", "reason": books.Unread})
+				return
+			}
+			rows, home, captured = books.Rows, books.Home, books.CapturedAt
+		} else {
+			c, err := latestCapture(r.Context(), db, r.PathValue("id"))
+			if err == sql.ErrNoRows {
+				jsonReply(w, 200, map[string]any{"state": "waiting", "reason": "Capture this month's QuickBooks transactions or Xero books first; matching reads the bills and purchases that capture holds."})
+				return
+			}
+			if err != nil {
+				problem(w, 503, "Matching unavailable.")
+				return
+			}
+			if rows, err = quickbooks.CapturedRows(r.Context(), db, c.RowsSync); err != nil {
+				problem(w, 503, "Matching unavailable.")
+				return
+			}
+			home, captured = c.HomeCurrency, c.Finished
 		}
-		home := c.HomeCurrency
 		var txns []matchItem
 		unreadableTxns := 0
 		for _, row := range rows {
@@ -164,7 +178,7 @@ func registerMatching(mux *http.ServeMux, db *sql.DB) {
 			txnsLeft = txnsLeft[:200]
 		}
 		jsonReply(w, 200, map[string]any{
-			"state": "ready", "captured_at": c.Finished, "note": matchingNote,
+			"state": "ready", "captured_at": captured, "note": matchingNote,
 			"pairs": pairs, "ambiguous": ambiguous,
 			"documents_not_in_capture": docsLeft, "documents_without_total": unreadableDocs,
 			"transactions_without_document": txnsLeft, "transactions_without_document_total": total, "has_more": total > len(txnsLeft),

@@ -16,7 +16,7 @@ type Found = {
 };
 type Balance = { type: "abnormal_balance" | "holding_balance"; account_id: string; account: string; side: string; amount: string; currency: string; finding: string; next_step: string; question: string };
 type Scan = {
-  capture: { id: string; evidence_id: string; finished_at: string } | null;
+  capture: { id: string; source: "quickbooks" | "xero"; evidence_id?: string; finished_at: string; unread?: string } | null;
   scanned?: number;
   items: Found[];
   schedule_scan?: { state: "checked" | "incomplete" | "no_directory"; unknown_accounts: string[]; item_lines: number };
@@ -54,6 +54,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
   if (!scan) return error ? <p role="alert">{error}</p> : null;
   const balances = scan.balances;
   const questions = [...scan.items, ...balances.items].map((item) => item.question);
+  const ledger = scan.capture?.source === "xero" ? "Xero" : "QuickBooks";
   async function copy(items: string[]) {
     try {
       await navigator.clipboard.writeText(items.map((question) => `- ${question}`).join("\n"));
@@ -78,16 +79,21 @@ export function Exceptions({ closeId }: { closeId: string }) {
       {copied && <p role="status">{copied}</p>}
       {!scan.capture ? (
         <p className="empty">
-          Capture this month's QuickBooks transactions on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every
+          Capture this month's QuickBooks transactions or Xero books on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then checks every
           transaction for possible duplicates, holding-account postings, payments without a payee and payees coded to different accounts, and
           asks about open invoices more than 60 days and bills more than 30 days past due at month-end.
+        </p>
+      ) : scan.capture.unread ? (
+        <p role="status">
+          The newest Xero capture, from {new Date(scan.capture.finished_at).toLocaleString()}, has no transactions: {scan.capture.unread}
         </p>
       ) : (
         <>
           <p>
-            Checked all {scan.scanned} transactions in the capture from {new Date(scan.capture.finished_at).toLocaleString()} (evidence #
-            {scan.capture.evidence_id}). Open invoice and bill balances are as of that capture; days past due are counted at month-end. Each
-            item is a question with the evidence still missing, not a conclusion. Nothing is changed in QuickBooks.
+            Checked all {scan.scanned} transactions in the {ledger} capture from {new Date(scan.capture.finished_at).toLocaleString()} (
+            {scan.capture.source === "xero" ? `Xero snapshot #${scan.capture.id}` : `evidence #${scan.capture.evidence_id}`}). Open invoice and bill
+            balances are as of that capture; days past due are counted at month-end. Each item is a question with the evidence still missing,
+            not a conclusion. Nothing is changed in {ledger}.
           </p>
           {scan.schedule_scan && scan.schedule_scan.state !== "checked" && (
             <p role="status">
@@ -109,7 +115,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
               <div className="rows-head">
                 <span>What the agent found</span>
                 <span>Question for the client</span>
-                <span>QuickBooks</span>
+                <span>{ledger}</span>
                 <span />
               </div>
               {scan.items.map((item) => (

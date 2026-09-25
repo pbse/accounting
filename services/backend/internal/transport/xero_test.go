@@ -136,8 +136,8 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	started := call("user_accountant", september, map[string]any{"action": "connect", "confirmed": true}, 200)
 	link, _ := url.Parse(started["url"].(string))
 	state, id := link.Query().Get("state"), started["id"].(string)
-	if link.Query().Get("scope") != "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals" {
-		t.Fatalf("granular scopes: reads plus manual journals for approved posting: %s", link.Query().Get("scope"))
+	if link.Query().Get("scope") != "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals accounting.invoices.read accounting.payments.read accounting.banktransactions.read" {
+		t.Fatalf("granular scopes: reads, transaction reads and manual journals for approved posting: %s", link.Query().Get("scope"))
 	}
 	back := httptest.NewRecorder()
 	xeroReturn(back, httptest.NewRequest("GET", "/v1/xero/callback?code=c1&state="+url.QueryEscape(state), nil), db)
@@ -161,6 +161,9 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	latest, _ := json.Marshal(status["latest"])
 	if len(dates) != 1 || dates[0] != "2026-09-30" || tenantHeaders[0] != "t-b" || !strings.Contains(string(latest), `"currency":"NZD"`) || !strings.Contains(string(latest), `"ytd_debit":"1250.00"`) {
 		t.Fatalf("the month-end Trial Balance of the chosen organisation is captured: %v %v %s", dates, tenantHeaders, latest)
+	}
+	if !strings.Contains(string(latest), "connect Xero again to read them") {
+		t.Fatalf("a connection without the transaction scopes still captures the Trial Balance and says to reconnect: %s", latest)
 	}
 	if p, err := preparation.ClientProfile(context.Background(), db, september); err != nil || p != (preparation.Profile{Currency: "NZD", FiscalStart: 4, State: "detected"}) {
 		t.Fatalf("a snapshot records the organisation's base currency and financial year: %+v %v", p, err)
