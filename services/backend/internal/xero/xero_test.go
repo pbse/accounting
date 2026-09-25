@@ -97,3 +97,20 @@ func TestWrongSideReadsYTDColumnsWithXeroRules(t *testing.T) {
 		t.Fatal("an unreadable amount must fail the check")
 	}
 }
+
+func TestNetRefusesAnAccountListedTwice(t *testing.T) {
+	row := func(id string) map[string]any {
+		return map[string]any{"RowType": "Row", "Cells": []any{map[string]any{"Value": "Sales", "Attributes": []any{map[string]any{"Id": "account", "Value": id}}}, map[string]any{"Value": ""}, map[string]any{"Value": ""}, map[string]any{"Value": "5.00"}, map[string]any{"Value": ""}}}
+	}
+	header := map[string]any{"RowType": "Header", "Cells": []any{map[string]any{"Value": "Account"}, map[string]any{"Value": "Debit"}, map[string]any{"Value": "Credit"}, map[string]any{"Value": "YTD Debit"}, map[string]any{"Value": "YTD Credit"}}}
+	report := func(rows ...any) json.RawMessage {
+		raw, _ := json.Marshal(map[string]any{"Reports": []any{map[string]any{"ReportType": "TrialBalance", "Rows": append([]any{header}, rows...)}}})
+		return raw
+	}
+	if got, err := Net(report(row("a")), []string{"a", "b"}); err != nil || got["a"] != "5.00" || got["b"] != "0.00" {
+		t.Fatalf("a listed account's net, and zero for one with no row: %v %v", got, err)
+	}
+	if _, err := Net(report(row("a"), row("a")), []string{"a"}); err == nil {
+		t.Fatal("an account listed twice cannot prove an unchanged balance")
+	}
+}

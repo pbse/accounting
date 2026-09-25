@@ -227,18 +227,44 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// captureXero saves a connected organisation's Trial Balance as at the close's month end, rotating the
-// token first when it is about to expire. Xero retires a refresh token once used, so the new one is saved
-// before anything else; a refresh that cannot be saved asks for a reconnection.
+// captureXero saves a connected organisation's Trial Balance as at the close's month end.
 func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, actor string) error {
+	access, tenant, err := xeroAccess(ctx, db, org, id)
+	if err != nil {
+		return err
+	}
+	month, err := time.Parse("2006-01", period)
+	if err != nil {
+		return refusal{422, "This close has no valid month."}
+	}
+	payload, err := xero.Capture(ctx, access, tenant, month.AddDate(0, 1, -1))
+	if err != nil {
+		db.ExecContext(ctx, `UPDATE xero_connections SET error=$2,updated_at=now() WHERE id=$1`, id, err.Error())
+		return refusal{422, err.Error()}
+	}
+	currency, fiscalStart, err := xero.Profile(payload)
+	if err != nil {
+		return refusal{422, err.Error()}
+	}
+	if _, err = db.ExecContext(ctx, `WITH s AS (INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6))
+ UPDATE xero_connections SET home_currency=$7,fiscal_year_start=$8 WHERE id=$2`, closeID, id, tenant, period, string(payload), actor, currency, fiscalStart); err != nil {
+		return refusal{503, "The Trial Balance was read but could not be saved. Capture again."}
+	}
+	return nil
+}
+
+// xeroAccess returns an active connection's access token and tenant, rotating the token first when it is about to
+// expire. Xero retires a refresh token once used, so the new one is saved before anything else; a refresh that
+// cannot be saved asks for a reconnection.
+func xeroAccess(ctx context.Context, db *sql.DB, org, id string) (string, string, error) {
 	var state, tenant string
 	var encrypted []byte
 	var expires sql.NullTime
 	if err := db.QueryRowContext(ctx, `SELECT state,tenant_id,credential,access_expires_at FROM xero_connections WHERE id::text=$1 AND organization_id=$2`, id, org).Scan(&state, &tenant, &encrypted, &expires); err != nil {
-		return refusal{404, "Xero connection not found for this client."}
+		return "", "", refusal{404, "Xero connection not found for this client."}
 	}
 	if state != "active" {
-		return refusal{409, "Confirm the client's Xero organisation before capturing."}
+		return "", "", refusal{409, "Confirm the client's Xero organisation first."}
 	}
 	aad := org + "/xero/" + id
 	fail := func(message string) error {
@@ -259,46 +285,29 @@ func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, acto
 	raw, err := secrets.Open(aad, encrypted)
 	var credentials xero.Credentials
 	if err != nil || json.Unmarshal(raw, &credentials) != nil {
-		return refusal{503, "Encrypted connection unavailable; check the server key."}
+		return "", "", refusal{503, "Encrypted connection unavailable; check the server key."}
 	}
 	if !expires.Valid || time.Until(expires.Time) < 2*time.Minute {
 		if err = changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='refreshing',updated_at=now() WHERE id=$1 AND state='active' AND access_expires_at IS NOT DISTINCT FROM $2`, id, expires)); err != nil {
-			return err
+			return "", "", err
 		}
 		if credentials, err = xero.Refresh(ctx, credentials.Refresh); err != nil {
-			return fail(err.Error())
+			return "", "", fail(err.Error())
 		}
 		raw, _ = json.Marshal(credentials)
 		sealed, err := secrets.Seal(aad, raw)
 		if err != nil {
-			return fail(err.Error())
+			return "", "", fail(err.Error())
 		}
 		result, err := db.ExecContext(ctx, `UPDATE xero_connections SET credential=$2,access_expires_at=$3,state='active',updated_at=now() WHERE id=$1 AND state='refreshing'`, id, sealed, time.Now().Add(time.Duration(credentials.Expires)*time.Second))
 		if err != nil {
-			return fail("Rotated Xero credentials could not be saved. Connect again before continuing.")
+			return "", "", fail("Rotated Xero credentials could not be saved. Connect again before continuing.")
 		}
 		if err = changed(result, nil); err != nil {
-			return err
+			return "", "", err
 		}
 	}
-	month, err := time.Parse("2006-01", period)
-	if err != nil {
-		return refusal{422, "This close has no valid month."}
-	}
-	payload, err := xero.Capture(ctx, credentials.Access, tenant, month.AddDate(0, 1, -1))
-	if err != nil {
-		db.ExecContext(ctx, `UPDATE xero_connections SET error=$2,updated_at=now() WHERE id=$1`, id, err.Error())
-		return refusal{422, err.Error()}
-	}
-	currency, fiscalStart, err := xero.Profile(payload)
-	if err != nil {
-		return refusal{422, err.Error()}
-	}
-	if _, err = db.ExecContext(ctx, `WITH s AS (INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6))
- UPDATE xero_connections SET home_currency=$7,fiscal_year_start=$8 WHERE id=$2`, closeID, id, tenant, period, string(payload), actor, currency, fiscalStart); err != nil {
-		return refusal{503, "The Trial Balance was read but could not be saved. Capture again."}
-	}
-	return nil
+	return credentials.Access, tenant, nil
 }
 
 // xeroDue is SQL: close c's firm is enabled and the close is open, in the current or prior month, not attempted and not captured in the past day.

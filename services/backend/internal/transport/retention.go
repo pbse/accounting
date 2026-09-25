@@ -30,16 +30,16 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
 	err := tx.QueryRowContext(ctx, `SELECT COALESCE(c.retain_until::text,''),c.legal_hold,c.retention_version,COALESCE(c.retain_until<=CURRENT_DATE,false),
  EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id AND j.state IN ('queued','waiting_evidence','interpreting','needs_confirmation','waiting_client')),
  EXISTS(SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('queued','running')),
- EXISTS(SELECT 1 FROM sandbox_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM bill_corrections p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')),
+ EXISTS(SELECT 1 FROM sandbox_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM bill_corrections p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM xero_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')),
  EXISTS(SELECT 1 FROM email_outbox m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND m.state IN ('queued','sending','unknown')),
  EXISTS(SELECT 1 FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now()),
  EXISTS(SELECT 1 FROM client_attachments a WHERE a.close_id=c.id AND a.state NOT IN ('released','rejected')),
  EXISTS(SELECT 1 FROM forwarding_links l WHERE l.close_id=c.id AND l.revoked_at IS NULL AND l.expires_at>now()) OR EXISTS(SELECT 1 FROM forwarded_files f WHERE f.close_id=c.id AND f.state NOT IN ('released','rejected')),
  EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.close_id=c.id AND x.state<>'disconnected'),
- EXISTS(SELECT 1 FROM production_posting_grants g JOIN quickbooks_connections x ON x.id=g.connection_id WHERE x.close_id=c.id AND g.revoked_at IS NULL),
+ EXISTS(SELECT 1 FROM production_posting_grants g JOIN quickbooks_connections x ON x.id=g.connection_id WHERE x.close_id=c.id AND g.revoked_at IS NULL) OR EXISTS(SELECT 1 FROM xero_posting_grants g JOIN xero_connections x ON x.id=g.connection_id WHERE x.close_id=c.id AND g.revoked_at IS NULL),
  EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.close_id=c.id AND (EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.connection_id=x.id AND s.close_id<>c.id) OR EXISTS(SELECT 1 FROM quickbooks_entity_syncs q WHERE q.connection_id=x.id AND q.close_id<>c.id) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.connection_id=x.id AND p.close_id<>c.id))),
  EXISTS(SELECT 1 FROM xero_connections x WHERE x.close_id=c.id AND x.state<>'disconnected'),
- EXISTS(SELECT 1 FROM xero_connections x JOIN xero_snapshots s ON s.connection_id=x.id WHERE x.close_id=c.id AND s.close_id<>c.id),
+ EXISTS(SELECT 1 FROM xero_connections x WHERE x.close_id=c.id AND (EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.connection_id=x.id AND s.close_id<>c.id) OR EXISTS(SELECT 1 FROM xero_postings p WHERE p.connection_id=x.id AND p.close_id<>c.id))),
  EXISTS(SELECT 1 FROM email_delivery_events e JOIN email_outbox m ON m.connection_id=e.connection_id AND m.provider_id=e.provider_id
   JOIN work_requests q ON q.id=m.request_id AND lower(q.recipient)=lower(e.recipient)
   JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND e.close_id IS NULL)
@@ -198,7 +198,7 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var productionCount int
-		if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM production_postings WHERE close_id=$1`, id).Scan(&productionCount); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT (SELECT count(*) FROM production_postings WHERE close_id=$1)+(SELECT count(*) FROM xero_postings WHERE close_id=$1)`, id).Scan(&productionCount); err != nil {
 			problem(w, 503, "Deletion scope could not be confirmed.")
 			return
 		}
@@ -209,6 +209,7 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM request_drafts WHERE close_id=$1`,
 			`DELETE FROM preparation_jobs WHERE close_id=$1`,
 			`DELETE FROM production_postings WHERE close_id=$1`,
+			`DELETE FROM xero_postings WHERE close_id=$1`,
 			`DELETE FROM vendor_credit_postings WHERE close_id=$1`,
 			`DELETE FROM bill_corrections WHERE close_id=$1`,
 			`DELETE FROM sandbox_postings WHERE close_id=$1`,
@@ -223,6 +224,7 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM production_posting_grants WHERE connection_id IN (SELECT id FROM quickbooks_connections WHERE close_id=$1)`,
 			`DELETE FROM quickbooks_connections WHERE close_id=$1`,
 			`DELETE FROM xero_snapshots WHERE close_id=$1`,
+			`DELETE FROM xero_posting_grants WHERE connection_id IN (SELECT id FROM xero_connections WHERE close_id=$1)`,
 			`DELETE FROM xero_connections WHERE close_id=$1`,
 			`DELETE FROM client_attachments WHERE close_id=$1`,
 			`UPDATE procedure_drafts SET source_evidence_id=NULL,source_digest='',source_quote='' WHERE source_evidence_id IN (SELECT id FROM evidence WHERE close_id=$1)`,

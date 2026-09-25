@@ -136,8 +136,8 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	started := call("user_accountant", september, map[string]any{"action": "connect", "confirmed": true}, 200)
 	link, _ := url.Parse(started["url"].(string))
 	state, id := link.Query().Get("state"), started["id"].(string)
-	if link.Query().Get("scope") != "offline_access accounting.settings.read accounting.reports.trialbalance.read" {
-		t.Fatalf("read-only granular scopes: %s", link.Query().Get("scope"))
+	if link.Query().Get("scope") != "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals" {
+		t.Fatalf("granular scopes: reads plus manual journals for approved posting: %s", link.Query().Get("scope"))
 	}
 	back := httptest.NewRecorder()
 	xeroReturn(back, httptest.NewRequest("GET", "/v1/xero/callback?code=c1&state="+url.QueryEscape(state), nil), db)

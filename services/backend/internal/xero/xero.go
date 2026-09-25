@@ -1,13 +1,16 @@
-// Package xero reads one Xero organisation's month-end Trial Balance. It never writes to Xero.
+// Package xero reads one Xero organisation's accounts and month-end Trial Balance, and posts a manual journal only
+// when the caller has a person's approval.
 package xero
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,8 +21,35 @@ import (
 	"close.local/backend/internal/ledger"
 )
 
-// Granular scopes are required for apps created after 2 March 2026.
-const scopes = "offline_access accounting.settings.read accounting.reports.trialbalance.read"
+// Granular scopes are required for apps created after 2 March 2026. Manual journals are available on every Xero plan.
+const scopes = "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals"
+
+// CanPostJournals reports whether an access token carries the manual journal scope; older connections must reconnect.
+func CanPostJournals(access string) bool {
+	parts := strings.Split(access, ".")
+	var claims struct {
+		Scope any `json:"scope"`
+	}
+	if len(parts) != 3 {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || json.Unmarshal(payload, &claims) != nil {
+		return false
+	}
+	granted := []string{}
+	switch s := claims.Scope.(type) {
+	case string:
+		granted = strings.Fields(s)
+	case []any:
+		for _, v := range s {
+			if text, ok := v.(string); ok {
+				granted = append(granted, text)
+			}
+		}
+	}
+	return slices.Contains(granted, "accounting.manualjournals") || slices.Contains(granted, "accounting.transactions")
+}
 
 type Credentials struct {
 	Access  string `json:"access_token"`
@@ -107,25 +137,18 @@ func Tenants(ctx context.Context, access string) ([]Tenant, error) {
 	return tenants, nil
 }
 
-// Capture reads the organisation, its accounts and the Trial Balance as at monthEnd.
-// The reads are sequential, not an atomic ledger copy.
-func Capture(ctx context.Context, access, tenant string, monthEnd time.Time) (json.RawMessage, error) {
-	get := func(path string, limit int64) (json.RawMessage, error) {
-		req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.xero.com/api.xro/2.0/"+path, nil)
-		req.Header.Set("Authorization", "Bearer "+access)
-		req.Header.Set("xero-tenant-id", tenant)
-		return read(req, limit)
-	}
-	organisation, err := get("Organisation", 256*1024)
-	if err != nil {
-		return nil, err
-	}
-	accounts, err := get("Accounts", 4*1024*1024)
-	if err != nil {
-		return nil, err
-	}
-	date := monthEnd.Format("2006-01-02")
-	report, err := get("Reports/TrialBalance?"+url.Values{"date": {date}}.Encode(), 8*1024*1024)
+// Get reads one Accounting API path for a tenant.
+func Get(ctx context.Context, access, tenant, path string, limit int64) (json.RawMessage, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.xero.com/api.xro/2.0/"+path, nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	req.Header.Set("xero-tenant-id", tenant)
+	return read(req, limit)
+}
+
+// TrialBalanceAt reads the Trial Balance as at date and checks Xero returned that report for that date.
+func TrialBalanceAt(ctx context.Context, access, tenant string, date time.Time) (json.RawMessage, error) {
+	day := date.Format("2006-01-02")
+	report, err := Get(ctx, access, tenant, "Reports/TrialBalance?"+url.Values{"date": {day}}.Encode(), 8*1024*1024)
 	if err != nil {
 		return nil, err
 	}
@@ -135,10 +158,143 @@ func Capture(ctx context.Context, access, tenant string, monthEnd time.Time) (js
 	if json.Unmarshal(report, &check) != nil || len(check.Reports) != 1 || check.Reports[0].ReportType != "TrialBalance" {
 		return nil, errors.New("Xero did not return a Trial Balance")
 	}
-	if at, e := time.Parse("2 January 2006", check.Reports[0].ReportDate); e != nil || !at.Equal(monthEnd) {
-		return nil, fmt.Errorf("Xero returned a Trial Balance for %q, not %s", check.Reports[0].ReportDate, date)
+	if at, e := time.Parse("2 January 2006", check.Reports[0].ReportDate); e != nil || !at.Equal(date) {
+		return nil, fmt.Errorf("Xero returned a Trial Balance for %q, not %s", check.Reports[0].ReportDate, day)
 	}
-	return json.Marshal(map[string]any{"date": date, "tenant_id": tenant, "organisation": organisation, "accounts": accounts, "trial_balance": report})
+	return report, nil
+}
+
+// Capture reads the organisation, its accounts and the Trial Balance as at monthEnd.
+// The reads are sequential, not an atomic ledger copy.
+func Capture(ctx context.Context, access, tenant string, monthEnd time.Time) (json.RawMessage, error) {
+	organisation, err := Get(ctx, access, tenant, "Organisation", 256*1024)
+	if err != nil {
+		return nil, err
+	}
+	accounts, err := Get(ctx, access, tenant, "Accounts", 4*1024*1024)
+	if err != nil {
+		return nil, err
+	}
+	report, err := TrialBalanceAt(ctx, access, tenant, monthEnd)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"date": monthEnd.Format("2006-01-02"), "tenant_id": tenant, "organisation": organisation, "accounts": accounts, "trial_balance": report})
+}
+
+// Day reads a Xero date, which arrives as "/Date(1727654400000+0000)/" or "2026-09-30T00:00:00".
+func Day(value string) (time.Time, error) {
+	if ms, ok := strings.CutPrefix(value, "/Date("); ok {
+		var millis int64
+		if _, err := fmt.Sscanf(ms, "%d", &millis); err != nil {
+			return time.Time{}, err
+		}
+		return time.UnixMilli(millis).UTC().Truncate(24 * time.Hour), nil
+	}
+	if len(value) >= 10 {
+		return time.Parse("2006-01-02", value[:10])
+	}
+	return time.Time{}, errors.New("unreadable Xero date")
+}
+
+// Net returns each listed account's YTD net (debit positive) from a Trial Balance report. An account with no row
+// has no balance; an account listed twice or an unreadable amount refuses.
+func Net(report json.RawMessage, ids []string) (map[string]string, error) {
+	wrapped, _ := json.Marshal(map[string]any{"trial_balance": report})
+	_, _, rows, err := Balances(wrapped)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, id := range ids {
+		out[id] = "0.00"
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if _, wanted := out[row.AccountID]; !wanted {
+			continue
+		}
+		if seen[row.AccountID] {
+			return nil, fmt.Errorf("Xero Trial Balance lists account %s twice", row.AccountID)
+		}
+		seen[row.AccountID] = true
+		net, err := ledger.Net(row.YTDDebit, row.YTDCredit)
+		if err != nil {
+			return nil, fmt.Errorf("Xero Trial Balance %v for %s", err, row.Name)
+		}
+		out[row.AccountID] = net.FloatString(2)
+	}
+	return out, nil
+}
+
+type JournalLine struct {
+	AccountID   string      `json:"AccountID"`
+	LineAmount  json.Number `json:"LineAmount"`
+	Description string      `json:"Description,omitempty"`
+}
+
+type ManualJournal struct {
+	ManualJournalID string        `json:"ManualJournalID,omitempty"`
+	Narration       string        `json:"Narration"`
+	Date            string        `json:"Date"`
+	Status          string        `json:"Status"`
+	LineAmountTypes string        `json:"LineAmountTypes"`
+	JournalLines    []JournalLine `json:"JournalLines"`
+}
+
+// PostManualJournal creates one manual journal. Xero keeps the idempotency key for only a few minutes, so the
+// caller's saved attempt, not the key, is what prevents a second write.
+func PostManualJournal(ctx context.Context, access, tenant, key string, journal ManualJournal) (string, error) {
+	body, _ := json.Marshal(map[string]any{"ManualJournals": []ManualJournal{journal}})
+	req, _ := http.NewRequestWithContext(ctx, "PUT", "https://api.xero.com/api.xro/2.0/ManualJournals", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+access)
+	req.Header.Set("xero-tenant-id", tenant)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", key)
+	raw, err := read(req, 1024*1024)
+	if err != nil {
+		return "", err
+	}
+	var result struct{ ManualJournals []ManualJournal }
+	if json.Unmarshal(raw, &result) != nil || len(result.ManualJournals) != 1 || result.ManualJournals[0].ManualJournalID == "" {
+		return "", errors.New("Xero did not return the created manual journal")
+	}
+	return result.ManualJournals[0].ManualJournalID, nil
+}
+
+// ReadManualJournal reads one manual journal back by its ID.
+func ReadManualJournal(ctx context.Context, access, tenant, id string) (ManualJournal, error) {
+	raw, err := Get(ctx, access, tenant, "ManualJournals/"+url.PathEscape(id), 1024*1024)
+	var result struct{ ManualJournals []ManualJournal }
+	if err == nil && (json.Unmarshal(raw, &result) != nil || len(result.ManualJournals) != 1) {
+		err = errors.New("Xero did not return the manual journal")
+	}
+	if err != nil {
+		return ManualJournal{}, err
+	}
+	return result.ManualJournals[0], nil
+}
+
+// SameJournal reports whether a read-back journal posted exactly the intended lines on the intended date.
+func SameJournal(want, got ManualJournal) bool {
+	wantDay, err1 := Day(want.Date)
+	gotDay, err2 := Day(got.Date)
+	if err1 != nil || err2 != nil || !wantDay.Equal(gotDay) || got.Status != "POSTED" || got.Narration != want.Narration || got.LineAmountTypes != want.LineAmountTypes || len(want.JournalLines) != len(got.JournalLines) {
+		return false
+	}
+	remaining := slices.Clone(got.JournalLines)
+	for _, line := range want.JournalLines {
+		amount, ok := new(big.Rat).SetString(string(line.LineAmount))
+		i := slices.IndexFunc(remaining, func(l JournalLine) bool {
+			other, good := new(big.Rat).SetString(string(l.LineAmount))
+			return ok && good && strings.EqualFold(l.AccountID, line.AccountID) && other.Cmp(amount) == 0
+		})
+		if i < 0 {
+			return false
+		}
+		remaining = slices.Delete(remaining, i, i+1)
+	}
+	return true
 }
 
 func read(req *http.Request, limit int64) ([]byte, error) {

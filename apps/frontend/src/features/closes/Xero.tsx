@@ -75,13 +75,13 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
   const latest = status?.latest;
   const confirm = (
     <label>
-      <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I am authorised to connect {entity}'s Xero organisation for read-only month-end evidence.
+      <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I am authorised to connect {entity}'s Xero organisation for month-end evidence and, only with a separate grant and approval, reviewed journals.
     </label>
   );
   return (
     <details open={callback.has("xero_code")}>
       <summary>Xero month-end Trial Balance</summary>
-      <p>Read-only: this reads the organisation, its chart of accounts and the Trial Balance at month-end. It never writes to Xero, and Xero data is not used to train models.</p>
+      <p>This reads the organisation, its chart of accounts and the Trial Balance at month-end. It writes to Xero only an approved draft's manual journal, under a client grant, after a person approves and a person posts it. Xero data is not used to train models.</p>
       {error && <p role="alert">{error}</p>}
       {!status ? null : !status.configured ? (
         <p className="empty">Xero is not configured on this server. Set the Xero app's client ID, secret and callback URL first.</p>
@@ -123,6 +123,7 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
           <button disabled={busy || !confirmed} onClick={() => void action("snapshot")}>
             {busy ? "Reading Xero…" : "Capture month-end Trial Balance"}
           </button>
+          <XeroGrant closeId={closeId} connectionId={c.id} />
         </>
       ) : (
         <>
@@ -177,6 +178,104 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
         <button disabled={busy || !confirmed} onClick={() => void action("disconnect")}>
           Disconnect Xero
         </button>
+      )}
+    </details>
+  );
+}
+
+type Grant = { id?: string; state?: string; account_ids?: string[]; kinds?: string[]; max_amount?: string; expires_at?: string; reason?: string };
+
+// A person's grant lets approved drafts of the listed kinds post to the listed Xero accounts, up to a limit, until expiry.
+function XeroGrant({ closeId, connectionId }: { closeId: string; connectionId: string }) {
+  const [grant, setGrant] = useState<Grant>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [accounts, setAccounts] = useState("");
+  const [kinds, setKinds] = useState<string[]>(["prepaid"]);
+  const [limit, setLimit] = useState("");
+  const [expiry, setExpiry] = useState("");
+  const [reason, setReason] = useState("");
+  const [phrase, setPhrase] = useState("");
+  async function load() {
+    try {
+      setGrant(await workspaceRequest(`/${closeId}/xero-grant`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Xero grant unavailable.");
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, [closeId]);
+  async function act(action: "grant" | "revoke") {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/xero-grant`, {
+        action, connection_id: connectionId, grant_id: grant?.id, account_ids: accounts.split(/[\s,]+/).filter(Boolean), kinds, max_amount: limit,
+        expires_at: expiry ? new Date(expiry).toISOString() : undefined, reason, confirmation: phrase,
+      });
+      setPhrase("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Grant outcome unclear. Refresh before trying again.");
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <details>
+      <summary>Xero posting grant</summary>
+      {error && <p role="alert">{error}</p>}
+      {grant?.id ? (
+        <>
+          <p>
+            Grant #{grant.id}: {grant.kinds?.join(", ")} drafts to {grant.account_ids?.length} accounts, up to {grant.max_amount} per journal, until{" "}
+            {grant.expires_at ? new Date(grant.expires_at).toLocaleString() : "—"}. {grant.reason}
+          </p>
+          <label>
+            Type REVOKE XERO POSTING
+            <input value={phrase} onChange={(e) => setPhrase(e.target.value)} autoComplete="off" />
+          </label>
+          <button disabled={busy || phrase !== "REVOKE XERO POSTING"} onClick={() => void act("revoke")}>
+            Revoke grant
+          </button>
+        </>
+      ) : (
+        <>
+          <p>No grant: nothing can be posted to this Xero organisation. A grant lists the Xero account IDs (from the Trial Balance above), the draft kinds, a limit per journal and an expiry within 30 days.</p>
+          <label>
+            Xero account IDs (2–20)
+            <textarea value={accounts} onChange={(e) => setAccounts(e.target.value)} />
+          </label>
+          <fieldset>
+            <legend>Draft kinds</legend>
+            {["prepaid", "accrual", "loan", "owner", "settlement"].map((kind) => (
+              <label key={kind}>
+                <input type="checkbox" checked={kinds.includes(kind)} onChange={(e) => setKinds(e.target.checked ? [...kinds, kind] : kinds.filter((k) => k !== kind))} /> {kind}
+              </label>
+            ))}
+          </fieldset>
+          <label>
+            Limit per journal
+            <input value={limit} inputMode="decimal" onChange={(e) => setLimit(e.target.value)} />
+          </label>
+          <label>
+            Expires
+            <input type="datetime-local" value={expiry} onChange={(e) => setExpiry(e.target.value)} />
+          </label>
+          <label>
+            Reason
+            <input value={reason} maxLength={2000} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <label>
+            Type GRANT XERO POSTING
+            <input value={phrase} onChange={(e) => setPhrase(e.target.value)} autoComplete="off" />
+          </label>
+          <button disabled={busy || phrase !== "GRANT XERO POSTING"} onClick={() => void act("grant")}>
+            Grant Xero posting
+          </button>
+        </>
       )}
     </details>
   );

@@ -226,6 +226,32 @@ func postable(kind string, raw []byte, period string) ([]prepaids.Adjustment, st
 	return entries, source, nil
 }
 
+// postingSource returns the key that identifies a draft's source across drafts and ledgers, refusing when a newer
+// draft of the same source, of any kind, supersedes this one. A settlement's report reference includes an editable
+// location, so its report file identifies the source.
+func postingSource(ctx context.Context, db querier, closeID, paperID, kind string, paperRaw []byte, source string) (string, error) {
+	var report string
+	if kind == "settlement" {
+		var cited struct{ Sources []preparation.Source }
+		json.Unmarshal(paperRaw, &cited)
+		for _, s := range cited.Sources {
+			if s.Role == "processor_report" {
+				report = s.ID
+			}
+		}
+	}
+	key := source
+	if report != "" {
+		key = "stripe report evidence " + report
+	}
+	var newer bool
+	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND id>$2 AND (lower(trim(COALESCE(paper->'input'->>'source_reference',paper->'input'->>'transaction_reference',paper->'input'->>'report_reference')))=$3 OR ($4<>'' AND paper->'sources' @> jsonb_build_array(jsonb_build_object('role','processor_report','id',$4::text)))))`, closeID, paperID, strings.ToLower(strings.TrimSpace(source)), report).Scan(&newer)
+	if err != nil || newer {
+		return "", refusal{409, "A newer source draft exists or source freshness could not be checked."}
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(key))))), nil
+}
+
 // effects returns each account's signed balance change: debit-normal classifications rise on debits.
 func effects(journal quickbooks.Journal, accounts []quickbooks.LedgerAccount) (map[string]*big.Rat, error) {
 	class := map[string]string{}
@@ -729,26 +755,9 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, err.Error())
 			return
 		}
-		// A settlement's report reference includes an editable location; its report file identifies the source.
-		var report string
-		if kind == "settlement" {
-			var cited struct{ Sources []preparation.Source }
-			json.Unmarshal(paperRaw, &cited)
-			for _, s := range cited.Sources {
-				if s.Role == "processor_report" {
-					report = s.ID
-				}
-			}
-		}
-		key := source
-		if report != "" {
-			key = "stripe report evidence " + report
-		}
-		// A newer draft of the same source, of any kind, supersedes this one.
-		var newer bool
-		err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND id>$2 AND (lower(trim(COALESCE(paper->'input'->>'source_reference',paper->'input'->>'transaction_reference',paper->'input'->>'report_reference')))=$3 OR ($4<>'' AND paper->'sources' @> jsonb_build_array(jsonb_build_object('role','processor_report','id',$4::text)))))`, r.PathValue("id"), r.PathValue("paper"), strings.ToLower(strings.TrimSpace(source)), report).Scan(&newer)
-		if err != nil || newer {
-			problem(w, 409, "A newer source draft exists or source freshness could not be checked.")
+		sourceKey, err := postingSource(r.Context(), db, r.PathValue("id"), r.PathValue("paper"), kind, paperRaw, source)
+		if err != nil {
+			refuse(w, err)
 			return
 		}
 		var total int64
@@ -771,7 +780,6 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		if in.Action == "preview" {
 			j, _ := json.Marshal(journal)
 			b, _ := json.Marshal(observed)
-			sourceKey := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(key)))))
 			var otherIntent string
 			err = db.QueryRowContext(r.Context(), `SELECT id::text FROM production_postings WHERE close_id::text=$1 AND source_key=$2 AND workpaper_id::text<>$3`, r.PathValue("id"), sourceKey, r.PathValue("paper")).Scan(&otherIntent)
 			if err == nil {
@@ -858,6 +866,10 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		var lockedConnection string
 		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_connections WHERE id::text=$1 FOR UPDATE`, record.ConnectionID).Scan(&lockedConnection); err != nil {
 			problem(w, 409, "QuickBooks connection changed before this decision.")
+			return
+		}
+		if elsewhere, e := postedElsewhere(r.Context(), tx, "xero_postings", closeID, r.PathValue("paper"), sourceKey); e != nil || elsewhere {
+			problem(w, 409, "This draft or its source was already posted to Xero.")
 			return
 		}
 		var competing bool
