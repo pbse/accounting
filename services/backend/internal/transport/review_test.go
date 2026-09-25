@@ -3,6 +3,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -156,5 +157,104 @@ func TestReviewAndEvidenceReplacement(t *testing.T) {
 	db.QueryRow(`SELECT count(*) FROM workpapers WHERE close_id=$1`, closeID).Scan(&count)
 	if count != 2 {
 		t.Fatal("Stale job created a new draft")
+	}
+}
+
+func TestIdempotencyKeyRunsAPostAtMostOnce(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	var closeID, source, sourceDigest, paperID string
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Idempotency "+rand.Text()).Scan(&closeID))
+	defer func() {
+		db.Exec(`DELETE FROM approval_requests WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM evidence WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
+		db.Exec(`DELETE FROM idempotency_keys WHERE organization_id='local-development' AND key LIKE 'fixture-%'`)
+	}()
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'invoice.txt',$2,'Invoice','fixture') RETURNING id::text,digest`, closeID, rand.Text()).Scan(&source, &sourceDigest))
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text`, closeID, rand.Text(), `{"sources":[{"id":"`+source+`","digest":"`+sourceDigest+`","role":"invoice"}],"blockers":[]}`).Scan(&paperID))
+	token := strings.Repeat("i", 32)
+	handler := apiWithStore(db, token)
+	path := "/v1/closes/" + closeID + "/workpapers/" + paperID + "/approval-request"
+	send := func(key, note string, want int) (out struct{ Code, Message string }) {
+		t.Helper()
+		r := httptest.NewRequest("POST", path, strings.NewReader(`{"note":"`+note+`"}`))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		if key != "" {
+			r.Header.Set("Idempotency-Key", key)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %q: %d %s", key, note, w.Code, w.Body.String())
+		}
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	requests := func() (n int) {
+		t.Helper()
+		must(db.QueryRow(`SELECT count(*) FROM approval_requests WHERE workpaper_id=$1`, paperID).Scan(&n))
+		return n
+	}
+	key := "fixture-" + rand.Text()
+	send(key, "Check the service dates", 200)
+	if got := send(key, "Check the service dates", 409); got.Code != "IDEMPOTENT_REPLAY" || !strings.Contains(got.Message, "HTTP 200") || requests() != 1 {
+		t.Fatalf("a repeated keyed request is not run again: %+v, %d requests", got, requests())
+	}
+	if got := send(key, "Check the amount instead", 422); got.Code != "IDEMPOTENCY_KEY_REUSED" || requests() != 1 {
+		t.Fatalf("a key reused for a different request is refused: %+v", got)
+	}
+	refused := "fixture-" + rand.Text()
+	send(refused, "No", 422)
+	if got := send(refused, "No", 409); got.Code != "IDEMPOTENT_REPLAY" || !strings.Contains(got.Message, "HTTP 422") {
+		t.Fatalf("a refusal also holds its key, since some refusals follow real work: %+v", got)
+	}
+	running := "fixture-" + rand.Text()
+	_, err = db.Exec(`INSERT INTO idempotency_keys(organization_id,key,fingerprint) VALUES('local-development',$1,'other')`, running)
+	must(err)
+	if got := send(running, "Check the service dates", 422); got.Code != "IDEMPOTENCY_KEY_REUSED" {
+		t.Fatalf("a pending key with another fingerprint is refused as reused: %+v", got)
+	}
+	_, err = db.Exec(`UPDATE idempotency_keys SET fingerprint=(SELECT fingerprint FROM idempotency_keys WHERE key=$2),status=NULL WHERE key=$1`, running, key)
+	must(err)
+	if got := send(running, "Check the service dates", 409); got.Code != "IDEMPOTENCY_IN_PROGRESS" || requests() != 1 {
+		t.Fatalf("a key still running or uncertain is not run again: %+v", got)
+	}
+	_, err = db.Exec(`UPDATE idempotency_keys SET status=503 WHERE key=$1`, running)
+	must(err)
+	if got := send(running, "Check the service dates", 409); got.Code != "IDEMPOTENCY_IN_PROGRESS" {
+		t.Fatalf("a 5xx outcome is uncertain, so it is not run again: %+v", got)
+	}
+	_, err = db.Exec(`UPDATE idempotency_keys SET created_at=now()-interval '25 hours' WHERE key=$1`, key)
+	must(err)
+	send(key, "Check the service dates", 200)
+	send("", "Check the service dates", 200)
+	if requests() != 3 {
+		t.Fatalf("after 24 hours a key is free, and requests without a key are unaffected: %d", requests())
+	}
+	send("bad key", "Check the service dates", 422)
+	r := httptest.NewRequest("POST", path, strings.NewReader(`{"note":"Check the service dates"}`))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header["Idempotency-Key"] = []string{""}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != 422 || requests() != 3 {
+		t.Fatalf("an empty key is refused, not treated as no key: %d", w.Code)
 	}
 }

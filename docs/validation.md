@@ -1014,3 +1014,37 @@ Tests (PostgreSQL), `TestIndependentReviewPolicyRefusesPreparersAndUnknownProven
 Each check was observed red with its rule removed (5 mutations): the minimum rule, counting a loan's entries, the at-or-above comparison, the clear branch, and the zero check. The existing firm-wide tests pass unchanged.
 
 Not verified: the firm settings page in a browser, and a race between a policy change and an approval (the row lock covers it, but no test exercises it).
+
+## API error codes and idempotency keys (2026-09-25)
+
+Author: Claude Opus 5.5. Migration 059. PRD Appendix C asks the API to "accept idempotency keys, and return explicit errors such as SOURCE_STALE, POLICY_REQUIRED, SCOPE_DENIED, APPROVAL_EXPIRED, and EXECUTION_UNKNOWN". The API already returned `SOURCE_STALE`, `EXECUTION_UNKNOWN` and, from HTTP 403, `SCOPE_DENIED`.
+
+- **`APPROVAL_EXPIRED`** is now returned at the four execution steps (production, sandbox, supplier credit, Bill correction), only when the saved approval's ten minutes have passed.
+- **`POLICY_REQUIRED`** is now returned only where a missing or contradicted approved procedure is proven: the typed `preparation.PolicyRequired` from the procedure check on a manual save, and the reconciliation and card procedure gates. Database failures there now answer 503.
+- **Idempotency keys:** a POST under `/v1/closes` with an `Idempotency-Key` runs at most once per firm within 24 hours. Only a fingerprint and the final status are stored, never the response. Repeats get `IDEMPOTENT_REPLAY` or `IDEMPOTENCY_IN_PROGRESS`. Docs: mcp.md.
+
+Plan review: GPT-6 Sol (high). It found that a generic response-replay layer would copy secrets (link tokens, passcodes), could skip a route's own permission check, and could leave a committed effect behind a pending key. Adopted:
+
+- no response bodies stored, and never re-execute after a success, a 5xx or an unfinished attempt;
+- the query string and content type are part of the fingerprint;
+- codes only where the condition is proven;
+- MCP keys are out of scope and documented.
+
+Tests (PostgreSQL):
+
+- `TestIdempotencyKeyRunsAPostAtMostOnce`, on approval requests, which otherwise create a row per call:
+  - A repeat creates no second request and says `IDEMPOTENT_REPLAY` with HTTP 200.
+  - A different body with the same key is refused as reused, and a refusal holds its key too.
+  - Pending and 5xx keys are not run again. After 24 hours the key is free, requests without a key are unaffected, and malformed or empty keys are refused.
+- `TestProductionPostingSingleDurableAttempt`: a lapsed approval answers `APPROVAL_EXPIRED` with no write.
+- `TestLoanDraftsNeedTheClientsApprovedLoanProcedure` and `TestCardPreparationRequiresAppliedProcedureAndClearingEvidence`: `POLICY_REQUIRED` for a missing loan procedure, and for a missing, unapproved or disabled reconciliation procedure.
+
+Code review: GPT-6 Sol (high). Adopted:
+
+- no key is freed after a 4xx, because some refusals follow real work (a procedure draft's model call, a saved connection step);
+- an empty key header is refused;
+- a failure to save the final status is logged, and the docs give the recovery step (re-read, then use a new key).
+
+Each check was observed red with its rule removed (12 mutations): the middleware, the empty-key refusal, the 24-hour window, the uncertain 5xx, the fingerprint check, recording the status, the expiry test, the policy mapping, and the three reconciliation gates.
+
+Not verified: concurrent requests with the same key (the primary key serializes them, but no test runs them in parallel). The APPROVAL_EXPIRED paths for sandbox, supplier credit and Bill correction share the tested helper but have no test of their own.

@@ -360,6 +360,10 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 			}
 			n, _ := result.RowsAffected()
 			if n != 1 {
+				if approvalLapsed(item.State, item.Expires) {
+					problemCode(w, 409, "APPROVAL_EXPIRED", lapsedMessage)
+					return
+				}
 				problem(w, 409, "Approval expired or attempt already exists.")
 				return
 			}

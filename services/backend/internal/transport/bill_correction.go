@@ -333,6 +333,10 @@ func registerBillCorrection(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		case "execute":
+			if in.Confirmed && approvalLapsed(item.State, item.Expires) {
+				problemCode(w, 409, "APPROVAL_EXPIRED", lapsedMessage)
+				return
+			}
 			if !in.Confirmed || item.State != "approved" || item.ApprovedBy == "" || item.Expires == nil || time.Now().After(*item.Expires) {
 				problem(w, 409, "A current accountant approval is required.")
 				return

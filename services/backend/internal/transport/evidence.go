@@ -278,14 +278,24 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			}
 			content[s.Role] = text
 			if s.Role == "procedure" {
-				var valid bool
-				if !approved.Valid || tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.id::text=$2 AND p.kind='reconciliation' AND p.enabled AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)))`, r.PathValue("id"), approved.String).Scan(&valid) != nil || !valid {
-					problem(w, 422, "Select an applied, approved reconciliation procedure for this close.")
+				valid := false
+				if approved.Valid {
+					if e := tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.id::text=$2 AND p.kind='reconciliation' AND p.enabled AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)))`, r.PathValue("id"), approved.String).Scan(&valid); e != nil {
+						problem(w, 503, "Approved procedures are unavailable.")
+						return
+					}
+				}
+				if !valid {
+					problemCode(w, 422, "POLICY_REQUIRED", "Select an applied, approved reconciliation procedure for this close.")
 					return
 				}
 				current, currentErr := preparation.CurrentProcedure(r.Context(), tx, r.PathValue("id"), "reconciliation")
-				if currentErr != nil || !current.Enabled {
-					problem(w, 422, "The current reconciliation procedure is disabled; request a new accountant-approved rule.")
+				if currentErr != nil && currentErr != sql.ErrNoRows {
+					problem(w, 503, "Approved procedures are unavailable.")
+					return
+				}
+				if !current.Enabled {
+					problemCode(w, 422, "POLICY_REQUIRED", "The current reconciliation procedure is disabled; request a new accountant-approved rule.")
 					return
 				}
 				procedureID = approved.String
@@ -307,7 +317,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			}
 			if in.AccountType == "credit_card" {
 				if procedureID == "" {
-					problem(w, 422, "Apply and link the client accountant's approved card reconciliation procedure.")
+					problemCode(w, 422, "POLICY_REQUIRED", "Apply and link the client accountant's approved card reconciliation procedure.")
 					return
 				}
 				in.CardRuleReference = "Approved reconciliation procedure v" + procedureID

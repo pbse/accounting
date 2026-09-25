@@ -29,7 +29,7 @@ Read-only access lists only the read tools. Read-and-prepare adds the prepare, d
 
 ## Tools
 
-Every tool replays one existing API call using the caller's own credentials. Firm membership, client assignment and permission checks are the same as in the app, and errors carry the same `code` (`SOURCE_STALE`: re-read; `CONFLICT`: re-read before deciding; `EXECUTION_UNKNOWN`: never repeat a write).
+Every tool replays one existing API call using the caller's own credentials. Firm membership, client assignment and permission checks are the same as in the app, and errors carry the same `code` (see [Errors](#errors-and-retries)).
 
 | Tool | What it does |
 | --- | --- |
@@ -53,3 +53,28 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 There are deliberately no tools that approve, sign off, post to QuickBooks, send client email, answer the agent's own questions, or change members, policy, procedures or retention. People keep that authority in the app (PRD Appendix C: "an agent cannot create its own authority").
 
 Each bearer token is limited to 120 MCP requests per minute per API instance.
+
+## Errors and retries
+
+The REST API under `/v1/closes` and every MCP tool return errors as `{"code", "message"}`. What a client should do:
+
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| `SOURCE_STALE` | Evidence or a source changed since you read it | Re-read, then decide again |
+| `POLICY_REQUIRED` | An accountant-approved procedure is missing or contradicts the draft (such as the loan procedure, the reconciliation or card procedure, or the approved method) | Ask the firm to approve or apply the procedure; do not retry unchanged |
+| `SCOPE_DENIED` | The caller lacks the permission or client access (HTTP 403) | Do not retry; ask for access |
+| `APPROVAL_EXPIRED` | A person's posting approval ran out (10 minutes) before execution; nothing was written | A person approves again |
+| `EXECUTION_UNKNOWN` | An outside write may or may not have happened | Never repeat it; verify the saved attempt |
+| `CONFLICT` | State changed or the action is not allowed now | Re-read before deciding |
+| `PASSCODE_REQUIRED` | A client link needs its passcode | Enter the passcode the firm gave |
+| `LIMIT_REACHED`, `NOT_FOUND`, `UNAUTHENTICATED`, `INVALID_REQUEST`, `UNAVAILABLE`, `EXPIRED` | As named, from the HTTP status | Fix the request, sign in, or retry later |
+
+**Idempotency keys.** A POST under `/v1/closes` may carry an `Idempotency-Key` header of 1–255 visible ASCII characters (migration 059). Within 24 hours the same firm's key runs the request at most once.
+
+- **Same request after a success:** `409 IDEMPOTENT_REPLAY`, naming the first status. Re-read current state.
+- **Same request while the first is still running or ended with a 5xx:** `409 IDEMPOTENCY_IN_PROGRESS`, because the outcome is uncertain. Re-read before trying again with a new key.
+- **Key reused for a different request (or by another person):** `422 IDEMPOTENCY_KEY_REUSED`.
+- **After a refusal from the action itself:** the key is held too, because some refusals follow real work (a model call, a saved connection step). Fix the request and send it with a new key. A refusal before the action (sign-in, firm or client access) records nothing, so the key stays unused.
+- **An empty key header** is refused, not treated as no key. If the final status could not be saved (logged by the API), the key stays "in progress" until it expires; re-read the state and use a new key.
+
+Only a fingerprint of the request (person, path, query, content type and body) and the final status are stored, never the response. So no response, link token or passcode is copied, and a repeat reveals only that the key was used. Many actions are already safe to repeat without a key: they carry a digest or revision, or deduplicate by content. MCP tool calls do not send keys; re-read after an uncertain tool call.
