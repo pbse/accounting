@@ -264,6 +264,15 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	}
 	call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 200)
 	actor.Permissions = []string{"clients:all", "posting:execute"}
+	if _, err = db.Exec(`UPDATE production_postings SET approval_expires_at=now()-interval '1 second' WHERE workpaper_id=$1`, paperID); err != nil {
+		t.Fatal(err)
+	}
+	if body := call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 409); !strings.Contains(string(body), `"code":"APPROVAL_EXPIRED"`) {
+		t.Fatalf("an approval that lapsed before execution says so: %s", body)
+	}
+	actor.Permissions = []string{"clients:all", "posting:approve"}
+	call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 200)
+	actor.Permissions = []string{"clients:all", "posting:execute"}
 	closedThrough = "2099-12-31"
 	call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 422)
 	closedThrough = "2000-01-31"

@@ -47,3 +47,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `057_link_passcodes.sql` adds the firm setting that makes new client request links need a passcode, records it in policy history, and stores each link's salted passcode digest and failed tries. Apply after 056 with API/worker stopped; `/readyz` checks it.
 
 `058_review_minimum.sql` adds the firm's optional amount at or above which a draft's proposed entries need an independent reviewer (hosted firms only), recorded in policy history. Apply after 057 with API/worker stopped; `/readyz` checks it.
+
+`059_idempotency_keys.sql` records, per firm, each `Idempotency-Key` used on a POST with a fingerprint of the request and its final status (never the response body), with row-level security like 055. Apply after 058 with API/worker stopped; `/readyz` checks it.

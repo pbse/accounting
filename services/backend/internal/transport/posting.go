@@ -34,6 +34,13 @@ func draftApproved(ctx context.Context, tx *sql.Tx, closeID, paperID string, act
 	return status, message
 }
 
+// approvalLapsed reports whether a saved posting approval's ten minutes ran out before execution.
+func approvalLapsed(state string, expires *time.Time) bool {
+	return state == "approved" && expires != nil && !expires.After(time.Now())
+}
+
+const lapsedMessage = "The posting approval expired after 10 minutes. Approve it again; no write was made."
+
 type posting struct {
 	RequestID  string          `json:"request_id"`
 	ID         string          `json:"id"`
@@ -215,6 +222,10 @@ func registerPosting(mux *http.ServeMux, db *sql.DB) {
 				}
 				n, _ := result.RowsAffected()
 				if n != 1 {
+					if approvalLapsed(record.State, record.Expires) {
+						problemCode(w, 409, "APPROVAL_EXPIRED", lapsedMessage)
+						return
+					}
 					problem(w, 409, "Approval expired, belongs to another reviewer, or an attempt already exists. No retry was made.")
 					return
 				}

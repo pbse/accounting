@@ -142,6 +142,11 @@ func BasisIssue(ctx context.Context, q interface {
 	return "", nil
 }
 
+// PolicyRequired refuses work because an accountant-approved procedure is missing or contradicted.
+type PolicyRequired string
+
+func (p PolicyRequired) Error() string { return string(p) }
+
 func CheckProcedureMethod(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID, kind string, paper []byte) error {
@@ -167,10 +172,10 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 			return err
 		}
 		if recorded == "" {
-			return fmt.Errorf("Record this client's entity type under Owner treatments before preparing owner reclassifications")
+			return PolicyRequired("Record this client's entity type under Owner treatments before preparing owner reclassifications")
 		}
 		if recorded != entityType.Input.EntityType {
-			return fmt.Errorf("The draft's entity type differs from the client's recorded entity type (%s)", recorded)
+			return PolicyRequired(fmt.Sprintf("The draft's entity type differs from the client's recorded entity type (%s)", recorded))
 		}
 		return nil
 	}
@@ -182,7 +187,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 			return err
 		}
 		if err == sql.ErrNoRows || !enabled || (approved != loans.Method && approved != loans.VariableMethod) {
-			return fmt.Errorf("Loan schedules need the firm's approved loan procedure for this client (a firm default or client override) before drafts are saved")
+			return PolicyRequired("Loan schedules need the firm's approved loan procedure for this client (a firm default or client override) before drafts are saved")
 		}
 	}
 	var method string
@@ -204,7 +209,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		used = result.Input.Method
 	}
 	if used != method {
-		return fmt.Errorf("Prepared method %q differs from the approved procedure method %q; review the procedure before saving", used, method)
+		return PolicyRequired(fmt.Sprintf("Prepared method %q differs from the approved procedure method %q; review the procedure before saving", used, method))
 	}
 	return nil
 }

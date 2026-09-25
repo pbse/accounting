@@ -69,9 +69,15 @@ func TestCardPreparationRequiresAppliedProcedureAndClearingEvidence(t *testing.T
 		}
 		return w.Body.Bytes()
 	}
-	call(422)
+	policy := func() {
+		t.Helper()
+		if body := call(422); !strings.Contains(string(body), `"code":"POLICY_REQUIRED"`) {
+			t.Fatalf("a missing, unapproved or disabled procedure is POLICY_REQUIRED: %s", body)
+		}
+	}
+	policy()
 	plan.Sources = append(plan.Sources, preparation.Source{ID: unapproved, Role: "procedure", Location: "all lines"})
-	call(422)
+	policy()
 	plan.Sources[2].ID = approved
 	call(422)
 	plan.Sources = append(plan.Sources, preparation.Source{ID: clearing, Role: "clearing", Location: "line 1"})
@@ -96,5 +102,5 @@ func TestCardPreparationRequiresAppliedProcedureAndClearingEvidence(t *testing.T
 		t.Fatal(err)
 	}
 	defer db.Exec(`DELETE FROM procedure_versions WHERE id=$1`, disabledID)
-	call(422)
+	policy()
 }

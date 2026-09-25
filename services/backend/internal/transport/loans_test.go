@@ -62,7 +62,7 @@ func TestLoanDraftsNeedTheClientsApprovedLoanProcedure(t *testing.T) {
 		}
 	}
 	override(false)
-	if body := call(path, save, 409); !strings.Contains(string(body), "approved loan procedure") {
+	if body := call(path, save, 409); !strings.Contains(string(body), "approved loan procedure") || !strings.Contains(string(body), `"code":"POLICY_REQUIRED"`) {
 		t.Fatalf("a loan draft needs an enabled loan procedure: %s", body)
 	}
 	override(true)

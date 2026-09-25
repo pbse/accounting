@@ -1,13 +1,17 @@
 package transport
 
 import (
+	"bytes"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -395,6 +399,11 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			return
 		}
 		if err = preparation.CheckProcedureMethod(r.Context(), db, r.PathValue("id"), input.Kind, body); err != nil {
+			var policy preparation.PolicyRequired
+			if errors.As(err, &policy) {
+				problemCode(w, 409, "POLICY_REQUIRED", err.Error())
+				return
+			}
 			problem(w, 409, err.Error())
 			return
 		}
@@ -411,7 +420,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		}
 		jsonReply(w, 200, saved)
 	})
-	scoped := organizationBoundary(db, mux)
+	scoped := organizationBoundary(db, idempotent(db, mux))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		if (len(token) < 32 && verifier.ClientID == "") || db == nil {
@@ -430,6 +439,89 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		scoped.ServeHTTP(w, r)
 	})
 }
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = 200
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// idempotent runs a POST that carries an Idempotency-Key at most once per firm within 24 hours. Only a fingerprint
+// of the request and its final status are kept, never the response, so a repeat is refused with a code saying what
+// happened and the client re-reads current state. Some refusals follow real work, so every outcome holds its key.
+func idempotent(db *sql.DB, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, keyed := r.Header["Idempotency-Key"]
+		key := r.Header.Get("Idempotency-Key")
+		if r.Method != "POST" || !keyed {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if key == "" || len(key) > 255 || strings.IndexFunc(key, func(c rune) bool { return c < '!' || c > '~' }) >= 0 {
+			problem(w, 422, "Use an Idempotency-Key of 1–255 visible ASCII characters.")
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 32<<20))
+		if err != nil {
+			problem(w, 413, "The request body is too large.")
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		fingerprint := preparation.Digest([]byte(strings.Join([]string{subject(r), r.URL.Path, r.URL.RawQuery, r.Header.Get("Content-Type"), string(body)}, "\x00")))
+		org := organization(r)
+		if _, err = db.ExecContext(r.Context(), `DELETE FROM idempotency_keys WHERE organization_id=$1 AND created_at<now()-interval '24 hours'`, org); err != nil {
+			problem(w, 503, "Idempotency keys are unavailable.")
+			return
+		}
+		var inserted bool
+		err = db.QueryRowContext(r.Context(), `INSERT INTO idempotency_keys(organization_id,key,fingerprint) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING true`, org, key, fingerprint).Scan(&inserted)
+		if err == sql.ErrNoRows {
+			var first string
+			var status sql.NullInt64
+			if err = db.QueryRowContext(r.Context(), `SELECT fingerprint,status FROM idempotency_keys WHERE organization_id=$1 AND key=$2`, org, key).Scan(&first, &status); err != nil {
+				problem(w, 503, "Idempotency keys are unavailable.")
+				return
+			}
+			switch {
+			case first != fingerprint:
+				problemCode(w, 422, "IDEMPOTENCY_KEY_REUSED", "This Idempotency-Key was used for a different request. Use a new key.")
+			case !status.Valid || status.Int64 >= 500:
+				problemCode(w, 409, "IDEMPOTENCY_IN_PROGRESS", "A request with this key is still running or its outcome is uncertain. Re-read the current state before trying again with a new key.")
+			default:
+				problemCode(w, 409, "IDEMPOTENT_REPLAY", fmt.Sprintf("This request already completed with HTTP %d and was not repeated. Re-read the current state.", status.Int64))
+			}
+			return
+		}
+		if err != nil {
+			problem(w, 503, "Idempotency keys are unavailable.")
+			return
+		}
+		recorder := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+		// A client that disconnects after the work finished must not leave the key looking unfinished.
+		persist, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+		if _, err = db.ExecContext(persist, `UPDATE idempotency_keys SET status=$3 WHERE organization_id=$1 AND key=$2`, org, key, max(recorder.status, 200)); err != nil {
+			log.Print("Idempotency receipt not saved; the key stays uncertain until it expires: ", err)
+		}
+	})
+}
+
 func ConfiguredAPI() (http.Handler, func(), error) {
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
