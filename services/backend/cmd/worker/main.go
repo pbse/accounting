@@ -32,5 +32,7 @@ func main() {
 	go transport.RunAlerts(ctx, db)
 	go transport.RunStandingApprovals(ctx, db)
 	go transport.RunComparisons(ctx, db)
+	go transport.RunReplays(ctx, db)
+	go transport.RunXeroRefresh(ctx, db)
 	transport.Run(transport.Worker())
 }

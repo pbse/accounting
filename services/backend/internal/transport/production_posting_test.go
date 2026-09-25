@@ -17,6 +17,7 @@ import (
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/prepaids"
+	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/secrets"
 	"github.com/golang-jwt/jwt/v5"
@@ -106,7 +107,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, q := range []string{`DELETE FROM production_postings WHERE close_id=$1`, `DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM production_postings WHERE close_id=$1`, `DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			arg := closeID
 			if strings.Contains(q, "organization_id") || strings.Contains(q, "organizations WHERE") {
 				arg = org
@@ -290,16 +291,29 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	laterBalance = false
 	actor.Permissions = []string{"clients:all", "posting:approve"}
 	paper.Input.SourceReference = "Synthetic second invoice"
-	raw, _ = json.Marshal(paper)
+	var source, sourceDigest string
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'second invoice.txt',$2,'Synthetic invoice','fixture') RETURNING id::text,digest`, closeID, rand.Text()).Scan(&source, &sourceDigest); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(struct {
+		prepaids.Workpaper
+		Sources []preparation.Source `json:"sources"`
+	}{paper, []preparation.Source{{ID: source, Digest: sourceDigest, Name: "second invoice.txt", Role: "invoice"}}})
 	if err = db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','synthetic-second',$2) RETURNING id::text`, closeID, string(raw)).Scan(&paperID); err != nil {
 		t.Fatal(err)
 	}
 	path = "/v1/closes/" + closeID + "/workpapers/" + paperID + "/production-posting"
 	json.Unmarshal(call(path, map[string]string{"action": "preview"}, 200), &preview)
-	if _, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'synthetic-second','approved','Reviewed second synthetic proposal','user_accountant')`, paperID); err != nil {
-		t.Fatal(err)
+	// One approval: approving the posting of a pending draft approves the draft, for someone who may review drafts.
+	if body := call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 409); !strings.Contains(string(body), "review drafts") {
+		t.Fatalf("without workpapers:review a pending draft still needs its own review: %s", body)
 	}
+	actor.Permissions = []string{"clients:all", "posting:approve", "workpapers:review"}
 	call(path, map[string]string{"action": "approve", "digest": preview.Digest, "confirmation": "APPROVE PRODUCTION DRAFT"}, 200)
+	var reviewer, note, reviewState string
+	if err = db.QueryRow(`SELECT v.actor,v.note,w.review_state FROM workpaper_reviews v JOIN workpaper_review_state w ON w.id=v.workpaper_id WHERE v.workpaper_id=$1`, paperID).Scan(&reviewer, &note, &reviewState); err != nil || reviewer != "user_accountant" || note != "Approved together with its posting." || reviewState != "approved" {
+		t.Fatalf("the draft approval is recorded with the posting approval: %s %s %s %v", reviewer, note, reviewState, err)
+	}
 	actor.Permissions = []string{"clients:all", "posting:execute"}
 	uncertain = true
 	if body := call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 502); !strings.Contains(string(body), `"code":"EXECUTION_UNKNOWN"`) {

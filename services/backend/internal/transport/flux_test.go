@@ -59,6 +59,7 @@ func TestFluxExplainsMovementsByPayee(t *testing.T) {
 			Reconciled bool
 			Omitted    int
 			Questions  []string
+			Causes     string `json:"causes_unavailable"`
 		}
 	}
 	read := func() (out result) {
@@ -146,8 +147,8 @@ func TestFluxExplainsMovementsByPayee(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) SELECT id,organization_id,entity,'fixture','active',$2,now(),'t-1' FROM client_closes WHERE id=$1 RETURNING id::text`, september, rand.Text()).Scan(&xero))
 	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-08','d','{}','fixture',now()+interval '1 minute')`, august, xero)
 	must(err)
-	if got = read(); got.State != "waiting" || !strings.Contains(got.Reason, "Last month's newest books come from Xero") {
-		t.Fatalf("when last month's newest books come from Xero, they are not compared: %+v", got)
+	if got = read(); got.State != "waiting" || !strings.Contains(got.Reason, "different ledgers") {
+		t.Fatalf("a QuickBooks month is not compared with a Xero month: %+v", got)
 	}
 	_, err = db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, august)
 	must(err)
@@ -156,12 +157,30 @@ func TestFluxExplainsMovementsByPayee(t *testing.T) {
 		t.Fatalf("months in different currencies are not compared: %+v", got)
 	}
 	snapshot(august, "2026-08", "999", pl(account("25", "Utilities", "800.00")), gl())
-	if got = read(); got.State != "waiting" || !strings.Contains(got.Reason, "different QuickBooks companies") {
+	if got = read(); got.State != "waiting" || !strings.Contains(got.Reason, "different companies") {
 		t.Fatalf("months from different companies are not compared: %+v", got)
 	}
 	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d','{}','fixture',now()+interval '1 minute')`, september, xero)
 	must(err)
 	if got = read(); got.State != "waiting" || !strings.Contains(got.Reason, "Xero") {
 		t.Fatalf("when the newest books come from Xero, QuickBooks changes are not presented as current: %+v", got)
+	}
+
+	// Two Xero months compare revenue and expense accounts from each Trial Balance's month columns.
+	xeroMonth := func(closeID, period, sales, rent, bank string) {
+		t.Helper()
+		row := func(id, label, debit, credit string) string {
+			return `{"RowType":"Row","Cells":[{"Value":"` + label + `","Attributes":[{"Id":"account","Value":"` + id + `"}]},{"Value":"` + debit + `"},{"Value":"` + credit + `"},{"Value":"1.00"},{"Value":""}]}`
+		}
+		tb := `{"Reports":[{"ReportType":"TrialBalance","Rows":[{"RowType":"Header","Cells":[{"Value":"Account"},{"Value":"Debit"},{"Value":"Credit"},{"Value":"YTD Debit"},{"Value":"YTD Credit"}]},{"RowType":"Section","Rows":[` +
+			row("x-200", "Sales (200)", "", sales) + "," + row("x-469", "Rent (469)", rent, "") + "," + row("x-090", "Bank (090)", bank, "") + `]}]}]}`
+		payload := `{"organisation":{"Organisations":[{"BaseCurrency":"USD"}]},"accounts":{"Accounts":[{"AccountID":"x-200","Name":"Sales","Class":"REVENUE"},{"AccountID":"x-469","Name":"Rent","Class":"EXPENSE"},{"AccountID":"x-090","Name":"Bank","Class":"ASSET"}]},"trial_balance":` + tb + `}`
+		_, e := db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1',$3,'d',$4,'fixture',now()+interval '2 minutes')`, closeID, xero, period, payload)
+		must(e)
+	}
+	xeroMonth(august, "2026-08", "4000.00", "1500.00", "100.00")
+	xeroMonth(september, "2026-09", "5000.00", "1500.00", "999.00")
+	if got = read(); got.State != "ready" || len(got.Changes) != 1 || got.Changes[0].Account != "Sales" || got.Changes[0].Change != "1000.00" || !strings.Contains(got.Changes[0].Causes, "Xero") {
+		t.Fatalf("two Xero months show the month's revenue and expense movements, without payees: %+v", got)
 	}
 }

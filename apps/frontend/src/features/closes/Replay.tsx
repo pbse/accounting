@@ -1,12 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
 type Item = { job_id: string; source_name: string; confirmed_kind: string; replay_kind?: string; kept: boolean; changed_fields: string[]; error?: string };
 
 export function Replay({ closeId }: { closeId: string }) {
-  const [result, setResult] = useState<{ model: string; items: Item[] }>();
+  const [result, setResult] = useState<{ model: string; items: Item[]; actor?: string; created_at?: string }>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  useEffect(() => {
+    workspaceRequest(`/${closeId}/replay`)
+      .then((saved: { run: { model: string; items: Item[]; actor: string; created_at: string } | null }) => saved.run && setResult((current) => current ?? saved.run!))
+      .catch(() => undefined);
+  }, [closeId]);
   async function run() {
     setBusy(true);
     setError("");
@@ -28,9 +33,15 @@ export function Replay({ closeId }: { closeId: string }) {
       </div>
       <p className="note">
         Reads up to 3 of this close's most recently confirmed documents again with the current model (up to 3 model calls), on the evidence the
-        agent originally selected, and compares each reading with what was confirmed. Nothing is saved or changed.
+        agent originally selected, and compares each reading with what was confirmed. Only the comparison is saved; no reading or workpaper changes.
+        The worker runs the same check once for each new model.
       </p>
       {error && <p role="alert">{error}</p>}
+      {result?.created_at && (
+        <p className="note">
+          Saved {new Date(result.created_at).toLocaleString()} · {result.actor === "scheduled-replay" ? "checked automatically after a model change" : `run by ${result.actor}`}
+        </p>
+      )}
       {result && (
         <div className="rows">
           <div className="rows-head">

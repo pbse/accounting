@@ -89,7 +89,8 @@ export function Posting({
       <h3>QuickBooks sandbox posting</h3>
       <p>
         Test company only. Review the exact company, accounts, date and amount
-        before approval. Approval does not post an entry. Sources remain
+        before approval. Approval does not post an entry, and approving the
+        posting of a pending draft approves the draft too. Sources remain
         manually confirmed; this is not production posting.
       </p>
       <button disabled={busy} onClick={() => void run()}>
@@ -226,7 +227,7 @@ export function ProductionPosting({ closeId, paperId }: { closeId: string; paper
   const phraseRequired = intent?.state === "preview" ? "APPROVE PRODUCTION DRAFT" : "POST TO PRODUCTION";
   return <details>
     <summary>Reviewed production posting</summary>
-    <p>Requires a client-specific grant, exact company and accounts, accountant-approved workpaper, unchanged live balances, and a separate posting approval. No agent posts automatically.</p>
+    <p>Requires a client-specific grant, exact company and accounts, unchanged live balances, and a person's posting approval. Approving the posting of a pending draft approves the draft too, if you can review drafts; one approval covers both. No agent posts automatically.</p>
     <button disabled={busy} onClick={() => void run()}>Check production posting status</button>
     {error && <p role="alert">{error}</p>}
     {intent && <>

@@ -107,7 +107,9 @@ func TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson(t *testing.T) {
 	must(err)
 	var xero string
 	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,'Garden','fixture','active',$3,now(),'t-1') RETURNING id::text`, garden, org, rand.Text()).Scan(&xero))
-	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,'t-1',$3,'d','{}','fixture')`, garden, xero, prior)
+	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,'t-1',$3,'d','{}','fixture'),($1,$2,'t-1',$3,'d','{}','scheduled-xero-refresh')`, garden, xero, prior)
+	must(err)
+	_, err = db.Exec(`INSERT INTO replay_runs(organization_id,close_id,model,actor,items) VALUES($1,$2,'model-b','scheduled-replay','[{"kept":true},{"kept":false},{"kept":false,"error":"Evidence changed"}]'),($1,$2,'model-b','user_partner','[]')`, org, garden)
 	must(err)
 	paper(foreign, map[string]any{"input": map[string]string{"source_reference": "Foreign"}}, nil)
 	_ = bakery
@@ -126,6 +128,10 @@ func TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson(t *testing.T) {
 			Needs   []string
 		}
 		Needing, Quiet int
+		Check          *struct {
+			Model        string
+			Kept, Scored int
+		} `json:"model_check"`
 	}) {
 		t.Helper()
 		actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}
@@ -138,8 +144,11 @@ func TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson(t *testing.T) {
 		return out
 	}
 	got := read("user_partner", "clients:all")
-	if got.Overnight.Snapshots != 1 || got.Overnight.Drafts != 1 || got.Overnight.Standing != 1 {
-		t.Errorf("the past day counts the scheduled snapshot, the new agent draft and the automatic approval only: %+v", got.Overnight)
+	if got.Overnight.Snapshots != 2 || got.Overnight.Drafts != 1 || got.Overnight.Standing != 1 {
+		t.Errorf("the past day counts the scheduled QuickBooks and Xero snapshots, the new agent draft and the automatic approval only: %+v", got.Overnight)
+	}
+	if got.Check == nil || got.Check.Model != "model-b" || got.Check.Kept != 1 || got.Check.Scored != 2 {
+		t.Errorf("the latest automatic model check counts the readings it scored: %+v", got.Check)
 	}
 	if got.Needing != 2 || got.Quiet != 2 || len(got.Closes) != 2 || got.Closes[0].CloseID != harbor || got.Closes[1].CloseID != dental {
 		t.Fatalf("closes needing a person are listed most first; the quiet one is counted: %+v", got)
@@ -150,7 +159,7 @@ func TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson(t *testing.T) {
 	if n := got.Closes[1].Needs; len(n) != 1 || n[0] != "1 new client question since last review" {
 		t.Errorf("Dental's new capture finding is a question since its last review: %v", n)
 	}
-	if member := read("user_member"); member.Needing != 0 || member.Quiet != 0 || member.Overnight.Drafts != 0 || member.Overnight.Snapshots != 0 || member.Overnight.Standing != 0 {
+	if member := read("user_member"); member.Needing != 0 || member.Quiet != 0 || member.Overnight.Drafts != 0 || member.Overnight.Snapshots != 0 || member.Overnight.Standing != 0 || member.Check != nil {
 		t.Fatalf("a member without client grants sees nothing: %+v", member)
 	}
 }

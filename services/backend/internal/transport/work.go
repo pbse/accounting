@@ -207,6 +207,9 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Plain-language requests need the agent model. Use one of the listed commands.")
 			return
 		}
+		if !modelBudget(w, r, db, 1) {
+			return
+		}
 		action, target, err := interpretWork(r.Context(), key, model, in.Text, in.Labels)
 		if err != nil {
 			problem(w, 502, err.Error())

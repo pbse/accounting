@@ -20,6 +20,8 @@ The connection belongs to the firm and client, so later months reuse it. Access 
 
 **Capture month-end Trial Balance** reads the organisation, the chart of accounts and `Reports/TrialBalance` dated the last day of the close's month, checks that Xero returned that report for that date, and stores the exact JSON with a SHA-256 digest. The close shows each account joined to the chart by Xero account ID, with Xero's own columns: Debit and Credit, and YTD Debit and YTD Credit. For asset, liability and equity accounts YTD is the balance at that date; for revenue and expense accounts it is the movement since the start of the financial year. The reads are sequential, not an atomic copy of the ledger.
 
+The worker also captures it: every ten minutes it looks for open current- and prior-month closes (not signed off, enabled firm) with an active Xero connection and no Xero snapshot from the past day. It captures up to 10 of them as `scheduled-xero-refresh`, through the same token rotation as the button. Each close is claimed before the capture, so it gets at most one attempt a day, whichever worker makes it and however it ends. A failed attempt records the connection error and waits for the next day or a manual capture. The morning brief counts these captures.
+
 Deleting the close that opened a connection waits until the connection is disconnected and no other close holds a snapshot from it.
 
 ## Exceptions
@@ -28,6 +30,10 @@ Each snapshot also records the organisation's base currency and financial year, 
 
 The close's exceptions use the most recently captured month-end snapshot, QuickBooks or Xero, to list accounts on the wrong side of their normal balance and suspense, clearing, undeposited-funds or uncategorized accounts that still hold a balance (clearing only on balance-sheet accounts). Each holding balance asks for reconciliation rather than a correction; for QuickBooks the item opens that account's ledger rows for the month, which can be added to agent evidence. Xero has no contra-account subtype, so accounts named "accumulated" are skipped, along with retained earnings and owner drawings; revenue and expense accounts are judged on their year-to-date movement.
 
+## Changes and client memory
+
+**Changes from last month** uses each close's newest snapshot, QuickBooks or Xero. With two Xero months from the same organisation, it compares each revenue and expense account's movement in the month, read from the Trial Balance's Debit and Credit columns (Xero reports these for the current month up to the report date). Xero snapshots carry no payees, so causes are marked unavailable. A QuickBooks month is never compared with a Xero month. When confirming a document, client memory checks proposed accounts against the newest snapshot's chart of accounts, including Xero's (an account is usable only while Xero marks it active).
+
 ## Not included
 
-No writes, transaction or journal sync (complete Journals need Xero's Advanced tier), cash-basis reports, or other checks on Xero data yet. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.
+No writes, transaction or journal sync (complete Journals need Xero's Advanced tier), cash-basis reports, or other checks on Xero data yet. Without transactions, schedule discovery, payee causes and agent-prepared recurring comparisons stay QuickBooks-only. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.

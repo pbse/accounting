@@ -8,20 +8,28 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/accruals"
 )
 
 // standingNote ends the review note an automatic approval records after "Standing approval #<grant>".
-const standingNote = ": this month's carried schedule, unchanged, approved automatically."
+const standingNote = ": this month's draft, on the approved terms, approved automatically."
 
-// coveringGrant is SQL for the active standing approval on a paper ($1) or its carry_forward ancestors.
-const coveringGrant = `WITH RECURSIVE chain(id) AS (SELECT $1::bigint UNION SELECT (p.paper->'carry_forward'->>'paper_id')::bigint FROM chain c JOIN workpapers p ON p.id=c.id WHERE p.paper->'carry_forward'->>'paper_id' IS NOT NULL)
- SELECT a.id::text,a.workpaper_id::text,a.review_id::text,a.granted_by,a.reason,a.created_at FROM standing_approvals a JOIN chain c ON c.id=a.workpaper_id JOIN workpapers w ON w.id=$1 JOIN client_closes wc ON wc.id=w.close_id
- WHERE a.revoked_at IS NULL AND a.organization_id=wc.organization_id AND lower(a.client_entity)=lower(wc.entity) ORDER BY a.id DESC LIMIT 1`
+// loanFigures are the loan inputs that change every month; every other input is a term the grant approved.
+const loanFigures = `'{close_period,source_reference,opening_principal,interest_paid_through,payments,closing_principal,book_balance,booked_fees,booked_accrued_interest,principal_due_next_12_months,booked_current_portion}'::text[]`
+
+// coveringGrant is SQL for the active standing approval on a paper ($1), its carried or recurring ancestors,
+// or, for a loan, an earlier month's loan paper with the same terms.
+const coveringGrant = `WITH RECURSIVE chain(id) AS (SELECT $1::bigint UNION SELECT COALESCE(p.paper->'carry_forward'->>'paper_id',p.paper->'recurring_accrual'->>'paper_id')::bigint FROM chain c JOIN workpapers p ON p.id=c.id WHERE COALESCE(p.paper->'carry_forward'->>'paper_id',p.paper->'recurring_accrual'->>'paper_id') IS NOT NULL)
+ SELECT a.id::text,a.workpaper_id::text,a.review_id::text,a.granted_by,a.reason,a.created_at FROM standing_approvals a JOIN workpapers g ON g.id=a.workpaper_id JOIN workpapers w ON w.id=$1 JOIN client_closes wc ON wc.id=w.close_id
+ WHERE a.revoked_at IS NULL AND a.organization_id=wc.organization_id AND lower(a.client_entity)=lower(wc.entity)
+ AND (a.workpaper_id IN (SELECT id FROM chain) OR w.kind='loan' AND g.kind='loan' AND g.paper->'input'->>'close_period'<w.paper->'input'->>'close_period' AND (g.paper->'input')-` + loanFigures + `=(w.paper->'input')-` + loanFigures + `)
+ ORDER BY a.id DESC LIMIT 1`
 
 // grantInForce is SQL: the granting paper ($1) still carries the approval ($2) the grant rests on, and the firm ($3) and granter ($4) are still enabled.
 const grantInForce = `SELECT EXISTS(SELECT 1 FROM workpaper_review_state WHERE id::text=$1 AND review_state='approved' AND review_id=$2) AND EXISTS(SELECT 1 FROM organizations WHERE id=$3 AND enabled) AND ($3='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$3 AND subject=$4 AND granted))`
 
-// standingApproval grants, revokes or reads the approval that lets a prepaid schedule's later carried months be approved without a new review.
+// standingApproval grants, revokes or reads the approval that lets later months of a prepaid schedule, recurring accrual or loan be approved without a new review.
 func standingApproval(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		closeID, paperID := r.PathValue("id"), r.PathValue("paper")
@@ -95,12 +103,13 @@ func standingApproval(db *sql.DB) http.HandlerFunc {
 		} else {
 			var state, reviewID string
 			var raw []byte
-			err = tx.QueryRowContext(r.Context(), `SELECT w.review_state,w.review_id,w.paper FROM workpaper_review_state w WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind='prepaid' AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`, paperID, closeID).Scan(&state, &reviewID, &raw)
+			err = tx.QueryRowContext(r.Context(), `SELECT w.review_state,w.review_id,w.paper FROM workpaper_review_state w WHERE w.id::text=$1 AND w.close_id::text=$2 AND (w.kind IN ('prepaid','loan') OR w.kind='accrual' AND w.paper->'input'->>'method'=$3) AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`, paperID, closeID, accruals.RecurringMethod).Scan(&state, &reviewID, &raw)
 			var paper struct {
-				Blockers []string `json:"blockers"`
+				Blockers  []string `json:"blockers"`
+				Questions []string `json:"questions"`
 			}
-			if err != nil || json.Unmarshal(raw, &paper) != nil || state != "approved" || reviewID == "" || len(paper.Blockers) > 0 {
-				problem(w, 409, "Only a current, approved prepaid schedule without blockers can carry a standing approval.")
+			if err != nil || json.Unmarshal(raw, &paper) != nil || state != "approved" || reviewID == "" || len(paper.Blockers) > 0 || len(paper.Questions) > 0 {
+				problem(w, 409, "Only a current, approved prepaid schedule, recurring accrual or loan without blockers or open questions can carry a standing approval.")
 				return
 			}
 			err = tx.QueryRowContext(r.Context(), `INSERT INTO standing_approvals(organization_id,client_entity,workpaper_id,review_id,granted_by,reason) SELECT c.organization_id,c.entity,w.id,$3::bigint,$4,$5 FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 ON CONFLICT (workpaper_id) WHERE revoked_at IS NULL DO NOTHING RETURNING id::text`, paperID, closeID, reviewID, actor, in.Reason).Scan(&id)
@@ -117,9 +126,9 @@ func standingApproval(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// sweepStandingApprovals approves up to 20 unreviewed carried schedules after the cursor whose lineage holds an active standing approval.
+// sweepStandingApprovals approves up to 20 unreviewed later-month drafts after the cursor that an active standing approval covers.
 func sweepStandingApprovals(ctx context.Context, db *sql.DB, cursor string) (string, int, error) {
-	rows, err := db.QueryContext(ctx, `SELECT w.id::text,w.close_id::text FROM workpapers w WHERE w.kind='prepaid' AND w.paper ? 'carry_forward' AND w.id>$1::bigint AND NOT EXISTS(SELECT 1 FROM workpaper_reviews v WHERE v.workpaper_id=w.id) ORDER BY w.id LIMIT 20`, cursor)
+	rows, err := db.QueryContext(ctx, `SELECT w.id::text,w.close_id::text FROM workpapers w WHERE (w.kind='prepaid' AND w.paper ? 'carry_forward' OR w.kind='accrual' AND w.paper ? 'recurring_accrual' OR w.kind='loan') AND w.id>$1::bigint AND NOT EXISTS(SELECT 1 FROM workpaper_reviews v WHERE v.workpaper_id=w.id) ORDER BY w.id LIMIT 20`, cursor)
 	if err != nil {
 		return cursor, 0, err
 	}
@@ -191,17 +200,19 @@ func standingApprove(ctx context.Context, db *sql.DB, closeID, paperID string) (
 	if err = tx.QueryRowContext(ctx, grantInForce, granted, grantReview, org, by).Scan(&standing); err != nil || !standing {
 		return false, err
 	}
-	var state, digest, reviewID string
+	var state, digest, reviewID, kind string
 	var raw []byte
-	if err = tx.QueryRowContext(ctx, `SELECT review_state,digest,review_id,paper FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&state, &digest, &reviewID, &raw); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT review_state,digest,review_id,paper,kind FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&state, &digest, &reviewID, &raw, &kind); err != nil {
 		return false, err
 	}
 	var paper struct {
-		Revises  string          `json:"revises"`
-		Proposal json.RawMessage `json:"proposal"`
+		Revises   string          `json:"revises"`
+		Proposal  json.RawMessage `json:"proposal"`
+		Questions []string        `json:"questions"`
 	}
 	json.Unmarshal(raw, &paper)
-	if state != "pending" || paper.Revises != "" || len(paper.Proposal) > 0 && string(paper.Proposal) != "null" {
+	// An accrual's or loan's entry still needs a person's posting approval; a prepaid schedule keeps its no-entry rule.
+	if state != "pending" || paper.Revises != "" || len(paper.Questions) > 0 || kind == "prepaid" && len(paper.Proposal) > 0 && string(paper.Proposal) != "null" {
 		return false, nil
 	}
 	if _, status, _ := decideReview(ctx, tx, closeID, paperID, by, "approved", "Standing approval #"+grant+standingNote, digest, reviewID, false); status != 0 {

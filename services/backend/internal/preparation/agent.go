@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,21 @@ import (
 
 	"close.local/backend/internal/documents"
 )
+
+// ErrModelLimit refuses model calls once the firm has used its calls for the UTC day.
+var ErrModelLimit = errors.New("The firm's daily model call limit is reached; it resets at midnight UTC.")
+
+// ReserveModelCalls counts n model calls against the firm's daily limit, or none of them.
+func ReserveModelCalls(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, org string, n int) error {
+	err := q.QueryRowContext(ctx, `INSERT INTO model_calls AS m(organization_id,day,calls) SELECT id,(now() AT TIME ZONE 'UTC')::date,$2 FROM organizations WHERE id=$1 AND $2<=max_model_calls_per_day
+ ON CONFLICT(organization_id,day) DO UPDATE SET calls=m.calls+$2 WHERE m.calls+$2<=(SELECT max_model_calls_per_day FROM organizations WHERE id=m.organization_id) RETURNING calls`, org, n).Scan(new(int))
+	if err == sql.ErrNoRows {
+		return ErrModelLimit
+	}
+	return err
+}
 
 // Inventory is always scoped by the authenticated close. Replies belonging to
 // another request are not interchangeable evidence, even inside the same close.
@@ -58,12 +74,17 @@ func AgentInventory(ctx context.Context, tx *sql.Tx, closeID, jobID string) ([]I
 	return sources, Digest(raw), nil
 }
 
-func selectEvidence(ctx context.Context, client *http.Client, key, model, primary string, sources []IntakeSource) ([]IntakeSource, error) {
+// needsSelection reports whether an inventory is too large to send whole, so the model first chooses from it.
+func needsSelection(sources []IntakeSource) bool {
 	total := 0
 	for _, s := range sources {
 		total += len(s.Content)
 	}
-	if len(sources) <= 20 && total <= 128*1024 {
+	return len(sources) > 20 || total > 128*1024
+}
+
+func selectEvidence(ctx context.Context, client *http.Client, key, model, primary string, sources []IntakeSource) ([]IntakeSource, error) {
+	if !needsSelection(sources) {
 		return sources, nil
 	}
 	if key == "" || model == "" {
@@ -442,17 +463,17 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	var id, closeID, primary, entity, period string
+	var id, closeID, primary, org, entity, period string
 	var revision, attempts int
 	var checkpoint []byte
-	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text,i.source_id::text,i.revision,i.agent_attempts,i.agent_checkpoint FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE (j.state='waiting_evidence' OR (j.state='interpreting' AND i.agent_started_at<now()-interval '2 minutes')) AND e.extraction_state IN ('ready','failed') AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j,i SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &primary, &revision, &attempts, &checkpoint)
+	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text,i.source_id::text,i.revision,i.agent_attempts,i.agent_checkpoint FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE (j.state='waiting_evidence' OR (j.state='interpreting' AND i.agent_started_at<now()-interval '2 minutes')) AND e.extraction_state IN ('ready','failed') AND (i.agent_retry_at IS NULL OR i.agent_retry_at<=now()) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j,i SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &primary, &revision, &attempts, &checkpoint)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&entity, &period); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT organization_id,entity,period FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&org, &entity, &period); err != nil {
 		return false, err
 	}
 	profile, err := ClientProfile(ctx, tx, closeID)
@@ -499,6 +520,29 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			return true, tx.Commit()
 		}
 	}
+	blocked, identityBlocked := blockedIdentity(primary, entity, aliases, sources)
+	selected, reusable := []IntakeSource(nil), false
+	calls := 0
+	if !identityBlocked {
+		selected, reusable = resumeSelection(checkpoint, digest, primary, sources)
+		calls = 1
+		if !reusable && needsSelection(sources) {
+			calls = 2
+		}
+	}
+	if calls > 0 {
+		if err = ReserveModelCalls(ctx, tx, org, calls); errors.Is(err, ErrModelLimit) {
+			if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET agent_claim=NULL,agent_retry_at=now()+interval '15 minutes' WHERE job_id=$1`, id); err != nil {
+				return false, err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='waiting_evidence',error=$2 WHERE id=$1`, id, ErrModelLimit.Error()); err != nil {
+				return false, err
+			}
+			return true, tx.Commit()
+		} else if err != nil {
+			return false, err
+		}
+	}
 	claim := rand.Text()
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET agent_claim=$2,agent_started_at=now(),agent_attempts=agent_attempts+1 WHERE job_id=$1`, id, claim); err != nil {
 		return false, err
@@ -510,11 +554,8 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	client := &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	blocked, identityBlocked := blockedIdentity(primary, entity, aliases, sources)
-	selected, reusable := []IntakeSource(nil), false
 	var selectErr error
 	if !identityBlocked {
-		selected, reusable = resumeSelection(checkpoint, digest, primary, sources)
 		if !reusable {
 			selected, selectErr = selectEvidence(ctx, client, os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), primary, sources)
 		}

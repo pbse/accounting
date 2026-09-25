@@ -253,10 +253,10 @@ func Balances(payload json.RawMessage) (currency, date string, rows []Balance, e
 		}
 	}
 	visit(snapshot.TrialBalance.Reports[0].Rows)
-	_, debit := columns["YTD Debit"]
-	_, credit := columns["YTD Credit"]
-	if !debit || !credit {
-		return "", "", nil, errors.New("Xero Trial Balance has no YTD Debit and YTD Credit columns")
+	for _, title := range []string{"Debit", "Credit", "YTD Debit", "YTD Credit"} {
+		if _, ok := columns[title]; !ok {
+			return "", "", nil, errors.New("Xero Trial Balance has no " + title + " column")
+		}
 	}
 	return currency, snapshot.Date, rows, nil
 }
@@ -320,6 +320,31 @@ func AccountBalances(payload json.RawMessage) (string, []ledger.AccountBalance, 
 			return "", nil, fmt.Errorf("Xero Trial Balance %v for %s", err, row.Name)
 		}
 		out = append(out, ledger.AccountBalance{ID: row.AccountID, Name: row.Name, Class: classes[row.Class], Net: net})
+	}
+	return currency, out, nil
+}
+
+// MonthlyActivity returns each revenue and expense account's movement in the Trial Balance's month, signed
+// as a Profit and Loss shows it. Xero's Debit and Credit columns cover the current month up to the report date.
+func MonthlyActivity(payload json.RawMessage) (string, []ledger.AccountBalance, error) {
+	currency, _, rows, err := Balances(payload)
+	if err != nil {
+		return "", nil, err
+	}
+	out := []ledger.AccountBalance{}
+	for _, row := range rows {
+		class := classes[row.Class]
+		if class != "Revenue" && class != "Expense" {
+			continue
+		}
+		net, err := ledger.Net(row.Debit, row.Credit)
+		if err != nil {
+			return "", nil, fmt.Errorf("Xero Trial Balance %v for %s", err, row.Name)
+		}
+		if class == "Revenue" {
+			net.Neg(net)
+		}
+		out = append(out, ledger.AccountBalance{ID: row.AccountID, Name: row.Name, Class: class, Net: net})
 	}
 	return currency, out, nil
 }

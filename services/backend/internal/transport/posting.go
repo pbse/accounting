@@ -17,6 +17,23 @@ import (
 	"close.local/backend/internal/quickbooks"
 )
 
+// draftApproved requires a current approved draft before a posting decision. Approving the posting of a
+// pending draft approves the draft too, in the caller's transaction, when the approver may review drafts.
+func draftApproved(ctx context.Context, tx *sql.Tx, closeID, paperID string, actor *auth.Claims, approving bool) (int, string) {
+	var state, digest, reviewID string
+	if err := tx.QueryRowContext(ctx, `SELECT review_state,digest,review_id FROM workpaper_review_state WHERE id::text=$1 AND close_id::text=$2`, paperID, closeID).Scan(&state, &digest, &reviewID); err != nil {
+		return 409, "A current accountant-approved workpaper is required."
+	}
+	if state == "approved" {
+		return 0, ""
+	}
+	if !approving || state != "pending" || !slices.Contains(actor.Permissions, "workpapers:review") {
+		return 409, "A current accountant-approved workpaper is required. Approving a posting approves its pending draft only for someone who can review drafts."
+	}
+	_, status, message := decideReview(ctx, tx, closeID, paperID, actor.Subject, "approved", "Approved together with its posting.", digest, reviewID, false)
+	return status, message
+}
+
 type posting struct {
 	RequestID  string          `json:"request_id"`
 	ID         string          `json:"id"`
@@ -158,13 +175,13 @@ func registerPosting(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			defer tx.Rollback()
-			var closeID, reviewState string
+			var closeID string
 			if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
 				problem(w, 503, "Could not lock the close.")
 				return
 			}
-			if err = tx.QueryRowContext(r.Context(), `SELECT review_state FROM workpaper_review_state WHERE id::text=$1 AND close_id=$2`, r.PathValue("paper"), closeID).Scan(&reviewState); err != nil || reviewState != "approved" {
-				problem(w, 409, "A current approved workpaper review is required before posting.")
+			if status, message := draftApproved(r.Context(), tx, closeID, r.PathValue("paper"), actor, input.Action == "approve"); status != 0 {
+				problem(w, status, message)
 				return
 			}
 			if input.Action == "approve" {

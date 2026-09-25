@@ -236,3 +236,102 @@ func TestStandingApprovalApprovesUnchangedCarriedMonths(t *testing.T) {
 		t.Fatal("a member granter's carried month is approved once the firm allows it")
 	}
 }
+
+func TestStandingApprovalCoversRecurringAccrualsAndSameTermLoans(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	client := "Standing terms " + rand.Text()
+	closes := map[string]string{}
+	for _, period := range []string{"2026-09", "2026-10"} {
+		var id string
+		must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,$2) RETURNING id::text`, client, period).Scan(&id))
+		closes[period] = id
+	}
+	defer func() {
+		for _, id := range closes {
+			db.Exec(`DELETE FROM standing_approvals WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, id)
+			db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, id)
+			db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM evidence WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM client_closes WHERE id=$1`, id)
+		}
+	}()
+	type paper struct{ id, digest, review string }
+	save := func(period, kind string, body map[string]any) paper {
+		t.Helper()
+		var source, sourceDigest string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'statement.txt',$2,'Statement','fixture') RETURNING id::text,digest`, closes[period], rand.Text()).Scan(&source, &sourceDigest))
+		body["sources"] = []map[string]string{{"id": source, "digest": sourceDigest, "role": "statement"}}
+		raw, _ := json.Marshal(body)
+		var p paper
+		must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,$2,$3,$4) RETURNING id::text,digest`, closes[period], kind, rand.Text(), string(raw)).Scan(&p.id, &p.digest))
+		return p
+	}
+	approved := func(p paper) bool {
+		t.Helper()
+		var state string
+		must(db.QueryRow(`SELECT review_state FROM workpaper_review_state WHERE id=$1`, p.id).Scan(&state))
+		return state == "approved"
+	}
+	token := strings.Repeat("x", 32)
+	handler := apiWithStore(db, token)
+	grant := func(p *paper, want int) {
+		t.Helper()
+		must(db.QueryRow(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,$2,'approved','Reviewed','user_partner') RETURNING id::text`, p.id, p.digest).Scan(&p.review))
+		r := httptest.NewRequest("POST", "/v1/closes/"+closes["2026-09"]+"/workpapers/"+p.id+"/standing-approval", strings.NewReader(`{"action":"grant","reason":"Same terms every month","confirmed":true}`))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("grant: %d %s", w.Code, w.Body.String())
+		}
+	}
+	entry := map[string]string{"date": "2026-10-31", "debit_account": "Utilities", "credit_account": "Accrued utilities", "amount": "300.00"}
+
+	accrual := save("2026-09", "accrual", map[string]any{"input": map[string]string{"method": "fixed_recurring_incurred_v1", "amount": "300.00", "close_period": "2026-09"}})
+	grant(&accrual, 200)
+	recurring := save("2026-10", "accrual", map[string]any{"input": map[string]string{"method": "fixed_recurring_incurred_v1", "amount": "300.00", "close_period": "2026-10"}, "proposal": entry, "recurring_accrual": map[string]string{"paper_id": accrual.id, "digest": accrual.digest, "review_id": accrual.review}})
+	unlinked := save("2026-10", "accrual", map[string]any{"input": map[string]string{"method": "fixed_recurring_incurred_v1", "amount": "300.00", "close_period": "2026-10"}, "proposal": entry})
+
+	terms := func(period, rate, opening string) map[string]any {
+		return map[string]any{"input": map[string]any{"lender": "First Bank", "agreement_reference": "Note §2", "annual_rate": rate, "day_count": "actual_360", "loan_account": "Loan payable", "interest_account": "Interest expense", "accrue_interest": true, "method": "note_v1",
+			"close_period": period, "source_reference": "Statement " + period, "opening_principal": opening, "payments": []map[string]string{{"date": period + "-15", "principal": "1500.00", "interest": "600.00"}}, "closing_principal": "100.00", "book_balance": opening},
+			"proposals": []map[string]string{entry}, "questions": []string{}}
+	}
+	loan := save("2026-09", "loan", terms("2026-09", "6.000", "120000.00"))
+	grant(&loan, 200)
+	sameMonth := save("2026-09", "loan", terms("2026-09", "6.000", "118500.00"))
+	later := save("2026-10", "loan", terms("2026-10", "6.000", "118500.00"))
+	repriced := save("2026-10", "loan", terms("2026-10", "6.500", "118500.00"))
+	open := terms("2026-10", "6.000", "118500.00")
+	open["questions"] = []string{"The lender charged more interest than the rate gives."}
+	questioned := save("2026-10", "loan", open)
+	unsettled := terms("2026-09", "6.000", "90000.00")
+	unsettled["questions"] = []string{"The ledger shows less principal than the statement."}
+	unsettledLoan := save("2026-09", "loan", unsettled)
+	grant(&unsettledLoan, 409)
+
+	if _, got, err := sweepStandingApprovals(context.Background(), db, "0"); err != nil || got != 2 {
+		t.Fatalf("the recurring accrual and the same-terms later loan are approved: %d %v", got, err)
+	}
+	if !approved(recurring) || !approved(later) {
+		t.Fatal("a recurring accrual with its entry, and a later loan month on the same terms, are approved automatically")
+	}
+	if approved(unlinked) || approved(sameMonth) || approved(repriced) || approved(questioned) {
+		t.Fatal("an accrual outside the recurring chain, a loan draft of the granting month, a changed rate and an open question all still need a person")
+	}
+}

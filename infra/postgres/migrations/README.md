@@ -41,3 +41,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `053_production_corrections.sql` lets a production grant cover Bill expense corrections and supplier credits and records the grant on each attempt. Apply after 052 with API/worker stopped; `/readyz` checks it.
 
 `054_client_aliases.sql` stores the other client names a reviewer confirmed from an identity-blocked source, with row-level security like 047. Apply after 053 with API/worker stopped; `/readyz` checks it.
+
+`056_model_limits.sql` adds the firm's daily model call limit and its per-day count, the agent's retry time after a refusal, saved replay runs (row-level security like 055), and the claim time for scheduled Xero captures. Apply after 055 with API/worker stopped; `/readyz` checks it.

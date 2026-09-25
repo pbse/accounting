@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
@@ -39,7 +40,7 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 		}
 	}
 	org := "org_Xero" + rand.Text()
-	var september, october string
+	var september, october, due string
 	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Synthetic Xero firm')`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture'),($1,'user_other',true,'Synthetic enrollment','fixture')`, org)
@@ -47,10 +48,10 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Xero client','2026-09') RETURNING id::text`, org).Scan(&september))
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Xero client','2026-10') RETURNING id::text`, org).Scan(&october))
 	defer func() {
-		for _, id := range []string{september, october} {
+		for _, id := range []string{september, october, due} {
 			db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, id)
 		}
-		for _, id := range []string{september, october} {
+		for _, id := range []string{due, september, october} {
 			db.Exec(`DELETE FROM xero_connections WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM client_closes WHERE id=$1`, id)
 		}
@@ -104,7 +105,8 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 		case strings.HasSuffix(r.URL.Path, "/Reports/TrialBalance"):
 			tenantHeaders = append(tenantHeaders, r.Header.Get("xero-tenant-id"))
 			dates = append(dates, r.URL.Query().Get("date"))
-			label := map[string]string{"2026-09-30": "30 September 2026", "2026-10-31": "31 October 2026"}[r.URL.Query().Get("date")]
+			when, _ := time.Parse("2006-01-02", r.URL.Query().Get("date"))
+			label := when.Format("2 January 2006")
 			return reply(200, map[string]any{"Reports": []any{map[string]any{"ReportType": "TrialBalance", "ReportDate": label, "Rows": []any{
 				map[string]any{"RowType": "Header", "Cells": []any{map[string]string{"Value": "Account"}, map[string]string{"Value": "Debit"}, map[string]string{"Value": "Credit"}, map[string]string{"Value": "YTD Debit"}, map[string]string{"Value": "YTD Credit"}}},
 				map[string]any{"RowType": "Section", "Rows": []any{map[string]any{"RowType": "Row", "Cells": []any{map[string]any{"Value": "Business Bank Account (090)", "Attributes": []any{map[string]string{"Id": "account", "Value": "a-090"}}}, map[string]string{"Value": "10.00"}, map[string]string{"Value": ""}, map[string]string{"Value": "1250.00"}, map[string]string{"Value": ""}}}}},
@@ -184,6 +186,48 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 		t.Fatalf("each rotated refresh token is saved before use: %v %s", refreshes, stored.Refresh)
 	}
 	call("user_accountant", october, map[string]any{"action": "snapshot", "connection_id": id, "confirmed": true}, 200)
+
+	// The worker captures an open current-month close once a day under its own name, one attempt per close a day.
+	if err = db.QueryRow(`SELECT id::text FROM client_closes WHERE organization_id=$1 AND entity='Xero client' AND period=$2`, org, time.Now().UTC().Format("2006-01")).Scan(&due); err == sql.ErrNoRows {
+		must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Xero client',$2) RETURNING id::text`, org, time.Now().UTC().Format("2006-01")).Scan(&due))
+	}
+	scheduled := func() (n int) {
+		t.Helper()
+		must(db.QueryRow(`SELECT count(*) FROM xero_snapshots WHERE close_id=$1 AND actor='scheduled-xero-refresh'`, due).Scan(&n))
+		return n
+	}
+	if due == september {
+		err = sweepXeroRefresh(t.Context(), db)
+		must(err)
+		if scheduled() != 0 {
+			t.Fatal("a close captured by hand in the past day is not captured again")
+		}
+	}
+	_, err = db.Exec(`UPDATE xero_snapshots SET captured_at=now()-interval '25 hours' WHERE close_id=$1`, due)
+	must(err)
+	_, err = db.Exec(`UPDATE organizations SET enabled=false WHERE id=$1`, org)
+	must(err)
+	err = sweepXeroRefresh(t.Context(), db)
+	must(err)
+	_, err = db.Exec(`UPDATE organizations SET enabled=true WHERE id=$1`, org)
+	must(err)
+	if scheduled() != 0 {
+		t.Fatal("a disabled firm's closes are not captured or claimed")
+	}
+	for range 2 {
+		err = sweepXeroRefresh(t.Context(), db)
+		must(err)
+	}
+	if scheduled() != 1 {
+		t.Fatalf("one scheduled capture for the due close: %d", scheduled())
+	}
+	_, err = db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1 AND actor='scheduled-xero-refresh'`, due)
+	must(err)
+	err = sweepXeroRefresh(t.Context(), db)
+	must(err)
+	if scheduled() != 0 {
+		t.Fatal("a close already attempted today is not attempted again, whatever the outcome")
+	}
 	tx, err := db.Begin()
 	must(err)
 	retention, err := readRetention(t.Context(), tx, september, org)
