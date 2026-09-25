@@ -78,3 +78,22 @@ func TestOpenItemExceptionsAskAboutOldInvoicesAndBills(t *testing.T) {
 		t.Fatalf("the policy note starts past 90 days: %+v", found[:2])
 	}
 }
+
+func TestUnappliedPaymentsAndOldCreditsAreAskedAbout(t *testing.T) {
+	monthEnd := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	found := OpenItemExceptions(map[string][]json.RawMessage{
+		"Payment":      {json.RawMessage(`{"Id":"11","TxnDate":"2026-09-28","UnappliedAmt":500,"CustomerRef":{"value":"1","name":"Acme"}}`)},
+		"CreditMemo":   {json.RawMessage(`{"Id":"12","DocNumber":"CM-4","TxnDate":"2026-08-16","RemainingCredit":120,"CustomerRef":{"value":"1","name":"Acme"}}`)},
+		"VendorCredit": {json.RawMessage(`{"Id":"13","TxnDate":"2026-09-20","Balance":80,"VendorRef":{"value":"2","name":"Ink Co"}}`)},
+	}, monthEnd)
+	got := []string{}
+	for _, e := range found {
+		got = append(got, e.Type+":"+e.ProviderIDs[0]+":"+e.Amount)
+	}
+	if strings.Join(got, ",") != "unapplied_payment:11:500.00,open_customer_credit:12:120.00" {
+		t.Fatalf("an unapplied payment of any age and a credit unused for over 30 days are asked about: %v", got)
+	}
+	if !strings.Contains(found[0].Question, "advance or deposit") || !strings.Contains(found[1].Question, "applied to an invoice or refunded") {
+		t.Fatalf("questions ask what the money settles: %+v", found)
+	}
+}

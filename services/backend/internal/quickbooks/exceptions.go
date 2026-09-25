@@ -195,30 +195,39 @@ func FindExceptions(rows []TransactionRow) []Exception {
 // month-end. Balances are as of the capture, so an item paid since then raises nothing.
 func OpenItemExceptions(open map[string][]json.RawMessage, monthEnd time.Time) []Exception {
 	out := []Exception{}
-	for _, kind := range []string{"Invoice", "Bill"} {
+	for _, kind := range []string{"Invoice", "Bill", "Payment", "CreditMemo", "VendorCredit"} {
 		for _, raw := range open[kind] {
 			var item struct {
-				ID                     string `json:"Id"`
-				DocNumber, DueDate     string
-				Balance                json.Number
-				CustomerRef, VendorRef ref
-				CurrencyRef            ref
+				ID                          string `json:"Id"`
+				DocNumber, DueDate, TxnDate string
+				Balance, UnappliedAmt       json.Number
+				RemainingCredit             json.Number
+				CustomerRef, VendorRef      ref
+				CurrencyRef                 ref
 			}
 			if json.Unmarshal(raw, &item) != nil {
 				continue
 			}
-			due, err := time.Parse("2006-01-02", item.DueDate)
-			balance, ok := new(big.Rat).SetString(item.Balance.String())
+			value := map[string]json.Number{"Payment": item.UnappliedAmt, "CreditMemo": item.RemainingCredit}[kind]
+			date := item.TxnDate
+			if kind == "Invoice" || kind == "Bill" {
+				date = item.DueDate
+			}
+			if value == "" {
+				value = item.Balance
+			}
+			at, err := time.Parse("2006-01-02", date)
+			balance, ok := new(big.Rat).SetString(value.String())
 			if err != nil || !ok || balance.Sign() <= 0 {
 				continue
 			}
-			days := int(monthEnd.Sub(due).Hours() / 24)
+			days := int(monthEnd.Sub(at).Hours() / 24)
 			number := item.DocNumber
 			if number == "" {
 				number = item.ID
 			}
 			shown := amount(TransactionRow{Amount: balance.FloatString(2), Currency: item.CurrencyRef.Value})
-			e := Exception{Kind: kind, ProviderIDs: []string{item.ID}, Dates: []string{item.DueDate}, Amount: balance.FloatString(2)}
+			e := Exception{Kind: kind, ProviderIDs: []string{item.ID}, Dates: []string{date}, Amount: balance.FloatString(2)}
 			switch {
 			case kind == "Invoice" && days > 60:
 				e.Type, e.Counterparty = "past_due_receivable", item.CustomerRef.Name
@@ -233,6 +242,21 @@ func OpenItemExceptions(open map[string][]json.RawMessage, monthEnd time.Time) [
 				e.Finding = fmt.Sprintf("Bill %s from %s has %s open, %d days past due at month-end.", number, e.Counterparty, shown, days)
 				e.NextStep = "Missing: whether it is still owed or was paid outside QuickBooks. Nothing is paid or changed."
 				e.Question = fmt.Sprintf("Is bill %s from %s (%s, %d days past due) still owed, or was it paid outside QuickBooks?", number, e.Counterparty, shown, days)
+			case kind == "Payment":
+				e.Type, e.Counterparty = "unapplied_payment", item.CustomerRef.Name
+				e.Finding = fmt.Sprintf("%s of the payment from %s on %s is not applied to an invoice.", shown, e.Counterparty, date)
+				e.NextStep = "Missing: what it settles. Match it to the invoice it pays, or record it as a customer advance or credit. Nothing is changed."
+				e.Question = fmt.Sprintf("What does the %s payment from %s on %s settle: an open invoice, or is it an advance or deposit?", shown, e.Counterparty, date)
+			case kind == "CreditMemo" && days > 30:
+				e.Type, e.Counterparty = "open_customer_credit", item.CustomerRef.Name
+				e.Finding = fmt.Sprintf("Credit memo %s for %s has %s unused since %s.", number, e.Counterparty, shown, date)
+				e.NextStep = "Missing: whether to apply it to an invoice or refund it. Nothing is changed."
+				e.Question = fmt.Sprintf("Should the %s credit for %s from %s be applied to an invoice or refunded?", shown, e.Counterparty, date)
+			case kind == "VendorCredit" && days > 30:
+				e.Type, e.Counterparty = "open_supplier_credit", item.VendorRef.Name
+				e.Finding = fmt.Sprintf("Supplier credit %s from %s has %s unused since %s.", number, e.Counterparty, shown, date)
+				e.NextStep = "Missing: whether it will be applied to a bill or was refunded. Nothing is changed."
+				e.Question = fmt.Sprintf("Will the %s credit from %s dated %s be applied to a bill, or was it refunded?", shown, e.Counterparty, date)
 			default:
 				continue
 			}

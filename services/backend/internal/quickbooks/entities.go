@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/url"
 	"strings"
 	"time"
@@ -134,7 +135,7 @@ func PeriodEntities(ctx context.Context, env, realm, token, period string) (Enti
 	// Open items only add questions; if a read fails, the transaction capture still completes and says so.
 	result.OpenItems = map[string][]json.RawMessage{}
 	unread := []string{}
-	for _, kind := range []string{"Invoice", "Bill"} {
+	for _, kind := range []string{"Invoice", "Bill", "Payment", "CreditMemo", "VendorCredit"} {
 		items, err := openItems(ctx, env, realm, token, kind, last)
 		if err != nil {
 			unread = append(unread, err.Error())
@@ -166,6 +167,12 @@ func PeriodEntities(ctx context.Context, env, realm, token, period string) (Enti
 // openItems pages through a type's records with a balance, dated on or before month-end.
 func openItems(ctx context.Context, env, realm, token, kind, last string) ([]json.RawMessage, error) {
 	where := fmt.Sprintf("WHERE Balance > '0' AND TxnDate <= '%s'", last)
+	// Unused payment and credit amounts are not documented as filterable: read a year and keep positive ones.
+	unused := map[string]string{"Payment": "UnappliedAmt", "CreditMemo": "RemainingCredit", "VendorCredit": "Balance"}[kind]
+	if unused != "" {
+		end, _ := time.Parse("2006-01-02", last)
+		where = fmt.Sprintf("WHERE TxnDate >= '%s' AND TxnDate <= '%s'", end.AddDate(-1, 0, 1).Format("2006-01-02"), last)
+	}
 	before, err := periodCount(ctx, env, realm, token, kind, where)
 	if err != nil {
 		return nil, fmt.Errorf("Open %s count: %w", kind, err)
@@ -198,5 +205,20 @@ func openItems(ctx context.Context, env, realm, token, kind, last string) ([]jso
 	if after, err := periodCount(ctx, env, realm, token, kind, where); err != nil || after != before || len(rows) != before {
 		return nil, fmt.Errorf("Open %s records changed during capture; retry", kind)
 	}
-	return rows, nil
+	if unused == "" {
+		return rows, nil
+	}
+	open := []json.RawMessage{}
+	for _, record := range rows {
+		var fields map[string]json.RawMessage
+		json.Unmarshal(record, &fields)
+		amount, ok := new(big.Rat).SetString(strings.Trim(string(fields[unused]), `"`))
+		if !ok {
+			return nil, fmt.Errorf("Open %s %s is unreadable", kind, unused)
+		}
+		if amount.Sign() > 0 {
+			open = append(open, record)
+		}
+	}
+	return open, nil
 }

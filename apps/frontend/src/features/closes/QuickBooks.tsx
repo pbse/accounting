@@ -317,8 +317,8 @@ export function QuickBooks({
           {syncs.length === 0 ? <p>No transaction capture requested.</p> : (
             <ul>{syncs.map((s) => <li key={s.id}>
               {s.period} transactions · {s.state.replaceAll("_", " ")} · attempt {s.attempts}/3
-              {s.state === "completed" && <> · {s.latest ? "latest completed" : "historical"} · evidence #{s.evidence_id} · {Object.values(s.counts ?? {}).reduce((n, count) => n + count, 0)} records · {s.started_at ? `${new Date(s.started_at).toLocaleString()} to ` : ""}{s.finished_at && new Date(s.finished_at).toLocaleString()} · {s.completeness ? "provider counts checked before and after each type" : "legacy capture; count completeness unverified"} <button onClick={() => void download(s.id, true)}>Download transactions</button></>}
-              {s.state === "unchanged" && <> · no source change · evidence #{s.evidence_id} · checked {s.finished_at && new Date(s.finished_at).toLocaleString()}</>}
+              {s.state === "completed" && <> · {s.latest ? "latest completed" : "historical"} · evidence #{s.evidence_id} · {Object.values(s.counts ?? {}).reduce((n, count) => n + count, 0)} records · {s.started_at ? `${new Date(s.started_at).toLocaleString()} to ` : ""}{s.finished_at && new Date(s.finished_at).toLocaleString()} · {s.completeness || "legacy capture; count completeness unverified"} <button onClick={() => void download(s.id, true)}>Download transactions</button></>}
+              {s.state === "unchanged" && <> · no source change · evidence #{s.evidence_id} · checked {s.finished_at && new Date(s.finished_at).toLocaleString()}{s.completeness && ` · ${s.completeness}`}</>}
               {s.error && <span role="alert"> · {s.error}</span>}
             </li>)}</ul>
           )}

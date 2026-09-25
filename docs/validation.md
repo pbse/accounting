@@ -588,3 +588,10 @@ Author: Claude Opus 5.5. Migration 054. Review: GPT-6 Sol (medium) plan review; 
 - `TestConfirmedAliasesAcceptOnlyAnUnambiguousSource`: an unconfirmed other name blocks and is offered; once confirmed it is the same client; a source naming two entities stays blocked and offers nothing. Observed red when any differing name is offered.
 - `TestConfirmingAClientAliasRechecksBlockedWork` (PostgreSQL): a document naming "<client> LLC" is blocked with that name; a different name and a stale revision are refused; confirming it requeues the job, which is then prepared. Observed red without the offered-name check, without alias acceptance and with aliases not loaded by the local intake.
 
+## Unapplied payments and unused credits (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted `RemainingCredit` for credit memos, reading a year by date and selecting positive unused amounts locally instead of undocumented filters, showing the completeness note, and asking what a payment settles.
+
+- `TestUnappliedPaymentsAndOldCreditsAreAskedAbout`: a 500.00 unapplied payment two days old and a credit memo with 120.00 unused for 45 days are asked about; a supplier credit 10 days old is not. Observed red without the payment question and without the 30-day wait for credits.
+- `TestPeriodEntitiesRequiresCompletePagedRevisions` now checks that open payments are read by date for the year to month-end, never filtered on UnappliedAmt, and that only the payment with money unapplied is kept. Observed red with zero amounts kept and without payments read. A payment without a readable unapplied amount is named in the completeness note instead of being treated as applied (code review finding; observed red without the check), and unchanged captures now show that note too.
+

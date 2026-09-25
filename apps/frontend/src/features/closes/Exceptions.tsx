@@ -4,7 +4,7 @@ import { workspaceRequest } from "./workspace";
 import { LedgerSelection } from "./Coverage";
 
 type Found = {
-  type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding" | "past_due_receivable" | "past_due_payable";
+  type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding" | "past_due_receivable" | "past_due_payable" | "unapplied_payment" | "open_customer_credit" | "open_supplier_credit";
   kind: string;
   provider_ids: string[];
   dates: string[];
@@ -28,6 +28,9 @@ const labels: Record<Found["type"], [string, string]> = {
   inconsistent_coding: ["Inconsistent coding", "info"],
   past_due_receivable: ["Overdue invoice", "warn"],
   past_due_payable: ["Overdue bill", "warn"],
+  unapplied_payment: ["Unapplied payment", "warn"],
+  open_customer_credit: ["Unused customer credit", "info"],
+  open_supplier_credit: ["Unused supplier credit", "info"],
 };
 
 export function Exceptions({ closeId }: { closeId: string }) {
