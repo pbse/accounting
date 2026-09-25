@@ -760,3 +760,28 @@ Code review adopted: showing the other remembered choices unless the proposal ma
   - A connection needing reconnection makes the snapshot stale, and the ledger check goes silent.
   - Observed red without the revision filter, the approved-decision filter, either window bound, the client filter, the stale check, the active check, the procedure conflict, the single-match rule, and procedure loading.
 
+## Standing approval of carried prepaid schedules (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 055 (`standing_approvals`). Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- never approving a revision automatically, including a monthly comparison with no adjustment;
+- binding each approval to the grant's own approval and re-checking the grant after locking;
+- stating that a grant rests on the granter's authority at grant time and stops when they leave the firm;
+- a sweep cursor so refused drafts cannot starve later ones.
+
+The test also caught a revoke that did not bind the workpaper to the close in the URL; every action now does. Code review adopted:
+
+- locking the granting schedule's close, the grant row and (second delta round) the firm's row before the final check, against a racing revoke, re-review or suspension (by inspection; no concurrent test);
+- no approvals for a disabled firm;
+- showing whether a grant is in effect.
+
+- `TestStandingApprovalApprovesUnchangedCarriedMonths` (PostgreSQL):
+  - A grant is refused on a draft that was never approved and on one sent back, and a second active grant is refused.
+  - One sweep approves the unchanged October carry under the granter, with a note naming the standing approval. A revision, a draft with a blocker, and a draft proposing an entry are left alone, and a second sweep approves nothing.
+  - A re-approval of the granting schedule stops even a fresh carry. November's carry of the approved October draft is covered too.
+  - Revoke through another close is a 404; after revoking, nothing more is approved.
+  - A signed-off close and another client's carry are skipped.
+  - A granter who is not a member is skipped; firm independence refuses a granter who prepared the carry; a disabled firm is skipped; once allowed and enabled, it is approved.
+  - The page reports a grant resting on a superseded approval as not in effect.
+  - Observed red without the revision check, the entry check, the signed-off check, the grant-approval binding, the membership check, the local-development exception, the client check, the approved-state check on grant, the close binding, the enabled-firm check, and the in-effect status.
+

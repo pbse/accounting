@@ -24,6 +24,19 @@ New drafts therefore contain no journal proposal or prior month's booked balance
 
 To correct carried terms, revise and review the originating schedule, then carry the new version forward. The existing initial-booking revision form does not accept carried drafts. Prior versions stay in history and become stale through lineage. Repeating this procedure for another month requires that month's schedule to receive its own review first.
 
+## Approve the schedule, not every month
+
+On an approved prepaid schedule, a reviewer can grant a **standing approval** with a reason (`POST /v1/closes/{id}/workpapers/{paper}/standing-approval`, `{"action":"grant","reason":…,"confirmed":true}`). The worker then checks carried schedules once a minute. It approves each later month's carried schedule under the granter's name, noting the standing approval, when all of these hold:
+
+- the draft is in the schedule's carry-forward lineage (on the granted paper or any carried descendant);
+- it is unreviewed and unchanged: its predecessors' drafts and approvals are current, it is not a revision (including a monthly comparison with no adjustment), it proposes no journal entry, and it has no blockers;
+- its close is not signed off;
+- the grant is not revoked, and the granting schedule is still approved with the same approval it was granted on;
+- the firm is enabled and the granter is still an enabled member of it;
+- the ordinary review checks pass: linked evidence, accounting basis, and the firm's independence rule, applied to the granter.
+
+A grant rests on the granter's review authority when they granted it. It stops when they leave the firm; if their review role changes, revoke it. **Revoke** on any covered draft ends it. A revised schedule is a new schedule and needs its own grant. Monthly entries still need a person. The review history shows each automatic approval. The schedule page says when a grant is no longer in effect, for example after the schedule was reviewed again. Each approval locks the granting schedule's close, the grant and the firm's row before its final check, so a revoke, a new review of the schedule or a firm suspension cannot race it.
+
 ## Refresh a recurring month
 
 In the new close, use **QuickBooks sandbox ledger evidence → Capture this month’s accrual reports and plan coverage**, then **Refresh recurring prepaid work → Compare current period**. The latter shows each latest carried schedule, its expected closing prepaid balance, and the matching QuickBooks prepaid account's Trial Balance row and columns. The account name must match the schedule after trimming spaces and ignoring case, its subtype must be `PrepaidExpenses`, and a USD accrual Trial Balance row must exist exactly once. Missing or ambiguous rows stop the comparison; a missing row is never treated as zero. Download the full snapshot to inspect the report cutoff and raw cells. For large captures, the linked evidence is an index and the full snapshot supplies the cited row.

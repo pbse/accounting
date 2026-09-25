@@ -30,5 +30,6 @@ func main() {
 	go forwarded.Run(ctx, db)
 	go quickbooks.RunSync(ctx, db)
 	go transport.RunAlerts(ctx, db)
+	go transport.RunStandingApprovals(ctx, db)
 	transport.Run(transport.Worker())
 }
