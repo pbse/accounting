@@ -38,7 +38,7 @@ The close's exceptions use the most recently captured month-end snapshot, QuickB
 
 ## Changes and client memory
 
-**Changes from last month** uses each close's newest snapshot, QuickBooks or Xero. With two Xero months from the same organisation, it compares each revenue and expense account's movement in the month, read from the Trial Balance's Debit and Credit columns (Xero reports these for the current month up to the report date). Xero snapshots carry no payees, so causes are marked unavailable. A QuickBooks month is never compared with a Xero month. When confirming a document, client memory checks proposed accounts against the newest snapshot's chart of accounts, including Xero's (an account is usable only while Xero marks it active).
+**Changes from last month** uses each close's newest snapshot, QuickBooks or Xero. With two Xero months from the same organisation, it compares each revenue and expense account's movement in the month, read from the Trial Balance's Debit and Credit columns (Xero reports these for the current month up to the report date). Payees come from the transactions each capture read: each contact's lines on the account, net of tax and signed as the Profit and Loss shows them, with journal lines unattributed. When either month's capture has no transactions, causes say why; an account with lines in another currency is not explained from them, because the capture does not hold their base-currency amounts; and a line without an account keeps the missing-payee question from being asked. A QuickBooks month is never compared with a Xero month. When confirming a document, client memory checks proposed accounts against the newest snapshot's chart of accounts, including Xero's (an account is usable only while Xero marks it active).
 
 ## Approved journal posting
 
@@ -63,4 +63,4 @@ Balances after posting are not re-checked; the readback compares the journal's l
 
 ## Not included
 
-No complete-journal sync (complete Journals need Xero's Advanced tier), no corrections to invoices, bills or credit notes, and no cash-basis reports. Payee causes in changes from last month, the firm-wide Daily Books list and agent-prepared recurring comparisons stay QuickBooks-only for now. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.
+No complete-journal sync (complete Journals need Xero's Advanced tier), no corrections to invoices, bills or credit notes, and no cash-basis reports. Agent-prepared recurring comparisons stay QuickBooks-only. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.

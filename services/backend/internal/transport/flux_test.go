@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -167,20 +168,37 @@ func TestFluxExplainsMovementsByPayee(t *testing.T) {
 	}
 
 	// Two Xero months compare revenue and expense accounts from each Trial Balance's month columns.
-	xeroMonth := func(closeID, period, sales, rent, bank string) {
+	xeroMonth := func(closeID, period, sales, rent, bank string, invoices ...string) {
 		t.Helper()
 		row := func(id, label, debit, credit string) string {
 			return `{"RowType":"Row","Cells":[{"Value":"` + label + `","Attributes":[{"Id":"account","Value":"` + id + `"}]},{"Value":"` + debit + `"},{"Value":"` + credit + `"},{"Value":"1.00"},{"Value":""}]}`
 		}
 		tb := `{"Reports":[{"ReportType":"TrialBalance","Rows":[{"RowType":"Header","Cells":[{"Value":"Account"},{"Value":"Debit"},{"Value":"Credit"},{"Value":"YTD Debit"},{"Value":"YTD Credit"}]},{"RowType":"Section","Rows":[` +
 			row("x-200", "Sales (200)", "", sales) + "," + row("x-469", "Rent (469)", rent, "") + "," + row("x-090", "Bank (090)", bank, "") + `]}]}]}`
-		payload := `{"organisation":{"Organisations":[{"BaseCurrency":"USD"}]},"accounts":{"Accounts":[{"AccountID":"x-200","Name":"Sales","Class":"REVENUE"},{"AccountID":"x-469","Name":"Rent","Class":"EXPENSE"},{"AccountID":"x-090","Name":"Bank","Class":"ASSET"}]},"trial_balance":` + tb + `}`
-		_, e := db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1',$3,'d',$4,'fixture',now()+interval '2 minutes')`, closeID, xero, period, payload)
+		transactions := ""
+		if invoices != nil {
+			transactions = `,"transactions":{"records":{"Invoices":[` + strings.Join(invoices, ",") + `]},"open":{}}`
+		}
+		payload := `{"date":"` + period + `-28","organisation":{"Organisations":[{"BaseCurrency":"USD"}]},"accounts":{"Accounts":[{"AccountID":"x-200","Name":"Sales","Class":"REVENUE"},{"AccountID":"x-469","Name":"Rent","Class":"EXPENSE"},{"AccountID":"x-090","Name":"Bank","Class":"ASSET"}]},"trial_balance":` + tb + transactions + `}`
+		_, e := db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1',$3,'d',$4,'fixture',now()+interval '2 minutes'+$5::interval)`, closeID, xero, period, payload, fmt.Sprintf("%d seconds", len(invoices)*10))
 		must(e)
 	}
 	xeroMonth(august, "2026-08", "4000.00", "1500.00", "100.00")
 	xeroMonth(september, "2026-09", "5000.00", "1500.00", "999.00")
 	if got = read(); got.State != "ready" || len(got.Changes) != 1 || got.Changes[0].Account != "Sales" || got.Changes[0].Change != "1000.00" || !strings.Contains(got.Changes[0].Causes, "Xero") {
-		t.Fatalf("two Xero months show the month's revenue and expense movements, without payees: %+v", got)
+		t.Fatalf("two Xero months show the month's revenue and expense movements; snapshots without transactions have no payees: %+v", got)
+	}
+	// With transactions, a Xero month explains the change by contact.
+	invoice := func(id, contact, currency, amount string) string {
+		return `{"Type":"ACCREC","InvoiceID":"` + id + `","Status":"AUTHORISED","Date":"2026-08-10T00:00:00","Contact":{"ContactID":"` + contact + `","Name":"` + contact + `"},"CurrencyCode":"` + currency + `","Total":` + amount + `,"LineItems":[{"AccountID":"x-200","LineAmount":` + amount + `}]}`
+	}
+	xeroMonth(august, "2026-08", "4000.00", "1500.00", "100.00", invoice("a-1", "Acme", "USD", "3000"), invoice("a-2", "Beta", "USD", "1000"))
+	xeroMonth(september, "2026-09", "5000.00", "1500.00", "999.00", invoice("s-1", "Acme", "USD", "3000"), invoice("s-2", "Gamma", "USD", "2000"))
+	if got = read(); got.State != "ready" || got.Changes[0].Causes != "" || len(got.Changes[0].New) != 1 || got.Changes[0].New[0].Name != "Gamma" || got.Changes[0].New[0].ThisMonth != "2000.00" || len(got.Changes[0].Missing) != 1 || got.Changes[0].Missing[0].Name != "Beta" || !got.Changes[0].Reconciled || len(got.Changes[0].Questions) != 1 {
+		t.Fatalf("Xero payees explain the change, signed as the Profit and Loss shows revenue: %+v", got)
+	}
+	xeroMonth(september, "2026-09", "5000.00", "1500.00", "999.00", invoice("s-1", "Acme", "USD", "3000"), invoice("s-2", "Gamma", "USD", "2000"), invoice("s-3", "Euro Ltd", "EUR", "10"))
+	if got = read(); got.Changes[0].Causes == "" || !strings.Contains(got.Changes[0].Causes, "another currency") {
+		t.Fatalf("an account with foreign-currency lines is not explained from them: %+v", got)
 	}
 }

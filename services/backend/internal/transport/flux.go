@@ -35,7 +35,7 @@ type payeeAmount struct {
 }
 
 // flux explains the largest movements in the Profit and Loss from last month's close to this one, from the payees behind them.
-// Each month uses its close's newest snapshot, from QuickBooks or Xero; Xero snapshots carry no payees.
+// Each month uses its close's newest snapshot, from QuickBooks or Xero; Xero payees come from the captured transactions.
 func flux(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -169,18 +169,39 @@ func flux(db *sql.DB) http.HandlerFunc {
 		for _, c := range changes {
 			ids = append(ids, c.id)
 		}
-		payeesNow, nowErr := quickbooks.PayeeActivity(this.gl, ids)
-		payeesBefore, beforeErr := quickbooks.PayeeActivity(last.gl, ids)
+		unavailable, foreign := "", map[string]bool{}
+		var payeesNow, payeesBefore map[string]quickbooks.Payees
+		if this.Source == "xero" {
+			var nowForeign, beforeForeign map[string]bool
+			var nowErr, beforeErr error
+			payeesNow, nowForeign, nowErr = xero.PayeeActivity(this.xero, ids)
+			payeesBefore, beforeForeign, beforeErr = xero.PayeeActivity(last.xero, ids)
+			switch {
+			case nowErr != nil:
+				unavailable = "This month's Xero capture: " + nowErr.Error()
+			case beforeErr != nil:
+				unavailable = "Last month's Xero capture: " + beforeErr.Error()
+			}
+			maps.Copy(foreign, nowForeign)
+			maps.Copy(foreign, beforeForeign)
+		} else {
+			var nowErr, beforeErr error
+			payeesNow, nowErr = quickbooks.PayeeActivity(this.gl, ids)
+			payeesBefore, beforeErr = quickbooks.PayeeActivity(last.gl, ids)
+			if nowErr != nil || beforeErr != nil {
+				unavailable = "The General Ledger could not be read by payee."
+			}
+		}
 		out := []map[string]any{}
 		for _, c := range changes {
 			item := map[string]any{"account_id": c.id, "account": c.name, "class": c.class, "this_month": c.now.FloatString(2), "last_month": c.before.FloatString(2), "change": c.delta.FloatString(2)}
-			if this.Source == "xero" {
-				item["causes_unavailable"] = "Xero month-end snapshots carry no payee detail."
+			if foreign[c.id] && unavailable == "" {
+				item["causes_unavailable"] = "Some of this account's transactions are in another currency, and the capture does not hold their base-currency amounts."
 				out = append(out, item)
 				continue
 			}
-			if nowErr != nil || beforeErr != nil {
-				item["causes_unavailable"] = "The General Ledger could not be read by payee."
+			if unavailable != "" {
+				item["causes_unavailable"] = unavailable
 				out = append(out, item)
 				continue
 			}

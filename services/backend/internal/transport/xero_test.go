@@ -65,7 +65,12 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	t.Setenv("SECRETS_KEY", strings.Repeat("cd", 32))
 
 	access := func(n string) string {
-		claims, _ := json.Marshal(map[string]string{"authentication_event_id": "event-now", "n": n})
+		fields := map[string]string{"authentication_event_id": "event-now", "n": n}
+		// The last rotated token carries the transaction read scopes.
+		if n == "refresh-3" {
+			fields["scope"] = "accounting.invoices.read accounting.payments.read accounting.banktransactions.read accounting.manualjournals"
+		}
+		claims, _ := json.Marshal(fields)
 		return "e30." + base64.RawURLEncoding.EncodeToString(claims) + ".sig"
 	}
 	var tenantHeaders, dates, refreshes []string
@@ -111,6 +116,13 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 				map[string]any{"RowType": "Header", "Cells": []any{map[string]string{"Value": "Account"}, map[string]string{"Value": "Debit"}, map[string]string{"Value": "Credit"}, map[string]string{"Value": "YTD Debit"}, map[string]string{"Value": "YTD Credit"}}},
 				map[string]any{"RowType": "Section", "Rows": []any{map[string]any{"RowType": "Row", "Cells": []any{map[string]any{"Value": "Business Bank Account (090)", "Attributes": []any{map[string]string{"Id": "account", "Value": "a-090"}}}, map[string]string{"Value": "10.00"}, map[string]string{"Value": ""}, map[string]string{"Value": "1250.00"}, map[string]string{"Value": ""}}}}},
 			}}}})
+		}
+		if endpoint := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]; map[string]bool{"Invoices": true, "CreditNotes": true, "BankTransactions": true, "ManualJournals": true, "Payments": true, "Overpayments": true, "Prepayments": true}[endpoint] {
+			records := []any{}
+			if endpoint == "Invoices" && r.URL.Query().Get("Statuses") == "AUTHORISED" {
+				records = append(records, map[string]any{"Type": "ACCPAY", "InvoiceID": "b-1", "InvoiceNumber": "B-1", "Status": "AUTHORISED", "Date": "2026-08-01T00:00:00", "DueDate": "2026-09-01T00:00:00", "Contact": map[string]string{"ContactID": "c-1", "Name": "Harbor Insurance"}, "CurrencyCode": "NZD", "AmountDue": 80})
+			}
+			return reply(200, map[string]any{endpoint: records, "pagination": map[string]int{"page": 1, "pageSize": 1000, "itemCount": len(records)}})
 		}
 		return reply(404, map[string]string{})
 	})
@@ -188,7 +200,39 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	if strings.Join(refreshes, ",") != "refresh-1,refresh-2" || stored.Refresh != "refresh-3" {
 		t.Fatalf("each rotated refresh token is saved before use: %v %s", refreshes, stored.Refresh)
 	}
-	call("user_accountant", october, map[string]any{"action": "snapshot", "connection_id": id, "confirmed": true}, 200)
+	// Saving a snapshot waits on the close lock Daily books' Mark reviewed takes (through its foreign key).
+	holder, err := db.Begin()
+	must(err)
+	defer holder.Rollback()
+	var holderPID string
+	must(holder.QueryRow(`SELECT pg_backend_pid()::text FROM client_closes WHERE id=$1 FOR UPDATE`, october).Scan(&holderPID))
+	saved := make(chan int)
+	go func() {
+		raw, _ := json.Marshal(map[string]any{"action": "snapshot", "connection_id": id, "confirmed": true})
+		r := httptest.NewRequest("POST", "/v1/closes/"+october+"/xero", bytes.NewReader(raw))
+		r.Header.Set("Content-Type", "application/json")
+		r = r.WithContext(auth.WithActor(r.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_accountant"}, Organization: org, Permissions: []string{"clients:all", "integrations:manage"}}))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		saved <- w.Code
+	}()
+	for deadline, waiting := time.Now().Add(10*time.Second), 0; waiting == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the snapshot never waited on the held close lock")
+		}
+		must(db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))`, holderPID).Scan(&waiting))
+	}
+	must(holder.Commit())
+	if code := <-saved; code != 200 {
+		t.Fatalf("the snapshot is saved once the lock is released: %d", code)
+	}
+	// Each snapshot records the findings of its transactions when it has them.
+	var unread int
+	var septemberFindings, octoberFindings string
+	must(db.QueryRow(`SELECT (SELECT count(*) FROM xero_snapshots WHERE close_id=$1 AND exceptions IS NULL),(SELECT exceptions::text FROM xero_snapshots WHERE close_id=$1 ORDER BY id DESC LIMIT 1),(SELECT exceptions::text FROM xero_snapshots WHERE close_id=$2 ORDER BY id DESC LIMIT 1)`, september, october).Scan(&unread, &septemberFindings, &octoberFindings))
+	if unread != 2 || septemberFindings != "[]" || !strings.Contains(octoberFindings, "past_due_payable") || !strings.Contains(octoberFindings, "outside Xero") {
+		t.Fatalf("snapshots without transactions record no findings; with them, the overdue bill is recorded in Xero's words: %d %s %s", unread, septemberFindings, octoberFindings)
+	}
 
 	// The worker captures an open current-month close once a day under its own name, one attempt per close a day.
 	if err = db.QueryRow(`SELECT id::text FROM client_closes WHERE organization_id=$1 AND entity='Xero client' AND period=$2`, org, time.Now().UTC().Format("2006-01")).Scan(&due); err == sql.ErrNoRows {

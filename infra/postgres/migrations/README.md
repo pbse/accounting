@@ -53,3 +53,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `060_xero_posting.sql` adds the per-client Xero posting grant and the saved manual journal intent/attempt, with row-level security like 048. Apply after 059 with API/worker stopped; `/readyz` checks it.
 
 `061_stripe_reports.sql` adds a client's confirmed Stripe connection (restricted, report-scoped key, sealed) and each month's itemized payout reconciliation report run, with row-level security like 048. Apply after 060 with API/worker stopped; `/readyz` checks it.
+
+`062_xero_daily.sql` records the findings of each Xero snapshot's transactions and lets a close's Daily books review point at a Xero snapshot instead of a QuickBooks capture (exactly one of the two). Apply after 061 with API/worker stopped; `/readyz` checks it.

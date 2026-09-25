@@ -356,7 +356,7 @@ export function Work({
   );
 }
 
-type Daily = { close_id: string; entity: string; period: string; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[] };
+type Daily = { close_id: string; entity: string; period: string; source: "quickbooks" | "xero"; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[] };
 
 // New exceptions from this and last month's captures since each client was last reviewed.
 function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () => void }) {
@@ -377,7 +377,7 @@ function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () =
   async function reviewed(item: Daily) {
     setBusy(item.close_id);
     try {
-      await workspaceRequest(`/${item.close_id}/daily-review`, { sync_id: item.sync_id });
+      await workspaceRequest(`/${item.close_id}/daily-review`, { sync_id: item.sync_id, source: item.source });
       onReviewed();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The review could not be saved.");
@@ -391,7 +391,7 @@ function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () =
     <>
       <div className="section-title" id="daily-books">
         <h2>Daily books</h2>
-        <small>New since each client's last review. Captures refresh daily and after QuickBooks changes.</small>
+        <small>New since each client's last review. QuickBooks and Xero captures refresh daily, and QuickBooks also after a change.</small>
       </div>
       <div className="rows" aria-label="Daily books">
         {!items && !error && <p role="status" className="empty">Checking captures…</p>}
