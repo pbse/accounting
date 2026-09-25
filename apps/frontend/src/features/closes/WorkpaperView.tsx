@@ -17,6 +17,7 @@ import type { Source } from "./Evidence";
 import type { Plan } from "./Planning";
 import { Posting, ProductionPosting } from "./Posting";
 import { ReviewDecision } from "./ReviewDecision";
+import { StandingApproval } from "./StandingApproval";
 import { VendorCredit } from "./VendorCredit";
 import { scheduleTerms } from "../prepaids/MethodFields";
 import { money, workspaceRequest } from "./workspace";
@@ -359,6 +360,7 @@ export default function WorkpaperView() {
             }}
             autoLoad
           />
+          {saved.kind === "prepaid" && <StandingApproval key={`standing-${saved.id}-${saved.review_state}`} closeId={close.id} paperId={saved.id} approved={saved.review_state === "approved"} />}
           <details>
             <summary>Original inputs and full calculation</summary>
             <pre>{JSON.stringify(saved.paper, null, 2)}</pre>
