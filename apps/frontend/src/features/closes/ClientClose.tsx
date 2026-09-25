@@ -7,6 +7,7 @@ import { CarryForward } from "./CarryForward";
 import { Coordinator } from "./Coordinator";
 import { EmailReplies } from "./EmailReplies";
 import { Aging } from "./Aging";
+import { Matching } from "./Matching";
 import { Exceptions } from "./Exceptions";
 import { Flux } from "./Flux";
 import { TieOut } from "./TieOut";
@@ -224,6 +225,7 @@ export default function ClientClose() {
           <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
           <Aging key={`aging-${close.id}`} closeId={close.id} />
+          <Matching key={`matching-${close.id}`} closeId={close.id} />
           <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
           <Flux key={`flux-${close.id}`} closeId={close.id} />
           <EmailReplies closeId={close.id} onReleased={() => void reload()} />
