@@ -34,5 +34,6 @@ func main() {
 	go transport.RunComparisons(ctx, db)
 	go transport.RunReplays(ctx, db)
 	go transport.RunXeroRefresh(ctx, db)
+	go transport.RunStripeReports(ctx, db)
 	transport.Run(transport.Worker())
 }

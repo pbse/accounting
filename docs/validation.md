@@ -1095,3 +1095,47 @@ Tests (PostgreSQL, mocked Xero), `TestApprovedDraftPostsOnceToXero`:
 `TestNetRefusesAnAccountListedTwice` covers the strict balance reading. Each check was observed red with its rule removed (24 mutations).
 
 Not verified: a live Xero organisation. Xero's acceptance of an AccountID-only, no-tax, immediately POSTED journal, lock-date behavior, readback timing, and granular-scope enforcement need a scoped live check before enabling any kind. Not tested because they cover races only: the connection and grant locks at reservation, and the in-transaction freshness recheck.
+
+## Live Stripe payout reconciliation (2026-09-25)
+
+Author: Claude Opus 5.5. Migration 061. The settlement workflow can now fetch the close month's itemized payout reconciliation from the client's Stripe account instead of a download and upload. The existing recognition, tracing and settlement flow is unchanged.
+
+- **Key and account:** a restricted, report-scoped key (secret keys refused), sealed and covered by key rotation. A person confirms the Stripe account's identity before use.
+- **Capture:** the request intent and a Stripe idempotency key are saved before the call. A lost answer is re-asked with the same key, and a repeated click reuses the month's report in progress.
+- **Worker:** claims expire after five minutes. Downloads come only from `files.stripe.com`, with no redirects, and are checked against the evidence and settlement limits and the parser's columns. Evidence and the same intake job as an upload are saved in one transaction.
+- **Disconnect and deletion:** disconnecting ends pending reports, and close deletion knows the new tables.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- confirming the account identity, and calling the key report-scoped;
+- a recoverable capture intent with an idempotency key;
+- the size and row limits;
+- the download host guard;
+- disconnect and key rotation;
+- dropping the two unused columns and keeping one completion path.
+
+Code review: GPT-6 Sol (high). Adopted:
+
+- the connection is bound to the close's client;
+- only the request that saved the intent calls Stripe, and an in-progress month skips the account check;
+- the evidence-limit failure is written in the same transaction, which avoided a self-deadlock;
+- an unexpected file location, and any definitive download refusal, end the run. Writing the test exposed that the worker kept such a refusal waiting; that is fixed;
+- only a confirmed inactive connection fails a run, while a missing server key or database error waits;
+- Stripe 429 and 409 are temporary, and a persistent intake failure (the firm's job limit) shows a waiting reason;
+- identical evidence with another purpose is refused, as in uploads.
+
+Tests (PostgreSQL, mocked Stripe), `TestStripeReportArrivesAsRecognizedEvidence`:
+
+- A secret key is refused. A checked key waits for confirmation and is stored only sealed.
+- Capture is refused before confirmation, before Stripe's data covers the month, and for a key now on another account.
+- One run is requested with an idempotency key and the September UTC interval, and a repeat reuses it.
+- A pending report is not downloaded and is checked again about a minute later. A finished report is saved once, and its intake job recognizes it as the Stripe export.
+- Stripe's refusal is shown. A failed report and a report without the columns fail with the reason, and a lost answer is re-asked with its own key.
+- A foreign file location receives no request and ends the run.
+- Temporary conditions keep a report waiting: a wrong server key, and the firm's job limit (with its reason). Evidence saved with another purpose and a full close end it.
+- A rate-limited request stays requesting, and another client's connection is refused.
+- Disconnecting clears the key and ends reports in progress.
+
+Each check was observed red with its rule removed (19 mutations). The two guards against concurrent captures (in-progress check, inserting request only) each cover a race and have no deterministic test.
+
+Not verified: a live Stripe account, including restricted-key permission combinations, account-details access with that key, a real report's size and timing, and test-mode availability of this report type.

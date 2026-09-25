@@ -16,6 +16,7 @@ import { Procedures } from "./Procedures";
 import { ProductionAccess } from "./ProductionAccess";
 import { QuickBooks } from "./QuickBooks";
 import { Xero } from "./Xero";
+import { Stripe } from "./Stripe";
 import { Readiness } from "./Readiness";
 import { Recurring } from "./Recurring";
 import { Replay } from "./Replay";
@@ -283,6 +284,7 @@ export default function ClientClose() {
           <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
           <QuickBooks key={`qbo-${close.id}`} closeId={close.id} entity={close.entity} />
           <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} />
+          <Stripe key={`stripe-${close.id}`} closeId={close.id} entity={close.entity} />
         </div>
       )}
       {tab === "requests" && <Requests closeId={close.id} papers={papers} />}
