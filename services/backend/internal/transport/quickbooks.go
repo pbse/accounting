@@ -363,53 +363,14 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			started := time.Now()
-			name, e := quickbooks.CompanyFor(ctx, environment, realm, credentials.Access)
-			if e != nil {
-				readFail(e.Error())
-				return
-			}
-			if name != company {
-				readFail("Company identity changed. Disconnect and confirm the company again.")
-				return
-			}
-			accounts, e := quickbooks.Accounts(ctx, environment, realm, credentials.Access)
-			if e != nil {
-				readFail(e.Error())
-				return
-			}
-			snapshot := map[string]any{"environment": environment, "realm": realm, "company_name": company, "accounts": accounts, "started_at": started, "completed_at": time.Now(), "scope": "Account records only; current balances are not a period-end ledger or atomic read."}
-			var evidence []byte
+			reportPeriod := ""
 			if in.Action == "period_snapshot" {
-				reports, readErr := quickbooks.PeriodReports(ctx, environment, realm, credentials.Access, period)
-				if readErr != nil {
-					readFail(readErr.Error())
-					return
-				}
-				coverage, readErr := quickbooks.Coverage(accounts, reports)
-				if readErr != nil {
-					readFail("Account coverage could not be read.")
-					return
-				}
-				snapshot["period"], snapshot["basis"], snapshot["reports"], snapshot["coverage"] = period, "Accrual", reports, coverage
-				snapshot["completed_at"] = time.Now()
-				snapshot["scope"] = "Sequential account and period report reads, not an atomic or independently verified complete ledger. TransactionList contains reported transactions, not full transaction entities. Account CurrentBalance is current, not month-end. Coverage is proposed evidence needs, never approval or completeness."
-				full, marshalErr := json.Marshal(snapshot)
-				if marshalErr != nil || len(full) > 18*1024*1024 {
-					readFail("Period reports exceed the 18 MiB supported snapshot size. No partial ledger was saved.")
-					return
-				}
-				evidence = full
-				if len(full) > 96*1024 {
-					index := map[string]any{"environment": environment, "realm": realm, "company_name": company, "period": period, "basis": "Accrual", "coverage_item_count": len(coverage), "report_sizes": map[string]int{}, "scope": "Full reports are stored in the immutable snapshot, not this index. Account-scoped ledger pages must be selected separately; no complete ledger or balance is certified."}
-					for name, report := range reports {
-						index["report_sizes"].(map[string]int)[name] = len(report)
-					}
-					evidence, e = json.Marshal(index)
-					if e != nil {
-						readFail("Could not prepare the ledger evidence index.")
-						return
-					}
-				}
+				reportPeriod = period
+			}
+			snapshot, evidence, e := quickbooks.ReadSnapshot(ctx, environment, realm, credentials.Access, company, reportPeriod, started)
+			if e != nil {
+				readFail(e.Error())
+				return
 			}
 			payload, _ := json.Marshal(snapshot)
 			tx, e := db.BeginTx(ctx, nil)

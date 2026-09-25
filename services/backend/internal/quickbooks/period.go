@@ -328,3 +328,49 @@ func selectLedger(accounts, report json.RawMessage, accountID string, offset int
 	}
 	return page, nil
 }
+
+// ReadSnapshot reads accounts and, for a period, month-end reports plus the evidence to cite (an index above 96 KiB).
+func ReadSnapshot(ctx context.Context, env, realm, token, company, period string, started time.Time) (map[string]any, []byte, error) {
+	name, err := CompanyFor(ctx, env, realm, token)
+	if err != nil {
+		return nil, nil, err
+	}
+	if name != company {
+		return nil, nil, fmt.Errorf("Company identity changed. Disconnect and confirm the company again.")
+	}
+	accounts, err := Accounts(ctx, env, realm, token)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshot := map[string]any{"environment": env, "realm": realm, "company_name": company, "accounts": accounts, "started_at": started, "completed_at": time.Now(), "scope": "Account records only; current balances are not a period-end ledger or atomic read."}
+	if period == "" {
+		return snapshot, nil, nil
+	}
+	reports, err := PeriodReports(ctx, env, realm, token, period)
+	if err != nil {
+		return nil, nil, err
+	}
+	coverage, err := Coverage(accounts, reports)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Account coverage could not be read.")
+	}
+	snapshot["period"], snapshot["basis"], snapshot["reports"], snapshot["coverage"] = period, "Accrual", reports, coverage
+	snapshot["completed_at"] = time.Now()
+	snapshot["scope"] = "Sequential account and period report reads, not an atomic or independently verified complete ledger. TransactionList contains reported transactions, not full transaction entities. Account CurrentBalance is current, not month-end. Coverage is proposed evidence needs, never approval or completeness."
+	full, err := json.Marshal(snapshot)
+	if err != nil || len(full) > 18*1024*1024 {
+		return nil, nil, fmt.Errorf("Period reports exceed the 18 MiB supported snapshot size. No partial ledger was saved.")
+	}
+	if len(full) <= 96*1024 {
+		return snapshot, full, nil
+	}
+	index := map[string]any{"environment": env, "realm": realm, "company_name": company, "period": period, "basis": "Accrual", "coverage_item_count": len(coverage), "report_sizes": map[string]int{}, "scope": "Full reports are stored in the immutable snapshot, not this index. Account-scoped ledger pages must be selected separately; no complete ledger or balance is certified."}
+	for name, report := range reports {
+		index["report_sizes"].(map[string]int)[name] = len(report)
+	}
+	evidence, err := json.Marshal(index)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Could not prepare the ledger evidence index.")
+	}
+	return snapshot, evidence, nil
+}

@@ -628,3 +628,23 @@ Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. I
   - Observed red without latest-version drafts, without the null-safe blocker check, without the unreadable-source state, without naming unchecked areas in the headline, without the approve need, when provisional counts include differing rows, without balance questions, without the confirmation state, without the stale check, without the sign-off, no-evidence and post-entries actions, without the unreadable Trial Balance state, and without the failed balance check.
 - `TestMCPToolsUseTheSignedInPersonsAccess` now lists `close_brief` and `tie_out`.
 
+## The first month-end snapshot captures itself (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- re-checking the period, the ended month, sign-off, "no period snapshot yet" and the snapshot limit under the close lock;
+- a separate three-minute budget after the transaction capture, with a failed read left for the next scheduled capture;
+- binding organization, client, company and reading connection in one join, repeated under the lock;
+- tests for a person's capture that wins the race and for another firm's close.
+
+The period-report assembly was extracted once (`quickbooks.ReadSnapshot`) and the manual handler uses it unchanged; `TestQuickBooksScopedOAuthRefreshAndSnapshots` still passes.
+
+- `TestTheFirstEndedMonthSnapshotIsCapturedOnce` (PostgreSQL, provider mocked):
+  - Last month's close gets exactly one period snapshot with reports and coverage. Its evidence is recorded as `scheduled-quickbooks-refresh`.
+  - A second attempt makes no provider read.
+  - The current month, a signed-off month and another firm's close are not read.
+  - A changed company name saves nothing.
+  - A person's snapshot saved during the read wins.
+  - Observed red without the signed-off check, the "no period snapshot" check, the ended-month check, the locked re-check, the company check and the evidence link.
+- Not covered by a test: the five-line call from `ProcessSync` after a completed transaction capture. It runs `captureFirstPeriod` with the sync's own refreshed credentials.
+

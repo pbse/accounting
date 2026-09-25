@@ -263,6 +263,13 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 		if err == nil {
 			err = completeSync(work, db, job, capture)
 		}
+		if err == nil {
+			reports, done := context.WithTimeout(ctx, 3*time.Minute)
+			if e := captureFirstPeriod(reports, db, job, environment, realm, token); e != nil {
+				log.Printf("Month-end snapshot for close %s was not captured; the next scheduled sync retries: %v", job.closeID, e)
+			}
+			done()
+		}
 	}
 	if err != nil {
 		state := "queued"
@@ -277,6 +284,77 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 		return true, saveErr
 	}
 	return true, nil
+}
+
+// firstPeriod binds an ended, unsigned month with no period snapshot to the connection its transactions came from.
+var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_closes c
+ JOIN organizations o ON o.id=c.organization_id AND o.enabled
+ JOIN quickbooks_connections x ON x.id=$2 AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.id=` + ReadingConnection("c.id") + `
+ WHERE c.id=$1 AND c.period=$3 AND c.period<to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ AND NOT EXISTS (SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period')
+ AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id)<20`
+
+// captureFirstPeriod saves an ended month's first period snapshot; a person's capture or refresh is never replaced.
+func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environment, realm, token string) error {
+	var org, entity, company string
+	err := db.QueryRowContext(ctx, firstPeriod, job.closeID, job.connectionID, job.period).Scan(&org, &entity, &company)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	started := time.Now()
+	snapshot, evidence, err := ReadSnapshot(ctx, environment, realm, token, company, job.period, started)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Same lock order as a person's capture, so the two never wait on each other's row locks.
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1||'/'||lower($2)))`, org, entity); err == nil {
+		if _, err = tx.ExecContext(ctx, `SELECT 1 FROM quickbooks_connections WHERE id=$1 FOR UPDATE`, job.connectionID); err == nil {
+			_, err = tx.ExecContext(ctx, `SELECT 1 FROM client_closes WHERE id=$1 FOR UPDATE`, job.closeID)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	var lockedOrg, lockedEntity, lockedCompany string
+	err = tx.QueryRowContext(ctx, firstPeriod, job.closeID, job.connectionID, job.period).Scan(&lockedOrg, &lockedEntity, &lockedCompany)
+	if err == sql.ErrNoRows || err == nil && (lockedOrg != org || lockedEntity != entity || lockedCompany != company) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var count, size int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, job.closeID).Scan(&count, &size); err != nil {
+		return err
+	}
+	if count >= 100 || size+len(evidence) > 20*1024*1024 {
+		return errors.New("close evidence capacity cannot hold the period snapshot")
+	}
+	var sourceID string
+	if err = tx.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,'scheduled-quickbooks-refresh') RETURNING id::text`, job.closeID, "QuickBooks "+job.period+" accrual period evidence.txt", fmt.Sprintf("%x", sha256.Sum256(evidence)), string(evidence)).Scan(&sourceID); err != nil {
+		return err
+	}
+	snapshot["source_id"] = sourceID
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,$3,encode(sha256(convert_to($4::jsonb::text,'UTF8')),'hex'),$4,$5,'scheduled-quickbooks-refresh')`, job.closeID, job.connectionID, realm, string(payload), started); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai'`, job.closeID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func RunSync(ctx context.Context, db *sql.DB) {
