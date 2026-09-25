@@ -174,3 +174,61 @@ func TestStripeFeeEntryCoversFeesOfPayoutsDepositedThisMonth(t *testing.T) {
 		}
 	}
 }
+
+const payoutsHeader = "balance_transaction_id,currency,description,effective_at,fee,gross,net,payout_expected_arrival_date,payout_id,payout_status,reporting_category\n"
+
+func TestManualAndInstantPayoutsAreTracedToTheirDeposits(t *testing.T) {
+	report := payoutsHeader + strings.Join([]string{
+		"txn_p1,usd,STRIPE PAYOUT,2026-09-02 10:00:00,0.00,-125.05,-125.05,2026-09-03,po_M1,paid,payout",
+		"txn_p2,usd,Instant payout,2026-09-11 09:00:00,0.00,-126.90,-126.90,2026-09-11,po_I1,paid,payout",
+		"txn_p3,usd,STRIPE PAYOUT,2026-09-20 10:00:00,0.00,-300.00,-300.00,2026-09-22,po_F1,failed,payout",
+		"txn_p4,usd,Payout failure,2026-09-23 10:00:00,0.00,300.00,300.00,2026-09-22,po_F1,failed,payout_reversal",
+		"txn_p5,usd,STRIPE PAYOUT,2026-09-30 10:00:00,0.00,-40.00,-40.00,2026-10-05,po_T1,in_transit,payout",
+		"txn_p6,usd,STRIPE PAYOUT,2026-09-11 11:00:00,0.00,-126.90,-126.90,2026-09-12,po_F2,failed,payout",
+	}, "\n") + "\n"
+	in := settlementInput(report)
+	in.Method = PayoutsMethod
+	paper, err := PrepareSettlement(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]string{}
+	for _, p := range paper.Payouts {
+		status[p.ID] = p.Status + " " + p.Net
+		if p.Deposit != nil {
+			status[p.ID] += " " + p.Deposit.ID
+		}
+	}
+	if paper.Method != PayoutsMethod || status["po_M1"] != "matched 125.05 B1" || status["po_I1"] != "matched 126.90 B2" || status["po_F1"] != "failed 300.00" || status["po_F2"] != "failed 126.90" || status["po_T1"] != "unmatched 40.00" || len(paper.Categories) != 0 {
+		t.Fatalf("each payout is traced to its deposit; a failed one expects none, even without its reversal in the file, and claims no deposit: %+v", status)
+	}
+	questions := strings.Join(paper.Questions, " ")
+	if len(paper.Blockers) != 1 || !strings.Contains(paper.Blockers[0], "po_T1") || !strings.Contains(questions, "po_F1 ($300.00) as failed or canceled, so no deposit is expected; the file shows its funds returned") || !strings.Contains(questions, "po_F2 ($126.90) as failed or canceled, so no deposit is expected; its return is not in this file") || !strings.Contains(questions, "traced as payouts only") {
+		t.Fatalf("an untraced payout blocks; the failed one and the limit of the method are questions: %v %v", paper.Blockers, paper.Questions)
+	}
+	// A payout expected early next month matches a deposit up to four days after its arrival.
+	late := in
+	late.BankCSV += "\nB9,2026-10-06,40.00"
+	if paper, err = PrepareSettlement(late); err != nil || len(paper.Blockers) != 0 || paper.Payouts[len(paper.Payouts)-1].Deposit == nil || paper.Payouts[len(paper.Payouts)-1].Deposit.ID != "B9" {
+		t.Fatalf("a deposit on the sixth of next month matches the payout expected on the fifth: %v %+v", err, paper.Blockers)
+	}
+	late.ReviewedDeposits = []ReviewedDeposit{{PayoutID: "po_F2", BankID: "B2", Reason: "Same amount as the deposit"}}
+	if _, err = PrepareSettlement(late); err == nil {
+		t.Fatal("a failed payout cannot take a bank row through review")
+	}
+	in.FeeEntry = &FeeEntry{FeeAccount: "Stripe fees", DepositAccount: "Sales", BookedFees: "0", RuleReference: "Rule 4.2"}
+	if _, err = PrepareSettlement(in); err == nil || !strings.Contains(err.Error(), "fee entry") {
+		t.Fatalf("a fee entry needs per-payout fees: %v", err)
+	}
+	for name, bad := range map[string]string{
+		"a positive payout row":          strings.Replace(report, "-125.05,-125.05", "125.05,125.05", 1),
+		"funds leaving in another month": strings.Replace(report, "2026-09-02 10:00:00", "2026-08-30 10:00:00", 1),
+		"an automatic-payout export":     stripeReport(settlementRows...),
+	} {
+		changed := settlementInput(bad)
+		changed.Method = PayoutsMethod
+		if _, err = PrepareSettlement(changed); err == nil {
+			t.Fatalf("%s is refused", name)
+		}
+	}
+}

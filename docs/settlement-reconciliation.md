@@ -18,11 +18,12 @@ Without a close, **Trace Stripe payouts** in the navigation previews local files
 ## Accounting boundary
 
 - Payouts come only from Stripe's `automatic_payout_id`. Rows without one, such as manual or instant payouts, are listed and block approval. They're never assigned to a payout by amount.
+- **Every payout from the Payouts report** (method `stripe_payouts_v1`), the way to trace manual and instant payouts. Stripe's itemized Payouts report (Reports → Balance → Payouts → Export → Itemized) lists every payout, whatever its schedule, so a month with automatic and instant payouts is traced whole this way, without transaction lineage. Each payout whose funds left the balance in the month is traced by its own amount and expected arrival to a bank row carrying exactly that amount, with the same one-day-before to four-days-after window, review and in-transit steps as automatic payouts; the bank file may run to four days after the last expected arrival. A payout Stripe reports as failed or canceled keeps its amount, expects no deposit, cannot be given one by review, and is a question that says whether its return is in the file. Payout rows must be negative and reversals positive, as Stripe exports them. Stripe cannot say which transactions a manual or instant payout settles, so no categories, fee entry or lineage are shown, and the month's activity must be reconciled separately from Stripe's Balance report: this workpaper does not do that.
 - Matching uses exact cents. A candidate is a lead until an accountant approves the workpaper. A deposit dated after month-end is labeled as such.
 - Categories outside charges, refunds, disputes and fees are shown for review. The totals still tie.
 - By default no journal is proposed. When the client books Stripe deposits net of fees and their accountant's rule says to record fees as an expense, choose **Stripe fee entry**: name the fee expense account, the account the net deposits were booked to, the fees already booked this month (zero explicitly) and the rule reference. Only payouts matched or reviewed to a bank deposit dated within the close month count; their fees are the per-transaction fees plus Stripe fees charged as their own `fee` rows. Fees of payouts in transit or deposited outside the month are named and left for the month their deposit is booked; fees of payouts not yet traced are named separately. The month-end draft entry debits fees and credits the deposit account for the difference from what is booked (reversed if more was booked) and appears only when every payout is traced. The review package states the entry and rule, and an approved entry is part of the year-end adjustment history. Revenue, refund and dispute entries are not proposed.
 - Once the settlement is approved, its fee entry can post to the client's production QuickBooks company under a production grant that covers **Stripe fee entries** (`settlement` in `PRODUCTION_POSTING_KINDS`), with the same preview, approval and readback as other entries. A newer draft of the same Stripe report supersedes it.
-- Out of scope: Stripe's Balance or ending-balance reports, non-USD, Connect platforms, and Stripe MCP access.
+- Out of scope: reconciling activity from Stripe's Balance or ending-balance reports, non-USD, Connect platforms, and Stripe MCP access.
 
 ## Live Stripe
 
@@ -37,7 +38,7 @@ Instead of downloading and uploading the report, **Stripe payout reconciliation*
    - A report Stripe cannot produce, one that is too large, or one missing columns fails with the reason. Download that one from Stripe in parts and upload it.
 6. **Disconnect.** Disconnecting clears the key and ends reports still in progress. Deleting the close that opened the connection waits until it is disconnected.
 
-Set `SECRETS_KEY` on the API and the worker. Manual and instant payouts and revenue or refund entries remain out of scope.
+Set `SECRETS_KEY` on the API and the worker. The live capture fetches the automatic-payout report only; upload the Payouts report for manual or instant payouts.
 
 ## Setup and recovery
 

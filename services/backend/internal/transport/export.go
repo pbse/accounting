@@ -461,8 +461,17 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			if e := paper.Proposal; e != nil {
 				entry = fmt.Sprintf("Proposed fee entry under %s: debit %s, credit %s, %s on %s.", paper.Input.FeeEntry.RuleReference, e.DebitAccount, e.CreditAccount, ledger.Show(e.Amount, paper.Input.Currency), e.Date)
 			}
-			summary.Issues = append(append([]string{paper.Input.Currency + " Stripe automatic payouts traced to " + paper.Input.BankAccount + ". Matched deposits are candidates until this workpaper is approved; in-transit payouts cite an accountant rule. " + entry}, paper.Blockers...), paper.Questions...)
+			traced := " Stripe automatic payouts, with the transactions in each, traced to "
+			if paper.Method == reconciliation.PayoutsMethod {
+				traced = " Stripe payouts from the Payouts report, without their transactions, traced to "
+			}
+			summary.Issues = append(append([]string{paper.Input.Currency + traced + paper.Input.BankAccount + ". Matched deposits are candidates until this workpaper is approved; in-transit payouts cite an accountant rule. " + entry}, paper.Blockers...), paper.Questions...)
+			// The Payouts report gives each payout's amount only: no transactions, gross or fees.
+			lineage := paper.Method != reconciliation.PayoutsMethod
 			records := [][]string{{"Payout", "Expected", "Transactions", "Gross " + paper.Input.Currency, "Fee " + paper.Input.Currency, "Net " + paper.Input.Currency, "Status", "Bank row", "Bank date", "After month-end", "Candidates", "Rule", "Reason"}}
+			if !lineage {
+				records = [][]string{{"Payout", "Expected arrival", "Amount " + paper.Input.Currency, "Status", "Bank row", "Bank date", "After month-end", "Candidates", "Rule", "Reason"}}
+			}
 			for _, payout := range paper.Payouts {
 				row, date, late := "", "", ""
 				if payout.Deposit != nil {
@@ -471,10 +480,17 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 						late = "yes"
 					}
 				}
-				records = append(records, []string{csvText(payout.ID), payout.ExpectedDate, fmt.Sprint(payout.Count), payout.Gross, payout.Fee, payout.Net, payout.Status, csvText(row), date, late, csvText(strings.Join(payout.CandidateIDs, "; ")), csvText(payout.Policy), csvText(payout.Reason)})
+				if lineage {
+					records = append(records, []string{csvText(payout.ID), payout.ExpectedDate, fmt.Sprint(payout.Count), payout.Gross, payout.Fee, payout.Net, payout.Status, csvText(row), date, late, csvText(strings.Join(payout.CandidateIDs, "; ")), csvText(payout.Policy), csvText(payout.Reason)})
+				} else {
+					records = append(records, []string{csvText(payout.ID), payout.ExpectedDate, payout.Net, payout.Status, csvText(row), date, late, csvText(strings.Join(payout.CandidateIDs, "; ")), csvText(payout.Policy), csvText(payout.Reason)})
+				}
 			}
 			if err = csvFile(root+"-payouts.csv", records); err != nil {
 				return nil, err
+			}
+			if !lineage {
+				break
 			}
 			records = [][]string{{"Stripe category", "Transactions", "Gross " + paper.Input.Currency, "Fee " + paper.Input.Currency, "Net " + paper.Input.Currency}}
 			for _, category := range append(paper.Categories, paper.Total) {
