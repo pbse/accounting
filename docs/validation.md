@@ -574,3 +574,10 @@ Author: Claude Opus 5.5. Migration 053. Review: GPT-6 Sol (medium) plan review; 
 - Not covered by an end-to-end test: the production supplier-credit route (its account, currency and grant rules are covered at the QuickBooks layer), its sign-off recheck under the close lock (code review finding; the sandbox route lacked it too), and the grant recheck under the attempt lock (a race).
 
 - `TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant` (PostgreSQL) now posts an approved settlement's 29.22 fee entry: refused until `settlement` is in `PRODUCTION_POSTING_KINDS`, refused while a newer draft of the same Stripe report exists, then previewed as Stripe fees 10.00 → 39.22 and Sales 5,000.00 → 5,029.22, approved, posted once and verified. The newer draft cites the same Stripe report file under a different location and is still recognized, because settlements are keyed on the report evidence (code review finding). Observed red without the kind, without the settlement entries and without the report-file match.
+
+## Sign-off carries the month forward (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Plan and code reviewed together (small change); adopted a distinct carry failure in the sign-off reply, "queued" wording and the standard library's response recorder.
+
+- `TestCarryForwardRoundingLineageAndFreshReview` now signs off the origin close after approving its schedule: the sign-off reports one schedule carried and the preview shows its next-month job; the later manual carry reuses that job. Observed red without the carry on sign-off.
+

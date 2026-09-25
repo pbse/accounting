@@ -32,7 +32,7 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, table := range []string{"preparation_jobs", "workpapers", "evidence", "close_scopes"} {
+		for _, table := range []string{"close_signoffs", "preparation_jobs", "workpapers", "evidence", "close_scopes"} {
 			if _, e := db.Exec("DELETE FROM "+table+" WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)", entity); e != nil {
 				t.Error(e)
 			}
@@ -109,6 +109,18 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 	}
 	approve(origin, first, "approved")
 	selected := preview(origin)
+	// Signing off the month carries its reviewed schedules into the next month without another step.
+	var ready readiness
+	json.Unmarshal(call("GET", "/v1/closes/"+origin+"/readiness", nil, 200), &ready)
+	call("POST", "/v1/closes/"+origin+"/scope", map[string]any{"digest": ready.Digest, "scope": closeScope{Description: "Prepaids only", RequiredPapers: []string{first}}}, 200)
+	json.Unmarshal(call("GET", "/v1/closes/"+origin+"/readiness", nil, 200), &ready)
+	var signed struct {
+		Carried int `json:"carried"`
+	}
+	json.Unmarshal(call("POST", "/v1/closes/"+origin+"/signoff", map[string]any{"digest": ready.Digest, "expected_decision_id": ready.DecisionID, "action": "sign", "note": "Synthetic month end", "confirmed": true}, 200), &signed)
+	if signed.Carried != 1 || preview(origin)[0].JobID == "" {
+		t.Fatalf("sign-off must carry the reviewed schedule: %+v", signed)
+	}
 	apply := func(closeID string, items []carryItem) (string, string) {
 		t.Helper()
 		var result struct {

@@ -34,6 +34,7 @@ export function Readiness({
   const [scope, setScope] = useState<Scope>();
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [confirmed, setConfirmed] = useState(false);
@@ -70,8 +71,9 @@ export function Readiness({
     if (!status) return;
     setBusy(true);
     setError("");
+    setNotice("");
     try {
-      await workspaceRequest(
+      const saved = await workspaceRequest(
         `/${closeId}/${action === "scope" ? "scope" : "signoff"}`,
         {
           digest: status.digest,
@@ -79,6 +81,8 @@ export function Readiness({
           ...(action === "scope" ? { scope } : { action, note, confirmed }),
         },
       );
+      if (saved.carry_error) setNotice(`Signed off. ${saved.carry_error}`);
+      else if (saved.carried) setNotice(`Next month is started: ${saved.carried} reviewed ${saved.carried === 1 ? "schedule is" : "schedules are"} queued for next-month preparation and review.`);
       setStatus(await workspaceRequest(`/${closeId}/readiness`));
       setEditing(false);
       setNote("");
@@ -102,6 +106,7 @@ export function Readiness({
         recorded attestations.
       </p>
       {error && <p role="alert">{error}</p>}
+      {notice && <p role="status">{notice}</p>}
       <button
         type="button"
         disabled={busy || editing}
