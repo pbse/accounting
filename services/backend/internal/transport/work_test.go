@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -128,6 +129,8 @@ func TestWorkInboxCoordinator(t *testing.T) {
 		t.Fatal("Inbox exposed without authentication")
 	}
 	call("POST", "/v1/closes/0/work/"+job+"/confirm", map[string]any{"revision": revision}, 404)
+	t.Setenv("OPENAI_API_KEY", "")
+	call("POST", "/v1/closes/work/interpret", map[string]any{"text": "what is stuck?", "labels": []string{}}, 503)
 	call("POST", path+"/confirm", map[string]any{"revision": revision, "facts_confirmed": false}, 409)
 	request := map[string]any{"revision": revision, "recipient": "client@example.test", "body": "Please confirm the invoice amount; the booking record differs."}
 	call("POST", base+"/requests", map[string]any{"workpaper_ids": []string{}}, 200)
@@ -310,4 +313,63 @@ func TestConfirmingAClientAliasRechecksBlockedWork(t *testing.T) {
 	if _, state, p := process(); p.Engine == "identity_blocked" || state != "needs_confirmation" {
 		t.Fatalf("once confirmed, the same client's document is prepared: %s %+v", state, p)
 	}
+}
+
+func TestPlainLanguageWorkRequestsBecomePreviewedCommands(t *testing.T) {
+	labels := []string{"Acme · 2026-09", "Bistro · 2026-09"}
+	for _, c := range []struct{ action, target, want string }{
+		{"explain", "Acme · 2026-09", "why is Acme · 2026-09 waiting?"},
+		{"prepare", "all visible", "prepare all visible"},
+		{"show_blockers", "", "show blockers"},
+		{"explain", "all visible", ""},
+		{"show_blockers", "Acme · 2026-09", ""},
+		{"rehearse", "Other · 2026-09", ""},
+		{"unsupported", "", ""},
+	} {
+		if got, ok := workCommand(c.action, c.target, labels); ok != (c.want != "") || ok && got != c.want {
+			t.Fatalf("%s/%s: %q %v", c.action, c.target, got, ok)
+		}
+	}
+	mux := http.NewServeMux()
+	registerWork(mux, nil)
+	ask := func(text string, want int) map[string]string {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"text": text, "labels": labels})
+		r := httptest.NewRequest("POST", "/v1/closes/work/interpret", bytes.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%q: %d %s", text, w.Code, w.Body.String())
+		}
+		var out map[string]string
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	t.Setenv("OPENAI_API_KEY", "")
+	ask("what is stuck for acme this month?", 503)
+	t.Setenv("OPENAI_API_KEY", "synthetic")
+	t.Setenv("OPENAI_MODEL", "synthetic-model")
+	answer := `{"action":"explain","target":"Acme · 2026-09"}`
+	original := http.DefaultTransport
+	defer func() { http.DefaultTransport = original }()
+	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
+		var sent struct {
+			Store bool                       `json:"store"`
+			Input []struct{ Content string } `json:"input"`
+		}
+		json.NewDecoder(r.Body).Decode(&sent)
+		if r.URL.Host != "api.openai.com" || sent.Store || !strings.Contains(sent.Input[1].Content, "Bistro · 2026-09") {
+			t.Fatalf("only the request and visible closes go to the model, unstored: %+v", sent)
+		}
+		envelope, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"content": []any{map[string]string{"type": "output_text", "text": answer}}}}})
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(envelope)), Header: make(http.Header)}, nil
+	})
+	if got := ask("what is stuck for acme this month?", 200); got["command"] != "why is Acme · 2026-09 waiting?" {
+		t.Fatalf("a plain request becomes the matching command: %v", got)
+	}
+	answer = `{"action":"explain","target":"all visible"}`
+	ask("why is everything waiting", 422)
+	answer = `{"action":"delete_everything","target":""}`
+	ask("delete everything", 422)
 }

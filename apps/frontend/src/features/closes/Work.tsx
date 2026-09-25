@@ -572,38 +572,46 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
     } catch(e) { setPreview(undefined);setError(e instanceof Error?e.message:"Could not inspect selected closes."); }
     finally { setBusy(false); }
   }
-  function interpret() {
+  function interpret(text = command, asked = false) {
     setAnswer("");setAnswerClose("");setError("");
-    const view = /^(?:show|list)(?: me)? (decisions|blockers|running work|client requests|prepared work|all work|dependencies)$/i.exec(command.trim());
+    const askAgent = (fallback: string): Promise<void> => {
+      if (asked) {setError(fallback);return Promise.resolve();}
+      const labels = [...new Set(items.map(i=>`${i.entity} · ${i.period}`))].slice(0,100);
+      setBusy(true);
+      return workspaceRequest("/work/interpret",{text:text.trim(),labels}).then(r=>interpret(r.command,true)).catch(e=>setError(e instanceof Error?e.message:"Could not interpret that request.")).finally(()=>setBusy(false));
+    };
+    const view = /^(?:show|list)(?: me)? (decisions|blockers|running work|client requests|prepared work|all work|dependencies)$/i.exec(text.trim());
     if (view) {
       if (view[1].toLowerCase() === "dependencies") {setAnswer("Changed workpapers are listed in Work needing re-review.");return;}
       const views:Record<string,string> = {decisions:"needs_confirmation",blockers:"blocked","running work":"running","client requests":"waiting_client","prepared work":"completed","all work":"all"};
       onFilter(views[view[1].toLowerCase()]);
       return;
     }
-    const rehearsal = /^rehearse (.+)$/i.exec(command.trim());
+    const rehearsal = /^rehearse (.+)$/i.exec(text.trim());
     if (rehearsal) {
       const query = rehearsal[1].trim().toLowerCase();
+      const visible = items.find(i=>`${i.entity} · ${i.period}`.toLowerCase() === query);
+      if (visible) {setAnswer(`Open the saved production journal rehearsal for ${visible.entity} · ${visible.period}.`);setAnswerClose(visible.close_id);return;}
       setBusy(true);
       void workspaceRequest("").then(data => {
         const matches = (data.closes as {id:string;entity:string;period:string}[]).filter(c=>c.entity.toLowerCase() === query || `${c.entity} · ${c.period}`.toLowerCase() === query);
-        if(matches.length !== 1) {setError(data.has_more ? "Name an exact client and month among the latest 100 closes, or open Client closes." : "Name exactly one accessible client and month for rehearsal.");return;}
+        if(matches.length !== 1) return askAgent(data.has_more ? "Name an exact client and month among the latest 100 closes, or open Client closes." : "Name exactly one accessible client and month for rehearsal.");
         setAnswer(`Open the saved production journal rehearsal for ${matches[0].entity} · ${matches[0].period}.`);
         setAnswerClose(matches[0].id);
       }).catch(e=>setError(e instanceof Error ? e.message : "Could not find that close.")).finally(()=>setBusy(false));
       return;
     }
-    const why = /^why is (.+) waiting\??$/i.exec(command.trim());
+    const why = /^why is (.+) waiting\??$/i.exec(text.trim());
     if (why) {
       const query = why[1].trim().toLowerCase();
       const matches = [...new Map(items.filter(i=>i.entity.toLowerCase() === query || `${i.entity} · ${i.period}`.toLowerCase() === query).map(i=>[i.close_id,i])).values()];
-      if (matches.length !== 1) {setError("Name exactly one visible client and month to explain its work.");return;}
+      if (matches.length !== 1) {askAgent("Name exactly one visible client and month to explain its work.");return;}
       const related = items.filter(i=>i.close_id === matches[0].close_id);
       setError("");setAnswer(related.map(i=>`${i.source_name}: ${labels[i.state] ?? i.state}${i.blockers.length ? ` — ${i.blockers.join("; ")}` : i.error ? ` — ${i.error}` : ""}`).join("\n"));
       return;
     }
-    const match = /^(prepare|recheck|stop) (.+)$/i.exec(command.trim());
-    if (!match) {setError("Try ‘show blockers’, ‘rehearse Client · YYYY-MM’, ‘prepare all visible’ or ‘why is Client · YYYY-MM waiting?’.");return;}
+    const match = /^(prepare|recheck|stop) (.+)$/i.exec(text.trim());
+    if (!match) {askAgent("Try ‘show blockers’, ‘rehearse Client · YYYY-MM’, ‘prepare all visible’ or ‘why is Client · YYYY-MM waiting?’.");return;}
     const action = match[1].toLowerCase() as "prepare"|"stop"|"recheck";
     const query = match[2].trim().toLowerCase();
     const eligible = closesFor(action);
@@ -614,7 +622,7 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
       return;
     }
     const matches = eligible.filter(c=>c.entity === query || c.label.toLowerCase() === query);
-    if (matches.length !== 1) {setError(matches.length ? "Several closes match. Include the close month shown below." : "No eligible visible close matches. Change the inbox filter or use the exact client name and month.");return;}
+    if (matches.length !== 1) {askAgent(matches.length ? "Several closes match. Include the close month shown below." : "No eligible visible close matches. Change the inbox filter or use the exact client name and month.");return;}
     setMode(action);setSelected([matches[0].id]);setPreview(undefined);setError("");
     void inspect([matches[0].id],action);
   }
@@ -635,8 +643,8 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
   }
   return <details open className="agent-card"><summary><Icon name="agent" /> Ask the agent · find, explain and preview actions</summary>
     <p>Select up to 10 visible closes. Each close is checked again when submitted and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
-    <div className="ask-row"><label>Ask Work<input value={command} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();interpret();}}} placeholder="show blockers · prepare all visible · rehearse Client · YYYY-MM" maxLength={220} /></label><button type="button" className="primary" disabled={busy || !command.trim()} onClick={interpret}>Find and preview</button></div>
-    <p>Try “show decisions”, “show dependencies”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, or “prepare/recheck/stop all visible”. Actions always need a preview and confirmation.</p>
+    <div className="ask-row"><label>Ask Work<input value={command} readOnly={busy} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();if(!busy) interpret();}}} placeholder="show blockers · prepare all visible · rehearse Client · YYYY-MM" maxLength={220} /></label><button type="button" className="primary" disabled={busy || !command.trim()} onClick={()=>interpret()}>Find and preview</button></div>
+    <p>Ask in your own words, or try “show decisions”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, or “prepare/recheck/stop all visible”. Actions always need a preview and confirmation.</p>
     {answer && <p role="status" style={{whiteSpace:"pre-line"}}>{answer}</p>}
     {answerClose && <Link to={`/dashboard/closes/${answerClose}`}>Open close rehearsal</Link>}
     <details><summary>Choose closes for a portfolio action</summary>
