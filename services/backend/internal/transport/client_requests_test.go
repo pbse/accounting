@@ -3,8 +3,10 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -178,4 +180,107 @@ func TestRedactSensitiveRemovesCardsBankNumbersAndSecrets(t *testing.T) {
 			t.Errorf("redacted text is stable: %q → %q", got, again)
 		}
 	}
+}
+
+func TestLinkPasscodeGuardsTheRequest(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	var closeID, draft, request string
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Passcode "+rand.Text()).Scan(&closeID))
+	defer func() {
+		db.Exec(`UPDATE organizations SET require_link_passcode=false WHERE id='local-development'`)
+		db.Exec(`DELETE FROM organization_policy_changes WHERE organization_id='local-development' AND reason='Synthetic passcode policy'`)
+		for _, q := range []string{`DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`, `DELETE FROM request_drafts WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+			db.Exec(q, closeID)
+		}
+	}()
+	tx, err := db.Begin()
+	must(err)
+	digest, _, err := preparation.RequestContext(context.Background(), tx, closeID, nil)
+	must(err)
+	must(tx.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the September statement.','[]',$2,'fixture') RETURNING id::text`, closeID, digest).Scan(&draft))
+	must(tx.QueryRow(`INSERT INTO work_requests(draft_id,revision,recipient,approved_by) VALUES($1,1,'client@example.test','fixture') RETURNING id::text`, draft).Scan(&request))
+	must(tx.Commit())
+	h := apiWithStore(db, strings.Repeat("p", 32))
+	call := func(method, path, token, passcode string, body any, want int) (out struct{ Code, Message, Status, Body string }) {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, strings.NewReader(string(raw)))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		if passcode != "" {
+			r.Header.Set("X-Request-Passcode", passcode)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	issue := func() (string, string) {
+		t.Helper()
+		tx, err := db.Begin()
+		must(err)
+		token := rand.Text()
+		passcode, err := issueLink(context.Background(), tx, request, "fixture", token)
+		must(err)
+		must(tx.Commit())
+		return token, passcode
+	}
+	open, none := issue()
+	if none != "" || call("GET", "/v1/client-request", open, "", nil, 200).Status != "open" {
+		t.Fatal("without the firm setting a link opens on possession, with no passcode")
+	}
+	call("POST", "/v1/closes/organization/policy", strings.Repeat("p", 32), "", map[string]any{"link_passcode": true, "reason": "Synthetic passcode policy"}, 200)
+	var review, recorded bool
+	must(db.QueryRow(`SELECT independent_review,link_passcode FROM organization_policy_changes WHERE organization_id='local-development' ORDER BY id DESC LIMIT 1`).Scan(&review, &recorded))
+	if review || !recorded {
+		t.Fatalf("the change records both settings, leaving independent review as it was: %v %v", review, recorded)
+	}
+	if call("GET", "/v1/client-request", open, "", nil, 200).Status != "open" {
+		t.Fatal("a link issued before the setting keeps working as issued")
+	}
+
+	token, passcode := issue()
+	var stored string
+	must(db.QueryRow(`SELECT passcode_digest FROM client_request_links WHERE digest=$1`, preparation.Digest([]byte(token))).Scan(&stored))
+	if len(passcode) != 8 || stored == preparation.Digest([]byte(passcode)) || strings.Contains(stored, passcode) {
+		t.Fatalf("a new link returns an 8-digit passcode once and stores only a digest salted by the link: %q", passcode)
+	}
+	if got := call("GET", "/v1/client-request", token, "", nil, 401); got.Code != "PASSCODE_REQUIRED" || got.Body != "" {
+		t.Fatalf("without the passcode nothing about the request is shown: %+v", got)
+	}
+	wrong := "00000000"
+	if wrong == passcode {
+		wrong = "11111111"
+	}
+	for i := 1; i <= 4; i++ {
+		if got := call("GET", "/v1/client-request", token, wrong, nil, 403); !strings.Contains(got.Message, fmt.Sprint(5-i)+" tries left") {
+			t.Fatalf("each wrong try is counted: %+v", got)
+		}
+	}
+	call("POST", "/v1/client-request", token, wrong, map[string]any{"body": "Guess", "confirmed": true}, 404)
+	call("GET", "/v1/client-request", token, passcode, nil, 404)
+
+	token, passcode = issue()
+	if got := call("GET", "/v1/client-request", token, passcode, nil, 200); got.Status != "open" || got.Body != "Please send the September statement." {
+		t.Fatalf("the right passcode opens the request: %+v", got)
+	}
+	call("POST", "/v1/client-request", token, passcode, map[string]any{"body": "Statement to follow.", "confirmed": true}, 200)
+	call("POST", "/v1/client-request/scan-text", token, "", nil, 401)
 }

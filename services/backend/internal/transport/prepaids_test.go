@@ -36,6 +36,15 @@ func TestPrepareCapabilityAndPreflight(t *testing.T) {
 			t.Fatalf("preflight for %s returned %d", test.origin, response.Code)
 		}
 	}
+	request = httptest.NewRequest("OPTIONS", "/v1/client-request", nil)
+	request.Header.Set("Origin", "http://localhost:5173")
+	request.Header.Set("Access-Control-Request-Method", "GET")
+	request.Header.Set("Access-Control-Request-Headers", "authorization, x-request-passcode")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != 204 {
+		t.Fatalf("a client link page may send its passcode header: %d", response.Code)
+	}
 	request = httptest.NewRequest("POST", "/v1/workpapers:prepare", strings.NewReader(body+` {}`))
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()

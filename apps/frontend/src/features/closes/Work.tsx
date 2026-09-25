@@ -1,6 +1,6 @@
 import { PrepaidMethodFields, readCredits } from "../prepaids/MethodFields";
 import { AccrualConfirmations } from "../accruals/Prepare";
-import { EmailHistory, SendRequestEmail, type EmailRecord } from "./Email";
+import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord } from "./Email";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { Avatar, Icon, type IconName } from "../dashboard/Icon";
@@ -725,6 +725,7 @@ function WorkDetails({
 }) {
   const [busy, setBusy] = useState(false);
   const [replyLink, setReplyLink] = useState("");
+  const [passcode, setPasscode] = useState("");
   const [error, setError] = useState("");
   const facts = item.proposal.facts ?? [];
   const kind = item.proposal.kind ?? "prepaid";
@@ -764,9 +765,14 @@ function WorkDetails({
         revision: item.revision,
         ...body,
       });
-      if (result.link_token)
+      if (result.link_token) {
         setReplyLink(`${window.location.origin}/request#${result.link_token}`);
-      if (action === "revoke_link") setReplyLink("");
+        setPasscode(result.passcode ?? "");
+      }
+      if (action === "revoke_link") {
+        setReplyLink("");
+        setPasscode("");
+      }
       onChange();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Update failed.");
@@ -1130,7 +1136,13 @@ function WorkDetails({
               requestId={latest.id}
               revision={item.revision}
               recipient={latest.recipient}
-              onQueued={onChange}
+              onQueued={(p) => {
+                if (!latest.email) {
+                  setPasscode(p);
+                  setReplyLink("");
+                }
+                onChange();
+              }}
             />
           )}
           <section aria-label="Private reply link">
@@ -1173,6 +1185,7 @@ function WorkDetails({
                 />
               </label>
             )}
+            <PasscodeNotice passcode={passcode} />
             <p>
               A new link invalidates the previous one. Evidence changes require
               a fresh reviewed request.

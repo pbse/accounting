@@ -242,6 +242,9 @@ func clientAttachmentScan(db *sql.DB) http.HandlerFunc {
 			problem(w, 404, "Request unavailable.")
 			return
 		}
+		if !linkPasscode(w, r, db, token) {
+			return
+		}
 		nameHint, limit := "upload.pdf", int64(5*1024*1024)
 		if textScan {
 			nameHint, limit = "upload.txt", 512*1024

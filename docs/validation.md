@@ -949,3 +949,39 @@ Tests (PostgreSQL):
 Each check was observed red with its rule removed (12 mutations): the shared writer and sender redaction, link and email redaction, the email digest and its Message-ID and Date parts, Luhn, mod-97, IBAN trailing-word trimming, the rest-of-line credential rule, and the bank-label requirement.
 
 Not verified: live Cloudflare email routing and the browser page. Detection is deterministic and bounded. A card-like 13–19 digit number that passes Luhn (such as some long invoice numbers) is also masked, keeping its last four digits.
+
+## Client link passcodes (2026-09-25)
+
+Author: Claude Opus 5.5. Migration 057. PRD §8 requires client links to be "subject to authentication appropriate to the data". A firm can now require that every new request link also needs an 8-digit passcode. A person gives it to the client another way; the app sends nothing, keeping to the rule that a person approves every outside send.
+
+- **Issuing:** all four link paths (manual link, both consolidated-request paths, approved email) go through `issueLink`. It locks the firm row while reading the setting, returns the passcode once, and stores only a digest salted by the raw token.
+- **Checking:** `linkPasscode` runs before anything is read, on the client page and both scan routes. It answers `PASSCODE_REQUIRED`, counts each wrong try atomically on its own, and the fifth wrong try revokes the link. The browser preflight allows the header.
+- **Policy:** the endpoint changes only the setting named, records both resulting values, and allows passcode changes in local development.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- showing the passcode from the email approval (lifted to the parent, because the form remounts after queueing), with reminders reusing the original link;
+- preserving the unchanged policy setting;
+- the preflight header;
+- locking the firm row while issuing;
+- checking before any read, and failure counts committed on their own.
+
+Code review: GPT-6 Sol (high), two delta rounds. Adopted:
+
+- a retried first email approval whose link has a passcode now refuses with the recovery step (create a new private link) instead of reporting success without a passcode;
+- Work clears the replaced manual link when the email is approved;
+- reminders are left alone: they keep their idempotent retry and the shown passcode.
+
+Tests (PostgreSQL):
+
+- `TestApprovedEmailDurableRetryAndScope`: with passcodes required, the email approval returns a passcode. The sealed email says one will be given separately and does not contain it, and a retried approval refuses.
+- `TestLinkPasscodeGuardsTheRequest`:
+  - Without the setting a link opens on possession. The policy change records both settings, leaving independent review unchanged, and an earlier link keeps working.
+  - A new link returns an 8-digit passcode, and its stored digest is neither the passcode nor its plain digest.
+  - Without the passcode the client gets `PASSCODE_REQUIRED` and no request text. Four wrong tries count down; the fifth revokes the link, even for the right passcode.
+  - A new link opens and accepts a reply with its passcode, and the scan route asks for the passcode.
+- `TestPrepareCapabilityAndPreflight`: the client page's preflight may send the passcode header.
+
+Each check was observed red with its rule removed (9 mutations): the page and scan checks, the fifth-try revocation, issuing, the salt, preserving the other setting, the preflight header, the retry refusal and the email sentence. The existing request, email, coverage and Work tests pass unchanged.
+
+Not verified: browser flows, hosted CORS through Cloudflare, a race between the policy change and issuing (the row lock covers it, but no test exercises it), and a retried reminder on a passcode link.

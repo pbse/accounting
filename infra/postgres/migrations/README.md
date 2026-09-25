@@ -43,3 +43,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `054_client_aliases.sql` stores the other client names a reviewer confirmed from an identity-blocked source, with row-level security like 047. Apply after 053 with API/worker stopped; `/readyz` checks it.
 
 `056_model_limits.sql` adds the firm's daily model call limit and its per-day count, the agent's retry time after a refusal, saved replay runs (row-level security like 055), and the claim time for scheduled Xero captures. Apply after 055 with API/worker stopped; `/readyz` checks it.
+
+`057_link_passcodes.sql` adds the firm setting that makes new client request links need a passcode, records it in policy history, and stores each link's salted passcode digest and failed tries. Apply after 056 with API/worker stopped; `/readyz` checks it.
