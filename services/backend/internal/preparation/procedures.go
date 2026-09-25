@@ -133,11 +133,15 @@ func BasisIssue(ctx context.Context, q interface {
 	}
 	var loan struct {
 		Input struct {
-			AccrueInterest bool `json:"accrue_interest"`
+			AccrueInterest bool             `json:"accrue_interest"`
+			IssuanceCosts  *json.RawMessage `json:"issuance_costs"`
 		} `json:"input"`
 	}
 	if json.Unmarshal(paper, &loan) == nil && loan.Input.AccrueInterest {
 		return fmt.Sprintf("Accrued loan interest is unsupported for this client's %s basis; prepare the loan without accruing interest.", label), nil
+	}
+	if loan.Input.IssuanceCosts != nil {
+		return fmt.Sprintf("Amortizing debt issuance costs is unsupported for this client's %s basis.", label), nil
 	}
 	return "", nil
 }
@@ -186,7 +190,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if err == sql.ErrNoRows || !enabled || (approved != loans.Method && approved != loans.VariableMethod) {
+		if err == sql.ErrNoRows || !enabled || (approved != loans.Method && approved != loans.VariableMethod && approved != loans.CostsMethod) {
 			return PolicyRequired("Loan schedules need the firm's approved loan procedure for this client (a firm default or client override) before drafts are saved")
 		}
 	}

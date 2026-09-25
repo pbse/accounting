@@ -183,3 +183,74 @@ func TestFeesAddedToTheBalanceBearInterestAndAreProposed(t *testing.T) {
 		}
 	}
 }
+
+func TestFeesPaidInCashAreShownWithoutAnEntry(t *testing.T) {
+	in := base()
+	in.Method, in.BookBalance = VariableMethod, "99975.00"
+	in.Payments[0].Fee, in.Payments[0].FeeReference = "25", " Statement line 4 "
+	paper, err := Prepare(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paper.Schedule[0].Fee != "25.00" || paper.FeesPaid != "25.00" || paper.Schedule[1].ExpectedInterest != "276.50" || paper.Input.Payments[0].FeeReference != "Statement line 4" {
+		t.Fatalf("a fee paid in cash is shown on its payment and leaves principal and interest alone: %+v", paper)
+	}
+	if len(paper.Proposals) != 1 || paper.Proposals[0].Amount != "19.67" || !strings.Contains(strings.Join(paper.Questions, " "), "equals the fees paid in cash") {
+		t.Fatalf("no entry is proposed for it; a book difference of exactly the fees names them as a possible cause: %+v %v", paper.Proposals, paper.Questions)
+	}
+	in.BookBalance = "99000.00"
+	if paper, err = Prepare(in); err != nil || strings.Contains(strings.Join(paper.Questions, " "), "fees paid in cash") {
+		t.Fatalf("another difference does not name them: %v %v", err, paper.Questions)
+	}
+	in.Payments[0].FeeReference = ""
+	if _, err = Prepare(in); err == nil || !strings.Contains(err.Error(), "statement line") {
+		t.Fatalf("a fee paid in cash needs its statement line: %v", err)
+	}
+	in.Payments[0].FeeReference, in.Method = "Statement line 4", Method
+	if _, err = Prepare(in); err == nil || !strings.Contains(err.Error(), "approved loan procedure") {
+		t.Fatalf("a fee paid in cash needs the procedure for fees: %v", err)
+	}
+}
+
+func TestIssuanceCostsAmortizeToInterest(t *testing.T) {
+	in := base()
+	in.Method = CostsMethod
+	in.IssuanceCosts = &IssuanceCosts{Amount: "1200", Start: "2026-01-01", End: "2026-12-31", Account: "Debt issuance costs", Reference: "Closing statement", Method: "equal_full_months_v1", MaterialityReference: "Memo 2026-01", BookedUnamortized: "400", BookingReference: "Trial balance Sep", MethodConfirmed: true, BookingConfirmed: true}
+	paper, err := Prepare(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1,200.00 over twelve months is 100.00 a month; nine months to September leave 300.00, against 400.00 booked.
+	if c := paper.IssuanceCosts; c == nil || c.Month != "100.00" || c.ToDate != "900.00" || c.Unamortized != "300.00" {
+		t.Fatalf("the month's amortization and the unamortized costs: %+v", paper.IssuanceCosts)
+	}
+	last := paper.Proposals[len(paper.Proposals)-1]
+	if len(paper.Proposals) != 3 || last.DebitAccount != "Interest expense" || last.CreditAccount != "Debt issuance costs" || last.Amount != "100.00" || last.Date != "2026-09-30" {
+		t.Fatalf("the amortization not yet booked is proposed to interest: %+v", paper.Proposals)
+	}
+	rated := in
+	rated.RateChanges = []RateChange{{Effective: "2026-09-01", AnnualRate: "6.500", Reference: "Rate notice Aug 2026"}}
+	if _, err = Prepare(rated); err != nil {
+		t.Fatalf("the procedure that includes issuance costs also covers rate changes: %v", err)
+	}
+	in.IssuanceCosts.BookedUnamortized = "250"
+	if paper, err = Prepare(in); err != nil || paper.Proposals[2].DebitAccount != "Debt issuance costs" || paper.Proposals[2].Amount != "50.00" {
+		t.Fatalf("amortization booked beyond the schedule reverses: %v %+v", err, paper.Proposals)
+	}
+	for name, change := range map[string]func(c *IssuanceCosts, in *Input){
+		"procedure that includes them":       func(c *IssuanceCosts, in *Input) { in.Method = VariableMethod },
+		"their own account":                  func(c *IssuanceCosts, in *Input) { c.Account = "loan payable" },
+		"not materially different":           func(c *IssuanceCosts, in *Input) { c.MaterialityReference = "" },
+		"booked to their account":            func(c *IssuanceCosts, in *Input) { c.BookingConfirmed = false },
+		"month-end balance (including zero)": func(c *IssuanceCosts, in *Input) { c.BookingReference = "" },
+		"Debt issuance costs: ":              func(c *IssuanceCosts, in *Input) { c.End = "2025-12-31" },
+	} {
+		changed := base()
+		changed.Method, changed.IssuanceCosts = CostsMethod, &IssuanceCosts{}
+		*changed.IssuanceCosts = *in.IssuanceCosts
+		change(changed.IssuanceCosts, &changed)
+		if _, err = Prepare(changed); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}

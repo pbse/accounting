@@ -95,6 +95,9 @@ func TestTheClientsBasisDecidesWhichWorkCanBeSavedAndApproved(t *testing.T) {
 	delete(loan, "booked_accrued_interest")
 	loan["accrue_interest"] = false
 	call("POST", path, map[string]any{"kind": "loan", "input": loan}, 200)
+	if issue, e := preparation.BasisIssue(ctx, db, closeID, "loan", []byte(`{"input":{"issuance_costs":{"amount":"1200.00"}}}`)); e != nil || !strings.Contains(issue, "debt issuance costs") {
+		t.Fatalf("a cash client must not amortize debt issuance costs: %q %v", issue, e)
+	}
 
 	content := "Invoice " + rand.Text()
 	var evidenceID, paperID string
