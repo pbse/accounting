@@ -184,6 +184,7 @@ export function SettlementResult({
       ),
       in_transit: input.in_transit?.filter((d) => d.payout_id !== payout.id),
     });
+  const lineage = result.method !== "stripe_payouts_v1";
   return (
     <>
       <h3>{headline}</h3>
@@ -195,18 +196,27 @@ export function SettlementResult({
       <div className="review-grid">
         <section>
           <h4>Stripe paid out</h4>
-          <dl>
-            <dt>Gross activity</dt>
-            <dd>{money(result.total.gross, input.currency)}</dd>
-            <dt>Fees on transactions</dt>
-            <dd>{money(result.total.fee, input.currency)}</dd>
-            <dt>Net paid out</dt>
-            <dd>{money(result.total.net, input.currency)}</dd>
-            <dt>Payouts · transactions</dt>
-            <dd>
-              {payouts.length} · {result.total.count}
-            </dd>
-          </dl>
+          {result.method === "stripe_payouts_v1" ? (
+            <dl>
+              <dt>Paid out</dt>
+              <dd>{money(result.total.net, input.currency)}</dd>
+              <dt>Payouts</dt>
+              <dd>{payouts.length}</dd>
+            </dl>
+          ) : (
+            <dl>
+              <dt>Gross activity</dt>
+              <dd>{money(result.total.gross, input.currency)}</dd>
+              <dt>Fees on transactions</dt>
+              <dd>{money(result.total.fee, input.currency)}</dd>
+              <dt>Net paid out</dt>
+              <dd>{money(result.total.net, input.currency)}</dd>
+              <dt>Payouts · transactions</dt>
+              <dd>
+                {payouts.length} · {result.total.count}
+              </dd>
+            </dl>
+          )}
         </section>
         <section>
           <h4>Sources and method</h4>
@@ -219,8 +229,9 @@ export function SettlementResult({
             </dd>
             <dt>Method</dt>
             <dd>
-              {input.currency} automatic payouts; exact net amount, one day before to four
-              days after the expected date.
+              {result.method === "stripe_payouts_v1"
+                ? `${input.currency} payouts from the Payouts report, without their transactions; exact amount, one day before to four days after the expected arrival.`
+                : `${input.currency} automatic payouts; exact net amount, one day before to four days after the expected date.`}
             </dd>
           </dl>
         </section>
@@ -248,17 +259,18 @@ export function SettlementResult({
       <section>
         <table>
           <caption>
-            Payouts expected in {input.close_period}. Fees are what Stripe kept
-            from each batch; net is what should reach the bank.
+            {lineage
+              ? `Payouts expected in ${input.close_period}. Fees are what Stripe kept from each batch; net is what should reach the bank.`
+              : `Payouts whose funds left the Stripe balance in ${input.close_period}, with the amount that should reach the bank.`}
           </caption>
           <thead>
             <tr>
               <th>Payout</th>
-              <th>Expected</th>
-              <th>Transactions</th>
-              <th>Gross</th>
-              <th>Fees</th>
-              <th>Net</th>
+              <th>{lineage ? "Expected" : "Expected arrival"}</th>
+              {lineage && <th>Transactions</th>}
+              {lineage && <th>Gross</th>}
+              {lineage && <th>Fees</th>}
+              <th>{lineage ? "Net" : "Amount"}</th>
               <th>Bank row</th>
               <th>Status</th>
             </tr>
@@ -268,9 +280,9 @@ export function SettlementResult({
               <tr key={p.id}>
                 <th>{p.id}</th>
                 <td>{p.expected_date}</td>
-                <td>{p.count}</td>
-                <td>{money(p.gross, input.currency)}</td>
-                <td>{money(p.fee, input.currency)}</td>
+                {lineage && <td>{p.count}</td>}
+                {lineage && <td>{money(p.gross, input.currency)}</td>}
+                {lineage && <td>{money(p.fee, input.currency)}</td>}
                 <td>{money(p.net, input.currency)}</td>
                 <td>
                   {p.deposit
@@ -335,7 +347,7 @@ export function SettlementResult({
           </ul>
         </section>
       )}
-      <details>
+      {result.method !== "stripe_payouts_v1" && <details>
         <summary>Stripe categories behind these payouts</summary>
         <table>
           <thead>
@@ -367,7 +379,7 @@ export function SettlementResult({
               .join(" · ")}
           </p>
         ))}
-      </details>
+      </details>}
       {input.fee_entry && (
         <section>
           <h4>Stripe fee entry</h4>
@@ -413,7 +425,7 @@ export default function Prepare() {
   const [feeEntry, setFeeEntry] = useState(false);
   const [manual, setManual] = useState(false);
   useEffect(() => {
-    if (revision.savedInput?.method === "stripe_payouts_v1") setManual(true);
+    if (revision.savedInput) setManual(revision.savedInput.method === "stripe_payouts_v1");
   }, [revision.savedInput]);
   const csvFiles = files.filter(
     (f) =>
@@ -632,7 +644,7 @@ export default function Prepare() {
                 Payout schedule
                 <select value={manual ? "manual" : "automatic"} onChange={(e) => { setManual(e.target.value === "manual"); setResult(undefined); }}>
                   <option value="automatic">Automatic payouts</option>
-                  <option value="manual">Manual or instant payouts</option>
+                  <option value="manual">Every payout from the Payouts report (manual, instant or mixed)</option>
                 </select>
               </label>
               {picker(
@@ -644,7 +656,9 @@ export default function Prepare() {
               )}
               {picker(
                 "Bank CSV",
-                "Columns id,date,amount with deposits positive. Include the first four days of next month so late deposits can match.",
+                manual
+                  ? "Columns id,date,amount with deposits positive. Run it through the later of four days after month-end and four days after the last payout's expected arrival, so late deposits can match."
+                  : "Columns id,date,amount with deposits positive. Include the first four days of next month so late deposits can match.",
                 "bank",
               )}
               <label>
@@ -677,7 +691,7 @@ export default function Prepare() {
               <input type="checkbox" name="method_confirmed" required />
               <span>
                 {manual
-                  ? `${currency} manual or instant payouts. Each payout is traced to a bank row carrying exactly its amount from one day before to four days after its expected arrival. Stripe cannot say which transactions a manual or instant payout settles, so the month's activity is reconciled from the Balance report instead.`
+                  ? `${currency} payouts from the Payouts report, whatever their schedule. Each payout is traced to a bank row carrying exactly its amount from one day before to four days after its expected arrival. Stripe cannot say which transactions a manual or instant payout settles, so the month's activity must be reconciled separately from the Balance report.`
                   : `${currency} automatic payouts. Stripe's payout ID defines each batch; a bank row is only a candidate when it carries exactly the payout's net amount from one day before to four days after the expected date.`}
               </span>
             </label>

@@ -1338,6 +1338,8 @@ Request: Stripe manual and instant payouts. Stripe's payout reconciliation repor
 
 Test: `TestManualAndInstantPayoutsAreTracedToTheirDeposits` (pure): a manual and an instant payout matched to their deposits, a failed payout with its reversal and one without it (which must not claim another payout's deposit), an unmatched payout blocking, the method's limit stated, a fee entry refused, and a positive payout row, funds leaving in another month and an automatic-payout export refused.
 
-Each check was observed red with its rule removed (10 mutations).
+Each check was observed red with its rule removed (14 mutations).
 
-Not verified: a real Payouts report export (the sign convention is enforced, not assumed silently), and the form in a browser. Review pending.
+Plan-and-code review: GPT-6 Sol (high), once available again. Adopted: the bank file may run to four days after the last expected arrival, so a payout that left the balance at month-end can match; a failed payout cannot take a bank row through review or in-transit; a reversal no longer changes the payout's amount and the question says whether the return is in the file; the result view, the review export and the docs describe this method without transactions or categories and say the month's activity must be reconciled separately; a revised draft restores its own method; the method is described as a whole-month trace of every payout in the report, since the report has no manual or instant marker; the parser no longer builds payout categories. Two delta rounds then closed the payouts table and review export (no transactions, gross, fees or categories file for this method); the bank-file hint's wording (run the file through the later of four days after month-end and four days after the last expected arrival) was taken verbatim from the second round's answer without a third round.
+
+Not verified: a real Payouts report export (the sign convention is enforced, not assumed silently), and the form in a browser.

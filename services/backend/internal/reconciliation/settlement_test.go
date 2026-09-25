@@ -194,17 +194,27 @@ func TestManualAndInstantPayoutsAreTracedToTheirDeposits(t *testing.T) {
 	}
 	status := map[string]string{}
 	for _, p := range paper.Payouts {
-		status[p.ID] = p.Status
+		status[p.ID] = p.Status + " " + p.Net
 		if p.Deposit != nil {
 			status[p.ID] += " " + p.Deposit.ID
 		}
 	}
-	if paper.Method != PayoutsMethod || status["po_M1"] != "matched B1" || status["po_I1"] != "matched B2" || status["po_F1"] != "failed" || status["po_F2"] != "failed" || status["po_T1"] != "unmatched" || len(paper.Categories) != 0 {
+	if paper.Method != PayoutsMethod || status["po_M1"] != "matched 125.05 B1" || status["po_I1"] != "matched 126.90 B2" || status["po_F1"] != "failed 300.00" || status["po_F2"] != "failed 126.90" || status["po_T1"] != "unmatched 40.00" || len(paper.Categories) != 0 {
 		t.Fatalf("each payout is traced to its deposit; a failed one expects none, even without its reversal in the file, and claims no deposit: %+v", status)
 	}
 	questions := strings.Join(paper.Questions, " ")
-	if len(paper.Blockers) != 1 || !strings.Contains(paper.Blockers[0], "po_T1") || !strings.Contains(questions, "po_F1") || !strings.Contains(questions, "traced as payouts only") {
+	if len(paper.Blockers) != 1 || !strings.Contains(paper.Blockers[0], "po_T1") || !strings.Contains(questions, "po_F1 ($300.00) as failed or canceled, so no deposit is expected; the file shows its funds returned") || !strings.Contains(questions, "po_F2 ($126.90) as failed or canceled, so no deposit is expected; its return is not in this file") || !strings.Contains(questions, "traced as payouts only") {
 		t.Fatalf("an untraced payout blocks; the failed one and the limit of the method are questions: %v %v", paper.Blockers, paper.Questions)
+	}
+	// A payout expected early next month matches a deposit up to four days after its arrival.
+	late := in
+	late.BankCSV += "\nB9,2026-10-06,40.00"
+	if paper, err = PrepareSettlement(late); err != nil || len(paper.Blockers) != 0 || paper.Payouts[len(paper.Payouts)-1].Deposit == nil || paper.Payouts[len(paper.Payouts)-1].Deposit.ID != "B9" {
+		t.Fatalf("a deposit on the sixth of next month matches the payout expected on the fifth: %v %+v", err, paper.Blockers)
+	}
+	late.ReviewedDeposits = []ReviewedDeposit{{PayoutID: "po_F2", BankID: "B2", Reason: "Same amount as the deposit"}}
+	if _, err = PrepareSettlement(late); err == nil {
+		t.Fatal("a failed payout cannot take a bank row through review")
 	}
 	in.FeeEntry = &FeeEntry{FeeAccount: "Stripe fees", DepositAccount: "Sales", BookedFees: "0", RuleReference: "Rule 4.2"}
 	if _, err = PrepareSettlement(in); err == nil || !strings.Contains(err.Error(), "fee entry") {
