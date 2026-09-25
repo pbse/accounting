@@ -306,3 +306,20 @@ func WrongSide(payload json.RawMessage) (string, []ledger.BalanceException, erro
 	slices.SortFunc(out, func(a, b ledger.BalanceException) int { return strings.Compare(a.Account, b.Account) })
 	return date, out, nil
 }
+
+// AccountBalances returns each Trial Balance account's year-to-date net; an account missing from the directory has no class.
+func AccountBalances(payload json.RawMessage) (string, []ledger.AccountBalance, error) {
+	currency, _, rows, err := Balances(payload)
+	if err != nil {
+		return "", nil, err
+	}
+	out := []ledger.AccountBalance{}
+	for _, row := range rows {
+		net, err := ledger.Net(row.YTDDebit, row.YTDCredit)
+		if err != nil {
+			return "", nil, fmt.Errorf("Xero Trial Balance %v for %s", err, row.Name)
+		}
+		out = append(out, ledger.AccountBalance{ID: row.AccountID, Name: row.Name, Class: classes[row.Class], Net: net})
+	}
+	return currency, out, nil
+}

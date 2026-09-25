@@ -8,6 +8,12 @@ import (
 	"strings"
 )
 
+// AccountBalance is one ledger account's month-end net (debit minus credit).
+type AccountBalance struct {
+	ID, Name, FullName, Class, AccountType, Subtype string
+	Net                                             *big.Rat
+}
+
 type BalanceException struct {
 	Type      string `json:"type"`
 	AccountID string `json:"account_id"`
