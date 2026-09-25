@@ -44,29 +44,37 @@ func independenceIssue(ctx context.Context, q querier, closeID, paperID, approve
 
 func registerIndependence(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/organization/policy", func(w http.ResponseWriter, r *http.Request) {
-		var required bool
-		if err := db.QueryRowContext(r.Context(), `SELECT require_independent_review FROM organizations WHERE id=$1`, organization(r)).Scan(&required); err != nil {
+		var required, passcode bool
+		if err := db.QueryRowContext(r.Context(), `SELECT require_independent_review,require_link_passcode FROM organizations WHERE id=$1`, organization(r)).Scan(&required, &passcode); err != nil {
 			problem(w, 503, "Firm policy is unavailable.")
 			return
 		}
-		a := actorPermissions(r)
-		jsonReply(w, 200, map[string]any{"independent_review": required, "hosted": organization(r) != "local-development", "can_manage": organization(r) != "local-development" && slices.Contains(a, "org:manage")})
+		local := organization(r) == "local-development"
+		manage := slices.Contains(actorPermissions(r), "org:manage")
+		jsonReply(w, 200, map[string]any{"independent_review": required, "link_passcode": passcode, "hosted": !local, "can_manage": !local && manage, "can_manage_links": local || manage})
 	})
+	// Each change names only the settings it changes and records the resulting state of both.
 	mux.HandleFunc("POST /v1/closes/organization/policy", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
-			IndependentReview bool   `json:"independent_review"`
+			IndependentReview *bool  `json:"independent_review"`
+			LinkPasscode      *bool  `json:"link_passcode"`
 			Reason            string `json:"reason"`
 		}
 		if !decode(w, r, &input) {
 			return
 		}
 		input.Reason = strings.TrimSpace(input.Reason)
-		if organization(r) == "local-development" {
+		local := organization(r) == "local-development"
+		if input.IndependentReview == nil && input.LinkPasscode == nil {
+			problem(w, 422, "Choose the firm policy to change.")
+			return
+		}
+		if local && input.IndependentReview != nil {
 			problem(w, 409, "Local development shares one identity, so independent review can only be enforced for hosted firms.")
 			return
 		}
-		if !slices.Contains(actorPermissions(r), "org:manage") {
-			problem(w, 403, "Changing firm review policy requires org:manage.")
+		if !local && !slices.Contains(actorPermissions(r), "org:manage") {
+			problem(w, 403, "Changing firm policy requires org:manage.")
 			return
 		}
 		if len(input.Reason) < 5 || len(input.Reason) > 500 {
@@ -79,13 +87,14 @@ func registerIndependence(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		if _, err = tx.ExecContext(r.Context(), `UPDATE organizations SET require_independent_review=$2 WHERE id=$1`, organization(r), input.IndependentReview); err == nil {
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO organization_policy_changes(organization_id,independent_review,reason,actor) VALUES($1,$2,$3,$4)`, organization(r), input.IndependentReview, input.Reason, subject(r))
+		var review, passcode bool
+		if err = tx.QueryRowContext(r.Context(), `UPDATE organizations SET require_independent_review=COALESCE($2,require_independent_review),require_link_passcode=COALESCE($3,require_link_passcode) WHERE id=$1 RETURNING require_independent_review,require_link_passcode`, organization(r), input.IndependentReview, input.LinkPasscode).Scan(&review, &passcode); err == nil {
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO organization_policy_changes(organization_id,independent_review,link_passcode,reason,actor) VALUES($1,$2,$3,$4,$5)`, organization(r), review, passcode, input.Reason, subject(r))
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Firm policy change could not be confirmed.")
 			return
 		}
-		jsonReply(w, 200, map[string]bool{"independent_review": input.IndependentReview})
+		jsonReply(w, 200, map[string]bool{"independent_review": review, "link_passcode": passcode})
 	})
 }

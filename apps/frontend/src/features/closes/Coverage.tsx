@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { EmailHistory, SendRequestEmail, type EmailRecord } from "./Email";
+import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord } from "./Email";
 import { workspaceRequest } from "./workspace";
 
 type Requirement = { account_id: string; name: string; kind: string; question: string; binding_id: string; job_ids: string[]; suggested_job_ids: string[]; suggested_ledger_queries: string[]; excluded: boolean; reason: string; state: string };
@@ -15,6 +15,7 @@ export function Coverage({ closeId }: { closeId: string }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [body, setBody] = useState("");
   const [link, setLink] = useState("");
+  const [passcode, setPasscode] = useState("");
   const [version, setVersion] = useState(0);
   const [accountSearch, setAccountSearch] = useState("");
   const [accountPage, setAccountPage] = useState(0);
@@ -31,7 +32,7 @@ export function Coverage({ closeId }: { closeId: string }) {
     setBusy(true); setError("");
     try {
       const result = await workspaceRequest(attachment ? `/${closeId}/attachments/${attachment}` : `/${closeId}/coverage`, { digest: status?.coverage.digest, ...input });
-      if (result.link_token) setLink(`${window.location.origin}/request#${result.link_token}`);
+      if (result.link_token) { setLink(`${window.location.origin}/request#${result.link_token}`); setPasscode(result.passcode ?? ""); }
       setVersion(v => v + 1);
     } catch (e) { setError(e instanceof Error ? e.message : "Decision could not be confirmed."); }
     finally { setBusy(false); }
@@ -88,15 +89,16 @@ export function Coverage({ closeId }: { closeId: string }) {
             <button disabled={selected.length === 0}>Approve request and create private link</button>
           </fieldset>
         </form>
-        <p>Share the link manually or approve email delivery below. Creating a request does not send an email. Anyone with the link can reply; their identity is not verified.</p>
+        <p>Share the link manually or approve email delivery below. Creating a request does not send an email. Anyone with the link can reply unless the firm requires a passcode, which you give the client another way.</p>
       </details>
     </>}
     {link && <label>Copy this private reply link now<input readOnly value={link} onFocus={e => e.currentTarget.select()} /></label>}
+    <PasscodeNotice passcode={passcode} />
     {!!status?.requests.length && <details><summary>Approved consolidated requests ({status.requests.length})</summary>{status.requests.map(q => <article key={q.id}>
       <h4>Request #{q.id} · {q.recipient}</h4><pre style={{ whiteSpace: "pre-wrap" }}>{q.body}</pre>
       <p>{q.link?.used_at ? "Reply received" : q.link?.revoked_at ? "Link revoked" : q.link ? `Expires ${new Date(q.link.expires_at).toLocaleString()}` : "No current link"}</p>
       {!!q.emails?.length && <EmailHistory emails={q.emails} />}
-      {!q.link?.used_at && !q.link?.revoked_at && (!q.email || (q.email.state==="accepted" && q.email.delivery==="delivered")) && <SendRequestEmail key={q.email?.id ?? "initial"} closeId={closeId} requestId={q.id} recipient={q.recipient} previousId={q.email?.id} onQueued={()=>{setLink("");setVersion(v=>v+1);}} />}
+      {!q.link?.used_at && !q.link?.revoked_at && (!q.email || (q.email.state==="accepted" && q.email.delivery==="delivered")) && <SendRequestEmail key={q.email?.id ?? "initial"} closeId={closeId} requestId={q.id} recipient={q.recipient} previousId={q.email?.id} onQueued={(p)=>{if(!q.email){setLink("");setPasscode(p);}setVersion(v=>v+1);}} />}
       {!q.link?.used_at && <><button disabled={busy} onClick={() => void act({ action: "link", request_id: q.id, confirmed: true })}>Replace private link</button><button disabled={busy} onClick={() => void act({ action: "revoke", request_id: q.id, confirmed: true })}>Withdraw request</button></>}
     </article>)}</details>}
     <details open={!!status?.attachments.length}><summary>Client attachments ({status?.attachments.length ?? 0})</summary>

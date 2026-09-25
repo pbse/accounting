@@ -164,6 +164,17 @@ export function EmailSettings() {
   );
 }
 
+// The passcode exists only in this response; the firm tells the client another way.
+export function PasscodeNotice({ passcode }: { passcode: string }) {
+  if (!passcode) return null;
+  return (
+    <p role="status">
+      Passcode for this link: <strong>{passcode.slice(0, 4)} {passcode.slice(4)}</strong>. Tell the client by phone or in person, never in the same
+      email. It is shown only now; if it is lost, issue a new link.
+    </p>
+  );
+}
+
 export function SendRequestEmail({
   closeId,
   jobId,
@@ -179,7 +190,7 @@ export function SendRequestEmail({
   revision?: number;
   previousId?: string;
   recipient: string;
-  onQueued: () => void;
+  onQueued: (passcode: string) => void;
 }) {
   const [data, setData] = useState<Configuration>();
   const [busy, setBusy] = useState(false);
@@ -200,7 +211,7 @@ export function SendRequestEmail({
     setBusy(true);
     setError("");
     try {
-      await workspaceRequest(
+      const result = await workspaceRequest(
         `/${closeId}${jobId ? `/work/${jobId}` : ""}/requests/${requestId}/email`,
         {
           revision,
@@ -210,7 +221,7 @@ export function SendRequestEmail({
             new FormData(event.currentTarget).get("confirmed") === "on",
         },
       );
-      onQueued();
+      onQueued(result.passcode ?? "");
     } catch (e) {
       setError(
         e instanceof Error

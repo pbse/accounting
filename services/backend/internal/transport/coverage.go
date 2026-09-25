@@ -240,7 +240,7 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 404, "Request not found.")
 				return
 			}
-			token := ""
+			token, passcode := "", ""
 			if in.Action == "link" {
 				if err = preparation.FreshClientRequest(r.Context(), tx, closeID, rid); err != nil {
 					problem(w, 409, err.Error())
@@ -253,13 +253,13 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='needs_confirmation' WHERE id IN (SELECT t.job_id FROM work_request_targets t JOIN preparation_intakes i ON i.job_id=t.job_id WHERE t.request_id=$1 AND t.revision=i.revision) AND state='waiting_client'`, rid)
 			}
 			if err == nil && token != "" {
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO client_request_links(digest,request_id,issued_by) VALUES($1,$2,$3)`, preparation.Digest([]byte(token)), rid, actor)
+				passcode, err = issueLink(r.Context(), tx, rid, actor, token)
 			}
 			if err != nil || tx.Commit() != nil {
 				problem(w, 503, "Link update unconfirmed.")
 				return
 			}
-			jsonReply(w, 200, map[string]string{"link_token": token})
+			jsonReply(w, 200, map[string]string{"link_token": token, "passcode": passcode})
 			return
 		}
 		view, err := currentCoverage(r.Context(), tx, closeID)
@@ -359,15 +359,15 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 					_, err = tx.ExecContext(r.Context(), `INSERT INTO work_request_targets(request_id,job_id,revision) SELECT $1,job_id,revision FROM preparation_intakes WHERE job_id=$2`, rid, id)
 				}
 			}
-			token := rand.Text()
+			token, passcode := rand.Text(), ""
 			if err == nil {
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO client_request_links(digest,request_id,issued_by) VALUES($1,$2,$3)`, preparation.Digest([]byte(token)), rid, actor)
+				passcode, err = issueLink(r.Context(), tx, rid, actor, token)
 			}
 			if err != nil || tx.Commit() != nil {
 				problem(w, 409, "Request could not be confirmed. Refresh history before retrying.")
 				return
 			}
-			jsonReply(w, 200, map[string]string{"id": rid, "link_token": token})
+			jsonReply(w, 200, map[string]string{"id": rid, "link_token": token, "passcode": passcode})
 			return
 		default:
 			problem(w, 422, "Unknown coverage action.")

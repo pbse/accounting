@@ -17,6 +17,8 @@ export default function ClientRequest() {
   const [busy, setBusy] = useState(false);
   const [scanStatus, setScanStatus] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [passcode, setPasscode] = useState("");
+  const [needsPasscode, setNeedsPasscode] = useState(false);
   async function call(body?: object | FormData): Promise<Request> {
     const response = await fetch(`${apiBaseUrl}/v1/client-request`, {
       method: body ? "POST" : "GET",
@@ -25,11 +27,13 @@ export default function ClientRequest() {
       referrerPolicy: "no-referrer",
       headers: {
         Authorization: `Bearer ${token}`,
+        ...(passcode ? { "X-Request-Passcode": passcode } : {}),
         ...(body && !(body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
       },
       ...(body ? { body: body instanceof FormData ? body : JSON.stringify(body) } : {}),
     });
     const result = await response.json().catch(() => ({ message: "The request was blocked or is unavailable. Contact the firm; retry unchanged if receipt is uncertain." }));
+    setNeedsPasscode(result.code === "PASSCODE_REQUIRED" || response.status === 403);
     if (!response.ok)
       throw new Error(
         result.message || "Request unavailable. Contact the firm.",
@@ -68,7 +72,7 @@ export default function ClientRequest() {
       setScanStatus(`Checking ${file.name} with ${textFile ? "the on-demand text scanner (startup may take a few minutes)" : "Cloudflare"}…`);
       const response = await fetch(`${apiBaseUrl}/v1/client-request/${textFile ? "scan-text" : "scan"}`, {
         method: "POST", credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": textFile ? "application/octet-stream" : "application/pdf" },
+        headers: { Authorization: `Bearer ${token}`, ...(passcode ? { "X-Request-Passcode": passcode } : {}), "Content-Type": textFile ? "application/octet-stream" : "application/pdf" },
         body: file,
       });
       if (!response.ok) throw new Error("Your reply is saved, but an attachment could not pass malware scanning. It remains quarantined. Retry with the same original files or contact the firm; do not change the file extension.");
@@ -118,7 +122,23 @@ export default function ClientRequest() {
       {error && <p role="alert">{error}</p>}
       {scanStatus && <p role="status">{scanStatus}</p>}
       {!request && !error && <p role="status">Opening your request…</p>}
-      {!request && error && (
+      {!request && needsPasscode && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setPasscode(String(new FormData(e.currentTarget).get("passcode") ?? "").replace(/\s/g, ""));
+            setRefresh((n) => n + 1);
+          }}
+        >
+          <label>
+            Passcode from your accounting team
+            <input name="passcode" inputMode="numeric" autoComplete="one-time-code" maxLength={9} required />
+          </label>
+          <button>Open request</button>
+          <p className="note">Your accounting team gives you this passcode by phone or in person; it is never in the email. Five wrong tries close the link.</p>
+        </form>
+      )}
+      {!request && error && !needsPasscode && (
         <button onClick={() => setRefresh((n) => n + 1)}>
           Retry opening request
         </button>

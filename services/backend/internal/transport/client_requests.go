@@ -2,9 +2,12 @@ package transport
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"regexp"
 	"slices"
@@ -88,6 +91,61 @@ func redactSensitive(text string) (string, []string) {
 	return text, removed
 }
 
+// issueLink stores a new private reply link. When the firm requires passcodes it also returns an 8-digit
+// passcode, salted by the raw token the database never holds; both are shown only to the issuing person.
+func issueLink(ctx context.Context, tx *sql.Tx, requestID, actor, token string) (string, error) {
+	var required bool
+	// The firm's row stays locked until commit, so a policy change cannot slip between this read and the insert.
+	if err := tx.QueryRowContext(ctx, `SELECT o.require_link_passcode FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id JOIN organizations o ON o.id=c.organization_id WHERE q.id::text=$1 FOR SHARE OF o`, requestID).Scan(&required); err != nil {
+		return "", err
+	}
+	passcode, digest := "", ""
+	if required {
+		n, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
+		if err != nil {
+			return "", err
+		}
+		passcode = fmt.Sprintf("%08d", n)
+		digest = preparation.Digest([]byte(token + ":" + passcode))
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO client_request_links(digest,request_id,issued_by,passcode_digest) VALUES($1,$2::bigint,$3,NULLIF($4,''))`, preparation.Digest([]byte(token)), requestID, actor, digest)
+	return passcode, err
+}
+
+// linkPasscode checks the passcode a link may need before anything about its request is read. Each wrong try is
+// recorded on its own, and the fifth revokes the link.
+func linkPasscode(w http.ResponseWriter, r *http.Request, db *sql.DB, token string) bool {
+	var stored string
+	err := db.QueryRowContext(r.Context(), `SELECT COALESCE(passcode_digest,'') FROM client_request_links WHERE digest=$1`, preparation.Digest([]byte(token))).Scan(&stored)
+	if err == sql.ErrNoRows || err == nil && stored == "" {
+		return true
+	}
+	if err != nil {
+		problem(w, 503, "Request service unavailable.")
+		return false
+	}
+	supplied := r.Header.Get("X-Request-Passcode")
+	if supplied == "" {
+		problemCode(w, 401, "PASSCODE_REQUIRED", "Enter the passcode your accounting team gave you.")
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(preparation.Digest([]byte(token+":"+supplied))), []byte(stored)) == 1 {
+		return true
+	}
+	var failures int
+	var revoked bool
+	if err = db.QueryRowContext(r.Context(), `UPDATE client_request_links SET passcode_failures=passcode_failures+1,revoked_at=CASE WHEN passcode_failures>=4 THEN COALESCE(revoked_at,now()) ELSE revoked_at END WHERE digest=$1 RETURNING passcode_failures,revoked_at IS NOT NULL`, preparation.Digest([]byte(token))).Scan(&failures, &revoked); err != nil {
+		problem(w, 503, "Request service unavailable.")
+		return false
+	}
+	if revoked {
+		problem(w, 404, "This link no longer works after too many wrong passcodes, or it was revoked. Ask your accounting team for a new link.")
+		return false
+	}
+	problem(w, 403, fmt.Sprintf("That passcode is not right. %d tries left.", 5-failures))
+	return false
+}
+
 // Staff capture and scoped client replies share the same evidence/queue writer; every reply is redacted first.
 func saveWorkReply(ctx context.Context, tx *sql.Tx, closeID, jobID, requestID, body, actor, from string) (int, error) {
 	if len(strings.TrimSpace(body)) == 0 || len(body) > 20000 || !utf8.ValidString(body) || strings.ContainsRune(body, 0) || len(from) == 0 || len(from) > 254 {
@@ -136,6 +194,9 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || (len(token) < 26 || len(token) > 128) {
 			problem(w, 404, "Request link unavailable. Ask the firm for a new link.")
+			return
+		}
+		if !linkPasscode(w, r, db, token) {
 			return
 		}
 		var bodyInput string

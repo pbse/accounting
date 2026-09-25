@@ -283,6 +283,32 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	if state != "cancelled" || attempts != 2 {
 		t.Fatal("stale approved request was sent")
 	}
+	// With passcodes required the approval shows one once; a retried approval refuses rather than hide it.
+	if _, err = db.Exec(`UPDATE organizations SET require_link_passcode=true WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
+	job, request = makeRequest("invoice-four")
+	guarded := "/v1/closes/" + closeID + "/work/" + job + "/requests/" + request + "/email"
+	approval := map[string]any{"confirmed": true, "revision": 1, "connection_id": status.Connection.ID}
+	var approved struct{ ID, Passcode string }
+	json.Unmarshal(call("POST", guarded, approval, 200), &approved)
+	var sealed []byte
+	if err = db.QueryRow(`SELECT payload FROM email_outbox WHERE id=$1`, approved.ID).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := secrets.Open(org+"/email/"+approved.ID, sealed)
+	if len(approved.Passcode) != 8 || err != nil || !strings.Contains(string(plain), "passcode your accounting team gives you") || strings.Contains(string(plain), approved.Passcode) {
+		t.Fatalf("the approval returns the passcode and the email only says one will be given: %+v %v", approved, err)
+	}
+	if body := call("POST", guarded, approval, 409); !strings.Contains(string(body), "new private reply link") {
+		t.Fatalf("a retried approval cannot show the passcode again: %s", body)
+	}
+	if _, err = db.Exec(`UPDATE email_outbox SET state='cancelled' WHERE id=$1`, approved.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE organizations SET require_link_passcode=false WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
 	// Group request has no primary job: two pinned jobs share one email/link.
 	jobA, _ := makeRequest("group-a")
 	jobB, _ := makeRequest("group-b")

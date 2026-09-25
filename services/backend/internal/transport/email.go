@@ -171,6 +171,19 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if existing != "" {
+			// A reminder reuses the original link and passcode, so only a first approval's retry can lose one.
+			guarded := false
+			if in.PreviousID == "" {
+				err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT l.passcode_digest IS NOT NULL FROM email_outbox m JOIN client_request_links l ON l.digest=m.link_digest WHERE m.id=$1),false)`, existing).Scan(&guarded)
+			}
+			if err != nil {
+				problem(w, 503, "Email history unavailable.")
+				return
+			}
+			if guarded {
+				problem(w, 409, "This email was already approved, and its link's passcode was shown only then. If it was not recorded, create a new private reply link, which replaces the emailed one, and give the client that link and its passcode.")
+				return
+			}
 			jsonReply(w, 200, map[string]string{"id": existing})
 			return
 		}
@@ -200,10 +213,24 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 		}
 		id, token := rand.Text(), rand.Text()
 		digest := preparation.Digest([]byte(token))
+		passcode := ""
+		if in.PreviousID == "" {
+			// A reminder reuses the original link and its passcode.
+			if _, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id::text=$1 AND revoked_at IS NULL AND used_at IS NULL`, r.PathValue("request")); err == nil {
+				passcode, err = issueLink(r.Context(), tx, r.PathValue("request"), actor, token)
+			}
+			if err != nil {
+				problem(w, 503, "Email approval could not be confirmed. Refresh Work before retrying.")
+				return
+			}
+		}
 		message := delivery.Email{From: sender, To: []string{recipient}, Subject: "A secure request from your accounting team", Text: "Your accounting team has requested information. Review the request and reply using this private link:\n\n" + strings.TrimRight(origin.String(), "/") + "/request#" + token + "\n\nThis link expires in seven days. Do not forward it. Contact your accounting team if you were not expecting this request."}
 		if intake := strings.Split(os.Getenv("EMAIL_INTAKE_ADDRESS"), "@"); len(intake) == 2 && intake[0] != "" && intake[1] != "" && len(os.Getenv("EMAIL_INTAKE_KEY")) >= 32 {
 			message.ReplyTo = intake[0] + "+reply-" + strings.ToLower(id) + "@" + intake[1]
 			message.Text += "\n\nYou may also reply to this email with text. Your accounting team will review the sender and answer before using it; use the secure link for attachments."
+		}
+		if passcode != "" {
+			message.Text += "\n\nYou will also need the passcode your accounting team gives you by phone or in person. It is never sent by email."
 		}
 		if in.PreviousID != "" {
 			var prior []byte
@@ -235,11 +262,6 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 		if a.ExpiresAt.Time.Before(until) {
 			until = a.ExpiresAt.Time
 		}
-		if in.PreviousID == "" {
-			if _, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id::text=$1 AND revoked_at IS NULL AND used_at IS NULL`, r.PathValue("request")); err == nil {
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO client_request_links(digest,request_id,issued_by) VALUES($1,$2,$3)`, digest, r.PathValue("request"), actor)
-			}
-		}
 		if err == nil {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO email_outbox(id,request_id,connection_id,link_digest,payload,approved_by,approved_until,firm_authority,reminder_of) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''))`, id, r.PathValue("request"), connection, digest, encrypted, actor, until, firmAccess(r), in.PreviousID)
 		}
@@ -247,7 +269,7 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Email approval could not be confirmed. Refresh Work before retrying.")
 			return
 		}
-		jsonReply(w, 200, map[string]string{"id": id})
+		jsonReply(w, 200, map[string]string{"id": id, "passcode": passcode})
 	}
 	mux.HandleFunc("POST /v1/closes/{id}/work/{job}/requests/{request}/email", send)
 	mux.HandleFunc("POST /v1/closes/{id}/requests/{request}/email", send)

@@ -7,7 +7,7 @@ import { EmailSettings } from "./Email";
 import { FirmEnrollment, FirmOperations } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { independent_review: boolean; hosted: boolean; can_manage: boolean };
+type Policy = { independent_review: boolean; link_passcode: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
 
 function IndependentReview() {
   const [policy, setPolicy] = useState<Policy>();
@@ -66,6 +66,62 @@ function IndependentReview() {
   );
 }
 
+function LinkPasscodes() {
+  const [policy, setPolicy] = useState<Policy>();
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/organization/policy")
+      .then((data) => live && setPolicy(data))
+      .catch((e) => live && setMessage(e instanceof Error ? e.message : "Firm policy is unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [refresh]);
+  if (!policy) return message ? <p role="alert">{message}</p> : null;
+  async function change() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await workspaceRequest("/organization/policy", { link_passcode: !policy!.link_passcode, reason });
+      setReason("");
+      setRefresh((n) => n + 1);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Policy change failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-label="Client link passcodes">
+      <h2>Client link passcodes</h2>
+      <p>
+        {policy.link_passcode
+          ? "On: each new client request link also needs an 8-digit passcode. The person who issues the link sees it once and tells the client by phone or in person; five wrong tries close the link."
+          : "Off: anyone holding a client request link can read the request and reply."}{" "}
+        Links issued earlier keep working as they were issued.
+      </p>
+      {policy.can_manage_links ? (
+        <>
+          <label>
+            Reason for the change
+            <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change()}>
+            {policy.link_passcode ? "Stop requiring passcodes" : "Require passcodes on new links"}
+          </button>
+        </>
+      ) : (
+        <p className="note">A firm administrator with org:manage can change this policy.</p>
+      )}
+      {message && <p role="alert">{message}</p>}
+    </section>
+  );
+}
+
 export default function Firm() {
   const [entities, setEntities] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -100,6 +156,7 @@ export default function Firm() {
       {loaded && !error && (
         <div className="stack">
           <IndependentReview />
+      <LinkPasscodes />
           <AgentAccess />
           <FirmOperations />
           <ClientAccess entities={entities} />

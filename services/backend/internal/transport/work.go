@@ -308,7 +308,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		linkToken := ""
+		linkToken, passcode := "", ""
 		switch action {
 		case "confirm":
 			if state != "needs_confirmation" || !in.FactsConfirmed || (len(proposed.Unselected) > 0 && !in.InventoryConfirmed) {
@@ -490,7 +490,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id=$1 AND revoked_at IS NULL AND used_at IS NULL`, requestID)
 			if err == nil && action == "link" {
 				linkToken = rand.Text()
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO client_request_links(digest,request_id,issued_by) VALUES($1,$2,$3)`, preparation.Digest([]byte(linkToken)), requestID, actor)
+				passcode, err = issueLink(r.Context(), tx, requestID, actor, linkToken)
 			}
 
 		case "retry", "alias":
@@ -535,7 +535,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Work update could not be confirmed. Refresh before retrying.")
 			return
 		}
-		jsonReply(w, 200, map[string]string{"id": jobID, "link_token": linkToken})
+		jsonReply(w, 200, map[string]string{"id": jobID, "link_token": linkToken, "passcode": passcode})
 	})
 }
 
