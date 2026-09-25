@@ -2,6 +2,8 @@
 
 Production posting is a separate, manually activated capability. Ordinary local development needs no production credentials and never calls a production QuickBooks company. The supported writes are one USD journal per approved draft: the initial full-month **prepaid**, and, once enabled (below), an **accrual**'s month-end adjustment (never its next-month reversal), a **loan** schedule's month-end entries combined in one journal, and an answered **owner** item's reclassification. Blocked, question-only and other drafts are never posted.
 
+**Rule: agents prepare, people approve before anything is written.** Agents may prepare drafts, comparisons and proposed entries, and may read from QuickBooks and Xero. Every write to an outside system needs a person's approval first: a QuickBooks journal, Bill or supplier credit (`posting:approve`, then `posting:execute`), or a client email (each message, including every reminder). No background worker writes to QuickBooks or sends email on its own, and no agent tool can post.
+
 ## Setup
 
 1. Back up PostgreSQL. Stop API and worker, apply `023_production_posting.sql` after 022, then deploy matching code. Fresh Compose volumes apply all migrations. The API readiness check requires the new tables.

@@ -62,7 +62,7 @@ export function Recurring({ closeId, currency, onPrepared }: { closeId: string; 
   }
   return <details>
     <summary>Refresh recurring schedules</summary>
-    <p>Capture this month’s QuickBooks period reports above, then compare carried prepaid, deferred revenue and depreciation schedules with each schedule's exact Trial Balance account. The client’s accounting professional must confirm the month-end booked balance and method before a new draft is prepared. No journal is posted automatically.</p>
+    <p>Capture this month’s QuickBooks period reports above, then compare carried prepaid, deferred revenue and depreciation schedules with each schedule's exact Trial Balance account. When a schedule's Trial Balance row is unambiguous and on its normal side, the agent prepares the comparison itself; its draft's ledger reference says the balance was read by the agent, and a person confirms the balance, method and entry when approving it. Otherwise enter the booked balance here. Nothing is posted without a person's separate posting approval.</p>
     <button disabled={busy} onClick={() => void load()}>Compare current period</button>
     {error && <p role="alert">{error}</p>}
     {queued && <p role="status">{queued}</p>}

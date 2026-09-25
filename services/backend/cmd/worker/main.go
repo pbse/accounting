@@ -31,5 +31,6 @@ func main() {
 	go quickbooks.RunSync(ctx, db)
 	go transport.RunAlerts(ctx, db)
 	go transport.RunStandingApprovals(ctx, db)
+	go transport.RunComparisons(ctx, db)
 	transport.Run(transport.Worker())
 }
