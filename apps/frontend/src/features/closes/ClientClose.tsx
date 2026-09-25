@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { Avatar, Icon, type IconName } from "../dashboard/Icon";
 import { BillCorrection } from "./BillCorrection";
+import { Brief } from "./Brief";
 import { CarryForward } from "./CarryForward";
 import { Coordinator } from "./Coordinator";
 import { EmailReplies } from "./EmailReplies";
@@ -214,6 +215,7 @@ export default function ClientClose() {
       </nav>
       {tab === "overview" && (
         <div className="stack">
+          <Brief key={`brief-${close.id}-${papers.map((paper) => paper.id + paper.review_state).join()}`} closeId={close.id} />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />

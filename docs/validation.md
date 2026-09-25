@@ -609,3 +609,22 @@ Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; a
 - `TestTieOutComparesBalancesWithLatestSupport` (PostgreSQL): from a QuickBooks Trial Balance, prepaid insurance (1,000.00 from the latest versions of two policies), accumulated depreciation (600.00 credit from cost 3,000.00 less salvage 600.00 less 1,800.00 remaining), deferred revenue, checking, a card reconciled with a missing page (provisional), accrued payroll whose entry was verified before the capture, and a loan whose 2,000.00 due within a year is capped at its 1,500.00 principal all tie; accrued liabilities (400.00 booked, 500.00 target, 100.00 proposed) tie after entries; an accrual whose proposal is stale differs; an accrual whose posting outcome is unknown waits on it even though its balance already matches; the loan payable and office equipment have no support, with a hint; equity and expense accounts are left off; a prepaid naming "Prepaid rent", one naming the Utilities expense account and one prepared in EUR are listed, not compared, and an account missing from the directory is unclassified. A newer Xero Trial Balance ties the same way. Observed red without latest-version selection, without the posted-before-capture boundary, the unknown-posting state, provisional marking, the deferred revenue sign, salvage, the loan cap, the card sign, unclassified accounts, the balance-sheet filter, the exact after-entries match, Xero class mapping, QuickBooks rows missing from the directory, the currency check, the balance-sheet check on support, and with a tie checked before an unknown posting.
 - Existing abnormal- and holding-balance tests pass unchanged on the shared Trial Balance reader.
 
+## Where this close stands (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. It found that the proposed "run the close" orchestration was unsafe: carry-forward runs from a close into its next month; repeating a month-end snapshot replaces ledger evidence that reviews and approvals depend on; a 90-second provider read cannot extend the outer request's deadline through internal dispatch; and agent OAuth lacks the integration permission. So the orchestration was dropped and this read-only brief shipped. Also adopted from the plan review: sources that cannot be read are marked not checked, the tie-out narration covers every status, and review counts are labelled as current drafts. Code review adopted:
+
+- An unreadable Trial Balance is not reported as read.
+- "Ready to sign off" and entries still to post are actions for the person.
+- Drafts with no evidence are counted and named.
+- A failed balance check keeps the exception scan from reading as done.
+- The card reloads with the close and has a Refresh button with an "as of" time, because some Work actions do not reload the page (second delta round).
+- Unclassified ledger accounts get their own action.
+
+- `TestCloseBriefNarratesWhatNeedsAPerson` (PostgreSQL):
+  - An empty close asks for a snapshot and documents; once its scope is set and nothing blocks sign-off, it asks for sign-off.
+  - A close with a snapshot, a document needing confirmation, two ready drafts (one the latest of two versions), a draft with no evidence, a blocked reconciliation, a differing prepaid balance, an accrual that ties once its entry posts, an unsupported loan and an abnormal checking balance reports each area's state. Its headline reads "8 things need you: confirm 1 document, approve 2 drafts, add evidence to 1 draft, fix 1 draft, explain 1 balance difference, support 1 balance, post the proposed entries for 1 balance, send 1 client question."
+  - A snapshot from a connection needing reconnection is out of date.
+  - An unreadable workpaper makes the ledger and balance sheet "not checked", named in the headline. So does an unreadable Trial Balance, which also marks the exception scan not checked.
+  - Observed red without latest-version drafts, without the null-safe blocker check, without the unreadable-source state, without naming unchecked areas in the headline, without the approve need, when provisional counts include differing rows, without balance questions, without the confirmation state, without the stale check, without the sign-off, no-evidence and post-entries actions, without the unreadable Trial Balance state, and without the failed balance check.
+- `TestMCPToolsUseTheSignedInPersonsAccess` now lists `close_brief` and `tie_out`.
+

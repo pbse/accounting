@@ -39,6 +39,8 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 | `get_workpaper` | One draft: inputs, results, cited sources, blockers and questions |
 | `find_exceptions` | Questions from the latest QuickBooks capture, abnormal Trial Balance balances and holding or clearing accounts that still hold a balance |
 | `get_readiness` | What still blocks sign-off |
+| `close_brief` | Where a close stands, area by area, with a headline of what needs a person |
+| `tie_out` | Each asset and liability compared with the balance the close's workpapers support |
 | `list_client_requests`, `draft_client_request` | Client request drafts; save a new draft (not sent or approved) |
 | `open_close` | Open or return the close for a client and month |
 | `add_evidence` | Upload a text or CSV document, which starts intake |

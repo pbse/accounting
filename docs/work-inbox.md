@@ -82,6 +82,19 @@ The close Overview scans every row of the latest completed QuickBooks transactio
 
 Each item names the QuickBooks transaction IDs, the evidence still missing and a plain client question. **Copy client questions** puts them on the clipboard for a client request. Nothing is recategorized, deleted, merged or posted. Owner or personal purpose is never inferred. Without a capture, the card asks for one rather than reporting "no exceptions".
 
+## Where this close stands
+
+The top of the close Overview narrates the close in the order an accountant walks it (`GET /v1/closes/{id}/brief`, MCP `close_brief`), with no provider or model call:
+
+1. **Ledger:** the month-end Trial Balance in use, or a request to capture one.
+2. **Preparation:** documents prepared, in progress, needing confirmation, waiting on the client, or failed.
+3. **Review:** current drafts (the latest version of each) that are approved, ready for approval, or need attention.
+4. **Balance sheet:** the tie-out summary, naming up to three accounts per problem.
+5. **Exceptions:** the client questions found.
+6. **Sign-off:** signed off, ready to sign off (an action for the person), or what it waits on.
+
+Each line is marked done, needs you, waiting, or not checked, and links to its tab. The card shows when it was read; **Refresh** reads it again after work elsewhere on the page. The headline lists what needs a person, such as "3 things need you: approve 2 drafts, support 1 balance, send 4 client questions." It reads the same tie-out, exceptions and readiness endpoints as their own panels. A source that cannot be read is reported as not checked and named in the headline, never shown as clear. Review counts cover current drafts only, so they can be lower than the Overview's counts, which include earlier versions.
+
 ## Balance sheet tie-out
 
 The close Overview compares every asset and liability account in the newest month-end QuickBooks or Xero Trial Balance with the balance the close's workpapers support (`GET /v1/closes/{id}/tie-out`), with no provider or model call. Only the latest version of each workpaper counts, as in the year-end handoff. Support is the unexpired prepaid, minus unearned deferred revenue, minus depreciation to date on the accumulated account, minus the accrual's target on its liability, the loan's principal split between the loan and current-portion accounts (the current portion capped at principal, as the loan calculator does) plus accrued interest, and the reconciled ledger balance for banks (credit for cards). A workpaper's account is matched to exactly one Trial Balance account by name or full name, ignoring case.
