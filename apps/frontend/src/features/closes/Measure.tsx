@@ -95,6 +95,80 @@ export default function Measure() {
           {report.has_more && <p className="note">Showing the first 200 closes this month.</p>}
         </>
       )}
+      <TrackRecord />
     </>
+  );
+}
+
+type TrackRow = {
+  entity: string;
+  proposals_confirmed: number;
+  proposals_kept: number;
+  filled_by_person: number;
+  changed_fields: { field: string; count: number }[];
+  drafts_reviewed: number;
+  drafts_approved_unrevised: number;
+  drafts_revised: number;
+  drafts_sent_back: number;
+};
+
+const share = (part: number, whole: number) => (whole === 0 ? "—" : `${part} of ${whole} (${Math.round((100 * part) / whole)}%)`);
+
+function TrackRecord() {
+  const [data, setData] = useState<{ window_from: string; clients: TrackRow[]; unlinked_human_drafts: number; has_more: boolean }>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/track-record")
+      .then((result) => live && setData(result))
+      .catch((e) => live && setError(e instanceof Error ? e.message : "The track record is unavailable."));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!data) return error ? <p role="alert">{error}</p> : null;
+  return (
+    <section aria-label="Agent track record by client">
+      <div className="section-title">
+        <h2>Agent track record by client</h2>
+      </div>
+      <p className="note">
+        Closes from {data.window_from} on. Proposals are the model's readings of client documents that a person confirmed; kept means the person
+        confirmed every value the model gave. Drafts count once a person has judged them, by a recorded review decision or a revision. Rule-based readings,
+        carried-forward and recurring work, and {data.unlinked_human_drafts} drafts people saved directly are not counted.
+      </p>
+      <div className="rows">
+        <div className="rows-head">
+          <span>Client</span>
+          <span>Proposals kept as proposed</span>
+          <span>Drafts approved without revision</span>
+          <span>Most changed</span>
+        </div>
+        {data.clients.length === 0 && <p className="empty">No confirmed model proposals {data.has_more ? "among the first 200 clients" : "in this window"} yet.</p>}
+        {data.clients.map((c) => (
+          <div className="row" key={c.entity}>
+            <span className="row-main">
+              <Avatar label={c.entity} />
+              <strong>{c.entity}</strong>
+            </span>
+            <span>
+              {share(c.proposals_kept, c.proposals_confirmed)}
+              {c.filled_by_person > 0 && <small> · {c.filled_by_person} blank values filled by a person</small>}
+            </span>
+            <span>
+              {share(c.drafts_approved_unrevised, c.drafts_reviewed)}
+              {c.drafts_reviewed > 0 && (
+                <small>
+                  {" "}
+                  · {c.drafts_revised} revised, {c.drafts_sent_back} sent back (a draft can be both)
+                </small>
+              )}
+            </span>
+            <small>{c.changed_fields.map((f) => `${f.field.replaceAll("_", " ")} ×${f.count}`).join(", ") || "—"}</small>
+          </div>
+        ))}
+      </div>
+      {data.has_more && <p className="note">Showing the first 200 clients.</p>}
+    </section>
   );
 }

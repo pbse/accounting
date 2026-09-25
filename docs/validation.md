@@ -682,3 +682,31 @@ Code review rejected an account check for fixed assets: depreciation workpapers 
   - An item line alone, then an unknown account, make the scan incomplete, and the brief names both.
   - Observed red without the document number, whole-word, hyphen, currency, account and full-name checks, without the current-version filter, without the incomplete state for item lines, and without the brief's waiting and not-checked lines.
 
+## Agent track record by client (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium).
+
+The plan review rejected the first definition ("agent accuracy" over drafts with no author). Every worker-written draft has no author, including drafts a person directed, and a person's corrections come back through the worker. So the metric was redefined and labelled a track record:
+
+- model proposals compared with what a person confirmed;
+- drafts judged by recorded review decisions, not the current state, so replaced evidence does not rewrite history;
+- a revision counts only when a successor draft exists.
+
+The delta plan review added counting only model proposals (not rule-based ones), requiring an actual successor draft, and selecting the first 201 accessible clients before aggregating. Code review adopted: amounts compared by value only when they look like amounts (identifiers stay text); sent back and revised counted independently; a window of exactly 12 close months; an accurate empty message when not all clients are shown.
+
+- `TestTrackRecordComparesProposalsWithWhatPeopleConfirmed` (PostgreSQL). The fixture:
+  - a proposal confirmed with only case, spacing and 1,200 → 1200.00 differences, whose draft was approved, then its evidence replaced, with a revision queued that produced nothing;
+  - a proposal whose prepaid account and booking reference (0012 → 12) were changed, whose draft was sent back and then revised;
+  - a proposal with a blank end date the person filled, whose draft was sent back;
+  - a proposal whose kind was changed;
+  - excluded: an unconfirmed proposal, a rule-based one, one from a close two years old, one from exactly 12 months ago, a carried-forward job, and another firm's client.
+
+  Expected results:
+  - 4 confirmed, 2 kept, and changed fields "booking reference", "kind" and "prepaid account";
+  - 3 drafts judged: 1 approved, 1 revised, 2 sent back;
+  - 1 draft saved directly;
+  - a member without the client grant sees nothing.
+
+  Observed red without the model-only filter, without the confirmed filter, without the number, comma, leading-zero, case and blank-value rules, with a 13-month window, with sent back excluding revised drafts, without actual-successor revisions, when using the current review state, without the client grant, without the window, without the kind check, and without the direct-save filter.
+- `TestMCPToolsUseTheSignedInPersonsAccess` now lists `agent_track_record`.
+

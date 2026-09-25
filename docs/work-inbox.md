@@ -111,6 +111,16 @@ The close Overview compares every asset and liability account in the newest mont
 
 Each account **ties**, **ties after proposed entries** (the month-end entries still to post close the gap), **differs**, waits on a **posting outcome unknown** (checked first, since a write in flight may change the balance), or has **no support yet** with a hint on what support to add. A match against a workpaper that is not approved or has blockers is marked provisional. An entry already posted to the snapshot's company before the capture began is treated as part of the balance; one posted later still counts as pending. Support that names no account, several accounts, or an account that is not an asset or liability is listed rather than counted, as is a workpaper prepared in a currency other than the Trial Balance's, and so are Trial Balance accounts with no class, because the board may then be incomplete. Zero-balance accounts with no support are left off. Equity is not tied, receivables and payables are not compared with aging, and nothing blocks sign-off or changes the ledger.
 
+## Agent track record
+
+**Measure** shows, per client, how the model's work has held up over the last 12 close months, including this one (`GET /v1/closes/track-record`, MCP `agent_track_record`). It uses only recorded history, with no model call.
+
+**Proposals kept as proposed.** For each client document the model read and a person confirmed, it compares the model's kind and values with what the person confirmed. Case and spacing are ignored. Amounts compare by value (1,200 = 1200.00), but identifiers compare as text (0012 is not 12). A blank the person filled in counts as filled, not as a change. The fields people changed most are listed.
+
+**Drafts approved without revision.** For the drafts those confirmations produced, it counts the latest recorded review decision (approved or sent back) and whether a person's revision replaced the draft. A draft that was sent back and then revised counts as both; "approved without revision" means approved and never replaced. Replaced evidence does not rewrite an earlier judgment. A queued revision that produced nothing is not a revision.
+
+Not counted: rule-based and bank-export readings, carried-forward and recurring work, and drafts people saved directly; the page states how many of those there are. It is a record of what happened, not a promise of future accuracy. It grants the agent no authority.
+
 ## Daily books
 
 Work lists **Daily books**: for each accessible client's unsigned current- or prior-month close, the exceptions the latest QuickBooks transaction capture found that were not in the capture last marked reviewed. Captures run daily and soon after QuickBooks reports a change, so new duplicates, holding-account postings, payments without a payee and inconsistent coding surface during the month instead of at close. Each capture records its findings when it finishes; a capture with unchanged evidence carries the previous findings. A finding is the same when its type, transaction kind and QuickBooks IDs match; after reconnecting to a different company, everything counts as new. Clients with the most new findings come first, up to 100.
