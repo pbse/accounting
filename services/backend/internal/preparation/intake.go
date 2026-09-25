@@ -36,9 +36,11 @@ type Proposal struct {
 	ResponseID      string   `json:"response_id,omitempty"`
 	InputTokens     int      `json:"input_tokens,omitempty"`
 	OutputTokens    int      `json:"output_tokens,omitempty"`
-	Facts           []Fact   `json:"facts"`
-	Sources         []Source `json:"sources"`
-	Unselected      []Source `json:"unselected,omitempty"`
+	// EntityName is the one other client name an identity-blocked source gives, for confirming as an alias.
+	EntityName string   `json:"entity_name,omitempty"`
+	Facts      []Fact   `json:"facts"`
+	Sources    []Source `json:"sources"`
+	Unselected []Source `json:"unselected,omitempty"`
 }
 type IntakeSource struct {
 	Source
@@ -216,13 +218,17 @@ func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	aliases, err := ClientAliases(ctx, tx, closeID)
+	if err != nil {
+		return false, err
+	}
 	proposed, recognized := RecognizeExport(sources, period, true)
 	if !recognized {
 		proposed = Propose(sources)
 	}
 	for _, source := range sources {
 		if source.Role == "invoice" {
-			if blocked, ok := blockedIdentity(source.ID, entity, sources); ok {
+			if blocked, ok := blockedIdentity(source.ID, entity, aliases, sources); ok {
 				proposed = blocked
 			}
 			break

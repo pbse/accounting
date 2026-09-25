@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/accruals"
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/reconciliation"
@@ -195,6 +196,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			RequestID          string          `json:"request_id"`
 			DeliveryReference  string          `json:"delivery_reference"`
 			ReceivedFrom       string          `json:"received_from"`
+			Alias              string          `json:"alias"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -453,12 +455,24 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				_, err = tx.ExecContext(r.Context(), `INSERT INTO client_request_links(digest,request_id,issued_by) VALUES($1,$2,$3)`, preparation.Digest([]byte(linkToken)), requestID, actor)
 			}
 
-		case "retry":
+		case "retry", "alias":
 			if state != "failed" && state != "needs_confirmation" && state != "waiting_client" && state != "cancelled" {
 				problem(w, 409, "Only stopped or unresolved work can be rechecked.")
 				return
 			}
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO recovery_actions(organization_id,close_id,job_id,action,prior_state,actor,reason) VALUES($1,$2,$3,'retry_preparation',$4,$5,'Work inbox recheck')`, organization(r), closeID, jobID, state, actor)
+			reason := "Work inbox recheck"
+			if action == "alias" {
+				// Only the one other name the blocked source gives can become the client's alias.
+				if json.Unmarshal(raw, &proposed) != nil || proposed.Engine != "identity_blocked" || documents.NormalizeEntity(proposed.EntityName) == "" || documents.NormalizeEntity(in.Alias) != documents.NormalizeEntity(proposed.EntityName) {
+					problem(w, 409, "Confirm the one other client name this source gives.")
+					return
+				}
+				if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) SELECT organization_id,entity,$2,$3 FROM client_closes WHERE id=$1 ON CONFLICT DO NOTHING`, closeID, documents.NormalizeEntity(proposed.EntityName), actor); err != nil {
+					break
+				}
+				reason = "Client alias confirmed: " + proposed.EntityName
+			}
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO recovery_actions(organization_id,close_id,job_id,action,prior_state,actor,reason) VALUES($1,$2,$3,'retry_preparation',$4,$5,$6)`, organization(r), closeID, jobID, state, actor, reason)
 			if err != nil {
 				break
 			}
@@ -473,7 +487,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if err == nil && action != "link" && action != "revoke_link" {
-			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=CASE WHEN $2 IN ('retry','reply','answer') THEN 0 ELSE agent_attempts END WHERE job_id=$1`, jobID, action)
+			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=CASE WHEN $2 IN ('retry','alias','reply','answer') THEN 0 ELSE agent_attempts END WHERE job_id=$1`, jobID, action)
 		}
 		if err != nil {
 			jobProblem(w, err, "Work update could not be confirmed. Refresh before retrying.")

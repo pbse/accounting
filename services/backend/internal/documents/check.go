@@ -21,16 +21,21 @@ type CheckResult struct {
 	Questions []string `json:"questions"`
 }
 
-func EntityIssue(content, expected string) string {
-	normalize := func(value string) string {
-		return strings.ToLower(strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) {
-				return r
-			}
-			return ' '
-		}, value)), " "))
-	}
-	values := map[string]bool{}
+// NormalizeEntity compares client names ignoring case, punctuation and spacing.
+func NormalizeEntity(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return ' '
+	}, value)), " "))
+}
+
+// EntityIssue accepts a source naming the client or one of its confirmed aliases (normalized). When the
+// source names exactly one other entity, alias is that name as written, for a reviewer to confirm.
+func EntityIssue(content, expected string, aliases []string) (issue, alias string) {
+	normalize := NormalizeEntity
+	values := map[string]string{}
 	for _, match := range entityLine.FindAllStringSubmatch(content, -1) {
 		value := match[1]
 		if normalize(value) != normalize(expected) {
@@ -42,15 +47,20 @@ func EntityIssue(content, expected string) string {
 				value = value[:at]
 			}
 		}
-		values[normalize(value)] = true
+		values[normalize(value)] = strings.TrimSpace(value)
 	}
 	if len(values) == 0 {
-		return ""
+		return "", ""
 	}
-	if len(values) != 1 || !values[normalize(expected)] {
-		return "The source names a different or ambiguous client entity. Compare the original with this close and upload it to the correct client before preparing."
+	for name, written := range values {
+		if len(values) == 1 && (name == normalize(expected) || slices.Contains(aliases, name)) {
+			return "", ""
+		}
+		if len(values) == 1 && name != "" {
+			alias = written
+		}
 	}
-	return ""
+	return "The source names a different or ambiguous client entity. Compare the original with this close and upload it to the correct client before preparing.", alias
 }
 
 func QuoteLocation(name, content, quote string) (string, bool) {

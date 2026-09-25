@@ -232,11 +232,11 @@ Accrual supports a fixed incurred closing amount or a separately approved actual
 Reconciliation begins with unique exact-date/amount candidates from TWO separate CSV documents whose header is id,date,amount. Select statement and ledger, with primary source one of them; other evidence may be support or client_reply. Grouped and exact-net split matches, approved tolerances, cited prior and current outstanding items, and transfers across two accounts are reviewed methods, not agent-confirmed facts. Ask for the accountant-approved rule, gross/fee source rows for a split, clearing row for a prior item, and both accounts' statement and ledger records for a transfer; propose relevant evidence as support. Native QuickBooks reconciliation status remains a separate reviewer-cited observation; never infer it from a matching workpaper. Fields: account,currency,statement_opening,statement_closing,ledger_opening,ledger_closing,expected_pages,pages (comma-separated observed page numbers). Never fabricate transactions or infer missing pages/balances from totals. PDF transaction conversion is unsupported.
 If identity, work type, source role, date scope or method is ambiguous or unsupported, return unsupported with a precise question. Inspect all permitted evidence before asking. Missing facts should be omitted and explained with specific questions about what is needed and why. Questions are for clarification, not claims that fraud/errors exist. Keep the summary factual and short. No external tools, no actions, no policy confirmations.`
 
-func blockedIdentity(primary, entity string, sources []IntakeSource) (Proposal, bool) {
+func blockedIdentity(primary, entity string, aliases []string, sources []IntakeSource) (Proposal, bool) {
 	for _, source := range sources {
 		if source.ID == primary {
-			if issue := documents.EntityIssue(source.Content, entity); issue != "" {
-				return Proposal{Kind: "unsupported", Engine: "identity_blocked", Summary: "Client identity needs review.", Questions: []string{fmt.Sprintf("Source #%s (%s): %s", source.ID, source.Name, issue)}, Facts: []Fact{}, Sources: []Source{source.Source}}, true
+			if issue, alias := documents.EntityIssue(source.Content, entity, aliases); issue != "" {
+				return Proposal{Kind: "unsupported", Engine: "identity_blocked", Summary: "Client identity needs review.", Questions: []string{fmt.Sprintf("Source #%s (%s): %s", source.ID, source.Name, issue)}, Facts: []Fact{}, Sources: []Source{source.Source}, EntityName: alias}, true
 			}
 			break
 		}
@@ -246,9 +246,6 @@ func blockedIdentity(primary, entity string, sources []IntakeSource) (Proposal, 
 
 func interpret(ctx context.Context, client *http.Client, key, model, entity, period, currency, primary string, sources []IntakeSource) (Proposal, error) {
 	var p Proposal
-	if blocked, ok := blockedIdentity(primary, entity, sources); ok {
-		return blocked, nil
-	}
 	if key == "" || model == "" {
 		return p, fmt.Errorf("Set OPENAI_API_KEY and OPENAI_MODEL on the worker, then retry interpretation.")
 	}
@@ -462,6 +459,10 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	aliases, err := ClientAliases(ctx, tx, closeID)
+	if err != nil {
+		return false, err
+	}
 	sources, digest, snapshotErr := AgentInventory(ctx, tx, closeID, id)
 	found := false
 	for _, s := range sources {
@@ -482,7 +483,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		return true, tx.Commit()
 	}
 	// A recognized export needs no model call; it is proposed inside this locked transaction.
-	if _, blocked := blockedIdentity(primary, entity, sources); !blocked {
+	if _, blocked := blockedIdentity(primary, entity, aliases, sources); !blocked {
 		intake, err := IntakeSources(ctx, tx, id)
 		if err != nil {
 			return false, err
@@ -509,7 +510,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	client := &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	blocked, identityBlocked := blockedIdentity(primary, entity, sources)
+	blocked, identityBlocked := blockedIdentity(primary, entity, aliases, sources)
 	selected, reusable := []IntakeSource(nil), false
 	var selectErr error
 	if !identityBlocked {

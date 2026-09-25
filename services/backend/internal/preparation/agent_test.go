@@ -139,11 +139,11 @@ func TestSelectionCheckpointOnlyResumesSameBoundedInventory(t *testing.T) {
 
 func TestPrimaryClientLabelBlocksBeforeEvidenceSelection(t *testing.T) {
 	sources := []IntakeSource{{Source: Source{ID: "1", Name: "invoice.txt"}, Content: "Client entity: Other LLC\nAmount: 100"}, {Source: Source{ID: "2", Name: "support.txt"}, Content: "Client entity: Third LLC"}}
-	if p, ok := blockedIdentity("1", "Acme LLC", sources); !ok || p.Kind != "unsupported" || p.Engine != "identity_blocked" {
+	if p, ok := blockedIdentity("1", "Acme LLC", nil, sources); !ok || p.Kind != "unsupported" || p.Engine != "identity_blocked" {
 		t.Fatal("misfiled primary source was not blocked", p)
 	}
 	sources[0].Content = "Amount: 100"
-	if _, ok := blockedIdentity("1", "Acme LLC", sources); ok {
+	if _, ok := blockedIdentity("1", "Acme LLC", nil, sources); ok {
 		t.Fatal("unrelated support source blocked this job")
 	}
 }

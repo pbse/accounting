@@ -581,3 +581,10 @@ Author: Claude Opus 5.5. No migration. Plan and code reviewed together (small ch
 
 - `TestCarryForwardRoundingLineageAndFreshReview` now signs off the origin close after approving its schedule: the sign-off reports one schedule carried and the preview shows its next-month job; the later manual carry reuses that job. Observed red without the carry on sign-off.
 
+## Confirming a client alias (2026-09-24)
+
+Author: Claude Opus 5.5. Migration 054. Review: GPT-6 Sol (medium) plan review; adopted the attempt reset shared with retry, offering and accepting an alias only when the source names exactly one other entity, one shared normalizer, and no surrogate id. Code review: adopted never offering or storing an empty normalized name, and failing evidence inspection when aliases cannot be loaded.
+
+- `TestConfirmedAliasesAcceptOnlyAnUnambiguousSource`: an unconfirmed other name blocks and is offered; once confirmed it is the same client; a source naming two entities stays blocked and offers nothing. Observed red when any differing name is offered.
+- `TestConfirmingAClientAliasRechecksBlockedWork` (PostgreSQL): a document naming "<client> LLC" is blocked with that name; a different name and a stale revision are refused; confirming it requeues the job, which is then prepared. Observed red without the offered-name check, without alias acceptance and with aliases not loaded by the local intake.
+

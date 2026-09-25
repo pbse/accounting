@@ -44,6 +44,7 @@ type WorkItem = Plan & {
     sources?: Source[];
     kind?: string;
     engine?: string;
+    entity_name?: string;
     summary?: string;
     questions?: string[];
     unselected?: Source[];
@@ -814,7 +815,12 @@ function WorkDetails({
               blank.
             </p>
           )}
-          {item.proposal.engine === "identity_blocked" && <p role="alert">This evidence names a different or ambiguous client. Compare it with the original and replace the misfiled source before preparing this work.</p>}
+          {item.proposal.engine === "identity_blocked" && (item.proposal.entity_name ? (
+            <p role="alert">
+              This evidence names the client “{item.proposal.entity_name}”. If that is {item.entity}, confirm it once and the work is rechecked; future documents using that name are accepted. Otherwise replace the misfiled source.{" "}
+              <button disabled={busy} onClick={() => void act("alias", { alias: item.proposal.entity_name })}>Same client as {item.entity}</button>
+            </p>
+          ) : <p role="alert">This evidence names a different or ambiguous client. Compare it with the original and replace the misfiled source before preparing this work.</p>)}
           {item.proposal.engine === "local" && (
             <p>
               For statement/ledger evidence,{" "}

@@ -3,6 +3,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -217,5 +218,96 @@ func TestWorkInboxCoordinator(t *testing.T) {
 	confirm["revision"] = secondRevision
 	if body := call("POST", base+"/work/"+second["job_id"]+"/confirm", confirm, 409); !bytes.Contains(body, []byte(`"code":"SOURCE_STALE"`)) {
 		t.Fatalf("replaced evidence must be reported as stale: %s", body)
+	}
+}
+
+func TestConfirmingAClientAliasRechecksBlockedWork(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	entity := "Alias fixture " + rand.Text()
+	var closeID string
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		db.Exec(`DELETE FROM client_aliases WHERE client_entity=$1`, entity)
+		db.Exec(`DELETE FROM recovery_actions WHERE close_id=$1`, closeID)
+		for _, table := range []string{"preparation_jobs", "evidence", "client_closes"} {
+			key := "close_id"
+			if table == "client_closes" {
+				key = "id"
+			}
+			db.Exec("DELETE FROM "+table+" WHERE "+key+"=$1", closeID)
+		}
+	}()
+	token := strings.Repeat("a", 32)
+	h := apiWithStore(db, token)
+	base := "/v1/closes/" + closeID
+	call := func(path string, body any, status int) {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest("POST", path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+	}
+	var b bytes.Buffer
+	m := multipart.NewWriter(&b)
+	f, _ := m.CreateFormFile("file", "invoice.txt")
+	io.WriteString(f, "Client entity: "+entity+" LLC\nInvoice amount: 1200.00\nService start: 2026-09-01\nService end: 2027-08-31\nCurrency: USD")
+	m.Close()
+	r := httptest.NewRequest("POST", base+"/evidence", &b)
+	r.Header.Set("Content-Type", m.FormDataContentType())
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	var uploaded map[string]string
+	json.Unmarshal(w.Body.Bytes(), &uploaded)
+	job := uploaded["job_id"]
+	if w.Code != 200 || job == "" {
+		t.Fatal(w.Body.String())
+	}
+	process := func() (int, string, preparation.Proposal) {
+		t.Helper()
+		for n := 0; n < 100; n++ {
+			worked, e := preparation.ProcessIntake(context.Background(), db)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if !worked {
+				break
+			}
+		}
+		var revision int
+		var state string
+		var raw []byte
+		if e := db.QueryRow(`SELECT i.revision,j.state,i.proposal FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id WHERE j.id=$1`, job).Scan(&revision, &state, &raw); e != nil {
+			t.Fatal(e)
+		}
+		var p preparation.Proposal
+		json.Unmarshal(raw, &p)
+		return revision, state, p
+	}
+	revision, _, p := process()
+	if p.Engine != "identity_blocked" || p.EntityName != entity+" LLC" {
+		t.Fatalf("a document naming the client differently is blocked and offers that name: %+v", p)
+	}
+	path := base + "/work/" + job + "/alias"
+	call(path, map[string]any{"revision": revision, "alias": "Another Client LLC"}, 409)
+	call(path, map[string]any{"revision": revision - 1, "alias": entity + " LLC"}, 409)
+	call(path, map[string]any{"revision": revision, "alias": entity + " LLC"}, 200)
+	if _, state, p := process(); p.Engine == "identity_blocked" || state != "needs_confirmation" {
+		t.Fatalf("once confirmed, the same client's document is prepared: %s %+v", state, p)
 	}
 }
