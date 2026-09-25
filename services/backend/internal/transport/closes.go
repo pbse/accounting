@@ -145,6 +145,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	mux.HandleFunc("GET /v1/closes/{id}/binder", exportClose(db, true))
 	mux.HandleFunc("GET /v1/closes/{id}/year-end", yearEndHandoff(db))
 	mux.HandleFunc("GET /v1/closes/{id}/tie-out", tieOut(db))
+	mux.HandleFunc("GET /v1/closes/{id}/flux", flux(db))
 	mux.HandleFunc("GET /v1/closes/{id}/workpapers/{paper}/standing-approval", standingApproval(db))
 	mux.HandleFunc("POST /v1/closes/{id}/workpapers/{paper}/standing-approval", standingApproval(db))
 	mux.HandleFunc("GET /v1/closes/{id}/work/{job}/hints", workHints(db))

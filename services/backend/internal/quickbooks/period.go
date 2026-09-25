@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/url"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/ledger"
 )
 
 // PeriodReports preserves report cells and provider decimals verbatim. These are
@@ -268,65 +271,176 @@ func selectLedger(accounts, report json.RawMessage, accountID string, offset int
 	}
 	accountColumn := len(root.Columns.Column) > 0 && strings.Contains(strings.ToLower(root.Columns.Column[0].ColTitle), "account")
 	needle := strings.ToLower(query)
-	var visit func([]json.RawMessage, string, bool) error
-	visit = func(rows []json.RawMessage, path string, inherited bool) error {
-		for n, raw := range rows {
-			location := fmt.Sprintf("%s.Row[%d]", path, n)
-			var value struct {
-				ColData []struct {
-					ID, Value string
-				}
-				Header struct {
-					ColData []struct {
-						ID, Value string
-					}
-				}
-				Rows struct{ Row []json.RawMessage }
-			}
-			if json.Unmarshal(raw, &value) != nil {
+	err := walkLedger(root.Rows.Row, "reports.GeneralLedger.Rows", "", accountColumn, func(location, account string, raw json.RawMessage, value ledgerRow) error {
+		if account != accountID {
+			return nil
+		}
+		include := query == ""
+		for _, cell := range value.ColData {
+			include = include || strings.Contains(strings.ToLower(cell.Value), needle)
+		}
+		for _, cell := range value.Header.ColData {
+			include = include || strings.Contains(strings.ToLower(cell.Value), needle)
+		}
+		if include {
+			var cells map[string]json.RawMessage
+			if json.Unmarshal(raw, &cells) != nil {
 				return fmt.Errorf("General Ledger row is invalid")
 			}
-			matched := inherited
-			if len(value.Header.ColData) > 0 && value.Header.ColData[0].ID != "" {
-				matched = value.Header.ColData[0].ID == accountID
-			}
-			if accountColumn && len(value.ColData) > 0 && value.ColData[0].ID != "" {
-				matched = value.ColData[0].ID == accountID
-			}
-			if matched {
-				include := query == ""
-				for _, cell := range value.ColData {
-					include = include || strings.Contains(strings.ToLower(cell.Value), needle)
+			delete(cells, "Rows")
+			body, _ := json.Marshal(cells)
+			if page.Total >= offset && len(page.Rows) < 20 {
+				if len(body) > 32*1024 {
+					return fmt.Errorf("A selected ledger row exceeds 32 KiB; inspect the original report")
 				}
-				for _, cell := range value.Header.ColData {
-					include = include || strings.Contains(strings.ToLower(cell.Value), needle)
-				}
-				if include {
-					var cells map[string]json.RawMessage
-					if json.Unmarshal(raw, &cells) != nil {
-						return fmt.Errorf("General Ledger row is invalid")
-					}
-					delete(cells, "Rows")
-					body, _ := json.Marshal(cells)
-					if page.Total >= offset && len(page.Rows) < 20 {
-						if len(body) > 32*1024 {
-							return fmt.Errorf("A selected ledger row exceeds 32 KiB; inspect the original report")
-						}
-						page.Rows = append(page.Rows, LedgerRow{Location: location, Row: body})
-					}
-					page.Total++
-				}
+				page.Rows = append(page.Rows, LedgerRow{Location: location, Row: body})
 			}
-			if err := visit(value.Rows.Row, location+".Rows", matched); err != nil {
+			page.Total++
+		}
+		return nil
+	})
+	return page, err
+}
+
+type ledgerCell struct{ ID, Value string }
+
+type ledgerRow struct {
+	Type    string `json:"type"`
+	ColData []ledgerCell
+	Header  struct{ ColData []ledgerCell }
+	Rows    struct{ Row []json.RawMessage }
+}
+
+// walkLedger visits every General Ledger row with the account it sits under: a section header's or, with an account column, its own.
+func walkLedger(rows []json.RawMessage, path, account string, accountColumn bool, fn func(location, account string, raw json.RawMessage, row ledgerRow) error) error {
+	for n, raw := range rows {
+		location := fmt.Sprintf("%s.Row[%d]", path, n)
+		var row ledgerRow
+		if json.Unmarshal(raw, &row) != nil {
+			return fmt.Errorf("General Ledger row is invalid")
+		}
+		current := account
+		if len(row.Header.ColData) > 0 && row.Header.ColData[0].ID != "" {
+			current = row.Header.ColData[0].ID
+		}
+		if accountColumn && len(row.ColData) > 0 && row.ColData[0].ID != "" {
+			current = row.ColData[0].ID
+		}
+		if err := fn(location, current, raw, row); err != nil {
+			return err
+		}
+		if err := walkLedger(row.Rows.Row, location+".Rows", current, accountColumn, fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type Activity struct {
+	Name   string
+	Amount *big.Rat
+}
+
+// MonthlyActivity reads each account's amount from a single-period Profit and Loss report; section summaries are not accounts.
+func MonthlyActivity(report json.RawMessage) (string, map[string]Activity, error) {
+	var root struct {
+		Header  struct{ Currency string }
+		Columns struct {
+			Column []struct{ ColTitle, ColType string }
+		}
+		Rows struct{ Row []json.RawMessage }
+	}
+	if json.Unmarshal(report, &root) != nil || len(root.Columns.Column) != 2 || !strings.EqualFold(strings.TrimSpace(root.Columns.Column[1].ColTitle), "Total") && root.Columns.Column[1].ColType != "Money" {
+		return "", nil, fmt.Errorf("Profit and Loss report is not a single account and total column")
+	}
+	out := map[string]Activity{}
+	var visit func([]json.RawMessage) error
+	visit = func(rows []json.RawMessage) error {
+		for _, raw := range rows {
+			var row ledgerRow
+			if json.Unmarshal(raw, &row) != nil {
+				return fmt.Errorf("Profit and Loss row is invalid")
+			}
+			if row.Type == "Data" && len(row.ColData) > 0 && row.ColData[0].ID != "" {
+				if len(row.ColData) != len(root.Columns.Column) {
+					return fmt.Errorf("Profit and Loss row for %s does not match its columns", row.ColData[0].Value)
+				}
+				if _, seen := out[row.ColData[0].ID]; seen {
+					return fmt.Errorf("Profit and Loss lists %s twice", row.ColData[0].Value)
+				}
+				amount, err := ledger.Net(row.ColData[len(row.ColData)-1].Value, "")
+				if err != nil {
+					return fmt.Errorf("Profit and Loss %v for %s", err, row.ColData[0].Value)
+				}
+				out[row.ColData[0].ID] = Activity{row.ColData[0].Value, amount}
+			}
+			if err := visit(row.Rows.Row); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := visit(root.Rows.Row, "reports.GeneralLedger.Rows", false); err != nil {
-		return page, err
+	if err := visit(root.Rows.Row); err != nil {
+		return "", nil, err
 	}
-	return page, nil
+	return root.Header.Currency, out, nil
+}
+
+type Payees struct {
+	ByName       map[string]*big.Rat
+	Unattributed *big.Rat
+	Unnamed      int
+}
+
+// PayeeActivity sums each wanted account's General Ledger transaction rows by the Name column; rows without a name are unattributed.
+func PayeeActivity(report json.RawMessage, accounts []string) (map[string]Payees, error) {
+	var root struct {
+		Columns struct{ Column []struct{ ColTitle string } }
+		Rows    struct{ Row []json.RawMessage }
+	}
+	if json.Unmarshal(report, &root) != nil {
+		return nil, fmt.Errorf("General Ledger report is invalid")
+	}
+	name, amount := -1, -1
+	for i, column := range root.Columns.Column {
+		switch strings.ToLower(strings.TrimSpace(column.ColTitle)) {
+		case "name":
+			name = i
+		case "amount":
+			amount = i
+		}
+	}
+	if name < 0 || amount < 0 {
+		return nil, fmt.Errorf("General Ledger has no Name and Amount columns")
+	}
+	accountColumn := len(root.Columns.Column) > 0 && strings.Contains(strings.ToLower(root.Columns.Column[0].ColTitle), "account")
+	out := map[string]Payees{}
+	for _, id := range accounts {
+		out[id] = Payees{map[string]*big.Rat{}, new(big.Rat), 0}
+	}
+	err := walkLedger(root.Rows.Row, "", "", accountColumn, func(_, account string, _ json.RawMessage, row ledgerRow) error {
+		payees, wanted := out[account]
+		if !wanted || row.Type != "Data" || len(row.ColData) <= max(name, amount) || strings.TrimSpace(row.ColData[amount].Value) == "" {
+			return nil
+		}
+		value, err := ledger.Net(row.ColData[amount].Value, "")
+		if err != nil {
+			return fmt.Errorf("General Ledger %v", err)
+		}
+		who := strings.TrimSpace(row.ColData[name].Value)
+		if who == "" {
+			payees.Unattributed.Add(payees.Unattributed, value)
+			payees.Unnamed++
+			out[account] = payees
+			return nil
+		}
+		if payees.ByName[who] == nil {
+			payees.ByName[who] = new(big.Rat)
+		}
+		payees.ByName[who].Add(payees.ByName[who], value)
+		return nil
+	})
+	return out, err
 }
 
 // ReadSnapshot reads accounts and, for a period, month-end reports plus the evidence to cite (an index above 96 KiB).

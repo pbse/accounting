@@ -785,3 +785,38 @@ The test also caught a revoke that did not bind the workpaper to the close in th
   - The page reports a grant resting on a superseded approval as not in effect.
   - Observed red without the revision check, the entry check, the signed-off check, the grant-approval binding, the membership check, the local-development exception, the client check, the approved-state check on grant, the close binding, the enabled-firm check, and the in-effect status.
 
+## Changes from last month (2026-09-25)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- labelling figures as captured, with both capture times;
+- refusing to compare different companies or currencies, and waiting when the newest books are from Xero;
+- summing only ledger transaction rows, keeping unnamed amounts apart, and never claiming a missing payee while this month has unnamed amounts;
+- "possible drivers" when payees do not add up;
+- strict P&L rows (duplicates and column mismatches refused);
+- neutral wording unless the account type is known;
+- one ledger scan per month.
+
+The General Ledger traversal was extracted once (`walkLedger`); ledger page selection is unchanged and its tests pass. Code review adopted:
+
+- waiting when last month's newest books are from Xero;
+- requiring a single account-and-total P&L, with a second column titled Total or typed Money (second delta round);
+- turning an account's ledger sign to match the P&L when its total is exactly opposite;
+- suppressing missing-payee claims when any unnamed row exists;
+- counting payees not shown.
+
+- `TestMonthlyActivityAndPayeesReadReportSections`:
+  - Reads accounts inside nested P&L sections, but neither summaries nor a parent-account section row.
+  - Refuses an account listed twice, a row that does not match the columns, and a P&L with a second amount column.
+  - Sums ledger rows by payee: unnamed amounts are kept apart, and a named row with no amount, a subtotal section and other accounts are ignored.
+  - A ledger without a Name column cannot attribute payees.
+- `TestFluxExplainsMovementsByPayee` (PostgreSQL):
+  - Without last month's close it waits.
+  - Utilities 800 → 2,000 is explained by the new Con Edison 1,200, and Software 49 → 0 asks whether CloudSuite billed; only moved accounts are listed, largest first.
+  - Consulting income signed -900 in the ledger reads as Acme 900.
+  - Unnamed rows this month, even netting to zero, suppress the missing-payee claim.
+  - Payees that do not add up are possible drivers, with two more payees counted but not shown.
+  - A stale snapshot is reported.
+  - Different currencies, different companies, and newer Xero books in either month all wait.
+  - Observed red without the data-row checks, the duplicate and column checks, the blank-amount and unnamed-amount rules, the Name-column check, the company, currency and Xero checks, the missing-payee suppression, the add-up check, the ordering, the zero-change filter, the single-amount-column rule, the sign match, and the omitted count.
+
