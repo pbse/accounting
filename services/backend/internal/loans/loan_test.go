@@ -254,3 +254,25 @@ func TestIssuanceCostsAmortizeToInterest(t *testing.T) {
 		}
 	}
 }
+
+func TestRatesFromAnIndexAreTheirSum(t *testing.T) {
+	in := base()
+	in.Method = VariableMethod
+	in.RateChanges = []RateChange{{Effective: "2026-09-01", AnnualRate: "6.160", Reference: "Note §3: SOFR + 2.500%", Index: "SOFR", IndexDate: "2026-08-31", IndexRate: "3.66", Margin: "2.500"}}
+	if _, err := Prepare(in); err != nil {
+		t.Fatalf("SOFR 3.66%% plus a 2.500%% margin is 6.160%%: %v", err)
+	}
+	for name, change := range map[string]func(c *RateChange){
+		"a rate that is not the sum":          func(c *RateChange) { c.AnnualRate = "6.170" },
+		"an index published after the change": func(c *RateChange) { c.IndexDate = "2026-09-02" },
+		"an unsupported index":                func(c *RateChange) { c.Index = "PRIME" },
+		"a missing margin":                    func(c *RateChange) { c.Margin = "" },
+	} {
+		changed := base()
+		changed.Method, changed.RateChanges = VariableMethod, []RateChange{in.RateChanges[0]}
+		change(&changed.RateChanges[0])
+		if _, err := Prepare(changed); err == nil || !strings.Contains(err.Error(), "from an index") {
+			t.Fatalf("%s is refused: %v", name, err)
+		}
+	}
+}

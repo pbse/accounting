@@ -4,7 +4,7 @@ export type LoanIssuanceCosts = {
   amount: string; start: string; end: string; account: string; reference: string; method: "equal_full_months_v1" | "actual_days_v1";
   materiality_reference: string; booked_unamortized: string; booking_reference: string; method_confirmed: boolean; booking_confirmed: boolean;
 };
-export type LoanRateChange = { effective: string; annual_rate: string; reference: string };
+export type LoanRateChange = { effective: string; annual_rate: string; reference: string; index?: "SOFR" | "EFFR"; index_date?: string; index_rate?: string; margin?: string };
 export type LoanFee = { date: string; amount: string; description: string; reference: string };
 export type LoanMethod = "lender_statement_v1" | "lender_statement_variable_v1" | "lender_statement_costs_v1";
 export type LoanInput = {

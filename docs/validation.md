@@ -1303,3 +1303,29 @@ Each check was observed red with its rule removed (16 mutations).
 Code review: GPT-6 Sol (high), one delta round. Adopted, in the form: adding a rate change or fee keeps the issuance cost method; a payment row with only a fee reaches validation; adding, removing or editing issuance costs clears the checked result; each cash fee shows its statement line; the docs and the result no longer say the fee is already booked.
 
 Not verified: real lender statements and closing statements, and the form in a browser.
+
+## Loans: rates from a published index (2026-09-25)
+
+Request: look up variable rates from an index. `GET /v1/closes/index-rates?index=SOFR|EFFR&date=` reads the New York Fed's published value on or in the ten days before the date and stores it (migration 063, shared reference data with an open row-level security policy). A rate change can carry the index, the date it was published for, its value and the note's margin; `loans.Prepare` requires the rate to be their sum, and `preparation.CheckIndexRates` refuses a draft whose index value is not the stored published one at preview, at save and when a queued job runs.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- the rate change stores the date the value was published for, not the date asked;
+- the table has row-level security with a policy, as hosted readiness requires;
+- the check runs again when a queued job runs, in case the value was revised after queueing;
+- the lookup is a firm route behind current membership;
+- no stored source address.
+
+Simplified after mutation testing: a date filter duplicated by the Fed's own end date was deleted, and the check at plan queueing was dropped because the job checks again when it runs.
+
+Tests:
+
+- `TestRatesFromAnIndexAreTheirSum` (pure): SOFR 3.66% plus a 2.500% margin is 6.160%; a rate that is not the sum, an index published after the change, an unsupported index and a missing margin are refused.
+- `TestIndexRatesAreLookedUpFromTheNewYorkFed` (PostgreSQL, mocked Fed): the ten-day window, the latest SOFR before a Sunday is the Friday's and is stored, another index's value is ignored, a revision replaces the stored value, none published is 404 and an unsupported index 422.
+- `TestLoanDraftsNeedTheClientsApprovedLoanProcedure` adds a SOFR rate change whose value is not the stored one: refused at save, at preview and by the worker for a queued job; accepted once it matches.
+
+Each check was observed red with its rule removed (13 mutations).
+
+Code review: GPT-6 Sol (high), two delta rounds (the first attempt failed on the reviewer's authentication and was rerun). Adopted: the Fed call refuses redirects; the form clears a looked-up value when the index changes, drops an answer for a changed index or margin, and applies only a row's latest lookup; the docs now say a saved draft keeps the value it was saved with and approval does not look it up again (a check at approval and posting was not added: a revision after saving is rare, and the lender's statement fixes the interest).
+
+Not verified: the live New York Fed service beyond one manual read of its SOFR endpoint, and the form in a browser.

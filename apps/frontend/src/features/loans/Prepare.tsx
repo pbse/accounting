@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router";
 import { apiBaseUrl } from "../../lib/api";
 import { authenticationHeaders } from "../auth/Auth";
 import { SaveDraft } from "../closes/SaveDraft";
-import { money, useCurrency } from "../closes/workspace";
+import { money, useCurrency, workspaceRequest } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { LoanFee, LoanInput, LoanIssuanceCosts, LoanPayment, LoanRateChange, LoanWorkpaper } from "../../../../../packages/contracts/loan";
@@ -18,7 +18,7 @@ export function LoanResult({ result }: { result: LoanWorkpaper }) {
     <section>
       <h3>Loan schedule · {input.lender} · {input.close_period}</h3>
       <p>
-        {input.annual_rate}%{input.rate_changes?.map((c) => `, ${c.annual_rate}% from ${c.effective} (${c.reference})`).join("")} · {dayCounts[input.day_count]} · note {input.agreement_reference} · statement {input.source_reference}. The lender's split of each payment is used as stated; the note-rate column only checks it.
+        {input.annual_rate}%{input.rate_changes?.map((c) => `, ${c.annual_rate}% from ${c.effective}${c.index ? ` (${c.index} ${c.index_rate}% published for ${c.index_date} + ${c.margin}%)` : ""} (${c.reference})`).join("")} · {dayCounts[input.day_count]} · note {input.agreement_reference} · statement {input.source_reference}. The lender's split of each payment is used as stated; the note-rate column only checks it.
       </p>
       {result.blockers.map((b) => <p role="alert" key={b}>{b}</p>)}
       <div className="table-scroll">
@@ -66,6 +66,7 @@ export default function PrepareLoan() {
   const [rateChanges, setRateChanges] = useState<LoanRateChange[]>([]);
   const [fees, setFees] = useState<LoanFee[]>([]);
   const [costs, setCosts] = useState<LoanIssuanceCosts>();
+  const lookups = useRef<Record<number, number>>({});
   const [method, setMethod] = useState<LoanInput["method"]>("lender_statement_v1");
   const [accrue, setAccrue] = useState("");
   const [reclass, setReclass] = useState("");
@@ -142,6 +143,22 @@ export default function PrepareLoan() {
   );
   const setPayment = (index: number, key: keyof LoanPayment, value: string) => setPayments((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
   const setRateChange = (index: number, key: keyof LoanRateChange, value: string) => setRateChanges((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
+  // The published value on or before the chosen date; the rate is that value plus the note's margin, in whole ten-thousandths.
+  async function lookUp(index: number, date: string) {
+    const change = rateChanges[index];
+    const asked = (lookups.current[index] = (lookups.current[index] ?? 0) + 1);
+    const tenThousandths = (text: string) => { const [whole, fraction = ""] = text.split("."); return Number(whole) * 10000 + Number((fraction + "0000").slice(0, 4)); };
+    try {
+      const found: { effective_date: string; percent: string } = await workspaceRequest(`/index-rates?index=${change.index}&date=${date}`);
+      const sum = tenThousandths(found.percent) + tenThousandths(change.margin ?? "");
+      // Only the latest lookup for this row is applied, and only if its index and margin are unchanged.
+      if (lookups.current[index] !== asked) return;
+      setRateChanges((rows) => rows.map((row, i) => (i === index && row.index === change.index && row.margin === change.margin ? { ...row, index_date: found.effective_date, index_rate: found.percent, annual_rate: sum % 10 === 0 ? (sum / 10000).toFixed(3) : "" } : row)));
+      setResult(undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The index rate could not be looked up.");
+    }
+  }
   const setFee = (index: number, key: keyof LoanFee, value: string) => setFees((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
   const setCost = (key: keyof LoanIssuanceCosts, value: string | boolean) => {
     setCosts((c) => c && { ...c, [key]: value });
@@ -206,12 +223,26 @@ export default function PrepareLoan() {
           <p>Only if the statement shows them. A new rate applies from its effective date; a fee bears interest from the day after it is added, after any payment that day. A fee paid in cash goes on its payment above instead. Any of these needs the firm's approved loan procedure for rate changes and fees to save.</p>
           {rateChanges.length > 0 && (
             <table>
-              <thead><tr><th>Effective date</th><th>Annual rate (%)</th><th>Rate notice</th><th /></tr></thead>
+              <thead><tr><th>Effective date</th><th>From an index</th><th>Annual rate (%)</th><th>Rate notice or note clause</th><th /></tr></thead>
               <tbody>
                 {rateChanges.map((c, index) => (
                   <tr key={index}>
                     <td><input aria-label={`Rate change ${index + 1} date`} type="date" value={c.effective} onChange={(e) => setRateChange(index, "effective", e.target.value)} /></td>
-                    <td><input aria-label={`Rate change ${index + 1} rate`} inputMode="decimal" value={c.annual_rate} onChange={(e) => setRateChange(index, "annual_rate", e.target.value)} /></td>
+                    <td>
+                      <select aria-label={`Rate change ${index + 1} index`} value={c.index ?? ""} onChange={(e) => setRateChanges((rows) => rows.map((row, i) => (i === index ? (e.target.value ? { ...row, index: e.target.value as "SOFR" | "EFFR", index_date: "", index_rate: "", annual_rate: "" } : { effective: row.effective, annual_rate: row.annual_rate, reference: row.reference }) : row)))}>
+                        <option value="">No — from the notice</option>
+                        <option value="SOFR">SOFR</option>
+                        <option value="EFFR">EFFR</option>
+                      </select>
+                      {c.index && (
+                        <>
+                          <input aria-label={`Rate change ${index + 1} margin`} placeholder="Margin %" inputMode="decimal" value={c.margin ?? ""} onChange={(e) => setRateChanges((rows) => rows.map((row, i) => (i === index ? { ...row, margin: e.target.value, index_date: "", index_rate: "", annual_rate: "" } : row)))} />
+                          <input aria-label={`Rate change ${index + 1} index lookup date`} type="date" onChange={(e) => e.target.value && c.margin && void lookUp(index, e.target.value)} />
+                          {c.index_rate && <small>{c.index} {c.index_rate}% published for {c.index_date} (New York Fed)</small>}
+                        </>
+                      )}
+                    </td>
+                    <td><input aria-label={`Rate change ${index + 1} rate`} inputMode="decimal" readOnly={!!c.index} value={c.annual_rate} onChange={(e) => setRateChange(index, "annual_rate", e.target.value)} /></td>
                     <td><input aria-label={`Rate change ${index + 1} notice`} maxLength={200} value={c.reference} onChange={(e) => setRateChange(index, "reference", e.target.value)} /></td>
                     <td><button type="button" onClick={() => setRateChanges((rows) => rows.filter((_, i) => i !== index))}>Remove</button></td>
                   </tr>
