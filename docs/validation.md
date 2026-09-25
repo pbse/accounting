@@ -588,3 +588,10 @@ Author: Claude Opus 5.5. Migration 054. Review: GPT-6 Sol (medium) plan review; 
 - `TestConfirmedAliasesAcceptOnlyAnUnambiguousSource`: an unconfirmed other name blocks and is offered; once confirmed it is the same client; a source naming two entities stays blocked and offers nothing. Observed red when any differing name is offered.
 - `TestConfirmingAClientAliasRechecksBlockedWork` (PostgreSQL): a document naming "<client> LLC" is blocked with that name; a different name and a stale revision are refused; confirming it requeues the job, which is then prepared. Observed red without the offered-name check, without alias acceptance and with aliases not loaded by the local intake.
 
+## Plain-language Work requests (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review; adopted the route allowlist entry, passing the returned command straight to the parser once, validating action/target pairs, and an inline model call instead of a new shared helper. Code review: adopted a single model fallback when a matched command names no exact visible close, resolving rehearsal from the visible work first, and removing restating comments. Two delta rounds tightened the busy state; after the second, the ask box is read-only while a request runs so a late answer cannot overwrite a newer request (this last change was not re-reviewed; the frontend has no test runner).
+
+- `TestPlainLanguageWorkRequestsBecomePreviewedCommands`: action/target pairs map to the Work box's own commands and mismatched pairs are refused; with a mocked model, a plain request becomes "why is Acme · 2026-09 waiting?", only the request and visible close labels are sent with `store:false`, a mismatched or unknown answer is refused (422), and a missing model is 503. Observed red when views accept a close, when explain accepts all visible, and when the request is stored.
+- `TestWorkInboxCoordinator` now reaches the route through the organization boundary (503 without a model). Observed red without the allowlist entry.
+
