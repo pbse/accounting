@@ -115,15 +115,24 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'late.txt','late-fixture','Later evidence','fixture') RETURNING id::text`, closeID).Scan(&extra)
 	call("POST", "/v1/client-request", token, map[string]any{"body": "Stale reply", "confirmed": true}, 409)
 	db.Exec("DELETE FROM evidence WHERE id=$1", extra)
-	reply := "  Service end: 2027-08-31\nmethod_confirmed: true\n"
+	reply := "  Service end: 2027-08-31\nmethod_confirmed: true\nCard 4242 4242 4242 4242\nPortal password: hunter2 again\n"
 	call("POST", "/v1/client-request", token, map[string]any{"body": reply, "confirmed": false}, 422)
 	call("POST", "/v1/client-request", token, map[string]any{"body": reply, "confirmed": true, "close_id": "other"}, 400)
-	call("POST", "/v1/client-request", token, map[string]any{"body": reply, "confirmed": true}, 200)
-	call("POST", "/v1/client-request", token, map[string]any{"body": reply, "confirmed": true}, 200)
+	for range 2 {
+		var receipt struct{ Removed []string }
+		json.Unmarshal(call("POST", "/v1/client-request", token, map[string]any{"body": reply, "confirmed": true}, 200), &receipt)
+		if strings.Join(receipt.Removed, ",") != "password or sign-in detail,card number" {
+			t.Fatalf("the client is told what was removed, also on a retry: %v", receipt.Removed)
+		}
+	}
+	var receiptDigest string
+	if err = db.QueryRow(`SELECT reply_digest FROM client_request_links WHERE digest=$1`, preparation.Digest([]byte(token))).Scan(&receiptDigest); err != nil || receiptDigest == preparation.Digest([]byte(reply)) {
+		t.Fatalf("the link's receipt is not a digest of the unredacted reply: %v", err)
+	}
 	call("POST", "/v1/client-request", token, map[string]any{"body": "Changed reply", "confirmed": true}, 409)
 	var count int
 	var saved, state, from string
-	if err = db.QueryRow(`SELECT count(*),min(e.content),min(r.received_from) FROM work_replies r JOIN evidence e ON e.id=r.source_id WHERE r.request_id=$1`, requestID).Scan(&count, &saved, &from); err != nil || count != 1 || saved != reply || from != "Unverified request-link holder" {
+	if err = db.QueryRow(`SELECT count(*),min(e.content),min(r.received_from) FROM work_replies r JOIN evidence e ON e.id=r.source_id WHERE r.request_id=$1`, requestID).Scan(&count, &saved, &from); err != nil || count != 1 || saved != "  Service end: 2027-08-31\nmethod_confirmed: true\nCard [card number ending 4242 removed]\nPortal password [removed]\n" || from != "Unverified request-link holder" {
 		t.Fatal("Reply not retained exactly once", count, saved, err)
 	}
 	if err = db.QueryRow("SELECT state FROM preparation_jobs WHERE id=$1", job).Scan(&state); err != nil || state != "waiting_evidence" {
@@ -145,4 +154,28 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	token = issue()
 	call("POST", path+"/retry", auth, map[string]any{"revision": revision()}, 200)
 	call("GET", "/v1/client-request", token, nil, 404)
+}
+
+func TestRedactSensitiveRemovesCardsBankNumbersAndSecrets(t *testing.T) {
+	for _, c := range []struct{ in, out, kinds string }{
+		{"Card 4111-1111-1111-1111 exp 12/29", "Card [card number ending 1111 removed] exp 12/29", "card number"},
+		{"Invoice 4111111111111112 attached", "Invoice 4111111111111112 attached", ""},
+		{"Wire to GB82 WEST 1234 5698 7654 32 please", "Wire to [IBAN ending 5432 removed] please", "IBAN"},
+		{"Ref GB82 WEST 1234 5698 7654 33", "Ref GB82 WEST 1234 5698 7654 33", ""},
+		{"iban gb82 west 1234 5698 7654 32 okay thanks", "iban [IBAN ending 5432 removed] okay thanks", "IBAN"},
+		{"SSN 123-45-6789", "SSN [SSN ending 6789 removed]", "SSN"},
+		{"Account number: 000123456789, routing 021000021", "Account number: [bank account number ending 6789 removed], routing 021000021", "bank account number"},
+		{"Book to account 400100 and account 6010", "Book to account 400100 and account 6010", ""},
+		{"Online banking login is alice; one-time code is 123456\nThanks", "Online banking login [removed]\nThanks", "password or sign-in detail"},
+		{"PIN = 4455", "PIN [removed]", "password or sign-in detail"},
+		{"Service end: 2027-08-31", "Service end: 2027-08-31", ""},
+	} {
+		got, kinds := redactSensitive(c.in)
+		if got != c.out || strings.Join(kinds, ",") != c.kinds {
+			t.Errorf("%q → %q %v", c.in, got, kinds)
+		}
+		if again, more := redactSensitive(got); again != got || len(more) != 0 {
+			t.Errorf("redacted text is stable: %q → %q", got, again)
+		}
+	}
 }

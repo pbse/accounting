@@ -7,6 +7,7 @@ type Request = {
   period?: string;
   body?: string;
   expires_at?: string;
+  removed?: string[];
 };
 
 export default function ClientRequest() {
@@ -124,8 +125,14 @@ export default function ClientRequest() {
       )}
       {request?.status === "received" && (
         <>
+        {(request.removed?.length ?? 0) > 0 && (
+          <p role="status">
+            For your security we removed the {request.removed!.join(", ")} from your reply before saving it. Please never send card or bank
+            account numbers, identity numbers or passwords; the firm will ask another way if it needs them.
+          </p>
+        )}
         <p>
-          Your original reply is saved. Attachments remain quarantined until automated scanning and firm release. Preparation can
+          Your reply is saved. Attachments remain quarantined until automated scanning and firm release. Preparation can
           resume; this does not approve accounting decisions or posting. Contact
           the firm directly if you need to correct your reply.
         </p>

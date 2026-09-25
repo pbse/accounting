@@ -123,6 +123,7 @@ func receiveEmailReply(db *sql.DB) http.HandlerFunc {
 			problem(w, 422, "Use a UTF-8 plain-text reply without attachments, or use the secure request link.")
 			return
 		}
+		body, _ = redactSensitive(body)
 		envelope := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Close-Envelope-From")))
 		address, err := mail.ParseAddress(envelope)
 		if err != nil || address.Address != envelope || len(envelope) > 254 {
@@ -142,7 +143,9 @@ func receiveEmailReply(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		authorized := strings.EqualFold(envelope, recipient) && strings.EqualFold(headerFrom, recipient)
-		digest := preparation.Digest(raw)
+		// A delivery retry repeats the Message-ID and Date; a digest of the raw message could fingerprint a removed value.
+		message, _ := mail.ReadMessage(bytes.NewReader(raw))
+		digest := preparation.Digest([]byte(envelope + "\n" + headerFrom + "\n" + message.Header.Get("Message-Id") + "\n" + message.Header.Get("Date") + "\n" + body))
 		var count int
 		var duplicate bool
 		if err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(bool_or(message_digest=$2),false) FROM inbound_replies WHERE outbox_id=upper($1)`, id, digest).Scan(&count, &duplicate); err != nil {

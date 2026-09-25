@@ -917,3 +917,35 @@ Tests (PostgreSQL):
 Each test was observed red with its rule removed (25 mutations): the review permission and single-approval path, the loan terms, the later-period, questions and prepaid-only proposal rules, the recurring lineage and loan candidates, the reservation, retry time, call count and limit condition, the scored-run and once-per-model rules, the Work route's reservation, the fresh-capture and claim conditions, the ledger-source match, the revenue sign and P&L filter, the Xero payee note, the newest-snapshot order in client memory, and the morning Xero count and kept count.
 
 Not verified: a live Xero organisation (Xero's Debit and Credit columns being the month's movement comes from third-party documentation, not a live report), a live model, and the browser. Sandbox single approval uses the same function as production and is not tested separately. Firm operations' usage line is not tested.
+
+## Sensitive values removed from client replies (2026-09-25)
+
+Author: Claude Opus 5.5. No migration. PRD COM-01 says a thread containing bank credentials must be redacted and restricted, not forwarded to every reviewer. Every free-text reply is now redacted before it is stored: link replies, email replies (while still held) and replies or answers recorded by staff. Removed are card numbers (Luhn), IBANs (mod-97), SSNs, labeled bank account numbers, and everything after a password or sign-in label on its line. Markers keep at most the last four digits. The original is never stored, and receipts and email duplicate checks use the redacted text. The client is told what was removed, also on a retry.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- no unkeyed digest of the raw text (link receipt, email message digest);
+- broader credential wording, removing the rest of the line;
+- the client notice on retries, and replacing the "original reply is saved" copy;
+- recording that COM-01 supersedes COM-02's original-storage clause for removed values.
+
+Code review: GPT-6 Sol (high), two delta rounds. Adopted:
+
+- the staff-entered "received from" is redacted too;
+- email duplicates are keyed on sender, Message-ID, Date and redacted text, so separately sent identical emails stay separate;
+- IBANs in any case, dropping words that follow the number;
+- staff copy that names exactly what is removed.
+
+Refuted with code: held replies are already restricted. Close routes admit only the client's grantees or firm-wide access (`organizations.go:60`), nothing is forwarded, and the secret itself is removed before storage. Not changed: after a page reload the client sees only "Your reply is saved"; the removal notice appears at submit and on a retry.
+
+Tests (PostgreSQL):
+
+- `TestRedactSensitiveRemovesCardsBankNumbersAndSecrets`: each rule, the Luhn and mod-97 negatives, and ledger account codes and routing numbers left alone. Redacted text is stable when redacted again.
+- `TestScopedClientReplyResumesJob`: a link reply with a card number and a password stores only the redacted evidence. The client is told both kinds, including on the retry. The link receipt is not a digest of the unredacted reply.
+- `TestInboundReplyHeldUntilSenderAndReviewerMatch`: a held email reply stores only the redacted account number, once for a repeated delivery. No digest of the raw message is kept, and the released evidence is redacted.
+- `TestWorkInboxCoordinator`: a reply recorded by staff loses its password line, and its "received from" loses a PIN.
+- The email test also holds separately sent identical emails apart, whether they differ by Message-ID or only by Date.
+
+Each check was observed red with its rule removed (12 mutations): the shared writer and sender redaction, link and email redaction, the email digest and its Message-ID and Date parts, Luhn, mod-97, IBAN trailing-word trimming, the rest-of-line credential rule, and the bank-label requirement.
+
+Not verified: live Cloudflare email routing and the browser page. Detection is deterministic and bounded. A card-like 13–19 digit number that passes Luhn (such as some long invoice numbers) is also masked, keeping its last four digits.
