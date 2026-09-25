@@ -1,4 +1,6 @@
+export type SettlementMethod = "stripe_automatic_payouts_v1" | "stripe_payouts_v1";
 export type SettlementInput = {
+  method?: SettlementMethod;
   entity: string;
   close_period: string;
   currency: string;
@@ -37,7 +39,7 @@ export type SettlementPayout = {
   fee: string;
   net: string;
   categories: SettlementCategory[];
-  status: "matched" | "reviewed" | "in_transit" | "unmatched" | "ambiguous";
+  status: "matched" | "reviewed" | "in_transit" | "unmatched" | "ambiguous" | "failed";
   deposit?: { id: string; date: string; amount: string };
   candidate_ids: string[];
   reason?: string;
@@ -45,7 +47,7 @@ export type SettlementPayout = {
 };
 export type SettlementWorkpaper = {
   status: "draft";
-  method: "stripe_automatic_payouts_v1";
+  method: SettlementMethod;
   input: SettlementInput;
   payouts: SettlementPayout[];
   categories: SettlementCategory[];

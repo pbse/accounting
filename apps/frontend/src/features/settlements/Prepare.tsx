@@ -20,6 +20,7 @@ const statusLabel: Record<SettlementPayout["status"], string> = {
   in_transit: "In transit",
   unmatched: "No deposit found",
   ambiguous: "Choose a deposit",
+  failed: "Failed, no deposit expected",
 };
 
 const money = (value: string, currency: string) =>
@@ -410,6 +411,10 @@ export default function Prepare() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [feeEntry, setFeeEntry] = useState(false);
+  const [manual, setManual] = useState(false);
+  useEffect(() => {
+    if (revision.savedInput?.method === "stripe_payouts_v1") setManual(true);
+  }, [revision.savedInput]);
   const csvFiles = files.filter(
     (f) =>
       !f.superseded_by &&
@@ -493,6 +498,7 @@ export default function Prepare() {
     const text = (key: string) => String(data.get(key) ?? "");
     setResult(undefined);
     void calculate({
+      ...(manual ? { method: "stripe_payouts_v1" as const } : {}),
       entity: text("entity"),
       close_period: text("close_period"),
       currency,
@@ -505,7 +511,7 @@ export default function Prepare() {
       coverage_confirmed: data.has("coverage_confirmed"),
       reviewed_deposits: [],
       in_transit: [],
-      ...(feeEntry
+      ...(feeEntry && !manual
         ? {
             fee_entry: {
               fee_account: text("fee_account"),
@@ -622,9 +628,18 @@ export default function Prepare() {
                   defaultValue={params.get("period") ?? ""}
                 />
               </label>
+              <label>
+                Payout schedule
+                <select value={manual ? "manual" : "automatic"} onChange={(e) => { setManual(e.target.value === "manual"); setResult(undefined); }}>
+                  <option value="automatic">Automatic payouts</option>
+                  <option value="manual">Manual or instant payouts</option>
+                </select>
+              </label>
               {picker(
-                "Stripe payout export",
-                "Stripe Dashboard → Reports → Payout reconciliation → Download → Itemized. Use the full download, not one category.",
+                manual ? "Stripe Payouts report" : "Stripe payout export",
+                manual
+                  ? "Stripe Dashboard → Reports → Balance → Payouts → Export → Itemized CSV, for this month."
+                  : "Stripe Dashboard → Reports → Payout reconciliation → Download → Itemized. Use the full download, not one category.",
                 "report",
               )}
               {picker(
@@ -661,20 +676,20 @@ export default function Prepare() {
             <label className="checkbox-label">
               <input type="checkbox" name="method_confirmed" required />
               <span>
-                {currency} automatic payouts. Stripe's payout ID defines each batch; a
-                bank row is only a candidate when it carries exactly the
-                payout's net amount from one day before to four days after the
-                expected date.
+                {manual
+                  ? `${currency} manual or instant payouts. Each payout is traced to a bank row carrying exactly its amount from one day before to four days after its expected arrival. Stripe cannot say which transactions a manual or instant payout settles, so the month's activity is reconciled from the Balance report instead.`
+                  : `${currency} automatic payouts. Stripe's payout ID defines each batch; a bank row is only a candidate when it carries exactly the payout's net amount from one day before to four days after the expected date.`}
               </span>
             </label>
             <label className="checkbox-label">
               <input type="checkbox" name="coverage_confirmed" required />
               <span>
-                The Stripe file is the full itemized download (all categories)
-                for this month, and the bank file covers the whole month.
+                The Stripe file is the full itemized download for this month,
+                and the bank file covers the whole month.
               </span>
             </label>
           </fieldset>
+          {!manual && (
           <fieldset disabled={busy || !revision.ready}>
             <legend>3. Stripe fee entry (optional)</legend>
             <label className="checkbox-label">
@@ -704,6 +719,7 @@ export default function Prepare() {
               </div>
             )}
           </fieldset>
+          )}
           {error && !result && (
             <p className="form-error" role="alert">
               {error}

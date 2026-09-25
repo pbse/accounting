@@ -1329,3 +1329,15 @@ Each check was observed red with its rule removed (13 mutations).
 Code review: GPT-6 Sol (high), two delta rounds (the first attempt failed on the reviewer's authentication and was rerun). Adopted: the Fed call refuses redirects; the form clears a looked-up value when the index changes, drops an answer for a changed index or margin, and applies only a row's latest lookup; the docs now say a saved draft keeps the value it was saved with and approval does not look it up again (a check at approval and posting was not added: a revision after saving is rare, and the lender's statement fixes the interest).
 
 Not verified: the live New York Fed service beyond one manual read of its SOFR endpoint, and the form in a browser.
+
+## Stripe manual and instant payouts (2026-09-25)
+
+Built while the GPT-6 Sol reviewer could not authenticate (its key was rejected), at the user's direction: committed on its own branch, reviewed before it is opened or merged.
+
+Request: Stripe manual and instant payouts. Stripe's payout reconciliation report covers automatic payouts only; its docs point manual payouts to the Balance report and say instant payouts cannot be tied to transactions. A second settlement method, `stripe_payouts_v1`, reads Stripe's itemized Payouts report (`payouts.itemized.5` columns balance_transaction_id, currency, net, reporting_category, payout_id, effective_at, payout_expected_arrival_date, payout_status) and traces each payout to its bank row with the existing matching, review and in-transit steps. Failed or canceled payouts expect no deposit and claim none. A draft without a method stays an automatic-payout draft, so saved drafts are unchanged.
+
+Test: `TestManualAndInstantPayoutsAreTracedToTheirDeposits` (pure): a manual and an instant payout matched to their deposits, a failed payout with its reversal and one without it (which must not claim another payout's deposit), an unmatched payout blocking, the method's limit stated, a fee entry refused, and a positive payout row, funds leaving in another month and an automatic-payout export refused.
+
+Each check was observed red with its rule removed (10 mutations).
+
+Not verified: a real Payouts report export (the sign convention is enforced, not assumed silently), and the form in a browser. Review pending.
