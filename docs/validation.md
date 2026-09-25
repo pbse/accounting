@@ -738,3 +738,25 @@ A firm-wide limit on model-spending actions was routed to a separate ticket, bec
   - Evidence added during the model call leaves the reading unscored.
   - Observed red without the model-only filter, the three-reading limit, the evidence check before and after the call, the identity check, the left-out-value rule (including values the person supplied), the one-at-a-time guard, and the configuration check.
 
+## Client memory when confirming (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- a stale snapshot says nothing, and "not in this QuickBooks snapshot" wording;
+- **Use** only for a single active account that agrees with the approved procedure;
+- excluding revised papers before latest-per-version selection;
+- a window of the 12 close months ending with the close;
+- the reading connection only, with no fallback.
+
+Code review adopted: showing the other remembered choices unless the proposal matches the most common one, and re-reading notes on Work's refresh, clearing old ones first.
+
+- `TestHintsRememberApprovedAccountsAndCheckTheLedger` (PostgreSQL):
+  - Remembered: Prepaid insurance ×2, Prepaid software ×1 and Prepaid legacy ×1.
+  - Ignored: a revised older version under a different source name, a changes-requested paper, papers 12 months back and one month ahead, and another client's paper.
+  - Without a snapshot there is no ledger check.
+  - A job from another close is a 404.
+  - With a snapshot, "Prepaid Expenses" is not in it, while "insurance expense" matches regardless of case. Only Prepaid insurance can be used: Prepaid software is ambiguous and Prepaid legacy is inactive.
+  - An approved procedure naming Prepaid software is shown and blocks the conflicting remembered account.
+  - A connection needing reconnection makes the snapshot stale, and the ledger check goes silent.
+  - Observed red without the revision filter, the approved-decision filter, either window bound, the client filter, the stale check, the active check, the procedure conflict, the single-match rule, and procedure loading.
+
