@@ -80,6 +80,16 @@ The close Overview scans every row of the latest completed QuickBooks transactio
 - **Holding account:** a line posted to an Uncategorized, Ask My Accountant or Suspense account.
 - **No payee:** a Purchase with no payee.
 
+**Needs a schedule:** a Bill, Purchase, journal entry or Deposit that adds to a prepaid account (subtype `PrepaidExpenses`), a fixed-asset account (not accumulated depreciation or amortization) or a deferred-revenue account (subtype `DeferredRevenue`, unverified against live companies), with no schedule in the close that cites it.
+
+- Additions are netted per transaction. A transfer between two prepaid accounts, an amortization or recognition entry, and a card refund are not new additions.
+- Each account the transaction adds to is its own item, so a split bill can be covered account by account.
+- A current schedule (the latest version) covers a transaction only when its source or booking reference contains the transaction's document number as a whole word (INV-88 does not match INV-88-1), with the same amount and currency. For prepaids and deferred revenue the account must also match; for depreciation, the cost.
+- A transaction without a document number or a captured currency keeps asking.
+- The question asks the client for the invoice, agreement or contract and the service period, or the in-service date. The agent then prepares the schedule from that evidence; nothing is posted.
+- Account types come from the newest QuickBooks period snapshot. Without one, the scan says it is waiting. An account missing from the snapshot's list, or a bill line posted through an item (whose account is not captured), makes the scan incomplete, and the Exceptions panel and the close brief both say so.
+- These items are computed when the close is opened, so Daily Books does not list them.
+
 Each item names the QuickBooks transaction IDs, the evidence still missing and a plain client question. **Copy client questions** puts them on the clipboard for a client request. Nothing is recategorized, deleted, merged or posted. Owner or personal purpose is never inferred. Without a capture, the card asks for one rather than reporting "no exceptions".
 
 ## Where this close stands

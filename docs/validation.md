@@ -648,3 +648,37 @@ The period-report assembly was extracted once (`quickbooks.ReadSnapshot`) and th
   - Observed red without the signed-off check, the "no period snapshot" check, the ended-month check, the locked re-check, the company check and the evidence link.
 - Not covered by a test: the five-line call from `ProcessSync` after a completed transaction capture. It runs `captureFirstPeriod` with the sync's own refreshed credentials.
 
+## Schedules discovered from the ledger (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- netting additions per transaction, so transfers and amortization are not new additions;
+- coverage only when a schedule cites the transaction's document number, with the same amount, currency and account, instead of amount alone;
+- an incomplete or waiting scan when the account list is missing or lacks an account, never a clear one;
+- account identity in the Exceptions row key.
+
+Mutation checks also removed a redundant account-list flag. Code review adopted:
+
+- one item per account, so a split bill is covered account by account;
+- current schedule versions only;
+- hyphens as part of a document number;
+- item-based lines making the scan incomplete, counted even without an amount (delta round);
+- coverage requiring a captured currency on both sides (delta round).
+
+Code review rejected an account check for fixed assets: depreciation workpapers record the accumulated account, not the cost account, and the document number already ties them to the purchase.
+
+- `TestScheduleCandidatesAreNetAdditions`:
+  - Found: a Bill to Prepaid insurance with document number INV-88, a Purchase of office equipment, a journal entry and a Deposit crediting deferred revenue.
+  - Not found: a transfer between prepaid accounts, amortization, a credit to accumulated depreciation, a debit to accumulated depreciation, revenue recognition, or a card refund.
+  - A split bill gives one item per prepaid account, and a partial transfer names only the account that grew. An item-based line is counted.
+  - An account missing from the directory is named.
+  - Observed red without the prepaid subtype, the contra exclusion, the Deposit and credit-card signs, the netting and deferred-revenue direction, the unknown-account list, the per-account amount guard and the item-line count.
+- `TestLedgerAdditionsAskForASchedule` (PostgreSQL):
+  - Without a snapshot nothing is concluded, and the brief says schedule discovery is waiting.
+  - These schedules do not cover anything: one citing INV-880, one in EUR, one on another account, and a depreciation schedule with no document number to match.
+  - A schedule citing INV-88 on "Prepaid Expenses:Prepaid insurance" covers only that bill; a second 12,000.00 bill (INV-90) still asks.
+  - A revised schedule that no longer cites INV-90 stops covering it.
+  - A bill with no captured currency is not covered by a schedule without one.
+  - An item line alone, then an unknown account, make the scan incomplete, and the brief names both.
+  - Observed red without the document number, whole-word, hyphen, currency, account and full-name checks, without the current-version filter, without the incomplete state for item lines, and without the brief's waiting and not-checked lines.
+

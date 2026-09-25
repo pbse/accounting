@@ -4,11 +4,12 @@ import { workspaceRequest } from "./workspace";
 import { LedgerSelection } from "./Coverage";
 
 type Found = {
-  type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding" | "past_due_receivable" | "past_due_payable" | "unapplied_payment" | "open_customer_credit" | "open_supplier_credit";
+  type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding" | "past_due_receivable" | "past_due_payable" | "unapplied_payment" | "open_customer_credit" | "open_supplier_credit" | "unscheduled_prepaid" | "unscheduled_fixed_asset" | "unscheduled_deferred_revenue";
   kind: string;
   provider_ids: string[];
   dates: string[];
   amount: string;
+  account?: string;
   finding: string;
   next_step: string;
   question: string;
@@ -18,6 +19,7 @@ type Scan = {
   capture: { id: string; evidence_id: string; finished_at: string } | null;
   scanned?: number;
   items: Found[];
+  schedule_scan?: { state: "checked" | "incomplete" | "no_directory"; unknown_accounts: string[]; item_lines: number };
   balances: { snapshot: { id: string; captured_at: string; stale: boolean; source: "quickbooks" | "xero" } | null; items: Balance[]; error?: string };
 };
 
@@ -31,6 +33,9 @@ const labels: Record<Found["type"], [string, string]> = {
   unapplied_payment: ["Unapplied payment", "warn"],
   open_customer_credit: ["Unused customer credit", "info"],
   open_supplier_credit: ["Unused supplier credit", "info"],
+  unscheduled_prepaid: ["Prepaid needs a schedule", "warn"],
+  unscheduled_fixed_asset: ["Fixed asset needs a schedule", "warn"],
+  unscheduled_deferred_revenue: ["Deferred revenue needs a schedule", "warn"],
 };
 
 export function Exceptions({ closeId }: { closeId: string }) {
@@ -84,6 +89,19 @@ export function Exceptions({ closeId }: { closeId: string }) {
             {scan.capture.evidence_id}). Open invoice and bill balances are as of that capture; days past due are counted at month-end. Each
             item is a question with the evidence still missing, not a conclusion. Nothing is changed in QuickBooks.
           </p>
+          {scan.schedule_scan && scan.schedule_scan.state !== "checked" && (
+            <p role="status">
+              {scan.schedule_scan.state === "no_directory"
+                ? "Schedule discovery waits on a month-end QuickBooks snapshot, which names each account's type."
+                : [
+                    "Schedule discovery is incomplete.",
+                    scan.schedule_scan.unknown_accounts.length > 0 && `Not in the snapshot's account list: ${scan.schedule_scan.unknown_accounts.join(", ")}; capture a new snapshot.`,
+                    scan.schedule_scan.item_lines > 0 && `${scan.schedule_scan.item_lines} bill or purchase line${scan.schedule_scan.item_lines === 1 ? " posts" : "s post"} through items, whose accounts are not captured; check those for prepaids or assets yourself.`,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+            </p>
+          )}
           {scan.items.length === 0 ? (
             <p className="empty">No possible duplicates, holding-account postings, payments without a payee, inconsistent coding or overdue items in this capture.</p>
           ) : (
@@ -95,7 +113,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
                 <span />
               </div>
               {scan.items.map((item) => (
-                <div className="row" key={item.type + item.provider_ids.join()}>
+                <div className="row" key={item.type + item.provider_ids.join() + (item.account ?? "")}>
                   <div>
                     <span className={`status ${labels[item.type][1]}`}>{labels[item.type][0]}</span>
                     <p>{item.finding}</p>

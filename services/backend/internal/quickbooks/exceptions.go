@@ -30,6 +30,8 @@ type Exception struct {
 	Amount       string   `json:"amount"`
 	Counterparty string   `json:"counterparty,omitempty"`
 	Account      string   `json:"account,omitempty"`
+	Reference    string   `json:"reference,omitempty"`
+	Currency     string   `json:"currency,omitempty"`
 	Finding      string   `json:"finding"`
 	NextStep     string   `json:"next_step"`
 	Question     string   `json:"question"`
@@ -264,4 +266,126 @@ func OpenItemExceptions(open map[string][]json.RawMessage, monthEnd time.Time) [
 		}
 	}
 	return out
+}
+
+var schedulePrompts = map[string][3]string{
+	"unscheduled_prepaid":          {"a prepaid account", "Missing: the invoice or agreement showing the service period. The agent then drafts the amortization schedule for review; nothing is posted.", "What period does the %s paid to %s on %s cover? Please send the invoice or agreement."},
+	"unscheduled_fixed_asset":      {"a fixed asset account", "Missing: the invoice, the date the asset was placed in service and its useful life under the firm's policy. The agent then drafts the depreciation schedule for review; nothing is posted.", "What was the %s purchase from %s on %s, and when was it placed in service? Please send the invoice."},
+	"unscheduled_deferred_revenue": {"a deferred revenue account", "Missing: the contract or invoice showing when the revenue is earned. The agent then drafts the recognition schedule for review; nothing is posted.", "What service period does the %s received from %s on %s cover? Please send the contract or invoice."},
+}
+
+// ScheduleCandidates finds additions to prepaid, fixed-asset or deferred-revenue accounts; it also returns accounts missing from the directory and item lines, whose accounts are not captured.
+func ScheduleCandidates(rows []TransactionRow, accounts json.RawMessage) ([]Exception, []string, int, error) {
+	var directory []struct {
+		ID                                string `json:"Id"`
+		Name, AccountType, AccountSubType string
+	}
+	if err := json.Unmarshal(accounts, &directory); err != nil {
+		return nil, nil, 0, fmt.Errorf("account directory is invalid")
+	}
+	purpose := map[string]string{}
+	names := map[string]string{}
+	for _, a := range directory {
+		names[a.ID] = a.Name
+		switch {
+		case a.AccountSubType == "PrepaidExpenses":
+			purpose[a.ID] = "unscheduled_prepaid"
+		case a.AccountType == "Fixed Asset" && !slices.Contains(oppositeSubtypes, a.AccountSubType):
+			purpose[a.ID] = "unscheduled_fixed_asset"
+		case a.AccountSubType == "DeferredRevenue":
+			purpose[a.ID] = "unscheduled_deferred_revenue"
+		default:
+			purpose[a.ID] = ""
+		}
+	}
+	out, unknown, items := []Exception{}, []string{}, 0
+	for _, row := range rows {
+		if row.Kind != "Bill" && row.Kind != "Purchase" && row.Kind != "JournalEntry" && row.Kind != "Deposit" {
+			continue
+		}
+		var record struct {
+			DocNumber                         string
+			Credit                            bool
+			EntityRef, VendorRef, CustomerRef *ref
+			Line                              []map[string]json.RawMessage
+		}
+		if json.Unmarshal(row.Record, &record) != nil {
+			continue
+		}
+		net := map[string]map[string]*big.Rat{}
+		for _, line := range record.Line {
+			if line["ItemBasedExpenseLineDetail"] != nil {
+				items++
+			}
+			var value json.Number
+			if json.Unmarshal(line["Amount"], &value) != nil {
+				continue
+			}
+			for key, raw := range line {
+				var detail struct {
+					AccountRef  ref
+					PostingType string
+				}
+				if key != "AccountBasedExpenseLineDetail" && key != "JournalEntryLineDetail" && key != "DepositLineDetail" || json.Unmarshal(raw, &detail) != nil || detail.AccountRef.Value == "" {
+					continue
+				}
+				kind, known := purpose[detail.AccountRef.Value]
+				if !known {
+					if !slices.Contains(unknown, detail.AccountRef.Name) {
+						unknown = append(unknown, detail.AccountRef.Name)
+					}
+					continue
+				}
+				amount, ok := new(big.Rat).SetString(value.String())
+				if kind == "" || !ok {
+					continue
+				}
+				if key == "DepositLineDetail" || detail.PostingType == "Credit" || record.Credit {
+					amount.Neg(amount)
+				}
+				if net[kind] == nil {
+					net[kind] = map[string]*big.Rat{}
+				}
+				if net[kind][detail.AccountRef.Value] == nil {
+					net[kind][detail.AccountRef.Value] = new(big.Rat)
+				}
+				net[kind][detail.AccountRef.Value].Add(net[kind][detail.AccountRef.Value], amount)
+			}
+		}
+		who := "an unnamed party"
+		for _, candidate := range []*ref{record.EntityRef, record.VendorRef, record.CustomerRef} {
+			if candidate != nil && candidate.Name != "" {
+				who = candidate.Name
+				break
+			}
+		}
+		for _, kind := range slices.Sorted(maps.Keys(net)) {
+			// A transaction that moves or releases more than it adds to a kind of account adds nothing new.
+			total := new(big.Rat)
+			for _, id := range slices.Sorted(maps.Keys(net[kind])) {
+				total.Add(total, net[kind][id])
+			}
+			if kind == "unscheduled_deferred_revenue" {
+				total.Neg(total)
+			}
+			if total.Sign() <= 0 {
+				continue
+			}
+			for _, id := range slices.Sorted(maps.Keys(net[kind])) {
+				added := new(big.Rat).Set(net[kind][id])
+				if kind == "unscheduled_deferred_revenue" {
+					added.Neg(added)
+				}
+				if added.Sign() <= 0 {
+					continue
+				}
+				prompt, shown := schedulePrompts[kind], ledger.Show(added.FloatString(2), row.Currency)
+				out = append(out, Exception{Type: kind, Kind: row.Kind, ProviderIDs: []string{row.ProviderID}, Dates: []string{row.Date}, Amount: added.FloatString(2), Counterparty: who, Account: names[id], Reference: record.DocNumber, Currency: row.Currency,
+					Finding:  fmt.Sprintf("%s %s adds %s from %s to %s, %s, and no schedule in this close cites it.", row.Kind, row.ProviderID, shown, who, names[id], prompt[0]),
+					NextStep: prompt[1],
+					Question: fmt.Sprintf(prompt[2], shown, who, row.Date)})
+			}
+		}
+	}
+	return out, unknown, items, nil
 }

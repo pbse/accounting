@@ -230,6 +230,11 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 				Items    []json.RawMessage `json:"items"`
 				Error    string            `json:"error"`
 			} `json:"balances"`
+			Schedules *struct {
+				State   string   `json:"state"`
+				Unknown []string `json:"unknown_accounts"`
+				Items   int      `json:"item_lines"`
+			} `json:"schedule_scan"`
 		}
 		switch {
 		case !read("/quickbooks/exceptions", &scan):
@@ -256,6 +261,26 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 					state = "unknown"
 				} else {
 					unchecked = append(unchecked, "balance check")
+				}
+			}
+			if s := scan.Schedules; s != nil && s.State == "no_directory" {
+				text += " Schedule discovery waits on a month-end snapshot."
+				if state == "done" {
+					state = "waiting"
+				}
+			} else if s != nil && s.State == "incomplete" {
+				text += " Schedule discovery is incomplete"
+				if len(s.Unknown) > 0 {
+					text += "; not in the snapshot's account list: " + named(s.Unknown)
+				}
+				if s.Items > 0 {
+					text += "; " + plural(s.Items, "line posts", "lines post") + " through items whose accounts are not captured"
+				}
+				text += "."
+				if state == "done" {
+					state = "unknown"
+				} else {
+					unchecked = append(unchecked, "schedule check")
 				}
 			}
 			add("exceptions", state, text, "overview")
