@@ -66,6 +66,7 @@ export default function PrepareLoan() {
   const [rateChanges, setRateChanges] = useState<LoanRateChange[]>([]);
   const [fees, setFees] = useState<LoanFee[]>([]);
   const [costs, setCosts] = useState<LoanIssuanceCosts>();
+  const lookups = useRef<Record<number, number>>({});
   const [method, setMethod] = useState<LoanInput["method"]>("lender_statement_v1");
   const [accrue, setAccrue] = useState("");
   const [reclass, setReclass] = useState("");
@@ -145,11 +146,13 @@ export default function PrepareLoan() {
   // The published value on or before the chosen date; the rate is that value plus the note's margin, in whole ten-thousandths.
   async function lookUp(index: number, date: string) {
     const change = rateChanges[index];
+    const asked = (lookups.current[index] = (lookups.current[index] ?? 0) + 1);
     const tenThousandths = (text: string) => { const [whole, fraction = ""] = text.split("."); return Number(whole) * 10000 + Number((fraction + "0000").slice(0, 4)); };
     try {
       const found: { effective_date: string; percent: string } = await workspaceRequest(`/index-rates?index=${change.index}&date=${date}`);
       const sum = tenThousandths(found.percent) + tenThousandths(change.margin ?? "");
-      // An answer for an index or margin changed meanwhile is dropped.
+      // Only the latest lookup for this row is applied, and only if its index and margin are unchanged.
+      if (lookups.current[index] !== asked) return;
       setRateChanges((rows) => rows.map((row, i) => (i === index && row.index === change.index && row.margin === change.margin ? { ...row, index_date: found.effective_date, index_rate: found.percent, annual_rate: sum % 10 === 0 ? (sum / 10000).toFixed(3) : "" } : row)));
       setResult(undefined);
     } catch (e) {

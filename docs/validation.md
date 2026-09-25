@@ -1326,6 +1326,6 @@ Tests:
 
 Each check was observed red with its rule removed (13 mutations).
 
-Code review: GPT-6 Sol (high). Adopted: the Fed call refuses redirects; the form clears a looked-up value when the index changes and drops an answer for a changed index or margin; the docs now say a saved draft keeps the value it was saved with and approval does not look it up again (a check at approval and posting was not added: a revision after saving is rare, and the lender's statement fixes the interest).
+Code review: GPT-6 Sol (high), two delta rounds (the first attempt failed on the reviewer's authentication and was rerun). Adopted: the Fed call refuses redirects; the form clears a looked-up value when the index changes, drops an answer for a changed index or margin, and applies only a row's latest lookup; the docs now say a saved draft keeps the value it was saved with and approval does not look it up again (a check at approval and posting was not added: a revision after saving is rare, and the lender's statement fixes the interest).
 
 Not verified: the live New York Fed service beyond one manual read of its SOFR endpoint, and the form in a browser.
