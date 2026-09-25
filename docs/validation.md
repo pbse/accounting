@@ -710,3 +710,31 @@ The delta plan review added counting only model proposals (not rule-based ones),
   Observed red without the model-only filter, without the confirmed filter, without the number, comma, leading-zero, case and blank-value rules, with a 13-month window, with sent back excluding revised drafts, without actual-successor revisions, when using the current review state, without the client grant, without the window, without the kind check, and without the direct-save filter.
 - `TestMCPToolsUseTheSignedInPersonsAccess` now lists `agent_track_record`.
 
+## Replaying confirmed readings with the current agent (2026-09-24)
+
+Author: Claude Opus 5.5. No migration. Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- replaying on the evidence the agent originally selected (its checkpoint), not only the sources it cited;
+- the worker's client-identity check before any model call;
+- counting a value the new reading leaves out as a difference;
+- re-checking the evidence after the model call.
+
+The track record's comparison was extracted and reused; `TestTrackRecordComparesProposalsWithWhatPeopleConfirmed` still passes. Code review adopted:
+
+- expected values taken from what the person confirmed, so a value the model misses again is a difference;
+- one replay per person at a time;
+- the card keyed to its close;
+- a mutex in the test's concurrent mock. The race detector is clean.
+
+A firm-wide limit on model-spending actions was routed to a separate ticket, because the Work box and preparation retries have the same gap.
+
+- `TestReplayComparesTheCurrentModelWithConfirmedReadings` (PostgreSQL, OpenAI mocked):
+  - Without the model configured, it returns 503.
+  - The three most recent model readings are replayed: one is the same as confirmed; one differs (another prepaid account, the amount left out, and an end date the person supplied that the model misses again); one is not replayed because evidence changed since confirmation. That run makes 2 model calls.
+  - A rule-based reading is never picked.
+  - A second replay by the same person while one runs is refused.
+  - A reading naming another client is not replayed, and only the newest three are used.
+  - Nothing is written: workpapers, jobs, evidence and stored proposals are unchanged.
+  - Evidence added during the model call leaves the reading unscored.
+  - Observed red without the model-only filter, the three-reading limit, the evidence check before and after the call, the identity check, the left-out-value rule (including values the person supplied), the one-at-a-time guard, and the configuration check.
+
