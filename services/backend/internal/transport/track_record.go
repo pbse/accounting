@@ -48,6 +48,45 @@ func sameFact(proposed, confirmed string) bool {
 	return norm(proposed) == norm(confirmed)
 }
 
+type readProposal struct {
+	Kind  string `json:"kind"`
+	Facts []struct {
+		Field string `json:"field"`
+		Value string `json:"value"`
+	} `json:"facts"`
+}
+
+type confirmedPlan struct {
+	Kind  string                     `json:"kind"`
+	Input map[string]json.RawMessage `json:"input"`
+}
+
+// compareProposal compares a model reading with what a person confirmed; expected fields the reading leaves blank are misses.
+func compareProposal(p readProposal, plan confirmedPlan, expected []string) (bool, []string, int) {
+	changed, filled, given := []string{}, 0, map[string]bool{}
+	if p.Kind != plan.Kind {
+		changed = append(changed, "kind")
+	}
+	for _, f := range p.Facts {
+		confirmed := factText(plan.Input[f.Field])
+		switch {
+		case strings.TrimSpace(f.Value) != "":
+			given[f.Field] = true
+			if !sameFact(f.Value, confirmed) {
+				changed = append(changed, f.Field)
+			}
+		case strings.TrimSpace(confirmed) != "" && !slices.Contains(expected, f.Field):
+			filled++
+		}
+	}
+	for _, field := range expected {
+		if !given[field] && !slices.Contains(changed, field) {
+			changed = append(changed, field)
+		}
+	}
+	return len(changed) == 0, changed, filled
+}
+
 // trackRecord compares the model's confirmed proposals with what people confirmed, and how their drafts were judged.
 func trackRecord(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -94,37 +133,17 @@ func trackRecord(db *sql.DB) http.HandlerFunc {
 				clients = append(clients, &client{Entity: entity, Changed: map[string]int{}, normalized: strings.ToLower(entity)})
 			}
 			c := clients[len(clients)-1]
-			var proposal struct {
-				Kind  string `json:"kind"`
-				Facts []struct {
-					Field string `json:"field"`
-					Value string `json:"value"`
-				} `json:"facts"`
-			}
-			var plans []struct {
-				Kind  string                     `json:"kind"`
-				Input map[string]json.RawMessage `json:"input"`
-			}
+			var proposal readProposal
+			var plans []confirmedPlan
 			if json.Unmarshal(rawProposal, &proposal) != nil || json.Unmarshal(rawPlans, &plans) != nil || len(plans) != 1 {
 				continue
 			}
 			c.Confirmed++
-			kept := proposal.Kind == plans[0].Kind
-			if !kept {
-				c.Changed["kind"]++
+			kept, changed, filled := compareProposal(proposal, plans[0], nil)
+			for _, field := range changed {
+				c.Changed[field]++
 			}
-			for _, f := range proposal.Facts {
-				confirmed := factText(plans[0].Input[f.Field])
-				switch {
-				case strings.TrimSpace(f.Value) == "":
-					if strings.TrimSpace(confirmed) != "" {
-						c.Filled++
-					}
-				case !sameFact(f.Value, confirmed):
-					kept = false
-					c.Changed[f.Field]++
-				}
-			}
+			c.Filled += filled
 			if kept {
 				c.Kept++
 			}

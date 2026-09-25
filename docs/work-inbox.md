@@ -121,6 +121,14 @@ Each account **ties**, **ties after proposed entries** (the month-end entries st
 
 Not counted: rule-based and bank-export readings, carried-forward and recurring work, and drafts people saved directly; the page states how many of those there are. It is a record of what happened, not a promise of future accuracy. It grants the agent no authority.
 
+## Check the current agent
+
+On a close's **Workpapers** tab, **Replay confirmed readings** reads up to 3 of the close's most recently confirmed model readings again with the current model (`POST /v1/closes/{id}/replay`, one model call each). It uses the evidence the agent originally selected, recorded in its checkpoint, and compares each new reading with what the person confirmed. Each document then shows "same as confirmed" or the fields that differ. A value the person confirmed that the new reading leaves out counts as a difference.
+
+A document is not replayed when evidence in the close has changed since it was confirmed, when it names another client, or when its original selection was not recorded. A reading is left unscored if evidence changes while the model is reading. Nothing is saved or changed.
+
+This is a check of interpretation, not of evidence selection. It needs `OPENAI_API_KEY` and `OPENAI_MODEL` and a person's session, and it is not exposed to agents, so model spend stays a person's click. Each person can run one replay at a time. It works best on past closes, whose evidence no longer changes.
+
 ## Daily books
 
 Work lists **Daily books**: for each accessible client's unsigned current- or prior-month close, the exceptions the latest QuickBooks transaction capture found that were not in the capture last marked reviewed. Captures run daily and soon after QuickBooks reports a change, so new duplicates, holding-account postings, payments without a payee and inconsistent coding surface during the month instead of at close. Each capture records its findings when it finishes; a capture with unchanged evidence carries the previous findings. A finding is the same when its type, transaction kind and QuickBooks IDs match; after reconnecting to a different company, everything counts as new. Clients with the most new findings come first, up to 100.

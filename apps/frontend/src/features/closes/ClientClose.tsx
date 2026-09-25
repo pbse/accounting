@@ -17,6 +17,7 @@ import { QuickBooks } from "./QuickBooks";
 import { Xero } from "./Xero";
 import { Readiness } from "./Readiness";
 import { Recurring } from "./Recurring";
+import { Replay } from "./Replay";
 import { RecurringAccruals } from "./RecurringAccruals";
 import { Requests } from "./Requests";
 import { EffortCard, EffortTracker, type Activity } from "./Effort";
@@ -272,6 +273,7 @@ export default function ClientClose() {
           <RecurringAccruals closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
           <CarryForward key={close.id} closeId={close.id} />
           <BillCorrection closeId={close.id} />
+          <Replay key={`replay-${close.id}`} closeId={close.id} />
         </div>
       )}
       {tab === "evidence" && (

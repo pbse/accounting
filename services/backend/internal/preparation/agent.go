@@ -585,3 +585,55 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	return true, finish.Commit()
 }
+
+// Replay reads a confirmed intake again with the current model on the evidence the agent originally selected; nothing is saved.
+func Replay(ctx context.Context, db *sql.DB, client *http.Client, closeID, jobID string) (Proposal, error) {
+	inventory := func() ([]IntakeSource, string, error) {
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			return nil, "", err
+		}
+		defer tx.Rollback()
+		return AgentInventory(ctx, tx, closeID, jobID)
+	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return Proposal{}, err
+	}
+	defer tx.Rollback()
+	var primary, entity, period string
+	var raw, checkpoint []byte
+	if err = tx.QueryRowContext(ctx, `SELECT i.source_id::text,i.proposal,i.agent_checkpoint,c.entity,c.period FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE i.job_id::text=$1 AND j.close_id::text=$2 AND i.confirmed_by IS NOT NULL AND i.proposal->>'engine'='openai'`, jobID, closeID).Scan(&primary, &raw, &checkpoint, &entity, &period); err != nil {
+		return Proposal{}, fmt.Errorf("This document has no confirmed model reading to replay.")
+	}
+	var original Proposal
+	json.Unmarshal(raw, &original)
+	profile, err := ClientProfile(ctx, tx, closeID)
+	if err != nil {
+		return Proposal{}, err
+	}
+	aliases, err := ClientAliases(ctx, tx, closeID)
+	if err != nil {
+		return Proposal{}, err
+	}
+	sources, digest, err := AgentInventory(ctx, tx, closeID, jobID)
+	if err != nil || digest != original.InventoryDigest {
+		return Proposal{}, fmt.Errorf("Evidence in this close changed since the reading was confirmed; not replayed.")
+	}
+	if _, blocked := blockedIdentity(primary, entity, aliases, sources); blocked {
+		return Proposal{}, fmt.Errorf("The document names another client; not replayed.")
+	}
+	selected, ok := resumeSelection(checkpoint, digest, primary, sources)
+	if !ok {
+		return Proposal{}, fmt.Errorf("The evidence the agent originally selected is not recorded; not replayed.")
+	}
+	tx.Rollback()
+	p, err := interpret(ctx, client, os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL"), entity, period, profile.Currency, primary, selected)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if _, now, err := inventory(); err != nil || now != digest {
+		return Proposal{}, fmt.Errorf("Evidence in this close changed during the replay; not scored.")
+	}
+	return p, nil
+}
