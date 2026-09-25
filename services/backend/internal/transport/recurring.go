@@ -163,6 +163,47 @@ func recurringPreview(ctx context.Context, tx *sql.Tx, closeID string) (recurrin
 	return snapshot, items, nil
 }
 
+// queueComparison queues the revision that compares a carried schedule's month with its booked balance; a person reviews the draft it prepares.
+func queueComparison(ctx context.Context, tx *sql.Tx, closeID, entity, period string, snapshot recurringSnapshot, selected *recurringItem, balance int64, actor, reference string) (job string, status int, code, message string) {
+	if selected.Blocker != "" {
+		return "", 409, "", "Carried work or account evidence changed. Refresh the comparison."
+	}
+	input := selected.Paper.Input
+	input.BookedBalance = prepaids.Money(balance)
+	input.BookingReference = reference
+	input.MethodConfirmed, input.BookingConfirmed, input.ExamplesConfirmed = true, true, true
+	if len(input.BookingReference) > 200 {
+		return "", 422, "", "Ledger reference is too long."
+	}
+	base := len(selected.Paper.CarryForward.SourceIDs)
+	if len(selected.Paper.Sources) < base {
+		return "", 409, "SOURCE_STALE", "Carried source lineage changed."
+	}
+	sources := append([]preparation.Source{}, selected.Paper.Sources[:base]...)
+	sources = append(sources, preparation.Source{ID: snapshot.SourceID, Digest: snapshot.SourceDigest, Name: "QuickBooks " + period + " period reports", Role: "period_ledger", Location: selected.Location})
+	raw, _ := json.Marshal(input)
+	plan := preparation.Plan{Kind: "prepaid", Input: raw, Sources: sources, CarryForward: selected.Paper.CarryForward, Revises: selected.ID}
+	if err := preparation.ValidateCarry(ctx, tx, plan, closeID, entity, period); err != nil {
+		return "", 409, "", err.Error()
+	}
+	if _, err := preparation.Calculate(plan, entity, period); err != nil {
+		return "", 422, "", err.Error()
+	}
+	plans, _ := json.Marshal([]preparation.Plan{plan})
+	err := tx.QueryRowContext(ctx, `INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(close_id,digest) DO UPDATE SET state=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN 'queued' ELSE preparation_jobs.state END,error=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN '' ELSE preparation_jobs.error END,finished_at=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN NULL ELSE preparation_jobs.finished_at END RETURNING id::text`, closeID, comparisonDigest(selected.ID, snapshot.ID, input.BookedBalance), string(plans), actor).Scan(&job)
+	if err != nil && strings.Contains(err.Error(), "Firm active job limit reached") {
+		return "", 429, "", "This firm has reached its active preparation limit. Resolve or cancel existing work before starting more."
+	}
+	if err != nil {
+		return "", 503, "", "Could not queue recurring preparation."
+	}
+	return job, 0, "", ""
+}
+
+func comparisonDigest(paperID, snapshotID, balance string) string {
+	return preparation.Digest([]byte("recurring:" + paperID + ":" + snapshotID + ":" + balance))
+}
+
 func registerRecurring(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/recurring", func(w http.ResponseWriter, r *http.Request) {
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
@@ -253,7 +294,7 @@ func registerRecurring(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Could not inspect queued comparison.")
 				return
 			}
-			wantDigest := preparation.Digest([]byte("recurring:" + selected.ID + ":" + snapshot.ID + ":" + prepaids.Money(balance)))
+			wantDigest := comparisonDigest(selected.ID, snapshot.ID, prepaids.Money(balance))
 			if currentDigest != wantDigest {
 				problem(w, 409, "A different booked-balance comparison is already queued. Wait for it to finish, then refresh.")
 				return
@@ -261,41 +302,13 @@ func registerRecurring(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 202, map[string]string{"job_id": selected.JobID})
 			return
 		}
-		if selected.Blocker != "" {
-			problem(w, 409, "Carried work or account evidence changed. Refresh the comparison.")
+		job, status, code, message := queueComparison(r.Context(), tx, closeID, entity, period, snapshot, selected, balance, actor, fmt.Sprintf("QuickBooks snapshot #%s, Trial Balance account #%s, %s", snapshot.ID, selected.AccountID, selected.Location))
+		if status != 0 && code != "" {
+			problemCode(w, status, code, message)
 			return
 		}
-		input := selected.Paper.Input
-		input.BookedBalance = prepaids.Money(balance)
-		input.BookingReference = fmt.Sprintf("QuickBooks snapshot #%s, Trial Balance account #%s, %s", snapshot.ID, selected.AccountID, selected.Location)
-		input.MethodConfirmed, input.BookingConfirmed, input.ExamplesConfirmed = true, true, true
-		if len(input.BookingReference) > 200 {
-			problem(w, 422, "Ledger reference is too long.")
-			return
-		}
-		base := len(selected.Paper.CarryForward.SourceIDs)
-		if len(selected.Paper.Sources) < base {
-			problemCode(w, 409, "SOURCE_STALE", "Carried source lineage changed.")
-			return
-		}
-		sources := append([]preparation.Source{}, selected.Paper.Sources[:base]...)
-		sources = append(sources, preparation.Source{ID: snapshot.SourceID, Digest: snapshot.SourceDigest, Name: "QuickBooks " + period + " period reports", Role: "period_ledger", Location: selected.Location})
-		raw, _ := json.Marshal(input)
-		plan := preparation.Plan{Kind: "prepaid", Input: raw, Sources: sources, CarryForward: selected.Paper.CarryForward, Revises: selected.ID}
-		if err = preparation.ValidateCarry(r.Context(), tx, plan, closeID, entity, period); err != nil {
-			problem(w, 409, err.Error())
-			return
-		}
-		if _, err = preparation.Calculate(plan, entity, period); err != nil {
-			problem(w, 422, err.Error())
-			return
-		}
-		plans, _ := json.Marshal([]preparation.Plan{plan})
-		var job string
-		jobDigest := preparation.Digest([]byte("recurring:" + selected.ID + ":" + snapshot.ID + ":" + input.BookedBalance))
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO preparation_jobs(close_id,digest,plans,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(close_id,digest) DO UPDATE SET state=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN 'queued' ELSE preparation_jobs.state END,error=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN '' ELSE preparation_jobs.error END,finished_at=CASE WHEN preparation_jobs.state IN ('failed','cancelled') THEN NULL ELSE preparation_jobs.finished_at END RETURNING id::text`, closeID, jobDigest, string(plans), actor).Scan(&job)
-		if err != nil {
-			jobProblem(w, err, "Could not queue recurring preparation.")
+		if status != 0 {
+			problem(w, status, message)
 			return
 		}
 		if err = tx.Commit(); err != nil {

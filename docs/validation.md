@@ -841,3 +841,32 @@ Daily Books' computation was extracted once (`dailyFindings`); its tests pass. C
   - A member without client grants sees nothing.
   - Observed red without the 24-hour window, the schedule actor, the revision and hand-saved filters, the exact note, the granter match, the ended-month and Xero rules, the ready-draft evidence rule, the Daily Books merge, and the ranking.
 
+## Agent-prepared month-end comparisons (2026-09-25)
+
+Author: Claude Opus 5.5. No migration. This follows the user's rule: agents build everything, and a person approves before any sync with a third-party system. An audit found every outside write already behind a person's approval: QuickBooks journals, Bills and supplier credits need `posting:approve` then `posting:execute`, and every client email and reminder is approved individually. The rule is now written in production-posting.md.
+
+Review: GPT-6 Sol (medium) plan review. Adopted:
+
+- reading the balance only from exactly one Debit and one Credit column, refusing a wrong-side value;
+- skipping any earlier comparison of the schedule against this capture, so a person's failed one is never silently replaced;
+- a ledger reference and panel copy saying the balance was read by the agent and awaits a person's confirmation.
+
+Code review adopted:
+
+- queueing each schedule inside its own savepoint, so a refusal or the firm's job limit cannot undo the rest of the close;
+- skipping disabled firms with the firm's row locked (second delta round);
+- reporting an unexpected database failure after committing earlier schedules, instead of skipping it (second delta round);
+- refusing a balance that is not a whole number of cents.
+
+Mutation checks deleted five redundant checks. The test restores the firm's job limit and enabled flag even when it fails, after an interrupted mutation run left the limit changed. The manual comparison path was extracted into `queueComparison` with unchanged behavior; `TestRecurringComparisonRefreshesOnlyCurrentPeriod` passes.
+
+- `TestBookedBalanceReadsTheNormalSideOnly`:
+  - Read: a prepaid debit, a credit for accumulated depreciation and for deferred revenue.
+  - Refused: a prepaid on the credit side, two Debit columns, cells not matching the columns (short or with an extra cell), no Credit column, an unreadable amount, and a fraction of a cent.
+- `TestCarriedSchedulesArePreparedFromTheTrialBalance` (PostgreSQL):
+  - Nothing is prepared for a credit-side prepaid, an ambiguous account, a signed-off close (also when signed off after it was picked), an inactive snapshot, or a schedule with a person's failed comparison against the capture.
+  - At the firm's job limit nothing is queued and the sweep still completes. A disabled firm is skipped.
+  - Then one comparison is prepared by `scheduled-recurring-comparison` at 50.00 with an agent-read reference, and it is not queued twice.
+  - Its draft proposes the 10.00 entry and waits for a person's approval, and the revision is not revised again from the same capture.
+  - Observed red without the column checks, the orientation, the already-cited and earlier-comparison skips, the sign-off and enabled-firm rechecks, the savepoint rollback, the whole-cent rule and the system actor. The missing-Credit-column guard fails only by panicking without it.
+
