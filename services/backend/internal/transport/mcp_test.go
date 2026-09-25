@@ -91,7 +91,7 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"list_closes", "get_workpaper", "find_exceptions", "draft_client_request", "request_approval", "prepare_close"} {
+	for _, want := range []string{"list_closes", "get_workpaper", "find_exceptions", "close_brief", "tie_out", "draft_client_request", "request_approval", "prepare_close"} {
 		if !slices.Contains(names, want) {
 			t.Fatalf("missing tool %s in %v", want, names)
 		}
