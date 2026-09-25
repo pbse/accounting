@@ -7,11 +7,12 @@ import { EmailSettings } from "./Email";
 import { FirmEnrollment, FirmOperations } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { independent_review: boolean; link_passcode: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
+type Policy = { independent_review: boolean; independent_review_min_amount: string; link_passcode: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
 
 function IndependentReview() {
   const [policy, setPolicy] = useState<Policy>();
   const [reason, setReason] = useState("");
+  const [minimum, setMinimum] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
@@ -25,12 +26,13 @@ function IndependentReview() {
     };
   }, [refresh]);
   if (!policy) return message ? <p role="alert">{message}</p> : null;
-  async function change() {
+  async function change(input: object = { independent_review: !policy!.independent_review }) {
     setBusy(true);
     setMessage("");
     try {
-      await workspaceRequest("/organization/policy", { independent_review: !policy!.independent_review, reason });
+      await workspaceRequest("/organization/policy", { ...input, reason });
       setReason("");
+      setMinimum("");
       setRefresh((n) => n + 1);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Policy change failed.");
@@ -44,7 +46,9 @@ function IndependentReview() {
       <p>
         {policy.independent_review
           ? "On: nobody may approve a draft they prepared or confirmed, drafts without a recorded preparer cannot be approved, and production posting needs an approval that meets this rule."
-          : "Off: any member with the reviewer role may approve a draft, including one they prepared."}
+          : policy.independent_review_min_amount
+            ? `Only for large drafts: a draft whose proposed entries total at least ${policy.independent_review_min_amount} (in the draft's own currency) needs a reviewer who did not prepare or confirm it; smaller drafts may be approved by their preparer.`
+            : "Off: any member with the reviewer role may approve a draft, including one they prepared."}
       </p>
       {!policy.hosted ? (
         <p className="note">Local development shares one identity, so this policy can only be enforced for hosted firms.</p>
@@ -57,6 +61,18 @@ function IndependentReview() {
           <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change()}>
             {policy.independent_review ? "Turn off independent review" : "Require independent review"}
           </button>
+          <label>
+            Or require it only for drafts whose proposed entries total at least
+            <input value={minimum} inputMode="decimal" placeholder={policy.independent_review_min_amount || "1000.00"} onChange={(e) => setMinimum(e.target.value)} />
+          </label>
+          <button type="button" disabled={busy || reason.trim().length < 5 || !minimum.trim()} onClick={() => void change({ independent_review: false, independent_review_min_amount: minimum })}>
+            {policy.independent_review ? "Require it only for large drafts" : "Set minimum"}
+          </button>
+          {policy.independent_review_min_amount && (
+            <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change({ independent_review_min_amount: "" })}>
+              Remove minimum
+            </button>
+          )}
         </>
       ) : (
         <p className="note">A firm administrator with org:manage can change this policy.</p>
