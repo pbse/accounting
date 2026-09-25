@@ -147,6 +147,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerXero(mux, db)
 	registerStripe(mux, db)
 	registerAging(mux, db)
+	registerMatching(mux, db)
 	registerDaily(mux, db)
 	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
 	mux.HandleFunc("GET /v1/closes/{id}/binder", exportClose(db, true))

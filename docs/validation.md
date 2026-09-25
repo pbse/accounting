@@ -1185,3 +1185,29 @@ Tests:
 Each check was observed red with its rule removed (20 mutations).
 
 Not verified: live QuickBooks open-item payloads, and the panel in a browser.
+
+## Daily books: documents beside ledger transactions (2026-09-25)
+
+Request: matching documents to ledger transactions during the month (PRD §20 Daily Books). `GET /v1/closes/{id}/matching` sets the close's uploaded prepaid invoices beside the bills and purchases of the latest transaction capture (the capture the exceptions list reads, now one shared `latestCapture`), and the close shows it as "Documents and ledger transactions". Pairs need a unique currency and exact amount on both sides; nothing is stored or written to QuickBooks.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- only the primary source of an intake read as prepaid work counts, and only a total quoted from that source;
+- labels say what the inputs cover: documents in this close, bills and purchases dated in the close month;
+- unreadable totals are counted, and the unmatched list is capped at 200 with the total.
+
+Accrual intakes are left out: an accrual is for a service not yet billed, so its document is not expected in the ledger.
+
+Tests:
+
+- `TestMatchPairsOnlyUniqueCurrencyAndAmount` (pure): a unique pair, two documents or two transactions on one amount left to a person, currencies kept apart, unmatched transactions largest first.
+- `TestMatchingReadsTheLatestCaptureAndQuotedInvoiceTotals` (PostgreSQL): waits without a capture; pairs a quoted invoice total with the one bill of that amount while an invoice and a reconciliation are ignored; a total quoted from another source is without a total; a superseded document is left out; a purchase without a currency takes the home currency; an unreadable total is counted.
+
+Each check was observed red with its rule removed (18 mutations). One survivor showed a redundant value comparison, which was deleted.
+
+Code review: GPT-6 Sol (high), two delta rounds. Adopted:
+
+- a total with grouped digits such as `1,2` is unreadable rather than read as 12;
+- the panel reads each time it opens, clears the previous result, and drops an older answer.
+
+Not verified: live QuickBooks payloads and model-read invoices, and the panel in a browser.

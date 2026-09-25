@@ -158,13 +158,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		} else if items != nil {
 			balances["items"] = items
 		}
-		// The latest finished capture, as Daily Books reads it; an unchanged one reuses its predecessor's rows.
-		var captureID, evidenceID, finished, rowsSync string
-		var stored []byte
-		err = db.QueryRowContext(r.Context(), `SELECT s.id::text,s.evidence_id::text,s.finished_at::text,s.exceptions,
- COALESCE((SELECT c.id::text FROM quickbooks_entity_syncs c WHERE c.close_id=s.close_id AND c.evidence_id=s.evidence_id AND c.state='completed' ORDER BY c.id DESC LIMIT 1),'')
- FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))`, r.PathValue("id")).Scan(&captureID, &evidenceID, &finished, &stored, &rowsSync)
+		c, err := latestCapture(r.Context(), db, r.PathValue("id"))
 		if err == sql.ErrNoRows {
 			jsonReply(w, 200, map[string]any{"capture": nil, "items": []any{}, "balances": balances})
 			return
@@ -173,14 +167,14 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Transaction index unavailable.")
 			return
 		}
-		scanned, err := quickbooks.CapturedRows(r.Context(), db, rowsSync)
+		scanned, err := quickbooks.CapturedRows(r.Context(), db, c.RowsSync)
 		if err != nil {
 			problem(w, 503, "Transaction index unavailable.")
 			return
 		}
 		// Stored findings include open invoices and bills; a capture from before they were recorded is scanned now.
 		found := quickbooks.FindExceptions(scanned)
-		if stored != nil && json.Unmarshal(stored, &found) != nil {
+		if c.Exceptions != nil && json.Unmarshal(c.Exceptions, &found) != nil {
 			problem(w, 503, "Recorded exceptions are unreadable.")
 			return
 		}
@@ -202,7 +196,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 				schedules["state"], schedules["unknown_accounts"], schedules["item_lines"] = "incomplete", unknown, items
 			}
 		}
-		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": captureID, "evidence_id": evidenceID, "finished_at": finished}, "scanned": len(scanned), "items": found, "balances": balances, "schedule_scan": schedules})
+		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": c.ID, "evidence_id": c.EvidenceID, "finished_at": c.Finished}, "scanned": len(scanned), "items": found, "balances": balances, "schedule_scan": schedules})
 	})
 	mux.HandleFunc("GET "+path+"/{sync}", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
@@ -217,6 +211,21 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Write(raw)
 	})
+}
+
+type capture struct {
+	ID, EvidenceID, Finished, RowsSync, HomeCurrency string
+	Exceptions                                       []byte
+}
+
+// latestCapture is the latest finished capture, as Daily Books reads it; an unchanged one reuses its predecessor's rows.
+func latestCapture(ctx context.Context, db *sql.DB, closeID string) (c capture, err error) {
+	err = db.QueryRowContext(ctx, `SELECT s.id::text,s.evidence_id::text,s.finished_at::text,s.exceptions,
+ COALESCE((SELECT c.id::text FROM quickbooks_entity_syncs c WHERE c.close_id=s.close_id AND c.evidence_id=s.evidence_id AND c.state='completed' ORDER BY c.id DESC LIMIT 1),''),
+ COALESCE((SELECT home_currency FROM quickbooks_connections WHERE id=s.connection_id),'')
+ FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
+ WHERE s.close_id::text=$1 AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))`, closeID).Scan(&c.ID, &c.EvidenceID, &c.Finished, &c.Exceptions, &c.RowsSync, &c.HomeCurrency)
+	return c, err
 }
 
 // scheduleCoverage reports whether a current schedule cites a candidate's document number with its amount, currency and account.
