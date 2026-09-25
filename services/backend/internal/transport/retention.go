@@ -26,7 +26,7 @@ func canManageData(r *http.Request) bool {
 
 func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retentionStatus, error) {
 	out := retentionStatus{Blockers: []string{}}
-	var due, jobs, syncs, postings, mail, links, attachments, forwarding, connection, grants, shared, xeroConnection, xeroShared, unmapped bool
+	var due, jobs, syncs, postings, mail, links, attachments, forwarding, connection, grants, shared, xeroConnection, xeroShared, stripeConnection, stripeShared, unmapped bool
 	err := tx.QueryRowContext(ctx, `SELECT COALESCE(c.retain_until::text,''),c.legal_hold,c.retention_version,COALESCE(c.retain_until<=CURRENT_DATE,false),
  EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id AND j.state IN ('queued','waiting_evidence','interpreting','needs_confirmation','waiting_client')),
  EXISTS(SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('queued','running')),
@@ -40,10 +40,12 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
  EXISTS(SELECT 1 FROM quickbooks_connections x WHERE x.close_id=c.id AND (EXISTS(SELECT 1 FROM quickbooks_snapshots s WHERE s.connection_id=x.id AND s.close_id<>c.id) OR EXISTS(SELECT 1 FROM quickbooks_entity_syncs q WHERE q.connection_id=x.id AND q.close_id<>c.id) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.connection_id=x.id AND p.close_id<>c.id))),
  EXISTS(SELECT 1 FROM xero_connections x WHERE x.close_id=c.id AND x.state<>'disconnected'),
  EXISTS(SELECT 1 FROM xero_connections x WHERE x.close_id=c.id AND (EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.connection_id=x.id AND s.close_id<>c.id) OR EXISTS(SELECT 1 FROM xero_postings p WHERE p.connection_id=x.id AND p.close_id<>c.id))),
+ EXISTS(SELECT 1 FROM stripe_connections x WHERE x.close_id=c.id AND x.state<>'disconnected') OR EXISTS(SELECT 1 FROM stripe_report_runs s WHERE s.close_id=c.id AND s.state IN ('requesting','pending')),
+ EXISTS(SELECT 1 FROM stripe_connections x JOIN stripe_report_runs s ON s.connection_id=x.id WHERE x.close_id=c.id AND s.close_id<>c.id),
  EXISTS(SELECT 1 FROM email_delivery_events e JOIN email_outbox m ON m.connection_id=e.connection_id AND m.provider_id=e.provider_id
   JOIN work_requests q ON q.id=m.request_id AND lower(q.recipient)=lower(e.recipient)
   JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND e.close_id IS NULL)
- FROM client_closes c WHERE c.id::text=$1 AND c.organization_id=$2`, closeID, org).Scan(&out.RetainUntil, &out.LegalHold, &out.Version, &due, &jobs, &syncs, &postings, &mail, &links, &attachments, &forwarding, &connection, &grants, &shared, &xeroConnection, &xeroShared, &unmapped)
+ FROM client_closes c WHERE c.id::text=$1 AND c.organization_id=$2`, closeID, org).Scan(&out.RetainUntil, &out.LegalHold, &out.Version, &due, &jobs, &syncs, &postings, &mail, &links, &attachments, &forwarding, &connection, &grants, &shared, &xeroConnection, &xeroShared, &stripeConnection, &stripeShared, &unmapped)
 	if err != nil {
 		return out, err
 	}
@@ -85,6 +87,8 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
 		{shared, "A QuickBooks connection opened here is used by another close."},
 		{xeroConnection, "Disconnect the Xero connection opened from this close."},
 		{xeroShared, "A Xero connection opened here is used by another close."},
+		{stripeConnection, "Disconnect the Stripe connection opened from this close, and let any report in progress finish."},
+		{stripeShared, "A Stripe connection opened here is used by another close."},
 		{unmapped, "Historical email delivery events need close attribution before any close in this firm can be deleted."},
 		{activeRule, "An active procedure rule depends on this close. Publish a disabled version after accountant review before deleting its source."},
 	} {
@@ -226,6 +230,8 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM xero_snapshots WHERE close_id=$1`,
 			`DELETE FROM xero_posting_grants WHERE connection_id IN (SELECT id FROM xero_connections WHERE close_id=$1)`,
 			`DELETE FROM xero_connections WHERE close_id=$1`,
+			`DELETE FROM stripe_report_runs WHERE close_id=$1`,
+			`DELETE FROM stripe_connections WHERE close_id=$1`,
 			`DELETE FROM client_attachments WHERE close_id=$1`,
 			`UPDATE procedure_drafts SET source_evidence_id=NULL,source_digest='',source_quote='' WHERE source_evidence_id IN (SELECT id FROM evidence WHERE close_id=$1)`,
 			`DELETE FROM evidence WHERE close_id=$1`,

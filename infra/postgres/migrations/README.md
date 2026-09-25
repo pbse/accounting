@@ -51,3 +51,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `059_idempotency_keys.sql` records, per firm, each `Idempotency-Key` used on a POST with a fingerprint of the request and its final status (never the response body), with row-level security like 055. Apply after 058 with API/worker stopped; `/readyz` checks it.
 
 `060_xero_posting.sql` adds the per-client Xero posting grant and the saved manual journal intent/attempt, with row-level security like 048. Apply after 059 with API/worker stopped; `/readyz` checks it.
+
+`061_stripe_reports.sql` adds a client's confirmed Stripe connection (restricted, report-scoped key, sealed) and each month's itemized payout reconciliation report run, with row-level security like 048. Apply after 060 with API/worker stopped; `/readyz` checks it.
