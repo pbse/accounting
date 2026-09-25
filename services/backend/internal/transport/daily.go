@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -20,9 +21,11 @@ func exceptionKey(e quickbooks.Exception) string {
 }
 
 type dailyItem struct {
-	CloseID     string                 `json:"close_id"`
-	Entity      string                 `json:"entity"`
-	Period      string                 `json:"period"`
+	CloseID string `json:"close_id"`
+	Entity  string `json:"entity"`
+	Period  string `json:"period"`
+	// Source is quickbooks or xero; SyncID is that capture's or snapshot's id.
+	Source      string                 `json:"source"`
 	SyncID      string                 `json:"sync_id"`
 	CapturedAt  time.Time              `json:"captured_at"`
 	RequestedBy string                 `json:"requested_by"`
@@ -31,13 +34,23 @@ type dailyItem struct {
 	ReviewedAt  *time.Time             `json:"reviewed_at"`
 }
 
+// dailyLatest is SQL for close c's newest finished capture: its latest QuickBooks capture with findings on the reading
+// connection whose evidence is not superseded, or its newest Xero snapshot for the close's month on a connection not
+// disconnected, whichever is newer, as the close's own checks choose. A Xero snapshot without transactions has no
+// findings, so the close then lists nothing.
+var dailyLatest = `(SELECT * FROM (
+ (SELECT 'quickbooks' AS source,s.id,s.finished_at AS at,s.requested_by,s.exceptions,s.connection_id FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('completed','unchanged') AND s.exceptions IS NOT NULL AND s.connection_id=COALESCE(` + quickbooks.ReadingConnection("c.id") + `,s.connection_id) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.id=s.evidence_id AND e.superseded_by IS NOT NULL) ORDER BY s.id DESC LIMIT 1)
+ UNION ALL
+ (SELECT 'xero',x.id,x.captured_at,x.actor,x.exceptions,x.connection_id FROM xero_snapshots x JOIN xero_connections xc ON xc.id=x.connection_id AND xc.state<>'disconnected' WHERE x.close_id=c.id AND x.period=c.period ORDER BY x.captured_at DESC,x.id DESC LIMIT 1)
+ ) u ORDER BY at DESC LIMIT 1)`
+
 // dailyFindings ranks every accessible unsigned current or prior-month close by the findings captured since its last review.
 func dailyFindings(ctx context.Context, db *sql.DB, org string, firm bool, who string) ([]dailyItem, error) {
-	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.entity,c.period,s.id::text,s.finished_at,s.requested_by,s.exceptions,
- CASE WHEN b.connection_id=s.connection_id THEN b.exceptions END,d.reviewed_at
+	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.entity,c.period,s.source,s.id::text,s.at,s.requested_by,s.exceptions,
+ CASE WHEN s.source='quickbooks' AND b.connection_id=s.connection_id THEN b.exceptions WHEN s.source='xero' AND bx.connection_id=s.connection_id THEN bx.exceptions END,d.reviewed_at
  FROM client_closes c
- JOIN LATERAL (SELECT * FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('completed','unchanged') AND s.exceptions IS NOT NULL AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("c.id")+`,s.connection_id) ORDER BY s.id DESC LIMIT 1) s ON true
- LEFT JOIN daily_reviews d ON d.close_id=c.id LEFT JOIN quickbooks_entity_syncs b ON b.id=d.sync_id
+ JOIN LATERAL `+dailyLatest+` s ON s.exceptions IS NOT NULL
+ LEFT JOIN daily_reviews d ON d.close_id=c.id LEFT JOIN quickbooks_entity_syncs b ON b.id=d.sync_id LEFT JOIN xero_snapshots bx ON bx.id=d.xero_snapshot_id
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'`, org, firm, who)
@@ -49,7 +62,7 @@ func dailyFindings(ctx context.Context, db *sql.DB, org string, firm bool, who s
 	for rows.Next() {
 		var it dailyItem
 		var latest, baseline []byte
-		if err = rows.Scan(&it.CloseID, &it.Entity, &it.Period, &it.SyncID, &it.CapturedAt, &it.RequestedBy, &latest, &baseline, &it.ReviewedAt); err != nil {
+		if err = rows.Scan(&it.CloseID, &it.Entity, &it.Period, &it.Source, &it.SyncID, &it.CapturedAt, &it.RequestedBy, &latest, &baseline, &it.ReviewedAt); err != nil {
 			break
 		}
 		var found, reviewed []quickbooks.Exception
@@ -101,6 +114,7 @@ func registerDaily(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /v1/closes/{id}/daily-review", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			SyncID string `json:"sync_id"`
+			Source string `json:"source"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -113,23 +127,26 @@ func registerDaily(mux *http.ServeMux, db *sql.DB) {
 		defer tx.Rollback()
 		// Take the lock a finishing capture takes first; the next statement then sees any capture
 		// that finished while this one waited.
-		var closeID, latest string
+		var closeID, source, latest string
 		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM quickbooks_entity_syncs WHERE close_id=$1::bigint AND state IN ('completed','unchanged') AND exceptions IS NOT NULL AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1),'')`, closeID).Scan(&latest); err != nil {
+		// The capture Daily books shows, from either ledger, is the only one that can be marked reviewed.
+		err = tx.QueryRowContext(r.Context(), `SELECT s.source,s.id::text FROM client_closes c JOIN LATERAL `+dailyLatest+` s ON s.exceptions IS NOT NULL WHERE c.id=$1::bigint`, closeID).Scan(&source, &latest)
+		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Review storage unavailable.")
 			return
 		}
-		if latest == "" || latest != in.SyncID {
+		if latest == "" || latest != in.SyncID || source != cmp.Or(in.Source, "quickbooks") {
 			problem(w, 409, "A newer capture finished. Refresh Daily books and review it.")
 			return
 		}
-		if _, err = tx.ExecContext(r.Context(), `INSERT INTO daily_reviews(close_id,sync_id,reviewed_by) VALUES($1::bigint,$2::bigint,$3) ON CONFLICT(close_id) DO UPDATE SET sync_id=excluded.sync_id,reviewed_by=excluded.reviewed_by,reviewed_at=now()`, r.PathValue("id"), latest, subject(r)); err != nil || tx.Commit() != nil {
+		if _, err = tx.ExecContext(r.Context(), `INSERT INTO daily_reviews(close_id,sync_id,xero_snapshot_id,reviewed_by) VALUES($1::bigint,CASE WHEN $4='quickbooks' THEN $2::bigint END,CASE WHEN $4='xero' THEN $2::bigint END,$3)
+ ON CONFLICT(close_id) DO UPDATE SET sync_id=excluded.sync_id,xero_snapshot_id=excluded.xero_snapshot_id,reviewed_by=excluded.reviewed_by,reviewed_at=now()`, r.PathValue("id"), latest, subject(r), source); err != nil || tx.Commit() != nil {
 			problem(w, 503, "Review could not be saved.")
 			return
 		}
-		jsonReply(w, 200, map[string]string{"close_id": r.PathValue("id"), "sync_id": latest})
+		jsonReply(w, 200, map[string]string{"close_id": r.PathValue("id"), "source": source, "sync_id": latest})
 	})
 }

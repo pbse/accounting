@@ -49,6 +49,9 @@ func TestDailyBooksShowsExceptionsNewSinceTheLastReview(t *testing.T) {
 			db.Exec(`DELETE FROM daily_reviews WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM xero_connections WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM evidence WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM client_closes WHERE id=$1`, id)
 		}
@@ -99,6 +102,8 @@ func TestDailyBooksShowsExceptionsNewSinceTheLastReview(t *testing.T) {
 	}
 	type entry struct {
 		CloseID string `json:"close_id"`
+		Source  string `json:"source"`
+		SyncID  string `json:"sync_id"`
 		Total   int    `json:"total"`
 		New     []struct {
 			Type string `json:"type"`
@@ -131,5 +136,68 @@ func TestDailyBooksShowsExceptionsNewSinceTheLastReview(t *testing.T) {
 	capture(dental, connect(dental, "Dental", org, "active"), [3]string{"possible_duplicate", "Purchase", "1"}, [3]string{"no_payee", "Purchase", "3"})
 	if got = daily(); got[0].CloseID != dental || len(got[0].New) != 2 {
 		t.Fatalf("findings from a new connection are new: %+v", got)
+	}
+
+	// A Xero client's snapshots record their findings and are reviewed the same way.
+	studio := open(org, "Studio")
+	var studioXero string
+	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,'Studio','fixture','active',$3,now(),'t-1') RETURNING id::text`, studio, org, rand.Text()).Scan(&studioXero))
+	snapshot := func(age string, findings ...string) string {
+		items := []map[string]any{}
+		for _, id := range findings {
+			items = append(items, map[string]any{"type": "uncategorized", "kind": "Purchase", "provider_ids": []string{id}, "question": "About " + id + "?"})
+		}
+		raw, _ := json.Marshal(items)
+		if findings == nil {
+			raw = nil
+		}
+		var id string
+		must(db.QueryRow(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at,exceptions) VALUES($1,$2,'t-1',$3,'d','{}','scheduled-xero-refresh',now()-$4::interval,$5) RETURNING id::text`, studio, studioXero, month, age, raw).Scan(&id))
+		return id
+	}
+	studioEntry := func() *entry {
+		for _, e := range daily() {
+			if e.CloseID == studio {
+				return &e
+			}
+		}
+		return nil
+	}
+	reviewedXero := snapshot("3 hours", "x-1")
+	if e := studioEntry(); e == nil || e.Source != "xero" || e.SyncID != reviewedXero || len(e.New) != 1 {
+		t.Fatalf("a Xero snapshot's findings are listed: %+v", e)
+	}
+	call("POST", "/v1/closes/"+studio+"/daily-review", map[string]string{"sync_id": reviewedXero}, 409)
+	call("POST", "/v1/closes/"+studio+"/daily-review", map[string]string{"sync_id": reviewedXero, "source": "xero"}, 200)
+	latestXero := snapshot("2 hours", "x-1", "x-2")
+	if e := studioEntry(); e == nil || e.SyncID != latestXero || e.Total != 2 || len(e.New) != 1 {
+		t.Fatalf("only what the reviewed snapshot lacked is new: %+v", e)
+	}
+	snapshot("1 hour")
+	if e := studioEntry(); e != nil {
+		t.Fatalf("a newest snapshot without transactions lists nothing rather than older findings: %+v", e)
+	}
+	// A QuickBooks capture finished after the Xero snapshots is the one shown, and the only one that can be reviewed.
+	quickbooksCapture := capture(studio, connect(studio, "Studio", org, "active"), [3]string{"no_payee", "Purchase", "q-1"})
+	if e := studioEntry(); e == nil || e.Source != "quickbooks" || e.SyncID != quickbooksCapture {
+		t.Fatalf("the newer QuickBooks capture wins: %+v", e)
+	}
+	call("POST", "/v1/closes/"+studio+"/daily-review", map[string]string{"sync_id": latestXero, "source": "xero"}, 409)
+	call("POST", "/v1/closes/"+studio+"/daily-review", map[string]string{"sync_id": quickbooksCapture, "source": "quickbooks"}, 200)
+	// A later QuickBooks capture whose evidence was superseded is passed over, as the close's own checks do.
+	var stale, replacement string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'capture.json',$2,'{}','fixture') RETURNING id::text`, studio, rand.Text()).Scan(&stale))
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'capture.json',$2,'{}','fixture') RETURNING id::text`, studio, rand.Text()).Scan(&replacement))
+	_, err = db.Exec(`UPDATE evidence SET superseded_by=$1 WHERE id=$2`, replacement, stale)
+	must(err)
+	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at,exceptions,evidence_id) SELECT close_id,connection_id,period,requested_by,state,now()+interval '1 minute',exceptions,$2 FROM quickbooks_entity_syncs WHERE id=$1`, quickbooksCapture, stale)
+	must(err)
+	if e := studioEntry(); e == nil || e.SyncID != quickbooksCapture {
+		t.Fatalf("a capture with superseded evidence is not the one shown: %+v", e)
+	}
+	var reviewedSync, reviewedSnapshot sql.NullString
+	must(db.QueryRow(`SELECT sync_id::text,xero_snapshot_id::text FROM daily_reviews WHERE close_id=$1`, studio).Scan(&reviewedSync, &reviewedSnapshot))
+	if reviewedSync.String != quickbooksCapture || reviewedSnapshot.Valid {
+		t.Fatalf("a review points at exactly one capture: %v %v", reviewedSync, reviewedSnapshot)
 	}
 }

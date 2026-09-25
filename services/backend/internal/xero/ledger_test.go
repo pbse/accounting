@@ -24,9 +24,9 @@ func books() map[string]any {
 			map[string]string{"AccountID": "a-620", "Code": "620", "Name": "Prepayments", "Type": "PREPAYMENT"},
 			map[string]string{"AccountID": "a-710", "Code": "710", "Name": "Office Equipment", "Type": "FIXED"},
 			map[string]string{"AccountID": "a-711", "Code": "711", "Name": "Accumulated Depreciation", "Type": "DEPRECIATN"},
-			map[string]string{"AccountID": "a-400", "Code": "400", "Name": "Advertising", "Type": "EXPENSE"},
-			map[string]string{"AccountID": "a-200", "Code": "200", "Name": "Sales", "Type": "REVENUE"},
-			map[string]string{"AccountID": "a-999", "Code": "999", "Name": "Suspense", "Type": "CURRLIAB"},
+			map[string]string{"AccountID": "a-400", "Code": "400", "Name": "Advertising", "Type": "EXPENSE", "Class": "EXPENSE"},
+			map[string]string{"AccountID": "a-200", "Code": "200", "Name": "Sales", "Type": "REVENUE", "Class": "REVENUE"},
+			map[string]string{"AccountID": "a-999", "Code": "999", "Name": "Suspense", "Type": "CURRLIAB", "Class": "LIABILITY"},
 			map[string]string{"AccountID": "a-090", "Code": "090", "Name": "Bank", "Type": "BANK"},
 		}},
 		"transactions": map[string]any{
@@ -195,5 +195,35 @@ func TestTransactionsPageToTheEndAndCheckXerosCount(t *testing.T) {
 	invoices, reported, updated = 5001, 5001, "/Date(1500000000000+0000)/"
 	if _, err = Transactions(context.Background(), "token", "tenant", monthEnd); err == nil || !strings.Contains(err.Error(), "5000-record") {
 		t.Fatalf("more than 5000 records of a type refuse: %v", err)
+	}
+}
+
+func TestPayeeActivitySignsAsTheProfitAndLossShows(t *testing.T) {
+	snapshot := books()
+	records := snapshot["transactions"].(map[string]any)["records"].(map[string]any)
+	records["BankTransactions"] = append(records["BankTransactions"].([]any), map[string]any{"Type": "SPEND", "BankTransactionID": "bt-eur", "Status": "AUTHORISED", "Date": "2026-09-19T00:00:00",
+		"Contact": map[string]string{"ContactID": "c-9", "Name": "Euro Ltd"}, "CurrencyCode": "EUR", "Total": 9, "LineItems": []any{map[string]any{"AccountCode": "400", "LineAmount": 9}}})
+	raw, _ := json.Marshal(snapshot)
+	payees, foreign, err := PayeeActivity(raw, []string{"a-200", "a-400", "a-999", "a-710", "a-090", "a-none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payees["a-200"].ByName["Acme"]; got == nil || got.FloatString(2) != "250.00" {
+		t.Fatalf("an invoice and a deposit to revenue are positive, as the Profit and Loss shows revenue: %v", payees["a-200"].ByName)
+	}
+	if got := payees["a-400"].ByName["Harbor Insurance"]; got == nil || got.FloatString(2) != "-20.00" || payees["a-400"].ByName["Euro Ltd"] != nil || !foreign["a-400"] || foreign["a-200"] {
+		t.Fatalf("a supplier credit reduces an expense; a foreign-currency line is flagged, not added: %v %v", payees["a-400"].ByName, foreign)
+	}
+	if got := payees["a-999"].ByName["Coffee Co"]; got == nil || got.FloatString(2) != "12.00" {
+		t.Fatalf("a purchase is a debit: %v", payees["a-999"].ByName)
+	}
+	if payees["a-710"].Unattributed.FloatString(2) != "500.00" || payees["a-710"].Unnamed != 3 {
+		t.Fatalf("a journal line has no contact; the bill's item line and the bank overpayment's line make every account uncertain: %+v", payees["a-710"])
+	}
+	if payees["a-090"].Unattributed.FloatString(2) != "-500.00" {
+		t.Fatalf("a journal's credit line is negative: %+v", payees["a-090"])
+	}
+	if p, ok := payees["a-none"]; !ok || p.Unattributed.Sign() != 0 || p.Unnamed != 2 {
+		t.Fatalf("every requested account is answered: %+v", p)
 	}
 }

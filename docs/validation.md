@@ -1256,3 +1256,26 @@ Code review: GPT-6 Sol (high), two delta rounds. Adopted:
 - the one-year limit on unused credits is stated as QuickBooks-only.
 
 Not verified: live Xero payloads, rate limits and timing, and the panels in a browser.
+
+## Xero payee causes and Daily books (2026-09-25)
+
+Request: the second half of reading Xero transactions. Changes from last month now explain a Xero client's movements by contact, from `xero.PayeeActivity` over each month's captured transactions. Each Xero capture records its findings when it is saved (migration 062), and Daily books lists a Xero client from its newest capture when that is newer than its latest QuickBooks capture; a review points at exactly one capture from either ledger.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- Mark reviewed accepts only the capture Daily books shows, comparing both ledger and ID under the close lock;
+- an account with lines in another currency shows no causes, because the capture does not hold base-currency amounts;
+- every requested account gets payees, and a line without an account counts as unnamed everywhere, so no missing-payee question is asked from an incomplete month.
+
+Tests:
+
+- `TestPayeeActivitySignsAsTheProfitAndLossShows` (pure): revenue positive from invoices and deposits, a supplier credit negative, a purchase and a journal's credit line, a foreign-currency line flagged, unattributed journal lines, an item line making every account uncertain, and an account with no lines.
+- `TestFluxExplainsMovementsByPayee` (PostgreSQL) adds two Xero months with transactions: a new and a missing contact, reconciled, one question; then a foreign-currency line leaves the account unexplained.
+- `TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance` checks that captures without transactions record no findings and one with them records an overdue bill in Xero's words.
+- `TestDailyBooksShowsExceptionsNewSinceTheLastReview` adds a Xero client: listed from its snapshot, reviewed only with the Xero source, only new findings after review, nothing listed when the newest snapshot has no transactions, and a newer QuickBooks capture shown and reviewable instead, with the review pointing at one capture.
+
+Each check was observed red with its rule removed (24 mutations).
+
+Code review: GPT-6 Sol (high), one delta round. Adopted: Daily books passes over a QuickBooks capture whose evidence was superseded, as the close's own checks do; lines of overpayments and prepayments made through the bank count as unnamed in payee causes; the Daily books text covers both ledgers. Refuted, and confirmed in the delta round: a Xero snapshot saved while Mark reviewed runs. The snapshot's foreign key to the close takes a lock that conflicts with the review's row lock, so the two are serialized either way. The test holds the close lock and shows the snapshot waits. An explicit lock added first was deleted after it survived its mutation for that reason.
+
+Not verified: live Xero payloads, and the panels in a browser.

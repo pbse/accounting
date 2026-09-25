@@ -1,9 +1,11 @@
 package xero
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"math/big"
+	"strings"
 	"time"
 
 	"close.local/backend/internal/quickbooks"
@@ -245,4 +247,100 @@ func Ledger(payload json.RawMessage) (rows []quickbooks.TransactionRow, open map
 		}
 	}
 	return rows, open, accounts, home, nil
+}
+
+// PayeeActivity sums each wanted account's month activity by contact from a snapshot's transactions, signed as a Profit
+// and Loss shows it: debits positive, credits positive on revenue accounts. Journal lines have no contact and are
+// unattributed. foreign lists accounts with lines in another currency, whose base amounts the capture does not hold. A
+// line without an account, or on an overpayment or prepayment made through the bank (which Ledger does not reshape),
+// could post anywhere, so it counts as unnamed on every account.
+func PayeeActivity(payload json.RawMessage, ids []string) (payees map[string]quickbooks.Payees, foreign map[string]bool, err error) {
+	rows, _, _, home, err := Ledger(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+	var snapshot struct {
+		Accounts struct {
+			Accounts []struct{ AccountID, Class string }
+		}
+		Transactions struct {
+			Records struct {
+				BankTransactions []struct {
+					Type, Status string
+					LineItems    []json.RawMessage
+				}
+			} `json:"records"`
+		} `json:"transactions"`
+	}
+	json.Unmarshal(payload, &snapshot)
+	unmapped := 0
+	for _, bank := range snapshot.Transactions.Records.BankTransactions {
+		if bank.Status == "AUTHORISED" && (strings.HasSuffix(bank.Type, "-OVERPAYMENT") || strings.HasSuffix(bank.Type, "-PREPAYMENT")) {
+			unmapped += len(bank.LineItems)
+		}
+	}
+	revenue := map[string]bool{}
+	for _, a := range snapshot.Accounts.Accounts {
+		revenue[a.AccountID] = a.Class == "REVENUE"
+	}
+	payees, foreign = map[string]quickbooks.Payees{}, map[string]bool{}
+	for _, id := range ids {
+		payees[id] = quickbooks.Payees{ByName: map[string]*big.Rat{}, Unattributed: new(big.Rat)}
+	}
+	credited := map[string]bool{"Invoice": true, "VendorCredit": true, "Deposit": true}
+	for _, row := range rows {
+		var record struct {
+			EntityRef, VendorRef, CustomerRef struct{ Name string }
+			Line                              []map[string]json.RawMessage
+		}
+		json.Unmarshal(row.Record, &record)
+		who := cmp.Or(record.EntityRef.Name, record.VendorRef.Name, record.CustomerRef.Name)
+		for _, line := range record.Line {
+			if line["ItemBasedExpenseLineDetail"] != nil {
+				unmapped++
+				continue
+			}
+			amount, ok := new(big.Rat).SetString(strings.Trim(string(line["Amount"]), `"`))
+			for key, raw := range line {
+				var detail struct {
+					AccountRef  struct{ Value string }
+					PostingType string
+				}
+				if !strings.HasSuffix(key, "Detail") || json.Unmarshal(raw, &detail) != nil {
+					continue
+				}
+				id := detail.AccountRef.Value
+				p, wanted := payees[id]
+				if !wanted || !ok {
+					continue
+				}
+				if row.Currency != home {
+					foreign[id] = true
+					continue
+				}
+				signed := new(big.Rat).Set(amount)
+				if credited[row.Kind] || detail.PostingType == "Credit" {
+					signed.Neg(signed)
+				}
+				if revenue[id] {
+					signed.Neg(signed)
+				}
+				if who == "" {
+					p.Unattributed.Add(p.Unattributed, signed)
+					p.Unnamed++
+				} else {
+					if p.ByName[who] == nil {
+						p.ByName[who] = new(big.Rat)
+					}
+					p.ByName[who].Add(p.ByName[who], signed)
+				}
+				payees[id] = p
+			}
+		}
+	}
+	for id, p := range payees {
+		p.Unnamed += unmapped
+		payees[id] = p
+	}
+	return payees, foreign, nil
 }

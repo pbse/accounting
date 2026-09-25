@@ -264,8 +264,16 @@ func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, acto
 	if err != nil {
 		return refusal{422, err.Error()}
 	}
-	if _, err = db.ExecContext(ctx, `WITH s AS (INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6))
- UPDATE xero_connections SET home_currency=$7,fiscal_year_start=$8 WHERE id=$2`, closeID, id, tenant, period, string(payload), actor, currency, fiscalStart); err != nil {
+	// Findings are recorded with the snapshot, as each QuickBooks capture records its own, so Daily books can show what is new.
+	var findings sql.NullString
+	if rows, open, _, _, e := xero.Ledger(payload); e == nil {
+		found := append(quickbooks.FindExceptions(rows), xeroWording(quickbooks.OpenItemExceptions(open, month.AddDate(0, 1, -1)))...)
+		raw, _ := json.Marshal(append([]quickbooks.Exception{}, found...))
+		findings = sql.NullString{String: string(raw), Valid: true}
+	}
+	// The insert's foreign key waits on the close lock Daily books' Mark reviewed takes, so a review never passes over it.
+	if _, err = db.ExecContext(ctx, `WITH s AS (INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,exceptions) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6,$9))
+ UPDATE xero_connections SET home_currency=$7,fiscal_year_start=$8 WHERE id=$2`, closeID, id, tenant, period, string(payload), actor, currency, fiscalStart, findings); err != nil {
 		return refusal{503, "The Trial Balance was read but could not be saved. Capture again."}
 	}
 	return nil
