@@ -95,10 +95,13 @@ func TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance(t *testing.
 
 	mux := http.NewServeMux()
 	registerIndependence(mux, db)
-	policy := func(organization string, permissions []string, want int) {
+	policy := func(organization string, permissions []string, want int, body ...string) {
 		t.Helper()
 		actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: organization, Permissions: permissions}
-		r := httptest.NewRequest("POST", "/v1/closes/organization/policy", bytes.NewReader([]byte(`{"independent_review":false,"reason":"Synthetic policy change"}`))).WithContext(auth.WithActor(context.Background(), actor))
+		if len(body) == 0 {
+			body = []string{`{"independent_review":false,"reason":"Synthetic policy change"}`}
+		}
+		r := httptest.NewRequest("POST", "/v1/closes/organization/policy", bytes.NewReader([]byte(body[0]))).WithContext(auth.WithActor(context.Background(), actor))
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
@@ -116,5 +119,54 @@ func TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance(t *testing.
 	if _, err = db.Exec(`UPDATE organizations SET require_independent_review=true WHERE id='local-development'`); err == nil {
 		db.Exec(`UPDATE organizations SET require_independent_review=false WHERE id='local-development'`)
 		t.Fatal("the shared local workspace must not enable independent review")
+	}
+
+	// With the firm-wide rule off, a minimum requires an independent reviewer only for drafts proposing at least that much.
+	policy(org, []string{"org:manage"}, 422, `{"independent_review_min_amount":"-5","reason":"Synthetic minimum"}`)
+	policy(org, []string{"org:manage"}, 422, `{"independent_review_min_amount":"0","reason":"Synthetic minimum"}`)
+	policy("", nil, 409, `{"independent_review_min_amount":"1000","reason":"Synthetic minimum"}`)
+	policy(org, []string{"org:manage"}, 200, `{"independent_review_min_amount":"1000","reason":"Synthetic minimum"}`)
+	var recorded string
+	var review bool
+	if err = db.QueryRow(`SELECT independent_review,independent_review_min_amount::text FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&review, &recorded); err != nil || review || recorded != "1000.00" {
+		t.Fatalf("the change records the minimum with the other settings: %v %s %v", review, recorded, err)
+	}
+	proposing := func(entries string) string {
+		t.Helper()
+		body := strings.Replace(sources, `"blockers":[]`, `"blockers":[],`+entries, 1)
+		digest := rand.Text()
+		var id string
+		if e := db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text`, closeID, digest, body).Scan(&id); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := db.Exec(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by,workpaper_ids) VALUES($1,$2,'[]','completed','user_prep',jsonb_build_array($3::text))`, closeID, rand.Text(), id); e != nil {
+			t.Fatal(e)
+		}
+		return id + "|" + digest
+	}
+	decideAs := func(paper, approver string) (int, string) {
+		t.Helper()
+		id, digest, _ := strings.Cut(paper, "|")
+		return decide(id, digest, approver)
+	}
+	small := proposing(`"proposal":{"amount":"999.99"}`)
+	large := proposing(`"proposal":{"amount":"1000.00"}`)
+	loan := proposing(`"proposals":[{"amount":"600.00"},{"amount":"400.00"}]`)
+	if status, message := decideAs(small, "user_prep"); status != 0 {
+		t.Fatalf("below the minimum the preparer may approve: %d %s", status, message)
+	}
+	if status, message := decideAs(large, "user_prep"); status != 409 || !strings.Contains(message, "at least 1000.00") {
+		t.Fatalf("at the minimum another member must approve: %d %s", status, message)
+	}
+	if status, message := decideAs(loan, "user_prep"); status != 409 {
+		t.Fatalf("a loan's entries count together: %d %s", status, message)
+	}
+	policy(org, []string{"org:manage"}, 200, `{"independent_review_min_amount":"","reason":"Synthetic minimum cleared"}`)
+	if status, message := decideAs(large, "user_prep"); status != 0 {
+		t.Fatalf("clearing the minimum lifts the rule: %d %s", status, message)
+	}
+	if _, err = db.Exec(`UPDATE organizations SET independent_review_min_amount=1 WHERE id='local-development'`); err == nil {
+		db.Exec(`UPDATE organizations SET independent_review_min_amount=NULL WHERE id='local-development'`)
+		t.Fatal("the shared local workspace must not set a review minimum")
 	}
 }

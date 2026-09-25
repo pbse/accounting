@@ -985,3 +985,32 @@ Tests (PostgreSQL):
 Each check was observed red with its rule removed (9 mutations): the page and scan checks, the fifth-try revocation, issuing, the salt, preserving the other setting, the preflight header, the retry refusal and the email sentence. The existing request, email, coverage and Work tests pass unchanged.
 
 Not verified: browser flows, hosted CORS through Cloudflare, a race between the policy change and issuing (the row lock covers it, but no test exercises it), and a retried reminder on a passcode link.
+
+## Independent review for large drafts (2026-09-25)
+
+Author: Claude Opus 5.5. Migration 058. PRD REV-02: "Role-based separation can require a different reviewer for specified risk levels." Firms had one on/off rule. They can now instead set a minimum: a draft whose proposed entries total at least that amount needs a reviewer who did not prepare or confirm it.
+
+- **One check:** the rule lives in the existing `independenceIssue`, so individual, bulk, standing, posting-together and production posting approvals all apply it.
+- **Locked:** the firm's row is locked during the check.
+- **What counts:** the draft's `proposal` amount plus its `proposals` amounts. An accrual's reversal is never posted, so it is not counted.
+- **Changing the minimum:** it can be set or cleared, is recorded with the other settings, and is refused for the local workspace by a database constraint.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- the parser's real cap;
+- locking the firm row during the check;
+- a hosted-only database constraint;
+- an explicit clear branch, so an empty value clears the minimum instead of keeping it.
+
+Code review: GPT-6 Sol (high), one delta round. Adopted: setting a minimum from Firm settings also turns off the firm-wide rule in the same change; otherwise every draft would still need an independent reviewer.
+
+Tests (PostgreSQL), `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`:
+
+- Negative and zero minimums are refused, and so is a minimum for the local workspace.
+- A minimum of 1000 is recorded with the other settings.
+- With the firm-wide rule off, the preparer may approve 999.99 but not 1000.00, nor a loan whose two entries total 1000.
+- Clearing the minimum lifts the rule, and the database refuses a minimum for the local workspace.
+
+Each check was observed red with its rule removed (5 mutations): the minimum rule, counting a loan's entries, the at-or-above comparison, the clear branch, and the zero check. The existing firm-wide tests pass unchanged.
+
+Not verified: the firm settings page in a browser, and a race between a policy change and an approval (the row lock covers it, but no test exercises it).
