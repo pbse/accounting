@@ -325,6 +325,7 @@ export function Procedures({
                     <select name="loan_method" required defaultValue={previous?.method ?? "lender_statement_v1"}>
                       <option value="lender_statement_v1">Lender statement, fixed rate</option>
                       <option value="lender_statement_variable_v1">Lender statement with rate changes and fees added to the balance</option>
+                      <option value="lender_statement_costs_v1">Lender statement with rate changes, fees and debt issuance costs</option>
                     </select>
                   </label>
                 )}

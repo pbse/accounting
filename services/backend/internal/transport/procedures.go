@@ -53,7 +53,7 @@ func readProcedureImpact(ctx context.Context, tx *sql.Tx, closeID, kind string) 
 }
 
 // Kinds whose procedure names its reviewed method directly; other methods come from procedure learning.
-var fixedMethods = map[string][]string{"loan": {loans.Method, loans.VariableMethod}, "basis": {"cash", "modified_cash", "accrual"}}
+var fixedMethods = map[string][]string{"loan": {loans.Method, loans.VariableMethod, loans.CostsMethod}, "basis": {"cash", "modified_cash", "accrual"}}
 
 func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/procedures/suggestion", func(w http.ResponseWriter, r *http.Request) {

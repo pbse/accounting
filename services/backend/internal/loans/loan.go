@@ -21,6 +21,9 @@ const Method = "lender_statement_v1"
 // The product requires a separately approved procedure for these treatments.
 const VariableMethod = "lender_statement_variable_v1"
 
+// CostsMethod covers everything VariableMethod does plus debt issuance costs, under its own approved procedure.
+const CostsMethod = "lender_statement_costs_v1"
+
 var DayCounts = map[string]string{
 	"actual_360":  "Actual/360",
 	"actual_365":  "Actual/365 (fixed)",
@@ -45,40 +48,61 @@ type Payment struct {
 	Date      string `json:"date"`
 	Principal string `json:"principal"`
 	Interest  string `json:"interest"`
+	// A fee the lender charged and the client paid in cash with this payment; it is not added to the balance.
+	Fee          string `json:"fee,omitempty"`
+	FeeReference string `json:"fee_reference,omitempty"`
+}
+
+// IssuanceCosts are costs of obtaining the loan, kept in their own account as a deduction from the debt and amortized
+// to interest straight-line over the term, where the accountant concluded that is not materially different from the
+// interest method.
+type IssuanceCosts struct {
+	Amount               string `json:"amount"`
+	Start                string `json:"start"`
+	End                  string `json:"end"`
+	Account              string `json:"account"`
+	Reference            string `json:"reference"`
+	Method               string `json:"method"`
+	MaterialityReference string `json:"materiality_reference"`
+	BookedUnamortized    string `json:"booked_unamortized"`
+	BookingReference     string `json:"booking_reference"`
+	MethodConfirmed      bool   `json:"method_confirmed"`
+	BookingConfirmed     bool   `json:"booking_confirmed"`
 }
 
 type Input struct {
-	Entity                   string       `json:"entity"`
-	ClosePeriod              string       `json:"close_period"`
-	Lender                   string       `json:"lender"`
-	SourceReference          string       `json:"source_reference"`
-	AgreementReference       string       `json:"agreement_reference"`
-	Currency                 string       `json:"currency"`
-	AnnualRate               string       `json:"annual_rate"`
-	DayCount                 string       `json:"day_count"`
-	OpeningPrincipal         string       `json:"opening_principal"`
-	InterestPaidThrough      string       `json:"interest_paid_through"`
-	Payments                 []Payment    `json:"payments"`
-	RateChanges              []RateChange `json:"rate_changes,omitempty"`
-	Fees                     []Fee        `json:"fees,omitempty"`
-	FeeAccount               string       `json:"fee_account,omitempty"`
-	BookedFees               string       `json:"booked_fees,omitempty"`
-	ClosingPrincipal         string       `json:"closing_principal"`
-	BookBalance              string       `json:"book_balance"`
-	LoanAccount              string       `json:"loan_account"`
-	InterestAccount          string       `json:"interest_account"`
-	AccrueInterest           bool         `json:"accrue_interest"`
-	AccruedInterestAccount   string       `json:"accrued_interest_account,omitempty"`
-	BookedAccruedInterest    string       `json:"booked_accrued_interest,omitempty"`
-	ReclassCurrentPortion    bool         `json:"reclass_current_portion"`
-	PrincipalDueNext12Months string       `json:"principal_due_next_12_months,omitempty"`
-	ScheduleReference        string       `json:"schedule_reference,omitempty"`
-	CurrentPortionAccount    string       `json:"current_portion_account,omitempty"`
-	BookedCurrentPortion     string       `json:"booked_current_portion,omitempty"`
-	Method                   string       `json:"method"`
-	MethodConfirmed          bool         `json:"method_confirmed"`
-	RateConfirmed            bool         `json:"rate_confirmed"`
-	BookingConfirmed         bool         `json:"booking_confirmed"`
+	Entity                   string         `json:"entity"`
+	ClosePeriod              string         `json:"close_period"`
+	Lender                   string         `json:"lender"`
+	SourceReference          string         `json:"source_reference"`
+	AgreementReference       string         `json:"agreement_reference"`
+	Currency                 string         `json:"currency"`
+	AnnualRate               string         `json:"annual_rate"`
+	DayCount                 string         `json:"day_count"`
+	OpeningPrincipal         string         `json:"opening_principal"`
+	InterestPaidThrough      string         `json:"interest_paid_through"`
+	Payments                 []Payment      `json:"payments"`
+	RateChanges              []RateChange   `json:"rate_changes,omitempty"`
+	Fees                     []Fee          `json:"fees,omitempty"`
+	FeeAccount               string         `json:"fee_account,omitempty"`
+	BookedFees               string         `json:"booked_fees,omitempty"`
+	ClosingPrincipal         string         `json:"closing_principal"`
+	BookBalance              string         `json:"book_balance"`
+	LoanAccount              string         `json:"loan_account"`
+	InterestAccount          string         `json:"interest_account"`
+	AccrueInterest           bool           `json:"accrue_interest"`
+	AccruedInterestAccount   string         `json:"accrued_interest_account,omitempty"`
+	BookedAccruedInterest    string         `json:"booked_accrued_interest,omitempty"`
+	ReclassCurrentPortion    bool           `json:"reclass_current_portion"`
+	PrincipalDueNext12Months string         `json:"principal_due_next_12_months,omitempty"`
+	ScheduleReference        string         `json:"schedule_reference,omitempty"`
+	CurrentPortionAccount    string         `json:"current_portion_account,omitempty"`
+	BookedCurrentPortion     string         `json:"booked_current_portion,omitempty"`
+	IssuanceCosts            *IssuanceCosts `json:"issuance_costs,omitempty"`
+	Method                   string         `json:"method"`
+	MethodConfirmed          bool           `json:"method_confirmed"`
+	RateConfirmed            bool           `json:"rate_confirmed"`
+	BookingConfirmed         bool           `json:"booking_confirmed"`
 }
 
 type Row struct {
@@ -90,6 +114,7 @@ type Row struct {
 	ExpectedInterest string   `json:"expected_interest"`
 	Difference       string   `json:"difference"`
 	Rates            []string `json:"rates,omitempty"`
+	Fee              string   `json:"fee,omitempty"`
 }
 
 type Accrual struct {
@@ -100,16 +125,25 @@ type Accrual struct {
 }
 
 type Workpaper struct {
-	Status          string                `json:"status"`
-	Method          string                `json:"method"`
-	Input           Input                 `json:"input"`
-	Schedule        []Row                 `json:"schedule"`
-	AccruedInterest *Accrual              `json:"accrued_interest,omitempty"`
-	BookDifference  string                `json:"book_difference"`
-	Fees            string                `json:"fees,omitempty"`
-	Proposals       []prepaids.Adjustment `json:"proposals"`
-	Questions       []string              `json:"questions"`
-	Blockers        []string              `json:"blockers"`
+	Status          string   `json:"status"`
+	Method          string   `json:"method"`
+	Input           Input    `json:"input"`
+	Schedule        []Row    `json:"schedule"`
+	AccruedInterest *Accrual `json:"accrued_interest,omitempty"`
+	BookDifference  string   `json:"book_difference"`
+	Fees            string   `json:"fees,omitempty"`
+	FeesPaid        string   `json:"fees_paid,omitempty"`
+	// Unamortized issuance costs at month-end are shown as a deduction from the debt, not an asset.
+	IssuanceCosts *Amortization         `json:"issuance_costs,omitempty"`
+	Proposals     []prepaids.Adjustment `json:"proposals"`
+	Questions     []string              `json:"questions"`
+	Blockers      []string              `json:"blockers"`
+}
+
+type Amortization struct {
+	Month       string `json:"month"`
+	ToDate      string `json:"to_date"`
+	Unamortized string `json:"unamortized"`
 }
 
 var ratePattern = regexp.MustCompile(`^\d{1,2}(\.\d{1,3})?$`)
@@ -171,7 +205,7 @@ func Prepare(in Input) (Workpaper, error) {
 	if strings.EqualFold(in.LoanAccount, in.InterestAccount) {
 		return fail("Loan and interest accounts must differ.")
 	}
-	if (in.Method != Method && in.Method != VariableMethod) || !ledger.ValidCurrency(in.Currency) || !in.MethodConfirmed || !in.RateConfirmed || !in.BookingConfirmed {
+	if (in.Method != Method && in.Method != VariableMethod && in.Method != CostsMethod) || !ledger.ValidCurrency(in.Currency) || !in.MethodConfirmed || !in.RateConfirmed || !in.BookingConfirmed {
 		return fail("Confirm the lender-statement method, the rate and day-count from the note, and the month-end book balances (USD only).")
 	}
 	if _, ok := DayCounts[in.DayCount]; !ok {
@@ -221,7 +255,7 @@ func Prepare(in Input) (Workpaper, error) {
 	if len(in.RateChanges) > 12 || len(in.Fees) > 12 {
 		return fail("At most 12 rate changes and 12 fees per month are supported.")
 	}
-	if len(in.RateChanges)+len(in.Fees) > 0 && in.Method != VariableMethod {
+	if len(in.RateChanges)+len(in.Fees) > 0 && in.Method == Method {
 		return fail("Rate changes and fees added to the loan balance need the firm's approved variable-rate loan procedure.")
 	}
 	// A rate applies from its effective date; days are counted (from, to], so the old rate covers the day before.
@@ -252,7 +286,7 @@ func Prepare(in Input) (Workpaper, error) {
 		at, err := time.Parse("2006-01-02", f.Date)
 		cents, amountErr := prepaids.Amount(f.Amount)
 		if err != nil || at.Format("2006-01") != in.ClosePeriod || !at.After(paidThrough) || amountErr != nil || cents == 0 || f.Description == "" || len(f.Description) > 200 || f.Reference == "" || len(f.Reference) > 200 {
-			return fail("Fee %d needs a date in the close month after interest was paid through, a positive amount, a description and the statement line it comes from. Fees paid in cash with a payment are already in the books and are not entered here.", i+1)
+			return fail("Fee %d needs a date in the close month after interest was paid through, a positive amount, a description and the statement line it comes from. A fee paid in cash with a payment is entered on that payment instead.", i+1)
 		}
 		f.Amount = prepaids.Money(cents)
 		charges, totalFees = append(charges, charge{at, cents}), totalFees+cents
@@ -262,7 +296,7 @@ func Prepare(in Input) (Workpaper, error) {
 	if paidThrough.After(monthEnd) || paidThrough.Before(month.AddDate(0, 0, -62)) {
 		result.Blockers = append(result.Blockers, "Interest paid-through date must fall between two months before this month and month-end, so opening principal is known for the whole window.")
 	}
-	outstanding, last, charged := opening, paidThrough, 0
+	outstanding, last, charged, feesPaid := opening, paidThrough, 0, int64(0)
 	rateOn := func(day time.Time) int64 {
 		rate := rateMilli
 		for _, c := range changes {
@@ -323,13 +357,24 @@ func Prepare(in Input) (Workpaper, error) {
 		if err != nil {
 			return Workpaper{}, err
 		}
+		p.FeeReference = strings.TrimSpace(p.FeeReference)
+		if p.Fee != "" || p.FeeReference != "" {
+			if in.Method == Method {
+				return fail("Fees paid in cash need the firm's approved loan procedure for rate changes and fees.")
+			}
+			fee, err := prepaids.Amount(p.Fee)
+			if err != nil || fee == 0 || p.FeeReference == "" || len(p.FeeReference) > 200 {
+				return fail("Payment %d's fee paid in cash needs a positive amount and the statement line it comes from.", i+1)
+			}
+			p.Fee, feesPaid = prepaids.Money(fee), feesPaid+fee
+		}
 		days := Days(in.DayCount, last, date)
 		expected, rates := window(last, date)
 		if principal > outstanding {
 			return fail("Payment %d principal exceeds the principal outstanding.", i+1)
 		}
 		p.Principal, p.Interest = prepaids.Money(principal), prepaids.Money(interest)
-		row := Row{Date: p.Date, PrincipalBefore: prepaids.Money(outstanding), Days: days, Principal: p.Principal, Interest: p.Interest, ExpectedInterest: prepaids.Money(expected), Difference: signed(interest - expected)}
+		row := Row{Date: p.Date, PrincipalBefore: prepaids.Money(outstanding), Days: days, Principal: p.Principal, Interest: p.Interest, ExpectedInterest: prepaids.Money(expected), Difference: signed(interest - expected), Fee: p.Fee}
 		if len(changes)+len(charges) > 0 {
 			row.Rates = rates
 		}
@@ -414,6 +459,36 @@ func Prepare(in Input) (Workpaper, error) {
 	} else if in.PrincipalDueNext12Months != "" || in.ScheduleReference != "" {
 		return fail("Principal due in 12 months and the schedule reference require confirming this is a reclassification month.")
 	}
+	if c := in.IssuanceCosts; c != nil {
+		if in.Method != CostsMethod {
+			return fail("Debt issuance costs need the firm's approved loan procedure that includes them.")
+		}
+		c.Account, c.Reference, c.MaterialityReference, c.BookingReference = strings.TrimSpace(c.Account), strings.TrimSpace(c.Reference), strings.TrimSpace(c.MaterialityReference), strings.TrimSpace(c.BookingReference)
+		for _, other := range []string{in.LoanAccount, in.InterestAccount, in.AccruedInterestAccount, in.FeeAccount, in.CurrentPortionAccount} {
+			if c.Account == "" || len(c.Account) > 200 || strings.EqualFold(c.Account, other) {
+				return fail("Keep debt issuance costs in their own account, deducted from the debt; the loan account keeps the principal.")
+			}
+		}
+		if c.Reference == "" || len(c.Reference) > 200 || c.MaterialityReference == "" || len(c.MaterialityReference) > 200 || !c.MethodConfirmed {
+			return fail("Cite the issuance costs and the accountant's conclusion that straight-line amortization is not materially different from the interest method, and confirm the method.")
+		}
+		if !c.BookingConfirmed || c.BookedUnamortized == "" || c.BookingReference == "" || len(c.BookingReference) > 200 {
+			return fail("Confirm the issuance costs were booked to their account, and give its month-end balance (including zero) and ledger reference.")
+		}
+		schedule, err := prepaids.Prepare(prepaids.Input{Entity: in.Entity, SourceReference: c.Reference, Amount: c.Amount, ServiceStart: c.Start, ServiceEnd: c.End, ClosePeriod: in.ClosePeriod, Currency: in.Currency, Basis: "accrual",
+			ExpenseAccount: in.InterestAccount, PrepaidAccount: c.Account, Method: c.Method, MethodConfirmed: true, ExamplesConfirmed: true, BookingConfirmed: true, BookedBalance: c.BookedUnamortized, BookingReference: c.BookingReference})
+		if err != nil {
+			return fail("Debt issuance costs: %s", err.Error())
+		}
+		c.Amount, c.BookedUnamortized = schedule.Input.Amount, schedule.Input.BookedBalance
+		result.IssuanceCosts = &Amortization{Month: schedule.PeriodExpense, ToDate: schedule.RecognizedExpense, Unamortized: schedule.PrepaidBalance}
+		if schedule.Proposal != nil {
+			result.Proposals = append(result.Proposals, *schedule.Proposal)
+		}
+	}
+	if feesPaid > 0 {
+		result.FeesPaid = prepaids.Money(feesPaid)
+	}
 	difference := book + unbookedFees + bookedCurrent - closing
 	result.BookDifference = signed(difference)
 	if difference != 0 {
@@ -421,7 +496,11 @@ func Prepare(in Input) (Workpaper, error) {
 		if difference < 0 {
 			more = "less"
 		}
-		result.Questions = append(result.Questions, fmt.Sprintf("The ledger shows %s %s loan principal than the lender's statement. Find the cause (a payment booked to another account, a missing payment or fees) before any adjustment; nothing is proposed for it.", ledger.Show(prepaids.Money(max(difference, -difference)), in.Currency), more))
+		question := fmt.Sprintf("The ledger shows %s %s loan principal than the lender's statement. Find the cause (a payment booked to another account, a missing payment or fees) before any adjustment; nothing is proposed for it.", ledger.Show(prepaids.Money(max(difference, -difference)), in.Currency), more)
+		if difference == -feesPaid {
+			question += fmt.Sprintf(" It equals the fees paid in cash with this month's payments (%s), so they may have been booked against principal; check the statement before moving them.", ledger.Show(prepaids.Money(feesPaid), in.Currency))
+		}
+		result.Questions = append(result.Questions, question)
 	}
 	if len(result.Blockers) > 0 {
 		result.Proposals = []prepaids.Adjustment{}

@@ -1,8 +1,12 @@
 import type { PrepaidWorkpaper } from "./prepaid";
-export type LoanPayment = { date: string; principal: string; interest: string };
+export type LoanPayment = { date: string; principal: string; interest: string; fee?: string; fee_reference?: string };
+export type LoanIssuanceCosts = {
+  amount: string; start: string; end: string; account: string; reference: string; method: "equal_full_months_v1" | "actual_days_v1";
+  materiality_reference: string; booked_unamortized: string; booking_reference: string; method_confirmed: boolean; booking_confirmed: boolean;
+};
 export type LoanRateChange = { effective: string; annual_rate: string; reference: string };
 export type LoanFee = { date: string; amount: string; description: string; reference: string };
-export type LoanMethod = "lender_statement_v1" | "lender_statement_variable_v1";
+export type LoanMethod = "lender_statement_v1" | "lender_statement_variable_v1" | "lender_statement_costs_v1";
 export type LoanInput = {
   entity: string; close_period: string; lender: string; source_reference: string; agreement_reference: string; currency: string;
   annual_rate: string; day_count: "actual_360" | "actual_365" | "30_360_bond" | "30e_360";
@@ -11,12 +15,14 @@ export type LoanInput = {
   loan_account: string; interest_account: string;
   accrue_interest: boolean; accrued_interest_account?: string; booked_accrued_interest?: string;
   reclass_current_portion: boolean; principal_due_next_12_months?: string; schedule_reference?: string; current_portion_account?: string; booked_current_portion?: string;
+  issuance_costs?: LoanIssuanceCosts;
   method: LoanMethod; method_confirmed: boolean; rate_confirmed: boolean; booking_confirmed: boolean;
 };
 export type LoanWorkpaper = {
   status: "draft"; method: LoanMethod; input: LoanInput;
-  schedule: { date: string; principal_before: string; days: number; principal: string; interest: string; expected_interest: string; difference: string; rates?: string[] }[];
-  fees?: string;
+  schedule: { date: string; principal_before: string; days: number; principal: string; interest: string; expected_interest: string; difference: string; rates?: string[]; fee?: string }[];
+  fees?: string; fees_paid?: string;
+  issuance_costs?: { month: string; to_date: string; unamortized: string };
   accrued_interest?: { from: string; to: string; days: number; amount: string };
   book_difference: string; proposals: NonNullable<PrepaidWorkpaper["proposal"]>[]; questions: string[]; blockers: string[];
 };

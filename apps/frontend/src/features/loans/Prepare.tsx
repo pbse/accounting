@@ -6,13 +6,14 @@ import { SaveDraft } from "../closes/SaveDraft";
 import { money, useCurrency } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
-import type { LoanFee, LoanInput, LoanPayment, LoanRateChange, LoanWorkpaper } from "../../../../../packages/contracts/loan";
+import type { LoanFee, LoanInput, LoanIssuanceCosts, LoanPayment, LoanRateChange, LoanWorkpaper } from "../../../../../packages/contracts/loan";
 
 const dayCounts = { actual_360: "Actual/360", actual_365: "Actual/365 (fixed)", "30_360_bond": "30/360 bond basis (US, no February rule)", "30e_360": "30E/360 (Eurobond)" };
 
 export function LoanResult({ result }: { result: LoanWorkpaper }) {
   const input = result.input;
   const rated = result.schedule.some((row) => row.rates?.length);
+  const feesPaid = result.schedule.some((row) => row.fee);
   return (
     <section>
       <h3>Loan schedule · {input.lender} · {input.close_period}</h3>
@@ -23,18 +24,25 @@ export function LoanResult({ result }: { result: LoanWorkpaper }) {
       <div className="table-scroll">
       <table>
         <thead>
-          <tr><th>Payment</th><th>Principal before</th><th>Days</th><th>Principal</th><th>Lender interest</th><th>Note-rate interest</th><th>Difference</th>{rated && <th>Rates</th>}</tr>
+          <tr><th>Payment</th><th>Principal before</th><th>Days</th><th>Principal</th><th>Lender interest</th><th>Note-rate interest</th><th>Difference</th>{rated && <th>Rates</th>}{feesPaid && <th>Fee paid in cash</th>}</tr>
         </thead>
         <tbody>
           {result.schedule.length === 0 && <tr><td colSpan={7}>No payments this month.</td></tr>}
-          {result.schedule.map((row) => (
-            <tr key={row.date}><td>{row.date}</td><td>{money(row.principal_before, input.currency)}</td><td>{row.days}</td><td>{money(row.principal, input.currency)}</td><td>{money(row.interest, input.currency)}</td><td>{money(row.expected_interest, input.currency)}</td><td>{row.difference === "0.00" ? "—" : `${money(row.difference, input.currency)}`}</td>{rated && <td>{row.rates?.join(" then ")}</td>}</tr>
+          {result.schedule.map((row, i) => (
+            <tr key={row.date}><td>{row.date}</td><td>{money(row.principal_before, input.currency)}</td><td>{row.days}</td><td>{money(row.principal, input.currency)}</td><td>{money(row.interest, input.currency)}</td><td>{money(row.expected_interest, input.currency)}</td><td>{row.difference === "0.00" ? "—" : `${money(row.difference, input.currency)}`}</td>{rated && <td>{row.rates?.join(" then ")}</td>}{feesPaid && <td>{row.fee ? `${money(row.fee, input.currency)} (${input.payments[i]?.fee_reference})` : "—"}</td>}</tr>
           ))}
         </tbody>
       </table>
       </div>
       <p>Lender principal: {money(input.opening_principal, input.currency)} opening{result.fees && ` + ${money(result.fees, input.currency)} fees added`} → {money(input.closing_principal, input.currency)} closing. Books differ by {money(result.book_difference, input.currency)}.</p>
       {input.fees?.map((f) => <p key={f.date + f.reference}>Fee {f.date}: {f.description}, {money(f.amount, input.currency)} ({f.reference}).</p>)}
+      {result.fees_paid && <p>Fees paid in cash with the payments: {money(result.fees_paid, input.currency)}. They are not part of principal; no entry is proposed for them, so check how they were booked.</p>}
+      {result.issuance_costs && input.issuance_costs && (
+        <p>
+          Debt issuance costs ({input.issuance_costs.reference}), deducted from the debt in {input.issuance_costs.account}: {money(result.issuance_costs.month, input.currency)} amortized to interest this month,{" "}
+          {money(result.issuance_costs.to_date, input.currency)} to date, {money(result.issuance_costs.unamortized, input.currency)} unamortized at month-end. Straight-line per {input.issuance_costs.materiality_reference}.
+        </p>
+      )}
       {result.accrued_interest && <p>Accrued interest {result.accrued_interest.from} → {result.accrued_interest.to}: {result.accrued_interest.days} {result.accrued_interest.days === 1 ? "day" : "days"}, {money(result.accrued_interest.amount, input.currency)}.</p>}
       {result.questions.length > 0 && <><h4>Questions before approval</h4><ul>{result.questions.map((q) => <li key={q}>{q}</li>)}</ul></>}
       <h4>Proposed entries</h4>
@@ -47,6 +55,7 @@ export function LoanResult({ result }: { result: LoanWorkpaper }) {
 const blank: LoanPayment = { date: "", principal: "", interest: "" };
 const blankRate: LoanRateChange = { effective: "", annual_rate: "", reference: "" };
 const blankFee: LoanFee = { date: "", amount: "", description: "", reference: "" };
+const blankCosts: LoanIssuanceCosts = { amount: "", start: "", end: "", account: "", reference: "", method: "equal_full_months_v1", materiality_reference: "", booked_unamortized: "", booking_reference: "", method_confirmed: false, booking_confirmed: false };
 
 export default function PrepareLoan() {
   const [params] = useSearchParams();
@@ -56,6 +65,7 @@ export default function PrepareLoan() {
   const [payments, setPayments] = useState<LoanPayment[]>([{ ...blank }]);
   const [rateChanges, setRateChanges] = useState<LoanRateChange[]>([]);
   const [fees, setFees] = useState<LoanFee[]>([]);
+  const [costs, setCosts] = useState<LoanIssuanceCosts>();
   const [method, setMethod] = useState<LoanInput["method"]>("lender_statement_v1");
   const [accrue, setAccrue] = useState("");
   const [reclass, setReclass] = useState("");
@@ -68,6 +78,7 @@ export default function PrepareLoan() {
     setPayments(saved.payments?.length ? saved.payments : [{ ...blank }]);
     setRateChanges(saved.rate_changes ?? []);
     setFees(saved.fees ?? []);
+    setCosts(saved.issuance_costs);
     if (saved.method) setMethod(saved.method);
     setAccrue(String(!!saved.accrue_interest));
     setReclass(String(!!saved.reclass_current_portion));
@@ -96,9 +107,10 @@ export default function PrepareLoan() {
     const optional = (names: string[], on: boolean) => (on ? Object.fromEntries(names.map((n) => [n, text(n)])) : {});
     const input = {
       ...Object.fromEntries(["entity", "close_period", "lender", "source_reference", "agreement_reference", "annual_rate", "day_count", "opening_principal", "interest_paid_through", "closing_principal", "book_balance", "loan_account", "interest_account"].map((n) => [n, text(n)])),
-      payments: payments.filter((p) => p.date || p.principal || p.interest),
+      payments: payments.filter((p) => p.date || p.principal || p.interest || p.fee || p.fee_reference),
       ...(rateChanges.length ? { rate_changes: rateChanges } : {}),
       ...(fees.length ? { fees, fee_account: text("fee_account"), booked_fees: text("booked_fees") } : {}),
+      ...(costs ? { issuance_costs: costs } : {}),
       accrue_interest: accrue === "true",
       ...optional(["accrued_interest_account", "booked_accrued_interest"], accrue === "true"),
       reclass_current_portion: reclass === "true",
@@ -131,6 +143,16 @@ export default function PrepareLoan() {
   const setPayment = (index: number, key: keyof LoanPayment, value: string) => setPayments((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
   const setRateChange = (index: number, key: keyof LoanRateChange, value: string) => setRateChanges((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
   const setFee = (index: number, key: keyof LoanFee, value: string) => setFees((rows) => rows.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
+  const setCost = (key: keyof LoanIssuanceCosts, value: string | boolean) => {
+    setCosts((c) => c && { ...c, [key]: value });
+    setResult(undefined);
+  };
+  const cost = (key: keyof LoanIssuanceCosts, label: string, type = "text") => (
+    <label key={key}>
+      {label}
+      <input required type={type} maxLength={200} value={String(costs?.[key] ?? "")} onChange={(e) => setCost(key, e.target.value)} />
+    </label>
+  );
   return (
     <>
       <h1>Prepare a loan schedule</h1>
@@ -165,13 +187,15 @@ export default function PrepareLoan() {
             {field("closing_principal", `Lender's closing principal (${currency})`)}
           </div>
           <table>
-            <thead><tr><th>Payment date</th><th>Principal ({currency})</th><th>Interest ({currency})</th><th /></tr></thead>
+            <thead><tr><th>Payment date</th><th>Principal ({currency})</th><th>Interest ({currency})</th><th>Fee paid in cash ({currency})</th><th>Fee statement line</th><th /></tr></thead>
             <tbody>
               {payments.map((payment, index) => (
                 <tr key={index}>
                   <td><input aria-label={`Payment ${index + 1} date`} type="date" value={payment.date} onChange={(e) => setPayment(index, "date", e.target.value)} /></td>
                   <td><input aria-label={`Payment ${index + 1} principal`} inputMode="decimal" value={payment.principal} onChange={(e) => setPayment(index, "principal", e.target.value)} /></td>
                   <td><input aria-label={`Payment ${index + 1} interest`} inputMode="decimal" value={payment.interest} onChange={(e) => setPayment(index, "interest", e.target.value)} /></td>
+                  <td><input aria-label={`Payment ${index + 1} fee paid in cash`} inputMode="decimal" value={payment.fee ?? ""} onChange={(e) => setPayment(index, "fee", e.target.value)} /></td>
+                  <td><input aria-label={`Payment ${index + 1} fee statement line`} maxLength={200} value={payment.fee_reference ?? ""} onChange={(e) => setPayment(index, "fee_reference", e.target.value)} /></td>
                   <td><button type="button" onClick={() => setPayments((rows) => rows.filter((_, i) => i !== index))}>Remove</button></td>
                 </tr>
               ))}
@@ -179,7 +203,7 @@ export default function PrepareLoan() {
           </table>
           <button type="button" disabled={payments.length >= 31} onClick={() => setPayments((rows) => [...rows, { ...blank }])}>Add payment</button>
           <h4>Rate changes and fees added to the balance</h4>
-          <p>Only if the statement shows them. A new rate applies from its effective date; a fee bears interest from the day after it is added, after any payment that day. Fees paid in cash with a payment are already in the books and are not entered. Either needs the firm's approved variable-rate loan procedure to save.</p>
+          <p>Only if the statement shows them. A new rate applies from its effective date; a fee bears interest from the day after it is added, after any payment that day. A fee paid in cash goes on its payment above instead. Any of these needs the firm's approved loan procedure for rate changes and fees to save.</p>
           {rateChanges.length > 0 && (
             <table>
               <thead><tr><th>Effective date</th><th>Annual rate (%)</th><th>Rate notice</th><th /></tr></thead>
@@ -195,7 +219,7 @@ export default function PrepareLoan() {
               </tbody>
             </table>
           )}
-          <button type="button" disabled={rateChanges.length >= 12} onClick={() => { setRateChanges((rows) => [...rows, { ...blankRate }]); setMethod("lender_statement_variable_v1"); }}>Add rate change</button>
+          <button type="button" disabled={rateChanges.length >= 12} onClick={() => { setRateChanges((rows) => [...rows, { ...blankRate }]); setMethod(costs ? "lender_statement_costs_v1" : "lender_statement_variable_v1"); }}>Add rate change</button>
           {fees.length > 0 && (
             <table>
               <thead><tr><th>Date added</th><th>Amount ({currency})</th><th>Description</th><th>Statement line</th><th /></tr></thead>
@@ -212,7 +236,35 @@ export default function PrepareLoan() {
               </tbody>
             </table>
           )}
-          <button type="button" disabled={fees.length >= 12} onClick={() => { setFees((rows) => [...rows, { ...blankFee }]); setMethod("lender_statement_variable_v1"); }}>Add fee</button>
+          <button type="button" disabled={fees.length >= 12} onClick={() => { setFees((rows) => [...rows, { ...blankFee }]); setMethod(costs ? "lender_statement_costs_v1" : "lender_statement_variable_v1"); }}>Add fee</button>
+          <h4>Debt issuance costs</h4>
+          <p>Costs of obtaining the loan, kept in their own account and deducted from the debt, amortized to interest straight-line over the term. Needs the firm's approved loan procedure that includes issuance costs, and the accountant's conclusion that straight-line is not materially different from the interest method.</p>
+          {costs ? (
+            <>
+              <div className="form-grid">
+                {cost("amount", `Issuance costs (${currency})`)}
+                {cost("reference", "Closing statement or invoice")}
+                {cost("start", "Amortization starts", "date")}
+                {cost("end", "Loan matures", "date")}
+                {cost("account", "Issuance cost account (deducted from the debt)")}
+                {cost("materiality_reference", "Accountant's straight-line conclusion")}
+                {cost("booked_unamortized", `Account balance at month-end (${currency}; enter zero explicitly)`)}
+                {cost("booking_reference", "Ledger reference for that balance")}
+                <label>
+                  Schedule
+                  <select value={costs.method} onChange={(e) => setCost("method", e.target.value)}>
+                    <option value="equal_full_months_v1">Equal full months</option>
+                    <option value="actual_days_v1">Actual days</option>
+                  </select>
+                </label>
+              </div>
+              <label><input type="checkbox" checked={costs.method_confirmed} onChange={(e) => setCost("method_confirmed", e.target.checked)} required /> Straight-line amortization over the term is the approved method for these costs.</label>
+              <label><input type="checkbox" checked={costs.booking_confirmed} onChange={(e) => setCost("booking_confirmed", e.target.checked)} required /> The costs were booked to this account and its balance reflects every earlier amortization.</label>
+              <button type="button" onClick={() => { setCosts(undefined); setResult(undefined); }}>Remove issuance costs</button>
+            </>
+          ) : (
+            <button type="button" onClick={() => { setCosts({ ...blankCosts }); setMethod("lender_statement_costs_v1"); setResult(undefined); }}>Add issuance costs</button>
+          )}
         </fieldset>
         <fieldset disabled={busy || !revision.ready}>
           <legend>Ledger and month-end entries</legend>
@@ -247,8 +299,9 @@ export default function PrepareLoan() {
             <select value={method} onChange={(e) => setMethod(e.target.value as LoanInput["method"])}>
               <option value="lender_statement_v1">Lender statement, fixed rate</option>
               <option value="lender_statement_variable_v1">Lender statement with rate changes and fees added to the balance</option>
+              <option value="lender_statement_costs_v1">Lender statement with rate changes, fees and debt issuance costs</option>
             </select>
-            <small>Must match the client's approved loan procedure to save. Rate changes and fees need the second one.</small>
+            <small>Must match the client's approved loan procedure to save. Rate changes and fees need the second or third one; issuance costs need the third.</small>
           </label>
           <label><input name="method_confirmed" type="checkbox" required /> The lender's statement is the source of each payment's principal and interest; this schedule only checks it.</label>
           <label><input name="rate_confirmed" type="checkbox" required /> The rate and day-count method are from the note, any rate change is from the lender's notice, and opening principal is the balance on the interest-paid-through date.</label>

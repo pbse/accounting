@@ -84,8 +84,17 @@ func TestLoanDraftsNeedTheClientsApprovedLoanProcedure(t *testing.T) {
 	}
 	override(true, "lender_statement_variable_v1")
 	call(path, save, 200)
+	// Debt issuance costs need the procedure that includes them.
+	input["method"] = "lender_statement_costs_v1"
+	input["issuance_costs"] = map[string]any{"amount": "1200.00", "start": "2026-01-01", "end": "2026-12-31", "account": "Debt issuance costs", "reference": "Closing statement", "method": "equal_full_months_v1", "materiality_reference": "Memo 2026-01", "booked_unamortized": "300.00", "booking_reference": "Trial balance Sep", "method_confirmed": true, "booking_confirmed": true}
+	if body := call(path, save, 409); !strings.Contains(string(body), "differs from the approved procedure") {
+		t.Fatalf("an issuance cost draft needs its own procedure: %s", body)
+	}
+	override(true, "lender_statement_costs_v1")
+	call(path, save, 200)
 	input["method"] = "lender_statement_v1"
 	delete(input, "rate_changes")
+	delete(input, "issuance_costs")
 	var reason string
 	if err = db.QueryRow(`SELECT `+bulkReason+` FROM workpaper_review_state w WHERE id::text=$1`, saved.ID).Scan(&reason); err != nil || reason != "Proposes a ledger adjustment" {
 		t.Fatalf("a loan with proposed entries must be reviewed individually: %q %v", reason, err)
@@ -94,4 +103,5 @@ func TestLoanDraftsNeedTheClientsApprovedLoanProcedure(t *testing.T) {
 		t.Fatalf("a loan procedure must name the reviewed method: %s", body)
 	}
 	call("/v1/closes/procedures", map[string]any{"client_entity": entity, "kind": "loan", "method": "lender_statement_v1", "instructions": "Accrue interest monthly.", "enabled": true, "reason": "Synthetic", "confirmed": true, "previous_id": "stale"}, 409)
+	call("/v1/closes/procedures", map[string]any{"client_entity": entity, "kind": "loan", "method": "lender_statement_costs_v1", "instructions": "Amortize issuance costs straight-line.", "enabled": true, "reason": "Synthetic", "confirmed": true, "previous_id": "stale"}, 409)
 }

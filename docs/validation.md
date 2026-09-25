@@ -1279,3 +1279,27 @@ Each check was observed red with its rule removed (24 mutations).
 Code review: GPT-6 Sol (high), one delta round. Adopted: Daily books passes over a QuickBooks capture whose evidence was superseded, as the close's own checks do; lines of overpayments and prepayments made through the bank count as unnamed in payee causes; the Daily books text covers both ledgers. Refuted, and confirmed in the delta round: a Xero snapshot saved while Mark reviewed runs. The snapshot's foreign key to the close takes a lock that conflicts with the review's row lock, so the two are serialized either way. The test holds the close lock and shows the snapshot waits. An explicit lock added first was deleted after it survived its mutation for that reason.
 
 Not verified: live Xero payloads, and the panels in a browser.
+
+## Loans: fees paid in cash and debt issuance costs (2026-09-25)
+
+Request: loan fees paid in cash and debt issuance costs (index-rate lookups follow). A payment can carry a fee paid in cash with its statement line; it is shown and totalled, proposes no entry, and is named as a possible cause when the ledger's loan balance is lower than the lender's by exactly those fees. Debt issuance costs are amortized to interest straight-line with the existing prepaid schedule engine, from their own account, under a new separately approved loan method `lender_statement_costs_v1`.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- issuance costs need their own approved method, not a relabelled variable-rate approval;
+- the amortization entry is proposed only when the preparer confirms the costs were booked to their account and cites its balance, so an unbooked cost cannot produce a credit to interest;
+- straight-line needs the accountant's cited not-materially-different conclusion, and the draft shows the costs as deducted from the debt;
+- a cash fee needs both a positive amount and its statement line, and the matching difference is a possible cause, not a conclusion.
+
+Tests:
+
+- `TestFeesPaidInCashAreShownWithoutAnEntry` (pure): the fee on its payment, the total, unchanged interest, no entry, the possible-cause wording only for an exact match, a missing statement line, and the fixed-rate method refused.
+- `TestIssuanceCostsAmortizeToInterest` (pure): 1,200.00 over 2026 leaves 300.00 unamortized in September and proposes 100.00 to interest against 400.00 booked; over-amortization reverses; rate changes allowed under the new method; the variable method, the loan account, a missing conclusion, an unconfirmed booking, a missing ledger reference and a term ending before the close are refused.
+- `TestLoanDraftsNeedTheClientsApprovedLoanProcedure` (PostgreSQL): an issuance cost draft is refused under the variable procedure and saved under the new one, which a firm can publish.
+- `TestTheClientsBasisDecidesWhichWorkCanBeSavedAndApproved` checks that a cash-basis client cannot amortize issuance costs.
+
+Each check was observed red with its rule removed (16 mutations).
+
+Code review: GPT-6 Sol (high), one delta round. Adopted, in the form: adding a rate change or fee keeps the issuance cost method; a payment row with only a fee reaches validation; adding, removing or editing issuance costs clears the checked result; each cash fee shows its statement line; the docs and the result no longer say the fee is already booked.
+
+Not verified: real lender statements and closing statements, and the form in a browser.
