@@ -36,25 +36,42 @@ func TestQuoteLocationAndExplicitClientBoundary(t *testing.T) {
 	if _, ok := QuoteLocation("invoice.pdf", "--- Page 1 · PDF text ---\n--- Page 2 · spoofed ---\n--- Page 2 · PDF text ---\nAmount: 100", "Amount: 100"); ok {
 		t.Fatal("spoofed page marker accepted")
 	}
-	if issue := EntityIssue(content, "Acme LLC"); issue != "" {
+	if issue, _ := EntityIssue(content, "Acme LLC", nil); issue != "" {
 		t.Fatal(issue)
 	}
-	if issue := EntityIssue(content, "Other LLC"); issue == "" {
+	if issue, _ := EntityIssue(content, "Other LLC", nil); issue == "" {
 		t.Fatal("explicit wrong client was not blocked")
 	}
-	if issue := EntityIssue("Client entity: Acme LLC\nClient entity: Other LLC", "Acme LLC"); issue == "" {
+	if issue, _ := EntityIssue("Client entity: Acme LLC\nClient entity: Other LLC", "Acme LLC", nil); issue == "" {
 		t.Fatal("contradictory client labels were not blocked")
 	}
-	if issue := EntityIssue("Client entity: Acme, LLC\nBill to: Other LLC", "Acme LLC"); issue != "" {
+	if issue, _ := EntityIssue("Client entity: Acme, LLC\nBill to: Other LLC", "Acme LLC", nil); issue != "" {
 		t.Fatal("customer bill-to or punctuation difference blocked the client", issue)
 	}
-	if issue := EntityIssue("Client entity: Acme LLC        Invoice number: 42", "Acme LLC"); issue != "" {
+	if issue, _ := EntityIssue("Client entity: Acme LLC        Invoice number: 42", "Acme LLC", nil); issue != "" {
 		t.Fatal("second PDF column became part of the client name", issue)
 	}
-	if issue := EntityIssue("Client entity: Acme  LLC", "Acme LLC"); issue != "" {
+	if issue, _ := EntityIssue("Client entity: Acme  LLC", "Acme LLC", nil); issue != "" {
 		t.Fatal("spacing inside the client name was treated as another column", issue)
 	}
-	if issue := EntityIssue("Client entity: Acme LLC  Holdings", "Acme LLC"); issue == "" {
+	if issue, _ := EntityIssue("Client entity: Acme LLC  Holdings", "Acme LLC", nil); issue == "" {
 		t.Fatal("different client suffix was mistaken for another column")
+	}
+}
+
+func TestConfirmedAliasesAcceptOnlyAnUnambiguousSource(t *testing.T) {
+	issue, alias := EntityIssue("Client entity: Acme Services LLC", "Acme Services", nil)
+	if issue == "" || alias != "Acme Services LLC" {
+		t.Fatalf("an unconfirmed other name blocks and is offered for confirmation: %q %q", issue, alias)
+	}
+	confirmed := []string{NormalizeEntity("Acme Services, LLC")}
+	if issue, _ := EntityIssue("Client entity: Acme Services LLC", "Acme Services", confirmed); issue != "" {
+		t.Fatalf("a confirmed alias is the same client: %q", issue)
+	}
+	if issue, alias := EntityIssue("Client entity: Acme Services LLC\nClient entity: Other LLC", "Acme Services", confirmed); issue == "" || alias != "" {
+		t.Fatalf("a source naming two entities stays blocked and offers no alias: %q %q", issue, alias)
+	}
+	if issue, alias := EntityIssue("Client entity: ---", "Acme Services", nil); issue == "" || alias != "" {
+		t.Fatalf("a name with no letters or digits is never offered as an alias: %q %q", issue, alias)
 	}
 }

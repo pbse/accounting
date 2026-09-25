@@ -141,6 +141,13 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Could not inspect evidence.")
 			return
 		}
+		var aliases []string
+		if inspect {
+			if aliases, err = preparation.ClientAliases(r.Context(), db, r.PathValue("id")); err != nil {
+				problem(w, 503, "Could not inspect the client's confirmed names.")
+				return
+			}
+		}
 		for _, file := range files {
 			var name, content, state string
 			json.Unmarshal(file["name"], &name)
@@ -149,7 +156,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			delete(file, "content")
 			if inspect && state == "ready" && string(file["superseded_by"]) == "null" {
 				checks := documents.Check(name, content)
-				if issue := documents.EntityIssue(content, entity); issue != "" {
+				if issue, _ := documents.EntityIssue(content, entity, aliases); issue != "" {
 					checks.Questions = append(checks.Questions, issue)
 				}
 				file["checks"], _ = json.Marshal(checks)

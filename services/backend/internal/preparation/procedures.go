@@ -88,6 +88,26 @@ func CurrencyIssue(ctx context.Context, q interface {
 	return nil
 }
 
+// ClientAliases returns the close client's confirmed aliases, normalized.
+func ClientAliases(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, closeID string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT a.alias FROM client_aliases a JOIN client_closes c ON c.organization_id=a.organization_id AND lower(c.entity)=lower(a.client_entity) WHERE c.id::text=$1`, closeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	aliases := []string{}
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			return nil, err
+		}
+		aliases = append(aliases, alias)
+	}
+	return aliases, rows.Err()
+}
+
 // BasisIssue refuses work the client's approved basis does not support. Firms that have
 // not set any basis keep per-draft accrual confirmations; basis versions are never disabled.
 func BasisIssue(ctx context.Context, q interface {

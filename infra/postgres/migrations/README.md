@@ -39,3 +39,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `052_settlement_posting.sql` lets a production grant cover Stripe settlement fee entries. Apply after 051 with API/worker stopped; `/readyz` checks it.
 
 `053_production_corrections.sql` lets a production grant cover Bill expense corrections and supplier credits and records the grant on each attempt. Apply after 052 with API/worker stopped; `/readyz` checks it.
+
+`054_client_aliases.sql` stores the other client names a reviewer confirmed from an identity-blocked source, with row-level security like 047. Apply after 053 with API/worker stopped; `/readyz` checks it.
