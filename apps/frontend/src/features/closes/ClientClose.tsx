@@ -6,6 +6,7 @@ import { CarryForward } from "./CarryForward";
 import { Coordinator } from "./Coordinator";
 import { EmailReplies } from "./EmailReplies";
 import { Exceptions } from "./Exceptions";
+import { TieOut } from "./TieOut";
 import { RetentionControls } from "./Enterprise";
 import { Evidence, PreparationJobs } from "./Evidence";
 import { ProposedStatePreview } from "./Posting";
@@ -216,6 +217,7 @@ export default function ClientClose() {
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
+          <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
           <EmailReplies closeId={close.id} onReleased={() => void reload()} />
           <PreparationJobs key={`jobs-${close.id}`} closeId={close.id} onComplete={() => void reload()} />
         </div>
