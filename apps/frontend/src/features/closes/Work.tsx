@@ -1215,11 +1215,11 @@ function WorkDetails({
                 <input name="from" required maxLength={254} />
               </label>
               <label>
-                Original reply
+                Reply as received
                 <textarea name="body" rows={6} required maxLength={20000} />
               </label>
               <p>
-                Preserved as evidence. Candidate facts return for review on this
+                Preserved as evidence, with card numbers, IBANs, Social Security numbers, labeled bank account numbers and passwords removed. Candidate facts return for review on this
                 same job; a reply cannot approve assumptions or posting.
               </p>
               <button>Record reply and resume this job</button>
@@ -1229,7 +1229,7 @@ function WorkDetails({
       )}
       {item.replies.length > 0 && (
         <section>
-          <h3>Original replies · review required</h3>
+          <h3>Replies · review required</h3>
           {item.replies.map((reply) => (
             <details key={reply.id}>
               <summary>

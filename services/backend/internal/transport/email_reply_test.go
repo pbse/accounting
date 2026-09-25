@@ -94,9 +94,9 @@ func TestInboundReplyHeldUntilSenderAndReviewerMatch(t *testing.T) {
 	t.Setenv("EMAIL_INTAKE_ADDRESS", "inbox@example.test")
 	t.Setenv("EMAIL_INTAKE_KEY", strings.Repeat("k", 32))
 	h := apiWithStore(db, "email-reply-fixture-workspace-token-000000")
-	internal := func(sender, text string) {
+	internal := func(sender, text string, headers ...string) {
 		t.Helper()
-		raw := []byte("From: " + sender + "\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + text)
+		raw := []byte("From: " + sender + "\r\n" + strings.Join(headers, "") + "Content-Type: text/plain; charset=UTF-8\r\n\r\n" + text)
 		r := httptest.NewRequest("POST", "/internal/email-reply", bytes.NewReader(raw))
 		r.Header.Set("X-Close-Email-Key", strings.Repeat("k", 32))
 		r.Header.Set("X-Close-Envelope-To", "inbox+reply-"+strings.ToLower(outbox)+"@example.test")
@@ -121,7 +121,17 @@ func TestInboundReplyHeldUntilSenderAndReviewerMatch(t *testing.T) {
 		return w.Body.Bytes()
 	}
 	internal("intruder@example.test", "Please use the wrong invoice.")
-	internal("client@example.test", "Please use the September invoice.")
+	internal("client@example.test", "Please use the September invoice.\nOur checking account 1234 5678 90 is new.")
+	internal("client@example.test", "Please use the September invoice.\nOur checking account 1234 5678 90 is new.")
+	var stored string
+	if err = db.QueryRow(`SELECT string_agg(body,'|') FROM inbound_replies WHERE close_id=$1 AND header_from='client@example.test'`, closeID).Scan(&stored); err != nil || stored != "Please use the September invoice.\nOur checking account [bank account number ending 7890 removed] is new." {
+		t.Fatalf("a held email reply keeps only the redacted text, once per delivered message: %q %v", stored, err)
+	}
+	var fingerprints int
+	raw := "From: client@example.test\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nPlease use the September invoice.\nOur checking account 1234 5678 90 is new."
+	if err = db.QueryRow(`SELECT count(*) FROM inbound_replies WHERE message_digest=$1`, preparation.Digest([]byte(raw))).Scan(&fingerprints); err != nil || fingerprints != 0 {
+		t.Fatalf("no digest of the raw message is kept: %d %v", fingerprints, err)
+	}
 	var held []struct {
 		ID             string `json:"id"`
 		AddressesMatch bool   `json:"addresses_match"`
@@ -147,10 +157,15 @@ func TestInboundReplyHeldUntilSenderAndReviewerMatch(t *testing.T) {
 	if err = db.QueryRow(`SELECT state FROM preparation_jobs WHERE id=$1`, job).Scan(&state); err != nil || state != "waiting_evidence" {
 		t.Fatalf("job not resumed: %s %v", state, err)
 	}
-	if err = db.QueryRow(`SELECT count(*) FROM work_replies WHERE request_id=$1`, request).Scan(&replies); err != nil || replies != 1 {
+	if err = db.QueryRow(`SELECT count(*) FROM work_replies r JOIN evidence e ON e.id=r.source_id WHERE r.request_id=$1 AND e.content NOT LIKE '%1234 5678%'`, request).Scan(&replies); err != nil || replies != 1 {
 		t.Fatalf("wrong reply count: %d %v", replies, err)
 	}
 	if err = db.QueryRow(`SELECT used_at IS NOT NULL FROM client_request_links WHERE digest=$1`, "reply-test-"+request).Scan(&used); err != nil || !used {
 		t.Fatalf("link remained reusable: %v", err)
+	}
+	internal("client@example.test", "Please use the September invoice.\nOur checking account 1234 5678 90 is new.", "Message-Id: <second@example.test>\r\n")
+	internal("client@example.test", "Please use the September invoice.\nOur checking account 1234 5678 90 is new.", "Date: Fri, 25 Sep 2026 10:00:00 +0000\r\n")
+	if err = db.QueryRow(`SELECT count(*) FROM inbound_replies WHERE close_id=$1 AND header_from='client@example.test'`, closeID).Scan(&replies); err != nil || replies != 3 {
+		t.Fatalf("a separately sent email with the same text is held separately: %d %v", replies, err)
 	}
 }
