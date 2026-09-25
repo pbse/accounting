@@ -75,3 +75,47 @@ func TestTrialBalanceAccountRequiresUniquePrepaidRow(t *testing.T) {
 		t.Fatal("duplicate row accepted")
 	}
 }
+
+func TestMonthlyActivityAndPayeesReadReportSections(t *testing.T) {
+	pl := json.RawMessage(`{"Header":{"Currency":"USD"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Total"}]},"Rows":{"Row":[
+		{"type":"Section","Header":{"ColData":[{"value":"Income"},{"value":""}]},"Rows":{"Row":[{"type":"Data","ColData":[{"id":"10","value":"Sales"},{"value":"5,000.00"}]}]},"Summary":{"ColData":[{"value":"Total Income"},{"value":"5000.00"}]}},
+		{"type":"Section","Header":{"ColData":[{"value":"Expenses"},{"value":""}]},"Rows":{"Row":[
+			{"type":"Section","Header":{"ColData":[{"id":"19","value":"Office"},{"value":""}]},"ColData":[{"id":"19","value":"Office"},{"value":"2000.00"}],"Rows":{"Row":[{"type":"Data","ColData":[{"id":"20","value":"Utilities"},{"value":"2000.00"}]}]},"Summary":{"ColData":[{"value":"Total Office"},{"value":"2000.00"}]}}
+		]}}]}}`)
+	currency, activity, err := MonthlyActivity(pl)
+	if err != nil || currency != "USD" || len(activity) != 2 || activity["10"].Amount.FloatString(2) != "5000.00" || activity["20"].Name != "Utilities" {
+		t.Fatalf("account rows inside nested sections are read and summaries are not: %s %v %v", currency, activity, err)
+	}
+	if _, _, err := MonthlyActivity(json.RawMessage(strings.Replace(string(pl), `"id":"20"`, `"id":"10"`, 1))); err == nil {
+		t.Fatal("an account listed twice is refused")
+	}
+	if _, _, err := MonthlyActivity(json.RawMessage(strings.Replace(string(pl), `{"value":"2000.00"}]}]}`, `{"value":"2000.00"},{"value":"1"}]}]}`, 1))); err == nil {
+		t.Fatal("a row that does not match the columns is refused")
+	}
+	if _, _, err := MonthlyActivity(json.RawMessage(`{"Header":{"Currency":"USD"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Total"},{"ColTitle":"% of Income"}]},"Rows":{"Row":[{"type":"Data","ColData":[{"id":"10","value":"Sales"},{"value":"5000.00"},{"value":"100.00"}]}]}}`)); err == nil {
+		t.Fatal("a Profit and Loss with more than one amount column is refused")
+	}
+	if _, _, err := MonthlyActivity(json.RawMessage(strings.Replace(string(pl), `{"ColTitle":"Total"}`, `{"ColTitle":"% of Income"}`, 1))); err == nil {
+		t.Fatal("a Profit and Loss whose second column is not the total is refused")
+	}
+	if _, _, err := MonthlyActivity(json.RawMessage(strings.Replace(string(pl), `{"ColTitle":"Total"}`, `{"ColTitle":"Sep 2026","ColType":"Money"}`, 1))); err != nil {
+		t.Fatal("a money column titled by its month is the total")
+	}
+	gl := json.RawMessage(`{"Columns":{"Column":[{"ColTitle":"Date"},{"ColTitle":"Transaction Type"},{"ColTitle":"Name"},{"ColTitle":"Amount"},{"ColTitle":"Balance"}]},"Rows":{"Row":[
+		{"type":"Section","Header":{"ColData":[{"id":"20","value":"Utilities"}]},"Rows":{"Row":[
+			{"type":"Data","ColData":[{"value":"2026-09-03"},{"value":"Bill"},{"value":"Con Edison"},{"value":"1,200.00"},{"value":"1200.00"}]},
+			{"type":"Data","ColData":[{"value":"2026-09-10"},{"value":"Bill"},{"value":"Con Edison"},{"value":"300.00"},{"value":"1500.00"}]},
+			{"type":"Data","ColData":[{"value":"2026-09-12"},{"value":"Journal Entry"},{"value":""},{"value":"500.00"},{"value":"2000.00"}]},
+			{"type":"Data","ColData":[{"value":"2026-09-13"},{"value":"Memo"},{"value":"Note only"},{"value":""},{"value":"2000.00"}]},
+			{"type":"Section","ColData":[{"value":""},{"value":""},{"value":"Subtotal line"},{"value":"9.00"},{"value":""}]}
+		]},"Summary":{"ColData":[{"value":"Total for Utilities"},{"value":""},{"value":""},{"value":"2000.00"}]}},
+		{"type":"Section","Header":{"ColData":[{"id":"22","value":"Rent"}]},"Rows":{"Row":[{"type":"Data","ColData":[{"value":"2026-09-01"},{"value":"Bill"},{"value":"Landlord"},{"value":"1500.00"},{"value":"1500.00"}]}]}}
+	]}}`)
+	payees, err := PayeeActivity(gl, []string{"20"})
+	if err != nil || len(payees) != 1 || payees["20"].ByName["Con Edison"].FloatString(2) != "1500.00" || payees["20"].Unattributed.FloatString(2) != "500.00" || len(payees["20"].ByName) != 1 {
+		t.Fatalf("a wanted account's transaction rows are summed by payee, blank names apart, other accounts ignored: %+v %v", payees, err)
+	}
+	if _, err := PayeeActivity(json.RawMessage(strings.Replace(string(gl), `"ColTitle":"Name"`, `"ColTitle":"Customer"`, 1)), []string{"20"}); err == nil {
+		t.Fatal("a ledger without a Name column cannot attribute payees")
+	}
+}

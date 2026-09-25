@@ -111,6 +111,16 @@ The close Overview compares every asset and liability account in the newest mont
 
 Each account **ties**, **ties after proposed entries** (the month-end entries still to post close the gap), **differs**, waits on a **posting outcome unknown** (checked first, since a write in flight may change the balance), or has **no support yet** with a hint on what support to add. A match against a workpaper that is not approved or has blockers is marked provisional. An entry already posted to the snapshot's company before the capture began is treated as part of the balance; one posted later still counts as pending. Support that names no account, several accounts, or an account that is not an asset or liability is listed rather than counted, as is a workpaper prepared in a currency other than the Trial Balance's, and so are Trial Balance accounts with no class, because the board may then be incomplete. Zero-balance accounts with no support are left off. Equity is not tied, receivables and payables are not compared with aging, and nothing blocks sign-off or changes the ledger.
 
+## Changes from last month
+
+The close Overview explains the largest Profit and Loss movements from last month's close to this one (`GET /v1/closes/{id}/flux`, MCP `explain_changes`). It uses each month's newest QuickBooks period snapshot on the client's reading connection, and makes no model or provider call.
+
+- **Changes shown:** accounts whose reported amount moved, largest movement first, up to eight. The two months' snapshots and capture times are shown; figures are as captured, so a posting made after last month's capture is not included. No materiality threshold is implied.
+- **Possible drivers:** each change lists the payees behind it from the General Ledger's Name column. That means new this month, not in this month's capture, or billed a different amount, plus any amount with no payee name. The ledger's sign for an account is turned to match the P&L when its month total is exactly opposite (as income can be). Up to three payees per group are shown, with a count of the rest. When those payees do not add up to the whole movement, they are labelled possible drivers.
+- **Missing payees:** a payee billed last month and not in this month's capture raises a question: was there a bill, or should it be accrued? Check the current books first. The claim is never made when any of this month's rows carries no payee name, even if they net to zero. **Copy client questions** copies them.
+- **Wording:** the panel says expense or income only when the account's type is known.
+- **Waiting:** it waits instead of comparing when there is no snapshot for either month, when the two months came from different QuickBooks companies or currencies, or when either month's newest books come from Xero. Only a single-period P&L (account and total columns) is read.
+
 ## Client memory when confirming
 
 When a person confirms a model reading, each account field (prepaid: expense and prepaid account; accrual: expense and liability account; reconciliation: account) can carry a note (`GET /v1/closes/{id}/work/{job}/hints`):
