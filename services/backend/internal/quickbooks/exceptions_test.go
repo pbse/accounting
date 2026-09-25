@@ -97,3 +97,53 @@ func TestUnappliedPaymentsAndOldCreditsAreAskedAbout(t *testing.T) {
 		t.Fatalf("questions ask what the money settles: %+v", found)
 	}
 }
+
+func TestScheduleCandidatesAreNetAdditions(t *testing.T) {
+	accounts := json.RawMessage(`[{"Id":"1","Name":"Prepaid insurance","AccountType":"Other Current Asset","AccountSubType":"PrepaidExpenses"},{"Id":"2","Name":"Prepaid software","AccountType":"Other Current Asset","AccountSubType":"PrepaidExpenses"},
+		{"Id":"3","Name":"Office equipment","AccountType":"Fixed Asset","AccountSubType":"MachineryAndEquipment"},{"Id":"4","Name":"Accumulated depreciation","AccountType":"Fixed Asset","AccountSubType":"AccumulatedDepreciation"},
+		{"Id":"5","Name":"Deferred revenue","AccountType":"Other Current Liability","AccountSubType":"DeferredRevenue"},{"Id":"6","Name":"Insurance expense","AccountType":"Expense"},{"Id":"7","Name":"Checking","AccountType":"Bank"},{"Id":"8","Name":"Sales","AccountType":"Income"}]`)
+	expense := func(account, name, amount string) string {
+		return `{"Amount":` + amount + `,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"` + account + `","name":"` + name + `"}}}`
+	}
+	journal := func(side, account, amount string) string {
+		return `{"Amount":` + amount + `,"JournalEntryLineDetail":{"PostingType":"` + side + `","AccountRef":{"value":"` + account + `"}}}`
+	}
+	row := func(kind, id, head string, lines ...string) TransactionRow {
+		return TransactionRow{Kind: kind, ProviderID: id, Date: "2026-09-03", Currency: "USD", Record: json.RawMessage(`{` + head + `"Line":[` + strings.Join(lines, ",") + `]}`)}
+	}
+	rows := []TransactionRow{
+		row("Bill", "101", `"DocNumber":"INV-88","VendorRef":{"value":"9","name":"Allianz"},`, expense("1", "Prepaid insurance", "12000"), expense("6", "Insurance expense", "50")),
+		row("Purchase", "102", `"EntityRef":{"value":"4","name":"Dell"},`, expense("3", "Office equipment", "2400")),
+		row("JournalEntry", "103", ``, journal("Debit", "2", "300"), journal("Credit", "1", "300")),
+		row("JournalEntry", "104", ``, journal("Debit", "6", "1000"), journal("Credit", "1", "1000")),
+		row("JournalEntry", "105", ``, journal("Debit", "7", "6000"), journal("Credit", "5", "6000")),
+		row("JournalEntry", "106", ``, journal("Debit", "6", "100"), journal("Credit", "4", "100")),
+		row("Deposit", "107", ``, `{"Amount":500,"DepositLineDetail":{"AccountRef":{"value":"5"}}}`),
+		row("JournalEntry", "108", ``, journal("Debit", "5", "400"), journal("Credit", "8", "400")),
+		row("Bill", "109", ``, expense("99", "New prepaid", "75")),
+		row("Purchase", "110", `"Credit":true,`, expense("1", "Prepaid insurance", "200")),
+		row("JournalEntry", "111", ``, journal("Debit", "4", "200"), journal("Credit", "8", "200")),
+		row("Bill", "112", `"DocNumber":"INV-92",`, expense("1", "Prepaid insurance", "100"), expense("2", "Prepaid software", "200")),
+		row("Bill", "113", ``, `{"Amount":80,"ItemBasedExpenseLineDetail":{"ItemRef":{"value":"5","name":"Toner"}}}`),
+		row("JournalEntry", "114", ``, journal("Debit", "2", "500"), journal("Credit", "1", "200"), journal("Credit", "7", "300")),
+		row("Bill", "115", ``, `{"ItemBasedExpenseLineDetail":{"ItemRef":{"value":"6","name":"Chairs"}}}`),
+	}
+	found, unknown, items, err := ScheduleCandidates(rows, accounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{}
+	for _, f := range found {
+		got = append(got, f.Type+" "+f.ProviderIDs[0]+" "+f.Amount+" "+f.Account+" "+f.Reference)
+	}
+	want := "unscheduled_prepaid 101 12000.00 Prepaid insurance INV-88|unscheduled_fixed_asset 102 2400.00 Office equipment |unscheduled_deferred_revenue 105 6000.00 Deferred revenue |unscheduled_deferred_revenue 107 500.00 Deferred revenue |unscheduled_prepaid 112 100.00 Prepaid insurance INV-92|unscheduled_prepaid 112 200.00 Prepaid software INV-92|unscheduled_prepaid 114 500.00 Prepaid software "
+	if strings.Join(got, "|") != want {
+		t.Fatalf("got %q\nwant %q", strings.Join(got, "|"), want)
+	}
+	if len(unknown) != 1 || unknown[0] != "New prepaid" || items != 2 {
+		t.Fatalf("accounts missing from the directory and item lines are reported: %v %d", unknown, items)
+	}
+	if !strings.Contains(found[0].Question, "What period does the $12000.00 paid to Allianz on 2026-09-03 cover?") {
+		t.Fatalf("the question asks for the service period: %s", found[0].Question)
+	}
+}

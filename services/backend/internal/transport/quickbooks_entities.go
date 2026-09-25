@@ -1,14 +1,18 @@
 package transport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/xero"
 )
@@ -180,7 +184,25 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Recorded exceptions are unreadable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": captureID, "evidence_id": evidenceID, "finished_at": finished}, "scanned": len(scanned), "items": found, "balances": balances})
+		schedules := map[string]any{"state": "no_directory", "unknown_accounts": []string{}, "item_lines": 0}
+		// Without a QuickBooks snapshot there is no account list, so the scan stays "no_directory".
+		if candidates, unknown, items, e := quickbooks.ScheduleCandidates(scanned, accounts); e == nil {
+			covered, e := scheduleCoverage(r.Context(), db, r.PathValue("id"))
+			if e != nil {
+				problem(w, 503, "Saved schedules are unreadable.")
+				return
+			}
+			for _, c := range candidates {
+				if !covered(c) {
+					found = append(found, c)
+				}
+			}
+			schedules["state"] = "checked"
+			if len(unknown) > 0 || items > 0 {
+				schedules["state"], schedules["unknown_accounts"], schedules["item_lines"] = "incomplete", unknown, items
+			}
+		}
+		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": captureID, "evidence_id": evidenceID, "finished_at": finished}, "scanned": len(scanned), "items": found, "balances": balances, "schedule_scan": schedules})
 	})
 	mux.HandleFunc("GET "+path+"/{sync}", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
@@ -195,4 +217,48 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Write(raw)
 	})
+}
+
+// scheduleCoverage reports whether a current schedule cites a candidate's document number with its amount, currency and account.
+func scheduleCoverage(ctx context.Context, db *sql.DB, closeID string) (func(quickbooks.Exception) bool, error) {
+	rows, err := db.QueryContext(ctx, `SELECT w.paper FROM workpaper_review_state w WHERE w.close_id::text=$1 AND w.kind='prepaid' AND NOT EXISTS (SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text) ORDER BY w.id`, closeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type schedule struct {
+		Input prepaids.Input `json:"input"`
+	}
+	latest := map[string]schedule{}
+	for rows.Next() {
+		var raw json.RawMessage
+		var p schedule
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal(raw, &p) == nil {
+			latest[paperKey("prepaid", raw)] = p
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	kinds := map[string]string{"unscheduled_prepaid": "", "unscheduled_fixed_asset": prepaids.Depreciation, "unscheduled_deferred_revenue": prepaids.DeferredRevenue}
+	return func(c quickbooks.Exception) bool {
+		if c.Reference == "" {
+			return false
+		}
+		cited := regexp.MustCompile(`(?i)(^|[^a-z0-9-])` + regexp.QuoteMeta(c.Reference) + `([^a-z0-9-]|$)`)
+		for _, p := range latest {
+			in := p.Input
+			account := strings.ToLower(strings.TrimSpace(in.PrepaidAccount))
+			if in.Schedule != kinds[c.Type] || !sameAmount(in.Amount, c.Amount) || c.Currency == "" || !strings.EqualFold(in.Currency, c.Currency) || !cited.MatchString(in.SourceReference) && !cited.MatchString(in.BookingReference) {
+				continue
+			}
+			if name := strings.ToLower(c.Account); c.Type == "unscheduled_fixed_asset" || account == name || strings.HasSuffix(account, ":"+name) {
+				return true
+			}
+		}
+		return false
+	}, nil
 }
