@@ -1048,3 +1048,50 @@ Code review: GPT-6 Sol (high). Adopted:
 Each check was observed red with its rule removed (12 mutations): the middleware, the empty-key refusal, the 24-hour window, the uncertain 5xx, the fingerprint check, recording the status, the expiry test, the policy mapping, and the three reconciliation gates.
 
 Not verified: concurrent requests with the same key (the primary key serializes them, but no test runs them in parallel). The APPROVAL_EXPIRED paths for sandbox, supplier credit and Bill correction share the tested helper but have no test of their own.
+
+## Approved journal posting to Xero (2026-09-25)
+
+Author: Claude Opus 5.5. Migration 060. This closes the largest ledger-parity gap. Approved drafts can now post to Xero as one manual journal, with the QuickBooks production controls.
+
+- **Scope and tier:** the granular `accounting.manualjournals` scope. Manual journals are on every Xero plan, so no Advanced tier is needed.
+- **Grant:** a person's client grant lists Xero account IDs, draft kinds, a limit and an expiry.
+- **Kinds gate:** `XERO_POSTING_KINDS` defaults to none.
+- **Preview:** built from live Xero reads (accounts, lock dates, the Trial Balance at the journal date), with a digest.
+- **Approval:** ten minutes, with single approval, basis and independence.
+- **Post:** one durable attempt by a person with `posting:execute`, under locks on the close, grant and connection. It carries Xero's `Idempotency-Key` and is read back.
+- **Unknown outcomes:** never retried; verified by ID.
+- **Cross-ledger guard:** QuickBooks and Xero check each other at the execution reservation.
+
+`xeroAccess` (token refresh) and `postingSource` (source identity, newer-draft check) were extracted and are shared. Close deletion now covers Xero grants and attempts, and the "read-only" copy was updated.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- the cross-ledger guard at both reservations, with a source key;
+- locking the connection at reservation;
+- the accounting-basis check;
+- a strict Trial Balance reading (report date, duplicate and unreadable rows refuse; an account with no row counts as zero);
+- close deletion and copy.
+
+Code review: GPT-6 Sol (high), one delta round. Adopted:
+
+- verification finds the client's active connection to the saved organisation, so a reconnection can still verify an unknown attempt;
+- the QuickBooks competing-intent rule: while another Xero intent on the same accounts is approved or unsettled, this one can't be approved or posted, and must re-preview after the first settles;
+- readback also compares narration and tax treatment;
+- source freshness is rechecked inside the reservation transaction.
+
+The same pre-existing freshness window in the QuickBooks reservation is recorded for a separate fix.
+
+Tests (PostgreSQL, mocked Xero), `TestApprovedDraftPostsOnceToXero`:
+
+- Refusals without a grant, without the kind enabled, without the journal scope, inside the lock date, for an ungranted account, above the limit, and for a connection now on another organisation.
+- The preview builds one POSTED journal on the granted active account, skipping an archived one with the same name.
+- Approval refusals: a stale digest, a cash-basis client, and a pending draft approved by someone who cannot review drafts.
+- A changed balance stops the write, and a lapsed approval answers `APPROVAL_EXPIRED`.
+- A draft attempted in QuickBooks is refused, and the QuickBooks-direction check (`postedElsewhere`) sees the Xero attempt.
+- Posting needs `posting:execute`, posts once with the saved request ID as its idempotency key, verifies, and never posts again.
+- A different readback (amounts, or narration only) is `EXECUTION_UNKNOWN`. Verification refuses until the journal matches, and verifies after a reconnection to the same organisation without a second post.
+- A second intent on the same accounts waits while the first is approved.
+
+`TestNetRefusesAnAccountListedTwice` covers the strict balance reading. Each check was observed red with its rule removed (24 mutations).
+
+Not verified: a live Xero organisation. Xero's acceptance of an AccountID-only, no-tax, immediately POSTED journal, lock-date behavior, readback timing, and granular-scope enforcement need a scoped live check before enabling any kind. Not tested because they cover races only: the connection and grant locks at reservation, and the in-transaction freshness recheck.

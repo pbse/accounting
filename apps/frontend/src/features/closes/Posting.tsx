@@ -265,3 +265,58 @@ export function ProductionPosting({ closeId, paperId }: { closeId: string; paper
     {busy && <p role="status">Checking production QuickBooks…</p>}
   </details>;
 }
+
+type XeroIntent = { state: string; id?: string; digest?: string; request_id?: string; grant_id?: string; journal?: unknown; ledger_before?: Record<string, string>; external_id?: string; error?: string; readback?: unknown };
+
+// Posting to Xero keeps the same human steps as QuickBooks: preview, a person's approval, and a person's single post.
+export function XeroPosting({ closeId, paperId }: { closeId: string; paperId: string }) {
+  const [intent, setIntent] = useState<XeroIntent>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [phrase, setPhrase] = useState("");
+  const [journalID, setJournalID] = useState("");
+  const path = `/${encodeURIComponent(closeId)}/workpapers/${encodeURIComponent(paperId)}/xero-posting`;
+  async function run(action?: string) {
+    setBusy(true);
+    setError("");
+    try {
+      setIntent(await workspaceRequest(path, action ? { action, digest: intent?.digest ?? "", confirmation: phrase, external_id: journalID } : undefined));
+      setPhrase("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Outcome unknown. Refresh status and inspect the saved attempt.");
+      await workspaceRequest(path).then(setIntent).catch(() => setIntent(undefined));
+    } finally {
+      setBusy(false);
+    }
+  }
+  const phraseRequired = intent?.state === "preview" ? "APPROVE XERO DRAFT" : "POST TO XERO";
+  return <details>
+    <summary>Reviewed Xero posting</summary>
+    <p>Posts this draft's entries as one manual journal to the client's Xero organisation. Requires a client-specific Xero grant, granted active accounts, a date after Xero's lock dates, unchanged live balances, and a person's approval and a person's post. No agent posts automatically.</p>
+    <button disabled={busy} onClick={() => void run()}>Check Xero posting status</button>
+    {error && <p role="alert">{error}</p>}
+    {intent && <>
+      <p role="status">State: {intent.state === "executing" ? "Attempt recorded; investigate before any further write" : intent.state}</p>
+      {intent.error && <p role="alert">{intent.error}</p>}
+      {intent.request_id && <p>Saved intent #{intent.id} · grant #{intent.grant_id} · request <code>{intent.request_id}</code></p>}
+      {intent.external_id && <p>Xero manual journal {intent.external_id}</p>}
+      {intent.journal != null && <details open><summary>Exact manual journal to review</summary><pre>{JSON.stringify(intent.journal, null, 2)}</pre></details>}
+      {intent.ledger_before && <p>Balances now (Trial Balance, debit positive): {Object.entries(intent.ledger_before).map(([id, balance]) => `${id}: ${balance}`).join(" · ")}. Rechecked before approval and posting.</p>}
+      {intent.state === "not_prepared" && <button disabled={busy} onClick={() => void run("preview")}>Prepare Xero preview</button>}
+      {(intent.state === "preview" || intent.state === "approved") && <>
+        <p>Approval expires after 10 minutes. A reserved attempt is never repeated, even if Xero's answer is lost.</p>
+        <button disabled={busy} onClick={() => void run("preview")}>Refresh preview from live Xero and clear approval</button>
+        <label>Type {phraseRequired}<input value={phrase} onChange={e => setPhrase(e.target.value)} autoComplete="off" /></label>
+        <button disabled={busy || phrase !== phraseRequired} onClick={() => void run(intent.state === "preview" ? "approve" : "execute")}>
+          {intent.state === "preview" ? "Approve exact Xero journal" : "Post once to Xero"}
+        </button>
+      </>}
+      {(intent.state === "unknown" || intent.state === "executing") && <>
+        <p>Look for the journal in Xero by its narration. If you find the exact one, enter its ManualJournalID to read it back. This page will not post again.</p>
+        {!intent.external_id && <label>Xero ManualJournalID<input value={journalID} onChange={e => setJournalID(e.target.value.trim())} /></label>}
+        <button disabled={busy || (!intent.external_id && !/^[0-9a-fA-F-]{36}$/.test(journalID))} onClick={() => void run("verify")}>Verify the journal against the saved intent</button>
+      </>}
+    </>}
+    {busy && <p role="status">Checking Xero…</p>}
+  </details>;
+}

@@ -49,3 +49,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `058_review_minimum.sql` adds the firm's optional amount at or above which a draft's proposed entries need an independent reviewer (hosted firms only), recorded in policy history. Apply after 057 with API/worker stopped; `/readyz` checks it.
 
 `059_idempotency_keys.sql` records, per firm, each `Idempotency-Key` used on a POST with a fingerprint of the request and its final status (never the response body), with row-level security like 055. Apply after 058 with API/worker stopped; `/readyz` checks it.
+
+`060_xero_posting.sql` adds the per-client Xero posting grant and the saved manual journal intent/attempt, with row-level security like 048. Apply after 059 with API/worker stopped; `/readyz` checks it.

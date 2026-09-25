@@ -15,7 +15,7 @@ import { LoanResult } from "../loans/Prepare";
 import { OwnerResult } from "../owners/Prepare";
 import type { Source } from "./Evidence";
 import type { Plan } from "./Planning";
-import { Posting, ProductionPosting } from "./Posting";
+import { Posting, ProductionPosting, XeroPosting } from "./Posting";
 import { ReviewDecision } from "./ReviewDecision";
 import { StandingApproval } from "./StandingApproval";
 import { VendorCredit } from "./VendorCredit";
@@ -197,7 +197,12 @@ function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[]
 }
 
 export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
-  const posting = <ProductionPosting closeId={close.id} paperId={saved.id} />;
+  const posting = (
+    <>
+      <ProductionPosting closeId={close.id} paperId={saved.id} />
+      <XeroPosting closeId={close.id} paperId={saved.id} />
+    </>
+  );
   if (saved.kind === "settlement") return <><SettlementResult result={saved.paper} />{saved.paper.proposal && saved.paper.blockers.length === 0 && posting}</>;
   if (saved.kind === "accrual") return <><AccrualResult result={saved.paper} />{saved.paper.proposal && posting}</>;
   if (saved.kind === "loan") return <><LoanResult result={saved.paper} />{saved.paper.proposals.length > 0 && saved.paper.blockers.length === 0 && posting}</>;
@@ -256,6 +261,7 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
         <>
           <Posting closeId={close.id} paperId={saved.id} />
           <ProductionPosting closeId={close.id} paperId={saved.id} />
+          <XeroPosting closeId={close.id} paperId={saved.id} />
         </>
       )}
       {!paper.input.schedule && <VendorCredit closeId={close.id} paperId={saved.id} paper={paper} sources={paper.sources ?? []} approved={saved.review_state === "approved"} />}

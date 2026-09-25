@@ -1,12 +1,12 @@
 # Xero month-end Trial Balance
 
-Connect a client's Xero organisation from its close, choose the exact organisation, and capture the Trial Balance at month-end as read-only evidence. The connector never writes to Xero.
+Connect a client's Xero organisation from its close, choose the exact organisation, and capture the Trial Balance at month-end as evidence. The only write is an approved draft's manual journal, under a client grant, after a person approves it and a person posts it (below).
 
 ## Xero app
 
-1. Create a web app in the Xero developer portal. Apps created after 2 March 2026 use granular scopes; this connector asks only for `offline_access accounting.settings.read accounting.reports.trialbalance.read`.
+1. Create a web app in the Xero developer portal. Apps created after 2 March 2026 use granular scopes; this connector asks for `offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals`. Manual journals are available on every Xero plan; Xero's Advanced tier is only needed for the separate Journals read endpoint, which is not used. Connections made before migration 060 lack the journal scope: reconnect before posting.
 2. Register the exact HTTPS callback `https://<api host>/v1/xero/callback`.
-3. Set `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` and `XERO_REDIRECT_URI` on the API only (the worker never calls Xero), plus the existing `PUBLIC_APP_URL` and `SECRETS_KEY`. For hosted deploys set `XERO_CLIENT_ID` and `XERO_REDIRECT_URI` as repository variables and `XERO_CLIENT_SECRET` as a secret. Apply migration 048 after 047.
+3. Set `XERO_CLIENT_ID`, `XERO_CLIENT_SECRET` and `XERO_REDIRECT_URI` on the API and the worker (the worker makes the scheduled month-end captures), plus the existing `PUBLIC_APP_URL` and `SECRETS_KEY`. For hosted deploys set `XERO_CLIENT_ID` and `XERO_REDIRECT_URI` as repository variables and `XERO_CLIENT_SECRET` as a secret. Apply migration 048 after 047.
 
 Xero limits uncertified apps to a small number of connected organisations. Check your app's tier before onboarding many clients.
 
@@ -34,6 +34,27 @@ The close's exceptions use the most recently captured month-end snapshot, QuickB
 
 **Changes from last month** uses each close's newest snapshot, QuickBooks or Xero. With two Xero months from the same organisation, it compares each revenue and expense account's movement in the month, read from the Trial Balance's Debit and Credit columns (Xero reports these for the current month up to the report date). Xero snapshots carry no payees, so causes are marked unavailable. A QuickBooks month is never compared with a Xero month. When confirming a document, client memory checks proposed accounts against the newest snapshot's chart of accounts, including Xero's (an account is usable only while Xero marks it active).
 
+## Approved journal posting
+
+This keeps the same human steps and refusals as production QuickBooks posting (migration 060).
+
+1. **Grant.** Someone with `posting:approve` grants posting for the client under **Xero posting grant**. The grant lists 2–20 Xero account IDs (taken from the Trial Balance rows), the draft kinds it covers, a limit per journal and an expiry within 30 days. Type `GRANT XERO POSTING` to grant it or `REVOKE XERO POSTING` to revoke it.
+2. **Enable kinds.** Each kind stays off until the operator lists it in `XERO_POSTING_KINDS` (for example `accrual,loan`), after checking Xero's behavior for it.
+3. **Preview.** **Reviewed Xero posting** on a draft reads Xero live and refuses unless all of these hold:
+   - each entry account matches exactly one active account the grant lists;
+   - the entries share one date, at the close month-end, after the organisation's period and end-of-year lock dates;
+   - the total is within the grant limit;
+   - the draft's currency is the organisation's base currency;
+   - no newer draft of the same source exists;
+   - the token carries the journal scope.
+
+   The digest covers the journal and the journal accounts' Trial Balance at that date. A changed balance, account, lock date or grant refuses approval and posting.
+4. **Approve.** `APPROVE XERO DRAFT` binds a person's approval for ten minutes. Approving the posting of a pending draft also approves the draft, for someone who can review drafts. The accounting-basis and independent-review rules apply.
+5. **Post.** A person with `posting:execute` types `POST TO XERO`. The API locks the close, the grant and the connection, and rechecks that no newer draft of the source exists. While another Xero intent on the same accounts is approved or unsettled, this one can't be approved or posted; refresh its preview after the other settles. It refuses if the draft or its source was already attempted in QuickBooks, and QuickBooks refuses the reverse. It saves one attempt, then creates one POSTED manual journal (lines by account ID, no tax) with the saved request ID as Xero's `Idempotency-Key`, and reads the journal back.
+6. **Check the result.** A matching readback is verified. Any doubt, including a lost answer, a different readback or a rejection, leaves the attempt unknown (`EXECUTION_UNKNOWN`). It is never posted again: find the journal in Xero and verify it by its ManualJournalID, also after reconnecting the same organisation. The readback also compares the narration and tax treatment. Xero keeps an idempotency key for only a few minutes, so the saved attempt, not the key, prevents a second journal.
+
+Balances after posting are not re-checked; the readback compares the journal's lines, date and status.
+
 ## Not included
 
-No writes, transaction or journal sync (complete Journals need Xero's Advanced tier), cash-basis reports, or other checks on Xero data yet. Without transactions, schedule discovery, payee causes and agent-prepared recurring comparisons stay QuickBooks-only. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.
+No transaction or complete-journal sync (complete Journals need Xero's Advanced tier), no corrections to invoices, bills or credit notes, no cash-basis reports, and no other checks on Xero data yet. Without transactions, schedule discovery, payee causes and agent-prepared recurring comparisons stay QuickBooks-only. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.
