@@ -872,6 +872,11 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "This draft or its source was already posted to Xero.")
 			return
 		}
+		// Under the close lock, which new drafts wait on, no newer draft of the source arrived since the check above.
+		if _, err = postingSource(r.Context(), tx, closeID, r.PathValue("paper"), kind, paperRaw, source); err != nil {
+			refuse(w, err)
+			return
+		}
 		var competing bool
 		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM production_postings WHERE connection_id::text=$1 AND id::text<>$2 AND (state IN ('executing','unknown') OR (state='approved' AND approval_expires_at>now())) AND `+sharesAccount+`)`, record.ConnectionID, record.ID, accountIDs(record.LedgerBefore)).Scan(&competing); err != nil || competing {
 			problem(w, 409, "Another approved or unsettled posting now uses these accounts. Refresh before deciding.")

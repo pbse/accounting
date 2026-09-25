@@ -1211,3 +1211,13 @@ Code review: GPT-6 Sol (high), two delta rounds. Adopted:
 - the panel reads each time it opens, clears the previous result, and drops an older answer.
 
 Not verified: live QuickBooks payloads and model-read invoices, and the panel in a browser.
+
+## QuickBooks production posting rechecks the source under the close lock (2026-09-25)
+
+Follow-up from the Xero posting review: production execute and approve checked for a newer draft of the same source only before their transaction. A draft saved between that check and the close lock could not stop the write. The check now runs again inside the transaction, after the close row is locked, as Xero posting does. New drafts wait on that lock (the manual save through its foreign key, the worker through its own lock), so none can commit between the recheck and the commit of the posting decision.
+
+Test: `TestProductionPostingSingleDurableAttempt` holds the close row lock, inserts a newer draft of the same source, starts execution, waits until it is blocked on the lock, then commits. Execution answers 409 with no write. With the recheck removed, the same run posted and verified the journal (observed red).
+
+Blast radius: the production posting, entries, Bill correction, rehearsal and Xero posting tests pass.
+
+Code review: GPT-6 Sol (high), one delta round. Adopted: the test rolls back its lock holder on failure, waits at most 10 seconds, and watches only the session its own holder blocks; the timing claim is limited to the commit of the posting decision.

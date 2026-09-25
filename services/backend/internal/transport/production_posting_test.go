@@ -281,6 +281,45 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		t.Fatalf("a closed or changed closing date must stop the write: %d", writes)
 	}
 	closedThrough = ""
+	// A newer draft of the same source committed while execution waits for the close lock stops the write.
+	holder, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback()
+	var newer, holderPID string
+	if err = holder.QueryRow(`SELECT pg_backend_pid()::text FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+	if err = holder.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','newer-digest',$2) RETURNING id::text`, closeID, string(raw)).Scan(&newer); err != nil {
+		t.Fatal(err)
+	}
+	raced := make(chan *httptest.ResponseRecorder)
+	go func() {
+		body, _ := json.Marshal(map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"})
+		r := httptest.NewRequest("POST", path, strings.NewReader(string(body))).WithContext(auth.WithActor(context.Background(), actor))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		raced <- w
+	}()
+	for deadline, waiting := time.Now().Add(10*time.Second), 0; waiting == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("execution never waited on the held close lock")
+		}
+		if err = db.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))`, holderPID).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = holder.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if w := <-raced; w.Code != 409 || !strings.Contains(w.Body.String(), "newer source draft") || writes != 0 {
+		t.Fatalf("a newer draft of the source committed before the lock was taken must stop the write: %d %s writes=%d", w.Code, w.Body.String(), writes)
+	}
+	if _, err = db.Exec(`DELETE FROM workpapers WHERE id=$1`, newer); err != nil {
+		t.Fatal(err)
+	}
 	closeOnWrite = true
 	var posted productionPosting
 	json.Unmarshal(call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 200), &posted)
