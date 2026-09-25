@@ -11,10 +11,12 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/secrets"
 	"close.local/backend/internal/xero"
 )
@@ -65,7 +67,23 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 			if e != nil {
 				out["latest"] = map[string]any{"error": e.Error()}
 			} else {
-				out["latest"] = map[string]any{"currency": currency, "date": date, "rows": rows}
+				// How many of each transaction type the snapshot holds, or why it holds none.
+				var read struct {
+					Transactions *struct {
+						Records map[string][]json.RawMessage `json:"records"`
+					} `json:"transactions"`
+					Unread string `json:"transactions_error"`
+				}
+				json.Unmarshal(latest, &read)
+				transactions := map[string]any{"unread": read.Unread}
+				if read.Transactions != nil {
+					counts := map[string]int{}
+					for kind, records := range read.Transactions.Records {
+						counts[kind] = len(records)
+					}
+					transactions["counts"] = counts
+				}
+				out["latest"] = map[string]any{"currency": currency, "date": date, "rows": rows, "transactions": transactions}
 			}
 		}
 		return out, nil
@@ -310,6 +328,51 @@ func xeroAccess(ctx context.Context, db *sql.DB, org, id string) (string, string
 	return credentials.Access, tenant, nil
 }
 
+// xeroBooks is a close's Xero transactions and open items in the QuickBooks shapes the checks read.
+type xeroBooks struct {
+	ID, CapturedAt, MonthEnd, Home string
+	// Unread says why the newest snapshot has no transactions; an older snapshot's are never shown in its place.
+	Unread   string
+	Rows     []quickbooks.TransactionRow
+	Open     map[string][]json.RawMessage
+	Accounts json.RawMessage
+}
+
+// latestXeroBooks returns the close's newest Xero snapshot for its month, from the client's current connection, when it
+// is newer than the close's latest QuickBooks transaction capture; nil otherwise.
+func latestXeroBooks(ctx context.Context, db *sql.DB, closeID string) (*xeroBooks, error) {
+	var b xeroBooks
+	var captured time.Time
+	var payload []byte
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period
+ JOIN xero_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'
+ WHERE s.close_id::text=$1 AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs q JOIN evidence e ON e.id=q.evidence_id AND e.close_id=q.close_id AND e.superseded_by IS NULL WHERE q.close_id=s.close_id AND q.state IN ('completed','unchanged') AND q.finished_at>s.captured_at AND q.connection_id=`+quickbooks.ReadingConnection("s.close_id")+`)
+ ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&b.ID, &captured, &payload)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var dated struct{ Date string }
+	json.Unmarshal(payload, &dated)
+	b.CapturedAt, b.MonthEnd = captured.UTC().Format(time.RFC3339), dated.Date
+	if b.Rows, b.Open, b.Accounts, b.Home, err = xero.Ledger(payload); err != nil {
+		b.Unread = err.Error()
+	}
+	return &b, nil
+}
+
+// xeroWording names Xero where a QuickBooks check's wording names QuickBooks.
+func xeroWording(items []quickbooks.Exception) []quickbooks.Exception {
+	for i := range items {
+		for _, text := range []*string{&items[i].Finding, &items[i].NextStep, &items[i].Question} {
+			*text = strings.ReplaceAll(*text, "QuickBooks", "Xero")
+		}
+	}
+	return items
+}
+
 // xeroDue is SQL: close c's firm is enabled and the close is open, in the current or prior month, not attempted and not captured in the past day.
 const xeroDue = `EXISTS(SELECT 1 FROM organizations o WHERE o.id=c.organization_id AND o.enabled)
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
@@ -354,7 +417,8 @@ func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 		if n, _ := claim.RowsAffected(); n != 1 {
 			continue
 		}
-		run, cancel := context.WithTimeout(ctx, 90*time.Second)
+		// The daily capture has more time than a person's request, so a large month's transactions fit.
+		run, cancel := context.WithTimeout(ctx, 3*time.Minute)
 		err = captureXero(run, db, d.org, d.connection, d.close, d.period, "scheduled-xero-refresh")
 		cancel()
 		if err != nil {

@@ -21,34 +21,56 @@ import (
 	"close.local/backend/internal/ledger"
 )
 
-// Granular scopes are required for apps created after 2 March 2026. Manual journals are available on every Xero plan.
-const scopes = "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals"
+// Granular scopes are required for apps created after 2 March 2026. Manual journals are available on every Xero plan;
+// accounting.manualjournals also reads them.
+const scopes = "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals accounting.invoices.read accounting.payments.read accounting.banktransactions.read"
 
-// CanPostJournals reports whether an access token carries the manual journal scope; older connections must reconnect.
-func CanPostJournals(access string) bool {
+// granted lists the scopes an access token carries.
+func granted(access string) []string {
 	parts := strings.Split(access, ".")
 	var claims struct {
 		Scope any `json:"scope"`
 	}
 	if len(parts) != 3 {
-		return false
+		return nil
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || json.Unmarshal(payload, &claims) != nil {
-		return false
+		return nil
 	}
-	granted := []string{}
+	out := []string{}
 	switch s := claims.Scope.(type) {
 	case string:
-		granted = strings.Fields(s)
+		out = strings.Fields(s)
 	case []any:
 		for _, v := range s {
 			if text, ok := v.(string); ok {
-				granted = append(granted, text)
+				out = append(out, text)
 			}
 		}
 	}
-	return slices.Contains(granted, "accounting.manualjournals") || slices.Contains(granted, "accounting.transactions")
+	return out
+}
+
+// CanPostJournals reports whether an access token carries the manual journal scope; older connections must reconnect.
+func CanPostJournals(access string) bool {
+	g := granted(access)
+	return slices.Contains(g, "accounting.manualjournals") || slices.Contains(g, "accounting.transactions")
+}
+
+// CanReadTransactions reports whether an access token can read invoices, credit notes, payments, bank transactions
+// and manual journals; connections made before these scopes were requested must reconnect.
+func CanReadTransactions(access string) bool {
+	g := granted(access)
+	if slices.Contains(g, "accounting.transactions") || slices.Contains(g, "accounting.transactions.read") {
+		return true
+	}
+	for _, scope := range []string{"accounting.invoices", "accounting.payments", "accounting.banktransactions", "accounting.manualjournals"} {
+		if !slices.Contains(g, scope) && !slices.Contains(g, scope+".read") {
+			return false
+		}
+	}
+	return true
 }
 
 type Credentials struct {
@@ -164,8 +186,9 @@ func TrialBalanceAt(ctx context.Context, access, tenant string, date time.Time) 
 	return report, nil
 }
 
-// Capture reads the organisation, its accounts and the Trial Balance as at monthEnd.
-// The reads are sequential, not an atomic ledger copy.
+// Capture reads the organisation, its accounts and the Trial Balance as at monthEnd, then the month's transactions
+// and the open items. The reads are sequential, not an atomic ledger copy. Transactions only add checks: when they
+// cannot be read in the time left, the Trial Balance is still returned with the reason.
 func Capture(ctx context.Context, access, tenant string, monthEnd time.Time) (json.RawMessage, error) {
 	organisation, err := Get(ctx, access, tenant, "Organisation", 256*1024)
 	if err != nil {
@@ -179,7 +202,117 @@ func Capture(ctx context.Context, access, tenant string, monthEnd time.Time) (js
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]any{"date": monthEnd.Format("2006-01-02"), "tenant_id": tenant, "organisation": organisation, "accounts": accounts, "trial_balance": report})
+	snapshot := map[string]any{"date": monthEnd.Format("2006-01-02"), "tenant_id": tenant, "organisation": organisation, "accounts": accounts, "trial_balance": report}
+	if !CanReadTransactions(access) {
+		snapshot["transactions_error"] = "This connection was made before transactions could be read; disconnect and connect Xero again to read them."
+		return json.Marshal(snapshot)
+	}
+	// Leave time to save the snapshot after the transaction reads.
+	budget, cancel := ctx, context.CancelFunc(func() {})
+	if deadline, ok := ctx.Deadline(); ok {
+		budget, cancel = context.WithDeadline(ctx, deadline.Add(-10*time.Second))
+	}
+	defer cancel()
+	transactions, err := Transactions(budget, access, tenant, monthEnd)
+	switch {
+	case budget.Err() != nil && ctx.Err() == nil:
+		snapshot["transactions_error"] = "Transactions took longer than this capture allows; the daily capture reads them with more time."
+	case err != nil:
+		snapshot["transactions_error"] = err.Error()
+	default:
+		snapshot["transactions"] = transactions
+	}
+	return json.Marshal(snapshot)
+}
+
+// transactionReads are the month's records and, apart, the documents still open at capture time. Statuses exclude
+// drafts, voided and deleted records.
+var transactionReads = []struct{ set, endpoint, where, statuses string }{
+	{"records", "Invoices", "%s", "AUTHORISED,PAID"},
+	{"records", "CreditNotes", `%s&&(Status=="AUTHORISED"||Status=="PAID")`, ""},
+	{"records", "BankTransactions", `%s&&Status=="AUTHORISED"`, ""},
+	{"records", "ManualJournals", `%s&&Status=="POSTED"`, ""},
+	{"records", "Payments", `%s&&Status=="AUTHORISED"`, ""},
+	{"open", "Invoices", "%s", "AUTHORISED"},
+	{"open", "CreditNotes", `%s&&Status=="AUTHORISED"`, ""},
+	{"open", "Overpayments", `%s&&Status=="AUTHORISED"`, ""},
+	{"open", "Prepayments", `%s&&Status=="AUTHORISED"`, ""},
+}
+
+// Transactions reads the month's records and the open items dated on or before monthEnd. Each type is paged to its
+// end, up to 5000 records, and the count Xero reports must match what was read. A record updated after the reads
+// began asks for a new capture. A record deleted and another added while paging can still be missed.
+func Transactions(ctx context.Context, access, tenant string, monthEnd time.Time) (map[string]any, error) {
+	started := time.Now()
+	first := monthEnd.AddDate(0, 0, 1-monthEnd.Day())
+	day := func(t time.Time) string { return fmt.Sprintf("DateTime(%d,%02d,%02d)", t.Year(), t.Month(), t.Day()) }
+	month := "Date>=" + day(first) + "&&Date<=" + day(monthEnd)
+	out := map[string]any{"read_at": started.UTC(), "records": map[string][]json.RawMessage{}, "open": map[string][]json.RawMessage{}}
+	size := 0
+	for _, read := range transactionReads {
+		where := month
+		if read.set == "open" {
+			where = "Date<=" + day(monthEnd)
+		}
+		query := url.Values{"where": {fmt.Sprintf(read.where, where)}, "pageSize": {"1000"}}
+		if read.statuses != "" {
+			query.Set("Statuses", read.statuses)
+		}
+		rows := []json.RawMessage{}
+		for page := 1; ; page++ {
+			query.Set("page", fmt.Sprint(page))
+			raw, err := Get(ctx, access, tenant, read.endpoint+"?"+query.Encode(), 16*1024*1024)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", read.endpoint, err)
+			}
+			var response map[string]json.RawMessage
+			var records []json.RawMessage
+			var paging struct{ ItemCount *int }
+			if json.Unmarshal(raw, &response) != nil || json.Unmarshal(response[read.endpoint], &records) != nil || len(records) > 1000 {
+				return nil, fmt.Errorf("Xero returned an unreadable %s page", read.endpoint)
+			}
+			if json.Unmarshal(response["pagination"], &paging) != nil || paging.ItemCount == nil {
+				return nil, fmt.Errorf("Xero did not count the %s it returned; capture again", read.endpoint)
+			}
+			for _, record := range records {
+				var stamp struct{ UpdatedDateUTC string }
+				json.Unmarshal(record, &stamp)
+				if updated, ok := instant(stamp.UpdatedDateUTC); ok && updated.After(started) {
+					return nil, fmt.Errorf("%s changed in Xero during the capture; capture again", read.endpoint)
+				}
+			}
+			rows = append(rows, records...)
+			size += len(raw)
+			if len(rows) > 5000 {
+				return nil, fmt.Errorf("%s exceeds the 5000-record limit", read.endpoint)
+			}
+			if size > 12*1024*1024 {
+				return nil, errors.New("Xero transactions exceed the 12 MiB capture limit")
+			}
+			if len(records) < 1000 {
+				if *paging.ItemCount != len(rows) {
+					return nil, fmt.Errorf("Xero counted %d %s but %d were read; capture again", *paging.ItemCount, read.endpoint, len(rows))
+				}
+				break
+			}
+		}
+		out[read.set].(map[string][]json.RawMessage)[read.endpoint] = rows
+	}
+	out["completeness"] = "Each type was paged to its end and matched Xero's count. Reads are sequential, not an atomic copy: a record deleted and another added while paging can be missed, and later edits need a new capture. Open items are as of the capture."
+	return out, nil
+}
+
+// instant reads a Xero timestamp such as "/Date(1727654400000+0000)/".
+func instant(value string) (time.Time, bool) {
+	var millis int64
+	ms, ok := strings.CutPrefix(value, "/Date(")
+	if !ok {
+		return time.Time{}, false
+	}
+	if _, err := fmt.Sscanf(ms, "%d", &millis); err != nil {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(millis), true
 }
 
 // Day reads a Xero date, which arrives as "/Date(1727654400000+0000)/" or "2026-09-30T00:00:00".

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strconv"
@@ -14,14 +15,38 @@ import (
 )
 
 // agingNote says what the balances are, so no one reads them as a month-end ledger.
-const agingNote = "Balances at the capture time, aged against the close's month-end. A document paid after month-end but before the capture is not shown, and a partly paid one shows its later balance. Payments and credits are listed apart from the aging: what they settle is not known. Unused payments and credits older than a year before month-end are not read."
+const agingNote = "Balances at the capture time, aged against the close's month-end. A document paid after month-end but before the capture is not shown, and a partly paid one shows its later balance. Payments and credits are listed apart from the aging: what they settle is not known. In QuickBooks, unused payments and credits older than a year before month-end are not read."
 
-// latestAging reads the open items of the close's latest completed transaction capture on its reading connection.
+// waiting is why there is nothing to age yet.
+type waiting string
+
+func (w waiting) Error() string { return string(w) }
+
+// latestAging reads the open items of the close's latest completed transaction capture on its reading connection, or
+// of its newer Xero snapshot.
 func latestAging(r *http.Request, db *sql.DB) (receivables, payables []quickbooks.AgingParty, meta map[string]any, err error) {
+	books, err := latestXeroBooks(r.Context(), db, r.PathValue("id"))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if books != nil {
+		if books.Unread != "" {
+			return nil, nil, nil, waiting(books.Unread)
+		}
+		monthEnd, _ := time.Parse("2006-01-02", books.MonthEnd)
+		receivables, payables, unreadable := quickbooks.Aging(books.Open, monthEnd, books.Home)
+		for _, party := range append(slices.Clone(receivables), payables...) {
+			unreadable += party.Unresolved
+		}
+		return receivables, payables, map[string]any{"captured_at": books.CapturedAt, "month_end": books.MonthEnd, "complete": unreadable == 0, "completeness": "", "note": agingNote, "buckets": quickbooks.AgingBuckets}, nil
+	}
 	var raw []byte
 	var captured, completeness, period, home string
 	err = db.QueryRowContext(r.Context(), `SELECT COALESCE(s.payload->'open_items','{}'::jsonb),COALESCE(s.payload->>'finished_at',''),COALESCE(s.payload->>'completeness',''),c.period,COALESCE((SELECT home_currency FROM quickbooks_connections WHERE id=s.connection_id),'') FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id
  WHERE s.close_id::text=$1 AND s.period=c.period AND s.state IN ('completed','unchanged') AND s.payload ? 'open_items' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` ORDER BY s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw, &captured, &completeness, &period, &home)
+	if err == sql.ErrNoRows {
+		return nil, nil, nil, waiting("Capture this month's QuickBooks transactions or Xero books first; the aging uses the open items that capture reads.")
+	}
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -41,8 +66,9 @@ func latestAging(r *http.Request, db *sql.DB) (receivables, payables []quickbook
 func registerAging(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/aging", func(w http.ResponseWriter, r *http.Request) {
 		receivables, payables, meta, err := latestAging(r, db)
-		if err == sql.ErrNoRows {
-			jsonReply(w, 200, map[string]any{"state": "waiting", "reason": "Capture this month's QuickBooks transactions first; the aging uses the open items that capture reads."})
+		var wait waiting
+		if errors.As(err, &wait) {
+			jsonReply(w, 200, map[string]any{"state": "waiting", "reason": string(wait)})
 			return
 		}
 		if err != nil {
@@ -55,8 +81,9 @@ func registerAging(mux *http.ServeMux, db *sql.DB) {
 	// A statement is a download for the firm to use through its own channel; nothing is sent or changed.
 	mux.HandleFunc("GET /v1/closes/{id}/aging/statement", func(w http.ResponseWriter, r *http.Request) {
 		receivables, _, meta, err := latestAging(r, db)
-		if err == sql.ErrNoRows {
-			problem(w, 404, "No transaction capture for this close yet.")
+		var wait waiting
+		if errors.As(err, &wait) {
+			problem(w, 404, string(wait))
 			return
 		}
 		if err != nil {

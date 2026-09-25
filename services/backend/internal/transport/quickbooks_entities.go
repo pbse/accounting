@@ -158,25 +158,41 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 		} else if items != nil {
 			balances["items"] = items
 		}
-		c, err := latestCapture(r.Context(), db, r.PathValue("id"))
-		if err == sql.ErrNoRows {
-			jsonReply(w, 200, map[string]any{"capture": nil, "items": []any{}, "balances": balances})
-			return
-		}
+		books, err := latestXeroBooks(r.Context(), db, r.PathValue("id"))
 		if err != nil {
-			problem(w, 503, "Transaction index unavailable.")
+			problem(w, 503, "Xero snapshot unavailable.")
 			return
 		}
-		scanned, err := quickbooks.CapturedRows(r.Context(), db, c.RowsSync)
-		if err != nil {
-			problem(w, 503, "Transaction index unavailable.")
-			return
-		}
-		// Stored findings include open invoices and bills; a capture from before they were recorded is scanned now.
-		found := quickbooks.FindExceptions(scanned)
-		if c.Exceptions != nil && json.Unmarshal(c.Exceptions, &found) != nil {
-			problem(w, 503, "Recorded exceptions are unreadable.")
-			return
+		var scanned []quickbooks.TransactionRow
+		found := []quickbooks.Exception{}
+		var capture map[string]string
+		if books != nil {
+			// A Xero snapshot carries its own account list; its checks are computed when read.
+			month, _ := time.Parse("2006-01-02", books.MonthEnd)
+			capture = map[string]string{"id": books.ID, "source": "xero", "finished_at": books.CapturedAt, "unread": books.Unread}
+			scanned, accounts = books.Rows, books.Accounts
+			found = append(append(found, quickbooks.FindExceptions(scanned)...), xeroWording(quickbooks.OpenItemExceptions(books.Open, month))...)
+		} else {
+			c, err := latestCapture(r.Context(), db, r.PathValue("id"))
+			if err == sql.ErrNoRows {
+				jsonReply(w, 200, map[string]any{"capture": nil, "items": []any{}, "balances": balances})
+				return
+			}
+			if err != nil {
+				problem(w, 503, "Transaction index unavailable.")
+				return
+			}
+			if scanned, err = quickbooks.CapturedRows(r.Context(), db, c.RowsSync); err != nil {
+				problem(w, 503, "Transaction index unavailable.")
+				return
+			}
+			// Stored findings include open invoices and bills; a capture from before they were recorded is scanned now.
+			found = append(found, quickbooks.FindExceptions(scanned)...)
+			if c.Exceptions != nil && json.Unmarshal(c.Exceptions, &found) != nil {
+				problem(w, 503, "Recorded exceptions are unreadable.")
+				return
+			}
+			capture = map[string]string{"id": c.ID, "source": "quickbooks", "evidence_id": c.EvidenceID, "finished_at": c.Finished}
 		}
 		schedules := map[string]any{"state": "no_directory", "unknown_accounts": []string{}, "item_lines": 0}
 		// Without a QuickBooks snapshot there is no account list, so the scan stays "no_directory".
@@ -196,7 +212,7 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 				schedules["state"], schedules["unknown_accounts"], schedules["item_lines"] = "incomplete", unknown, items
 			}
 		}
-		jsonReply(w, 200, map[string]any{"capture": map[string]string{"id": c.ID, "evidence_id": c.EvidenceID, "finished_at": c.Finished}, "scanned": len(scanned), "items": found, "balances": balances, "schedule_scan": schedules})
+		jsonReply(w, 200, map[string]any{"capture": capture, "scanned": len(scanned), "items": found, "balances": balances, "schedule_scan": schedules})
 	})
 	mux.HandleFunc("GET "+path+"/{sync}", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte

@@ -114,6 +114,10 @@ func TestExceptionsScanTheWholeLatestCapture(t *testing.T) {
 	if got := scan(); got.Balances.Snapshot == nil || got.Balances.Snapshot.Source != "quickbooks" || got.Balances.Snapshot.ID != latest {
 		t.Fatalf("a newer QuickBooks snapshot supplies the balances instead: %+v", got)
 	}
+	// A disconnected Xero connection's snapshots no longer supply transactions.
+	if _, err = db.Exec(`UPDATE xero_connections SET state='disconnected' WHERE id=$1`, xeroConnection); err != nil {
+		t.Fatal(err)
+	}
 	if err = db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at) VALUES($1,$2,'2026-09','fixture','completed',$3,now()) RETURNING id::text`, closeID, connection, evidenceID).Scan(&syncID); err != nil {
 		t.Fatal(err)
 	}

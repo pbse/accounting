@@ -8,7 +8,7 @@ type Status = {
   hosted: boolean;
   connection: { id: string; state: string; tenant_name: string; tenants: Tenant[]; error: string } | null;
   snapshots: { id: string; period: string; captured_at: string; digest: string }[];
-  latest: { currency: string; date: string; rows: Balance[] } | { error: string } | null;
+  latest: { currency: string; date: string; rows: Balance[]; transactions?: { unread: string; counts?: Record<string, number> } } | { error: string } | null;
 };
 
 export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
@@ -140,6 +140,17 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
           <p>
             Trial Balance as at {latest.date}, in {latest.currency || "the organisation's base currency"}. YTD columns are Xero's: the balance at that date for asset, liability and equity accounts, and the movement since the start of the financial year for revenue and expense accounts.
           </p>
+          {latest.transactions?.counts ? (
+            <p className="note">
+              Transactions read with it:{" "}
+              {Object.entries(latest.transactions.counts)
+                .map(([kind, n]) => `${n} ${kind.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase()}`)
+                .join(", ")}
+              .
+            </p>
+          ) : (
+            latest.transactions?.unread && <p role="status">Transactions were not read: {latest.transactions.unread}</p>
+          )}
           <table>
             <thead>
               <tr>

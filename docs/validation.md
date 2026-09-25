@@ -1221,3 +1221,38 @@ Test: `TestProductionPostingSingleDurableAttempt` holds the close row lock, inse
 Blast radius: the production posting, entries, Bill correction, rehearsal and Xero posting tests pass.
 
 Code review: GPT-6 Sol (high), one delta round. Adopted: the test rolls back its lock holder on failure, waits at most 10 seconds, and watches only the session its own holder blocks; the timing claim is limited to the commit of the posting decision.
+
+## Xero transactions feed the close's checks (2026-09-25)
+
+Request: read Xero transactions so Xero clients get schedule discovery, matching, and the aging and statements. Each Xero capture now also reads the month's invoices, bills, credit notes, bank transactions, manual journals and payments, and the open invoices, bills, credit notes, overpayments and prepayments, with the new read scopes. `xero.Ledger` reshapes them into the QuickBooks record shapes, so the existing exception, schedule, matching and aging code reads them unchanged. `latestXeroBooks` picks the newest Xero capture for the close's month from the client's current connection when it is newer than the latest QuickBooks capture. Payee causes and the firm-wide Daily Books list follow in the next change.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- open overpayments and prepayments are read from their own endpoints;
+- dates use the Xero date parser, payment currency comes from the invoice and journal currency is the base currency;
+- only invoice and bill payments are reshaped, refunds are kept but not checked;
+- no consistent-snapshot claim: each type pages to its end and must match Xero's count, and the note says what can be missed;
+- the capture is bound to the close's month and a connection that is not disconnected, and a newest capture without transactions says why instead of showing an older one's;
+- a connection without the read scopes is recognized from its token and told to reconnect;
+- a person's capture gives the transaction reads the time left before saving; the daily capture has three minutes.
+
+Simplified after mutation testing: a positive-balance filter and a status re-check on open items were deleted, because the checks that read them already skip zero balances and Xero filters by status.
+
+Tests:
+
+- `TestLedgerReshapesXeroTransactionsForTheChecks` (pure): every kind, tax-inclusive and exclusive lines, account codes, item lines, drafts, deleted records and refunds left out, payment and journal currency, schedule discovery for prepayment and fixed asset accounts, a suspense purchase, aging of open items and credits, open-item questions, and a snapshot without transactions.
+- `TestTransactionsNeedTheReadScopes` and `TestTransactionsPageToTheEndAndCheckXerosCount` (pure, mock Xero): both scope forms, two pages, the month range and the open-item range, a count mismatch, a change during the capture, and the 5,000 cap.
+- `TestXeroTransactionsDriveTheCloseChecks` (PostgreSQL): the panel's counts; exceptions with Xero wording, schedule discovery, matching and aging from a Xero capture; another month's capture ignored; a newer capture without transactions explained in all three; a newer QuickBooks capture read instead.
+- `TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance` now checks that a connection without the scopes still captures and says to reconnect. `TestExceptionsScanTheWholeLatestCapture` disconnects its Xero connection before its QuickBooks-only steps.
+
+Each check was observed red with its rule removed (31 mutations).
+
+Code review: GPT-6 Sol (high), two delta rounds. Adopted:
+
+- a QuickBooks capture whose evidence was superseded no longer hides the Xero books;
+- overpayments and prepayments made through the bank are not reshaped as purchases or deposits;
+- every page must carry Xero's count, including a full first page (the test sends a pagination object without a count; this fixture was tightened after the second round, when a mutation showed the first version passed for another reason);
+- the Xero panel no longer says its snapshot feeds the checks;
+- the one-year limit on unused credits is stated as QuickBooks-only.
+
+Not verified: live Xero payloads, rate limits and timing, and the panels in a browser.
