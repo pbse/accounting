@@ -54,10 +54,6 @@ For **R4** Cash Operations, each capture's open items raise questions about over
 
 Provider credentials, hosted resources, real-data/accountant acceptance, and production activation remain a separate configuration and verification phase. Code completion cannot establish those outcomes. Hosted MCP OAuth uses admin-approved per-member agent access; enable it with the AuthKit Connect setup in mcp.md.
 
-## Known follow-ups
-
-- QuickBooks production posting checks for a newer draft of the same source before the transaction that executes it, not inside it; Xero posting repeats that check inside the transaction under the close lock. Apply the same in-transaction check to QuickBooks.
-
 ## Already implemented locally
 
 Saved closes, exact-cent full-month prepaids, conservative CSV reconciliation, TXT/CSV/PDF evidence and OCR, source-linked review and recalculation, durable evidence-to-preparation jobs, live Work inbox, scoped text reply links, next-month schedule carry-forward (approved once for later months for prepaids, accruals and loans) and ZIP review packages. The first month-end snapshot, schedule discovery, alias confirmation, client memory, replay and the agent track record are in [QuickBooks onboarding](quickbooks-onboarding.md) and [Work inbox](work-inbox.md), with the morning brief, close narrative, tie-out board and changes from last month. AuthKit, OpenAI and sandbox-posting integrations have code and synthetic/provider mocks; live activation is not claimed.
