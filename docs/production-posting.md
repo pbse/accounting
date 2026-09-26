@@ -36,7 +36,7 @@ Intuit references: [QuickBooks API environment URLs](https://developer.intuit.co
 
 ## Closing date and independent review
 
-A signed-off close takes no journal decision: approving or executing a sandbox, production or Xero journal is refused under the close's lock until the close is reopened. Reading back an earlier attempt still works.
+A signed-off close takes no journal decision: approving or executing a sandbox, production or Xero journal is refused under the close's lock until the close is reopened. Reading back an earlier attempt still works. An executing or unknown Xero journal blocks sign-off, as production and sandbox attempts already did, so a Xero write in flight cannot be overtaken by a sign-off.
 
 Every QuickBooks write (production and sandbox JournalEntry, sandbox VendorCredit and Bill correction) reads the company's `AccountingInfoPrefs.BookCloseDate` first and refuses a transaction dated on or before it, before any attempt is reserved. An unreadable or malformed closing date also blocks the write; an empty date means the company has no closing date. The production preview records the closing date, so a change between preview and execution rejects the stale intent without writing. Readback after a write does not recheck the closing date, so books closed after a successful write still verify.
 

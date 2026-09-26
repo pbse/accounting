@@ -827,8 +827,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Close changed.")
 			return
 		}
-		if signed, err := signedOff(r.Context(), tx, closeID); err != nil || signed {
-			problem(w, 409, signedOffMessage)
+		if refuseSignedOff(w, r.Context(), tx, closeID) {
 			return
 		}
 		var activeMember bool

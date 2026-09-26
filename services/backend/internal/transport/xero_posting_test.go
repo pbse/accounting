@@ -266,6 +266,15 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 		t.Fatalf("an unconfirmed journal is unknown, not verified: %s", body)
 	}
 	call(second, map[string]string{"action": "execute", "digest": intent.Digest, "confirmation": "POST TO XERO"}, 409)
+	// An unknown Xero journal blocks sign-off until it is verified.
+	readTx, err := db.Begin()
+	must(err)
+	ready, err := closeReadiness(context.Background(), readTx, closeID)
+	readTx.Rollback()
+	must(err)
+	if !strings.Contains(strings.Join(ready.Blockers, " "), "Xero journal attempt #") {
+		t.Fatalf("an unknown Xero journal must block sign-off: %v", ready.Blockers)
+	}
 	call(second, map[string]string{"action": "verify"}, 502)
 	tamper, renamed = false, true
 	call(second, map[string]string{"action": "verify"}, 502)
