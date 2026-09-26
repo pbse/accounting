@@ -116,15 +116,17 @@ func TestAssistantAnswersFromTheMembersOwnScopedReads(t *testing.T) {
 	if got := ask("hello"); !strings.Contains(got.Body, "I answer from this close's saved work") {
 		t.Fatalf("an unmatched question gets the help reply: %+v", got)
 	}
-	// The latest message stays last when ids gain a digit (9 → 10), which a text sort would break.
-	var gap string
-	must(db.QueryRow(`SELECT (10^(length(max(id)::text)))::bigint FROM chat_messages`).Scan(&gap))
-	_, err = db.Exec(`SELECT setval(pg_get_serial_sequence('chat_messages','id'),$1::bigint-1)`, gap)
+	// The newest message stays last when ids gain a digit (99 → 100), which a text sort would break.
+	var boundary int64
+	must(db.QueryRow(`SELECT (10^length((GREATEST(COALESCE(pg_sequence_last_value(pg_get_serial_sequence('chat_messages','id')::regclass),0),COALESCE(max(id),0))+10)::text))::bigint FROM chat_messages`).Scan(&boundary))
+	_, err = db.Exec(`INSERT INTO chat_messages(id,organization_id,author,close_id,role,body) OVERRIDING SYSTEM VALUE VALUES($1::bigint,$2,'user_a',$3::bigint,'user','Across a digit'),($1::bigint+1,$2,'user_a',$3::bigint,'assistant','The newest answer')`, boundary, org, alpha)
 	must(err)
-	if got := ask("What blocks sign-off?"); !strings.Contains(got.Body, "blocks sign-off") {
-		t.Fatalf("the answer after the ids gain a digit is the last message: %+v", got)
+	if history := call("user_a", nil, "GET", closeChat, nil, 200); history.Messages[len(history.Messages)-1].Body != "The newest answer" {
+		t.Fatalf("the newest message stays last when ids gain a digit: %+v", history.Messages[len(history.Messages)-1])
 	}
-	if history := call("user_a", nil, "GET", closeChat, nil, 200); len(history.Messages) != 20 {
+	_, err = db.Exec(`DELETE FROM chat_messages WHERE id IN ($1::bigint,$1::bigint+1)`, boundary)
+	must(err)
+	if history := call("user_a", nil, "GET", closeChat, nil, 200); len(history.Messages) != 18 {
 		t.Fatalf("the conversation keeps every question and answer: %d", len(history.Messages))
 	}
 	// Another member never sees it, even with access to the client; a member without access to a client cannot use its chat.

@@ -80,7 +80,7 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
     </label>
   );
   return (
-    <details open={callback.has("xero_code")}>
+    <details id="xero" open={callback.has("xero_code") || window.location.hash === "#xero"}>
       <summary>Xero month-end Trial Balance</summary>
       <p>This reads the organisation, its chart of accounts and the Trial Balance at month-end. It writes to Xero only an approved draft's manual journal, under a client grant, after a person approves and a person posts it. Xero data is not used to train models.</p>
       {error && <p role="alert">{error}</p>}

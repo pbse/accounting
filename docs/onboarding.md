@@ -33,6 +33,20 @@ Review the consolidated request wording and recipient. Approve the request, gene
 
 Preview carry-forward, then select current approved prepaid schedules or approved procedures in separate actions. Unresolved prior jobs and unapproved drafts can also become incomplete follow-up steps in the next close; they do not automatically resume as new-month jobs. Open the next close and review fresh drafts, evidence and readiness. Carried schedule sources and predecessor approvals remain linked. Changing a predecessor invalidates dependent work. The opening amount is a scheduled balance; historical booked balances are cleared, so a new-month ledger balance and posting must be independently confirmed.
 
+## Get started
+
+Work opens with **Get started**, the first-client journey: enroll the firm, add a team member, open a client close, connect the client's books, confirm the period and rules, and receive the first prepared draft. `GET /v1/closes/setup` reads each step from the firm's own records, so progress is kept by doing the work and nothing else is stored:
+
+- **Team:** members enrolled besides you. Members are still enrolled under **Firm operations and membership**.
+- **Client:** closes you can open. The next steps are about your newest such close.
+- **Books:** that client has an active Xero connection, or its QuickBooks captures read an active connection (production is read before sandbox, so an active sandbox company does not count while the production one needs reconnecting). When neither provider is configured on the server, the step says to upload ledger reports instead.
+- **Period and rules:** the close's month, and whether an enabled approved procedure applies to its client for any kind, including the accounting basis (a client override wins, and a disabled one blocks the firm's).
+- **First draft:** any draft in a close you can open; until then the step points to that close's Evidence tab.
+
+Each open step links to the control that completes it. A member who is not enrolled sees **Enroll a new firm** instead, even while the rest of Work cannot load. **What you can do here** lists your permissions in plain words, and "only the clients assigned to you" when you lack `clients:all`.
+
+**Reconnect** lists your clients' QuickBooks or Xero connections that need authorizing again, with the provider's error and a link to the panel that reconnects it: production QuickBooks on the close's Settings tab, sandbox QuickBooks and Xero on Evidence. Reconnecting (disconnect, connect and confirm) needs `integrations:manage`; without it the list says who can. It restores scheduled captures for this and last month's open closes; existing jobs and blockers stay as they are.
+
 ## Onboard a hosted firm
 
 The API accepts signed WorkOS organization sessions only; it does not trust an organization ID supplied in a form, URL or header. Create the organization and its user memberships in WorkOS and require your MFA policy there. Grant the first authorized administrator `org:enroll`, `members:manage` and `clients:all`, then sign in to that organization and use **Enroll a new firm** on Client closes. The API derives the exact organization and user IDs from the verified token and records the first membership. Existing registered organizations without membership records may be claimed only by an administrator with the same enrollment grant; verify their identity and ownership before doing so. All new client closes derive ownership from the verified session.

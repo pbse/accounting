@@ -8,6 +8,7 @@ import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
 import { MorningBrief } from "./Morning";
+import { Setup } from "./Setup";
 
 type Fact = {
  optional?: boolean;
@@ -257,6 +258,7 @@ export function Work({
           </div>
         </>
       )}
+      {!closeId && <Setup onEnrolled={() => setRefresh((n) => n + 1)} />}
       {error && (
         <p role="alert">{error} Updates paused; refresh to reconnect.</p>
       )}
