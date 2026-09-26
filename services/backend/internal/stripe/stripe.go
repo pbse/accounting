@@ -1,4 +1,4 @@
-// Package stripe reads a client's itemized payout reconciliation report with a restricted, report-scoped key.
+// Package stripe reads a client's itemized payout reports with a restricted, report-scoped key.
 // Creating a report run is the only request that is not a plain read; it changes no financial data.
 package stripe
 
@@ -19,6 +19,18 @@ const reportType = "payout_reconciliation.itemized.5"
 
 // Columns are exactly the ones the settlement parser reads.
 var Columns = []string{"balance_transaction_id", "currency", "gross", "fee", "net", "reporting_category", "automatic_payout_id", "automatic_payout_effective_at"}
+
+// Report is one report a close can capture: Stripe's report type, the columns its parser reads and the evidence name.
+type Report struct {
+	Type, Name string
+	Columns    []string
+}
+
+var Reports = map[string]Report{
+	"payout_reconciliation": {reportType, "Stripe payout reconciliation", Columns},
+	"payouts":               {"payouts.itemized.5", "Stripe payouts", []string{"balance_transaction_id", "currency", "net", "reporting_category", "payout_id", "effective_at", "payout_expected_arrival_date", "payout_status"}},
+	"activity":              {"balance_change_from_activity.itemized.7", "Stripe balance activity", []string{"balance_transaction_id", "currency", "gross", "fee", "net", "reporting_category", "created"}},
+}
 
 var restricted = regexp.MustCompile(`^rk_(live|test)_[A-Za-z0-9]{10,200}$`)
 
@@ -70,13 +82,10 @@ func read(req *http.Request, limit int64) ([]byte, error) {
 	return raw, nil
 }
 
-type Account struct {
-	ID, Name string
-	Through  time.Time
-}
+type Account struct{ ID, Name string }
 
 // Verify checks the key can read the payout reconciliation report and names the Stripe account it belongs to, so a
-// person can confirm it is the client's. Through is when Stripe's report data currently ends.
+// person can confirm it is the client's.
 func Verify(ctx context.Context, key string) (Account, error) {
 	var a Account
 	raw, err := call(ctx, "GET", "reporting/report_types/"+reportType, key, nil, "", 64*1024)
@@ -107,18 +116,34 @@ func Verify(ctx context.Context, key string) (Account, error) {
 	if json.Unmarshal(raw, &account) != nil || !strings.HasPrefix(account.ID, "acct_") {
 		return a, errors.New("Stripe did not name the account; give the key read access to account details")
 	}
-	a.ID, a.Name, a.Through = account.ID, account.BusinessProfile.Name, time.Unix(kind.DataAvailableEnd, 0).UTC()
+	a.ID, a.Name = account.ID, account.BusinessProfile.Name
 	if a.Name == "" {
 		a.Name = account.Settings.Dashboard.DisplayName
 	}
 	return a, nil
 }
 
-// CreateRun asks Stripe for the month's itemized payout reconciliation. The idempotency key makes a retry of a lost
-// response return the same run.
-func CreateRun(ctx context.Context, key, idempotency string, start, end time.Time) (string, error) {
-	form := url.Values{"report_type": {reportType}, "parameters[interval_start]": {fmt.Sprint(start.Unix())}, "parameters[interval_end]": {fmt.Sprint(end.Unix())}}
-	for _, column := range Columns {
+// Availability is the window a report type's data currently covers.
+func Availability(ctx context.Context, key, report string) (time.Time, time.Time, error) {
+	raw, err := call(ctx, "GET", "reporting/report_types/"+Reports[report].Type, key, nil, "", 64*1024)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	var kind struct {
+		Start int64 `json:"data_available_start"`
+		End   int64 `json:"data_available_end"`
+	}
+	if json.Unmarshal(raw, &kind) != nil || kind.End == 0 {
+		return time.Time{}, time.Time{}, errors.New("Stripe did not describe the " + Reports[report].Name + " report")
+	}
+	return time.Unix(kind.Start, 0).UTC(), time.Unix(kind.End, 0).UTC(), nil
+}
+
+// CreateRun asks Stripe for a month's itemized report. The idempotency key makes a retry of a lost response return the
+// same run, so a saved request always retries with its own report.
+func CreateRun(ctx context.Context, key, idempotency, report string, start, end time.Time) (string, error) {
+	form := url.Values{"report_type": {Reports[report].Type}, "parameters[interval_start]": {fmt.Sprint(start.Unix())}, "parameters[interval_end]": {fmt.Sprint(end.Unix())}}
+	for _, column := range Reports[report].Columns {
 		form.Add("parameters[columns][]", column)
 	}
 	raw, err := call(ctx, "POST", "reporting/report_runs", key, form, idempotency, 64*1024)

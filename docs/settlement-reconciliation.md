@@ -1,6 +1,6 @@
 # Stripe settlement reconciliation
 
-Stripe deposits a batch of charges, refunds, disputes and fees as one net payout, so the bank shows one number that matches no invoice. This workpaper traces each automatic payout to its bank deposit using Stripe's own batch relationship (PRD REC-04). The Stripe report can be uploaded as an export, or fetched from the client's Stripe account ([Live Stripe](#live-stripe)).
+Stripe deposits a batch of charges, refunds, disputes and fees as one net payout, so the bank shows one number that matches no invoice. This workpaper traces each automatic payout to its bank deposit using Stripe's own batch relationship (PRD REC-04), or, for manual and instant payouts, every payout in the Payouts report to its deposit, with the month's balance activity rolling the Stripe balance forward. The Stripe report can be uploaded as an export, or fetched from the client's Stripe account ([Live Stripe](#live-stripe)).
 
 ## Flow
 
@@ -29,18 +29,18 @@ Without a close, **Trace Stripe payouts** in the navigation previews local files
 
 ## Live Stripe
 
-Instead of downloading and uploading the report, **Stripe payout reconciliation** on the close's Evidence tab fetches it (migration 061).
+Instead of downloading and uploading the reports, **Stripe reports** on the close's Evidence tab fetches them (migrations 061 and 069): the payout reconciliation for automatic payouts, and for manual or instant payouts the Payouts report and the balance change from activity report.
 
 1. **Create a key.** In Stripe, create a *restricted* key with read access to reports and account details and write access to report runs. Stripe needs that permission to generate a report; it changes no financial data. Secret keys (`sk_…`) are refused, so the app never holds full account access.
 2. **Connect.** Someone with `integrations:manage` pastes the key. The API checks it can read the payout reconciliation report and reads the Stripe account's ID and name. The key is sealed with `SECRETS_KEY` and covered by the key-rotation command.
 3. **Confirm.** A person confirms the account belongs to the client before any report is requested.
-4. **Capture.** **Capture this month's payout reconciliation** asks Stripe for the close month's `payout_reconciliation.itemized.5` report, with UTC month boundaries and exactly the parser's columns. It is refused until Stripe's data covers the whole month, or if the key now belongs to another account.
-   - The request and its idempotency key are saved first. A lost answer is asked again with the same key, so Stripe returns the same report, and a repeated click reuses the month's report in progress.
-5. **Save.** Every minute the worker checks reports in progress. It downloads a finished report only from `files.stripe.com` (no redirects, bounded size), checks it fits the evidence limits (512 KiB, 5,000 transactions) and has the parser's columns, then saves it as evidence named "Stripe payout reconciliation YYYY-MM.csv". It starts the same intake job as an upload, so the report is recognized and traced exactly like an uploaded export.
+4. **Capture.** Choose the report and select **Capture this month's report**. Stripe is asked for the close month's `payout_reconciliation.itemized.5`, `payouts.itemized.5` or `balance_change_from_activity.itemized.7` report, with UTC month boundaries and exactly the parser's columns. Each is refused until that report type's data covers the whole month, or if the key now belongs to another account.
+   - The request, its report and its idempotency key are saved first. A lost answer is asked again with the same key and report, so Stripe returns the same run, and a repeated click reuses the month's report of that kind in progress; one of each kind can be in progress at once.
+5. **Save.** Every minute the worker checks reports in progress. It downloads a finished report only from `files.stripe.com` (no redirects, bounded size), checks it fits the evidence limits (512 KiB, 5,000 transactions) and has the parser's columns, then saves it as evidence named "Stripe payout reconciliation YYYY-MM.csv", "Stripe payouts YYYY-MM.csv" or "Stripe balance activity YYYY-MM.csv". The two payout reports start the same intake job as an upload and are recognized without a model call (an uploaded Payouts report is too); the settlement page switches to the Payouts report method for a Payouts report unless a saved draft chose the method. The balance activity report starts no job of its own: choose it as the activity report when tracing the Payouts report.
    - A report Stripe cannot produce, one that is too large, or one missing columns fails with the reason. Download that one from Stripe in parts and upload it.
 6. **Disconnect.** Disconnecting clears the key and ends reports still in progress. Deleting the close that opened the connection waits until it is disconnected.
 
-Set `SECRETS_KEY` on the API and the worker. The live capture fetches the automatic-payout report only; upload the Payouts report for manual or instant payouts.
+Set `SECRETS_KEY` on the API and the worker.
 
 ## Setup and recovery
 

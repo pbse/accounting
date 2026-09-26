@@ -116,6 +116,17 @@ func TestStripeReportSummaryRecognizesOnlyPayoutExports(t *testing.T) {
 	if _, ok, err := StripeReportSummary(stripeReport(settlementRows...), "2026-08"); !ok || err == nil {
 		t.Fatal("a recognized export for another month must explain the mismatch")
 	}
+	payouts := payoutsHeader + "txn_p1,usd,STRIPE PAYOUT,2026-09-02 10:00:00,0.00,-125.05,-125.05,2026-09-03,po_M1,paid,payout\ntxn_p2,usd,Instant payout,2026-09-11 09:00:00,0.00,-126.90,-126.90,2026-09-11,po_I1,paid,payout\n"
+	if summary, ok, err := StripeReportSummary(payouts, "2026-09"); !ok || err != nil || !strings.Contains(summary, "Payouts report: 2 payouts expected 2026-09-03 to 2026-09-11") || !strings.Contains(summary, "Payouts report method") {
+		t.Fatalf("a Payouts report is recognized in its own currency: %q %v %v", summary, ok, err)
+	}
+	if _, ok, err := StripeReportSummary(payouts, "2026-08"); !ok || err == nil {
+		t.Fatal("a Payouts report for another month must explain the mismatch")
+	}
+	returns := payoutsHeader + "txn_r0,usd,Payout failure,2026-09-01 08:00:00,0.00,50.00,50.00,2026-08-29,po_A0,failed,payout_reversal\n"
+	if summary, ok, err := StripeReportSummary(returns, "2026-09"); !ok || err != nil || !strings.Contains(summary, "1 returns of earlier payouts") {
+		t.Fatalf("a month with only returns is described: %q %v", summary, err)
+	}
 }
 
 func TestStripeFeeEntryCoversFeesOfPayoutsDepositedThisMonth(t *testing.T) {

@@ -40,8 +40,8 @@ func stripeKey(ctx context.Context, db *sql.DB, org, entity, id string) (string,
 	return string(key), account, nil
 }
 
-// stripeReport checks a downloaded report fits the evidence and settlement limits and carries the parser's columns.
-func stripeReport(body []byte) error {
+// stripeReport checks a downloaded report fits the evidence and settlement limits and carries its parser's columns.
+func stripeReport(body []byte, columns []string) error {
 	if len(body) > 512*1024 || !utf8.Valid(body) {
 		return errors.New("The report is larger than the 512 KiB evidence limit or is not text. Download it from Stripe in parts and upload them.")
 	}
@@ -54,7 +54,7 @@ func stripeReport(body []byte) error {
 	for i := range header {
 		header[i] = strings.TrimSpace(strings.TrimPrefix(header[i], "\ufeff"))
 	}
-	for _, column := range stripe.Columns {
+	for _, column := range columns {
 		if !slices.Contains(header, column) {
 			return errors.New("The report lacks the column " + column + ".")
 		}
@@ -78,10 +78,10 @@ func stripeReport(body []byte) error {
 // claim lasts five minutes, so a crashed worker's run is picked up again.
 func sweepStripeReports(ctx context.Context, db *sql.DB) error {
 	for range 10 {
-		var id, closeID, connection, period, key, org, entity, actor, state string
+		var id, closeID, connection, period, key, org, entity, actor, state, report string
 		var runID sql.NullString
 		err := db.QueryRowContext(ctx, `UPDATE stripe_report_runs r SET claimed_at=now() FROM client_closes c WHERE c.id=r.close_id AND r.id=(SELECT id FROM stripe_report_runs WHERE (state='pending' OR (state='requesting' AND created_at<now()-interval '1 minute')) AND (claimed_at IS NULL OR claimed_at<now()-interval '5 minutes') ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
- RETURNING r.id::text,r.close_id::text,r.connection_id::text,r.period,r.idempotency_key::text,r.run_id,r.state,c.organization_id,c.entity,r.actor`).Scan(&id, &closeID, &connection, &period, &key, &runID, &state, &org, &entity, &actor)
+ RETURNING r.id::text,r.close_id::text,r.connection_id::text,r.period,r.idempotency_key::text,r.run_id,r.state,c.organization_id,c.entity,r.actor,r.report`).Scan(&id, &closeID, &connection, &period, &key, &runID, &state, &org, &entity, &actor, &report)
 		if err == sql.ErrNoRows {
 			return nil
 		}
@@ -114,7 +114,7 @@ func sweepStripeReports(ctx context.Context, db *sql.DB) error {
 		var provider stripe.ProviderError
 		if state == "requesting" {
 			month, _ := time.Parse("2006-01", period)
-			created, err := stripe.CreateRun(ctx, apiKey, key, month, month.AddDate(0, 1, 0))
+			created, err := stripe.CreateRun(ctx, apiKey, key, report, month, month.AddDate(0, 1, 0))
 			switch {
 			case errors.As(err, &provider):
 				err = fail(provider.Message)
@@ -134,10 +134,10 @@ func sweepStripeReports(ctx context.Context, db *sql.DB) error {
 			if body, err = stripe.Download(ctx, apiKey, file, 512*1024); errors.As(err, &provider) {
 				status, message, err = "failed", provider.Message, nil
 			} else if err == nil {
-				if check := stripeReport(body); check != nil {
+				if check := stripeReport(body, stripe.Reports[report].Columns); check != nil {
 					status, message = "failed", check.Error()
 				} else {
-					err = saveStripeReport(ctx, db, id, closeID, period, actor, body)
+					err = saveStripeReport(ctx, db, id, closeID, period, actor, report, body)
 				}
 			} else if strings.Contains(err.Error(), "size") {
 				status, message, err = "failed", "The report is larger than the 512 KiB evidence limit. Download it from Stripe in parts and upload them.", nil
@@ -167,7 +167,9 @@ func sweepStripeReports(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func saveStripeReport(ctx context.Context, db *sql.DB, runID, closeID, period, actor string, body []byte) error {
+// saveStripeReport saves a finished report as evidence. The payout reports start an intake job like an upload; the
+// balance activity report is chosen as the settlement's third file, so it has no job of its own.
+func saveStripeReport(ctx context.Context, db *sql.DB, runID, closeID, period, actor, report string, body []byte) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -200,13 +202,15 @@ func saveStripeReport(ctx context.Context, db *sql.DB, runID, closeID, period, a
 			}
 			return tx.Commit()
 		}
-		err = tx.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state,purpose) VALUES($1::bigint,$2,$3,$4,'stripe-report','ready','work') RETURNING id::text`, closeID, "Stripe payout reconciliation "+period+".csv", digest, string(body)).Scan(&evidence)
+		err = tx.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state,purpose) VALUES($1::bigint,$2,$3,$4,'stripe-report','ready','work') RETURNING id::text`, closeID, stripe.Reports[report].Name+" "+period+".csv", digest, string(body)).Scan(&evidence)
 	}
 	if err != nil {
 		return err
 	}
-	if _, err = preparation.StartIntake(ctx, tx, closeID, evidence, actor); err != nil {
-		return err
+	if report != "activity" {
+		if _, err = preparation.StartIntake(ctx, tx, closeID, evidence, actor); err != nil {
+			return err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE stripe_report_runs SET state='saved',evidence_id=$2::bigint,finished_at=now(),error='' WHERE id::text=$1`, runID, evidence); err != nil {
 		return err
@@ -238,7 +242,7 @@ func registerStripe(mux *http.ServeMux, db *sql.DB) {
 		var raw json.RawMessage
 		err := db.QueryRowContext(ctx, `SELECT jsonb_build_object(
  'connection',(SELECT jsonb_build_object('id',x.id::text,'state',x.state,'livemode',x.livemode,'key_last4',x.key_last4,'account_id',x.account_id,'account_name',x.account_name) FROM stripe_connections x JOIN client_closes c ON c.organization_id=x.organization_id AND lower(c.entity)=lower(x.client_entity) WHERE c.id::text=$1 AND x.state<>'disconnected'),
- 'runs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',r.id::text,'period',r.period,'state',r.state,'error',r.error,'evidence_id',r.evidence_id::text,'created_at',r.created_at) ORDER BY r.id DESC) FROM (SELECT * FROM stripe_report_runs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 10) r),'[]'::jsonb))`, closeID).Scan(&raw)
+ 'runs',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',r.id::text,'period',r.period,'report',r.report,'state',r.state,'error',r.error,'evidence_id',r.evidence_id::text,'created_at',r.created_at) ORDER BY r.id DESC) FROM (SELECT * FROM stripe_report_runs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 10) r),'[]'::jsonb))`, closeID).Scan(&raw)
 		return raw, err
 	}
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
@@ -260,6 +264,7 @@ func registerStripe(mux *http.ServeMux, db *sql.DB) {
 			Key          string `json:"key"`
 			ConnectionID string `json:"connection_id"`
 			Confirmed    bool   `json:"confirmed"`
+			Report       string `json:"report"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -336,8 +341,15 @@ func registerStripe(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		case "capture":
+			if in.Report == "" {
+				in.Report = "payout_reconciliation"
+			}
+			if _, ok := stripe.Reports[in.Report]; !ok {
+				problem(w, 422, "Choose the payout reconciliation, payouts or balance activity report.")
+				return
+			}
 			var inFlight bool
-			if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stripe_report_runs WHERE close_id::text=$1 AND period=$2 AND state IN ('requesting','pending'))`, r.PathValue("id"), period).Scan(&inFlight); err != nil {
+			if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stripe_report_runs WHERE close_id::text=$1 AND period=$2 AND report=$3 AND state IN ('requesting','pending'))`, r.PathValue("id"), period, in.Report).Scan(&inFlight); err != nil {
 				problem(w, 503, "Report storage unavailable.")
 				return
 			}
@@ -365,8 +377,13 @@ func registerStripe(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "This key now belongs to another Stripe account. Disconnect and connect the client's account again.")
 				return
 			}
-			if end.After(current.Through) {
-				problem(w, 409, "Stripe has report data through "+current.Through.Format("2 January 2006 15:04 MST")+". Capture "+period+" once Stripe has the whole month.")
+			from, through, err := stripe.Availability(ctx, key, in.Report)
+			if err != nil {
+				problem(w, 422, err.Error())
+				return
+			}
+			if end.After(through) || month.Before(from) {
+				problem(w, 409, "Stripe has "+stripe.Reports[in.Report].Name+" data from "+from.Format("2 January 2006")+" through "+through.Format("2 January 2006 15:04 MST")+". Capture "+period+" once Stripe has the whole month.")
 				return
 			}
 			tx, err := db.BeginTx(ctx, nil)
@@ -377,7 +394,7 @@ func registerStripe(mux *http.ServeMux, db *sql.DB) {
 			defer tx.Rollback()
 			// Only the request that saved the intent asks Stripe; a concurrent one leaves it to that request or the worker.
 			var runID, idempotency string
-			err = tx.QueryRowContext(ctx, `INSERT INTO stripe_report_runs(close_id,connection_id,period,state,actor) VALUES($1,$2,$3,'requesting',$4) ON CONFLICT (close_id,period) WHERE state IN ('requesting','pending') DO NOTHING RETURNING id::text,idempotency_key::text`, r.PathValue("id"), in.ConnectionID, period, a.Subject).Scan(&runID, &idempotency)
+			err = tx.QueryRowContext(ctx, `INSERT INTO stripe_report_runs(close_id,connection_id,period,state,actor,report) VALUES($1,$2,$3,'requesting',$4,$5) ON CONFLICT (close_id,period,report) WHERE state IN ('requesting','pending') DO NOTHING RETURNING id::text,idempotency_key::text`, r.PathValue("id"), in.ConnectionID, period, a.Subject, in.Report).Scan(&runID, &idempotency)
 			inserted := err == nil
 			if err == sql.ErrNoRows {
 				err = nil
@@ -388,7 +405,7 @@ func registerStripe(mux *http.ServeMux, db *sql.DB) {
 			}
 			if inserted {
 				// The same idempotency key makes a retry of a lost answer return the same Stripe run.
-				created, err := stripe.CreateRun(ctx, key, idempotency, month, end)
+				created, err := stripe.CreateRun(ctx, key, idempotency, in.Report, month, end)
 				var provider stripe.ProviderError
 				switch {
 				case errors.As(err, &provider):

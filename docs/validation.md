@@ -1618,3 +1618,13 @@ Tests: `TestManualPayoutsRollTheStripeBalanceForwardWithTheMonthsActivity` (pure
 Code review: GPT-6 Sol (high). Adopted: the coverage confirmation covers both Stripe files and their reporting timezone when the activity report is chosen; the page's automatic bank pick only takes a file with the bank header, and a late check cannot clear a person's own choice; the package's source line names the activity report; a month with only earlier payouts' returns has its own headline. Two delta rounds closed them.
 
 Not verified: real Stripe exports of both reports (column names follow Stripe's report documentation), and the page in a browser.
+
+## Live Stripe Payouts and balance activity reports (2026-09-26)
+
+Request: full manual and instant payout tracing, part B. The Stripe connector captures three reports (migration 069 `stripe_report_runs.report`, one of each kind in flight per close and month): `payout_reconciliation.itemized.5` as before, `payouts.itemized.5` and `balance_change_from_activity.itemized.7`, each with exactly its parser's columns and UTC month boundaries (Stripe's default timezone). Capture checks the chosen report type's own availability window (`data_available_start` and `data_available_end`), and the saved run keeps its report through the worker's retry with the same idempotency key, download validation and evidence name. The Payouts report starts an intake job and is recognized without a model (its currency read from the first row); the balance activity report is saved with no job of its own. The settlement page switches to the Payouts report method when the chosen report is a Payouts report, unless a saved draft chose the method. The Stripe panel has a report select and names each run's report.
+
+Tests: `TestStripePayoutsAndActivityReportsAreCapturedByKind` (faked Stripe: an unknown report refused, a report whose data starts mid-month refused, both reports in flight together with their own types and columns, saved by name with work only for the Payouts report, the Payouts report recognized at intake, and a lost request retried for its own report); `TestStripeReportSummaryRecognizesOnlyPayoutExports` now also recognizes a Payouts report, a month's mismatch and a returns-only month. The existing live Stripe test passes unchanged. 14 mutations, all failing their tests.
+
+Code review: GPT-6 Sol (high). Adopted: a local Payouts file in the standalone preview also selects the Payouts report method; a saved activity run points to the settlement page's activity picker rather than Work; the workpaper's opening description covers manual and instant payouts; the unused `Account.Through` was deleted. Delta review clean.
+
+Not verified: real Stripe report runs for the two new types on a connected account.
