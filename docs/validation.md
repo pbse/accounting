@@ -1366,3 +1366,27 @@ Each check was observed red with its rule removed (12 mutations).
 Code review: GPT-6 Sol (high), one delta round. Adopted: revising a saved settlement restores its payout method, fee, refund and revenue entries and their fields; the clearing confirmation is asked again.
 
 Not verified: real client books using these rules, and the form in a browser.
+
+## QuickBooks expense and income deposit line recodes (2026-09-25)
+
+Request: recode a Purchase line and a Deposit line. The Bill correction became one flow for three kinds (Bill, Purchase, Deposit): strict typed shapes per kind for validation (`quickbooks.ParseRecodable`), and a shared write and readback (`Recode`, `VerifyRecode`) that resends the Line array exactly as read with one account changed and compares every field on readback, numbers by value. Migration 064 keys corrections by kind, saves the accountant's rule reference, adds the income treatment and two grant kinds. The Bill paths and behaviour are unchanged apart from the required rule reference.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- the accountant's rule reference is saved with each correction and bound into its digest;
+- deposit line fields (payer with its type, payment method, check number) are kept exactly, because the write resends the raw lines rather than a typed copy; cash back is refused explicitly;
+- the kind is part of every lookup, the uniqueness key and the digest, so a Bill and an expense with ID 41 are separate;
+- deposits are income lines only: the current and the new account must both be income;
+- strict per-kind shapes kept, with the preview, approval, attempt and readback mechanics shared.
+
+Tests:
+
+- `TestPurchaseAndDepositLinesAreRecodedWithEveryOtherFieldKept` (pure): the update body keeps every line as read with one account changed; readbacks pass with only that change (whatever the number formatting) and fail for a changed payee, a changed amount, a changed check number and a line still on the old account; six shapes refused.
+- `TestBillCorrectionPreservesSimpleBillAndChecksReadback` now runs through the shared functions.
+- `TestProductionBillCorrectionStaysInsideItsGrant` adds an expense with the Bill's own ID recoded once and verified under its own kind and grant, a short rule reference refused, and a deposit line not on income refused.
+
+Each check was observed red with its rule removed (17 mutations).
+
+Code review: GPT-6 Sol (high). Adopted: copies are compared on every field (numbers by value), not the version alone, so a changed payee at the same version is caught before the write; the readback also refuses a field that appears after the write; a correction saved before rules were required must be previewed again with one. Two delta rounds closed all three findings.
+
+Not verified: QuickBooks' live sparse Line updates for Purchase and Deposit (the reason both kinds stay off in production until the operator enables them after a sandbox check), and the panels in a browser.

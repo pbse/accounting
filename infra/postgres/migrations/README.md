@@ -57,3 +57,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `062_xero_daily.sql` records the findings of each Xero snapshot's transactions and lets a close's Daily books review point at a Xero snapshot instead of a QuickBooks capture (exactly one of the two). Apply after 061 with API/worker stopped; `/readyz` checks it.
 
 `063_index_rates.sql` stores the SOFR and EFFR values a preparer looked up from the New York Fed, keyed by index and published date, so a loan's rate from an index is checked against them. Shared reference data with an open row-level security policy. Apply after 062 with API/worker stopped; `/readyz` checks it.
+
+`064_line_recodes.sql` lets a correction recode one line of an expense (Purchase) or an income deposit as well as a Bill, keyed by kind, records the accountant's rule reference with each correction, and adds the `purchase_correction` and `deposit_correction` grant kinds. Apply after 063 with API/worker stopped; `/readyz` checks it.

@@ -179,7 +179,7 @@ func postingKinds() []string {
 var postableKinds = []string{"prepaid", "accrual", "loan", "owner", "settlement"}
 
 // A grant may also cover native QuickBooks corrections, which are not journals.
-var grantKinds = append(slices.Clone(postableKinds), "bill_correction", "vendor_credit")
+var grantKinds = append(slices.Clone(postableKinds), "bill_correction", "vendor_credit", "purchase_correction", "deposit_correction")
 
 // postable returns the approved month-end entries a non-prepaid draft posts together and its source reference.
 // An accrual's next-month reversal is not posted.

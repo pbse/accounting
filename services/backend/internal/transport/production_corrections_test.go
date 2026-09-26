@@ -60,11 +60,14 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 	_, err = db.Exec(`UPDATE quickbooks_connections SET credential=$2 WHERE id=$1`, connectionID, sealed)
 	must(err)
 	bill := `{"Id":"41","SyncToken":"3","TxnDate":"2026-09-15","VendorRef":{"value":"21"},"CurrencyRef":{"value":"USD"},"TotalAmt":100,"Balance":100,"Line":[{"Id":"1","Amount":60,"DetailType":"AccountBasedExpenseLineDetail","AccountBasedExpenseLineDetail":{"AccountRef":{"value":"7"}}},{"Id":"2","Amount":40,"DetailType":"AccountBasedExpenseLineDetail","AccountBasedExpenseLineDetail":{"AccountRef":{"value":"8"}}}]}`
+	// An expense with the Bill's own ID is a different transaction; a deposit line on a non-income account is refused.
+	purchase := `{"Id":"41","SyncToken":"6","TxnDate":"2026-09-16","PaymentType":"CreditCard","AccountRef":{"value":"35"},"EntityRef":{"value":"12","name":"Staples","type":"Vendor"},"CurrencyRef":{"value":"USD"},"TotalAmt":25,"Line":[{"Id":"1","Amount":25,"DetailType":"AccountBasedExpenseLineDetail","AccountBasedExpenseLineDetail":{"AccountRef":{"value":"8"}}}]}`
+	deposit := `{"Id":"61","SyncToken":"2","TxnDate":"2026-09-17","DepositToAccountRef":{"value":"35"},"CurrencyRef":{"value":"USD"},"TotalAmt":300,"Line":[{"Id":"1","Amount":300,"DetailType":"DepositLineDetail","DepositLineDetail":{"AccountRef":{"value":"8"}}}]}`
 	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,'QuickBooks transactions 2026-09','capture-digest','{}','quickbooks-sync','ready') RETURNING id::text`, closeID).Scan(&evidenceID))
-	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',$3,now(),$4)`, closeID, connectionID, evidenceID, `{"realm":"123","records":{"Bill":[`+bill+`]}}`)
+	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',$3,now(),$4)`, closeID, connectionID, evidenceID, `{"realm":"123","records":{"Bill":[`+bill+`],"Purchase":[`+purchase+`],"Deposit":[`+deposit+`]}}`)
 	must(err)
 
-	writes := 0
+	writes, purchaseWrites := 0, 0
 	original := http.DefaultTransport
 	defer func() { http.DefaultTransport = original }()
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
@@ -81,6 +84,18 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 			if writes > 0 {
 				body = `{"Bill":` + strings.Replace(strings.Replace(bill, `"SyncToken":"3"`, `"SyncToken":"4"`, 1), `{"value":"8"}`, `{"value":"9"}`, 1) + `}`
 			}
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/purchase"):
+			purchaseWrites++
+			body = `{"Purchase":{"Id":"41"}}`
+		case strings.HasSuffix(r.URL.Path, "/purchase/41"):
+			body = `{"Purchase":` + purchase + `}`
+			if purchaseWrites > 0 {
+				body = `{"Purchase":` + strings.Replace(strings.Replace(purchase, `"SyncToken":"6"`, `"SyncToken":"7"`, 1), `{"value":"8"}`, `{"value":"9"}`, 1) + `}`
+			}
+		case strings.HasSuffix(r.URL.Path, "/deposit/61"):
+			body = `{"Deposit":` + deposit + `}`
+		case strings.HasSuffix(r.URL.Path, "/account/8"):
+			body = `{"Account":{"Id":"8","Name":"Travel","Active":true,"Classification":"Expense","CurrencyRef":{"value":"USD"}}}`
 		case strings.HasSuffix(r.URL.Path, "/account/9"):
 			body = `{"Account":{"Id":"9","Name":"Office supplies","Active":true,"Classification":"Expense","CurrencyRef":{"value":"USD"}}}`
 		case strings.HasSuffix(r.URL.Path, "/preferences"):
@@ -108,16 +123,17 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 		return w.Body.Bytes()
 	}
 	grantPath := "/v1/closes/" + closeID + "/production-grant"
+	kinds := []string{"bill_correction"}
 	grant := func(limit string, accounts ...string) string {
 		var out struct{ ID string }
-		json.Unmarshal(call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "account_ids": accounts, "kinds": []string{"bill_correction"}, "max_amount": limit, "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic correction authority", "confirmation": "GRANT PRODUCTION POSTING"}, 200), &out)
+		json.Unmarshal(call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "account_ids": accounts, "kinds": kinds, "max_amount": limit, "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic correction authority", "confirmation": "GRANT PRODUCTION POSTING"}, 200), &out)
 		return out.ID
 	}
 	revoke := func(id string) {
 		call(grantPath, map[string]any{"action": "revoke", "grant_id": id, "confirmation": "REVOKE PRODUCTION GRANT"}, 200)
 	}
 	path := "/v1/closes/" + closeID + "/quickbooks/bills/41/correction"
-	preview := map[string]any{"action": "preview", "treatment": "inconsistent_coding", "reason": "Supplies coded to travel", "target_account_id": "9", "target_line_id": "2", "confirmed": true}
+	preview := map[string]any{"action": "preview", "treatment": "inconsistent_coding", "reason": "Supplies coded to travel", "rule_reference": "Coding rule 3.1", "target_account_id": "9", "target_line_id": "2", "confirmed": true}
 
 	first := grant("1000.00", "7", "9")
 	if body := call(path, preview, 409); !strings.Contains(string(body), "not enabled") {
@@ -138,7 +154,7 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 	third := grant("1000.00", "8", "9")
 	json.Unmarshal(call(path, preview, 200), &item)
 	revoke(third)
-	grant("1000.00", "8", "9")
+	fourth := grant("1000.00", "8", "9")
 	if body := call(path, map[string]any{"action": "approve", "digest": item.Digest, "confirmed": true}, 409); !strings.Contains(string(body), "grant changed") {
 		t.Fatalf("an approval is bound to the grant the correction was previewed under: %s", body)
 	}
@@ -146,9 +162,39 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 	if item.State != "preview" || item.GrantID == "" {
 		t.Fatalf("the preview is bound to the current grant: %+v", item)
 	}
+	// A correction saved before rules were required cannot be approved until it is previewed again with one.
+	_, err = db.Exec(`UPDATE bill_corrections SET rule_reference='' WHERE id=$1`, item.ID)
+	must(err)
+	if body := call(path, map[string]any{"action": "approve", "digest": item.Digest, "confirmed": true}, 409); !strings.Contains(string(body), "Prepare this correction again") {
+		t.Fatalf("an old correction without a rule is previewed again: %s", body)
+	}
+	json.Unmarshal(call(path, preview, 200), &item)
 	call(path, map[string]any{"action": "approve", "digest": item.Digest, "confirmed": true}, 200)
 	json.Unmarshal(call(path, map[string]any{"action": "execute", "digest": item.Digest, "confirmed": true}, 200), &item)
 	if writes != 1 || item.State != "verified" {
 		t.Fatalf("the approved correction posts once and verifies: %+v writes=%d", item, writes)
+	}
+
+	purchasePath := "/v1/closes/" + closeID + "/quickbooks/purchases/41/correction"
+	if body := call(purchasePath, preview, 409); !strings.Contains(string(body), "not enabled") {
+		t.Fatalf("production expense recodes stay off until enabled: %s", body)
+	}
+	t.Setenv("PRODUCTION_POSTING_KINDS", "prepaid,bill_correction,purchase_correction,deposit_correction")
+	kinds = []string{"bill_correction", "purchase_correction", "deposit_correction"}
+	revoke(fourth)
+	grant("1000.00", "8", "9", "81")
+	var recoded billCorrection
+	purchasePreview := map[string]any{"action": "preview", "treatment": "inconsistent_coding", "reason": "Paper coded to travel", "rule_reference": "Coding rule 3.1", "target_account_id": "9", "target_line_id": "1", "confirmed": true}
+	purchasePreview["rule_reference"] = "x"
+	call(purchasePath, purchasePreview, 422)
+	purchasePreview["rule_reference"] = "Coding rule 3.1"
+	json.Unmarshal(call(purchasePath, purchasePreview, 200), &recoded)
+	call(purchasePath, map[string]any{"action": "approve", "digest": recoded.Digest, "confirmed": true}, 200)
+	json.Unmarshal(call(purchasePath, map[string]any{"action": "execute", "digest": recoded.Digest, "confirmed": true}, 200), &recoded)
+	if purchaseWrites != 1 || recoded.State != "verified" || recoded.Entity != "Purchase" || recoded.RuleReference != "Coding rule 3.1" || writes != 1 {
+		t.Fatalf("the expense with the Bill's ID is its own correction, written once and verified: %+v", recoded)
+	}
+	if body := call("/v1/closes/"+closeID+"/quickbooks/deposits/61/correction", map[string]any{"action": "preview", "treatment": "uncategorized_income", "reason": "Consulting fee received", "rule_reference": "Income rule 2", "target_account_id": "81", "target_line_id": "1", "confirmed": true}, 422); !strings.Contains(string(body), "income account") {
+		t.Fatalf("a deposit line that does not post to income is not recoded: %s", body)
 	}
 }
