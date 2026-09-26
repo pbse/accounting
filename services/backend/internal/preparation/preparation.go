@@ -37,6 +37,14 @@ type Plan struct {
 	Sources          []Source          `json:"sources"`
 }
 
+// WorkKind is the kind of work a plan prepares: a prepaid plan with a schedule prepares deferred revenue or depreciation.
+func WorkKind(kind, schedule string) string {
+	if kind == "prepaid" && schedule != "" {
+		return schedule
+	}
+	return kind
+}
+
 func Digest(b []byte) string { return fmt.Sprintf("%x", sha256.Sum256(b)) }
 func Strict(raw []byte, v any) error {
 	d := json.NewDecoder(bytes.NewReader(raw))

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/preparation"
 )
 
 // factText renders a confirmed input value the way the confirm form sent it.
@@ -64,7 +66,7 @@ type confirmedPlan struct {
 // compareProposal compares a model reading with what a person confirmed; expected fields the reading leaves blank are misses.
 func compareProposal(p readProposal, plan confirmedPlan, expected []string) (bool, []string, int) {
 	changed, filled, given := []string{}, 0, map[string]bool{}
-	if p.Kind != plan.Kind {
+	if p.Kind != preparation.WorkKind(plan.Kind, factText(plan.Input["schedule"])) {
 		changed = append(changed, "kind")
 	}
 	for _, f := range p.Facts {

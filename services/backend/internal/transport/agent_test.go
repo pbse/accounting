@@ -262,3 +262,77 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 	}
 
 }
+
+func TestAgentProposedDepreciationContinuesThroughItsForm(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	t.Setenv("OPENAI_API_KEY", "mock-only-key")
+	t.Setenv("OPENAI_MODEL", "mock-only-model")
+	var closeID, invoice, ledger string
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES('Depreciation agent fixture','2026-09') RETURNING id::text`).Scan(&closeID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, table := range []string{"preparation_plans", "preparation_jobs", "evidence", "client_closes"} {
+			column := "close_id"
+			if table == "client_closes" {
+				column = "id"
+			}
+			db.Exec("DELETE FROM "+table+" WHERE "+column+"=$1", closeID)
+		}
+	}()
+	quote := "Laptop, USD 3600.00, placed in service 2026-09-01."
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'laptop.txt','laptop-invoice',$2,'fixture') RETURNING id::text`, closeID, quote).Scan(&invoice); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt','laptop-ledger','Accumulated depreciation 0.00','fixture') RETURNING id::text`, closeID).Scan(&ledger); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ := db.Begin()
+	job, err := preparation.StartIntake(context.Background(), tx, closeID, invoice, "fixture")
+	if err != nil || tx.Commit() != nil {
+		t.Fatal("Cannot start fixture", err)
+	}
+	originalTransport := http.DefaultTransport
+	defer func() { http.DefaultTransport = originalTransport }()
+	http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
+		output, _ := json.Marshal(map[string]any{"kind": "depreciation", "summary": "Laptop depreciation", "questions": []string{}, "sources": []any{map[string]string{"id": invoice, "role": "invoice"}, map[string]string{"id": ledger, "role": "support"}}, "facts": []any{map[string]string{"field": "amount", "value": "3600.00", "source_id": invoice, "quote": quote}, map[string]string{"field": "service_start", "value": "2026-09-01", "source_id": invoice, "quote": quote}}})
+		body, _ := json.Marshal(map[string]any{"id": "mock-response", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
+	})
+	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
+		t.Fatal("Intake failed", e)
+	}
+	var revision int
+	var state, kind string
+	if err = db.QueryRow(`SELECT i.revision,j.state,i.proposal->>'kind' FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id WHERE j.id::text=$1`, job).Scan(&revision, &state, &kind); err != nil || state != "needs_confirmation" || kind != "depreciation" {
+		t.Fatalf("the agent proposes depreciation for review: %s %s %v", state, kind, err)
+	}
+	token := strings.Repeat("a", 32)
+	h := apiWithStore(db, token)
+	call := func(schedule string, want int) {
+		t.Helper()
+		input := map[string]any{"entity": "Depreciation agent fixture", "source_reference": "laptop.txt", "amount": "3600.00", "service_start": "2026-09-01", "service_end": "2029-08-31", "close_period": "2026-09", "currency": "USD", "basis": "accrual", "expense_account": "Depreciation expense", "prepaid_account": "Accumulated depreciation", "schedule": schedule, "booked_balance": "0.00", "booking_reference": "September ledger", "method": "equal_full_months_v1", "method_confirmed": true, "booking_confirmed": true, "examples_confirmed": true}
+		raw, _ := json.Marshal(map[string]any{"kind": "prepaid", "input": input, "work_id": job, "work_revision": revision, "sources": []preparation.Source{{ID: invoice, Role: "invoice", Location: "line 1"}, {ID: ledger, Role: "support", Location: "line 1"}}})
+		r := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/preparations", bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s: %d %s", schedule, w.Code, w.Body.String())
+		}
+	}
+	call("deferred_revenue", 409)
+	call("depreciation", 200)
+	if err = db.QueryRow(`SELECT state FROM preparation_jobs WHERE id::text=$1`, job).Scan(&state); err != nil || state != "queued" {
+		t.Fatalf("the confirmed depreciation continues the agent's job: %s %v", state, err)
+	}
+}
