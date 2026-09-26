@@ -107,7 +107,7 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, q := range []string{`DELETE FROM production_postings WHERE close_id=$1`, `DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM close_signoffs WHERE close_id=$1`, `DELETE FROM production_postings WHERE close_id=$1`, `DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			arg := closeID
 			if strings.Contains(q, "organization_id") || strings.Contains(q, "organizations WHERE") {
 				arg = org
@@ -318,6 +318,16 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		t.Fatalf("a newer draft of the source committed before the lock was taken must stop the write: %d %s writes=%d", w.Code, w.Body.String(), writes)
 	}
 	if _, err = db.Exec(`DELETE FROM workpapers WHERE id=$1`, newer); err != nil {
+		t.Fatal(err)
+	}
+	// A close signed off after the approval takes no write until it is reopened.
+	if _, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','d','{}','Signed fixture','fixture')`, closeID); err != nil {
+		t.Fatal(err)
+	}
+	if body := call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 409); !strings.Contains(string(body), "signed off") || writes != 0 {
+		t.Fatalf("a signed-off close refuses the write: %s writes=%d", body, writes)
+	}
+	if _, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'reopened','d','{}','Reopened fixture','fixture')`, closeID); err != nil {
 		t.Fatal(err)
 	}
 	closeOnWrite = true

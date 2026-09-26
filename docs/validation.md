@@ -1505,3 +1505,9 @@ Each check was observed red with its rule removed (10 mutations).
 Code review: GPT-6 Sol (high) found no defect in token handling, hosts, redirects, file IDs, query escaping, the access boundary, the filename header or the limits. Adopted: `WORKOS_API_KEY` is forwarded to the API in the staging deploy, the edge container and Compose; the evidence documentation no longer calls Drive access deferred (only automatic syncing is); the unused file size was removed. One delta round closed both findings.
 
 Not verified: a live WorkOS Pipes integration and Google Drive responses (the provider slug and scopes depend on the firm's WorkOS dashboard), and the panel in a browser.
+
+## No journal decisions in a signed-off close (2026-09-26)
+
+Request: refuse journal decisions after sign-off (review item 2). The QuickBooks production (`production_posting.go`) and Xero (`xero_posting.go`) decision paths locked the close but never read its latest sign-off, and neither did the sandbox path (`posting.go`), which the review had not named; bill corrections and supplier credits already checked. Each path now calls `signedOff` right after taking the close's row lock, the lock sign-off itself takes (`readiness.go:261`), and refuses approval and execution while the latest decision is `signed_off`. Verification of an earlier attempt is unchanged.
+
+Tests: `TestProductionPostingSingleDurableAttempt`, `TestApprovedDraftPostsOnceToXero` and `TestSandboxAttemptIsDurableAndNotRepeated` each sign the close off after approval, see the execution refused with no write, reopen it and execute once. Each guard, and the latest-decision ordering, was observed red when broken (4 mutations).

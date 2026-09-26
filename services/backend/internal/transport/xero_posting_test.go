@@ -45,7 +45,7 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 	must(err)
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,$2,'2026-09') RETURNING id::text`, org, entity).Scan(&closeID))
 	defer func() {
-		for _, q := range []string{`DELETE FROM xero_postings WHERE close_id=$1`, `DELETE FROM production_postings WHERE close_id=$1`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`} {
+		for _, q := range []string{`DELETE FROM close_signoffs WHERE close_id=$1`, `DELETE FROM xero_postings WHERE close_id=$1`, `DELETE FROM production_postings WHERE close_id=$1`, `DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`} {
 			db.Exec(q, closeID)
 		}
 		for _, q := range []string{`DELETE FROM procedure_versions WHERE organization_id=$1`, `DELETE FROM xero_posting_grants WHERE organization_id=$1`, `DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM xero_connections WHERE organization_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
@@ -219,6 +219,13 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 	actor.Permissions = []string{"clients:all", "posting:approve"}
 	call(path, map[string]string{"action": "execute", "digest": intent.Digest, "confirmation": "POST TO XERO"}, 403)
 	actor.Permissions = []string{"clients:all", "posting:execute"}
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','d','{}','Signed fixture','fixture')`, closeID)
+	must(err)
+	if body := call(path, map[string]string{"action": "execute", "digest": intent.Digest, "confirmation": "POST TO XERO"}, 409); !strings.Contains(string(body), "signed off") || puts != 0 {
+		t.Fatalf("a signed-off close takes no Xero write: %s puts=%d", body, puts)
+	}
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'reopened','d','{}','Reopened fixture','fixture')`, closeID)
+	must(err)
 	must(json.Unmarshal(call(path, map[string]string{"action": "execute", "digest": intent.Digest, "confirmation": "POST TO XERO"}, 200), &intent))
 	if puts != 1 || keys[0] != intent.RequestID || intent.State != "verified" || intent.ExternalID == "" {
 		t.Fatalf("one write with the saved request as its idempotency key, read back and verified: puts=%d %v %+v", puts, keys, intent)
