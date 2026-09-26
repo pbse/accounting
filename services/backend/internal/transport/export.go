@@ -57,6 +57,7 @@ type closePackage struct {
 	SandboxPostings    json.RawMessage `json:"sandbox_postings"`
 	VendorCredits      json.RawMessage `json:"vendor_credits"`
 	BillCorrections    json.RawMessage `json:"bill_corrections"`
+	CreditApplications json.RawMessage `json:"credit_applications"`
 	ProductionPostings json.RawMessage `json:"production_postings"`
 	Reviews            json.RawMessage `json:"reviews"`
 	WorkHistory        json.RawMessage `json:"work_history"`
@@ -151,6 +152,10 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.id),'[]'::jsonb) FROM vendor_credit_postings p WHERE close_id=$1`, pack.Close.ID).Scan(&pack.VendorCredits)
 		if err != nil {
 			problem(w, 503, "Could not read supplier credit receipts.")
+			return
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.id),'[]'::jsonb) FROM credit_applications p WHERE close_id=$1`, pack.Close.ID).Scan(&pack.CreditApplications); err != nil {
+			problem(w, 503, "Could not read credit application receipts.")
 			return
 		}
 		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(p) ORDER BY p.id),'[]'::jsonb) FROM bill_corrections p WHERE close_id=$1`, pack.Close.ID).Scan(&pack.BillCorrections); err != nil {

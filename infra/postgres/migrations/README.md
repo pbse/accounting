@@ -59,3 +59,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `063_index_rates.sql` stores the SOFR and EFFR values a preparer looked up from the New York Fed, keyed by index and published date, so a loan's rate from an index is checked against them. Shared reference data with an open row-level security policy. Apply after 062 with API/worker stopped; `/readyz` checks it.
 
 `064_line_recodes.sql` lets a correction recode one line of an expense (Purchase) or an income deposit as well as a Bill, keyed by kind, records the accountant's rule reference with each correction, and adds the `purchase_correction` and `deposit_correction` grant kinds. Apply after 063 with API/worker stopped; `/readyz` checks it.
+
+`065_credit_applications.sql` records each unapplied customer payment applied to an open invoice and each vendor credit applied to an open bill (preview, approval, one attempt, readback), with row-level security like 050, and adds the `payment_application` and `credit_application` grant kinds. Apply after 064 with API/worker stopped; `/readyz` checks it.

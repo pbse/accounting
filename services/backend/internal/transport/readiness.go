@@ -177,6 +177,20 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Bill correction attempt #%d must be resolved.", p.ID))
 		}
 	}
+	// Credit applications are checked apart from the signed snapshot, so adding them left existing sign-offs intact.
+	uncertain, err := tx.QueryContext(ctx, `SELECT id FROM credit_applications WHERE close_id::text=$1 AND state IN ('executing','unknown') ORDER BY id`, id)
+	if err != nil {
+		return out, err
+	}
+	for uncertain.Next() {
+		var attempt int64
+		if err = uncertain.Scan(&attempt); err != nil {
+			uncertain.Close()
+			return out, err
+		}
+		out.Blockers = append(out.Blockers, fmt.Sprintf("Credit application attempt #%d must be resolved.", attempt))
+	}
+	uncertain.Close()
 	for _, p := range snapshot.ProductionPostings {
 		if p.State == "executing" || p.State == "unknown" {
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Production attempt #%d requires canonical readback or investigation.", p.ID))

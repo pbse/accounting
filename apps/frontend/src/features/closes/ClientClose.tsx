@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
 import { Avatar, Icon, type IconName } from "../dashboard/Icon";
 import { BillCorrection } from "./BillCorrection";
+import { CreditApplications } from "./CreditApplications";
 import { Brief } from "./Brief";
 import { CarryForward } from "./CarryForward";
 import { Coordinator } from "./Coordinator";
@@ -282,6 +283,7 @@ export default function ClientClose() {
           <BillCorrection closeId={close.id} />
           <BillCorrection closeId={close.id} kind="purchases" />
           <BillCorrection closeId={close.id} kind="deposits" />
+          <CreditApplications closeId={close.id} />
           <Replay key={`replay-${close.id}`} closeId={close.id} />
         </div>
       )}
