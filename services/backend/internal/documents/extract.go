@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +21,8 @@ import (
 )
 
 type boundedOutput struct{ bytes.Buffer }
+
+var markerLike = regexp.MustCompile(`(?m)^--- Page `)
 
 func (b *boundedOutput) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > 524288 {
@@ -102,6 +105,8 @@ func Extract(ctx context.Context, original []byte) (string, error) {
 		if strings.TrimSpace(text) == "" {
 			text = "[No text detected; inspect this page in the original PDF.]"
 		}
+		// A line in the document shaped like a page marker is indented, so only the extractor marks pages.
+		text = markerLike.ReplaceAllString(text, " $0")
 		if _, err = fmt.Fprintf(&output, "--- Page %d · %s ---\n%s\n", page, method, text); err != nil {
 			return "", err
 		}

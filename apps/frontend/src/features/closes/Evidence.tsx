@@ -2,6 +2,7 @@ import { DriveEvidence } from "./DriveEvidence";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
 import { ForwardedEvidence } from "./ForwardedEvidence";
+import { StatementRows } from "./StatementRows";
 
 export type Source = {
   id: string;
@@ -400,6 +401,14 @@ export function Evidence({
           }))}
         />
       )}
+      {files
+        .filter((f) => f.name.toLowerCase().endsWith(".pdf") && f.extraction_state === "ready" && !f.superseded_by)
+        .map((f) => (
+          <div key={`statement-${f.id}`}>
+            <strong>{f.name}</strong>
+            <StatementRows closeId={closeId} evidenceId={f.id} onConfirmed={() => void load()} />
+          </div>
+        ))}
     </section>
   );
 }
