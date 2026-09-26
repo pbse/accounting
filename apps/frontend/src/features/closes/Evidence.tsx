@@ -36,6 +36,10 @@ export function SourceReview({
 }) {
   const [opened, setOpened] = useState<{ name: string; text: string }>();
   const [error, setError] = useState("");
+  // An assistant link to one document (#source-ID) scrolls to it once the list has loaded.
+  useEffect(() => {
+    if (location.hash.startsWith("#source-")) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "center" });
+  }, [sources.length]);
   return (
     <section>
       <h4>Linked source evidence</h4>
@@ -46,7 +50,7 @@ export function SourceReview({
       </p>
       <ul>
         {sources.map((source) => (
-          <li key={`${source.id}-${source.role}`}>
+          <li key={`${source.id}-${source.role}`} id={source.role === "uploaded" ? `source-${source.id}` : undefined}>
             {source.role}: {source.name} · {source.location}{" "}
             <button
               onClick={async () => {

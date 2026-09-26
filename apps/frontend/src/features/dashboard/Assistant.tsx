@@ -69,6 +69,7 @@ function Panel() {
 function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId: string; onClose: () => void }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [live, setLive] = useState<string[]>([]);
+  const [liveLinks, setLiveLinks] = useState<{ label: string; href: string }[]>([]);
   const [label, setLabel] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -111,6 +112,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
       if (asked !== generation.current) return;
       setMessages(data.messages);
       setLive(data.live ?? []);
+      setLiveLinks(data.live_citations ?? []);
       setText("");
     } catch (e) {
       if (asked === generation.current) setError(e instanceof Error ? e.message : "The assistant is unavailable.");
@@ -174,8 +176,8 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
                 ))}
               </ul>
             )}
-            {m.citations.map((c) => (
-              <Link key={c.href} to={c.href}>
+            {[...m.citations, ...(m.role === "assistant" && i === messages.length - 1 ? liveLinks : [])].map((c, n) => (
+              <Link key={n} to={c.href}>
                 {c.label} →
               </Link>
             ))}

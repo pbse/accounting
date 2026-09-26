@@ -187,7 +187,7 @@ export function QuickBooks({
   const production = c ? c.environment === "production" : !!status?.production_configured;
   const company = production ? "production company" : "sandbox company";
   return (
-    <details open={callback.has("qbo_code") && callback.get("qbo_env") !== "production"}>
+    <details id="quickbooks-ledger" open={(callback.has("qbo_code") && callback.get("qbo_env") !== "production") || location.hash === "#quickbooks-ledger"}>
       <summary>QuickBooks ledger evidence</summary>
       <p>
         Reads {entity}'s QuickBooks {company}. This reader cannot post

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -39,8 +40,28 @@ type chatMessage struct {
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
+var chatFollowUp = regexp.MustCompile(`(?i)\b(that|it|same|those|them)\b`)
+
+var chatFind = []string{"find ", "search for ", "search ", "look for ", "where is ", "where's ", "show me "}
+
+// chatQuery is what a find question asks for: the text after its opening phrase, or "" when it is not a find question.
+func chatQuery(text string) string {
+	t := strings.ToLower(strings.TrimSpace(text))
+	for _, prefix := range chatFind {
+		if strings.HasPrefix(t, prefix) {
+			q := strings.TrimSpace(strings.TrimSpace(text)[len(prefix):])
+			q = strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(q, "the ")), "?")
+			return strings.TrimSpace(q)
+		}
+	}
+	return ""
+}
+
 // chatIntent picks the read a question is about; the first match wins, and "" means the help reply.
 func chatIntent(text string, closeScoped, paper bool) string {
+	if chatQuery(text) != "" {
+		return "find"
+	}
 	t := strings.ToLower(text)
 	has := func(words ...string) bool {
 		return slices.ContainsFunc(words, func(w string) bool { return strings.Contains(t, w) })
@@ -63,7 +84,7 @@ func chatIntent(text string, closeScoped, paper bool) string {
 		return "blockers"
 	case has("tie", "balance", "differ", "support"):
 		return "tieout"
-	case has("change", "flux", "movement", "moved", "last month"):
+	case has("change", "flux", "movement", "moved", "last month", "compare"):
 		return "changes"
 	case has("exception", "duplicate", "holding", "suspense", "payee", "issue"):
 		return "exceptions"
@@ -75,25 +96,32 @@ func chatIntent(text string, closeScoped, paper bool) string {
 	return ""
 }
 
-// chatNamed keeps the items whose account the question names, or all of them when it names none.
-func chatNamed[T any](text string, items []T, account func(T) string) []T {
-	t := strings.ToLower(text)
-	out := []T{}
-	for _, item := range items {
-		if a := strings.ToLower(strings.TrimSpace(account(item))); a != "" && strings.Contains(t, a) {
-			out = append(out, item)
+// chatNamed keeps the items whose account the question names, or, when it names none, those the previous question of
+// the same kind named, or all of them.
+func chatNamed[T any](text, previous string, items []T, account func(T) string) ([]T, bool) {
+	for _, question := range []string{text, previous} {
+		t := strings.ToLower(question)
+		out := []T{}
+		for _, item := range items {
+			if a := strings.ToLower(strings.TrimSpace(account(item))); a != "" && strings.Contains(t, a) {
+				out = append(out, item)
+			}
+		}
+		if len(out) > 0 {
+			return out, true
 		}
 	}
-	if len(out) == 0 {
-		return items
-	}
-	return out
+	return items, false
 }
 
 var chatTieStatus = map[string]string{"ties": "ties", "ties_after_entries": "ties after proposed entries", "within_materiality": "differs by less than the firm's materiality", "differs": "differs", "posting_unknown": "posting outcome unknown", "unsupported": "no support yet"}
 
 // closeAnswer answers a question about one close from its reads.
-func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text string) chatReply {
+func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text, previous string) chatReply {
+	// Only a question that refers back ("that", "it", "same") keeps the previous question's account.
+	if chatIntent(previous, true, paperID != "") != intent || !chatFollowUp.MatchString(text) {
+		previous = ""
+	}
 	base := "/dashboard/closes/" + closeID
 	unread := func(what string) chatReply {
 		return chatReply{body: "I couldn't read " + what + " right now. Try again, or open the close.", citations: []chatCitation{{"Close overview", base}}}
@@ -144,8 +172,8 @@ func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text str
 		if t.Snapshot == nil || t.Error != "" {
 			return chatReply{body: "There is no readable month-end Trial Balance to tie out yet." + strings.TrimSpace(" "+t.Error), citations: link}
 		}
-		rows := chatNamed(text, t.Rows, func(r tieRow) string { return r.Account })
-		if len(rows) == len(t.Rows) {
+		rows, named := chatNamed(text, previous, t.Rows, func(r tieRow) string { return r.Account })
+		if !named {
 			rows = slices.DeleteFunc(slices.Clone(rows), func(r tieRow) bool { return r.Status == "ties" || r.Status == "ties_after_entries" })
 		}
 		if len(rows) == 0 {
@@ -180,7 +208,7 @@ func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text str
 		if f.State != "ready" {
 			return chatReply{body: strings.TrimSpace("Changes from last month aren't available yet. " + f.Reason), citations: link}
 		}
-		changes := chatNamed(text, f.Changes, func(c change) string { return c.Account })
+		changes, _ := chatNamed(text, previous, f.Changes, func(c change) string { return c.Account })
 		if len(changes) > 5 {
 			changes = changes[:5]
 		}
@@ -216,6 +244,16 @@ func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text str
 			reply.lines = append(reply.lines, strings.TrimSpace(item.Finding+" "+item.Amount))
 		}
 		return reply
+	case "find":
+		q := chatQuery(text)
+		var s struct {
+			Results  []searchHit `json:"results"`
+			Searched string      `json:"searched"`
+		}
+		if !read("/search?q="+url.QueryEscape(q), &s) {
+			return chatReply{body: "I couldn't search for “" + q + "”. Use 3–100 characters, or try a more specific phrase."}
+		}
+		return chatReply{body: fmt.Sprintf("%s for “%s” in this close. I searched %s.", plural(len(s.Results), "match", "matches"), q, s.Searched), citations: searchCitations(s.Results)}
 	case "draft":
 		var p struct {
 			Kind        string `json:"kind"`
@@ -246,11 +284,21 @@ func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text str
 
 // firmAnswer answers a firm-wide question. Only a generic reply is stored; the live lines are shown once, so history
 // never keeps client details a member may later lose access to.
-func firmAnswer(read func(string, any) bool, intent string) (chatReply, []string) {
+func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []string, []chatCitation) {
 	work := []chatCitation{{"Work", "/dashboard"}}
 	unread := chatReply{body: "I couldn't read that right now. Open Work for the current list.", citations: work}
 	label := func(entity, period string) string { return entity + " · " + period }
 	switch intent {
+	case "find":
+		q := chatQuery(text)
+		var found struct {
+			Results  []searchHit `json:"results"`
+			Searched string      `json:"searched"`
+		}
+		if !read("/search?q="+url.QueryEscape(q), &found) {
+			return chatReply{body: "I couldn't search for that. Use 3–100 characters, or try a more specific phrase."}, nil, nil
+		}
+		return chatReply{body: "I searched your accessible closes. The matches are shown once; search again to see them."}, []string{fmt.Sprintf("%s for “%s”. I searched %s.", plural(len(found.Results), "match", "matches"), q, found.Searched)}, searchCitations(found.Results)
 	case "today":
 		var m struct {
 			Needing int `json:"needing"`
@@ -260,7 +308,7 @@ func firmAnswer(read func(string, any) bool, intent string) (chatReply, []string
 			} `json:"closes"`
 		}
 		if !read("/morning", &m) {
-			return unread, nil
+			return unread, nil, nil
 		}
 		lines := []string{plural(m.Needing, "close needs", "closes need") + " a person today."}
 		for i, c := range m.Closes {
@@ -268,7 +316,7 @@ func firmAnswer(read func(string, any) bool, intent string) (chatReply, []string
 				lines = append(lines, label(c.Entity, c.Period))
 			}
 		}
-		return chatReply{body: "Here is what needs a person today. Open Work for the current list.", citations: work}, lines
+		return chatReply{body: "Here is what needs a person today. Open Work for the current list.", citations: work}, lines, nil
 	case "review":
 		var q struct {
 			Count int `json:"count"`
@@ -280,7 +328,7 @@ func firmAnswer(read func(string, any) bool, intent string) (chatReply, []string
 			} `json:"items"`
 		}
 		if !read("/review-queue", &q) {
-			return unread, nil
+			return unread, nil, nil
 		}
 		lines := []string{plural(q.Count, "draft is", "drafts are") + " ready for review."}
 		for i, item := range q.Items {
@@ -288,7 +336,7 @@ func firmAnswer(read func(string, any) bool, intent string) (chatReply, []string
 				lines = append(lines, fmt.Sprintf("%s: %s draft #%s", label(item.Entity, item.Period), item.Kind, item.WorkpaperID))
 			}
 		}
-		return chatReply{body: "Here is the review queue. Open Work to review the current drafts.", citations: work}, lines
+		return chatReply{body: "Here is the review queue. Open Work to review the current drafts.", citations: work}, lines, nil
 	case "blocked":
 		var b struct {
 			Items []struct {
@@ -298,7 +346,7 @@ func firmAnswer(read func(string, any) bool, intent string) (chatReply, []string
 			} `json:"items"`
 		}
 		if !read("/work?view=blocked", &b) {
-			return unread, nil
+			return unread, nil, nil
 		}
 		lines := []string{plural(len(b.Items), "item is", "items are") + " blocked."}
 		for i, item := range b.Items {
@@ -306,9 +354,25 @@ func firmAnswer(read func(string, any) bool, intent string) (chatReply, []string
 				lines = append(lines, label(item.Entity, item.Period)+": "+item.SourceName)
 			}
 		}
-		return chatReply{body: "Here is the blocked work. Open Work for the current list.", citations: work}, lines
+		return chatReply{body: "Here is the blocked work. Open Work for the current list.", citations: work}, lines, nil
 	}
-	return chatReply{body: "Across the firm I can tell you what needs a person today, what is ready for review, and what work is blocked. Open a client close to ask about it."}, nil
+	return chatReply{body: "Across the firm I can find documents, drafts, transactions, procedures and review decisions, and tell you what needs a person today, what is ready for review, and what work is blocked. Open a client close to ask about it."}, nil, nil
+}
+
+// searchCitations links each match with a label that says what it is.
+func searchCitations(hits []searchHit) []chatCitation {
+	out := []chatCitation{}
+	for _, h := range hits {
+		label := h.Kind + ": " + h.Title
+		if h.Snippet != "" {
+			label += " — " + h.Snippet
+		}
+		if len(label) > 220 {
+			label = label[:217] + "…"
+		}
+		out = append(out, chatCitation{label + " (" + h.Close + ")", h.Href})
+	}
+	return out
 }
 
 func registerChat(mux *http.ServeMux, db *sql.DB) {
@@ -382,10 +446,22 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		var reply chatReply
 		var live []string
+		var linked []chatCitation
 		if closeID == "" {
-			reply, live = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, chatIntent(in.Text, false, false))
+			reply, live, linked = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, chatIntent(in.Text, false, false), in.Text)
 		} else {
-			reply = closeAnswer(func(path string, out any) bool { return read(r, "/v1/closes/"+url.PathEscape(closeID)+path, out) }, closeID, in.WorkpaperID, chatIntent(in.Text, true, in.WorkpaperID != ""), in.Text)
+			// A follow-up may keep the account of the previous question in this conversation.
+			var previous string
+			if err := db.QueryRowContext(r.Context(), `SELECT body FROM chat_messages WHERE `+scope+` AND role='user' ORDER BY id DESC LIMIT 1`, org, author, closeID).Scan(&previous); err != nil && err != sql.ErrNoRows {
+				problem(w, 503, "Conversation unavailable.")
+				return
+			}
+			// A question that refers back without naming a read asks the previous question's read again.
+			intent := chatIntent(in.Text, true, in.WorkpaperID != "")
+			if intent == "" && chatFollowUp.MatchString(in.Text) {
+				intent = chatIntent(previous, true, in.WorkpaperID != "")
+			}
+			reply = closeAnswer(func(path string, out any) bool { return read(r, "/v1/closes/"+url.PathEscape(closeID)+path, out) }, closeID, in.WorkpaperID, intent, in.Text, previous)
 		}
 		body := strings.Join(append([]string{reply.body}, reply.lines...), "\n")
 		if len(body) > 8000 {
@@ -421,7 +497,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The message could not be saved.")
 			return
 		}
-		history(w, r, map[string]any{"live": live})
+		history(w, r, map[string]any{"live": live, "live_citations": append([]chatCitation{}, linked...)})
 	}
 	mux.HandleFunc("GET /v1/closes/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, nil) })
 	mux.HandleFunc("POST /v1/closes/chat", post)

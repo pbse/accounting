@@ -105,6 +105,9 @@ func TestAssistantAnswersFromTheMembersOwnScopedReads(t *testing.T) {
 	if got := ask("What changed from last month?"); !strings.Contains(got.Body, "aren't available yet") {
 		t.Fatalf("changes wait for two months of snapshots: %+v", got)
 	}
+	if got := ask("And what about that one?"); !strings.Contains(got.Body, "aren't available yet") {
+		t.Fatalf("a question that refers back asks the previous question's read again: %+v", got)
+	}
 	if got := ask("Any exceptions?"); !strings.Contains(got.Body, "no transaction capture") {
 		t.Fatalf("exceptions wait for a capture: %+v", got)
 	}
@@ -126,7 +129,7 @@ func TestAssistantAnswersFromTheMembersOwnScopedReads(t *testing.T) {
 	if got := ask("What blocks sign-off?"); !strings.Contains(got.Body, "blocks sign-off") {
 		t.Fatalf("the answer after the ids gain a digit is the last message: %+v", got)
 	}
-	if history := call("user_a", nil, "GET", closeChat, nil, 200); len(history.Messages) != 18 {
+	if history := call("user_a", nil, "GET", closeChat, nil, 200); len(history.Messages) != 20 {
 		t.Fatalf("the conversation keeps every question and answer: %d", len(history.Messages))
 	}
 	// Another member never sees it, even with access to the client; a member without access to a client cannot use its chat.
@@ -226,8 +229,8 @@ func TestAssistantAnswersNameTheAccountsAskedAbout(t *testing.T) {
 		raw, ok := reads[path]
 		return ok && json.Unmarshal([]byte(raw), out) == nil
 	}
-	answer := func(intent, text string) string {
-		r := closeAnswer(read, "7", "", intent, text)
+	answer := func(intent, text string, previous ...string) string {
+		r := closeAnswer(read, "7", "", intent, text, append(previous, "")[0])
 		return strings.Join(append([]string{r.body}, r.lines...), "\n")
 	}
 	if got := answer("tieout", "Which balances don't tie?"); !strings.Contains(got, "Prepaid insurance: differs; Trial Balance 1200.00 USD, supported 1000.00, difference 200.00") || strings.Contains(got, "Accrued rent") {
@@ -241,6 +244,18 @@ func TestAssistantAnswersNameTheAccountsAskedAbout(t *testing.T) {
 	}
 	if got := answer("changes", "What changed in insurance expense?"); !strings.Contains(got, "Insurance expense: 0.00") || strings.Contains(got, "Rent expense") {
 		t.Fatalf("a named account's change is answered: %s", got)
+	}
+	if got := answer("changes", "And how does that compare?", "What changed in insurance expense?"); !strings.Contains(got, "Insurance expense") || strings.Contains(got, "Rent expense") {
+		t.Fatalf("a follow-up keeps the account of the previous question of the same kind: %s", got)
+	}
+	if got := answer("changes", "What changed in utilities?", "What changed in insurance expense?"); !strings.Contains(got, "Rent expense") {
+		t.Fatalf("a question that doesn't refer back never inherits the previous account: %s", got)
+	}
+	if got := answer("tieout", "Does that tie?", "What changed in accrued rent?"); strings.Contains(got, "Accrued rent") {
+		t.Fatalf("an account named in a different kind of question is not carried over: %s", got)
+	}
+	if chatQuery("Find the Zurich invoice?") != "Zurich invoice" || chatQuery("Where is the lease") != "lease" || chatQuery("What changed?") != "" || chatIntent("Search for rent", false, false) != "find" {
+		t.Fatal("a find question names what to look for")
 	}
 	if got := answer("blockers", "What blocks sign-off?"); !strings.Contains(got, "couldn't read sign-off readiness") {
 		t.Fatalf("a failed read says so: %s", got)
