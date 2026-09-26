@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
@@ -42,6 +42,80 @@ export function FirmEnrollment({ onEnrolled }: { onEnrolled: () => void }) {
       <button>Enroll firm</button>
     </fieldset></form><p role="status">{message}</p>
   </details>;
+}
+
+type Role = { slug: string; name: string; description: string; permissions: string[]; allowed: boolean };
+type Invitation = { id: string; email: string; role_name: string; state: string; invited_by: string; subject?: string; expires_at?: string; created_at: string };
+const invitationStates: Record<string, string> = { sending: "Not yet confirmed by WorkOS", pending: "Waiting for them to accept", accepted: "Joined", revoked: "Revoked", expired: "Expired" };
+
+function Invitations() {
+  const [roles, setRoles] = useState<{ configured: boolean; roles: Role[] }>();
+  const [list, setList] = useState<Invitation[]>([]);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("");
+  const [reason, setReason] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function load() {
+    try {
+      const [available, sent] = await Promise.all([workspaceRequest("/members/roles"), workspaceRequest("/members/invitations")]);
+      setRoles(available);
+      setList(sent);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Invitations are unavailable.");
+    }
+  }
+  useEffect(() => void load(), []);
+  async function act(body: Record<string, unknown>) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await workspaceRequest("/members/invitations", body);
+      setMessage(result.message);
+      if (body.action === "send") {
+        setEmail("");
+        setReason("");
+        setConfirmed(false);
+      }
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The invitation could not be sent.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (roles && !roles.configured) return <p>Email invitations need the server's WorkOS API key; until then, enroll members by their WorkOS user ID below.</p>;
+  const chosen = roles?.roles.find((r) => r.slug === role);
+  const hidden = roles?.roles.filter((r) => !r.allowed).length ?? 0;
+  return (
+    <section aria-label="Invite by email">
+      <form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
+        <fieldset disabled={busy}>
+          <legend>Invite by email</legend>
+          <label>Email<input type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+          <label>Role<select required value={role} onChange={(event) => setRole(event.target.value)}><option value="">Choose a role</option>{roles?.roles.filter((r) => r.allowed).map((r) => <option key={r.slug} value={r.slug}>{r.name}</option>)}</select></label>
+          {chosen && <>{chosen.description && <p>{chosen.description}</p>}<ul>{chosen.permissions.map((p) => <li key={p}>{p}</li>)}</ul></>}
+          {hidden > 0 && <p>{hidden} role{hidden === 1 ? " grants" : "s grant"} permissions you don't hold; only an administrator who holds them can invite into {hidden === 1 ? "it" : "them"}.</p>}
+          <label>Authority and reason<textarea required minLength={10} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+          <label><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I verified the address and the role.</label>
+          <button disabled={!confirmed || !role}>Send invitation</button>
+        </fieldset>
+      </form>
+      <p>WorkOS emails the invitation. Once they accept it and sign in, they join the firm. Assign their clients under client access if their role cannot see every client.</p>
+      {list.length > 0 && (
+        <ul>
+          {list.map((i) => (
+            <li key={i.id}>
+              {i.email} · {i.role_name} · {invitationStates[i.state] ?? i.state} · invited by {i.invited_by} {new Date(i.created_at).toLocaleDateString()}
+              {(i.state === "pending" || i.state === "sending") && <> <button type="button" disabled={busy} onClick={() => void act({ action: "revoke", id: i.id, confirmed: true })}>Revoke</button></>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {message && <p role="status">{message}</p>}
+    </section>
+  );
 }
 
 export function FirmOperations() {
@@ -90,8 +164,9 @@ export function FirmOperations() {
       {snapshot.alerts.length === 0 ? <p>No aged or unknown work in this snapshot.</p> : <ul>{snapshot.alerts.map((item) => <li key={`${item.kind}-${item.item_id}`}><Link to={`/dashboard/closes/${item.close_id}`}>{item.kind} #{item.item_id}</Link> · {item.state} · {item.age_minutes} minutes</li>)}</ul>}
       {snapshot.has_more && <p>More than 100 alerts exist. Resolve these, then refresh to see the rest.</p>}
     </>}
+    {memberAccess && <Invitations />}
     {memberAccess && <form onSubmit={(event) => void decide(event)}><fieldset disabled={busy}>
-      <legend>Enroll or revoke a firm member</legend>
+      <legend>Enroll or revoke an existing WorkOS user by ID</legend>
       <label>Exact WorkOS user ID<input required pattern="user_.+" maxLength={200} value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
       <p>Current access: {current ? current.granted ? "Enrolled" : "Revoked" : "Not enrolled"}</p>
       <label><input name="granted" type="checkbox" />Enroll this member (leave unchecked to revoke)</label>
