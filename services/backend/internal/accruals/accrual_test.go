@@ -1,6 +1,9 @@
 package accruals
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFixedAccrualDifferenceAndReversal(t *testing.T) {
 	in := Input{Entity: "Synthetic", SourceReference: "Service completion", ClosePeriod: "2026-09", ServiceStart: "2026-09-01", ServiceEnd: "2026-09-30", Amount: "1200.00", BookedBalance: "200.00", BookingReference: "September ledger", EstimationBasis: "Approved 12 hours at $100", ExpenseAccount: "Consulting expense", LiabilityAccount: "Accrued liabilities", Currency: "USD", Basis: "accrual", Method: Method, MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true, ReverseNextMonth: true}
@@ -60,5 +63,45 @@ func TestRecurringAccrualRequiresCurrentMonthAndApprovedRule(t *testing.T) {
 	in.ServiceStart = "2026-08-31"
 	if _, err = Prepare(in); err == nil {
 		t.Fatal("prior-month service accepted")
+	}
+}
+
+func TestProRataAccrualTakesTheElapsedShareLessInvoiced(t *testing.T) {
+	in := Input{Entity: "Synthetic", SourceReference: "Quarterly maintenance contract", ClosePeriod: "2026-09", ServiceStart: "2026-08-15", ServiceEnd: "2026-11-14", ContractAmount: "9000", InvoicedToDate: "0.00", BookedBalance: "0.00", BookingReference: "September ledger", EstimationBasis: "Signed contract", ExpenseAccount: "Maintenance", LiabilityAccount: "Accrued maintenance", Currency: "USD", Basis: "accrual", Method: ProRataMethod, AccountantRuleReference: "Service contract rule 3", MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true}
+	p, err := Prepare(in)
+	if err != nil || p.Input.Amount != "4597.82" || p.Input.ContractAmount != "9000.00" || p.Proposal.Amount != "4597.82" || p.Proposal.CreditAccount != "Accrued maintenance" {
+		t.Fatalf("47 of 92 service days of 9000 accrue 4597.82: %+v %v", p, err)
+	}
+	in.InvoicedToDate, in.BookedBalance = "3000.00", "1000.00"
+	if p, err = Prepare(in); err != nil || p.Input.Amount != "1597.82" || p.Proposal.Amount != "597.82" {
+		t.Fatalf("what was invoiced is not accrued again: %+v %v", p, err)
+	}
+	in.Amount = "1.00"
+	if p, err = Prepare(in); err != nil || p.Input.Amount != "1597.82" {
+		t.Fatalf("a resent target is recomputed: %+v %v", p, err)
+	}
+	in.ServiceEnd = "2026-09-20"
+	if p, err = Prepare(in); err != nil || p.Input.Amount != "6000.00" {
+		t.Fatalf("a service ended by month-end accrues the whole contract less invoiced: %+v %v", p, err)
+	}
+	in.ServiceEnd, in.InvoicedToDate = "2026-11-14", "4597.82"
+	if p, err = Prepare(in); err != nil || p.Input.Amount != "0.00" || p.Proposal.Amount != "1000.00" || p.Proposal.DebitAccount != "Accrued maintenance" {
+		t.Fatalf("a fully invoiced share clears the booked liability: %+v %v", p, err)
+	}
+	for want, change := range map[string]func(*Input){
+		"treat the excess as a prepaid":      func(i *Input) { i.InvoicedToDate = "4597.83" },
+		"inferred estimates are unsupported": func(i *Input) { i.ServiceStart, i.ServiceEnd, i.InvoicedToDate = "2026-10-01", "2026-12-31", "0.00" },
+		"including an explicit 0.00":         func(i *Input) { i.InvoicedToDate = "" },
+		"pro-rata rule":                      func(i *Input) { i.AccountantRuleReference = "" },
+		"pro-rata method only":               func(i *Input) { i.Method, i.ServiceEnd, i.AccountantRuleReference = Method, "2026-09-30", "" },
+		"future services": func(i *Input) {
+			i.Method, i.ContractAmount, i.InvoicedToDate, i.AccountantRuleReference = Method, "", "", ""
+		},
+	} {
+		bad := in
+		change(&bad)
+		if _, err := Prepare(bad); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("want a refusal naming %q: %v", want, err)
+		}
 	}
 }

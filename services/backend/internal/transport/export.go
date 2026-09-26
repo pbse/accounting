@@ -380,7 +380,11 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			}
 			summary.Source = paper.Input.SourceReference
 			summary.Method = paper.Input.Method
-			summary.Issues = []string{"Fixed incurred amount and booked liability require evidence review. No posting is authorized.", "Any next-month reversal reverses only this proposed adjustment, not the entire booked liability."}
+			basis := "Fixed incurred amount"
+			if paper.Input.Method == accruals.ProRataMethod {
+				basis = "Pro-rata contract share by service days through month-end, less " + paper.Input.InvoicedToDate + " invoiced to date,"
+			}
+			summary.Issues = []string{basis + " and booked liability require evidence review. No posting is authorized.", "Any next-month reversal reverses only this proposed adjustment, not the entire booked liability."}
 		case "reconciliation":
 			var paper reconciliation.Workpaper
 			if err = json.Unmarshal(saved.Paper, &paper); err != nil {
