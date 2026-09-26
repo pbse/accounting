@@ -114,3 +114,56 @@ func TestPeriodEntitiesRequiresCompletePagedRevisions(t *testing.T) {
 		t.Fatalf("changed provider count must block capture: %v", err)
 	}
 }
+
+func TestCertifyComparesTheReportWithTheCaptureTransactionByTransaction(t *testing.T) {
+	row := func(kind, id, noPost string) string {
+		return `{"type":"Data","ColData":[{"value":"2026-09-02"},{"value":"` + kind + `","id":"` + id + `"},{"value":"` + noPost + `"}]}`
+	}
+	report := func(rows ...string) json.RawMessage {
+		return json.RawMessage(`{"Columns":{"Column":[{"ColType":"Date","MetaData":[{"Name":"ColKey","Value":"tx_date"}]},{"ColType":"String","MetaData":[{"Name":"ColKey","Value":"txn_type"}]},{"ColType":"String","MetaData":[{"Name":"ColKey","Value":"is_no_post"}]}]},"Rows":{"Row":[` + strings.Join(rows, ",") + `]}}`)
+	}
+	counts := map[string]int{}
+	for _, kind := range periodEntityTypes {
+		counts[kind] = 0
+	}
+	counts["Bill"], counts["Purchase"], counts["JournalEntry"] = 1, 2, 1
+	captured := map[string][]string{"Bill": {"41"}, "Purchase": {"52", "53"}, "JournalEntry": {"7"}}
+	// A section of rows nests like any report, and an estimate is not posting.
+	agreed := report(row("Bill", "41", "No"), `{"type":"Section","Rows":{"Row":[`+row("Expense", "52", "No")+`,`+row("Credit Card Credit", "53", "No")+`]}}`, row("General Journal", "7", "No"), row("Estimate", "9", "Yes"))
+	if c, err := Certify(agreed, counts, captured); err != nil || !c.Agrees || c.Reported != 4 || c.Captured != 4 || c.NonPosting != 1 {
+		t.Fatalf("the report and the capture agree: %+v %v", c, err)
+	}
+	if c, _ := Certify(report(row("Bill", "41", "No"), row("Expense", "52", "No"), row("Expense", "53", "No"), row("Journal Entry", "7", "No"), row("Invoice", "130", "No")), counts, captured); c.Agrees || strings.Join(c.Missing, ",") != "Invoice 130" {
+		t.Fatalf("a reported transaction the capture lacks is missing: %+v", c)
+	}
+	if c, _ := Certify(report(row("Bill", "41", "No"), row("Expense", "52", "No"), row("Journal Entry", "7", "No")), counts, captured); c.Agrees || strings.Join(c.Extra, ",") != "Purchase 53" {
+		t.Fatalf("a captured transaction the report lacks is extra: %+v", c)
+	}
+	if c, _ := Certify(report(row("Bill", "41", "No"), row("Expense", "52", "No"), row("Expense", "53", "No"), row("Journal Entry", "7", "No"), row("Inventory Qty Adjust", "3", "No")), counts, captured); c.Agrees || strings.Join(c.Unsupported, ",") != "Inventory Qty Adjust 3" {
+		t.Fatalf("a posting type the capture does not read keeps the ledger uncertified: %+v", c)
+	}
+	for name, bad := range map[string]json.RawMessage{
+		"no ID":             report(`{"type":"Data","ColData":[{"value":"2026-09-02"},{"value":"Bill"},{"value":"No"}]}`),
+		"repeated":          report(row("Bill", "41", "No"), row("Bill", "41", "No")),
+		"no type":           json.RawMessage(`{"Columns":{"Column":[{"ColType":"Date"}]},"Rows":{"Row":[]}}`),
+		"short row":         report(`{"type":"Data","ColData":[{"value":"2026-09-02"}]}`),
+		"repeated estimate": report(row("Estimate", "9", "Yes"), row("Estimate", "9", "Yes")),
+	} {
+		if _, err := Certify(bad, counts, captured); err == nil {
+			t.Fatalf("%s: an unreadable report is refused, not certified", name)
+		}
+	}
+	captured["CreditCardPayment"] = []string{"8"}
+	if _, err := Certify(agreed, counts, captured); err == nil {
+		t.Fatal("a captured row of a type the capture does not read is refused")
+	}
+	delete(captured, "CreditCardPayment")
+	delete(counts, "Transfer")
+	if _, err := Certify(agreed, counts, captured); err == nil {
+		t.Fatal("a capture without every type's count is refused")
+	}
+	counts["Transfer"], counts["Bill"] = 0, 2
+	if _, err := Certify(agreed, counts, captured); err == nil {
+		t.Fatal("a capture whose rows do not match its counts is refused")
+	}
+}

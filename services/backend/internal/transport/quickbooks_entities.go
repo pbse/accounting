@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
@@ -124,6 +125,14 @@ func registerQuickBooksEntities(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		jsonReply(w, 200, map[string]any{"items": items, "has_more": more})
+	})
+	mux.HandleFunc("GET /v1/closes/{id}/ledger-certification", func(w http.ResponseWriter, r *http.Request) {
+		out, err := ledgerCertification(r.Context(), db, r.PathValue("id"))
+		if err != nil {
+			problem(w, 503, "Ledger certification unavailable.")
+			return
+		}
+		jsonReply(w, 200, out)
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/quickbooks/exceptions", func(w http.ResponseWriter, r *http.Request) {
 		// Balances come from the most recently captured month-end snapshot, QuickBooks or Xero.
@@ -286,4 +295,93 @@ func scheduleCoverage(ctx context.Context, db *sql.DB, closeID string) (func(qui
 		}
 		return false
 	}, nil
+}
+
+// ledgerCertification compares the close's newest period snapshot's TransactionList with its newest transaction capture
+// of the same month and company. Agreement is between two stored, sequential reads, not an atomic ledger copy.
+func ledgerCertification(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, closeID string) (map[string]any, error) {
+	var snapshotID, snapshotRealm string
+	var snapshotAt time.Time
+	var report []byte
+	err := q.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,s.payload->'reports'->'TransactionList' FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
+ WHERE s.close_id::text=$1 AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&snapshotID, &snapshotRealm, &snapshotAt, &report)
+	if err == sql.ErrNoRows || err == nil && len(report) == 0 {
+		return map[string]any{"status": "unavailable", "reason": "No current QuickBooks period reports for this month."}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var captureID, rowsSync, realm string
+	var finished time.Time
+	var counts []byte
+	var provisional bool
+	err = q.QueryRowContext(ctx, `SELECT s.id::text,COALESCE((SELECT z.id::text FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.period=s.period AND z.evidence_id=s.evidence_id AND z.state='completed' ORDER BY z.id DESC LIMIT 1),''),x.realm,s.finished_at,COALESCE(s.payload->'counts','{}'::jsonb),
+ EXISTS(SELECT 1 FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.connection_id=s.connection_id AND n.period=s.period AND n.id>s.id AND n.state IN ('queued','running','failed'))
+ FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
+ WHERE s.close_id::text=$1 AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z JOIN client_closes zc ON zc.id=z.close_id WHERE z.close_id=s.close_id AND z.period=zc.period AND z.state IN ('completed','unchanged') AND z.connection_id=`+quickbooks.ReadingConnection("s.close_id")+`)`, closeID).Scan(&captureID, &rowsSync, &realm, &finished, &counts, &provisional)
+	if err == sql.ErrNoRows {
+		return map[string]any{"status": "unavailable", "reason": "No current QuickBooks transaction capture for this month."}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"status": "unavailable", "provisional": provisional, "snapshot_id": snapshotID, "snapshot_captured_at": snapshotAt, "capture_id": captureID, "capture_finished_at": finished}
+	if realm != snapshotRealm {
+		out["reason"] = "The period reports and the transaction capture are of different QuickBooks companies."
+		return out, nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT kind,provider_id FROM quickbooks_transaction_rows WHERE sync_id::text=$1`, rowsSync)
+	if err != nil {
+		return nil, err
+	}
+	captured := map[string][]string{}
+	for rows.Next() {
+		var kind, id string
+		if err = rows.Scan(&kind, &id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		captured[kind] = append(captured[kind], id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	var count map[string]int
+	json.Unmarshal(counts, &count)
+	certification, err := quickbooks.Certify(report, count, captured)
+	if err != nil {
+		out["reason"] = err.Error()
+		return out, nil
+	}
+	out["status"], out["certification"] = "differs", certification
+	if certification.Agrees {
+		out["status"] = "agrees"
+	}
+	return out, nil
+}
+
+// certificationSentence says in one sentence what a ledger certification found.
+func certificationSentence(out map[string]any) string {
+	c, _ := out["certification"].(quickbooks.Certification)
+	var text string
+	switch out["status"] {
+	case "agrees":
+		text = fmt.Sprintf("The stored reads agree: all %d posting transactions in the TransactionList report were captured.", c.Reported)
+	case "differs":
+		text = fmt.Sprintf("The stored reads differ: %d reported transactions were not captured, %d captured ones are not reported and %d are of types the capture does not read.", len(c.Missing), len(c.Extra), len(c.Unsupported))
+	default:
+		text, _ = out["reason"].(string)
+		text = "The ledger is not certified: " + strings.TrimSuffix(text, ".") + "."
+	}
+	if provisional, _ := out["provisional"].(bool); provisional {
+		text += " A newer capture has not finished, so this is provisional."
+	} else if out["status"] == "differs" {
+		text += " Capture the transactions and period reports again."
+	}
+	return text
 }

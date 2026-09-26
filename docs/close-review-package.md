@@ -4,7 +4,7 @@ Open a saved client close and select **Download draft review package**. Once an 
 
 The ZIP contains:
 
-- `review.html`: offline, printable summary with source references, methods, unresolved blockers, stored posting receipts and remaining manual review steps.
+- `review.html`: offline, printable summary with source references, methods, unresolved blockers, stored posting receipts, whether the QuickBooks ledger capture was certified against its TransactionList report, and remaining manual review steps.
 - `workpapers.pdf`: portable PDF of saved workpaper inputs, calculations, review IDs and source links. The embedded font may substitute unsupported scripts; JSON retains the exact text. It is a snapshot, not an approval by itself.
 - `manifest.json`: close identity, period, database snapshot timestamp, scope, every saved workpaper version and stored posting record, including sandbox VendorCredit attempts.
 - `workpapers/{id}.json`: full inputs and calculated results for each draft.
