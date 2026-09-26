@@ -548,7 +548,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/jobs", func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(j) ORDER BY j.created_at DESC),'[]'::jsonb) FROM (SELECT id::text,state,workpaper_ids,error,created_at,finished_at FROM preparation_jobs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 20) j`, r.PathValue("id")).Scan(&body)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(j) ORDER BY j.created_at DESC),'[]'::jsonb) FROM (SELECT id::text,state,workpaper_ids,error,created_at,finished_at FROM preparation_jobs WHERE close_id::text=$1 ORDER BY preparation_jobs.id DESC LIMIT 20) j`, r.PathValue("id")).Scan(&body)
 		if err != nil {
 			problem(w, 503, "Could not read preparation jobs.")
 			return

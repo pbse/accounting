@@ -266,7 +266,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close unavailable.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text FROM procedure_drafts WHERE organization_id=$1 AND kind=$2 AND (lower(client_entity)=lower($3) OR (client_entity='' AND $4)) ORDER BY id DESC LIMIT 51`, organization(r), kind, entity, firmAccess(r))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text FROM procedure_drafts WHERE organization_id=$1 AND kind=$2 AND (lower(client_entity)=lower($3) OR (client_entity='' AND $4)) ORDER BY procedure_drafts.id DESC LIMIT 51`, organization(r), kind, entity, firmAccess(r))
 		if err != nil {
 			problem(w, 503, "Procedure drafts unavailable.")
 			return
@@ -629,7 +629,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		var previous string
-		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM procedure_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND kind=$3 ORDER BY id DESC LIMIT 1),'')`, org, d.ClientEntity, d.Kind).Scan(&previous)
+		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM procedure_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND kind=$3 ORDER BY procedure_versions.id DESC LIMIT 1),'')`, org, d.ClientEntity, d.Kind).Scan(&previous)
 		if err != nil || previous != in.PreviousID {
 			problem(w, 409, "Procedure changed. Refresh the impact preview.")
 			return

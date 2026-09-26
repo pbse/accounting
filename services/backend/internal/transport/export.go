@@ -122,7 +122,7 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 			return
 		}
 		pack.SignOff = strings.ReplaceAll(status.State, "_", " ")
-		rows, err := tx.QueryContext(ctx, `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE close_id=$1 ORDER BY id LIMIT 1001`, pack.Close.ID)
+		rows, err := tx.QueryContext(ctx, `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE close_id=$1 ORDER BY workpaper_review_state.id LIMIT 1001`, pack.Close.ID)
 		if err != nil {
 			problem(w, 503, "Could not read saved workpapers.")
 			return
@@ -236,7 +236,7 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 			problem(w, 413, "Work history exceeds the 16 MiB export limit; nothing was omitted.")
 			return
 		}
-		ledgerRows, err := tx.QueryContext(ctx, `SELECT id::text,payload::text,digest FROM quickbooks_snapshots WHERE close_id=$1 ORDER BY id LIMIT 21`, pack.Close.ID)
+		ledgerRows, err := tx.QueryContext(ctx, `SELECT id::text,payload::text,digest FROM quickbooks_snapshots WHERE close_id=$1 ORDER BY quickbooks_snapshots.id LIMIT 21`, pack.Close.ID)
 		if err != nil {
 			problem(w, 503, "Could not read captured ledger reports.")
 			return
@@ -267,7 +267,7 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 			return
 		}
 
-		evidenceRows, err := tx.QueryContext(ctx, `SELECT id::text,name,digest,content,original,extraction_state,extraction_error,superseded_by::text,replacement_reason FROM evidence WHERE close_id=$1 ORDER BY id LIMIT 101`, pack.Close.ID)
+		evidenceRows, err := tx.QueryContext(ctx, `SELECT id::text,name,digest,content,original,extraction_state,extraction_error,superseded_by::text,replacement_reason FROM evidence WHERE close_id=$1 ORDER BY evidence.id LIMIT 101`, pack.Close.ID)
 		if err != nil {
 			problem(w, 503, "Could not read source evidence.")
 			return

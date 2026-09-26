@@ -50,7 +50,7 @@ func readXeroCorrection(ctx context.Context, q querier, closeID, invoiceID strin
 // latestXeroBills returns the bills read by the close's latest Xero capture.
 func latestXeroBills(ctx context.Context, q querier, closeID string) (snapshot, connection, tenant string, bills []xero.Bill, err error) {
 	var raw []byte
-	if err = q.QueryRowContext(ctx, `SELECT id::text,connection_id::text,tenant_id,COALESCE(payload->'transactions'->'records'->'Invoices','[]') FROM xero_snapshots WHERE close_id::text=$1 ORDER BY captured_at DESC,id DESC LIMIT 1`, closeID).Scan(&snapshot, &connection, &tenant, &raw); err != nil {
+	if err = q.QueryRowContext(ctx, `SELECT id::text,connection_id::text,tenant_id,COALESCE(payload->'transactions'->'records'->'Invoices','[]') FROM xero_snapshots WHERE close_id::text=$1 ORDER BY captured_at DESC,xero_snapshots.id DESC LIMIT 1`, closeID).Scan(&snapshot, &connection, &tenant, &raw); err != nil {
 		return
 	}
 	var records []json.RawMessage

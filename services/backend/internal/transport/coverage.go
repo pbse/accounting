@@ -86,7 +86,7 @@ func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageV
 		Excluded bool
 		Reason   string
 	}{}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT ON (account_id) account_id,id::text,job_ids,excluded,reason FROM coverage_bindings WHERE close_id=$1 AND snapshot_id::text=$2 ORDER BY account_id,id DESC`, closeID, out.SnapshotID)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT ON (account_id) account_id,id::text,job_ids,excluded,reason FROM coverage_bindings WHERE close_id=$1 AND snapshot_id::text=$2 ORDER BY account_id,coverage_bindings.id DESC`, closeID, out.SnapshotID)
 	if err != nil {
 		return out, err
 	}

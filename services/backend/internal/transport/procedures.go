@@ -150,7 +150,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			var previous string
-			err = db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM procedure_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND kind=$3 ORDER BY id DESC LIMIT 1),'')`, organization(r), client, kind).Scan(&previous)
+			err = db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM procedure_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND kind=$3 ORDER BY procedure_versions.id DESC LIMIT 1),'')`, organization(r), client, kind).Scan(&previous)
 			if err != nil {
 				problem(w, 503, "Procedure impact unavailable.")
 				return
@@ -183,7 +183,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, map[string]any{"kind": kind, "client_entity": client, "previous_id": previous, "impact_digest": digest, "total_closes": total, "has_more": total > len(items), "closes": items})
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) ORDER BY id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) ORDER BY procedure_versions.id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r))
 		if err != nil {
 			problem(w, 503, "Firm procedures unavailable.")
 			return
@@ -268,7 +268,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		var prior string
-		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM procedure_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND kind=$3 ORDER BY id DESC LIMIT 1),'')`, org, in.ClientEntity, in.Kind).Scan(&prior); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM procedure_versions WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND kind=$3 ORDER BY procedure_versions.id DESC LIMIT 1),'')`, org, in.ClientEntity, in.Kind).Scan(&prior); err != nil {
 			problem(w, 503, "Could not read current procedure.")
 			return
 		}
