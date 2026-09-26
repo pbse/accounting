@@ -1556,3 +1556,5 @@ Request: the first open item after the control fixes. A client whose learned pro
 
 Tests: `TestNewMethodsReplayAsLearnableProcedureMethods` prepares a mid-month depreciation, a declining-balance depreciation and a pro-rata accrual and checks each replays to a method a procedure can learn. The existing refusal of a mid-month paper under an equal-months procedure still passes.
 The replayed boundary, two learnable methods and the composition were observed red when broken (4 mutations).
+
+Code review: GPT-6 Sol (high). Adopted: the list of approved examples for a draft filtered on the paper's bare method, so a mid-month rule found no example and could not be activated; it now compares the composed method, and `TestLearnedRuleRequiresApprovedExampleBeforeActivation` lists a mid-month depreciation, and not an equal-months prepaid, for a mid-month draft (observed red with the old filter). The method text attached to an applied procedure now names the new prepaid and accrual methods; the backlog claim is limited to the calculation methods; the plain declining-balance option says full-month convention. One delta round closed all findings.
