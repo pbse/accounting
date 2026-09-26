@@ -144,7 +144,15 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Client search is too long.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), workSelect+` WHERE `+workScope+` AND (`+predicate+`) ORDER BY CASE WHEN j.state IN ('needs_confirmation','failed') THEN 0 WHEN (`+predicates["blocked"]+`) OR `+issues+` THEN 1 WHEN j.state='waiting_client' THEN 2 WHEN j.state IN ('waiting_evidence','interpreting','queued') THEN 3 ELSE 4 END,(c.owner<>'' AND c.owner=$5) DESC,c.due_on NULLS LAST,`+priorityOrder+`,j.id DESC LIMIT 101`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r))
+		// jobs narrows the list to named jobs, such as those an assistant card started.
+		jobs := []string{}
+		if raw := r.URL.Query().Get("jobs"); raw != "" {
+			if jobs = strings.Split(raw, ","); len(jobs) > 100 {
+				problem(w, 422, "Name at most 100 jobs.")
+				return
+			}
+		}
+		rows, err := db.QueryContext(r.Context(), workSelect+` WHERE `+workScope+` AND (`+predicate+`) AND (cardinality($6::text[])=0 OR j.id::text=ANY($6)) ORDER BY CASE WHEN j.state IN ('needs_confirmation','failed') THEN 0 WHEN (`+predicates["blocked"]+`) OR `+issues+` THEN 1 WHEN j.state='waiting_client' THEN 2 WHEN j.state IN ('waiting_evidence','interpreting','queued') THEN 3 ELSE 4 END,(c.owner<>'' AND c.owner=$5) DESC,c.due_on NULLS LAST,`+priorityOrder+`,j.id DESC LIMIT 101`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r), jobs)
 		if err != nil {
 			problem(w, 503, "Work inbox unavailable.")
 			return

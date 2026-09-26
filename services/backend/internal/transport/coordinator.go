@@ -13,12 +13,13 @@ import (
 
 type cancellableJob struct {
 	ID       string `json:"id"`
+	Name     string `json:"name"`
 	State    string `json:"state"`
 	Revision int    `json:"revision"`
 }
 
 func cancellableJobs(ctx context.Context, tx *sql.Tx, closeID string, lock bool) ([]cancellableJob, string, error) {
-	query := `SELECT j.id::text,j.state,i.revision FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled') ORDER BY j.id`
+	query := `SELECT j.id::text,e.name,j.state,i.revision FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled') ORDER BY j.id`
 	if lock {
 		query += ` FOR UPDATE OF j,i`
 	}
@@ -30,7 +31,7 @@ func cancellableJobs(ctx context.Context, tx *sql.Tx, closeID string, lock bool)
 	jobs := []cancellableJob{}
 	for rows.Next() {
 		var job cancellableJob
-		if err = rows.Scan(&job.ID, &job.State, &job.Revision); err != nil {
+		if err = rows.Scan(&job.ID, &job.Name, &job.State, &job.Revision); err != nil {
 			return nil, "", err
 		}
 		jobs = append(jobs, job)
@@ -43,7 +44,7 @@ func cancellableJobs(ctx context.Context, tx *sql.Tx, closeID string, lock bool)
 }
 
 func recheckableJobs(ctx context.Context, tx *sql.Tx, closeID string, lock bool) ([]cancellableJob, string, error) {
-	query := `SELECT j.id::text,j.state,i.revision FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND j.state IN ('failed','needs_confirmation') AND e.superseded_by IS NULL AND e.extraction_state='ready' ORDER BY j.id`
+	query := `SELECT j.id::text,e.name,j.state,i.revision FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND j.state IN ('failed','needs_confirmation') AND e.superseded_by IS NULL AND e.extraction_state='ready' ORDER BY j.id`
 	if lock {
 		query += ` FOR UPDATE OF j,i`
 	}
@@ -55,7 +56,7 @@ func recheckableJobs(ctx context.Context, tx *sql.Tx, closeID string, lock bool)
 	jobs := []cancellableJob{}
 	for rows.Next() {
 		var job cancellableJob
-		if err = rows.Scan(&job.ID, &job.State, &job.Revision); err != nil {
+		if err = rows.Scan(&job.ID, &job.Name, &job.State, &job.Revision); err != nil {
 			return nil, "", err
 		}
 		jobs = append(jobs, job)
@@ -135,7 +136,7 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Could not read preparation progress.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"inventory": json.RawMessage(raw), "inventory_digest": scopeDigest(raw, coverage), "coverage": coverage, "run": run, "stop": map[string]any{"count": len(stoppable), "digest": stopDigest}, "recheck": map[string]any{"count": len(recheckable), "digest": recheckDigest}})
+		jsonReply(w, 200, map[string]any{"inventory": json.RawMessage(raw), "inventory_digest": scopeDigest(raw, coverage), "coverage": coverage, "run": run, "stop": map[string]any{"count": len(stoppable), "digest": stopDigest, "jobs": stoppable}, "recheck": map[string]any{"count": len(recheckable), "digest": recheckDigest, "jobs": recheckable}})
 	})
 	mux.HandleFunc("POST /v1/closes/{id}/prepare-close/recheck", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := reviewActor(w, r); !ok {
@@ -343,11 +344,13 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			raw, _ = json.Marshal(linked)
 		}
 		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_preparations(close_id,inventory_digest,scope,actor,agent) VALUES($1,$2,$3,$4,NULLIF($5,'')) ON CONFLICT(close_id,inventory_digest) DO UPDATE SET inventory_digest=close_preparations.inventory_digest RETURNING id::text`, closeID, in.Digest, string(raw), actor, auth.Agent(r.Context())).Scan(&id)
+		var created bool
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_preparations(close_id,inventory_digest,scope,actor,agent) VALUES($1,$2,$3,$4,NULLIF($5,'')) ON CONFLICT(close_id,inventory_digest) DO UPDATE SET inventory_digest=close_preparations.inventory_digest RETURNING id::text,xmax::text='0'`, closeID, in.Digest, string(raw), actor, auth.Agent(r.Context())).Scan(&id, &created)
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Preparation could not be confirmed. Retry the same scope safely.")
 			return
 		}
-		jsonReply(w, 200, map[string]string{"id": id})
+		// created is false when the same scope was already confirmed and this returns that run.
+		jsonReply(w, 200, map[string]any{"id": id, "created": created})
 	})
 }

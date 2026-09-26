@@ -23,6 +23,7 @@ Every answer comes from an existing read, made with your own permissions, and li
 | | exceptions in the ledger capture | the Exceptions panel |
 | | whether the ledger capture is certified | the close brief's ledger line |
 | A close | find … (also search, look for, where is, show me) | search, in this close |
+| | prepare, recheck or stop its work | an action card ([below](#action-cards)) |
 | A draft | this draft | its review state, blockers and questions |
 | Firm-wide | find … | search, across your closes |
 | | what needs you today | the morning brief |
@@ -32,6 +33,16 @@ Every answer comes from an existing read, made with your own permissions, and li
 A follow-up that refers back ("that", "it", "same") and names no account keeps the account of your previous question in the same close conversation, when that question was the same kind (a tie-out after a tie-out, a change after a change); otherwise nothing carries over. A question that refers back without naming what to read ("and that one?") asks the previous question's read again.
 
 A firm-wide answer shows its current details once, under the reply. History keeps only the generic reply and its link, so it never keeps an answer's client details you might later lose access to; your own questions are kept as you typed them. A close answer is kept in full, since the close conversation is reachable only with access to the close.
+
+## Action cards
+
+In a close conversation, a message that starts with **prepare**, **recheck** (or re-check) or **stop** and otherwise only names the close's work ("Prepare this close", "Recheck failed work", "Stop this close's unresolved work") answers with a card; "Prepare me for sign-off" or "Stop showing that" does not (migration 073). A firm-wide conversation has no close to act on.
+
+The newest card in the conversation reads the close's preparation status (`GET /v1/closes/{id}/prepare-close`, every 5 seconds while it is shown) and lists exactly what the action covers: the source documents to prepare, with each source number and a note when no period ledger is linked or it is stale, or the named jobs to recheck or stop, with each job number (the status now names each job). It shows the latest preparation run with who started it and its jobs by state. When there is nothing to act on, or the exact scope is already being prepared, it says so and offers no confirmation.
+
+Confirming needs the checkbox, the `workpapers:review` permission, and a 1–500 character reason to stop. The checkbox is tied to the list it was ticked against: any change to the list clears it, even if the list later changes back. `POST /v1/closes/{id}/chat/{message}/confirm` sends that list's digest and is refused if the list has changed. It then runs the close page's own route (`POST /prepare-close`, `/prepare-close/recheck` or `/prepare-close/cancel`) with your own permissions, and the route checks the digest again under its lock. Any refusal is shown as the route returned it, and nothing is recorded. For the same scope the prepare route returns the run already confirmed rather than start one, and now says whether it created the run; the card is then refused, since it started nothing. On success the card keeps the jobs it covered, the run it started (for prepare) and when. A card is confirmed at most once, and only by its author; while a confirmation runs, the assistant takes no other question. If the work started but the card could not record it, the card keeps saying so until the next confirmation.
+
+Closing the assistant does not stop the work: the jobs run as they would from the close page. Reopening shows each of the card's jobs with its current state, any error or changed source, and links to its drafts, read from Work narrowed to those jobs (`GET /v1/closes/{id}/work?jobs=`, up to 100 job numbers; a card that stopped more points to Work for the rest). Older cards show only what they started.
 
 ## Search
 
@@ -47,7 +58,7 @@ Only closes you can access are searched, in a read-only transaction with a time 
 
 ## Commands
 
-Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type **/** in the assistant's box for the same commands. Commands run without a model: each asks the assistant one of the questions above or opens the screen that does the work, where every action keeps its preview and confirmation.
+Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type **/** in the assistant's box for the same commands. Commands run without a model: each asks the assistant one of the questions above, or opens the screen that does the work, where every action keeps its preview and confirmation.
 
 | Command | Does |
 | --- | --- |
@@ -56,7 +67,7 @@ Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type 
 | `/explain [account]` | Whether that account ties, or what blocks sign-off |
 | `/compare [account]` | What changed from last month, for that account or overall |
 | `/find <words>` | Searches, in this close or across your closes |
-| `/prepare`, `/stop` | Opens the close's preparation, with its preview, confirmation and stop |
+| `/prepare`, `/stop` | Asks for the close's prepare or stop card |
 | `/request` | Opens the close's client requests |
 | `/review` | Opens the first draft in the review queue |
 | `/rehearse`, `/export` | Opens the close's sign-off tab: the saved-proposal rehearsal and the package downloads |
@@ -65,6 +76,6 @@ A command that needs a close uses the one you are on. Elsewhere the palette list
 
 ## Boundaries
 
-The assistant reads and explains; it never approves, sends, posts, signs off or starts work, and it calls no POST route. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
+The assistant reads and explains. It never approves, sends, posts or signs off; the only work it starts is a card's action, after its author confirms the listed scope, through the close page's own route and checks. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
 
-Checks: `go test ./internal/transport -run TestAssistant` with `TEST_DATABASE_URL`.
+Checks: `go test ./internal/transport -run 'TestAssistant|TestChatAction'` with `TEST_DATABASE_URL`.

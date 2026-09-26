@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -18,7 +19,8 @@ import (
 )
 
 // The assistant answers from existing reads, replayed through the saved-closes mux under the caller's own
-// permissions, and writes only its own history. It calls no POST route and no model.
+// permissions, and writes only its own history. It calls no model. An action card runs the close page's own
+// route, replayed the same way, only when its author confirms the scope the card showed.
 
 type chatCitation struct {
 	Label string `json:"label"`
@@ -29,6 +31,7 @@ type chatReply struct {
 	body      string
 	lines     []string
 	citations []chatCitation
+	action    string
 }
 
 type chatMessage struct {
@@ -37,6 +40,8 @@ type chatMessage struct {
 	Body        string          `json:"body"`
 	WorkpaperID string          `json:"workpaper_id,omitempty"`
 	Citations   json.RawMessage `json:"citations"`
+	Action      string          `json:"action,omitempty"`
+	Outcome     json.RawMessage `json:"outcome"`
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
@@ -55,6 +60,32 @@ func chatQuery(text string) string {
 		}
 	}
 	return ""
+}
+
+var chatActionWords = strings.Fields("this the close close's work unresolved remaining failed pending jobs proposals preparation all everything it now please again")
+
+// chatAction is the close action a message asks for: it starts with the verb, and every other word only names the
+// close's work, so "prepare me for sign-off" or "stop showing that" is not an action.
+func chatAction(text string) string {
+	words := strings.Fields(strings.ToLower(strings.TrimRight(strings.TrimSpace(text), ".!")))
+	if len(words) > 0 && words[0] == "please" {
+		words = words[1:]
+	}
+	if len(words) == 0 || !slices.Contains([]string{"prepare", "recheck", "re-check", "stop"}, words[0]) {
+		return ""
+	}
+	for _, w := range words[1:] {
+		if !slices.Contains(chatActionWords, w) {
+			return ""
+		}
+	}
+	return strings.ReplaceAll(words[0], "-", "")
+}
+
+var chatActionReply = map[string]string{
+	"prepare": "Here is what preparing this close would coordinate. Check the listed documents and confirm on the card to start; facts and methods still need their own review, and closing the assistant does not stop the work.",
+	"recheck": "Here are the failed or pending proposals that can be rechecked. Check the list and confirm on the card to recheck them.",
+	"stop":    "Here is the unresolved work in this close. Check the list, give a reason and confirm on the card to stop it; prepared drafts and sent messages stay in their history.",
 }
 
 // chatIntent picks the read a question is about; the first match wins, and "" means the help reply.
@@ -379,7 +410,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	// scope binds every query to the firm, the signed-in author and one conversation.
 	const scope = `organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint`
 	history := func(w http.ResponseWriter, r *http.Request, extra map[string]any) {
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(outcome,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Conversation unavailable.")
 			return
@@ -388,7 +419,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		messages := []chatMessage{}
 		for rows.Next() {
 			var m chatMessage
-			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.CreatedAt) != nil {
+			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.Outcome, &m.CreatedAt) != nil {
 				problem(w, 503, "Conversation unavailable.")
 				return
 			}
@@ -405,13 +436,16 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, out)
 	}
-	read := func(r *http.Request, path string, out any) bool {
-		req, err := http.NewRequestWithContext(r.Context(), "GET", path, nil)
-		if err != nil {
-			return false
-		}
+	replay := func(r *http.Request, method, path string, body any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequestWithContext(r.Context(), method, path, bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	read := func(r *http.Request, path string, out any) bool {
+		rec := replay(r, "GET", path, nil)
 		return rec.Code == 200 && json.Unmarshal(rec.Body.Bytes(), out) == nil
 	}
 	post := func(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +483,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		var linked []chatCitation
 		if closeID == "" {
 			reply, live, linked = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, chatIntent(in.Text, false, false), in.Text)
+		} else if action := chatAction(in.Text); action != "" {
+			reply = chatReply{body: chatActionReply[action], citations: []chatCitation{{"Close preparation", "/dashboard/closes/" + closeID + "?tab=overview"}}, action: action}
 		} else {
 			// A follow-up may keep the account of the previous question in this conversation.
 			var previous string
@@ -484,8 +520,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "Your firm membership changed. Nothing was saved.")
 			return
 		}
-		for _, m := range []struct{ role, body, citations string }{{"user", in.Text, "[]"}, {"assistant", body, string(citations)}} {
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7)`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations); err != nil {
+		for _, m := range []struct{ role, body, citations, action string }{{"user", in.Text, "[]", ""}, {"assistant", body, string(citations), reply.action}} {
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''))`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action); err != nil {
 				break
 			}
 		}
@@ -499,6 +535,93 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		history(w, r, map[string]any{"live": live, "live_citations": append([]chatCitation{}, linked...)})
 	}
+	// confirm runs a card's action through the close page's route with the digest the author confirmed, and records
+	// the jobs it covered on the card. The route checks permission and re-checks the digest under its own lock.
+	confirm := func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Digest string `json:"digest"`
+			Reason string `json:"reason"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		org, author, closeID := organization(r), subject(r), r.PathValue("id")
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "Conversation unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		var action string
+		if err = tx.QueryRowContext(r.Context(), `SELECT action FROM chat_messages WHERE `+scope+` AND id::text=$4 AND action IS NOT NULL AND outcome IS NULL FOR UPDATE`, org, author, closeID, r.PathValue("message")).Scan(&action); err != nil {
+			problem(w, 409, "This card was already confirmed or is no longer in your conversation.")
+			return
+		}
+		type job struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		base := "/v1/closes/" + url.PathEscape(closeID)
+		var scoped struct {
+			Inventory []struct {
+				JobID string `json:"job_id"`
+				Name  string `json:"name"`
+			} `json:"inventory"`
+			InventoryDigest string `json:"inventory_digest"`
+			Stop            struct {
+				Digest string `json:"digest"`
+				Jobs   []job  `json:"jobs"`
+			} `json:"stop"`
+			Recheck struct {
+				Digest string `json:"digest"`
+				Jobs   []job  `json:"jobs"`
+			} `json:"recheck"`
+		}
+		if !read(r, base+"/prepare-close", &scoped) {
+			problem(w, 503, "Close preparation unavailable.")
+			return
+		}
+		route, digest, jobs, body := "/prepare-close", scoped.InventoryDigest, []job{}, map[string]any{"inventory_digest": in.Digest, "confirmed": true}
+		for _, i := range scoped.Inventory {
+			jobs = append(jobs, job{i.JobID, i.Name})
+		}
+		switch action {
+		case "recheck":
+			route, digest, jobs, body = "/prepare-close/recheck", scoped.Recheck.Digest, scoped.Recheck.Jobs, map[string]any{"digest": in.Digest, "confirmed": true}
+		case "stop":
+			route, digest, jobs, body = "/prepare-close/cancel", scoped.Stop.Digest, scoped.Stop.Jobs, map[string]any{"digest": in.Digest, "reason": in.Reason, "confirmed": true}
+		}
+		if in.Digest == "" || in.Digest != digest {
+			problem(w, 409, "The work changed since the card showed it. Check the updated list and confirm again.")
+			return
+		}
+		rec := replay(r, "POST", base+route, body)
+		if rec.Code != 200 {
+			for k, v := range rec.Header() {
+				w.Header()[k] = v
+			}
+			w.WriteHeader(rec.Code)
+			w.Write(rec.Body.Bytes())
+			return
+		}
+		var started struct {
+			ID      string `json:"id"`
+			Created bool   `json:"created"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &started)
+		// The prepare route returns an earlier run of the same scope rather than starting one; the card claims only its own.
+		if action == "prepare" && !started.Created {
+			problem(w, 409, "This exact scope is already being prepared as run #"+started.ID+". Open the close to follow it.")
+			return
+		}
+		outcome, _ := json.Marshal(map[string]any{"run_id": started.ID, "jobs": jobs})
+		if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET outcome=$5::jsonb||jsonb_build_object('at',now()) WHERE `+scope+` AND id::text=$4`, org, author, closeID, r.PathValue("message"), string(outcome)); err != nil || tx.Commit() != nil {
+			problem(w, 503, "The work started, but this card could not record it. Open the close to see its status.")
+			return
+		}
+		history(w, r, nil)
+	}
+	mux.HandleFunc("POST /v1/closes/{id}/chat/{message}/confirm", confirm)
 	mux.HandleFunc("GET /v1/closes/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, nil) })
 	mux.HandleFunc("POST /v1/closes/chat", post)
 	mux.HandleFunc("GET /v1/closes/{id}/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, nil) })
