@@ -11,7 +11,9 @@ export type PrepaidInput = {
   prepaid_account: string;
   schedule?: "deferred_revenue" | "depreciation";
   salvage_value?: string;
-  method: "equal_full_months_v1" | "actual_days_v1";
+  method: "equal_full_months_v1" | "actual_days_v1" | "declining_balance_v1";
+  factor?: "2" | "1.5";
+  convention?: "mid_month";
   examples_confirmed?: boolean;
   credit_amount?: string;
   credit_period?: string;

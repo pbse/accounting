@@ -19,6 +19,14 @@ const NoRefundCancellation = "no_refund_month_boundary_v1"
 const DeferredRevenue = "deferred_revenue"
 const Depreciation = "depreciation"
 
+// DecliningMethod depreciates a fixed share of the net book value each month (factor ÷ useful life in months), switching
+// to straight-line over the remaining months once that is larger, never below salvage value.
+const DecliningMethod = "declining_balance_v1"
+
+// MidMonth treats an asset as placed in service mid-month: half a month's depreciation in the first month and the other
+// half in the month after the useful life ends.
+const MidMonth = "mid_month"
+
 type Credit struct {
 	Amount          string `json:"amount"`
 	EffectivePeriod string `json:"effective_period"`
@@ -29,6 +37,8 @@ type Credit struct {
 type Input struct {
 	Schedule                string   `json:"schedule,omitempty"`
 	SalvageValue            string   `json:"salvage_value,omitempty"`
+	Factor                  string   `json:"factor,omitempty"`
+	Convention              string   `json:"convention,omitempty"`
 	ExamplesConfirmed       bool     `json:"examples_confirmed,omitempty"`
 	CreditAmount            string   `json:"credit_amount,omitempty"`
 	CreditPeriod            string   `json:"credit_period,omitempty"`
@@ -115,7 +125,7 @@ func Prepare(input Input) (Workpaper, error) {
 	if input.Basis != "accrual" {
 		return empty, invalid("basis", "This method requires accrual-basis accounting.")
 	}
-	if (input.Method != Method && input.Method != DailyMethod) || !input.MethodConfirmed {
+	if (input.Method != Method && input.Method != DailyMethod && (input.Method != DecliningMethod || input.Schedule != Depreciation)) || !input.MethodConfirmed {
 		return empty, &InputError{"POLICY_REQUIRED", "method_confirmed", "Select and confirm equal full months or inclusive actual days, with cents rounded down and the residual in the final month."}
 	}
 	if !input.BookingConfirmed {
@@ -137,21 +147,44 @@ func Prepare(input Input) (Workpaper, error) {
 	if err != nil {
 		return empty, invalid("service_end", "Enter a valid service end date.")
 	}
-	if input.Method == Method && start.Day() != 1 {
+	monthly := input.Method == Method || input.Method == DecliningMethod
+	if monthly && start.Day() != 1 {
 		return empty, invalid("service_start", "Partial months need a separately approved method. Start on the first day of a month.")
 	}
-	if end.Before(start) || (input.Method == Method && end.AddDate(0, 0, 1).Day() != 1) {
+	if end.Before(start) || (monthly && end.AddDate(0, 0, 1).Day() != 1) {
 		return empty, invalid("service_end", "End on or after the start; equal full months must end on a month-end.")
 	}
 	months := (end.Year()-start.Year())*12 + int(end.Month()-start.Month()) + 1
 	if months > 120 || start.Year() < 1000 || end.Year() > 9998 {
 		return empty, invalid("service_end", "This method supports up to 120 months.")
 	}
+	// Declining balance and the mid-month convention are depreciation methods under the accountant's cited policy.
+	var factorTenths int64
+	life := int64(months)
+	if input.Method == DecliningMethod {
+		factorTenths = map[string]int64{"2": 20, "2.0": 20, "1.5": 15}[input.Factor]
+		if factorTenths == 0 {
+			return empty, invalid("factor", "Choose a declining-balance factor of 2 (double) or 1.5.")
+		}
+	} else if input.Factor != "" {
+		return empty, invalid("factor", "A factor applies to declining-balance depreciation only.")
+	}
+	if input.Convention != "" && (input.Convention != MidMonth || input.Schedule != Depreciation || !monthly) {
+		return empty, invalid("convention", "The mid-month convention applies to depreciation in equal months or declining balance.")
+	}
+	input.AccountantRuleReference = strings.TrimSpace(input.AccountantRuleReference)
+	if (input.Method == DecliningMethod || input.Convention == MidMonth) && (len(input.AccountantRuleReference) < 5 || len(input.AccountantRuleReference) > 200) {
+		return empty, &InputError{"POLICY_REQUIRED", "accountant_rule_reference", "Cite the client accountant's approved depreciation policy for this method or convention."}
+	}
+	if input.Convention == MidMonth {
+		months++
+		end = time.Date(end.Year(), end.Month()+2, 0, 0, 0, 0, 0, time.UTC)
+	}
 	period, err := time.Parse("2006-01", input.ClosePeriod)
 	if err != nil || period.Before(time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)) || period.After(end) {
 		return empty, invalid("close_period", "Choose a close month within the service period.")
 	}
-	var credit, booked int64
+	var credit, booked, salvage int64
 	var effective time.Time
 	extended := input.Method == DailyMethod || input.CreditAmount != "" || len(input.Credits) > 0 || input.BookedBalance != "" || input.CancellationMethod != ""
 	if extended && !input.ExamplesConfirmed {
@@ -183,7 +216,7 @@ func Prepare(input Input) (Workpaper, error) {
 		if input.BookedBalance == "" {
 			return empty, invalid("booked_balance", "Enter the booked accumulated depreciation and its ledger reference, including an explicit 0.00.")
 		}
-		salvage := int64(0)
+		salvage = 0
 		if input.SalvageValue != "" {
 			if salvage, err = Amount(input.SalvageValue); err != nil || salvage >= total {
 				return empty, invalid("salvage_value", "Salvage value must be less than the asset's cost.")
@@ -218,7 +251,6 @@ func Prepare(input Input) (Workpaper, error) {
 	if len(input.Credits) > 20 || (len(input.Credits) > 0 && (input.CreditAmount != "" || input.CancellationMethod != "" || input.BookedBalance == "")) {
 		return empty, invalid("credits", "Use up to 20 separately documented credits with a confirmed booked balance; do not combine with a legacy credit or cancellation.")
 	}
-	input.AccountantRuleReference = strings.TrimSpace(input.AccountantRuleReference)
 	if len(input.Credits) > 0 && (input.AccountantRuleReference == "" || len(input.AccountantRuleReference) > 200) {
 		return empty, &InputError{"POLICY_REQUIRED", "accountant_rule_reference", "Cite the client accountant's approved rule for multiple or retrospective credits."}
 	}
@@ -325,6 +357,25 @@ func Prepare(input Input) (Workpaper, error) {
 			weight = int64(to.Sub(from).Hours()/24) + 1
 		}
 		amount := base * weight / denominator
+		if input.Convention == MidMonth || input.Method == DecliningMethod {
+			// Half months weigh 1 and full months 2; the life's total weight is twice its months.
+			weight = 2
+			if input.Convention == MidMonth && i == 0 {
+				weight = 1
+			}
+			left := 2*int64(months-i) - 1
+			if input.Convention != MidMonth {
+				left = 2 * int64(months-i)
+			} else if i == 0 {
+				left = 2*int64(months) - 2
+			}
+			amount = remaining * weight / left
+			if input.Method == DecliningMethod {
+				// Net book value is what is left to depreciate plus salvage.
+				declining := (remaining + salvage) * factorTenths * weight / (10 * life * 2)
+				amount = min(max(declining, amount), remaining)
+			}
+		}
 		if i == months-1 {
 			amount = remaining
 		}
