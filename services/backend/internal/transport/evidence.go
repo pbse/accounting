@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -65,56 +66,9 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		digest := preparation.Digest(body)
-		var id string
-		added := false
-		err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM evidence WHERE close_id=$1 AND digest=$2`, closeID, digest).Scan(&id)
-		if err == sql.ErrNoRows {
-			added = true
-			var count, size int
-			if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil {
-				problem(w, 503, "Could not check evidence storage.")
-				return
-			}
-			// ponytail: 100 files / 20 MiB per close in Postgres; move originals to R2 when larger intake is supported.
-			if count >= 100 || size+len(body) > 20*1024*1024 {
-				problem(w, 413, "This close has reached its evidence limit (100 files or 20 MiB).")
-				return
-			}
-			actor := auth.Actor(r.Context())
-			subject := "local-workspace"
-			if actor != nil && actor.Subject != "" {
-				subject = actor.Subject
-			}
-			content, state := string(body), "ready"
-			var original []byte
-			if pdf {
-				content = ""
-				state = "queued"
-				original = body
-			}
-			err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,created_by,original,extraction_state,purpose,agent) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')) RETURNING id::text`, closeID, name, digest, content, subject, original, state, purpose, auth.Agent(r.Context())).Scan(&id)
-		}
-		if err == nil && !added {
-			var currentPurpose string
-			if err = tx.QueryRowContext(r.Context(), `SELECT purpose FROM evidence WHERE id::text=$1 AND close_id=$2`, id, closeID).Scan(&currentPurpose); err != nil {
-				problem(w, 503, "Evidence purpose unavailable.")
-				return
-			}
-			if currentPurpose != purpose {
-				problem(w, 409, "This file already has a different evidence purpose. Use its existing source or choose distinct content.")
-				return
-			}
-		}
-		jobID := ""
-		if err == nil && purpose == "work" {
-			jobID, err = preparation.StartIntake(r.Context(), tx, closeID, id, auth.Actor(r.Context()).Subject)
-		}
-		if err == nil && added && purpose == "work" {
-			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.id::text<>$2 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai' AND (jsonb_array_length(COALESCE(i.proposal->'questions','[]'))>0 OR EXISTS(SELECT 1 FROM jsonb_array_elements(i.proposal->'facts') f WHERE COALESCE(f->>'question','')<>''))`, closeID, jobID)
-		}
-		if err != nil {
-			jobProblem(w, err, "Upload could not be confirmed. Retry the same file safely.")
+		id, digest, jobID, refused := addEvidence(r.Context(), tx, closeID, name, body, pdf, purpose)
+		if refused != nil {
+			refused.write(w)
 			return
 		}
 		if tx.Commit() != nil {
@@ -569,4 +523,55 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]string{"id": id, "state": "cancelled"})
 	})
+}
+
+// addEvidence saves a file in the caller's transaction, which holds the close's lock: it deduplicates by content, keeps the
+// close within its evidence limits, and starts (or finds) the file's intake job for work evidence.
+func addEvidence(ctx context.Context, tx *sql.Tx, closeID, name string, body []byte, pdf bool, purpose string) (id, digest, jobID string, refused *closeActionError) {
+	digest = preparation.Digest(body)
+	added := false
+	err := tx.QueryRowContext(ctx, `SELECT id::text FROM evidence WHERE close_id=$1 AND digest=$2`, closeID, digest).Scan(&id)
+	if err == sql.ErrNoRows {
+		added = true
+		var count, size int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil {
+			return "", "", "", closeRefusal(503, "Could not check evidence storage.")
+		}
+		// ponytail: 100 files / 20 MiB per close in Postgres; move originals to R2 when larger intake is supported.
+		if count >= 100 || size+len(body) > 20*1024*1024 {
+			return "", "", "", closeRefusal(413, "This close has reached its evidence limit (100 files or 20 MiB).")
+		}
+		actor := auth.Actor(ctx)
+		subject := "local-workspace"
+		if actor != nil && actor.Subject != "" {
+			subject = actor.Subject
+		}
+		content, state := string(body), "ready"
+		var original []byte
+		if pdf {
+			content = ""
+			state = "queued"
+			original = body
+		}
+		err = tx.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by,original,extraction_state,purpose,agent) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')) RETURNING id::text`, closeID, name, digest, content, subject, original, state, purpose, auth.Agent(ctx)).Scan(&id)
+	}
+	if err == nil && !added {
+		var currentPurpose string
+		if err = tx.QueryRowContext(ctx, `SELECT purpose FROM evidence WHERE id::text=$1 AND close_id=$2`, id, closeID).Scan(&currentPurpose); err != nil {
+			return "", "", "", closeRefusal(503, "Evidence purpose unavailable.")
+		}
+		if currentPurpose != purpose {
+			return "", "", "", closeRefusal(409, "This file already has a different evidence purpose. Use its existing source or choose distinct content.")
+		}
+	}
+	if err == nil && purpose == "work" {
+		jobID, err = preparation.StartIntake(ctx, tx, closeID, id, auth.Actor(ctx).Subject)
+	}
+	if err == nil && added && purpose == "work" {
+		_, err = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.id::text<>$2 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai' AND (jsonb_array_length(COALESCE(i.proposal->'questions','[]'))>0 OR EXISTS(SELECT 1 FROM jsonb_array_elements(i.proposal->'facts') f WHERE COALESCE(f->>'question','')<>''))`, closeID, jobID)
+	}
+	if err != nil {
+		return "", "", "", jobRefusal(err, "Upload could not be confirmed. Retry the same file safely.")
+	}
+	return id, digest, jobID, nil
 }

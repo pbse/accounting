@@ -26,6 +26,25 @@ Open `/dashboard/closes`, unlock, create a close, choose a preparation type, the
 
 Standalone preparation still supports export without saving. CSV format is `id,date,amount`, one source ID per row, dates within the selected full month, positive deposits and negative withdrawals. Header-only means no movement. Limits: 2,000 rows per source, 512 KiB request, 1,000 statement pages. Page presence is user-reported, not PDF inspection. Matched rows are candidates and cannot establish population completeness. No unexplained balancing entry is generated.
 
+## Statement PDFs
+
+A bank or card statement uploaded as a PDF can become the statement CSV (migration 076). On the Evidence tab, each current PDF with extracted text has **Statement rows**:
+
+1. **Propose rows** (`POST /v1/closes/{id}/evidence/{evidence}/statement`, one model call within the firm's daily limit) reads statements up to 48 KiB of text and 300 rows; a longer or truncated reading is refused, asking to split the PDF by pages. The model gets the text as untrusted data and returns each row's page, date, description, signed amount (so closing = opening + the rows) and the line it came from, plus the account, period, opening and closing balances with their lines, and the currency.
+2. Each row's line must appear as one line on its page and show its amount as a whole number (20.00 does not match 120.00) and its date in a common statement form, and the model must be sure of its direction; otherwise the row is flagged ("not found on page 2", "the amount does not appear in the line", "the date does not appear in the line", "direction unclear"). An account, period date or balance whose line is not in the text, or does not show that value, is left blank to enter from the original. The PDF's extracted pages must be marked 1 to N; extraction indents any line in the document that looks like a page marker.
+3. The review shows the rows as a table to correct, remove or add to, the balance difference, and the PDF's page check: printed "Page x of y" labels that disagree with the extracted pages block confirmation.
+4. **Confirm** (`.../statement/confirm`, `workpapers:review`) requires, under the close's lock:
+   - the same current, unreplaced PDF;
+   - every page ticked as checked against the original, including each row's direction (a balance that ties does not prove no row is missing);
+   - every proposed row kept once or removed, and every added, changed (including its description) or flagged row checked;
+   - an explicit check when the account, period, balances or currency differ from the reading;
+   - a statement period within the close month, and every row in it;
+   - the client's established home currency (refused while its ledger connections conflict or predate currency detection; a client with no ledger connected is assumed USD, as elsewhere);
+   - amounts of at most ten whole digits, as reconciliation reads;
+   - opening balance plus the rows equal to the closing balance exactly (a statement with no transactions confirms as a header-only CSV).
+
+   It then saves "`<name>` rows.csv" (`id,date,amount`, ids `e<source>-p<page>-<n>`) through the upload's own evidence step, in the same transaction as the record of what was confirmed, by whom and from which reading. The CSV starts its own preparation job, as an upload does, and its PDF remains support for the opening and closing balances and pages.
+
 ## API for UI and agents
 
 - `POST /v1/reconciliations:prepare`: typed `ReconciliationInput` to deterministic draft; no persistence.
