@@ -117,6 +117,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerBillCorrection(mux, db)
 	registerProductionPosting(mux, db)
 	registerXeroPosting(mux, db)
+	registerXeroCorrections(mux, db)
 	registerEvidence(mux, db)
 	registerForwardedEvidence(mux, db)
 	registerReview(mux, db)

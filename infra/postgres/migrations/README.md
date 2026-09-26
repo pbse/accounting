@@ -90,3 +90,5 @@ Fresh Compose volumes run every migration automatically. Existing Compose volume
 `066_materiality.sql` adds a firm's optional materiality amount and records it with every firm policy change. Apply after 065 with API/worker stopped; `/readyz` checks it.
 
 `067_xero_change_hints.sql` records the newest change time a signed Xero webhook reported for each connection, so a hinted close is captured again early. Apply after 066 with API/worker stopped; `/readyz` checks it.
+
+`068_xero_corrections.sql` records each reviewed recode of one Xero bill line (preview, approval, one attempt, readback), with row-level security like 060. Apply after 067 with API/worker stopped; `/readyz` checks it.

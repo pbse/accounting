@@ -21,6 +21,8 @@ const operationsAlertQuery = `SELECT kind,close_id,item_id,state,age_minutes FRO
  FROM vendor_credit_postings p JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state IN ('unknown','executing')
  UNION ALL SELECT 'bill_correction',p.close_id::text,p.id::text,p.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(p.attempted_at,now()))/60)::int)
  FROM bill_corrections p JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state IN ('unknown','executing')
+ UNION ALL SELECT 'xero_correction',p.close_id::text,p.id::text,p.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(p.attempted_at,now()))/60)::int)
+ FROM xero_corrections p JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state IN ('unknown','executing')
  UNION ALL SELECT 'production_posting',p.close_id::text,p.id::text,p.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(p.attempted_at,now()))/60)::int)
  FROM production_postings p JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state IN ('unknown','executing')
  UNION ALL SELECT 'client_attachment',a.close_id::text,a.id::text,a.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(a.started_at,a.created_at))/60)::int)

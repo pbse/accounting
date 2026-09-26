@@ -124,6 +124,7 @@ export function Xero({ closeId, entity }: { closeId: string; entity: string }) {
             {busy ? "Reading Xero…" : "Capture month-end Trial Balance"}
           </button>
           <XeroGrant closeId={closeId} connectionId={c.id} />
+          <XeroBillCorrection closeId={closeId} />
         </>
       ) : (
         <>
@@ -261,7 +262,7 @@ function XeroGrant({ closeId, connectionId }: { closeId: string; connectionId: s
           </label>
           <fieldset>
             <legend>Draft kinds</legend>
-            {["prepaid", "accrual", "loan", "owner", "settlement"].map((kind) => (
+            {["prepaid", "accrual", "loan", "owner", "settlement", "bill_correction"].map((kind) => (
               <label key={kind}>
                 <input type="checkbox" checked={kinds.includes(kind)} onChange={(e) => setKinds(e.target.checked ? [...kinds, kind] : kinds.filter((k) => k !== kind))} /> {kind}
               </label>
@@ -288,6 +289,104 @@ function XeroGrant({ closeId, connectionId }: { closeId: string; connectionId: s
           </button>
         </>
       )}
+    </details>
+  );
+}
+
+type XeroLine = { LineItemID: string; Description?: string; AccountCode?: string; LineAmount: number | string };
+type XeroFix = { state: string; digest?: string; target_line_id?: string; target_account_id?: string; target_account_code?: string; reason?: string; target_account_name?: string; rule_reference?: string; approved_by?: string; error?: string; before_bill?: { LineItems: XeroLine[] } };
+
+// One reviewed recode of one Xero bill line, under the client's Xero grant.
+function XeroBillCorrection({ closeId }: { closeId: string }) {
+  const [bills, setBills] = useState<{ id: string; number: string; date: string; total: string; currency: string }[]>([]);
+  const [selected, setSelected] = useState("");
+  const [item, setItem] = useState<XeroFix>();
+  const [lineId, setLineId] = useState("");
+  const [account, setAccount] = useState("");
+  const [reason, setReason] = useState("");
+  const [rule, setRule] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const base = `/${closeId}/xero/bills`;
+  async function load() {
+    try {
+      const result = await workspaceRequest(`${base}/candidates`);
+      setBills(result.items);
+      setMessage(result.message ?? "");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Candidates unavailable.");
+    }
+  }
+  async function select(id: string) {
+    setSelected(id); setItem(undefined); setLineId(""); setConfirmed(false); setMessage("");
+    if (!id) return;
+    try {
+      const current = await workspaceRequest(`${base}/${encodeURIComponent(id)}/correction`);
+      setItem(current);
+      setLineId(current.target_line_id ?? "");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Correction status unavailable.");
+    }
+  }
+  async function run(action: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      setItem(await workspaceRequest(`${base}/${encodeURIComponent(selected)}/correction`, { action, digest: item?.digest, reason, rule_reference: rule, target_line_id: lineId, target_account_id: account, confirmed }));
+      setConfirmed(false);
+      setMessage(action === "execute" || action === "verify" ? "Xero readback verified. Capture Xero again before relying on its figures." : "Saved exact correction state.");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Correction outcome unclear. Refresh before any retry.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const editable = !item || item.state === "not_prepared" || item.state === "preview" || item.state === "approved";
+  return (
+    <details onToggle={(e) => { if (e.currentTarget.open && bills.length === 0) void load(); }}>
+      <summary>Recode a Xero bill line</summary>
+      <p>For an approved bill in the close month with nothing paid or credited, no tax and up to ten lines. Choose one line and a new expense account under the accountant's cited rule; both accounts must be in a Xero grant that covers bill corrections. Everything else must read back unchanged, and an uncertain update is never retried.</p>
+      <label>
+        Bill from the latest Xero capture
+        <select value={selected} onChange={(e) => void select(e.target.value)}>
+          <option value="">Choose one</option>
+          {bills.map((b) => <option key={b.id} value={b.id}>{b.number || b.id} · {b.date} · {b.currency} {b.total}</option>)}
+        </select>
+      </label>
+      {item && item.state !== "not_prepared" && <p>State: {item.state}. Line {item.target_line_id} → {item.target_account_name} ({item.target_account_code}, account ID {item.target_account_id}). Reason: {item.reason} Rule: {item.rule_reference}. {item.approved_by && `Approved by ${item.approved_by}.`}</p>}
+      {item?.error && <p role="alert">{item.error}</p>}
+      {selected && editable && (
+        <>
+          <label>
+            Line
+            <select value={lineId} onChange={(e) => setLineId(e.target.value)}>
+              <option value="">Choose the exact line</option>
+              {item?.before_bill?.LineItems.map((l) => <option key={l.LineItemID} value={l.LineItemID}>{l.LineAmount} · account {l.AccountCode}{l.Description ? ` · ${l.Description}` : ""}</option>)}
+            </select>
+          </label>
+          <label>
+            New Xero expense account ID
+            <input value={account} onChange={(e) => setAccount(e.target.value)} />
+          </label>
+          <label>
+            Accountant reason and source reference
+            <textarea value={reason} maxLength={2000} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <label>
+            Accountant's coding rule it follows
+            <input value={rule} maxLength={200} onChange={(e) => setRule(e.target.value)} />
+          </label>
+          <label>
+            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> I reviewed the bill, the capture, the rule and the exact new account.
+          </label>
+          <button disabled={busy || !confirmed || !lineId || !account || reason.trim().length < 5 || rule.trim().length < 5} onClick={() => void run("preview")}>Preview exact correction</button>
+        </>
+      )}
+      {item?.state === "preview" && <button disabled={busy || !confirmed} onClick={() => void run("approve")}>Approve this correction for 10 minutes</button>}
+      {item?.state === "approved" && <button disabled={busy || !confirmed} onClick={() => void run("execute")}>Update the bill once</button>}
+      {(item?.state === "executing" || item?.state === "unknown" || item?.state === "verified") && <button disabled={busy} onClick={() => void run("verify")}>Read back from Xero</button>}
+      {message && <p role="status">{message}</p>}
     </details>
   );
 }
