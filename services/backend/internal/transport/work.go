@@ -19,6 +19,7 @@ import (
 	"close.local/backend/internal/documents"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/reconciliation"
 )
 
@@ -109,7 +110,12 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		if more {
 			items = items[:100]
 		}
-		jsonReply(w, 200, map[string]any{"items": items, "has_more": more})
+		predicted, predictedMore, err := predictedReviews(r, db, search)
+		if err != nil {
+			problem(w, 503, "Dependency review unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"items": items, "has_more": more, "predicted": predicted, "predicted_more": predictedMore})
 	})
 	read := func(w http.ResponseWriter, r *http.Request) {
 		view := r.URL.Query().Get("view")
@@ -614,4 +620,55 @@ func interpretWork(ctx context.Context, key, model, text string, labels []string
 		return "", "", errors.New("The agent model's answer was incomplete; use one of the listed commands")
 	}
 	return answer.Action, answer.Target, nil
+}
+
+var predictedAccounts = map[string][]string{"prepaid": {"prepaid_account"}, "accrual": {"liability_account"}, "loan": {"loan_account", "accrued_interest_account", "current_portion_account"}, "owner": {"owner_account"}, "settlement": {"bank_account"}, "reconciliation": {"account"}}
+
+func predictedReviews(r *http.Request, db *sql.DB, search string) ([]map[string]any, bool, error) {
+	rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.paper->'input',v.created_at,t.kind,t.provider_id,t.provider_updated_at,t.record
+ FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id JOIN workpaper_reviews v ON v.id::text=w.review_id
+ JOIN quickbooks_entity_syncs s ON s.close_id=c.id AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.state='completed' AND z.connection_id=`+quickbooks.ReadingConnection("c.id")+`)
+ JOIN evidence e ON e.id=s.evidence_id AND e.close_id=c.id AND e.superseded_by IS NULL
+ JOIN quickbooks_transaction_rows t ON t.sync_id=s.id AND t.provider_updated_at>v.created_at
+ WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4)
+ AND w.review_state='approved' AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ ORDER BY w.id DESC,t.provider_updated_at DESC`, organization(r), firmAccess(r), subject(r), search)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	items, byPaper := []map[string]any{}, map[string]map[string]any{}
+	for rows.Next() {
+		var id, closeID, entity, period, kind, txnKind, provider string
+		var input, record json.RawMessage
+		var approved, updated time.Time
+		if err = rows.Scan(&id, &closeID, &entity, &period, &kind, &input, &approved, &txnKind, &provider, &updated, &record); err != nil {
+			return nil, false, err
+		}
+		var fields map[string]json.RawMessage
+		json.Unmarshal(input, &fields)
+		supported := map[string]bool{}
+		for _, key := range predictedAccounts[kind] {
+			var name string
+			if json.Unmarshal(fields[key], &name) == nil && strings.TrimSpace(name) != "" {
+				supported[strings.ToLower(strings.TrimSpace(name))] = true
+			}
+		}
+		for _, account := range quickbooks.RecordAccounts(record) {
+			if !supported[strings.ToLower(strings.TrimSpace(account))] {
+				continue
+			}
+			if item := byPaper[id]; item != nil {
+				item["count"] = item["count"].(int) + 1
+			} else if len(items) < 101 {
+				byPaper[id] = map[string]any{"workpaper_id": id, "close_id": closeID, "entity": entity, "period": period, "kind": kind, "transaction": txnKind + " " + provider, "account": account, "updated_at": updated, "approved_at": approved, "count": 1}
+				items = append(items, byPaper[id])
+			}
+			break
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return items[:min(len(items), 100)], len(items) > 100, nil
 }
