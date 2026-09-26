@@ -1507,3 +1507,72 @@ a.row:hover {
   font-size: 0.75rem;
   color: var(--muted, #6b6b65);
 }
+.assistant-commands {
+  list-style: none;
+  margin: 0;
+  padding: 0.3rem;
+  border: 1px solid var(--border, #e4e4e0);
+  border-radius: 8px;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+.assistant-commands button {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgb(0 0 0 / 25%);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 1rem 1rem;
+}
+.palette {
+  width: min(560px, 100%);
+  background: var(--surface, #fff);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgb(0 0 0 / 20%);
+  padding: 0.8rem;
+}
+.palette input {
+  width: 100%;
+  font: inherit;
+  font-size: 1.05rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border-strong, #cfcfca);
+  border-radius: 8px;
+}
+.palette ul {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.palette li {
+  padding: 0.45rem 0.6rem;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.palette li.active {
+  background: #e5eee2;
+}
+.palette li span {
+  color: var(--muted, #6b6b65);
+  font-size: 0.85rem;
+}
+.palette-empty {
+  color: var(--muted, #6b6b65);
+  cursor: default;
+}
+.palette-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted, #6b6b65);
+}

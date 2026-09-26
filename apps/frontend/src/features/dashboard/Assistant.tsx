@@ -1,8 +1,11 @@
 import { useAuth } from "@workos-inc/authkit-react";
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import { authKitClientId } from "../auth/Auth";
 import { useUnlocked, workspaceRequest } from "../closes/workspace";
+import { nextReview, takePending, usePending } from "./assistantStore";
+import { CommandPalette, openPalette } from "./CommandPalette";
+import { commands, parseCommand, runCommand } from "./commands";
 import { Icon } from "./Icon";
 
 type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[] };
@@ -21,7 +24,12 @@ function useSignedIn() {
 }
 
 export function Assistant() {
-  return useSignedIn() ? <Panel /> : null;
+  return useSignedIn() ? (
+    <>
+      <Panel />
+      <CommandPalette />
+    </>
+  ) : null;
 }
 
 function Panel() {
@@ -30,6 +38,10 @@ function Panel() {
   const closeId = match?.[1] ?? "";
   const paperId = match?.[2] ?? "";
   const [open, setOpen] = useState(readOpen);
+  const asked = usePending();
+  useEffect(() => {
+    if (asked && !open) toggle(true);
+  }, [asked]);
   const toggleButton = useRef<HTMLButtonElement>(null);
   const opened = useRef(open);
   useEffect(() => {
@@ -61,16 +73,26 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const generation = useRef(0);
   const list = useRef<HTMLOListElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const navigate = useNavigate();
+  const waiting = usePending();
   const path = closeId ? `/${closeId}/chat` : "/chat";
+  // A question from the palette is asked once the history has loaded, so its answer is the last thing shown.
+  useEffect(() => {
+    if (!loaded || busy) return;
+    const question = takePending(closeId);
+    if (question) void send({ text: question, workpaper_id: paperId });
+  }, [waiting, busy, loaded]);
   useEffect(() => {
     input.current?.focus();
     const asked = ++generation.current;
     workspaceRequest(path)
       .then((data) => asked === generation.current && setMessages(data.messages))
-      .catch((e) => asked === generation.current && setError(e instanceof Error ? e.message : "Conversation unavailable."));
+      .catch((e) => asked === generation.current && setError(e instanceof Error ? e.message : "Conversation unavailable."))
+      .finally(() => setLoaded(true));
     if (closeId)
       workspaceRequest(`/${closeId}`)
         .then((data) => setLabel(`${data.close.entity} · ${data.close.period}`))
@@ -96,9 +118,29 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
       setBusy(false);
     }
   }
+  const slash = text.startsWith("/") && !text.includes(" ") ? commands.filter((c) => c.name.startsWith(text.slice(1).toLowerCase())) : [];
   function submit(event?: { preventDefault(): void }) {
     event?.preventDefault();
-    if (text.trim() && !busy) void send({ text: text.trim(), workpaper_id: paperId });
+    const line = text.trim();
+    if (!line || busy) return;
+    if (!line.startsWith("/")) {
+      void send({ text: line, workpaper_id: paperId });
+      return;
+    }
+    const { command, argument } = parseCommand(line);
+    if (!command) {
+      setError("Unknown command. Type / to see the commands.");
+      return;
+    }
+    setText("");
+    if (command.close && !closeId) {
+      openPalette(command.argument ? `/${command.name} ` : line, command.argument ? argument : "");
+      return;
+    }
+    setError("");
+    void runCommand(command, argument, { closeId, navigate, nextReview, ask: (question) => void send({ text: question, workpaper_id: paperId }) })
+      .then(setError)
+      .catch((e) => setError(e instanceof Error ? e.message : "The command could not run."));
   }
   return (
     <aside className="assistant" aria-label="Assistant">
@@ -142,16 +184,31 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
       </ol>
       {error && <p role="alert">{error}</p>}
       <form onSubmit={submit}>
+        {slash.length > 0 && (
+          <ul className="assistant-commands" aria-label="Command suggestions">
+            {slash.map((c) => (
+              <li key={c.name}>
+                <button type="button" onClick={() => { setText(`/${c.name}${c.argument ? " " : ""}`); input.current?.focus(); }}>
+                  <strong>/{c.name}</strong> {c.description}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           ref={input}
           aria-label="Ask the assistant"
           value={text}
           maxLength={1000}
           rows={2}
-          placeholder={closeId ? "Ask about this close…" : "Ask about your work…"}
+          placeholder={closeId ? "Ask about this close, or type / for commands…" : "Ask about your work, or type / for commands…"}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) submit(e);
+            const completed = slash.length > 0 ? `/${slash[0].name}${slash[0].argument ? " " : ""}` : "";
+            if (e.key === "Tab" && completed && completed !== text) {
+              e.preventDefault();
+              setText(completed);
+            } else if (e.key === "Enter" && !e.shiftKey) submit(e);
           }}
         />
         <div>
