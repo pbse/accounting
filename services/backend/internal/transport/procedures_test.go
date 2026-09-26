@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	neturl "net/url"
 	"os"
+	"strconv"
 	"testing"
 
 	"close.local/backend/internal/auth"
@@ -103,10 +104,18 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	}
 	publish("", "Firm insurance", "")
 	first := publish("Same client", "Client insurance", "")
-	if _, err = db.Exec(`SELECT setval(pg_get_serial_sequence('procedure_versions','id'),(10^length(max(id)::text))::bigint-1) FROM procedure_versions`); err != nil {
+	// Two versions just either side of the next digit boundary: a text sort would take the one below as current.
+	var boundary int64
+	if err = db.QueryRow(`SELECT (10^length((GREATEST(COALESCE(pg_sequence_last_value(pg_get_serial_sequence('procedure_versions','id')::regclass),0),COALESCE(max(id),0))+10)::text))::bigint FROM procedure_versions`).Scan(&boundary); err != nil {
 		t.Fatal(err)
 	}
-	first = publish("Same client", "Client insurance", publish("Same client", "Client insurance", first))
+	if _, err = db.Exec(`INSERT INTO procedure_versions(id,organization_id,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,method) OVERRIDING SYSTEM VALUE SELECT v,organization_id,client_entity,kind,instructions,expense_account,prepaid_account,enabled,reason,actor,method FROM procedure_versions,unnest(ARRAY[$1::bigint-1,$1::bigint]) v WHERE id::text=$2`, boundary, first); err != nil {
+		t.Fatal(err)
+	}
+	first = publish("Same client", "Client insurance", strconv.FormatInt(boundary, 10))
+	if _, err = db.Exec(`DELETE FROM procedure_versions WHERE id IN ($1::bigint-1,$1::bigint)`, boundary); err != nil {
+		t.Fatal(err)
+	}
 	call("/v1/closes/procedures", map[string]any{"client_entity": "Same client", "kind": "prepaid", "instructions": "Stale", "reason": "Stale test", "confirmed": true, "enabled": true}, 409)
 	ctx := context.Background()
 	tx, _ := db.BeginTx(ctx, nil)
