@@ -306,8 +306,8 @@ func ledgerCertification(ctx context.Context, q interface {
 	var snapshotID, snapshotRealm string
 	var snapshotAt time.Time
 	var report []byte
-	err := q.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,s.payload->'reports'->'TransactionList' FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.payload->>'period'=c.period AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&snapshotID, &snapshotRealm, &snapshotAt, &report)
+	err := q.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,s.payload->'reports'->'TransactionList' FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
+ WHERE s.close_id::text=$1 AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&snapshotID, &snapshotRealm, &snapshotAt, &report)
 	if err == sql.ErrNoRows || err == nil && len(report) == 0 {
 		return map[string]any{"status": "unavailable", "reason": "No current QuickBooks period reports for this month."}, nil
 	}
@@ -318,10 +318,10 @@ func ledgerCertification(ctx context.Context, q interface {
 	var finished time.Time
 	var counts []byte
 	var provisional bool
-	err = q.QueryRowContext(ctx, `SELECT s.id::text,COALESCE((SELECT z.id::text FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.evidence_id=s.evidence_id AND z.state='completed' ORDER BY z.id DESC LIMIT 1),''),x.realm,s.finished_at,COALESCE(s.payload->'counts','{}'::jsonb),
- EXISTS(SELECT 1 FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.id>s.id AND n.state IN ('queued','running','failed'))
+	err = q.QueryRowContext(ctx, `SELECT s.id::text,COALESCE((SELECT z.id::text FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.period=s.period AND z.evidence_id=s.evidence_id AND z.state='completed' ORDER BY z.id DESC LIMIT 1),''),x.realm,s.finished_at,COALESCE(s.payload->'counts','{}'::jsonb),
+ EXISTS(SELECT 1 FROM quickbooks_entity_syncs n WHERE n.close_id=s.close_id AND n.connection_id=s.connection_id AND n.period=s.period AND n.id>s.id AND n.state IN ('queued','running','failed'))
  FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.period=c.period AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id))`, closeID).Scan(&captureID, &rowsSync, &realm, &finished, &counts, &provisional)
+ WHERE s.close_id::text=$1 AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z JOIN client_closes zc ON zc.id=z.close_id WHERE z.close_id=s.close_id AND z.period=zc.period AND z.state IN ('completed','unchanged') AND z.connection_id=`+quickbooks.ReadingConnection("s.close_id")+`)`, closeID).Scan(&captureID, &rowsSync, &realm, &finished, &counts, &provisional)
 	if err == sql.ErrNoRows {
 		return map[string]any{"status": "unavailable", "reason": "No current QuickBooks transaction capture for this month."}, nil
 	}
@@ -373,13 +373,15 @@ func certificationSentence(out map[string]any) string {
 	case "agrees":
 		text = fmt.Sprintf("The stored reads agree: all %d posting transactions in the TransactionList report were captured.", c.Reported)
 	case "differs":
-		text = fmt.Sprintf("The stored reads differ: %d reported transactions were not captured, %d captured ones are not reported and %d are of types the capture does not read. Capture the transactions and period reports again.", len(c.Missing), len(c.Extra), len(c.Unsupported))
+		text = fmt.Sprintf("The stored reads differ: %d reported transactions were not captured, %d captured ones are not reported and %d are of types the capture does not read.", len(c.Missing), len(c.Extra), len(c.Unsupported))
 	default:
 		text, _ = out["reason"].(string)
 		text = "The ledger is not certified: " + strings.TrimSuffix(text, ".") + "."
 	}
 	if provisional, _ := out["provisional"].(bool); provisional {
 		text += " A newer capture has not finished, so this is provisional."
+	} else if out["status"] == "differs" {
+		text += " Capture the transactions and period reports again."
 	}
 	return text
 }

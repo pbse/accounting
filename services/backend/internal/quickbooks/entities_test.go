@@ -143,14 +143,21 @@ func TestCertifyComparesTheReportWithTheCaptureTransactionByTransaction(t *testi
 		t.Fatalf("a posting type the capture does not read keeps the ledger uncertified: %+v", c)
 	}
 	for name, bad := range map[string]json.RawMessage{
-		"no ID":    report(`{"type":"Data","ColData":[{"value":"2026-09-02"},{"value":"Bill"},{"value":"No"}]}`),
-		"repeated": report(row("Bill", "41", "No"), row("Bill", "41", "No")),
-		"no type":  json.RawMessage(`{"Columns":{"Column":[{"ColType":"Date"}]},"Rows":{"Row":[]}}`),
+		"no ID":             report(`{"type":"Data","ColData":[{"value":"2026-09-02"},{"value":"Bill"},{"value":"No"}]}`),
+		"repeated":          report(row("Bill", "41", "No"), row("Bill", "41", "No")),
+		"no type":           json.RawMessage(`{"Columns":{"Column":[{"ColType":"Date"}]},"Rows":{"Row":[]}}`),
+		"short row":         report(`{"type":"Data","ColData":[{"value":"2026-09-02"}]}`),
+		"repeated estimate": report(row("Estimate", "9", "Yes"), row("Estimate", "9", "Yes")),
 	} {
 		if _, err := Certify(bad, counts, captured); err == nil {
 			t.Fatalf("%s: an unreadable report is refused, not certified", name)
 		}
 	}
+	captured["CreditCardPayment"] = []string{"8"}
+	if _, err := Certify(agreed, counts, captured); err == nil {
+		t.Fatal("a captured row of a type the capture does not read is refused")
+	}
+	delete(captured, "CreditCardPayment")
 	delete(counts, "Transfer")
 	if _, err := Certify(agreed, counts, captured); err == nil {
 		t.Fatal("a capture without every type's count is refused")

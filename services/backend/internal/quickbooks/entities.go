@@ -243,6 +243,11 @@ type Certification struct {
 func Certify(report json.RawMessage, counts map[string]int, captured map[string][]string) (Certification, error) {
 	result := Certification{Missing: []string{}, Extra: []string{}, Unsupported: []string{}}
 	have := map[string]bool{}
+	for kind := range captured {
+		if !slices.Contains(periodEntityTypes, kind) {
+			return result, fmt.Errorf("The transaction capture has rows of an unread type, %s", kind)
+		}
+	}
 	for _, kind := range periodEntityTypes {
 		count, ok := counts[kind]
 		if !ok || count != len(captured[kind]) {
@@ -283,7 +288,7 @@ func Certify(report json.RawMessage, counts map[string]int, captured map[string]
 	if typeColumn < 0 {
 		return result, fmt.Errorf("TransactionList has no transaction type column")
 	}
-	reported := map[string]bool{}
+	reported, seen := map[string]bool{}, map[string]bool{}
 	var walk func(rows []json.RawMessage) error
 	walk = func(rows []json.RawMessage) error {
 		for _, raw := range rows {
@@ -297,18 +302,22 @@ func Certify(report json.RawMessage, counts map[string]int, captured map[string]
 			if err := walk(row.Rows.Row); err != nil {
 				return err
 			}
-			if len(row.ColData) <= typeColumn {
+			if len(row.ColData) == 0 {
 				continue
 			}
+			if len(row.ColData) <= typeColumn || row.ColData[typeColumn].ID == "" {
+				return fmt.Errorf("A TransactionList row has no transaction type or ID")
+			}
 			cell := row.ColData[typeColumn]
+			if seen[cell.Value+" "+cell.ID] {
+				return fmt.Errorf("TransactionList lists %s %s more than once", cell.Value, cell.ID)
+			}
+			seen[cell.Value+" "+cell.ID] = true
 			if postColumn >= 0 && postColumn < len(row.ColData) {
 				if flag := strings.ToLower(row.ColData[postColumn].Value); flag == "yes" || flag == "true" {
 					result.NonPosting++
 					continue
 				}
-			}
-			if cell.ID == "" {
-				return fmt.Errorf("A TransactionList row has no transaction ID")
 			}
 			kind, known := reportedKinds[cell.Value]
 			if !known {

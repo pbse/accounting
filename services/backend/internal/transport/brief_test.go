@@ -97,7 +97,8 @@ func TestCloseBriefNarratesWhatNeedsAPerson(t *testing.T) {
 	save("reconciliation", `{"input":{"account":"Checking","ledger_closing":"-50.00"},"blockers":["Statement page 2 is missing."],`+sources+`}`)
 
 	b, states = read()
-	if states != "ledger=done preparation=attention review=attention balance sheet=attention exceptions=attention sign-off=waiting" {
+	// The fixture's period reports have no TransactionList, so the ledger cannot be certified yet.
+	if states != "ledger=waiting preparation=attention review=attention balance sheet=attention exceptions=attention sign-off=waiting" {
 		t.Fatalf("each area reports its own state: %s", states)
 	}
 	if want := "8 things need you: confirm 1 document, approve 2 drafts, add evidence to 1 draft, fix 1 draft, explain 1 balance difference, support 1 balance, post the proposed entries for 1 balance, send 1 client question."; b.Headline != want {
@@ -108,6 +109,7 @@ func TestCloseBriefNarratesWhatNeedsAPerson(t *testing.T) {
 		texts[line.Area] = line.Text
 	}
 	for area, want := range map[string]string{
+		"ledger":        "Books read from the QuickBooks Trial Balance captured",
 		"preparation":   "2 documents: 1 prepared, 1 need your confirmation.",
 		"review":        "Of 4 current drafts, 0 approved, 2 ready for your approval and 1 need attention (blockers, requested changes or changed evidence). 1 draft cites no evidence yet and cannot be approved.",
 		"balance sheet": "1 of 4 balance-sheet accounts tie. Tie once proposed entries post: Accrued liabilities. Differ: Prepaid insurance. No support yet: Loan payable. 2 matches rest on unapproved or blocked support.",

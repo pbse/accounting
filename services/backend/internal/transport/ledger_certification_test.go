@@ -139,6 +139,22 @@ func TestLedgerCertificationComparesStoredReports(t *testing.T) {
 	if got := check(); !got.Provisional {
 		t.Fatalf("a capture still running makes the comparison provisional: %+v", got)
 	}
+	brief.Lines = nil
+	get("/brief", &brief)
+	for _, line := range brief.Lines {
+		if line.Area == "ledger" && (line.State != "waiting" || strings.Contains(line.Text, "Capture the transactions")) {
+			t.Fatalf("a provisional difference waits for the running capture: %+v", line)
+		}
+	}
+	for _, state := range []string{"disconnected", "reconnect_required"} {
+		_, err = db.Exec(`UPDATE quickbooks_connections SET state=$2 WHERE id=$1`, connection, state)
+		must(err)
+		if got := check(); got.Status != "unavailable" {
+			t.Fatalf("reads of a %s connection are not certified: %+v", state, got)
+		}
+	}
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='active' WHERE id=$1`, connection)
+	must(err)
 	_, err = db.Exec(`UPDATE quickbooks_entity_syncs SET payload='{"counts":{"Bill":1}}' WHERE id=$1`, syncID)
 	must(err)
 	if got := check(); got.Status != "unavailable" || !strings.Contains(got.Reason, "count") {

@@ -93,9 +93,12 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 				// Whether the QuickBooks transaction capture agrees with the period's TransactionList report.
 				if source == "QuickBooks" {
 					certification, err := ledgerCertification(r.Context(), db, r.PathValue("id"))
+					provisional, _ := certification["provisional"].(bool)
 					switch {
 					case err != nil:
-						text += " Ledger certification could not be read."
+						text, state = text+" Ledger certification could not be read.", "unknown"
+					case certification["status"] == "unavailable" || provisional:
+						text, state = text+" "+certificationSentence(certification), "waiting"
 					case certification["status"] == "differs":
 						text, state = text+" "+certificationSentence(certification), "attention"
 						needs = append(needs, "capture the ledger again")
