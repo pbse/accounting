@@ -55,8 +55,8 @@ func TestPurchaseAndDepositLinesAreRecodedWithEveryOtherFieldKept(t *testing.T) 
 	if _, err := sandbox.VerifyRecode(ctx, "Purchase", json.RawMessage(purchase), "2", "9"); err == nil || !strings.Contains(err.Error(), "adds a field") {
 		t.Fatalf("a field that appears on readback fails it: %v", err)
 	}
-	if !SameRecodable("Purchase", json.RawMessage(purchase), json.RawMessage(strings.Replace(purchase, `"Amount":40`, `"Amount":40.00`, 1)), "USD") || SameRecodable("Purchase", json.RawMessage(purchase), json.RawMessage(strings.Replace(purchase, `{"value":"8","name":"Meals"}`, `{"value":"6","name":"Meals"}`, 1)), "USD") {
-		t.Fatal("copies agree when their lines do, whatever the formatting, and not when a line's account differs at the same version")
+	if !SameRecodable("Purchase", json.RawMessage(purchase), json.RawMessage(strings.Replace(purchase, `"Amount":40`, `"Amount":40.00`, 1)), "USD") || SameRecodable("Purchase", json.RawMessage(purchase), json.RawMessage(strings.Replace(purchase, `{"value":"8","name":"Meals"}`, `{"value":"6","name":"Meals"}`, 1)), "USD") || SameRecodable("Purchase", json.RawMessage(purchase), json.RawMessage(strings.Replace(purchase, `"name":"Staples"`, `"name":"Office Depot"`, 1)), "USD") {
+		t.Fatal("copies agree whatever the number formatting, and not when a line's account or the payee differs at the same version")
 	}
 	readback["Purchase"] = strings.Replace(changed, `"name":"Staples"`, `"name":"Office Depot"`, 1)
 	if _, err := sandbox.VerifyRecode(ctx, "Purchase", json.RawMessage(purchase), "2", "9"); err == nil || !strings.Contains(err.Error(), "EntityRef") {

@@ -148,22 +148,13 @@ func ParseRecodable(kind string, raw json.RawMessage, currency string) (id, vers
 	return "", "", "", nil, errors.New("Unsupported transaction kind")
 }
 
-// SameRecodable reports whether two copies of a transaction agree on what a correction depends on: its ID, version, date
-// and every line's ID, amount and account.
+// SameRecodable reports whether two supported copies of a transaction agree on every field, numbers by value.
 func SameRecodable(kind string, a, b json.RawMessage, currency string) bool {
-	idA, versionA, dateA, linesA, errA := ParseRecodable(kind, a, currency)
-	idB, versionB, dateB, linesB, errB := ParseRecodable(kind, b, currency)
-	if errA != nil || errB != nil || idA != idB || versionA != versionB || dateA != dateB || len(linesA) != len(linesB) {
-		return false
-	}
-	for i := range linesA {
-		amountA, _ := new(big.Rat).SetString(linesA[i].Amount)
-		amountB, _ := new(big.Rat).SetString(linesB[i].Amount)
-		if linesA[i].ID != linesB[i].ID || linesA[i].Account != linesB[i].Account || amountA.Cmp(amountB) != 0 {
-			return false
-		}
-	}
-	return true
+	_, _, _, _, errA := ParseRecodable(kind, a, currency)
+	_, _, _, _, errB := ParseRecodable(kind, b, currency)
+	fieldsA, okA := decoded(a)
+	fieldsB, okB := decoded(b)
+	return errA == nil && errB == nil && okA && okB && same(fieldsA, fieldsB)
 }
 
 // ReadRecodable reads a transaction exactly as QuickBooks returns it and checks its kind's strict shape.
