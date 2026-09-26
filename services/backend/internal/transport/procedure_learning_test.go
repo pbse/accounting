@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
@@ -264,4 +265,39 @@ func TestLearnedRuleRequiresApprovedExampleBeforeActivation(t *testing.T) {
 	must(err)
 	cadRaw, _ := json.Marshal(cadPaper)
 	must(preparation.CheckProcedureMethod(context.Background(), db, closeID, "prepaid", cadRaw))
+
+	// A mid-month depreciation is an example for a mid-month rule, and only for it.
+	laptop := prepaids.Input{Entity: "Synthetic client", SourceReference: "Laptop invoice", Amount: "3600.00", ServiceStart: "2026-01-01", ServiceEnd: "2028-12-31", ClosePeriod: "2026-01", Currency: "CAD", Basis: "accrual", ExpenseAccount: "Depreciation expense", PrepaidAccount: "Accumulated depreciation", Schedule: prepaids.Depreciation, BookedBalance: "0.00", BookingReference: "January ledger", Method: prepaids.Method, Convention: prepaids.MidMonth, AccountantRuleReference: "Fixed asset policy v2", MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true}
+	laptopPaper, err := prepaids.Prepare(laptop)
+	must(err)
+	laptopRaw, _ := json.Marshal(laptopPaper)
+	var laptopID string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text`, closeID, preparation.Digest(laptopRaw), string(laptopRaw)).Scan(&laptopID))
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,$2,'approved','Reviewed depreciation','user_accountant')`, laptopID, preparation.Digest(laptopRaw))
+	must(err)
+	var midMonthDraft learnedDraft
+	must(json.Unmarshal(call("POST", base, map[string]any{"client_entity": "Synthetic client", "kind": "prepaid", "method": "equal_full_months_v1+mid_month", "source_id": sourceID, "from_edits": false}, 200), &midMonthDraft))
+	listed := string(call("GET", base+"/"+midMonthDraft.ID+"/examples", nil, 200))
+	if !strings.Contains(listed, `"id":"`+laptopID+`"`) || strings.Contains(listed, `"id":"`+paperID+`"`) {
+		t.Fatalf("only the mid-month depreciation is an example for a mid-month rule: %s", listed)
+	}
+}
+
+func TestNewMethodsReplayAsLearnableProcedureMethods(t *testing.T) {
+	laptop := prepaids.Input{Entity: "Synthetic", SourceReference: "Laptop invoice", Amount: "3600.00", ServiceStart: "2026-09-01", ServiceEnd: "2029-08-31", ClosePeriod: "2026-09", Currency: "USD", Basis: "accrual", ExpenseAccount: "Depreciation expense", PrepaidAccount: "Accumulated depreciation", Schedule: prepaids.Depreciation, BookedBalance: "0.00", BookingReference: "September ledger", Method: prepaids.Method, Convention: prepaids.MidMonth, AccountantRuleReference: "Fixed asset policy v2", MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true}
+	declining := laptop
+	declining.Method, declining.Factor, declining.Convention = prepaids.DecliningMethod, "2", ""
+	contract := accruals.Input{Entity: "Synthetic", SourceReference: "Maintenance contract", ClosePeriod: "2026-09", ServiceStart: "2026-08-15", ServiceEnd: "2026-11-14", ContractAmount: "9000.00", InvoicedToDate: "0.00", BookedBalance: "0.00", BookingReference: "September ledger", EstimationBasis: "Signed contract", ExpenseAccount: "Maintenance", LiabilityAccount: "Accrued maintenance", Currency: "USD", Basis: "accrual", Method: accruals.ProRataMethod, AccountantRuleReference: "Service contract rule 3", MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true}
+	for kind, prepare := range map[string]func() (any, string){
+		"prepaid":  func() (any, string) { p, _ := prepaids.Prepare(laptop); return p, "equal_full_months_v1+mid_month" },
+		"prepaid ": func() (any, string) { p, _ := prepaids.Prepare(declining); return p, prepaids.DecliningMethod },
+		"accrual":  func() (any, string) { p, _ := accruals.Prepare(contract); return p, accruals.ProRataMethod },
+	} {
+		paper, want := prepare()
+		raw, _ := json.Marshal(paper)
+		method, err := replayLearnedExample(strings.TrimSpace(kind), raw)
+		if err != nil || method != want || !learnedMethod(strings.TrimSpace(kind), method) {
+			t.Fatalf("an approved %s example replays as a method a procedure can learn: %q %v", kind, method, err)
+		}
+	}
 }

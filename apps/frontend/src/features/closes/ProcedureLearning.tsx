@@ -6,8 +6,8 @@ type Draft = { id:string; client_entity:string; kind:string; method:string; inst
 type Example = { id:string; close_id:string; entity:string; period:string; digest:string; review_id:string; approved_by:string; reason:string };
 type Impact = { previous_id:string; impact_digest:string; total_closes:number; has_more:boolean; closes:{close_id:string;entity:string;period:string;draft_count:number;pinned_source_id:string}[] };
 const methods:Record<string,{value:string;label:string}[]> = {
-  prepaid:[{value:"equal_full_months_v1",label:"Equal full months"},{value:"actual_days_v1",label:"Inclusive actual days"}],
-  accrual:[{value:"fixed_incurred_amount_v1",label:"Fixed incurred amount"},{value:"actual_invoice_true_up_v1",label:"Actual invoice true-up"},{value:"fixed_recurring_incurred_v1",label:"Fixed recurring incurred"}],
+  prepaid:[{value:"equal_full_months_v1",label:"Equal full months"},{value:"actual_days_v1",label:"Inclusive actual days"},{value:"equal_full_months_v1+mid_month",label:"Depreciation: equal months, mid-month convention"},{value:"declining_balance_v1",label:"Depreciation: declining balance, full-month convention"},{value:"declining_balance_v1+mid_month",label:"Depreciation: declining balance, mid-month convention"}],
+  accrual:[{value:"fixed_incurred_amount_v1",label:"Fixed incurred amount"},{value:"actual_invoice_true_up_v1",label:"Actual invoice true-up"},{value:"fixed_recurring_incurred_v1",label:"Fixed recurring incurred"},{value:"pro_rata_service_days_v1",label:"Pro-rata share of a service contract"}],
 };
 
 export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;entity:string;onActivated:()=>void}) {

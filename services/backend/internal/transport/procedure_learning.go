@@ -48,9 +48,9 @@ type learnedDraft struct {
 func learnedMethod(kind, method string) bool {
 	switch kind {
 	case "prepaid":
-		return method == prepaids.Method || method == prepaids.DailyMethod
+		return slices.Contains([]string{prepaids.Method, prepaids.DailyMethod, prepaids.DecliningMethod, prepaids.Boundary(prepaids.Method, prepaids.MidMonth), prepaids.Boundary(prepaids.DecliningMethod, prepaids.MidMonth)}, method)
 	case "accrual":
-		return method == accruals.Method || method == accruals.ActualMethod || method == accruals.RecurringMethod
+		return slices.Contains([]string{accruals.Method, accruals.ActualMethod, accruals.RecurringMethod, accruals.ProRataMethod}, method)
 	}
 	return false
 }
@@ -238,7 +238,7 @@ func replayLearnedExample(kind string, raw []byte) (string, error) {
 		if err != nil || !reflect.DeepEqual(got, saved) {
 			return "", fmt.Errorf("Prepaid example no longer matches the calculator")
 		}
-		return saved.Input.Method, nil
+		return prepaids.Boundary(saved.Input.Method, saved.Input.Convention), nil
 	case "accrual":
 		var saved accruals.Workpaper
 		if json.Unmarshal(raw, &saved) != nil {
@@ -469,7 +469,7 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "Draft access unavailable.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.digest,w.review_id,COALESCE(a.approved_by,''),COALESCE(a.reason,'') FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id LEFT JOIN procedure_example_approvals a ON a.workpaper_id=w.id AND a.draft_id=$1::bigint AND a.draft_revision=$6 WHERE c.organization_id=$2 AND w.kind=$3 AND w.review_state='approved' AND COALESCE(w.paper->>'method',w.paper->'input'->>'method')=$4 AND ($5='' OR lower(c.entity)=lower($5)) ORDER BY w.id DESC LIMIT 51`, d.ID, organization(r), d.Kind, d.Method, d.ClientEntity, d.Revision)
+		rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.digest,w.review_id,COALESCE(a.approved_by,''),COALESCE(a.reason,'') FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id LEFT JOIN procedure_example_approvals a ON a.workpaper_id=w.id AND a.draft_id=$1::bigint AND a.draft_revision=$6 WHERE c.organization_id=$2 AND w.kind=$3 AND w.review_state='approved' AND COALESCE(w.paper->>'method',w.paper->'input'->>'method')||COALESCE('+'||NULLIF(w.paper->'input'->>'convention',''),'')=$4 AND ($5='' OR lower(c.entity)=lower($5)) ORDER BY w.id DESC LIMIT 51`, d.ID, organization(r), d.Kind, d.Method, d.ClientEntity, d.Revision)
 		if err != nil {
 			problem(w, 503, "Approved examples unavailable.")
 			return

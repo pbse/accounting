@@ -2,6 +2,7 @@ package preparation
 
 import (
 	"close.local/backend/internal/loans"
+	"close.local/backend/internal/prepaids"
 	"cmp"
 	"context"
 	"database/sql"
@@ -213,9 +214,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		used = result.Input.Method
 	}
 	// A convention changes the calculation, so it is part of what the procedure must approve.
-	if result.Input.Convention != "" {
-		used += "+" + result.Input.Convention
-	}
+	used = prepaids.Boundary(used, result.Input.Convention)
 	if used != method {
 		return PolicyRequired(fmt.Sprintf("Prepared method %q differs from the approved procedure method %q; review the procedure before saving", used, method))
 	}
@@ -241,7 +240,7 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 		text += "Approved method boundary: " + p.Method + "\n"
 	}
 	if p.Kind == "prepaid" {
-		text += "Supported allocation: equal_full_months_v1 or actual_days_v1 (accrual, client's home currency). Multiple or retrospective credits require separately cited entries and the client accountant's approved rule reference. Method and booking are confirmed per draft.\n"
+		text += "Supported allocation: equal_full_months_v1 or actual_days_v1; depreciation may also use declining_balance_v1 and the mid-month convention (written method+mid_month) under the client accountant's cited depreciation policy (accrual, client's home currency). Multiple or retrospective credits require separately cited entries and the client accountant's approved rule reference. Method and booking are confirmed per draft.\n"
 		if p.ExpenseAccount != "" {
 			text += "Expense account: " + p.ExpenseAccount + "\n"
 		}
@@ -249,7 +248,7 @@ func AttachProcedure(ctx context.Context, tx *sql.Tx, closeID string, p Procedur
 			text += "Prepaid account: " + p.PrepaidAccount + "\n"
 		}
 	} else if p.Kind == "accrual" {
-		text += "Supported method: fixed_incurred_amount_v1 or actual_invoice_true_up_v1. Cite the prior estimate and actual invoice; the true-up requires the client accountant's approved rule reference. Confirm incurred amount, booked liability and reversal choice; never infer estimates.\n"
+		text += "Supported method: fixed_incurred_amount_v1, actual_invoice_true_up_v1, fixed_recurring_incurred_v1 or pro_rata_service_days_v1 (the elapsed share of a contract amount less what is invoiced). For a true-up, cite the prior estimate and actual invoice; the true-up, recurring and pro-rata methods require the client accountant's approved rule reference. Confirm incurred amount, booked liability and reversal choice; never infer estimates.\n"
 	} else if p.Kind == "loan" {
 		text += "Supported method: lender_statement_v1. The lender statement's principal/interest split is authoritative; recomputed interest raises questions. Accrued interest and current portion entries need the preparer's per-draft choices and balances that tie to the lender.\n"
 	} else {

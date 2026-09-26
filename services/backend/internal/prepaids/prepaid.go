@@ -28,6 +28,14 @@ const DecliningMethod = "declining_balance_v1"
 // half in the month after the useful life ends.
 const MidMonth = "mid_month"
 
+// Boundary is the method an approved procedure names for a schedule: its method, and its convention when one applies.
+func Boundary(method, convention string) string {
+	if convention != "" {
+		return method + "+" + convention
+	}
+	return method
+}
+
 type Credit struct {
 	Amount          string `json:"amount"`
 	EffectivePeriod string `json:"effective_period"`
