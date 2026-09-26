@@ -5,7 +5,7 @@ export const commands: Command[] = [
   { name: "status", description: "Where a close stands, or what needs you today" },
   { name: "explain", description: "Explain a balance that doesn't tie, or what blocks sign-off", close: true, argument: "account" },
   { name: "compare", description: "Compare with last month, optionally for one account", close: true, argument: "account" },
-  { name: "find", description: "Find a client and month", argument: "client or YYYY-MM" },
+  { name: "find", description: "Find documents, drafts, transactions, procedures or review decisions", argument: "words" },
   { name: "prepare", description: "Preview and start preparing a close", close: true },
   { name: "request", description: "Draft a consolidated client request", close: true },
   { name: "review", description: "Open the next draft ready for review" },
@@ -46,7 +46,8 @@ export async function runCommand(command: Command, argument: string, ctx: Comman
       ctx.ask(argument ? `What changed in ${argument} from last month?` : "What changed from last month?", close);
       return "";
     case "find":
-      ctx.navigate(`/dashboard/closes${argument ? `?q=${encodeURIComponent(argument)}` : ""}`);
+      if (!argument) return "Type what to find after /find.";
+      ctx.ask(`Find ${argument}`, close);
       return "";
     case "prepare":
     case "stop":

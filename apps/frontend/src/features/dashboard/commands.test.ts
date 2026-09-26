@@ -34,7 +34,8 @@ test("commands ask the assistant or open the screen that does the work", async (
   assert.equal((await run("/prepare")).navigated, "/dashboard/closes/7?tab=overview");
   assert.equal((await run("/request")).navigated, "/dashboard/closes/7?tab=requests");
   assert.equal((await run("/rehearse")).navigated, "/dashboard/closes/7?tab=signoff");
-  assert.equal((await run("/find Acme")).navigated, "/dashboard/closes?q=Acme");
+  assert.equal((await run("/find Zurich invoice")).asked, "Find Zurich invoice");
+  assert.equal((await run("/find")).message, "Type what to find after /find.");
   assert.equal((await run("/review")).navigated, "/dashboard/closes/9/workpapers/44");
   assert.equal((await run("/prepare", "")).message, "Choose a client close first.");
   assert.equal((await run("/ask")).message, "Type your question after /ask.");

@@ -22,12 +22,28 @@ Every answer comes from an existing read, made with your own permissions, and li
 | | what changed from last month, or a named account | changes from last month |
 | | exceptions in the ledger capture | the Exceptions panel |
 | | whether the ledger capture is certified | the close brief's ledger line |
+| A close | find … (also search, look for, where is, show me) | search, in this close |
 | A draft | this draft | its review state, blockers and questions |
-| Firm-wide | what needs you today | the morning brief |
+| Firm-wide | find … | search, across your closes |
+| | what needs you today | the morning brief |
 | | the review queue | drafts ready for review |
 | | blocked work | Work's blocked view |
 
+A follow-up that refers back ("that", "it", "same") and names no account keeps the account of your previous question in the same close conversation, when that question was the same kind (a tie-out after a tie-out, a change after a change); otherwise nothing carries over. A question that refers back without naming what to read ("and that one?") asks the previous question's read again.
+
 A firm-wide answer shows its current details once, under the reply. History keeps only the generic reply and its link, so it never keeps an answer's client details you might later lose access to; your own questions are kept as you typed them. A close answer is kept in full, since the close conversation is reachable only with access to the close.
+
+## Search
+
+`GET /v1/closes/search?q=` (across your closes) and `GET /v1/closes/{id}/search?q=` (one close) find literal matches of every word you type (3–100 characters, up to six words; more are refused), up to 8 of each kind:
+
+- **Documents** by name or extracted text, current versions only; a client's reply is marked as a reply. Each links to the document on the close's Evidence tab.
+- **Drafts**, current versions only, linked to the draft.
+- **Transactions** in each close's latest QuickBooks transaction capture whose evidence is still current, shown with the captured amount and payee and linked to the QuickBooks ledger evidence on the Evidence tab; Xero records are not searched yet.
+- **Procedures**: the current version of each enabled procedure for your clients or all clients.
+- **Review decisions**: decision, reviewer, date and note, linked to the draft.
+
+Only closes you can access are searched, in a read-only transaction with a time limit. Titles and snippets hide passwords, card, bank account and identity numbers like a client reply; the whole text is redacted before about 200 characters around the first word are shown. A match is a literal match, not a claim that a document supports or caused an entry; the answer says what was searched and that each kind is capped.
 
 ## Commands
 
@@ -39,7 +55,7 @@ Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type 
 | `/status` | Where this close stands, or, outside a close, what needs you today |
 | `/explain [account]` | Whether that account ties, or what blocks sign-off |
 | `/compare [account]` | What changed from last month, for that account or overall |
-| `/find <client or YYYY-MM>` | Opens Client closes filtered to it |
+| `/find <words>` | Searches, in this close or across your closes |
 | `/prepare`, `/stop` | Opens the close's preparation, with its preview, confirmation and stop |
 | `/request` | Opens the close's client requests |
 | `/review` | Opens the first draft in the review queue |
