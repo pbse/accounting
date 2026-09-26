@@ -1,3 +1,4 @@
+import { DriveEvidence } from "./DriveEvidence";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
 import { ForwardedEvidence } from "./ForwardedEvidence";
@@ -193,6 +194,7 @@ export function Evidence({
         </button>
       </form>
       <ForwardedEvidence closeId={closeId} onReleased={() => { void load(); onReplace(); }} />
+      <DriveEvidence closeId={closeId} onAdded={() => void load()} />
       {files.filter((file) => !file.superseded_by && files.some((other) => other.id !== file.id && other.name.toLowerCase() === file.name.toLowerCase() && other.digest !== file.digest && !other.superseded_by && BigInt(other.id) < BigInt(file.id))).map((file) => {
         const previous = files.find((other) => other.name.toLowerCase() === file.name.toLowerCase() && other.digest !== file.digest && !other.superseded_by && BigInt(other.id) < BigInt(file.id));
         return previous && <p key={file.id} role="status">{file.name} has different bytes in source #{previous.id} and #{file.id}. The agent keeps both as separate evidence until you compare them. <button onClick={() => { setOldId(previous.id); setNewId(file.id); setComparison(undefined); }}>Select for comparison</button></p>;
