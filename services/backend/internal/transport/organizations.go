@@ -30,6 +30,9 @@ func organizationAccess(db *sql.DB, r *http.Request) (bool, error) {
 	}
 	var member bool
 	err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, organization(r), subject(r)).Scan(&member)
+	if err == nil && !member {
+		member = invitationEnrollment(r.Context(), db, organization(r), subject(r))
+	}
 	return member, err
 }
 
@@ -49,7 +52,7 @@ func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 			return
 		}
 		path := strings.TrimPrefix(r.URL.EscapedPath(), "/v1/closes")
-		if path != "" && path != "/work" && path != "/work/interpret" && path != "/chat" && path != "/search" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/track-record" && path != "/organization/policy" && path != "/agent-access" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" && path != "/daily" && path != "/morning" && path != "/index-rates" && path != "/portfolio" && path != "/portfolio/run" && path != "/setup" {
+		if path != "" && path != "/work" && path != "/work/interpret" && path != "/chat" && path != "/search" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/track-record" && path != "/organization/policy" && path != "/agent-access" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" && path != "/daily" && path != "/morning" && path != "/index-rates" && path != "/portfolio" && path != "/portfolio/run" && path != "/setup" && path != "/members/roles" && path != "/members/invitations" {
 			id, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 			id, err = url.PathUnescape(id)
 			if err != nil {

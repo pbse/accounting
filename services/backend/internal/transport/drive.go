@@ -46,8 +46,9 @@ func driveCall(ctx context.Context, method, target, bearer string, body any, out
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil || resp.StatusCode != 200 {
-		return nil, fmt.Errorf("%s returned %d", req.URL.Host, resp.StatusCode)
+	// A POST may create (201); a GET must return the whole body (200), never a partial one.
+	if err != nil || resp.StatusCode != 200 && !(method == "POST" && resp.StatusCode == 201) {
+		return nil, statusError{req.URL.Host, resp.StatusCode}
 	}
 	if int64(len(raw)) > limit {
 		return nil, errTooLarge
@@ -59,6 +60,14 @@ func driveCall(ctx context.Context, method, target, bearer string, body any, out
 }
 
 var errTooLarge = errors.New("too large")
+
+// statusError is a provider's refusal, with the status that tells a definitive answer (4xx) from an uncertain one.
+type statusError struct {
+	host string
+	code int
+}
+
+func (e statusError) Error() string { return fmt.Sprintf("%s returned %d", e.host, e.code) }
 
 // driveToken returns the person's Drive access token, or why they must connect first.
 func driveToken(ctx context.Context, a *auth.Claims) (string, string, error) {
