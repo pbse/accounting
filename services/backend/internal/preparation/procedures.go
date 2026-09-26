@@ -2,6 +2,7 @@ package preparation
 
 import (
 	"close.local/backend/internal/loans"
+	"close.local/backend/internal/prepaids"
 	"cmp"
 	"context"
 	"database/sql"
@@ -213,9 +214,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		used = result.Input.Method
 	}
 	// A convention changes the calculation, so it is part of what the procedure must approve.
-	if result.Input.Convention != "" {
-		used += "+" + result.Input.Convention
-	}
+	used = prepaids.Boundary(used, result.Input.Convention)
 	if used != method {
 		return PolicyRequired(fmt.Sprintf("Prepared method %q differs from the approved procedure method %q; review the procedure before saving", used, method))
 	}

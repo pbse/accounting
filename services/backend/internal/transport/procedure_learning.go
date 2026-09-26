@@ -48,9 +48,9 @@ type learnedDraft struct {
 func learnedMethod(kind, method string) bool {
 	switch kind {
 	case "prepaid":
-		return method == prepaids.Method || method == prepaids.DailyMethod
+		return slices.Contains([]string{prepaids.Method, prepaids.DailyMethod, prepaids.DecliningMethod, prepaids.Boundary(prepaids.Method, prepaids.MidMonth), prepaids.Boundary(prepaids.DecliningMethod, prepaids.MidMonth)}, method)
 	case "accrual":
-		return method == accruals.Method || method == accruals.ActualMethod || method == accruals.RecurringMethod
+		return slices.Contains([]string{accruals.Method, accruals.ActualMethod, accruals.RecurringMethod, accruals.ProRataMethod}, method)
 	}
 	return false
 }
@@ -238,7 +238,7 @@ func replayLearnedExample(kind string, raw []byte) (string, error) {
 		if err != nil || !reflect.DeepEqual(got, saved) {
 			return "", fmt.Errorf("Prepaid example no longer matches the calculator")
 		}
-		return saved.Input.Method, nil
+		return prepaids.Boundary(saved.Input.Method, saved.Input.Convention), nil
 	case "accrual":
 		var saved accruals.Workpaper
 		if json.Unmarshal(raw, &saved) != nil {
