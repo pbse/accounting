@@ -409,7 +409,11 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if proposal.Engine == "openai" {
-				if proposal.Kind != p.Kind || len(proposal.Questions) > 0 || proposal.Kind == "unsupported" {
+				var schedule struct {
+					Schedule string `json:"schedule"`
+				}
+				json.Unmarshal(p.Input, &schedule)
+				if proposal.Kind != preparation.WorkKind(p.Kind, schedule.Schedule) || len(proposal.Questions) > 0 || proposal.Kind == "unsupported" {
 					problem(w, 409, "Resolve agent questions and confirm the proposed work before continuing this job.")
 					return
 				}

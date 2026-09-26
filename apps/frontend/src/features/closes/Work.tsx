@@ -114,7 +114,14 @@ const tones: Record<string, string> = {
   completed: "status ok",
 };
 type QueueItem = Plan & { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string; digest: string; review_id: string; bulk_reason: string; approval_note?: string; approval_requested_by?: string; approval_agent?: string };
-const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement" };
+const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", deferred_revenue: "Deferred revenue", depreciation: "Depreciation", loan: "Loan schedule", owner: "Owner item" };
+
+const formFor: Record<string, [string, string]> = {
+  deferred_revenue: ["prepaids/new", "schedule=deferred_revenue&"],
+  depreciation: ["prepaids/new", "schedule=depreciation&"],
+  loan: ["loans/new", ""],
+  owner: ["owners/new", ""],
+};
 
 function Kpi({ icon, tone, label, value, caption, onClick }: { icon: IconName; tone: string; label: string; value?: number; caption: string; onClick: () => void }) {
   return (
@@ -993,7 +1000,22 @@ function WorkDetails({
               </Link>
             </p>
           )}
-          {kind !== "unsupported" && kind !== "settlement" && item.proposal.engine !== "recognized_export" && (
+          {formFor[kind] && (
+            <p>
+              {facts.filter((f) => f.candidates.length > 0).map((f) => (
+                <span key={f.field} style={{ display: "block" }}>
+                  {f.label}: {f.value || f.question} · source #{f.candidates[0].source_id}, {f.candidates[0].location}
+                </span>
+              ))}
+              {questions.length > 0 ? <span>Answer the questions above; the form opens once the agent has none left.</span> : <Link
+                className="button primary"
+                to={`/dashboard/${formFor[kind][0]}?${formFor[kind][1]}close=${item.close_id}&entity=${encodeURIComponent(item.entity)}&period=${item.period}&work=${item.id}&revision=${item.revision}`}
+              >
+                Open the {kindLabels[kind].toLowerCase()} form with these facts →
+              </Link>}
+            </p>
+          )}
+          {kind !== "unsupported" && kind !== "settlement" && !formFor[kind] && item.proposal.engine !== "recognized_export" && (
             <form onSubmit={confirm}>
               <fieldset disabled={busy}>
                 <legend>

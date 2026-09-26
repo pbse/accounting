@@ -169,3 +169,70 @@ func TestRecognizeExportLeavesTheReconciliationRoleToTheReviewer(t *testing.T) {
 		t.Fatal("an invoice is not a recognized export")
 	}
 }
+
+func TestFormPreparedKindsKeepTheirFormsSources(t *testing.T) {
+	sources := []IntakeSource{
+		{Source: Source{ID: "1", Name: "statement.txt"}, Content: "Closing principal 118,000.00"},
+		{Source: Source{ID: "2", Name: "note.txt"}, Content: "Interest at 6.000% per annum, Actual/360."},
+		{Source: Source{ID: "3", Name: "ledger.txt"}, Content: "Loan payable 100,000.00"},
+	}
+	proposal := func(kind string, roles map[string]string, fields ...string) agentResult {
+		var r agentResult
+		r.Kind, r.Summary = kind, "Fixture"
+		for _, id := range []string{"1", "2", "3"} {
+			if role := roles[id]; role != "" {
+				r.Sources = append(r.Sources, struct {
+					ID   string `json:"id"`
+					Role string `json:"role"`
+				}{id, role})
+			}
+		}
+		for _, field := range fields {
+			r.Facts = append(r.Facts, struct {
+				Field    string `json:"field"`
+				Value    string `json:"value"`
+				SourceID string `json:"source_id"`
+				Quote    string `json:"quote"`
+			}{field, "118000.00", "1", "Closing principal 118,000.00"})
+		}
+		return r
+	}
+	loan := map[string]string{"1": "statement", "2": "support", "3": "ledger"}
+	p, err := validateInterpretation(proposal("loan", loan, "closing_principal"), "1", sources)
+	if err != nil || len(p.Questions) != 0 || p.Facts[5].Field != "closing_principal" || p.Facts[5].Value != "118000.00" {
+		t.Fatalf("a loan proposal from the statement with its note and ledger: %+v %v", p, err)
+	}
+	if p, err = validateInterpretation(proposal("loan", map[string]string{"1": "statement", "2": "support"}), "1", sources); err != nil || len(p.Questions) != 1 || !strings.Contains(p.Questions[0], "ledger page") {
+		t.Fatalf("a loan without its ledger page asks for it: %+v %v", p, err)
+	}
+	for name, bad := range map[string]agentResult{
+		"a loan from the note":             proposal("loan", map[string]string{"1": "support", "2": "statement", "3": "ledger"}),
+		"a loan with an invoice":           proposal("loan", map[string]string{"1": "statement", "2": "invoice", "3": "ledger"}),
+		"an owner item from a statement":   proposal("owner", map[string]string{"1": "statement", "3": "ledger"}),
+		"an owner item with a statement":   proposal("owner", map[string]string{"1": "support", "2": "statement", "3": "ledger"}),
+		"depreciation from a ledger":       proposal("depreciation", map[string]string{"1": "invoice", "3": "ledger"}),
+		"a field the form does not have":   proposal("depreciation", map[string]string{"1": "invoice"}, "useful_life"),
+		"a loan field on deferred revenue": proposal("deferred_revenue", map[string]string{"1": "invoice"}, "closing_principal"),
+	} {
+		if _, err = validateInterpretation(bad, "1", sources); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if p, err = validateInterpretation(proposal("owner", map[string]string{"1": "support"}, "amount"), "1", sources); err != nil || len(p.Questions) != 1 || p.Facts[3].Value != "118000.00" {
+		t.Fatalf("an owner item without its ledger page asks for it: %+v %v", p, err)
+	}
+	for _, c := range []struct {
+		name      string
+		p         agentResult
+		questions int
+	}{
+		{"depreciation without the booked accumulated depreciation's support", proposal("depreciation", map[string]string{"1": "invoice"}), 1},
+		{"depreciation with it", proposal("depreciation", map[string]string{"1": "invoice", "2": "support"}), 0},
+		{"deferred revenue booked to revenue", proposal("deferred_revenue", map[string]string{"1": "invoice"}, "amount"), 0},
+		{"deferred revenue with a booked balance but no support", proposal("deferred_revenue", map[string]string{"1": "invoice"}, "booked_balance"), 1},
+	} {
+		if p, err = validateInterpretation(c.p, "1", sources); err != nil || len(p.Questions) != c.questions {
+			t.Errorf("%s: %v %v", c.name, p.Questions, err)
+		}
+	}
+}

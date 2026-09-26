@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router";
 import { workspaceRequest } from "./workspace";
 
 type Candidate = { id: string; date: string; amount: string; vendor_id: string };
@@ -27,6 +28,15 @@ export function BillCorrection({ closeId, kind = "bills" }: { closeId: string; k
   const [item, setItem] = useState<Correction>();
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const panel = useRef<HTMLDetailsElement>(null);
+  const { hash } = useLocation();
+  useEffect(() => {
+    const asked = new RegExp(`^#correct-${kind}-([0-9]+)$`).exec(hash)?.[1];
+    if (!asked || !panel.current) return;
+    panel.current.open = true;
+    panel.current.scrollIntoView({ block: "start" });
+    void select(asked);
+  }, [hash]);
   async function load() {
     setBusy(true); setMessage("");
     try {
@@ -53,7 +63,7 @@ export function BillCorrection({ closeId, kind = "bills" }: { closeId: string; k
     } catch (error) { setMessage(error instanceof Error ? error.message : "Correction unavailable."); }
     finally { setBusy(false); }
   }
-  return <details onToggle={event => { if (event.currentTarget.open && bills.length === 0) void load(); }}>
+  return <details ref={panel} onToggle={event => { if (event.currentTarget.open && bills.length === 0) void load(); }}>
     <summary>{k.title}</summary>
     <p>{k.about} Select exactly one line and a new {k.account} account, under the accountant's cited rule; everything else must read back unchanged. It writes to the client's production QuickBooks company under a grant that covers {k.grant} (both the line's current and new accounts must be granted), or to the configured sandbox company in development. No automatic retry follows an uncertain write.</p>
     <button type="button" disabled={busy} onClick={() => void load()}>Refresh {k.noun} candidates</button>

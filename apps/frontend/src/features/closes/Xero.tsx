@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router";
 import { workspaceRequest } from "./workspace";
 
 type Tenant = { tenantId: string; tenantName: string };
@@ -309,6 +310,15 @@ function XeroBillCorrection({ closeId }: { closeId: string }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const base = `/${closeId}/xero/bills`;
+  const panel = useRef<HTMLDetailsElement>(null);
+  const { hash } = useLocation();
+  useEffect(() => {
+    const asked = /^#correct-xero-([\w-]+)$/.exec(hash)?.[1];
+    if (!asked || !panel.current) return;
+    panel.current.open = true;
+    panel.current.scrollIntoView({ block: "start" });
+    void select(asked);
+  }, [hash]);
   async function load() {
     try {
       const result = await workspaceRequest(`${base}/candidates`);
@@ -344,13 +354,14 @@ function XeroBillCorrection({ closeId }: { closeId: string }) {
   }
   const editable = !item || item.state === "not_prepared" || item.state === "preview" || item.state === "approved";
   return (
-    <details onToggle={(e) => { if (e.currentTarget.open && bills.length === 0) void load(); }}>
+    <details ref={panel} onToggle={(e) => { if (e.currentTarget.open && bills.length === 0) void load(); }}>
       <summary>Recode a Xero bill line</summary>
       <p>For an approved bill in the close month with nothing paid or credited, no tax and up to ten lines. Choose one line and a new expense account under the accountant's cited rule; both accounts must be in a Xero grant that covers bill corrections. Everything else must read back unchanged, and an uncertain update is never retried.</p>
       <label>
         Bill from the latest Xero capture
         <select value={selected} onChange={(e) => void select(e.target.value)}>
           <option value="">Choose one</option>
+          {selected && !bills.some((b) => b.id === selected) && <option value={selected}>Bill {selected}</option>}
           {bills.map((b) => <option key={b.id} value={b.id}>{b.number || b.id} · {b.date} · {b.currency} {b.total}</option>)}
         </select>
       </label>

@@ -55,6 +55,12 @@ export function Exceptions({ closeId }: { closeId: string }) {
   const balances = scan.balances;
   const questions = [...scan.items, ...balances.items].map((item) => item.question);
   const ledger = scan.capture?.source === "xero" ? "Xero" : "QuickBooks";
+  const correction = (item: Found): [string, string] | undefined =>
+    item.type !== "uncategorized" && item.type !== "inconsistent_coding"
+      ? undefined
+      : scan.capture?.source === "xero"
+        ? item.kind === "Bill" ? ["evidence", "correct-xero"] : undefined
+        : ({ Bill: ["workpapers", "correct-bills"], Purchase: ["workpapers", "correct-purchases"], Deposit: ["workpapers", "correct-deposits"] } as Record<string, [string, string]>)[item.kind];
   async function copy(items: string[]) {
     try {
       await navigator.clipboard.writeText(items.map((question) => `- ${question}`).join("\n"));
@@ -129,7 +135,12 @@ export function Exceptions({ closeId }: { closeId: string }) {
                   <small>
                     {item.kind} {item.provider_ids.map((id) => `#${id}`).join(", ")}
                   </small>
-                  <span />
+                  <span>
+                    {item.provider_ids.slice(0, 5).map((id) => {
+                      const target = correction(item);
+                      return target && <Link key={id} to={`?tab=${target[0]}#${target[1]}-${encodeURIComponent(id)}`}>Prepare a correction for #{id}</Link>;
+                    })}
+                  </span>
                 </div>
               ))}
             </div>

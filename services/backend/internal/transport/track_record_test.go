@@ -171,3 +171,13 @@ func TestTrackRecordComparesProposalsWithWhatPeopleConfirmed(t *testing.T) {
 		t.Fatalf("a member without the client grant sees nothing: %+v", member.Clients)
 	}
 }
+
+func TestTrackRecordReadsAScheduleAsItsKind(t *testing.T) {
+	plan := confirmedPlan{Kind: "prepaid", Input: map[string]json.RawMessage{"schedule": json.RawMessage(`"depreciation"`)}}
+	if _, changed, _ := compareProposal(readProposal{Kind: "depreciation"}, plan, nil); len(changed) != 0 {
+		t.Fatalf("a confirmed depreciation schedule keeps the proposed kind: %v", changed)
+	}
+	if _, changed, _ := compareProposal(readProposal{Kind: "prepaid"}, plan, nil); len(changed) != 1 || changed[0] != "kind" {
+		t.Fatalf("a prepaid proposal confirmed as depreciation changed kind: %v", changed)
+	}
+}

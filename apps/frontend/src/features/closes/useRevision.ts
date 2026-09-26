@@ -8,6 +8,7 @@ export function useRevision(form: RefObject<HTMLFormElement | null>) {
   const [params] = useSearchParams();
   const close = params.get("close");
   const paper = params.get("revise");
+  const work = params.get("work");
   const [ready, setReady] = useState(!paper);
   const [error, setError] = useState("");
   const [sources, setSources] = useState<Source[]>([]);
@@ -78,5 +79,31 @@ export function useRevision(form: RefObject<HTMLFormElement | null>) {
       cancelled = true;
     };
   }, [close, paper, form]);
+  useEffect(() => {
+    if (paper || !work || !close) return;
+    let cancelled = false;
+    type Proposal = { facts?: { field: string; value: string; candidates: { source_id: string; location: string }[] }[]; sources?: Source[] };
+    workspaceRequest(`/${close}/work?view=all&jobs=${encodeURIComponent(work)}`)
+      .then(({ items }: { items: { source_id: string; proposal: Proposal }[] }) => {
+        const item = items[0];
+        if (cancelled || !item) return;
+        const facts = item.proposal.facts ?? [];
+        const own = item.proposal.sources?.find((s) => s.id === item.source_id);
+        const values: [string, string][] = [...facts.filter((f) => f.value).map((f) => [f.field, f.value] as [string, string]), ...(own ? [["source_reference", own.name] as [string, string]] : [])];
+        for (const [name, value] of values) {
+          const field = form.current?.elements.namedItem(name);
+          if (((field instanceof HTMLInputElement && field.type !== "checkbox") || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement) && !field.value) field.value = value;
+        }
+        // One source per role, the job's own source first, at its first cited location when it has one.
+        const byRole = new Map<string, Source>();
+        for (const s of [...(own ? [own] : []), ...(item.proposal.sources ?? [])])
+          if (!byRole.has(s.role)) byRole.set(s.role, { ...s, location: facts.flatMap((f) => f.candidates).find((c) => c.source_id === s.id)?.location ?? "" });
+        setSources([...byRole.values()]);
+      })
+      .catch((e) => !cancelled && setError(e.message));
+    return () => {
+      cancelled = true;
+    };
+  }, [close, paper, work, form]);
   return { ready, error, sources, paper, close, savedInput };
 }

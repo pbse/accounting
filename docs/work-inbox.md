@@ -54,7 +54,19 @@ Add `OPENAI_API_KEY` and `OPENAI_MODEL` privately to the root `.env`. Choose a m
 
 The worker uses OpenAI's [Responses structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs), `store: false`, and no executable tools. It sends current extracted text from this close only; replies and staff answers from other jobs are excluded. Configuring credentials enables this transfer of evidence to OpenAI. Documents remain untrusted input. The response proposes a supported kind, relevant evidence, quoted candidate facts and specific questions. The server validates source IDs and exact quotes; citations do not prove that the model's interpretation is correct.
 
-The current methods remain USD equal-full-month prepaids and exact date/amount reconciliation of two original CSVs. The model cannot generate transactions, authorize policy, approve workpapers or post journals. A preparer must review facts and confirm the existing accounting assumptions. Unsupported or ambiguous work stays a question, not a calculation.
+The model cannot generate transactions, authorize policy, approve workpapers or post journals. A preparer must review facts and confirm the existing accounting assumptions. Unsupported or ambiguous work stays a question, not a calculation.
+
+It proposes one of these kinds of work, each finished by an existing calculator:
+
+| Kind | Primary source | Other sources | Confirmed in |
+| --- | --- | --- | --- |
+| Prepaid, accrual | the invoice | support | Work |
+| Reconciliation | the statement or ledger CSV | the other CSV, support | Work |
+| Deferred revenue, depreciation | the customer or purchase invoice | support | the Deferred revenue or Depreciation form |
+| Loan | the lender statement | the note or agreement and amortization schedule (support), one ledger page | the Loan schedule form |
+| Owner item | the receipt or transaction record (support) | one ledger page | the Owner items form |
+
+For the form kinds, Work lists the cited facts and opens the form with them filled in (fields named as the form's, each only when the sources agree on one value; the source reference is the job's own document) and the proposal's sources linked, one per role with the job's own source first, located at its first citation or left for the preparer to locate. Saving continues the same job. The model never chooses a method, day-count, owner direction or treatment, business-use share, useful life, salvage value, convention or disposal; loan payment rows are entered from the cited statement, and a field the form shows only after another choice is not filled. A note, agreement or schedule uploaded alone is support for its statement's job. A loan without its note or ledger page, an owner item without its ledger page, depreciation without support for the booked accumulated depreciation, or deferred revenue citing a booked balance without its support, asks for it, since the form saves one source for each role; Work opens the form only once the agent has no questions left. Stripe payout exports are recognized without a model and go to the settlement form; native corrections start from the exceptions below.
 
 Use **Save answer and resume agent** to retain a staff answer as immutable evidence and resume the same job. Approved client requests still require staff-recorded delivery and original replies; replies resume the same interpreter. New uploads wake unresolved OpenAI proposals. Fresh facts require another confirmation, after which the existing worker prepares automatically. Concurrent evidence changes discard model output; changes after review block execution until rechecked.
 
@@ -94,7 +106,7 @@ The close Overview scans every row of the latest completed QuickBooks transactio
 - Account types come from the newest QuickBooks period snapshot. Without one, the scan says it is waiting. An account missing from the snapshot's list, or a bill line posted through an item (whose account is not captured), makes the scan incomplete, and the Exceptions panel and the close brief both say so.
 - These items are computed when the close is opened, so Daily Books does not list them.
 
-Each item names the QuickBooks transaction IDs, the evidence still missing and a plain client question. **Copy client questions** puts them on the clipboard for a client request. Nothing is recategorized, deleted, merged or posted. Owner or personal purpose is never inferred. Without a capture, the card asks for one rather than reporting "no exceptions".
+Each item names the QuickBooks transaction IDs, the evidence still missing and a plain client question. **Copy client questions** puts them on the clipboard for a client request. A holding-account or inconsistently coded QuickBooks Bill, expense or Deposit, or Xero bill, links each transaction (up to five) to **Prepare a correction**, which opens its reviewed correction with that transaction chosen; the preparer picks the line, the new account and the accountant's rule, and previews, approves and runs it as before. Nothing is recategorized, deleted, merged or posted by the scan. Owner or personal purpose is never inferred. Without a capture, the card asks for one rather than reporting "no exceptions".
 
 ## Where this close stands
 
