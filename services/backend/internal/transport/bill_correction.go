@@ -420,7 +420,7 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 				return
 			}
 			var currentCapture string
-			e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture)
+			e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY quickbooks_entity_syncs.id DESC LIMIT 1`, closeID).Scan(&currentCapture)
 			if e != nil && e != sql.ErrNoRows {
 				problem(w, 503, "Could not verify the transaction capture.")
 				return

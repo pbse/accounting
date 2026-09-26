@@ -1648,3 +1648,13 @@ Tests: `TestAgentsActOnlyUnderAnApprovedMemberGrant` (OAuth agent): a read grant
 Code review: GPT-6 Sol (high). Adopted: the review queue returns the member and the client as separate fields; ledger certification and aging were dropped as unbounded; the test's request draft is cleaned up.
 
 Not verified: a real WorkOS AuthKit token's `client_id` claim, and the two UI labels in a browser.
+
+## Numeric id ordering (2026-09-26)
+
+Request: found while fixing the chat test flake. In `SELECT id::text ... ORDER BY id`, Postgres resolves a bare `id` in ORDER BY to the output column, so ids sort as text and `9` comes after `10`; `(SELECT id::text FROM (VALUES (9),(10)) v(id) ORDER BY id DESC LIMIT 1)` returns 9. Every query that selects `id::text` and orders by a bare `id` now orders by the table's column (`procedure_versions.id`, `workpapers.id`, ...): the preparation job queue, latest-snapshot and coverage-binding lookups, close and workpaper lists, export, tie-out, procedure history and current-version checks, procedure drafts, recurring accrual revisions, the latest Xero snapshot, the latest QuickBooks entity capture in bill corrections and credit applications, credit applications, preparation jobs and inbound replies (the outer aggregate orders by `x.id::bigint`). Ordering inside an aggregate or over a `SELECT *` subquery already used the numeric column and was left alone.
+
+Tests: `TestProcedureOverridesPinAndInvalidate` moves the procedure id sequence to the next digit boundary and publishes two more versions; the current-version check rejected the second with 409 before the fix. Full backend suite and vet pass.
+
+Code review: GPT-6 Sol (high).
+
+Not verified: production rows past a digit boundary were not replayed.
