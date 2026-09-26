@@ -390,15 +390,16 @@ func ScheduleCandidates(rows []TransactionRow, accounts json.RawMessage) ([]Exce
 	return out, unknown, items, nil
 }
 
-// RecordAccounts lists the account names a captured transaction posts to: its lines' accounts and its bank, card,
-// deposit or payable account.
+// RecordAccounts lists the account names a captured transaction posts to.
 func RecordAccounts(record json.RawMessage) []string {
 	var doc struct {
 		AccountRef, DepositToAccountRef, APAccountRef ref
+		CheckPayment                                  struct{ BankAccountRef ref }
+		CreditCardPayment                             struct{ CCAccountRef ref }
 		Line                                          []map[string]json.RawMessage
 	}
 	json.Unmarshal(record, &doc)
-	names := []string{doc.AccountRef.Name, doc.DepositToAccountRef.Name, doc.APAccountRef.Name}
+	names := []string{doc.AccountRef.Name, doc.DepositToAccountRef.Name, doc.APAccountRef.Name, doc.CheckPayment.BankAccountRef.Name, doc.CreditCardPayment.CCAccountRef.Name}
 	for _, line := range doc.Line {
 		for key, raw := range line {
 			var detail struct{ AccountRef ref }

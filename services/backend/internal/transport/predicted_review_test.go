@@ -41,6 +41,7 @@ func TestPredictedReviewFlagsDraftsALaterTransactionMayAffect(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,record) VALUES
  ($1,'Bill','41','2','2026-09-10',now(),'{"Line":[{"DetailType":"AccountBasedExpenseLineDetail","AccountBasedExpenseLineDetail":{"AccountRef":{"value":"7","name":"Prepaid insurance"}}}]}'),
  ($1,'Purchase','52','1','2026-09-11',now()-interval '2 days','{"AccountRef":{"value":"9","name":"Accrued liabilities"}}'),
+ ($1,'BillPayment','70','1','2026-09-13',now(),'{"CheckPayment":{"BankAccountRef":{"value":"3","name":"Operating bank"}}}'),
  ($1,'Purchase','60','1','2026-09-12',now(),'{"Line":[{"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"11","name":"Rent expense"}}}]}')`, syncID)
 	must(err)
 	approved := func(kind, input, at string) string {
@@ -55,6 +56,7 @@ func TestPredictedReviewFlagsDraftsALaterTransactionMayAffect(t *testing.T) {
 	approved("accrual", `{"liability_account":"Accrued liabilities"}`, "-1 day")
 	approved("prepaid", `{"prepaid_account":"Prepaid rent","expense_account":"Rent expense"}`, "-1 day")
 	approved("prepaid", `{"prepaid_account":"Prepaid insurance"}`, "1 hour")
+	bank := approved("reconciliation", `{"account":"Operating bank"}`, "-1 day")
 	changed := approved("prepaid", `{"prepaid_account":"Prepaid insurance"},"sources":[{"id":"0","digest":"missing"}]`, "-1 day")
 
 	token := strings.Repeat("p", 32)
@@ -77,9 +79,16 @@ func TestPredictedReviewFlagsDraftsALaterTransactionMayAffect(t *testing.T) {
 		}
 		return out
 	}
-	if got := read().Predicted; len(got) != 1 || got[0].WorkpaperID != flagged || got[0].Transaction != "Bill 41" || got[0].Account != "Prepaid insurance" || got[0].Count != 1 {
+	if got := read().Predicted; len(got) != 2 || got[0].WorkpaperID != bank || got[0].Transaction != "BillPayment 70" || got[1].WorkpaperID != flagged || got[1].Transaction != "Bill 41" || got[1].Account != "Prepaid insurance" || got[1].Count != 1 {
 		t.Fatalf("only the draft whose account a transaction updated after approval is flagged, not one already reopened (#%s): %+v", changed, got)
 	}
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='disconnected' WHERE id=$1`, connection)
+	must(err)
+	if got := read().Predicted; len(got) != 0 {
+		t.Fatalf("a disconnected company's old capture predicts nothing: %+v", got)
+	}
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='active' WHERE id=$1`, connection)
+	must(err)
 	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','d','{}','Signed fixture','fixture')`, closeID)
 	must(err)
 	if got := read().Predicted; len(got) != 0 {

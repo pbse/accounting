@@ -622,26 +622,22 @@ func interpretWork(ctx context.Context, key, model, text string, labels []string
 	return answer.Action, answer.Target, nil
 }
 
-// predictedAccounts are the balance-sheet accounts each kind of workpaper supports.
 var predictedAccounts = map[string][]string{"prepaid": {"prepaid_account"}, "accrual": {"liability_account"}, "loan": {"loan_account", "accrued_interest_account", "current_portion_account"}, "owner": {"owner_account"}, "settlement": {"bank_account"}, "reconciliation": {"account"}}
 
-// predictedReviews lists approved drafts in open closes that a transaction in the latest capture may affect: it posts
-// to an account the draft supports and QuickBooks updated it after the draft's approval. It never changes a review.
 func predictedReviews(r *http.Request, db *sql.DB, search string) ([]map[string]any, bool, error) {
 	rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.paper->'input',v.created_at,t.kind,t.provider_id,t.provider_updated_at,t.record
  FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id JOIN workpaper_reviews v ON v.id::text=w.review_id
- JOIN quickbooks_entity_syncs s ON s.close_id=c.id AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.state='completed' AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("c.id")+`,z.connection_id))
+ JOIN quickbooks_entity_syncs s ON s.close_id=c.id AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.state='completed' AND z.connection_id=`+quickbooks.ReadingConnection("c.id")+`)
  JOIN evidence e ON e.id=s.evidence_id AND e.close_id=c.id AND e.superseded_by IS NULL
  JOIN quickbooks_transaction_rows t ON t.sync_id=s.id AND t.provider_updated_at>v.created_at
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4)
- AND w.review_state='approved' AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)
- AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
- ORDER BY w.id DESC,t.provider_updated_at DESC LIMIT 5001`, organization(r), firmAccess(r), subject(r), search)
+ AND w.review_state='approved' AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ ORDER BY w.id DESC,t.provider_updated_at DESC`, organization(r), firmAccess(r), subject(r), search)
 	if err != nil {
 		return nil, false, err
 	}
 	defer rows.Close()
-	items, byPaper, scanned := []map[string]any{}, map[string]map[string]any{}, 0
+	items, byPaper := []map[string]any{}, map[string]map[string]any{}
 	for rows.Next() {
 		var id, closeID, entity, period, kind, txnKind, provider string
 		var input, record json.RawMessage
@@ -649,7 +645,6 @@ func predictedReviews(r *http.Request, db *sql.DB, search string) ([]map[string]
 		if err = rows.Scan(&id, &closeID, &entity, &period, &kind, &input, &approved, &txnKind, &provider, &updated, &record); err != nil {
 			return nil, false, err
 		}
-		scanned++
 		var fields map[string]json.RawMessage
 		json.Unmarshal(input, &fields)
 		supported := map[string]bool{}
@@ -675,6 +670,5 @@ func predictedReviews(r *http.Request, db *sql.DB, search string) ([]map[string]
 	if err = rows.Err(); err != nil {
 		return nil, false, err
 	}
-	more := len(items) > 100 || scanned > 5000
-	return items[:min(len(items), 100)], more, nil
+	return items[:min(len(items), 100)], len(items) > 100, nil
 }
