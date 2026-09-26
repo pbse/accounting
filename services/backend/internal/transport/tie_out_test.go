@@ -11,6 +11,7 @@ import (
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/loans"
+	"close.local/backend/internal/owners"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/reconciliation"
 )
@@ -99,6 +100,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 		{"16", "Stripe clearing", "Other Current Asset", "Asset", "100.00", ""},
 		{"17", "Server accumulated depreciation", "Fixed Asset", "Asset", "", "500.00"},
 		{"18", "Accrued bank fees", "Other Current Liability", "Liability", "", "40.00"},
+		{"19", "Accrued card fees", "Other Current Liability", "Liability", "", "40.00"},
 	}
 	directory, report := []map[string]string{}, []map[string]any{}
 	for _, a := range accounts {
@@ -160,6 +162,10 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	post(save("accrual", accrual("Payroll", "Accrued payroll", "300.00", entry("Accrued payroll", "300.00")), true), "verified", "-1 hour")
 	save("accrual", accrual("Audit", "Accrued audit fees", "500.00", entry("Accrued audit fees", "100.00")), true)
 	save("accrual", accrual("Bank fees", "Accrued bank fees", "45.00", nil), true)
+	save("accrual", accrual("Card fees", "Accrued card fees", "45.00", nil), true)
+	// Two opposing entries still to post net to nothing, but they are pending, so materiality does not explain the account.
+	save("owner", owners.Workpaper{Input: owners.Input{TransactionReference: "Fee refund"}, Proposal: &prepaids.Adjustment{Date: "2026-09-30", DebitAccount: "Accrued card fees", CreditAccount: "Utilities", Amount: "3.00"}}, true)
+	save("owner", owners.Workpaper{Input: owners.Input{TransactionReference: "Fee charge"}, Proposal: &prepaids.Adjustment{Date: "2026-09-30", DebitAccount: "Utilities", CreditAccount: "Accrued card fees", Amount: "3.00"}}, true)
 	post(save("accrual", accrual("Landlord", "Accrued rent", "200.00", entry("Accrued rent", "200.00")), true), "unknown", "0")
 	save("loan", loans.Workpaper{Input: loans.Input{Lender: "First Bank", LoanAccount: "Term loan", ClosingPrincipal: "1500.00", ReclassCurrentPortion: true, PrincipalDueNext12Months: "2000.00", CurrentPortionAccount: "Loan current portion"}}, true)
 	save("reconciliation", reconciliation.Workpaper{Input: reconciliation.Input{Account: "Checking", LedgerClosing: "5000.00"}}, true)
@@ -175,7 +181,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 		"Prepaid insurance": "ties", "Accumulated depreciation": "ties", "Deferred revenue": "ties", "Checking": "ties", "Business card": "ties",
 		"Accrued liabilities": "ties_after_entries", "Accrued payroll": "ties", "Accrued rent": "posting_unknown", "Accrued audit fees": "differs",
 		"Term loan": "ties", "Loan current portion": "ties", "Loan payable": "unsupported", "Office equipment": "unsupported",
-		"Server accumulated depreciation": "ties_after_entries", "Accrued bank fees": "differs",
+		"Server accumulated depreciation": "ties_after_entries", "Accrued bank fees": "differs", "Accrued card fees": "differs",
 	} {
 		if rows[name].Status != want {
 			t.Errorf("%s is %q, want %q: %+v", name, rows[name].Status, want, rows[name])
@@ -184,7 +190,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	if clearing := rows["Stripe clearing"].Entries; len(clearing) != 1 || clearing[0].Posting != "proposed" {
 		t.Errorf("a posted fee entry is in the balance, but the settlement's refund draft is still proposed: %+v", rows["Stripe clearing"])
 	}
-	if _, found := rows["Retained Earnings"]; found || len(b.Rows) != 16 {
+	if _, found := rows["Retained Earnings"]; found || len(b.Rows) != 17 {
 		t.Errorf("equity and supportless expense accounts are left off the board: %+v", b.Rows)
 	}
 	if rows["Prepaid insurance"].Provisional || !rows["Business card"].Provisional {
@@ -202,7 +208,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	_, material := read()
 	_, err = db.Exec(`UPDATE organizations SET materiality_amount=NULL WHERE id='local-development'`)
 	must(err)
-	if material["Accrued bank fees"].Status != "within_materiality" || material["Accrued audit fees"].Status != "differs" {
+	if material["Accrued bank fees"].Status != "within_materiality" || material["Accrued audit fees"].Status != "differs" || material["Accrued card fees"].Status != "differs" {
 		t.Errorf("a 5.00 difference is within a 1000.00 materiality; the audit fees' 450.00 difference, which a proposed entry only partly closes, still differs: %+v %+v", material["Accrued bank fees"], material["Accrued audit fees"])
 	}
 	unmatched := []string{}

@@ -1465,10 +1465,12 @@ Plan review: GPT-6 Sol (high). Adopted: materiality is read in the tie-out's rep
 
 Tests:
 
-- `TestTieOutComparesBalancesWithLatestSupport`: under a 1,000.00 materiality a 5.00 difference is within materiality, while a 450.00 difference that a proposed entry only partly closes still differs.
+- `TestTieOutComparesBalancesWithLatestSupport`: under a 1,000.00 materiality a 5.00 difference is within materiality, while a 450.00 difference that a proposed entry only partly closes, and a 5.00 difference with two opposing entries still pending, still differ.
 - `TestCloseBriefNarratesWhatNeedsAPerson`: under 500.00, the 100.00 prepaid difference is listed as within materiality, still rests on unapproved support, and is not a need.
 - `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`: zero is refused; a set materiality is recorded again on a later unrelated change; the local workspace can set and clear it.
 
-Each check was observed red with its rule removed (6 mutations).
+Each check was observed red with its rule removed (7 mutations).
+
+Code review: GPT-6 Sol (high). Adopted: "no entry pending" means no pending entry at all, not entries netting to zero; the documentation names the four recorded settings and who may change materiality; an unused response field was deleted. One delta round closed both findings.
 
 Not verified: the Firm settings and tie-out panels in a browser.

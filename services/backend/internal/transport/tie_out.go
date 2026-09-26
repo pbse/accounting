@@ -395,7 +395,7 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 				for _, e := range row.Entries {
 					row.Provisional = row.Provisional || !e.settled
 				}
-			case pending.Sign() == 0 && materiality != nil && new(big.Rat).Abs(difference).Cmp(materiality) < 0:
+			case len(row.Entries) == 0 && materiality != nil && new(big.Rat).Abs(difference).Cmp(materiality) < 0:
 				row.Status = "within_materiality"
 			default:
 				row.Status = "differs"
@@ -403,7 +403,7 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 			out = append(out, row)
 		}
 		slices.SortStableFunc(out, func(a, b tieRow) int { return strings.Compare(a.Class, b.Class) })
-		jsonReply(w, 200, map[string]any{"snapshot": snapshot, "currency": currency, "materiality": materialityText, "rows": out, "unmatched": unmatched, "unclassified": unclassified})
+		jsonReply(w, 200, map[string]any{"snapshot": snapshot, "currency": currency, "rows": out, "unmatched": unmatched, "unclassified": unclassified})
 	}
 }
 
