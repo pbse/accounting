@@ -4,11 +4,11 @@ Open a saved client close and select **Download draft review package**. Once an 
 
 The ZIP contains:
 
-- `review.html`: offline, printable summary with source references, methods, unresolved blockers, stored posting receipts, whether the QuickBooks ledger capture was certified against its TransactionList report, and remaining manual review steps.
+- `review.html`: offline, printable summary with source references, methods, unresolved blockers, stored posting and correction receipts (sandbox and production QuickBooks, Xero journals and Xero bill corrections), whether the QuickBooks ledger capture was certified against its TransactionList report, Xero's reconciled flags for Xero books, and remaining manual review steps.
 - `workpapers.pdf`: portable PDF of saved workpaper inputs, calculations, review IDs and source links. The embedded font may substitute unsupported scripts; JSON retains the exact text. It is a snapshot, not an approval by itself.
 - `manifest.json`: close identity, period, database snapshot timestamp, scope, every saved workpaper version and stored posting record, including sandbox VendorCredit attempts.
 - `workpapers/{id}.json`: full inputs and calculated results for each draft.
-- CSV files for prepaid schedules, reconciliation match candidates and unmatched transactions.
+- CSV files for prepaid schedules, reconciliation match candidates and unmatched transactions, and for Stripe settlements the payouts and, except on the Payouts report method without an activity report, their categories (with the activity report, the categories file ends with the computed balance roll-forward).
 - `evidence/{id}.txt` or `.pdf`, with extracted PDF text alongside: exact uploaded originals, names and hashes in the manifest. Workpaper source links retain role and location.
 - `ledger/snapshot-{id}.json`: every captured QuickBooks account/report payload, with snapshot ID, digest, company and capture time in the manifest. These are sequential reads, not a fresh or atomic ledger verification.
 - Current workpaper review states, append-only review decisions, and source replacement relationships/reasons in the manifest. Workpaper review is separate from firm close sign-off.
