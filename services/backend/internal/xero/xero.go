@@ -198,11 +198,12 @@ func Capture(ctx context.Context, access, tenant string, monthEnd time.Time) (js
 	if err != nil {
 		return nil, err
 	}
+	requested := time.Now().UTC()
 	report, err := TrialBalanceAt(ctx, access, tenant, monthEnd)
 	if err != nil {
 		return nil, err
 	}
-	snapshot := map[string]any{"date": monthEnd.Format("2006-01-02"), "tenant_id": tenant, "organisation": organisation, "accounts": accounts, "trial_balance": report}
+	snapshot := map[string]any{"date": monthEnd.Format("2006-01-02"), "tenant_id": tenant, "organisation": organisation, "accounts": accounts, "trial_balance": report, "trial_balance_requested_at": requested}
 	if !CanReadTransactions(access) {
 		snapshot["transactions_error"] = "This connection was made before transactions could be read; disconnect and connect Xero again to read them."
 		return json.Marshal(snapshot)
@@ -313,6 +314,14 @@ func instant(value string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return time.UnixMilli(millis), true
+}
+
+// RequestedAt is when a snapshot's Trial Balance was requested: anything posted earlier is in it.
+func RequestedAt(payload json.RawMessage) (time.Time, bool) {
+	var snapshot struct {
+		At time.Time `json:"trial_balance_requested_at"`
+	}
+	return snapshot.At, json.Unmarshal(payload, &snapshot) == nil && !snapshot.At.IsZero()
 }
 
 // Day reads a Xero date, which arrives as "/Date(1727654400000+0000)/" or "2026-09-30T00:00:00".

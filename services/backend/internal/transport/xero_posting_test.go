@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -132,6 +133,16 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_accountant"}, Organization: org, Permissions: []string{"clients:all", "posting:approve", "posting:execute"}}
 	mux := http.NewServeMux()
 	registerXeroPosting(mux, db)
+	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
+	// A close with no Xero journal keeps the signed snapshot it had, so earlier sign-offs stand.
+	plainTx, err := db.Begin()
+	must(err)
+	plain, err := closeReadiness(context.Background(), plainTx, closeID)
+	plainTx.Rollback()
+	must(err)
+	if strings.Contains(string(plain.Snapshot), "xero_postings") {
+		t.Fatalf("a close without Xero journals has no Xero key in its signed snapshot: %s", plain.Snapshot)
+	}
 	call := func(path string, input any, want int) []byte {
 		t.Helper()
 		body, _ := json.Marshal(input)
@@ -234,6 +245,24 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 	if puts != 1 {
 		t.Fatal("a verified journal is never posted again")
 	}
+	exported := httptest.NewRecorder()
+	mux.ServeHTTP(exported, httptest.NewRequest("GET", "/v1/closes/"+closeID+"/export", nil).WithContext(auth.WithActor(context.Background(), actor)))
+	archive, err := zip.NewReader(bytes.NewReader(exported.Body.Bytes()), int64(exported.Body.Len()))
+	if err != nil {
+		t.Fatalf("export: %d %s", exported.Code, exported.Body.String())
+	}
+	var manifest closePackage
+	for _, file := range archive.File {
+		if file.Name == "manifest.json" {
+			reader, e := file.Open()
+			must(e)
+			must(json.NewDecoder(reader).Decode(&manifest))
+			reader.Close()
+		}
+	}
+	if !strings.Contains(string(manifest.XeroPostings), intent.ExternalID) {
+		t.Fatalf("the close package carries the verified Xero journal's receipt: %s", manifest.XeroPostings)
+	}
 	var sourceKey string
 	must(db.QueryRow(`SELECT source_key FROM xero_postings WHERE workpaper_id=$1`, first).Scan(&sourceKey))
 	for _, probe := range [][2]string{{first, ""}, {"0", sourceKey}} {
@@ -266,6 +295,22 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 		t.Fatalf("an unconfirmed journal is unknown, not verified: %s", body)
 	}
 	call(second, map[string]string{"action": "execute", "digest": intent.Digest, "confirmation": "POST TO XERO"}, 409)
+	// Xero receipts are part of the signed snapshot, so a later change to one reopens the close.
+	digest := func() string {
+		t.Helper()
+		readTx, e := db.Begin()
+		must(e)
+		defer readTx.Rollback()
+		ready, e := closeReadiness(context.Background(), readTx, closeID)
+		must(e)
+		return ready.Digest
+	}
+	before := digest()
+	_, err = db.Exec(`UPDATE xero_postings SET last_error='Readback differs' WHERE id=(SELECT min(id) FROM xero_postings WHERE close_id=$1)`, closeID)
+	must(err)
+	if digest() == before {
+		t.Fatal("a changed Xero receipt must change the close's signed snapshot")
+	}
 	// An unknown Xero journal blocks sign-off until it is verified.
 	readTx, err := db.Begin()
 	must(err)

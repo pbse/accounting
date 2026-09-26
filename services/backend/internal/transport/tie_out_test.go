@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/loans"
@@ -35,6 +36,8 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	var closeID, connection, evidenceID string
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Tie-out "+rand.Text()).Scan(&closeID))
 	defer func() {
+		db.Exec(`DELETE FROM xero_postings WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM xero_posting_grants WHERE connection_id IN (SELECT id FROM xero_connections WHERE close_id=$1)`, closeID)
 		db.Exec(`DELETE FROM sandbox_postings WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, closeID)
 		db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, closeID)
@@ -158,7 +161,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	deferred := prepaid("Annual plan", "Deferred revenue", "1200.00")
 	deferred.Input.Schedule = prepaids.DeferredRevenue
 	save("prepaid", deferred, true)
-	save("accrual", accrual("City utilities", "Accrued liabilities", "500.00", entry("Accrued liabilities", "100.00")), true)
+	utilities := save("accrual", accrual("City utilities", "Accrued liabilities", "500.00", entry("Accrued liabilities", "100.00")), true)
 	post(save("accrual", accrual("Payroll", "Accrued payroll", "300.00", entry("Accrued payroll", "300.00")), true), "verified", "-1 hour")
 	save("accrual", accrual("Audit", "Accrued audit fees", "500.00", entry("Accrued audit fees", "100.00")), true)
 	save("accrual", accrual("Bank fees", "Accrued bank fees", "45.00", nil), true)
@@ -222,11 +225,25 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 
 	var xeroConnection string
 	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) SELECT id,organization_id,entity,'fixture','active',$2,now(),'t-1' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&xeroConnection))
-	xeroPayload := `{"date":"2026-09-30","organisation":{"Organisations":[{"BaseCurrency":"USD"}]},"accounts":{"Accounts":[{"AccountID":"a-1","Code":"090","Name":"Checking","Class":"ASSET"},{"AccountID":"a-2","Code":"800","Name":"Business card","Class":"LIABILITY"},{"AccountID":"a-3","Code":"091","Name":"Savings","Class":"ASSET"}]},
-		"trial_balance":{"Reports":[{"Rows":[{"RowType":"Header","Cells":[{"Value":"Account"},{"Value":"Debit"},{"Value":"Credit"},{"Value":"YTD Debit"},{"Value":"YTD Credit"}]},{"RowType":"Row","Cells":[{"Value":"Checking","Attributes":[{"Id":"account","Value":"a-1"}]},{"Value":""},{"Value":""},{"Value":"5000.00"},{"Value":""}]},{"RowType":"Row","Cells":[{"Value":"Business card","Attributes":[{"Id":"account","Value":"a-2"}]},{"Value":""},{"Value":""},{"Value":""},{"Value":"300.00"}]},{"RowType":"Row","Cells":[{"Value":"Savings","Attributes":[{"Id":"account","Value":"a-3"}]},{"Value":""},{"Value":""},{"Value":"100.00"},{"Value":""}]}]}]}}`
+	xeroPayload := `{"date":"2026-09-30","organisation":{"Organisations":[{"BaseCurrency":"USD"}]},"accounts":{"Accounts":[{"AccountID":"a-1","Code":"090","Name":"Checking","Class":"ASSET"},{"AccountID":"a-2","Code":"800","Name":"Business card","Class":"LIABILITY"},{"AccountID":"a-3","Code":"091","Name":"Savings","Class":"ASSET"},{"AccountID":"a-4","Code":"820","Name":"Accrued liabilities","Class":"LIABILITY"}]},
+		"trial_balance":{"Reports":[{"Rows":[{"RowType":"Header","Cells":[{"Value":"Account"},{"Value":"Debit"},{"Value":"Credit"},{"Value":"YTD Debit"},{"Value":"YTD Credit"}]},{"RowType":"Row","Cells":[{"Value":"Checking","Attributes":[{"Id":"account","Value":"a-1"}]},{"Value":""},{"Value":""},{"Value":"5000.00"},{"Value":""}]},{"RowType":"Row","Cells":[{"Value":"Business card","Attributes":[{"Id":"account","Value":"a-2"}]},{"Value":""},{"Value":""},{"Value":""},{"Value":"300.00"}]},{"RowType":"Row","Cells":[{"Value":"Savings","Attributes":[{"Id":"account","Value":"a-3"}]},{"Value":""},{"Value":""},{"Value":"100.00"},{"Value":""}]},{"RowType":"Row","Cells":[{"Value":"Accrued liabilities","Attributes":[{"Id":"account","Value":"a-4"}]},{"Value":""},{"Value":""},{"Value":""},{"Value":"500.00"}]}]}]}}`
+	// This Trial Balance was requested a minute ago; the utilities journal was verified in Xero before that.
+	xeroPayload = strings.Replace(xeroPayload, `"trial_balance":`, `"trial_balance_requested_at":"`+time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)+`","trial_balance":`, 1)
+	var xeroGrant string
+	must(db.QueryRow(`INSERT INTO xero_posting_grants(organization_id,client_entity,connection_id,tenant_id,account_ids,kinds,max_amount,expires_at,reason,granted_by) SELECT organization_id,entity,$2,'t-1','{a-4,a-5}','{accrual}',1000,now()+interval '1 day','Tie-out fixture','fixture' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, xeroConnection).Scan(&xeroGrant))
+	_, err = db.Exec(`INSERT INTO xero_postings(close_id,workpaper_id,source_key,grant_id,connection_id,tenant_id,digest,journal,ledger_before,state,verified_at) VALUES($1,$2,'utilities',$3,$4,'t-1','d','{}','{}','verified',now()-interval '2 minutes')`, closeID, utilities, xeroGrant, xeroConnection)
+	must(err)
 	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d',$3,'fixture',now()+interval '1 minute')`, closeID, xeroConnection, xeroPayload)
 	must(err)
 	if b, rows = read(); b.Snapshot == nil || b.Snapshot.Source != "xero" || rows["Checking"].Status != "ties" || rows["Business card"].Status != "differs" || rows["Savings"].Status != "unsupported" {
 		t.Fatalf("a newer Xero Trial Balance is tied the same way: %+v", b)
+	}
+	if entries := rows["Accrued liabilities"].Entries; rows["Accrued liabilities"].Status != "ties" || len(entries) != 0 {
+		t.Fatalf("a Xero journal verified before the Trial Balance is already in it: %+v", rows["Accrued liabilities"])
+	}
+	_, err = db.Exec(`UPDATE xero_postings SET verified_at=now() WHERE close_id=$1`, closeID)
+	must(err)
+	if _, rows = read(); len(rows["Accrued liabilities"].Entries) != 1 || rows["Accrued liabilities"].Entries[0].Posting != "posted_after_capture" {
+		t.Fatalf("a Xero journal verified after the Trial Balance is still pending in it: %+v", rows["Accrued liabilities"])
 	}
 }
