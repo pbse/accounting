@@ -30,6 +30,8 @@ type SettlementInput struct {
 	BankReference     string            `json:"bank_reference"`
 	ReportCSV         string            `json:"report_csv"`
 	BankCSV           string            `json:"bank_csv"`
+	ActivityReference string            `json:"activity_reference,omitempty"`
+	ActivityCSV       string            `json:"activity_csv,omitempty"`
 	MethodConfirmed   bool              `json:"method_confirmed"`
 	CoverageConfirmed bool              `json:"coverage_confirmed"`
 	ReviewedDeposits  []ReviewedDeposit `json:"reviewed_deposits,omitempty"`
@@ -112,9 +114,21 @@ type SettlementWorkpaper struct {
 	// Refund and revenue entries are drafts to book by hand; only the fee entry can post.
 	RefundProposal  *prepaids.Adjustment `json:"refund_proposal,omitempty"`
 	RevenueProposal *prepaids.Adjustment `json:"revenue_proposal,omitempty"`
+	RollForward     *RollForward         `json:"roll_forward,omitempty"`
+}
+
+// RollForward is the Stripe balance's computed change for the month on the Payouts report method: the month's
+// activity, less payouts that left the balance, plus payout funds returned. It is not tied to Stripe's balances.
+type RollForward struct {
+	Activity string `json:"activity"`
+	PaidOut  string `json:"paid_out"`
+	Returned string `json:"returned"`
+	Change   string `json:"change"`
 }
 
 var stripeColumns = []string{"balance_transaction_id", "currency", "gross", "fee", "net", "reporting_category", "automatic_payout_id", "automatic_payout_effective_at"}
+
+var activityColumns = []string{"balance_transaction_id", "currency", "gross", "fee", "net", "reporting_category", "created"}
 
 var payoutColumns = []string{"balance_transaction_id", "currency", "net", "reporting_category", "payout_id", "effective_at", "payout_expected_arrival_date", "payout_status"}
 
@@ -276,63 +290,75 @@ func stripePayouts(source, period, currency string) ([]*payoutGroup, map[string]
 
 // stripeManualPayouts reads Stripe's itemized Payouts report: one group per payout whose funds left the balance in the
 // month, dated by its expected arrival and carrying the payout's own amount. failed lists payouts Stripe reports as
-// failed or canceled, and reversed those whose returned funds are in the file; no deposit is expected for them.
-func stripeManualPayouts(source, period, currency string) (groups []*payoutGroup, failed, reversed []string, err error) {
+// failed or canceled, and reversed those whose returned funds are in the file; no deposit is expected for them. paid and
+// returned are the funds that left and came back in the month; earlier lists returns of payouts from earlier months.
+func stripeManualPayouts(source, period, currency string) (groups []*payoutGroup, failed, reversed, earlier []string, paid, returned int64, err error) {
 	reader := csv.NewReader(strings.NewReader(source))
 	header, err := reader.Read()
 	index, ok := stripeHeader(header, payoutColumns...)
 	if err != nil || !ok {
-		return nil, nil, nil, fmt.Errorf("Use Stripe's itemized Payouts report with columns %s.", strings.Join(payoutColumns, ", "))
+		return nil, nil, nil, nil, 0, 0, fmt.Errorf("Use Stripe's itemized Payouts report with columns %s.", strings.Join(payoutColumns, ", "))
 	}
 	reader.FieldsPerRecord = len(header)
-	byID, seen := map[string]*payoutGroup{}, map[string]bool{}
-	for row := 1; ; row++ {
+	reversals, seen := []string{}, map[string]bool{}
+	fail := func(format string, args ...any) ([]*payoutGroup, []string, []string, []string, int64, int64, error) {
+		return nil, nil, nil, nil, 0, 0, fmt.Errorf(format, args...)
+	}
+	for n := 1; ; n++ {
 		record, err := reader.Read()
 		if err == io.EOF {
 			break
 		}
-		if err != nil || row > 5000 {
-			return nil, nil, nil, fmt.Errorf("Payouts row %d is not valid CSV, or the file has more than 5,000 rows.", row)
+		if err != nil || n > 5000 {
+			return fail("Payouts row %d is not valid CSV, or the file has more than 5,000 rows.", n)
 		}
 		field := func(name string) string { return strings.TrimSpace(record[index[name]]) }
 		id, payout, category := field("balance_transaction_id"), field("payout_id"), field("reporting_category")
 		if id == "" || len(id) > 100 || seen[id] || payout == "" || len(payout) > 100 {
-			return nil, nil, nil, fmt.Errorf("Payouts row %d needs a unique balance transaction ID and its payout ID.", row)
+			return fail("Payouts row %d needs a unique balance transaction ID and its payout ID.", n)
 		}
 		seen[id] = true
 		if !strings.EqualFold(field("currency"), currency) {
-			return nil, nil, nil, fmt.Errorf("Payouts row %d (%s) is in %.8q; this workpaper reconciles %s.", row, id, field("currency"), currency)
+			return fail("Payouts row %d (%s) is in %.8q; this workpaper reconciles %s.", n, id, field("currency"), currency)
 		}
 		net, err := cents(field("net"))
 		if err != nil || (category == "payout" && net >= 0) || (category == "payout_reversal" && net <= 0) || (category != "payout" && category != "payout_reversal") {
-			return nil, nil, nil, fmt.Errorf("Payouts row %d (%s) must be a payout (negative, as Stripe exports it) or a payout reversal (positive). Download an unedited file.", row, id)
+			return fail("Payouts row %d (%s) must be a payout (negative, as Stripe exports it) or a payout reversal (positive). Download an unedited file.", n, id)
 		}
 		effective, okEffective := exportDate(field("effective_at"))
 		arrival, okArrival := exportDate(field("payout_expected_arrival_date"))
 		if !okEffective || !okArrival {
-			return nil, nil, nil, fmt.Errorf("Payouts row %d (%s) needs the date the funds left the balance and the expected arrival date.", row, id)
+			return fail("Payouts row %d (%s) needs the date the funds left the balance and the expected arrival date.", n, id)
 		}
-		group := byID[payout]
-		if group == nil {
-			if category != "payout" || effective[:7] != period {
-				return nil, nil, nil, fmt.Errorf("Payout %s must start with its payout row, with funds leaving the balance in %s. Download the Payouts report for %s only.", payout, period, period)
+		if effective[:7] != period {
+			return fail("Payouts row %d (%s) moved funds on %s, outside %s. Download the Payouts report for %s only.", n, id, effective, period, period)
+		}
+		if category == "payout_reversal" {
+			returned += net
+			reversals = append(reversals, payout)
+		} else {
+			paid -= net
+			if slices.ContainsFunc(groups, func(g *payoutGroup) bool { return g.id == payout }) {
+				return fail("Payout %s has more than one payout row.", payout)
 			}
-			group = &payoutGroup{id: payout, date: arrival}
-			byID[payout] = group
-			groups = append(groups, group)
+			groups = append(groups, &payoutGroup{id: payout, date: arrival})
+			groups[len(groups)-1].total.add(-net, 0, -net)
 			if status := field("payout_status"); status == "failed" || status == "canceled" {
 				failed = append(failed, payout)
 			}
 		}
-		// A reversal returns the funds to the balance; the payout keeps its own amount.
-		if category == "payout_reversal" {
-			reversed = append(reversed, payout)
-			continue
-		}
-		group.total.add(-net, 0, -net)
 	}
-	if len(groups) == 0 {
-		return nil, nil, nil, fmt.Errorf("The Payouts report has no payouts.")
+	// A reversal returns the funds to the balance; the payout keeps its own amount. A reversal of an earlier month's
+	// payout counts in the month's movements only.
+	for _, payout := range reversals {
+		if slices.ContainsFunc(groups, func(g *payoutGroup) bool { return g.id == payout }) {
+			reversed = append(reversed, payout)
+		} else {
+			earlier = append(earlier, payout)
+		}
+	}
+	if len(groups) == 0 && len(earlier) == 0 {
+		return fail("The Payouts report has no payouts.")
 	}
 	sort.Slice(groups, func(i, j int) bool {
 		if groups[i].date != groups[j].date {
@@ -340,7 +366,54 @@ func stripeManualPayouts(source, period, currency string) (groups []*payoutGroup
 		}
 		return groups[i].id < groups[j].id
 	})
-	return groups, failed, reversed, nil
+	return groups, failed, reversed, earlier, paid, returned, nil
+}
+
+// stripeActivity reads Stripe's itemized balance change from activity report for the month: every balance transaction
+// except payouts, by category, in the report's timezone like the Payouts report.
+func stripeActivity(source, period, currency string) (map[string]*totals, totals, error) {
+	reader := csv.NewReader(strings.NewReader(source))
+	header, err := reader.Read()
+	index, ok := stripeHeader(header, activityColumns...)
+	if err != nil || !ok {
+		return nil, totals{}, fmt.Errorf("Use Stripe's itemized balance change from activity report with columns %s.", strings.Join(activityColumns, ", "))
+	}
+	reader.FieldsPerRecord = len(header)
+	categories, seen, all := map[string]*totals{}, map[string]bool{}, totals{}
+	for n := 1; ; n++ {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil || n > 5000 {
+			return nil, totals{}, fmt.Errorf("Activity row %d is not valid CSV, or the file has more than 5,000 rows.", n)
+		}
+		field := func(name string) string { return strings.TrimSpace(record[index[name]]) }
+		id, category := field("balance_transaction_id"), field("reporting_category")
+		gross, grossErr := cents(field("gross"))
+		fee, feeErr := cents(field("fee"))
+		net, netErr := cents(field("net"))
+		created, dated := exportDate(field("created"))
+		switch {
+		case id == "" || len(id) > 100 || seen[id]:
+			return nil, totals{}, fmt.Errorf("Activity row %d needs a unique balance transaction ID.", n)
+		case !strings.EqualFold(field("currency"), currency):
+			return nil, totals{}, fmt.Errorf("Activity row %d (%s) is in %.8q; this workpaper reconciles %s.", n, id, field("currency"), currency)
+		case grossErr != nil || feeErr != nil || netErr != nil || gross-fee != net:
+			return nil, totals{}, fmt.Errorf("Activity row %d (%s) needs gross, fee and net as decimals, with net equal to gross minus fee.", n, id)
+		case category == "" || len(category) > 100 || category == "payout" || category == "payout_reversal":
+			return nil, totals{}, fmt.Errorf("Activity row %d (%s) needs a reporting category other than a payout; payouts come from the Payouts report.", n, id)
+		case !dated || created[:7] != period:
+			return nil, totals{}, fmt.Errorf("Activity row %d (%s) was created outside %s. Download the activity report for %s only.", n, id, period, period)
+		}
+		seen[id] = true
+		if categories[category] == nil {
+			categories[category] = &totals{}
+		}
+		categories[category].add(gross, fee, net)
+		all.add(gross, fee, net)
+	}
+	return categories, all, nil
 }
 
 // StripeReportSummary recognizes an itemized payout export without a model. ok is false for any other file.
@@ -382,6 +455,12 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 	if !ledger.ValidCurrency(input.Currency) || !input.MethodConfirmed || !input.CoverageConfirmed || (method != SettlementMethod && method != PayoutsMethod) {
 		return fail("Confirm the automatic-payout or manual-payout method in the client's home currency and that both files cover the full close month.")
 	}
+	if method != PayoutsMethod && input.ActivityCSV != "" {
+		return fail("An activity report goes with the Payouts report method; the automatic-payout export already has each payout's transactions.")
+	}
+	if input.ActivityCSV != "" && (strings.TrimSpace(input.ActivityReference) == "" || len(input.ActivityReference) > 200) {
+		return fail("The activity report's source reference requires 1–200 characters.")
+	}
 	if method == PayoutsMethod && input.FeeEntry != nil {
 		return fail("A fee entry needs each payout's fees, which only the automatic-payout export gives; take the month's fees from Stripe's Balance report instead.")
 	}
@@ -421,9 +500,10 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 	}
 	var groups []*payoutGroup
 	var categories map[string]*totals
-	var unassigned, failed, reversed []string
+	var unassigned, failed, reversed, earlier []string
+	var paid, returned int64
 	if method == PayoutsMethod {
-		groups, failed, reversed, err = stripeManualPayouts(input.ReportCSV, input.ClosePeriod, input.Currency)
+		groups, failed, reversed, earlier, paid, returned, err = stripeManualPayouts(input.ReportCSV, input.ClosePeriod, input.Currency)
 	} else {
 		groups, categories, unassigned, err = stripePayouts(input.ReportCSV, input.ClosePeriod, input.Currency)
 	}
@@ -537,9 +617,21 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 		total.net += group.total.net
 	}
 	result.Total = total.summary("all")
-	if method == PayoutsMethod {
-		result.Questions = append(result.Questions, "Payouts are traced as payouts only: Stripe cannot say which transactions a manual or instant payout settles. The month's activity must be reconciled separately from Stripe's Balance report; this workpaper does not do that.")
+	if len(earlier) > 0 {
+		result.Questions = append(result.Questions, fmt.Sprintf("Payouts from earlier months returned funds to the Stripe balance this month (%s). Confirm how each return was recorded.", strings.Join(earlier, ", ")))
+	}
+	if method == PayoutsMethod && input.ActivityCSV == "" {
+		result.Questions = append(result.Questions, "Payouts are traced as payouts only: Stripe cannot say which transactions a manual or instant payout settles. Add Stripe's balance change from activity report for the month to roll the balance forward.")
 		return result, nil
+	}
+	if method == PayoutsMethod {
+		var activity totals
+		if categories, activity, err = stripeActivity(input.ActivityCSV, input.ClosePeriod, input.Currency); err != nil {
+			return fail("Activity report: %s", err.Error())
+		}
+		change := activity.net - paid + returned
+		result.RollForward = &RollForward{Activity: money(activity.net), PaidOut: money(paid), Returned: money(returned), Change: money(change)}
+		result.Questions = append(result.Questions, fmt.Sprintf("Computed roll-forward: the month's activity of %s, less %s paid out, plus %s returned, changes the Stripe balance by %s. Stripe cannot say which of these transactions each payout settled, and this is not tied to Stripe's opening and closing balances; compare it with the Balance summary for the month.", ledger.Show(money(activity.net), input.Currency), ledger.Show(money(paid), input.Currency), ledger.Show(money(returned), input.Currency), ledger.Show(money(change), input.Currency)))
 	}
 	result.Categories = sortedCategories(categories)
 	for _, category := range result.Categories {

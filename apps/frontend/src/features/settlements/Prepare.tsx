@@ -170,7 +170,9 @@ export function SettlementResult({
     !!p.deposit && !p.deposit.date.startsWith(input.close_period);
   const headline =
     payouts.length === 0
-      ? "No automatic payouts in this export."
+      ? result.roll_forward
+        ? "No payouts left the balance this month; only earlier payouts' returns."
+        : "No automatic payouts in this export."
       : open.length === 0 && result.unassigned.length > 0
         ? `All ${payouts.length} payouts traced to ${input.bank_account}, but ${result.unassigned.length} Stripe ${result.unassigned.length === 1 ? "row has" : "rows have"} no payout ID and still ${result.unassigned.length === 1 ? "blocks" : "block"} approval.`
         : open.length === 0
@@ -227,6 +229,12 @@ export function SettlementResult({
             <dd>
               {input.bank_reference} · {input.bank_account}
             </dd>
+            {input.activity_reference && (
+              <>
+                <dt>Activity report</dt>
+                <dd>{input.activity_reference}</dd>
+              </>
+            )}
             <dt>Method</dt>
             <dd>
               {result.method === "stripe_payouts_v1"
@@ -347,6 +355,29 @@ export function SettlementResult({
           </ul>
         </section>
       )}
+      {result.roll_forward && (
+        <section>
+          <h4>Stripe balance roll-forward (computed, not tied)</h4>
+          <dl>
+            <dt>Month's activity</dt>
+            <dd>{money(result.roll_forward.activity, input.currency)}</dd>
+            <dt>Paid out</dt>
+            <dd>{money(result.roll_forward.paid_out, input.currency)}</dd>
+            <dt>Returned</dt>
+            <dd>{money(result.roll_forward.returned, input.currency)}</dd>
+            <dt>Change in the Stripe balance</dt>
+            <dd>{money(result.roll_forward.change, input.currency)}</dd>
+          </dl>
+          <table>
+            <thead><tr><th>Activity category</th><th>Transactions</th><th>Gross</th><th>Fees</th><th>Net</th></tr></thead>
+            <tbody>
+              {result.categories.map((c) => (
+                <tr key={c.category}><th>{c.category}</th><td>{c.count}</td><td>{money(c.gross, input.currency)}</td><td>{money(c.fee, input.currency)}</td><td>{money(c.net, input.currency)}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
       {result.method !== "stripe_payouts_v1" && <details>
         <summary>Stripe categories behind these payouts</summary>
         <table>
@@ -429,10 +460,11 @@ export default function Prepare() {
   const revision = useRevision(form);
   const heading = useRef<HTMLHeadingElement>(null);
   const preselected = useRef(false);
-  const latest = useRef({ report: "", bank: "" });
+  const latest = useRef({ report: "", bank: "", activity: "" });
   const [files, setFiles] = useState<EvidenceFile[]>([]);
   const [report, setReport] = useState<Chosen>();
   const [bank, setBank] = useState<Chosen>();
+  const [activity, setActivity] = useState<Chosen>();
   const [autoPicked, setAutoPicked] = useState("");
   const [result, setResult] = useState<SettlementWorkpaper>();
   const [error, setError] = useState("");
@@ -482,8 +514,8 @@ export default function Prepare() {
         .catch((e) => setError(e.message));
   }, [close]);
 
-  async function choose(id: string, slot: "report" | "bank") {
-    const set = slot === "report" ? setReport : setBank;
+  async function choose(id: string, slot: "report" | "bank" | "activity", auto = false) {
+    const set = slot === "report" ? setReport : slot === "bank" ? setBank : setActivity;
     latest.current[slot] = id;
     set(undefined);
     const file = files.find((f) => f.id === id);
@@ -495,7 +527,14 @@ export default function Prepare() {
         true,
       );
       const text = await blob.text();
-      if (latest.current[slot] === id) set({ id, name: file.name, text });
+      if (latest.current[slot] !== id) return;
+      // An automatically picked file must be a bank CSV, not another Stripe report.
+      if (auto && !/^\ufeff?id,date,amount\s*$/i.test(text.split("\n")[0].trim())) {
+        latest.current[slot] = "";
+        setAutoPicked("");
+        return;
+      }
+      set({ id, name: file.name, text });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Evidence is unavailable.");
     }
@@ -506,14 +545,17 @@ export default function Prepare() {
     const saved = (role: string) =>
       revision.sources.find((s) => s.role === role)?.id;
     const reportId = saved("processor_report") ?? params.get("report");
-    let bankId = saved("bank");
-    const others = csvFiles.filter((f) => f.id !== reportId);
+    const bankId = saved("bank");
+    let autoBank = "";
+    const activityId = saved("activity_report");
+    const others = csvFiles.filter((f) => f.id !== reportId && f.id !== activityId);
     if (!bankId && reportId && others.length === 1) {
-      bankId = others[0].id;
+      autoBank = others[0].id;
       setAutoPicked(others[0].name);
     }
     if (reportId) void choose(reportId, "report");
-    if (bankId) void choose(bankId, "bank");
+    if (bankId || autoBank) void choose(bankId ?? autoBank, "bank", !bankId);
+    if (activityId) void choose(activityId, "activity");
   }, [revision.ready, files]);
 
   async function calculate(input: SettlementInput) {
@@ -557,6 +599,7 @@ export default function Prepare() {
       bank_reference: bank.name,
       report_csv: report.text,
       bank_csv: bank.text,
+      ...(manual && activity ? { activity_reference: activity.name, activity_csv: activity.text } : {}),
       method_confirmed: data.has("method_confirmed"),
       coverage_confirmed: data.has("coverage_confirmed"),
       reviewed_deposits: [],
@@ -597,22 +640,22 @@ export default function Prepare() {
     setResult(undefined);
     setError("");
   }
-  const picker = (label: string, hint: string, slot: "report" | "bank") => {
-    const chosen = slot === "report" ? report : bank;
-    const set = slot === "report" ? setReport : setBank;
+  const picker = (label: string, hint: string, slot: "report" | "bank" | "activity") => {
+    const chosen = slot === "report" ? report : slot === "bank" ? bank : activity;
+    const set = slot === "report" ? setReport : slot === "bank" ? setBank : setActivity;
     return (
       <label>
         {label}
         {close ? (
           <select
             value={chosen?.id ?? latest.current[slot]}
-            required
+            required={slot !== "activity"}
             onChange={(e) => {
               setAutoPicked("");
               void choose(e.target.value, slot);
             }}
           >
-            <option value="">Choose a CSV from this close</option>
+            <option value="">{slot === "activity" ? "None" : "Choose a CSV from this close"}</option>
             {csvFiles.map((f) => (
               <option key={f.id} value={f.id}>
                 {f.name} · #{f.id}
@@ -701,6 +744,11 @@ export default function Prepare() {
                   : "Columns id,date,amount with deposits positive. Include the first four days of next month so late deposits can match.",
                 "bank",
               )}
+              {manual && picker(
+                "Stripe activity report (optional)",
+                "Stripe Dashboard → Reports → Balance → Balance change from activity → Export → Itemized CSV, for the same month and reporting timezone as the Payouts report. With it, the month's activity is shown by category and the Stripe balance is rolled forward.",
+                "activity",
+              )}
               <label>
                 Bank account
                 <input
@@ -731,15 +779,16 @@ export default function Prepare() {
               <input type="checkbox" name="method_confirmed" required />
               <span>
                 {manual
-                  ? `${currency} payouts from the Payouts report, whatever their schedule. Each payout is traced to a bank row carrying exactly its amount from one day before to four days after its expected arrival. Stripe cannot say which transactions a manual or instant payout settles, so the month's activity must be reconciled separately from the Balance report.`
+                  ? `${currency} payouts from the Payouts report, whatever their schedule. Each payout is traced to a bank row carrying exactly its amount from one day before to four days after its expected arrival. Stripe cannot say which transactions a manual or instant payout settles; with the activity report, the month's activity less payouts plus returns rolls the Stripe balance forward, untied to Stripe's balances.`
                   : `${currency} automatic payouts. Stripe's payout ID defines each batch; a bank row is only a candidate when it carries exactly the payout's net amount from one day before to four days after the expected date.`}
               </span>
             </label>
             <label className="checkbox-label">
               <input type="checkbox" name="coverage_confirmed" required />
               <span>
-                The Stripe file is the full itemized download for this month,
-                and the bank file covers the whole month.
+                {manual && activity
+                  ? "Both Stripe files are the full itemized downloads for this month in the same reporting timezone, and the bank file covers the whole month."
+                  : "The Stripe file is the full itemized download for this month, and the bank file covers the whole month."}
               </span>
             </label>
           </fieldset>
@@ -865,6 +914,7 @@ export default function Prepare() {
                 ? {
                     processor_report: { id: report.id, location: "All rows" },
                     bank: { id: bank.id, location: "All rows" },
+                    ...(manual && activity?.id ? { activity_report: { id: activity.id, location: "All rows" } } : {}),
                   }
                 : {}
             }

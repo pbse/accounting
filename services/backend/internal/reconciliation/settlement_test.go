@@ -233,6 +233,68 @@ func TestManualAndInstantPayoutsAreTracedToTheirDeposits(t *testing.T) {
 	}
 }
 
+func TestManualPayoutsRollTheStripeBalanceForwardWithTheMonthsActivity(t *testing.T) {
+	report := payoutsHeader + strings.Join([]string{
+		"txn_r0,usd,Payout failure,2026-09-01 08:00:00,0.00,50.00,50.00,2026-08-29,po_A0,failed,payout_reversal",
+		"txn_p4,usd,Payout failure,2026-09-23 10:00:00,0.00,300.00,300.00,2026-09-22,po_F1,failed,payout_reversal",
+		"txn_p1,usd,STRIPE PAYOUT,2026-09-02 10:00:00,0.00,-125.05,-125.05,2026-09-03,po_M1,paid,payout",
+		"txn_p2,usd,Instant payout,2026-09-11 09:00:00,0.00,-126.90,-126.90,2026-09-11,po_I1,paid,payout",
+		"txn_p3,usd,STRIPE PAYOUT,2026-09-20 10:00:00,0.00,-300.00,-300.00,2026-09-22,po_F1,failed,payout",
+	}, "\n") + "\n"
+	activity := "created,balance_transaction_id,currency,gross,fee,net,reporting_category\n" + strings.Join([]string{
+		"2026-09-01 12:00:00,txn_a1,usd,500.00,14.80,485.20,charge",
+		"2026-09-05 12:00:00,txn_a2,usd,-60.00,0.00,-60.00,refund",
+		"2026-09-09 12:00:00,txn_a3,usd,-4.20,0.00,-4.20,fee",
+		"2026-09-30 23:00:00,txn_a4,usd,-10.00,0.00,-10.00,transfer",
+	}, "\n") + "\n"
+	in := settlementInput(report)
+	in.Method, in.ActivityCSV, in.ActivityReference = PayoutsMethod, activity, "activity.csv"
+	paper, err := PrepareSettlement(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	questions := strings.Join(paper.Questions, " ")
+	if r := paper.RollForward; r == nil || r.Activity != "411.00" || r.PaidOut != "551.95" || r.Returned != "350.00" || r.Change != "209.05" || len(paper.Categories) != 4 || len(paper.Payouts) != 3 {
+		t.Fatalf("activity less payouts plus returns is the balance's change, whatever the rows' order: %+v %+v", paper.RollForward, paper.Categories)
+	}
+	if !strings.Contains(questions, "not tied to Stripe's opening and closing balances") || !strings.Contains(questions, "earlier months returned funds to the Stripe balance this month (po_A0)") || !strings.Contains(questions, "category transfer") || strings.Contains(questions, "Add Stripe's balance change") {
+		t.Fatalf("the roll-forward is qualified, an earlier payout's return and an unusual category are questions: %v", paper.Questions)
+	}
+	unnamed := in
+	unnamed.ActivityReference = " "
+	if _, err = PrepareSettlement(unnamed); err == nil {
+		t.Fatal("the activity report needs its source reference")
+	}
+	returnsOnly := in
+	returnsOnly.ReportCSV = payoutsHeader + "txn_r0,usd,Payout failure,2026-09-01 08:00:00,0.00,50.00,50.00,2026-08-29,po_A0,failed,payout_reversal\n"
+	if paper, err = PrepareSettlement(returnsOnly); err != nil || len(paper.Payouts) != 0 || paper.RollForward.Returned != "50.00" {
+		t.Fatalf("a month whose only payout movement is an earlier payout's return still rolls forward: %v %+v", err, paper.RollForward)
+	}
+	twice := in
+	twice.ReportCSV = report + "txn_p9,usd,STRIPE PAYOUT,2026-09-12 10:00:00,0.00,-126.90,-126.90,2026-09-11,po_I1,paid,payout\n"
+	if _, err = PrepareSettlement(twice); err == nil {
+		t.Fatal("a payout with two payout rows is refused")
+	}
+	automatic := settlementInput(stripeReport(settlementRows...))
+	automatic.ActivityCSV, automatic.ActivityReference = activity, "activity.csv"
+	if _, err = PrepareSettlement(automatic); err == nil {
+		t.Fatal("the automatic-payout export takes no activity report")
+	}
+	for name, bad := range map[string]string{
+		"a row from another month":      strings.Replace(activity, "2026-09-30 23:00:00", "2026-10-01 00:30:00", 1),
+		"a payout row":                  strings.Replace(activity, "transfer", "payout", 1),
+		"net other than gross less fee": strings.Replace(activity, "485.20", "485.00", 1),
+		"a repeated transaction":        strings.Replace(activity, "txn_a2", "txn_a1", 1),
+		"another currency":              strings.Replace(activity, "txn_a3,usd", "txn_a3,eur", 1),
+	} {
+		changed := in
+		changed.ActivityCSV = bad
+		if _, err = PrepareSettlement(changed); err == nil {
+			t.Fatalf("an activity report with %s is refused", name)
+		}
+	}
+}
+
 func TestRefundAndRevenueEntriesCoverPayoutsDepositedThisMonth(t *testing.T) {
 	resolved := func() SettlementInput {
 		// po_R carries a failed refund: its 5.00 comes back into the balance and reduces the month's refunds.

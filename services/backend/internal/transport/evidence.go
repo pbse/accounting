@@ -265,7 +265,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			selectedIDs[s.ID] = true
-			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "clearing" && s.Role != "procedure" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") || (p.Kind == "settlement" && s.Role != "processor_report" && s.Role != "bank") || (p.Kind == "loan" && s.Role != "statement" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "owner" && s.Role != "support" && s.Role != "ledger") {
+			if ((p.Kind == "prepaid" || p.Kind == "accrual") && s.Role != "invoice" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "reconciliation" && s.Role != "statement" && s.Role != "ledger" && s.Role != "support" && s.Role != "clearing" && s.Role != "procedure" && s.Role != "other_statement" && s.Role != "other_ledger" && s.Role != "native_status") || (p.Kind == "settlement" && s.Role != "processor_report" && s.Role != "bank" && s.Role != "activity_report") || (p.Kind == "loan" && s.Role != "statement" && s.Role != "support" && s.Role != "ledger") || (p.Kind == "owner" && s.Role != "support" && s.Role != "ledger") {
 				problem(w, 422, "Unsupported source role.")
 				return
 			}
@@ -371,12 +371,14 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, err.Error())
 				return
 			}
-			in.ReportCSV, in.BankCSV = content["processor_report"], content["bank"]
+			in.ReportCSV, in.BankCSV, in.ActivityCSV, in.ActivityReference = content["processor_report"], content["bank"], content["activity_report"], ""
 			for _, s := range p.Sources {
 				if s.Role == "processor_report" {
 					in.ReportReference = s.Name + " · " + s.Location
 				} else if s.Role == "bank" {
 					in.BankReference = s.Name + " · " + s.Location
+				} else if s.Role == "activity_report" {
+					in.ActivityReference = s.Name + " · " + s.Location
 				}
 			}
 			p.Input, _ = json.Marshal(in)
