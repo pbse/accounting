@@ -183,6 +183,7 @@ export function SendRequestEmail({
   recipient,
   onQueued,
   previousId,
+  reminder,
 }: {
   closeId: string;
   jobId?: string;
@@ -191,7 +192,15 @@ export function SendRequestEmail({
   previousId?: string;
   recipient: string;
   onQueued: (passcode: string) => void;
+  reminder?: ReminderStatus;
 }) {
+  // The firm's rule decides when a reminder is due and how many are allowed; each still needs this approval.
+  const stop = !previousId || !reminder ? "" : reminder.left <= 0
+    ? "This request is unanswered after all the reminders the firm's rule allows. Contact the client another way."
+    : reminder.expires_at && (new Date(reminder.expires_at) <= new Date() || (reminder.due_at && new Date(reminder.due_at) >= new Date(reminder.expires_at)))
+      ? "The private link has expired, or expires before the next reminder is due. Contact the client another way."
+      : "";
+  const waiting = previousId && reminder?.due_at && new Date(reminder.due_at) > new Date() ? `Under the firm's rule the next reminder is due ${new Date(reminder.due_at).toLocaleString()}.` : "";
   const [data, setData] = useState<Configuration>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -232,6 +241,7 @@ export function SendRequestEmail({
       setBusy(false);
     }
   }
+  if (stop) return <p role="status">{stop}</p>;
   return (
     <details
       onToggle={(e) => {
@@ -258,7 +268,8 @@ export function SendRequestEmail({
               sending this private request link through Resend from this sender
               to this exact recipient.
             </label>
-            <button>{previousId ? "Approve and queue this reminder" : "Approve and queue email"}</button>
+            {waiting && <p role="status">{waiting}</p>}
+            <button disabled={!!waiting}>{previousId ? "Approve and queue this reminder" : "Approve and queue email"}</button>
           </fieldset>
         </form>
       ) : (
@@ -279,6 +290,7 @@ export function SendRequestEmail({
   );
 }
 
+export type ReminderStatus = { left: number; due_at?: string; expires_at?: string };
 export type EmailRecord = { id: string; state: string; delivery: string; reminder_of?: string; error: string; approved_by?: string; created_at: string };
 export function EmailHistory({emails}: {emails: EmailRecord[]}) {
   return <section aria-label="Email delivery history"><h5>Email history</h5>{emails.map(m=><p key={m.id}>

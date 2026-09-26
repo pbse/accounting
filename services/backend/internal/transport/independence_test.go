@@ -131,6 +131,13 @@ func TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance(t *testing.
 	if err = db.QueryRow(`SELECT independent_review,independent_review_min_amount::text FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&review, &recorded); err != nil || review || recorded != "1000.00" {
 		t.Fatalf("the change records the minimum with the other settings: %v %s %v", review, recorded, err)
 	}
+	policy(org, []string{"org:manage"}, 422, `{"reminder_after_days":7,"reason":"Synthetic reminders"}`)
+	policy(org, []string{"org:manage"}, 422, `{"reminder_max":0,"reason":"Synthetic reminders"}`)
+	policy(org, []string{"org:manage"}, 200, `{"reminder_after_days":2,"reminder_max":1,"reason":"Synthetic reminders"}`)
+	var after, most int
+	if err = db.QueryRow(`SELECT reminder_after_days,reminder_max,independent_review_min_amount::text FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&after, &most, &recorded); err != nil || after != 2 || most != 1 || recorded != "1000.00" {
+		t.Fatalf("the change records the reminder rule with the other settings: %d %d %s %v", after, most, recorded, err)
+	}
 	proposing := func(entries string) string {
 		t.Helper()
 		body := strings.Replace(sources, `"blockers":[]`, `"blockers":[],`+entries, 1)

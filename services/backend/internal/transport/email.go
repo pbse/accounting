@@ -17,6 +17,14 @@ import (
 	"close.local/backend/internal/secrets"
 )
 
+// reminderStatus is SQL for request q: the reminders its firm's rule still allows, when the next is due (null until
+// the latest email is delivered) and when that email's link expires.
+const reminderStatus = `(SELECT jsonb_build_object('left',o.reminder_max-(SELECT count(*) FROM email_outbox WHERE request_id=q.id AND reminder_of IS NOT NULL),
+ 'due_at',(SELECT min(e.occurred_at) FROM email_delivery_events e WHERE e.connection_id=m.connection_id AND e.provider_id=m.provider_id AND lower(e.recipient)=lower(q.recipient) AND e.kind='delivered')+make_interval(days=>o.reminder_after_days),
+ 'expires_at',(SELECT l.expires_at FROM client_request_links l WHERE l.digest=m.link_digest))
+ FROM request_drafts rd JOIN client_closes rc ON rc.id=rd.close_id JOIN organizations o ON o.id=rc.organization_id
+ LEFT JOIN LATERAL (SELECT connection_id,provider_id,link_digest FROM email_outbox WHERE request_id=q.id ORDER BY created_at DESC,id DESC LIMIT 1) m ON true WHERE rd.id=q.draft_id)`
+
 func registerEmail(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/email", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte
@@ -237,6 +245,22 @@ func registerEmail(mux *http.ServeMux, db *sql.DB) {
 			err = tx.QueryRowContext(r.Context(), `SELECT m.payload,m.link_digest FROM email_delivery m JOIN client_request_links l ON l.digest=m.link_digest WHERE m.id=$1 AND m.request_id::text=$2 AND m.connection_id::text=$3 AND m.state='accepted' AND m.delivery='delivered' AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now() AND NOT EXISTS(SELECT 1 FROM email_delivery bad WHERE bad.request_id=m.request_id AND bad.delivery IN ('bounced','complained','failed','suppressed')) AND NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=m.request_id)`, in.PreviousID, r.PathValue("request"), connection).Scan(&prior, &digest)
 			if err != nil {
 				problem(w, 409, "Reminder blocked: confirm delivery, an unanswered current request, the same sender and an unexpired link first.")
+				return
+			}
+			// The firm's rule bounds reminders: every approved one counts, and the next is due some days after delivery.
+			// A predecessor without a reminder is the request's latest email.
+			var left int
+			var due time.Time
+			if err = tx.QueryRowContext(r.Context(), `SELECT (s->>'left')::int,(s->>'due_at')::timestamptz FROM (SELECT `+reminderStatus+` AS s FROM work_requests q WHERE q.id::text=$1) x`, r.PathValue("request")).Scan(&left, &due); err != nil {
+				problem(w, 503, "The firm's reminder rule is unavailable.")
+				return
+			}
+			if left <= 0 {
+				problem(w, 409, "This request is unanswered after all the reminders the firm's rule allows. Contact the client another way.")
+				return
+			}
+			if due.After(time.Now()) {
+				problem(w, 409, "Under the firm's rule the next reminder is due "+due.UTC().Format("2 January 2006 15:04 MST")+".")
 				return
 			}
 			plain, e := secrets.Open(org+"/email/"+in.PreviousID, prior)

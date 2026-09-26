@@ -1628,3 +1628,13 @@ Tests: `TestStripePayoutsAndActivityReportsAreCapturedByKind` (faked Stripe: an 
 Code review: GPT-6 Sol (high). Adopted: a local Payouts file in the standalone preview also selects the Payouts report method; a saved activity run points to the settlement page's activity picker rather than Work; the workpaper's opening description covers manual and instant payouts; the unused `Account.Through` was deleted. Delta review clean.
 
 Not verified: real Stripe report runs for the two new types on a connected account.
+
+## Reminder rules (2026-09-26)
+
+Request: reminder rules (PRD R3 governed reminders; COM-02 bounded reminder policies with explicit stop). Under the standing rule a person approves every outside write, so the rule schedules nothing: each reminder is still approved individually. Migration 070 gives every firm a bounded rule, `reminder_after_days` (0–6, default 0; the private link lasts seven days) and `reminder_max` (1–5, default 3), recorded with every firm policy change and set through `POST /v1/closes/organization/policy` (org:manage for hosted firms, anyone locally). Approving a reminder is refused before it is due (the previous email's first signed delivered event plus the days) and once the request has all its reminders (every approved reminder counts, whatever its outcome), with the reason. Work and Coverage return each request's `reminder` (`left`, `due_at`, and `expires_at` of the latest email's link) from one shared SQL expression, which the approval check reuses; the email panel shows when the next is due and disables approval until then, and says to contact the client another way once no reminder is left or the link would expire first. Firm settings has a Reminder rule section. Existing firms get the defaults, under which the existing reminder flow is unchanged up to three reminders.
+
+Tests: `TestApprovedEmailDurableRetryAndScope` now sets a rule (two days, one reminder): the coverage view shows one left and the due time, approval is refused before it, allowed with no wait, and refused once the one reminder is used; `TestIndependentReview…` records the rule and refuses values outside 0–6 and 1–5. 9 mutations, all failing their tests.
+
+Code review: GPT-6 Sol (high). Adopted: the stop shows even when the last allowed reminder was not delivered; the link-expiry stop uses the latest email's own link and also covers a link that has already expired. Delta review clean.
+
+Not verified: the panels in a browser, and a reminder queued before a tighter rule (it can send within its 30-minute approval window).
