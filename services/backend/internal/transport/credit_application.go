@@ -61,11 +61,12 @@ func scanApplication(row interface{ Scan(...any) error }) (creditApplication, er
 }
 
 // capturedOpen reads the open items and company of the close's latest transaction capture; an unchanged capture reuses
-// its predecessor's transactions but reads the open items afresh.
+// its predecessor's transactions but reads the open items afresh, and records no realm, so the company comes from its
+// connection.
 func capturedOpen(ctx context.Context, db *sql.DB, closeID string) (string, string, map[string][]json.RawMessage, error) {
 	var captureID, realm string
 	var raw []byte
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,COALESCE(s.payload->>'realm',''),COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state IN ('completed','unchanged') AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &raw)
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,x.realm,COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state IN ('completed','unchanged') AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &raw)
 	if err != nil {
 		return "", "", nil, errors.New("A current completed QuickBooks transaction capture is required")
 	}

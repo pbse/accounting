@@ -42,7 +42,7 @@ type dailyItem struct {
 var dailyLatest = `(SELECT * FROM (
  (SELECT 'quickbooks' AS source,s.id,s.finished_at AS at,s.requested_by,s.exceptions,s.connection_id,'' AS unchecked FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('completed','unchanged') AND s.exceptions IS NOT NULL AND s.connection_id=COALESCE(` + quickbooks.ReadingConnection("c.id") + `,s.connection_id) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.id=s.evidence_id AND e.superseded_by IS NOT NULL) ORDER BY s.id DESC LIMIT 1)
  UNION ALL
- (SELECT 'xero',x.id,x.captured_at,x.actor,x.exceptions,x.connection_id,CASE WHEN x.exceptions IS NULL THEN COALESCE(x.payload->>'transactions_error','Transactions were not read.') ELSE '' END FROM xero_snapshots x JOIN xero_connections xc ON xc.id=x.connection_id AND xc.state<>'disconnected' WHERE x.close_id=c.id AND x.period=c.period ORDER BY x.captured_at DESC,x.id DESC LIMIT 1)
+ (SELECT 'xero',x.id,x.captured_at,x.actor,x.exceptions,x.connection_id,CASE WHEN x.exceptions IS NULL THEN COALESCE(x.payload->>'transactions_error','Transaction findings were not recorded.') ELSE '' END FROM xero_snapshots x JOIN xero_connections xc ON xc.id=x.connection_id AND xc.state<>'disconnected' WHERE x.close_id=c.id AND x.period=c.period ORDER BY x.captured_at DESC,x.id DESC LIMIT 1)
  ) u ORDER BY at DESC LIMIT 1)`
 
 // dailyFindings ranks every accessible unsigned current or prior-month close by the findings captured since its last review.

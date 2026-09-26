@@ -150,13 +150,6 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 		t.Fatalf("a payment is never applied to another customer's invoice: %s", body)
 	}
 	call(path, apply(map[string]any{"rule_reference": "x"}), 422)
-	_, err = db.Exec(`UPDATE quickbooks_entity_syncs SET payload=jsonb_set(payload,'{realm}','"999"') WHERE close_id=$1`, closeID)
-	must(err)
-	if body := call(path, apply(nil), 409); !strings.Contains(string(body), "another QuickBooks company") {
-		t.Fatalf("a capture of another company is refused: %s", body)
-	}
-	_, err = db.Exec(`UPDATE quickbooks_entity_syncs SET payload=jsonb_set(payload,'{realm}','"123"') WHERE close_id=$1`, closeID)
-	must(err)
 	var item creditApplication
 	must(json.Unmarshal(call(path, apply(nil), 200), &item))
 	// Under the firm's independent-review rule the person who prepared an application cannot approve it.
@@ -186,7 +179,7 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 	// A newer capture whose transactions did not change reads open items afresh, and its candidates are the ones offered.
 	fresh := `{"Id":"93","SyncToken":"1","TxnDate":"2026-09-20","CustomerRef":{"value":"4","name":"Acme"},"CurrencyRef":{"value":"USD"},"TotalAmt":40,"Balance":40}`
 	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at,payload) VALUES($1,$2,'2026-09','fixture','unchanged',$3,now(),$4)`, closeID, connectionID, evidenceID,
-		`{"realm":"123","open_items":{"Payment":[`+payment+`],"Invoice":[`+fresh+`],"VendorCredit":[`+credit+`],"Bill":[`+bill+`]}}`)
+		`{"counts":{},"open_items":{"Payment":[`+payment+`],"Invoice":[`+fresh+`],"VendorCredit":[`+credit+`],"Bill":[`+bill+`]}}`)
 	must(err)
 	listRequest := httptest.NewRequest("GET", path, nil).WithContext(auth.WithActor(context.Background(), actor))
 	listed := httptest.NewRecorder()

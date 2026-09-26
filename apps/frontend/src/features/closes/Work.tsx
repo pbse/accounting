@@ -427,7 +427,7 @@ function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () =
               <Avatar label={item.entity} />
               <span>
                 <strong>{item.entity} · {item.period}</strong>
-                <small>Transactions not checked in the {item.source === "xero" ? "Xero" : "QuickBooks"} capture of {new Date(item.captured_at).toLocaleString()}: {item.unchecked}</small>
+                <small>Transaction check incomplete in the {item.source === "xero" ? "Xero" : "QuickBooks"} capture of {new Date(item.captured_at).toLocaleString()}: {item.unchecked}</small>
               </span>
             </span>
             <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open the close</Link>
