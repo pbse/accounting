@@ -101,11 +101,12 @@ func TestDailyBooksShowsExceptionsNewSinceTheLastReview(t *testing.T) {
 		return w.Body.Bytes()
 	}
 	type entry struct {
-		CloseID string `json:"close_id"`
-		Source  string `json:"source"`
-		SyncID  string `json:"sync_id"`
-		Total   int    `json:"total"`
-		New     []struct {
+		CloseID   string `json:"close_id"`
+		Source    string `json:"source"`
+		SyncID    string `json:"sync_id"`
+		Total     int    `json:"total"`
+		Unchecked string `json:"unchecked"`
+		New       []struct {
 			Type string `json:"type"`
 			Kind string `json:"kind"`
 		} `json:"new"`
@@ -173,10 +174,11 @@ func TestDailyBooksShowsExceptionsNewSinceTheLastReview(t *testing.T) {
 	if e := studioEntry(); e == nil || e.SyncID != latestXero || e.Total != 2 || len(e.New) != 1 {
 		t.Fatalf("only what the reviewed snapshot lacked is new: %+v", e)
 	}
-	snapshot("1 hour")
-	if e := studioEntry(); e != nil {
-		t.Fatalf("a newest snapshot without transactions lists nothing rather than older findings: %+v", e)
+	unread := snapshot("1 hour")
+	if e := studioEntry(); e == nil || e.SyncID != unread || e.Unchecked == "" || len(e.New) != 0 {
+		t.Fatalf("a newest snapshot without transactions is listed as not checked, never as clear or with older findings: %+v", e)
 	}
+	call("POST", "/v1/closes/"+studio+"/daily-review", map[string]string{"sync_id": unread, "source": "xero"}, 409)
 	// A QuickBooks capture finished after the Xero snapshots is the one shown, and the only one that can be reviewed.
 	quickbooksCapture := capture(studio, connect(studio, "Studio", org, "active"), [3]string{"no_payee", "Purchase", "q-1"})
 	if e := studioEntry(); e == nil || e.Source != "quickbooks" || e.SyncID != quickbooksCapture {

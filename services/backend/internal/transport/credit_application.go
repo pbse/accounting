@@ -60,11 +60,13 @@ func scanApplication(row interface{ Scan(...any) error }) (creditApplication, er
 	return a, err
 }
 
-// capturedOpen reads the open items and company of the close's latest complete transaction capture.
+// capturedOpen reads the open items and company of the close's latest transaction capture; an unchanged capture reuses
+// its predecessor's transactions but reads the open items afresh, and records no realm, so the company comes from its
+// connection.
 func capturedOpen(ctx context.Context, db *sql.DB, closeID string) (string, string, map[string][]json.RawMessage, error) {
 	var captureID, realm string
 	var raw []byte
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,COALESCE(s.payload->>'realm',''),COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state='completed' AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &raw)
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,x.realm,COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state IN ('completed','unchanged') AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &raw)
 	if err != nil {
 		return "", "", nil, errors.New("A current completed QuickBooks transaction capture is required")
 	}
@@ -390,7 +392,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			var currentCapture string
-			if e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture); e != nil || currentCapture != item.CaptureID {
+			if e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state IN ('completed','unchanged') AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture); e != nil || currentCapture != item.CaptureID {
 				problemCode(w, 409, "SOURCE_STALE", "Transaction capture changed. Review a new application.")
 				return
 			}

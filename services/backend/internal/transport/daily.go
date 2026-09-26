@@ -32,24 +32,25 @@ type dailyItem struct {
 	Total       int                    `json:"total"`
 	New         []quickbooks.Exception `json:"new"`
 	ReviewedAt  *time.Time             `json:"reviewed_at"`
+	Unchecked   string                 `json:"unchecked,omitempty"`
 }
 
 // dailyLatest is SQL for close c's newest finished capture: its latest QuickBooks capture with findings on the reading
 // connection whose evidence is not superseded, or its newest Xero snapshot for the close's month on a connection not
 // disconnected, whichever is newer, as the close's own checks choose. A Xero snapshot without transactions has no
-// findings, so the close then lists nothing.
+// findings; unchecked says why, so the close is listed as not checked rather than clear.
 var dailyLatest = `(SELECT * FROM (
- (SELECT 'quickbooks' AS source,s.id,s.finished_at AS at,s.requested_by,s.exceptions,s.connection_id FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('completed','unchanged') AND s.exceptions IS NOT NULL AND s.connection_id=COALESCE(` + quickbooks.ReadingConnection("c.id") + `,s.connection_id) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.id=s.evidence_id AND e.superseded_by IS NOT NULL) ORDER BY s.id DESC LIMIT 1)
+ (SELECT 'quickbooks' AS source,s.id,s.finished_at AS at,s.requested_by,s.exceptions,s.connection_id,'' AS unchecked FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('completed','unchanged') AND s.exceptions IS NOT NULL AND s.connection_id=COALESCE(` + quickbooks.ReadingConnection("c.id") + `,s.connection_id) AND NOT EXISTS(SELECT 1 FROM evidence e WHERE e.id=s.evidence_id AND e.superseded_by IS NOT NULL) ORDER BY s.id DESC LIMIT 1)
  UNION ALL
- (SELECT 'xero',x.id,x.captured_at,x.actor,x.exceptions,x.connection_id FROM xero_snapshots x JOIN xero_connections xc ON xc.id=x.connection_id AND xc.state<>'disconnected' WHERE x.close_id=c.id AND x.period=c.period ORDER BY x.captured_at DESC,x.id DESC LIMIT 1)
+ (SELECT 'xero',x.id,x.captured_at,x.actor,x.exceptions,x.connection_id,CASE WHEN x.exceptions IS NULL THEN COALESCE(x.payload->>'transactions_error','Transaction findings were not recorded.') ELSE '' END FROM xero_snapshots x JOIN xero_connections xc ON xc.id=x.connection_id AND xc.state<>'disconnected' WHERE x.close_id=c.id AND x.period=c.period ORDER BY x.captured_at DESC,x.id DESC LIMIT 1)
  ) u ORDER BY at DESC LIMIT 1)`
 
 // dailyFindings ranks every accessible unsigned current or prior-month close by the findings captured since its last review.
 func dailyFindings(ctx context.Context, db *sql.DB, org string, firm bool, who string) ([]dailyItem, error) {
 	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.entity,c.period,s.source,s.id::text,s.at,s.requested_by,s.exceptions,
- CASE WHEN s.source='quickbooks' AND b.connection_id=s.connection_id THEN b.exceptions WHEN s.source='xero' AND bx.connection_id=s.connection_id THEN bx.exceptions END,d.reviewed_at
+ CASE WHEN s.source='quickbooks' AND b.connection_id=s.connection_id THEN b.exceptions WHEN s.source='xero' AND bx.connection_id=s.connection_id THEN bx.exceptions END,d.reviewed_at,s.unchecked
  FROM client_closes c
- JOIN LATERAL `+dailyLatest+` s ON s.exceptions IS NOT NULL
+ JOIN LATERAL `+dailyLatest+` s ON true
  LEFT JOIN daily_reviews d ON d.close_id=c.id LEFT JOIN quickbooks_entity_syncs b ON b.id=d.sync_id LEFT JOIN xero_snapshots bx ON bx.id=d.xero_snapshot_id
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
@@ -62,7 +63,7 @@ func dailyFindings(ctx context.Context, db *sql.DB, org string, firm bool, who s
 	for rows.Next() {
 		var it dailyItem
 		var latest, baseline []byte
-		if err = rows.Scan(&it.CloseID, &it.Entity, &it.Period, &it.Source, &it.SyncID, &it.CapturedAt, &it.RequestedBy, &latest, &baseline, &it.ReviewedAt); err != nil {
+		if err = rows.Scan(&it.CloseID, &it.Entity, &it.Period, &it.Source, &it.SyncID, &it.CapturedAt, &it.RequestedBy, &latest, &baseline, &it.ReviewedAt, &it.Unchecked); err != nil {
 			break
 		}
 		var found, reviewed []quickbooks.Exception
