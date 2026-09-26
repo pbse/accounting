@@ -1343,3 +1343,26 @@ Each check was observed red with its rule removed (14 mutations).
 Plan-and-code review: GPT-6 Sol (high), once available again. Adopted: the bank file may run to four days after the last expected arrival, so a payout that left the balance at month-end can match; a failed payout cannot take a bank row through review or in-transit; a reversal no longer changes the payout's amount and the question says whether the return is in the file; the result view, the review export and the docs describe this method without transactions or categories and say the month's activity must be reconciled separately; a revised draft restores its own method; the method is described as a whole-month trace of every payout in the report, since the report has no manual or instant marker; the parser no longer builds payout categories. Two delta rounds then closed the payouts table and review export (no transactions, gross, fees or categories file for this method); the bank-file hint's wording (run the file through the later of four days after month-end and four days after the last expected arrival) was taken verbatim from the second round's answer without a third round.
 
 Not verified: a real Payouts report export (the sign convention is enforced, not assumed silently), and the form in a browser.
+
+## Stripe refund and revenue entries (2026-09-25)
+
+Request: Stripe revenue and refund entries. With the fee entry, a settlement can propose a refund entry (refunds less failed refunds of payouts deposited this month, from the deposit account to a refunds account) and, when the accountant's rule says the deposit account is a clearing account, a revenue entry (gross charges less uncaptured amounts, out of clearing). Both are drafts to book by hand; production posting still posts the fee entry only.
+
+Plan review: GPT-6 Sol (high). Adopted:
+
+- disputes and other categories left in the deposit account are named for the payouts deposited this month;
+- the revenue entry needs an explicit clearing-account confirmation and the refund account must differ from the deposit account; booked amounts are those for the same payouts;
+- the drafts appear in the review package, year-end adjustments and tie-out (where they stay proposed even once the fee entry has posted);
+- the existing claim that deferred fees are "left for the month their deposit is booked" was corrected: the next month's report does not include those payouts, so they are recorded by hand;
+- two named proposals instead of a list.
+
+Tests:
+
+- `TestRefundAndRevenueEntriesCoverPayoutsDepositedThisMonth` (pure): refunds 95.00 (a failed refund reduces them) and revenue 400.00 of the payouts deposited this month; deferred charges and the dispute left in clearing named; refunds already booked and revenue booked beyond the charges; nothing proposed with an unresolved trace; six refusals.
+- `TestYearEndHandoffRollsForwardApprovedWork` includes a settlement's refund draft in the adjustments; `TestTieOutComparesBalancesWithLatestSupport` shows a refund draft still proposed after the fee entry posted.
+
+Each check was observed red with its rule removed (12 mutations).
+
+Code review: GPT-6 Sol (high), one delta round. Adopted: revising a saved settlement restores its payout method, fee, refund and revenue entries and their fields; the clearing confirmation is asked again.
+
+Not verified: real client books using these rules, and the form in a browser.

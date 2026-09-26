@@ -232,3 +232,61 @@ func TestManualAndInstantPayoutsAreTracedToTheirDeposits(t *testing.T) {
 		}
 	}
 }
+
+func TestRefundAndRevenueEntriesCoverPayoutsDepositedThisMonth(t *testing.T) {
+	resolved := func() SettlementInput {
+		// po_R carries a failed refund: its 5.00 comes back into the balance and reduces the month's refunds.
+		input := settlementInput(stripeReport(append(append([]string{}, settlementRows...), "2026-09-20 00:00:00,po_R,2026-09-20 00:00:00,txn_30,2026-09-18 08:00:00,usd,Refund failed,0.00,5.00,5.00,refund_failure,")...))
+		input.BankCSV += "\nB10,2026-09-20,5.00"
+		input.ReviewedDeposits = []ReviewedDeposit{{PayoutID: "po_E", BankID: "B6", Reason: "Stripe dashboard trace ID matches B6"}, {PayoutID: "po_F", BankID: "B5", Reason: "Stripe dashboard trace ID matches B5"}}
+		input.InTransit = []InTransit{{PayoutID: "po_G", PolicyReference: "Firm deposits-in-transit rule", Reason: "October statement line 2 shows $77.00 on Oct 6"}}
+		input.FeeEntry = &FeeEntry{FeeAccount: "Stripe fees", DepositAccount: "Stripe clearing", BookedFees: "0", RuleReference: "Rule 4: fees to expense"}
+		input.RefundEntry = &RefundEntry{RefundAccount: "Refunds", BookedRefunds: "0", RuleReference: "Rule 5: refunds contra revenue"}
+		input.RevenueEntry = &RevenueEntry{RevenueAccount: "Revenue", BookedRevenue: "0", RuleReference: "Rule 6: Stripe clearing account", ClearingConfirmed: true}
+		return input
+	}
+	// Deposited in September: po_A, po_B, po_C, po_E, po_F and po_R. Refunds 20 + 80 - 5; charges 150 + 200 + 30 + 10 + 10;
+	// po_B's 50.00 dispute stays in clearing. po_G (in transit) and po_D (deposited 2 October) carry 120.00 of charges.
+	paper, err := PrepareSettlement(resolved())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := paper.RefundProposal; paper.Refunds != "95.00" || r == nil || r.DebitAccount != "Refunds" || r.CreditAccount != "Stripe clearing" || r.Amount != "95.00" {
+		t.Fatalf("refunds of deposited payouts move from clearing to refunds: %s %+v", paper.Refunds, r)
+	}
+	if v := paper.RevenueProposal; paper.Revenue != "400.00" || v == nil || v.DebitAccount != "Stripe clearing" || v.CreditAccount != "Revenue" || v.Amount != "400.00" || v.Date != "2026-09-30" {
+		t.Fatalf("gross charges of deposited payouts are revenue out of clearing: %s %+v", paper.Revenue, v)
+	}
+	questions := strings.Join(paper.Questions, " ")
+	if !strings.Contains(questions, "Gross charges of $120.00 belong to payouts in transit or deposited after this month") || !strings.Contains(questions, "stay in Stripe clearing") {
+		t.Fatalf("deferred charges and the dispute left in clearing are named: %v", paper.Questions)
+	}
+	more := resolved()
+	more.RefundEntry.BookedRefunds = "30"
+	if paper, _ = PrepareSettlement(more); paper.RefundProposal == nil || paper.RefundProposal.Amount != "65.00" {
+		t.Fatalf("refunds already booked for these payouts are left out: %+v", paper.RefundProposal)
+	}
+	more.RevenueEntry.BookedRevenue = "410"
+	if paper, _ = PrepareSettlement(more); paper.RevenueProposal == nil || paper.RevenueProposal.DebitAccount != "Revenue" || paper.RevenueProposal.Amount != "10.00" {
+		t.Fatalf("more revenue booked than charged proposes the excess back: %+v", paper.RevenueProposal)
+	}
+	blocked := resolved()
+	blocked.ReviewedDeposits = nil
+	if paper, _ = PrepareSettlement(blocked); paper.RefundProposal != nil || paper.RevenueProposal != nil {
+		t.Fatalf("an unresolved trace proposes nothing: %+v", paper)
+	}
+	for name, change := range map[string]func(*SettlementInput){
+		"a refund entry without the fee entry": func(in *SettlementInput) { in.FeeEntry, in.RevenueEntry = nil, nil },
+		"a refund account that is the deposit": func(in *SettlementInput) { in.RefundEntry.RefundAccount = "stripe clearing" },
+		"revenue into the deposit account":     func(in *SettlementInput) { in.RevenueEntry.RevenueAccount = "Stripe clearing" },
+		"revenue without the clearing rule":    func(in *SettlementInput) { in.RevenueEntry.ClearingConfirmed = false },
+		"revenue into the refunds account":     func(in *SettlementInput) { in.RevenueEntry.RevenueAccount = "refunds" },
+		"entries on the payouts-report method": func(in *SettlementInput) { in.Method = PayoutsMethod },
+	} {
+		in := resolved()
+		change(&in)
+		if _, err := PrepareSettlement(in); err == nil {
+			t.Fatalf("%s must be refused", name)
+		}
+	}
+}

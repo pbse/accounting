@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"cmp"
 	"database/sql"
 	"encoding/json"
 	"math/big"
@@ -193,14 +194,7 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 			support := func(label, account string, net *big.Rat) {
 				supports = append(supports, tieSupport{PaperID: p.id, Kind: p.kind, Label: label, Amount: net.FloatString(2), Review: p.state, account: account, net: net, settled: p.settled})
 			}
-			propose := func(proposals ...*prepaids.Adjustment) {
-				posting := postings[p.id]
-				if posting == "in_balance" {
-					return
-				}
-				if posting == "" {
-					posting = "proposed"
-				}
+			proposeAs := func(posting string, proposals ...*prepaids.Adjustment) {
 				for _, e := range proposals {
 					if e == nil {
 						continue
@@ -210,6 +204,13 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 						tieEntry{PaperID: p.id, Kind: p.kind, Amount: value.FloatString(2), Posting: posting, account: e.DebitAccount, net: value, settled: p.settled},
 						tieEntry{PaperID: p.id, Kind: p.kind, Amount: new(big.Rat).Neg(value).FloatString(2), Posting: posting, account: e.CreditAccount, net: new(big.Rat).Neg(value), settled: p.settled})
 				}
+			}
+			propose := func(proposals ...*prepaids.Adjustment) {
+				posting := postings[p.id]
+				if posting == "in_balance" {
+					return
+				}
+				proposeAs(cmp.Or(posting, "proposed"), proposals...)
 			}
 			var decodeErr error
 			switch p.kind {
@@ -285,6 +286,8 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 				var wp reconciliation.SettlementWorkpaper
 				if decodeErr = json.Unmarshal(p.raw, &wp); decodeErr == nil {
 					propose(wp.Proposal)
+					// Refund and revenue drafts never post, so they stay proposed whatever the fee entry's posting.
+					proposeAs("proposed", wp.RefundProposal, wp.RevenueProposal)
 				}
 			}
 			if decodeErr != nil || bad {

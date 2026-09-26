@@ -96,6 +96,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 		{"13", "Utilities", "Expenses", "Expense", "900.00", ""},
 		{"14", "Retained Earnings", "Equity", "Equity", "", "2000.00"},
 		{"15", "Accrued audit fees", "Other Current Liability", "Liability", "", "50.00"},
+		{"16", "Stripe clearing", "Other Current Asset", "Asset", "100.00", ""},
 	}
 	directory, report := []map[string]string{}, []map[string]any{}
 	for _, a := range accounts {
@@ -154,6 +155,8 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	post(save("accrual", accrual("Landlord", "Accrued rent", "200.00", entry("Accrued rent", "200.00")), true), "unknown", "0")
 	save("loan", loans.Workpaper{Input: loans.Input{Lender: "First Bank", LoanAccount: "Term loan", ClosingPrincipal: "1500.00", ReclassCurrentPortion: true, PrincipalDueNext12Months: "2000.00", CurrentPortionAccount: "Loan current portion"}}, true)
 	save("reconciliation", reconciliation.Workpaper{Input: reconciliation.Input{Account: "Checking", LedgerClosing: "5000.00"}}, true)
+	// The settlement's fee entry posted before the capture; its refund entry is a draft that never posts.
+	post(save("settlement", reconciliation.SettlementWorkpaper{Input: reconciliation.SettlementInput{ReportReference: "stripe.csv"}, Proposal: &prepaids.Adjustment{Date: "2026-09-30", DebitAccount: "Stripe fees", CreditAccount: "Stripe clearing", Amount: "29.22"}, RefundProposal: &prepaids.Adjustment{Date: "2026-09-30", DebitAccount: "Utilities", CreditAccount: "Stripe clearing", Amount: "100.00"}}, true), "verified", "-1 hour")
 	save("reconciliation", reconciliation.Workpaper{Input: reconciliation.Input{Account: "Business card", AccountType: "credit_card", LedgerClosing: "250.00"}, Blockers: []string{"Statement page 2 is missing."}}, false)
 
 	b, rows := read()
@@ -169,7 +172,10 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 			t.Errorf("%s is %q, want %q: %+v", name, rows[name].Status, want, rows[name])
 		}
 	}
-	if _, found := rows["Retained Earnings"]; found || len(b.Rows) != 13 {
+	if clearing := rows["Stripe clearing"].Entries; len(clearing) != 1 || clearing[0].Posting != "proposed" {
+		t.Errorf("a posted fee entry is in the balance, but the settlement's refund draft is still proposed: %+v", rows["Stripe clearing"])
+	}
+	if _, found := rows["Retained Earnings"]; found || len(b.Rows) != 14 {
 		t.Errorf("equity and supportless expense accounts are left off the board: %+v", b.Rows)
 	}
 	if rows["Prepaid insurance"].Provisional || !rows["Business card"].Provisional {

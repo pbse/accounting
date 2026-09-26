@@ -457,9 +457,26 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			}
 			summary.Source = paper.Input.ReportReference + " / " + paper.Input.BankReference
 			summary.Method = paper.Method
-			entry := "No journal is proposed."
-			if e := paper.Proposal; e != nil {
-				entry = fmt.Sprintf("Proposed fee entry under %s: debit %s, credit %s, %s on %s.", paper.Input.FeeEntry.RuleReference, e.DebitAccount, e.CreditAccount, ledger.Show(e.Amount, paper.Input.Currency), e.Date)
+			entry := ""
+			for _, draft := range []struct {
+				label string
+				e     *prepaids.Adjustment
+			}{{"fee entry", paper.Proposal}, {"refund entry (book by hand)", paper.RefundProposal}, {"revenue entry (book by hand)", paper.RevenueProposal}} {
+				if draft.e != nil {
+					entry += fmt.Sprintf("Proposed %s: debit %s, credit %s, %s on %s. ", draft.label, draft.e.DebitAccount, draft.e.CreditAccount, ledger.Show(draft.e.Amount, paper.Input.Currency), draft.e.Date)
+				}
+			}
+			if entry == "" {
+				entry = "No journal is proposed."
+			} else {
+				entry += "Rules: " + paper.Input.FeeEntry.RuleReference
+				if paper.Input.RefundEntry != nil {
+					entry += "; " + paper.Input.RefundEntry.RuleReference
+				}
+				if paper.Input.RevenueEntry != nil {
+					entry += "; " + paper.Input.RevenueEntry.RuleReference
+				}
+				entry += "."
 			}
 			traced := " Stripe automatic payouts, with the transactions in each, traced to "
 			if paper.Method == reconciliation.PayoutsMethod {

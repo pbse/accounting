@@ -393,6 +393,21 @@ export function SettlementResult({
           ) : (
             <p>{result.blockers.length > 0 ? "No entry is proposed until every payout is traced." : "No entry is needed; the booked fees match."}</p>
           )}
+          {[
+            { label: "Refunds", entry: input.refund_entry, total: result.refunds, booked: input.refund_entry?.booked_refunds, proposal: result.refund_proposal },
+            { label: "Gross charges (revenue)", entry: input.revenue_entry, total: result.revenue, booked: input.revenue_entry?.booked_revenue, proposal: result.revenue_proposal },
+          ].map((d) =>
+            d.entry ? (
+              <p key={d.label}>
+                {d.label} of payouts deposited in {input.close_period}: {money(d.total ?? "0.00", input.currency)}; already booked: {money(d.booked ?? "0.00", input.currency)}. Rule: {d.entry.rule_reference}.{" "}
+                {d.proposal
+                  ? `Draft ${d.proposal.date}: debit ${d.proposal.debit_account}, credit ${d.proposal.credit_account}, ${money(d.proposal.amount, input.currency)}. Book it by hand once approved; only the fee entry can post.`
+                  : result.blockers.length > 0
+                    ? "No entry until every payout is traced."
+                    : "No entry is needed."}
+              </p>
+            ) : null,
+          )}
         </section>
       )}
       <p className="note">
@@ -424,8 +439,31 @@ export default function Prepare() {
   const [busy, setBusy] = useState(false);
   const [feeEntry, setFeeEntry] = useState(false);
   const [manual, setManual] = useState(false);
+  const [refundEntry, setRefundEntry] = useState(false);
+  const [revenueEntry, setRevenueEntry] = useState(false);
   useEffect(() => {
-    if (revision.savedInput) setManual(revision.savedInput.method === "stripe_payouts_v1");
+    const saved = revision.savedInput as Partial<SettlementInput> | undefined;
+    if (!saved) return;
+    setManual(saved.method === "stripe_payouts_v1");
+    setFeeEntry(!!saved.fee_entry);
+    setRefundEntry(!!saved.refund_entry);
+    setRevenueEntry(!!saved.revenue_entry);
+    // The entry fields mount after this render; the clearing confirmation is asked again.
+    const values: Record<string, string | undefined> = {
+      ...saved.fee_entry,
+      refund_account: saved.refund_entry?.refund_account,
+      booked_refunds: saved.refund_entry?.booked_refunds,
+      refund_rule_reference: saved.refund_entry?.rule_reference,
+      revenue_account: saved.revenue_entry?.revenue_account,
+      booked_revenue: saved.revenue_entry?.booked_revenue,
+      revenue_rule_reference: saved.revenue_entry?.rule_reference,
+    };
+    setTimeout(() => {
+      for (const [name, value] of Object.entries(values)) {
+        const field = form.current?.elements.namedItem(name);
+        if (field instanceof HTMLInputElement && value !== undefined) field.value = value;
+      }
+    });
   }, [revision.savedInput]);
   const csvFiles = files.filter(
     (f) =>
@@ -531,6 +569,8 @@ export default function Prepare() {
               booked_fees: text("booked_fees"),
               rule_reference: text("rule_reference"),
             },
+            ...(refundEntry ? { refund_entry: { refund_account: text("refund_account"), booked_refunds: text("booked_refunds"), rule_reference: text("refund_rule_reference") } } : {}),
+            ...(revenueEntry ? { revenue_entry: { revenue_account: text("revenue_account"), booked_revenue: text("booked_revenue"), rule_reference: text("revenue_rule_reference"), clearing_confirmed: data.has("clearing_confirmed") } } : {}),
           }
         : {}),
     });
@@ -731,6 +771,33 @@ export default function Prepare() {
                   <input name="rule_reference" required minLength={5} maxLength={200} />
                 </label>
               </div>
+            )}
+            {feeEntry && (
+              <>
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={refundEntry} onChange={(e) => setRefundEntry(e.target.checked)} />
+                  <span>The rule also moves refunds netted into those deposits to a refunds account (a draft to book by hand).</span>
+                </label>
+                {refundEntry && (
+                  <div className="form-grid">
+                    <label>Refunds account<input name="refund_account" required maxLength={200} /></label>
+                    <label>Refunds already booked for these payouts ({currency}; enter zero explicitly)<input name="booked_refunds" required inputMode="decimal" /></label>
+                    <label>Accountant's rule reference<input name="refund_rule_reference" required minLength={5} maxLength={200} /></label>
+                  </div>
+                )}
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={revenueEntry} onChange={(e) => setRevenueEntry(e.target.checked)} />
+                  <span>The deposits are booked to a clearing account, and the rule records their gross charges as revenue (a draft to book by hand).</span>
+                </label>
+                {revenueEntry && (
+                  <div className="form-grid">
+                    <label>Revenue account<input name="revenue_account" required maxLength={200} /></label>
+                    <label>Revenue already booked for these payouts ({currency}; enter zero explicitly)<input name="booked_revenue" required inputMode="decimal" /></label>
+                    <label>Accountant's rule reference<input name="revenue_rule_reference" required minLength={5} maxLength={200} /></label>
+                    <label className="checkbox-label"><input type="checkbox" name="clearing_confirmed" required /><span>The rule identifies the deposit account above as a clearing account.</span></label>
+                  </div>
+                )}
+              </>
             )}
           </fieldset>
           )}
