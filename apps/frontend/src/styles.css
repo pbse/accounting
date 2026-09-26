@@ -1576,3 +1576,22 @@ a.row:hover {
   font-size: 0.75rem;
   color: var(--muted, #6b6b65);
 }
+.assistant-card {
+  margin-top: 0.5rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border, #e4e4e0);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+}
+.assistant-card ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.assistant-card textarea {
+  width: 100%;
+  font: inherit;
+}

@@ -3,12 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { authKitClientId } from "../auth/Auth";
 import { useUnlocked, workspaceRequest } from "../closes/workspace";
+import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
 import { nextReview, takePending, usePending } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
 import { Icon } from "./Icon";
 
-type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[] };
+type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction; outcome?: Outcome | null };
 
 function readOpen() {
   try {
@@ -120,6 +121,20 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
       setBusy(false);
     }
   }
+  // A confirmation holds the composer, so no other answer can replace the card's result while it runs.
+  async function confirm(id: string, body: { digest: string; reason: string }) {
+    if (busy) throw new Error("Wait for the current answer, then confirm.");
+    const asked = ++generation.current;
+    setBusy(true);
+    try {
+      const data = await workspaceRequest(`${path}/${id}/confirm`, body);
+      if (asked === generation.current) setMessages(data.messages);
+    } finally {
+      setBusy(false);
+    }
+  }
+  // Only the newest card follows the close's work; older ones keep what they started.
+  const newestCard = messages.map((m) => !!m.action).lastIndexOf(true);
   const slash = text.startsWith("/") && !text.includes(" ") ? commands.filter((c) => c.name.startsWith(text.slice(1).toLowerCase())) : [];
   function submit(event?: { preventDefault(): void }) {
     event?.preventDefault();
@@ -162,13 +177,14 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
         {messages.length === 0 && (
           <li className="assistant-hint">
             {closeId
-              ? "Ask where this close stands, what blocks sign-off, which balances don't tie, what changed from last month or what exceptions the ledger shows."
+              ? "Ask where this close stands, what blocks sign-off, which balances don't tie, what changed from last month or what exceptions the ledger shows, or ask it to prepare, recheck or stop this close's work."
               : "Ask what needs you today, what is ready for review or what is blocked. Open a client close to ask about it."}
           </li>
         )}
         {messages.map((m, i) => (
           <li key={m.id} className={m.role}>
             <p>{m.body}</p>
+            {m.action && closeId && <ActionCard closeId={closeId} action={m.action} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />}
             {m.role === "assistant" && i === messages.length - 1 && live.length > 0 && (
               <ul>
                 {live.map((line, n) => (
@@ -222,7 +238,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
           </button>
         </div>
       </form>
-      <p className="assistant-note">Answers come from saved work you can access. The assistant never approves, sends or posts anything.</p>
+      <p className="assistant-note">Answers come from saved work you can access. A card's action runs only after you confirm it, through the same checks as the close page; the assistant never approves, sends or posts anything.</p>
     </aside>
   );
 }

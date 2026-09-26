@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/preparation"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -83,12 +84,6 @@ func TestAssistantAnswersFromTheMembersOwnScopedReads(t *testing.T) {
 		out := call("user_a", nil, "POST", closeChat, map[string]string{"text": text, "workpaper_id": append(paper, "")[0]}, 200)
 		last := out.Messages[len(out.Messages)-1]
 		if out.Messages[len(out.Messages)-2].Body != text || last.Role != "assistant" {
-			rows, _ := db.Query(`SELECT id,role,left(body,20),created_at FROM chat_messages WHERE organization_id=$1 AND close_id::text=$2 ORDER BY id DESC LIMIT 4`, org, alpha)
-			for rows.Next() {
-				var id, role, body, at string
-				rows.Scan(&id, &role, &body, &at)
-				t.Log(id, role, body, at)
-			}
 			t.Fatalf("the question and its answer are saved in order: %d %+v", len(out.Messages), out.Messages[max(0, len(out.Messages)-3):])
 		}
 		return last
@@ -259,5 +254,150 @@ func TestAssistantAnswersNameTheAccountsAskedAbout(t *testing.T) {
 	}
 	if got := answer("blockers", "What blocks sign-off?"); !strings.Contains(got, "couldn't read sign-off readiness") {
 		t.Fatalf("a failed read says so: %s", got)
+	}
+}
+
+func TestChatActionIsOnlyAnAskForCloseWork(t *testing.T) {
+	for text, want := range map[string]string{"Prepare this close": "prepare", "please prepare.": "prepare", "Re-check failed work": "recheck", "Stop this close's unresolved work": "stop", "Prepare me for sign-off": "", "Stop showing that": "", "What stops sign-off?": "", "preparing": ""} {
+		if got := chatAction(text); got != want {
+			t.Errorf("%q: %q, want %q", text, got, want)
+		}
+	}
+}
+
+func TestAssistantCardsRunTheClosePagesOwnRoutes(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_Card" + rand.Text()
+	var alpha, source, job string
+	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Card fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture'),($1,'user_admin',true,'Synthetic','fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`, org)
+	must(err)
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	defer func() {
+		for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1`, `DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	tx, err := db.BeginTx(context.Background(), nil)
+	must(err)
+	must(tx.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'insurance.pdf','card-invoice','Invoice amount: 1200.00','fixture') RETURNING id::text`, alpha).Scan(&source))
+	job, err = preparation.StartIntake(context.Background(), tx, alpha, source, "fixture")
+	must(err)
+	must(tx.Commit())
+	store := savedCloses(db, strings.Repeat("a", 32))
+	type message struct {
+		ID      string `json:"id"`
+		Role    string `json:"role"`
+		Action  string `json:"action"`
+		Outcome *struct {
+			RunID string `json:"run_id"`
+			Jobs  []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"jobs"`
+		} `json:"outcome"`
+	}
+	call := func(subject string, permissions []string, method, path string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s %v: %d %s", method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	reviewer := []string{"workpapers:review"}
+	chat := "/v1/closes/" + alpha + "/chat"
+	card := func(text string) message {
+		t.Helper()
+		var out struct{ Messages []message }
+		must(json.Unmarshal(call("user_a", nil, "POST", chat, map[string]string{"text": text}, 200), &out))
+		return out.Messages[len(out.Messages)-1]
+	}
+	var status struct {
+		InventoryDigest string `json:"inventory_digest"`
+		Stop            struct {
+			Digest string `json:"digest"`
+			Jobs   []struct {
+				Name string `json:"name"`
+			} `json:"jobs"`
+		} `json:"stop"`
+	}
+	must(json.Unmarshal(call("user_a", nil, "GET", "/v1/closes/"+alpha+"/prepare-close", nil, 200), &status))
+	prepare := card("Prepare this close")
+	if prepare.Action != "prepare" || prepare.Outcome != nil {
+		t.Fatalf("a prepare request answers with an unconfirmed card: %+v", prepare)
+	}
+	confirm := chat + "/" + prepare.ID + "/confirm"
+	call("user_a", reviewer, "POST", confirm, map[string]string{"digest": "stale"}, 409)
+	call("user_a", nil, "POST", confirm, map[string]string{"digest": status.InventoryDigest}, 403)
+	call("user_admin", []string{"clients:all", "workpapers:review"}, "POST", confirm, map[string]string{"digest": status.InventoryDigest}, 409)
+	var runs int
+	must(db.QueryRow(`SELECT count(*) FROM close_preparations WHERE close_id::text=$1`, alpha).Scan(&runs))
+	if runs != 0 {
+		t.Fatal("a stale, unpermitted or foreign confirmation started nothing")
+	}
+	call("user_a", reviewer, "POST", confirm, map[string]string{"digest": status.InventoryDigest}, 200)
+	call("user_a", reviewer, "POST", confirm, map[string]string{"digest": status.InventoryDigest}, 409)
+	var reopened struct{ Messages []message }
+	must(json.Unmarshal(call("user_a", nil, "GET", chat, nil, 200), &reopened))
+	var run, actor string
+	must(db.QueryRow(`SELECT id::text,actor FROM close_preparations WHERE close_id::text=$1`, alpha).Scan(&run, &actor))
+	got := reopened.Messages[len(reopened.Messages)-1]
+	if got.ID != prepare.ID || got.Outcome == nil || got.Outcome.RunID != run || len(got.Outcome.Jobs) != 1 || got.Outcome.Jobs[0].ID != job || got.Outcome.Jobs[0].Name != "insurance.pdf" || actor != "user_a" {
+		t.Fatalf("the reopened card keeps the run its confirmation started, by its author: %+v %s %s", got, run, actor)
+	}
+	var tracked struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	must(json.Unmarshal(call("user_a", nil, "GET", "/v1/closes/"+alpha+"/work?view=all&jobs="+job, nil, 200), &tracked))
+	if len(tracked.Items) != 1 || tracked.Items[0].ID != job {
+		t.Fatalf("Work reads the card's own jobs: %+v", tracked)
+	}
+	must(json.Unmarshal(call("user_a", nil, "GET", "/v1/closes/"+alpha+"/work?view=all&jobs=0", nil, 200), &tracked))
+	if len(tracked.Items) != 0 {
+		t.Fatalf("Work reads only the named jobs: %+v", tracked)
+	}
+	again := card("Prepare this close")
+	call("user_a", reviewer, "POST", chat+"/"+again.ID+"/confirm", map[string]string{"digest": status.InventoryDigest}, 409)
+	stop := card("Stop this close's unresolved work")
+	must(json.Unmarshal(call("user_a", nil, "GET", "/v1/closes/"+alpha+"/prepare-close", nil, 200), &status))
+	if stop.Action != "stop" || len(status.Stop.Jobs) != 1 || status.Stop.Jobs[0].Name != "insurance.pdf" {
+		t.Fatalf("the stop card lists the named jobs it would stop: %+v %+v", stop, status.Stop)
+	}
+	call("user_a", reviewer, "POST", chat+"/"+stop.ID+"/confirm", map[string]string{"digest": status.Stop.Digest}, 422)
+	var stopped struct{ Messages []message }
+	must(json.Unmarshal(call("user_a", reviewer, "POST", chat+"/"+stop.ID+"/confirm", map[string]string{"digest": status.Stop.Digest, "reason": "Client withdrew the invoice"}, 200), &stopped))
+	var state string
+	must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id::text=$1`, job).Scan(&state))
+	if last := stopped.Messages[len(stopped.Messages)-1]; state != "cancelled" || last.Outcome == nil || last.Outcome.RunID != "" || len(last.Outcome.Jobs) != 1 {
+		t.Fatalf("the stop card stops the listed job and keeps it: %s %+v", state, last)
+	}
+	var firm struct{ Messages []message }
+	must(json.Unmarshal(call("user_a", nil, "POST", "/v1/closes/chat", map[string]string{"text": "Prepare everything"}, 200), &firm))
+	if firm.Messages[len(firm.Messages)-1].Action != "" {
+		t.Fatal("a firm-wide conversation has no close to act on")
 	}
 }

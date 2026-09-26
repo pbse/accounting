@@ -11,7 +11,7 @@ export const commands: Command[] = [
   { name: "review", description: "Open the next draft ready for review" },
   { name: "rehearse", description: "Preview the combined effect of saved proposals", close: true },
   { name: "export", description: "Download the review package or signed binder", close: true },
-  { name: "stop", description: "Inspect or stop unresolved preparation", close: true },
+  { name: "stop", description: "Preview and stop unresolved preparation", close: true },
 ];
 
 export function parseCommand(line: string) {
@@ -50,8 +50,10 @@ export async function runCommand(command: Command, argument: string, ctx: Comman
       ctx.ask(`Find ${argument}`, close);
       return "";
     case "prepare":
+      ctx.ask("Prepare this close", close);
+      return "";
     case "stop":
-      ctx.navigate(`${base}?tab=overview`);
+      ctx.ask("Stop this close's unresolved work", close);
       return "";
     case "request":
       ctx.navigate(`${base}?tab=requests`);
