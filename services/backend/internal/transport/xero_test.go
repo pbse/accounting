@@ -185,6 +185,11 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	if !intact {
 		t.Fatal("each snapshot digest must match its stored payload")
 	}
+	var requested []byte
+	must(db.QueryRow(`SELECT payload FROM xero_snapshots WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, september).Scan(&requested))
+	if at, ok := xero.RequestedAt(requested); !ok || at.After(time.Now()) {
+		t.Fatalf("a snapshot records when its Trial Balance was requested: %s", requested)
+	}
 	// Two expiries in a row: the second refresh only works if the first rotated token was saved.
 	for range 2 {
 		_, err = db.Exec(`UPDATE xero_connections SET access_expires_at=now()-interval '1 minute' WHERE id=$1`, id)

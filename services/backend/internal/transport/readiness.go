@@ -53,7 +53,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
  'coverage',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=c.id),'[]'),
  'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'digest',a.digest,'state',a.state,'source_id',a.source_id,'scan_version',a.scan_version,'decision_note',a.decision_note) ORDER BY a.id) FROM client_attachments a WHERE a.close_id=c.id),'[]'),
  'requests',COALESCE((SELECT jsonb_agg(to_jsonb(q) ORDER BY q.id) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id),'[]')
- ) FROM client_closes c WHERE c.id::text=$1`, id).Scan(&raw)
+ )||COALESCE((SELECT jsonb_build_object('xero_postings',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_postings p WHERE p.close_id=c.id HAVING count(*)>0),'{}') FROM client_closes c WHERE c.id::text=$1`, id).Scan(&raw)
 	if err != nil {
 		return out, err
 	}

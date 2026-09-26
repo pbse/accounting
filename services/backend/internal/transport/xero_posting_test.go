@@ -134,6 +134,15 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 	mux := http.NewServeMux()
 	registerXeroPosting(mux, db)
 	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
+	// A close with no Xero journal keeps the signed snapshot it had, so earlier sign-offs stand.
+	plainTx, err := db.Begin()
+	must(err)
+	plain, err := closeReadiness(context.Background(), plainTx, closeID)
+	plainTx.Rollback()
+	must(err)
+	if strings.Contains(string(plain.Snapshot), "xero_postings") {
+		t.Fatalf("a close without Xero journals has no Xero key in its signed snapshot: %s", plain.Snapshot)
+	}
 	call := func(path string, input any, want int) []byte {
 		t.Helper()
 		body, _ := json.Marshal(input)
@@ -286,6 +295,22 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 		t.Fatalf("an unconfirmed journal is unknown, not verified: %s", body)
 	}
 	call(second, map[string]string{"action": "execute", "digest": intent.Digest, "confirmation": "POST TO XERO"}, 409)
+	// Xero receipts are part of the signed snapshot, so a later change to one reopens the close.
+	digest := func() string {
+		t.Helper()
+		readTx, e := db.Begin()
+		must(e)
+		defer readTx.Rollback()
+		ready, e := closeReadiness(context.Background(), readTx, closeID)
+		must(e)
+		return ready.Digest
+	}
+	before := digest()
+	_, err = db.Exec(`UPDATE xero_postings SET last_error='Readback differs' WHERE id=(SELECT min(id) FROM xero_postings WHERE close_id=$1)`, closeID)
+	must(err)
+	if digest() == before {
+		t.Fatal("a changed Xero receipt must change the close's signed snapshot")
+	}
 	// An unknown Xero journal blocks sign-off until it is verified.
 	readTx, err := db.Begin()
 	must(err)

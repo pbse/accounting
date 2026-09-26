@@ -99,9 +99,9 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 		switch {
 		case xeroErr == nil && (err == sql.ErrNoRows || xeroAt.After(capturedAt)):
 			snapshot = map[string]any{"id": xeroID, "captured_at": xeroAt, "stale": xeroStale, "source": "xero"}
-			// Without Xero's report time, no journal is taken to be in its Trial Balance.
+			// Without the time the Trial Balance was requested, no journal is taken to be in it.
 			realm, started = "", time.Time{}
-			if at, ok := xero.ReportTime(xeroPayload); ok {
+			if at, ok := xero.RequestedAt(xeroPayload); ok {
 				started = at
 			}
 			currency, balances, readErr = xero.AccountBalances(xeroPayload)
