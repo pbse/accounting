@@ -31,6 +31,10 @@ AuthKit's OAuth tokens say who the person is but carry no app permissions, so th
 
 Read-only access lists only the read tools. Read-and-prepare adds the prepare, draft and request-approval tools; nothing beyond the tool table is reachable.
 
+### Agent attribution
+
+What an agent makes under a member's agent access stays the member's: it counts as theirs for client access and the independence rule (a draft an agent prepared for a member is prepared by that member). It also records the MCP client that made it (migration 071): evidence and the intake job it starts, close preparations, client request drafts and approval requests carry `agent`, `MCP client <client_id>` from the OAuth token's `client_id` claim, or `MCP (client unverified)` when the token names none. The client ID identifies the OAuth application, not one running agent. Calls with the workspace token or a signed-in session record no agent. The evidence list shows "added by <member> via <client>", and the review queue shows who asked for an approval and through which client; the evidence, request draft, preparation and review queue reads return both. Opening a close records no actor for anyone, so it has no attribution either.
+
 ## Tools
 
 Every tool replays one existing API call using the caller's own credentials. Firm membership, client assignment and permission checks are the same as in the app, and errors carry the same `code` (see [Errors](#errors-and-retries)).
@@ -43,6 +47,10 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 | `get_workpaper` | One draft: inputs, results, cited sources, blockers and questions |
 | `find_exceptions` | Questions from the latest QuickBooks capture, abnormal Trial Balance balances and holding or clearing accounts that still hold a balance |
 | `get_readiness` | What still blocks sign-off |
+| `native_reconciliation` | For Xero books, Xero's own reconciled flags per bank account |
+| `proposed_state` | Production journal proposals awaiting approval or execution, with balances before and projected after |
+| `workpaper_changes` | What changed between a draft and the version it revises |
+| `list_close_jobs` | A close's 20 newest preparation jobs |
 | `morning_brief` | What the agent did in the past 24 hours across open closes, and which closes need a person today |
 | `agent_track_record` | Per client over 12 months: model proposals people confirmed unchanged, the fields they changed, and how the drafts were judged |
 | `close_brief` | Where a close stands, area by area, with a headline of what needs a person |

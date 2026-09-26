@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/reconciliation"
 )
 
@@ -159,7 +160,7 @@ func StartIntake(ctx context.Context, tx *sql.Tx, closeID, sourceID, actor strin
 		}
 	}
 	var id string
-	err := tx.QueryRowContext(ctx, `INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','waiting_evidence',$3) ON CONFLICT(close_id,digest) DO UPDATE SET digest=preparation_jobs.digest RETURNING id::text`, closeID, "intake:"+sourceID, actor).Scan(&id)
+	err := tx.QueryRowContext(ctx, `INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by,agent) VALUES($1,$2,'[]','waiting_evidence',$3,NULLIF($4,'')) ON CONFLICT(close_id,digest) DO UPDATE SET digest=preparation_jobs.digest RETURNING id::text`, closeID, "intake:"+sourceID, actor, auth.Agent(ctx)).Scan(&id)
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `INSERT INTO preparation_intakes(job_id,source_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, id, sourceID)
 	}

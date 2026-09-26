@@ -1638,3 +1638,13 @@ Tests: `TestApprovedEmailDurableRetryAndScope` now sets a rule (two days, one re
 Code review: GPT-6 Sol (high). Adopted: the stop shows even when the last allowed reminder was not delivered; the link-expiry stop uses the latest email's own link and also covers a link that has already expired. Delta review clean.
 
 Not verified: the panels in a browser, and a reminder queued before a tighter rule (it can send within its 30-minute approval window).
+
+## MCP parity and agent attribution (2026-09-26)
+
+Request: MCP parity with distinct agent attribution. Four read-only tools replay existing bounded routes: `native_reconciliation`, `proposed_state` (up to 100 proposals), `workpaper_changes` and `list_close_jobs` (20 newest). Ledger certification and aging, whose responses are unbounded, the year-end ZIP and the unbounded dependency query were left out; the close brief already states the ledger certification. No write tool was added. On the OAuth path the MCP handler marks the request with the agent, `MCP client <client_id>` from the token's `client_id` claim (added to the claims) or `MCP (client unverified)`; migration 071 records it as `agent` on evidence, the intake job an upload starts, close preparations, request drafts and approval requests, while `created_by`/`actor`/`requested_by` stay the member, so client access and the independence rule are unchanged. Workspace-token and session calls record none. The evidence list, request drafts, close preparation readback and review queue return the member and the client; the evidence list and the review queue show them.
+
+Tests: `TestAgentsActOnlyUnderAnApprovedMemberGrant` (OAuth agent): a read grant lists the new read tools and no write tools; under a prepare grant, an upload and its intake job, a close preparation, a request draft and an approval request are the member's and name `MCP client client_abc`, shown through list_evidence, preview_close_preparation, list_client_requests and review_queue; a token without a client ID is `MCP (client unverified)`. 18 mutations, all failing the test.
+
+Code review: GPT-6 Sol (high). Adopted: the review queue returns the member and the client as separate fields; ledger certification and aging were dropped as unbounded; the test's request draft is cleaned up.
+
+Not verified: a real WorkOS AuthKit token's `client_id` claim, and the two UI labels in a browser.

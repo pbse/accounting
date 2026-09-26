@@ -70,6 +70,9 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,$2,$3,true,'Synthetic assignment','fixture')`, org, member, mine)
 	must(err)
 	defer func() {
+		for _, q := range []string{`DELETE FROM approval_requests WHERE close_id=$1`, `DELETE FROM request_drafts WHERE close_id=$1`, `DELETE FROM close_preparations WHERE close_id=$1`, `DELETE FROM preparation_intakes WHERE job_id IN (SELECT id FROM preparation_jobs WHERE close_id=$1)`, `DELETE FROM preparation_jobs WHERE close_id=$1`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`} {
+			db.Exec(q, mineID)
+		}
 		db.Exec(`DELETE FROM agent_access WHERE organization_id=$1`, org)
 		db.Exec(`DELETE FROM client_access WHERE organization_id=$1`, org)
 		db.Exec(`DELETE FROM organization_member_access WHERE organization_id=$1`, org)
@@ -84,14 +87,14 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 	defer func() { http.DefaultTransport = original }()
 	t.Setenv("WORKOS_AUTHKIT_DOMAIN", "https://auth.test")
 	t.Setenv("MCP_RESOURCE_URL", "https://api.test/mcp")
-	sign := func(audience string) string {
-		token := jwt.NewWithClaims(jwt.SigningMethodRS256, auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: member, Issuer: "https://auth.test", Audience: jwt.ClaimStrings{audience}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)), IssuedAt: jwt.NewNumericDate(time.Now())}, Session: "consent_1", Organization: org})
+	sign := func(audience string, client ...string) string {
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: member, Issuer: "https://auth.test", Audience: jwt.ClaimStrings{audience}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)), IssuedAt: jwt.NewNumericDate(time.Now())}, Session: "consent_1", Organization: org, ClientID: append(client, "")[0]})
 		token.Header["kid"] = "agent"
 		raw, e := token.SignedString(key)
 		must(e)
 		return raw
 	}
-	agentToken := sign("https://api.test/mcp")
+	agentToken := sign("https://api.test/mcp", "client_abc")
 	server := httptest.NewServer(apiWithStore(db, strings.Repeat("a", 32)))
 	defer server.Close()
 
@@ -138,9 +141,9 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 	decide(admin, adminPerms, map[string]any{"action": "approve", "subject": member, "scope": "prepare", "previous_id": request, "reason": "Widening attempt", "confirmed": true}, 422)
 	approved := decide(admin, adminPerms, map[string]any{"action": "approve", "subject": member, "scope": "read", "previous_id": request, "reason": "Approved for read-only use", "confirmed": true}, 200)
 
-	connect := func() *mcp.ClientSession {
+	connect := func(token ...string) *mcp.ClientSession {
 		t.Helper()
-		session, e := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "1"}, nil).Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp", HTTPClient: &http.Client{Transport: bearer{agentToken}}}, nil)
+		session, e := mcp.NewClient(&mcp.Implementation{Name: "agent", Version: "1"}, nil).Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp", HTTPClient: &http.Client{Transport: bearer{append(token, agentToken)[0]}}}, nil)
 		must(e)
 		return session
 	}
@@ -161,7 +164,7 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 		t.Fatalf("administrators must see each member's access in force: %d %s", listed.Code, listed.Body.String())
 	}
 	session := connect()
-	if list := names(session); slices.Contains(list, "prepare_close") || slices.Contains(list, "request_approval") || !slices.Contains(list, "list_closes") {
+	if list := names(session); slices.Contains(list, "prepare_close") || slices.Contains(list, "request_approval") || !slices.Contains(list, "list_closes") || !slices.Contains(list, "native_reconciliation") || !slices.Contains(list, "list_close_jobs") {
 		t.Fatalf("a read grant must offer only read tools: %v", list)
 	}
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_closes", Arguments: map[string]any{}})
@@ -181,7 +184,60 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 	if list := names(session); !slices.Contains(list, "prepare_close") {
 		t.Fatalf("a prepare grant must offer preparation tools: %v", list)
 	}
+	tool := func(session *mcp.ClientSession, name string, args map[string]any) map[string]any {
+		t.Helper()
+		result, e := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+		must(e)
+		if result.IsError {
+			t.Fatalf("%s: %s", name, result.Content[0].(*mcp.TextContent).Text)
+		}
+		out, _ := result.StructuredContent.(map[string]any)
+		return out
+	}
+	// What the agent makes is the member's, and records the MCP client that made it.
+	uploaded := tool(session, "add_evidence", map[string]any{"close_id": mineID, "name": "bank.csv", "text": "id,date,amount\nB1,2026-09-01,1.00\n"})
+	var author, via, jobVia string
+	must(db.QueryRow(`SELECT e.created_by,COALESCE(e.agent,''),COALESCE(j.agent,'') FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id JOIN preparation_jobs j ON j.id=i.job_id WHERE e.id::text=$1`, uploaded["id"]).Scan(&author, &via, &jobVia))
+	if author != member || via != "MCP client client_abc" || jobVia != via {
+		t.Fatalf("an agent's upload and its intake job are the member's, via the MCP client: %s %q %q", author, via, jobVia)
+	}
+	preview := tool(session, "preview_close_preparation", map[string]any{"close_id": mineID})
+	prepared := tool(session, "prepare_close", map[string]any{"close_id": mineID, "inventory_digest": preview["inventory_digest"], "confirmed": true})
+	must(db.QueryRow(`SELECT actor,COALESCE(agent,'') FROM close_preparations WHERE id::text=$1`, prepared["id"]).Scan(&author, &via))
+	if author != member || via != "MCP client client_abc" {
+		t.Fatalf("an agent's close preparation records the MCP client: %s %q", author, via)
+	}
+	shown := func(name string, args map[string]any) string {
+		t.Helper()
+		raw, _ := json.Marshal(tool(session, name, args))
+		return string(raw)
+	}
+	if got := shown("preview_close_preparation", map[string]any{"close_id": mineID}); !strings.Contains(got, `"agent":"MCP client client_abc"`) {
+		t.Fatalf("the preparation readback names the MCP client: %s", got)
+	}
+	if got := shown("list_evidence", map[string]any{"close_id": mineID}); !strings.Contains(got, `"agent":"MCP client client_abc"`) || !strings.Contains(got, `"created_by":"`+member+`"`) {
+		t.Fatalf("the evidence list names the member and the MCP client: %s", got)
+	}
+	var paper, digest string
+	must(db.QueryRow(`SELECT digest FROM evidence WHERE id::text=$1`, uploaded["id"]).Scan(&digest))
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text`, mineID, "agent-paper", `{"sources":[{"id":"`+uploaded["id"].(string)+`","digest":"`+digest+`","role":"invoice"}],"blockers":[]}`).Scan(&paper))
+	tool(session, "request_approval", map[string]any{"close_id": mineID, "workpaper_id": paper, "note": "Check the bank row"})
+	tool(session, "draft_client_request", map[string]any{"close_id": mineID, "expected_id": "", "workpaper_ids": []string{paper}})
+	if got := shown("list_client_requests", map[string]any{"close_id": mineID}); !strings.Contains(got, `"agent":"MCP client client_abc"`) {
+		t.Fatalf("a request draft names the MCP client: %s", got)
+	}
+	queue := tool(session, "review_queue", map[string]any{})
+	if items, _ := queue["items"].([]any); len(items) == 0 || items[0].(map[string]any)["approval_requested_by"] != member || items[0].(map[string]any)["approval_agent"] != "MCP client client_abc" {
+		t.Fatalf("the review queue shows who asked, via which MCP client: %v", queue)
+	}
 	session.Close()
+	unverified := connect(sign("https://api.test/mcp"))
+	uploaded = tool(unverified, "add_evidence", map[string]any{"close_id": mineID, "name": "second.csv", "text": "id,date,amount\nB2,2026-09-02,2.00\n"})
+	must(db.QueryRow(`SELECT COALESCE(agent,'') FROM evidence WHERE id::text=$1`, uploaded["id"]).Scan(&via))
+	if via != "MCP (client unverified)" {
+		t.Fatalf("a token that names no client is attributed as unverified: %q", via)
+	}
+	unverified.Close()
 
 	membership(member, false)
 	membership(member, true)

@@ -18,6 +18,7 @@ type requestDraft struct {
 	WorkpaperIDs  []string  `json:"workpaper_ids"`
 	ContextDigest string    `json:"context_digest"`
 	CreatedBy     string    `json:"created_by"`
+	Agent         string    `json:"agent,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	Stale         bool      `json:"stale"`
 }
@@ -31,7 +32,7 @@ func registerRequests(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		rows, err := tx.QueryContext(r.Context(), `SELECT id::text,body,workpaper_ids,context_digest,created_by,created_at FROM request_drafts WHERE close_id::text=$1 ORDER BY request_drafts.id DESC LIMIT 20`, r.PathValue("id"))
+		rows, err := tx.QueryContext(r.Context(), `SELECT id::text,body,workpaper_ids,context_digest,created_by,COALESCE(agent,''),created_at FROM request_drafts WHERE close_id::text=$1 ORDER BY request_drafts.id DESC LIMIT 20`, r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Could not read drafts.")
 			return
@@ -40,7 +41,7 @@ func registerRequests(mux *http.ServeMux, db *sql.DB) {
 		for rows.Next() {
 			var d requestDraft
 			var ids []byte
-			if err = rows.Scan(&d.ID, &d.Body, &ids, &d.ContextDigest, &d.CreatedBy, &d.CreatedAt); err != nil {
+			if err = rows.Scan(&d.ID, &d.Body, &ids, &d.ContextDigest, &d.CreatedBy, &d.Agent, &d.CreatedAt); err != nil {
 				break
 			}
 			if err = json.Unmarshal(ids, &d.WorkpaperIDs); err != nil {
@@ -142,7 +143,7 @@ func registerRequests(mux *http.ServeMux, db *sql.DB) {
 			ids = []byte("[]")
 		}
 		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, closeID, body, string(ids), digest, subject).Scan(&id)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by,agent) VALUES($1,$2,$3,$4,$5,NULLIF($6,'')) RETURNING id::text`, closeID, body, string(ids), digest, subject, auth.Agent(r.Context())).Scan(&id)
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Save could not be confirmed. Retry the same draft safely.")
 			return

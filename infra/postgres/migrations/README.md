@@ -96,3 +96,5 @@ Fresh Compose volumes run every migration automatically. Existing Compose volume
 `069_stripe_report_kinds.sql` lets a close capture Stripe's itemized Payouts and balance activity reports as well as the payout reconciliation, one of each in flight. Apply after 068 with API/worker stopped; `/readyz` checks it.
 
 `070_reminder_rules.sql` adds a firm's reminder rule (days after delivery before a reminder is due, 0–6, default 0; reminders per request, 1–5, default 3) and records it with every firm policy change. Apply after 069 with API/worker stopped; `/readyz` checks it.
+
+`071_agent_attribution.sql` records which MCP client made evidence, intake jobs, close preparations, request drafts and approval requests through a member's approved agent access, beside the member who remains their author. Apply after 070 with API/worker stopped; `/readyz` checks it.

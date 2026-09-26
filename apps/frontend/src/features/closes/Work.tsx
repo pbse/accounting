@@ -113,7 +113,7 @@ const tones: Record<string, string> = {
   waiting_evidence: "status info",
   completed: "status ok",
 };
-type QueueItem = Plan & { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string; digest: string; review_id: string; bulk_reason: string; approval_note?: string };
+type QueueItem = Plan & { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string; digest: string; review_id: string; bulk_reason: string; approval_note?: string; approval_requested_by?: string; approval_agent?: string };
 const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement" };
 
 function Kpi({ icon, tone, label, value, caption, onClick }: { icon: IconName; tone: string; label: string; value?: number; caption: string; onClick: () => void }) {
@@ -511,7 +511,7 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
                   {kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}
                   {item.bulk_reason ? ` · review individually: ${item.bulk_reason.toLowerCase()}` : ""}
                 </small>
-                {item.approval_note && <small title={item.approval_note}>Approval requested: {item.approval_note}</small>}
+                {item.approval_note && <small title={item.approval_note}>Approval requested{item.approval_requested_by ? ` by ${item.approval_requested_by}` : ""}{item.approval_agent ? ` via ${item.approval_agent}` : ""}: {item.approval_note}</small>}
               </span>
             </span>
             <span className="status warn">{item.approval_note ? "Approval requested" : "Awaiting review"}</span>
