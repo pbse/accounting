@@ -1489,3 +1489,17 @@ Each check was observed red with its rule removed (9 mutations).
 Code review: GPT-6 Sol (high). Adopted: the 100-draft bound applies after matching (no row limit hides a draft or undercounts); only the current reading connection counts; bill payments' bank and card accounts are matched; the Work documentation no longer says revised drafts are listed; a redundant revision check and explanatory comments were deleted. One delta round closed all findings.
 
 Not verified: query cost on real tenant volumes, and the list in a browser.
+
+## Google Drive evidence (2026-09-25)
+
+Request: "Picking files from a cloud drive for evidence" through WorkOS with approved scopes, optional and non-blocking. `transport/drive.go` (under the saved-close boundary, so firm membership and client access apply): `GET /v1/closes/{id}/drive?q=` gets the person's token from WorkOS Pipes (`POST /data-integrations/google-drive/token` with the verified actor's user and organization IDs) and lists matching PDF/text/CSV files through Drive v3; `POST .../drive/connect` returns WorkOS's authorization URL with a server-built return to the close's Evidence tab from a validated HTTPS `PUBLIC_APP_URL`; `GET .../drive/files/{file}` checks the type, caps the actual bytes and hands them back for the ordinary evidence upload. Off without `WORKOS_API_KEY`; fixed WorkOS and Google hosts; redirects are not followed; the token never leaves the API. The WorkOS request and response shapes were taken from WorkOS's official Node SDK source.
+
+Plan review: GPT-6 Sol (high). Adopted: a read-only `drive.readonly` grant for name search (documented for the WorkOS dashboard); the documentation says plainly that a Drive file gets the direct upload's checks, not the forwarded-attachment malware scan; routes under the saved-close boundary with IDs from the verified actor; the byte cap applies to the downloaded body, not Drive's metadata size; the search escapes backslashes and quotes and groups the type filter; WorkOS or Google outages are Drive-only errors; `WORKOS_API_KEY` alone is the switch (no provider setting); the provider slug follows WorkOS's provider list (`google-drive`).
+
+Tests:
+
+- `TestDriveFilesAreListedAndHandedBackOnlyWithAGrant` (mocked WorkOS and Google): off without a key; not connected and missing-scope grants ask to (re)connect, with the actor's IDs sent; the search escapes `O'Neil\x` and groups the types, lists only supported files with an upload-ready name and never returns the token; a CSV's bytes come back with its name; a Google Doc (422) and an oversize file (413) are refused; connecting returns to the close's Evidence tab, and an HTTP application URL is refused.
+
+Each check was observed red with its rule removed (10 mutations).
+
+Not verified: a live WorkOS Pipes integration and Google Drive responses (the provider slug and scopes depend on the firm's WorkOS dashboard), and the panel in a browser.
