@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../../lib/api";
 
+type Question = { position: number; text: string; state: string; answer: string };
 type Request = {
   status: string;
   entity?: string;
@@ -8,7 +9,10 @@ type Request = {
   body?: string;
   expires_at?: string;
   removed?: string[];
+  questions?: Question[];
+  open?: boolean;
 };
+const stateLabels: Record<string, string> = { answered: "Answered", awaiting_document: "Waiting for your document", "": "Not answered yet" };
 
 export default function ClientRequest() {
   const [token] = useState(() => window.location.hash.slice(1));
@@ -19,6 +23,10 @@ export default function ClientRequest() {
   const [refresh, setRefresh] = useState(0);
   const [passcode, setPasscode] = useState("");
   const [needsPasscode, setNeedsPasscode] = useState(false);
+  const [drafts, setDrafts] = useState<Record<number, { answer: string; later: boolean }>>({});
+  useEffect(() => {
+    setDrafts(Object.fromEntries((request?.questions ?? []).map((q) => [q.position, { answer: q.answer, later: q.state === "awaiting_document" }])));
+  }, [request]);
   async function call(body?: object | FormData): Promise<Request> {
     const response = await fetch(`${apiBaseUrl}/v1/client-request`, {
       method: body ? "POST" : "GET",
@@ -94,7 +102,12 @@ export default function ClientRequest() {
     setError("");
     try {
       const submission = new FormData();
-      submission.set("body", String(data.get("reply") ?? ""));
+      // Each question sent is either answered or a document to follow; untouched ones stay as they were.
+      const answers = (request?.questions ?? [])
+        .map((q) => ({ q, d: drafts[q.position] ?? { answer: "", later: false } }))
+        .filter(({ q, d }) => (d.later || d.answer.trim()) && ((d.later ? "awaiting_document" : "answered") !== q.state || d.answer.trim() !== q.answer))
+        .map(({ q, d }) => ({ position: q.position, state: d.later ? "awaiting_document" : "answered", answer: d.answer.trim() }));
+      submission.set("body", JSON.stringify({ answers }));
       submission.set("confirmed", String(data.has("confirmed")));
       const files = data.getAll("files").filter((file): file is File => file instanceof File && file.size > 0);
       for (const file of files) submission.append("files", file);
@@ -143,59 +156,76 @@ export default function ClientRequest() {
           Retry opening request
         </button>
       )}
-      {request?.status === "received" && (
-        <>
-        {(request.removed?.length ?? 0) > 0 && (
-          <p role="status">
-            For your security we removed the {request.removed!.join(", ")} from your reply before saving it. Please never send card or bank
-            account numbers, identity numbers or passwords; the firm will ask another way if it needs them.
-          </p>
-        )}
-        <p>
-          Your reply is saved. Attachments remain quarantined until automated scanning and firm release. Preparation can
-          resume; this does not approve accounting decisions or posting. Contact
-          the firm directly if you need to correct your reply.
-        </p>
-        <details><summary>Retry attachment scanning</summary><p>Select the same original files if scanning was interrupted or the firm needs a fresh scan. This cannot add new documents or change your reply.</p>
-          <form onSubmit={retryScans}><fieldset disabled={busy}>
-            <label>Original documents<input type="file" name="files" accept=".pdf,.txt,.csv" multiple required /></label>
-            <button>Retry malware scanning</button>
-          </fieldset></form>
-        </details>
-        </>
-      )}
-      {request?.status === "open" && (
+      {(request?.status === "open" || request?.status === "received") && (
         <>
           <h2>
             {request.entity} · {request.period}
           </h2>
-          <p>
-            Please respond only for this client and period. Do not include
-            passwords or information about other clients.
-          </p>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{request.body}</pre>
-          <p>
-            This link expires {new Date(request.expires_at!).toLocaleString()}.
-            Keep it private.
-          </p>
+          {(request.removed?.length ?? 0) > 0 && (
+            <p role="status">
+              For your security we removed the {request.removed!.join(", ")} from your reply before saving it. Please never send card or bank
+              account numbers, identity numbers or passwords; the firm will ask another way if it needs them.
+            </p>
+          )}
+          {request.status === "received" && (
+            <p role="status">
+              {request.open
+                ? "Your reply is saved. You can answer more questions, send documents or correct an answer until this link expires. Work continues once every question is answered, or when the firm decides to go ahead."
+                : "Your reply is saved, and this request takes no more answers. Contact the firm if something needs to change."}{" "}
+              Attachments stay quarantined until automated scanning and the firm's release.
+            </p>
+          )}
+          <details>
+            <summary>The request as sent</summary>
+            <pre style={{ whiteSpace: "pre-wrap" }}>{request.body}</pre>
+          </details>
+          {request.open !== false && (
+            <p>
+              Please respond only for this client and period. Do not include passwords or information about other clients. This link expires{" "}
+              {new Date(request.expires_at!).toLocaleString()}. Keep it private.
+            </p>
+          )}
           <form onSubmit={submit}>
-            <fieldset disabled={busy}>
-              <label>
-                Your reply
-                <textarea name="reply" rows={8} maxLength={20000} required />
-              </label>
-              <label>
-                <input type="checkbox" name="confirmed" required /> This reply
-                concerns {request.entity} for {request.period}. I understand it
-                will be reviewed by the firm.
-              </label>
+            <fieldset disabled={busy || request.open === false}>
+              <ol className="stack">
+                {(request.questions ?? []).map((q) => {
+                  const d = drafts[q.position] ?? { answer: "", later: false };
+                  return (
+                    <li key={q.position}>
+                      <p>
+                        {q.text} <span className="pill">{stateLabels[q.state] ?? q.state}</span>
+                      </p>
+                      <label>
+                        {d.later ? "Note about the document (optional)" : "Your answer"}
+                        <textarea rows={3} value={d.answer} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, answer: e.target.value } })} />
+                      </label>
+                      <label>
+                        <input type="checkbox" checked={d.later} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, later: e.target.checked } })} /> I'll send the document later
+                      </label>
+                    </li>
+                  );
+                })}
+              </ol>
               <label>Supporting documents<input name="files" type="file" accept=".pdf,.txt,.csv" multiple /></label>
-              <p>Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total. PDFs use Cloudflare scanning; TXT/CSV use the separate on-demand antivirus service. Files stay quarantined until automated malware scanning succeeds and the firm releases them. One submission per link; retry with the same reply and files if receipt is uncertain.</p>
-              <button>
-                {busy ? "Saving your reply…" : "Send reply to the firm"}
-              </button>
+              <p>Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total. Files stay quarantined until automated scanning and the firm's release.</p>
+              <label>
+                <input type="checkbox" name="confirmed" required /> This reply concerns {request.entity} for {request.period}. I understand it will be reviewed by the firm.
+              </label>
+              <button>{busy ? "Saving your reply…" : request.status === "received" ? "Send the update to the firm" : "Send to the firm"}</button>
             </fieldset>
           </form>
+          {request.status === "received" && (
+            <details>
+              <summary>Retry attachment scanning</summary>
+              <p>Select the same original files if scanning was interrupted or the firm needs a fresh scan. This cannot add new documents or change your reply.</p>
+              <form onSubmit={retryScans}>
+                <fieldset disabled={busy}>
+                  <label>Original documents<input type="file" name="files" accept=".pdf,.txt,.csv" multiple required /></label>
+                  <button>Retry malware scanning</button>
+                </fieldset>
+              </form>
+            </details>
+          )}
         </>
       )}
     </main>

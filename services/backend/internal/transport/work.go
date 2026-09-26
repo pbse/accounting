@@ -30,6 +30,8 @@ const workSelect = `SELECT j.id::text,j.close_id::text,c.entity,c.period,j.state
  'email',(SELECT jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'provider_id',m.provider_id,'error',m.error,'approved_by',m.approved_by,'created_at',m.created_at) FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),
  'emails',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'approved_by',m.approved_by,'created_at',m.created_at,'error',m.error) ORDER BY m.created_at) FROM email_delivery m WHERE m.request_id=q.id),'[]'::jsonb),
  'reminder',` + reminderStatus + `,
+ 'answers',COALESCE((SELECT jsonb_agg(jsonb_build_object('position',a.position,'state',a.state) ORDER BY a.position) FROM work_request_answers a WHERE a.request_id=q.id),'[]'::jsonb),
+ 'partial',COALESCE((SELECT NOT s.complete FROM request_submissions s WHERE s.request_id=q.id ORDER BY s.id DESC LIMIT 1),false),
  'link', (SELECT jsonb_build_object('expires_at',l.expires_at,'revoked_at',l.revoked_at,'used_at',l.used_at) FROM client_request_links l WHERE l.request_id=q.id ORDER BY l.issued_at DESC LIMIT 1)) ORDER BY q.id DESC) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id IN (SELECT request_id FROM request_jobs WHERE job_id=j.id)),'[]'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',r.id::text,'request_id',r.request_id::text,'source_id',r.source_id::text,'received_from',r.received_from,'recorded_by',r.recorded_by,'body',s.content) ORDER BY r.id) FROM work_replies r JOIN work_requests q ON q.id=r.request_id JOIN evidence s ON s.id=r.source_id WHERE q.id IN (SELECT request_id FROM request_jobs WHERE job_id=j.id)),'[]'::jsonb)
 ,
@@ -272,7 +274,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		action := r.PathValue("action")
-		if state == "completed" || state == "queued" || (state == "cancelled" && action != "retry") {
+		if action != "revoke_link" && (state == "completed" || state == "queued" || (state == "cancelled" && action != "retry")) {
 			problem(w, 409, "This work is already preparing or finished. Refresh its status.")
 			return
 		}
@@ -292,7 +294,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		var fresh preparation.Proposal
 		var proposed preparation.Proposal
 		var sources []preparation.IntakeSource
-		if action == "confirm" || action == "request" || action == "link" {
+		if action == "confirm" || action == "request" {
 			if json.Unmarshal(raw, &proposed) != nil {
 				problem(w, 503, "Stored proposals unavailable.")
 				return
@@ -477,7 +479,8 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		case "link", "revoke_link":
-			if state != "waiting_client" {
+			// A link that already has a reply still takes additions, so it can be withdrawn after the work moves on.
+			if action == "link" && state != "waiting_client" {
 				problem(w, 409, "This work is not waiting for a client.")
 				return
 			}
@@ -487,12 +490,12 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if action == "link" {
-				if e := preparation.FreshClientRequest(r.Context(), tx, closeID, requestID); e != nil {
+				if e := requestLinkable(r.Context(), tx, closeID, requestID); e != nil {
 					problem(w, 409, e.Error())
 					return
 				}
 			}
-			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id=$1 AND revoked_at IS NULL AND used_at IS NULL`, requestID)
+			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id=$1 AND revoked_at IS NULL`, requestID)
 			if err == nil && action == "link" {
 				linkToken = rand.Text()
 				passcode, err = issueLink(r.Context(), tx, requestID, actor, linkToken)
@@ -519,10 +522,21 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			if err != nil {
 				break
 			}
-			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND used_at IS NULL AND revoked_at IS NULL`, jobID)
+			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND revoked_at IS NULL`, jobID)
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_evidence',error='',finished_at=NULL WHERE id=$1`, jobID)
 			}
+		case "resume":
+			// A partial client reply waits for the firm; resuming prepares this work from what the client has sent so far.
+			var partial bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT NOT complete FROM request_submissions WHERE request_id=(SELECT max(request_id) FROM request_jobs WHERE job_id=$1) ORDER BY id DESC LIMIT 1),false)`, jobID).Scan(&partial); err != nil {
+				break
+			}
+			if state != "waiting_client" || !partial {
+				problem(w, 409, "Only work waiting on a partial client reply to its current request can resume.")
+				return
+			}
+			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_evidence',error='' WHERE id=$1`, jobID)
 		case "cancel":
 			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='cancelled',finished_at=now() WHERE id=$1`, jobID)
 		default:
@@ -530,7 +544,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if err == nil && action != "link" && action != "revoke_link" {
-			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=CASE WHEN $2 IN ('retry','alias','reply','answer') THEN 0 ELSE agent_attempts END WHERE job_id=$1`, jobID, action)
+			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=CASE WHEN $2 IN ('retry','alias','reply','answer','resume') THEN 0 ELSE agent_attempts END WHERE job_id=$1`, jobID, action)
 		}
 		if err != nil {
 			jobProblem(w, err, "Work update could not be confirmed. Refresh before retrying.")

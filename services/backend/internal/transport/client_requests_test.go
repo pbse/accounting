@@ -131,10 +131,9 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	if err = db.QueryRow(`SELECT reply_digest FROM client_request_links WHERE digest=$1`, preparation.Digest([]byte(token))).Scan(&receiptDigest); err != nil || receiptDigest == preparation.Digest([]byte(reply)) {
 		t.Fatalf("the link's receipt is not a digest of the unredacted reply: %v", err)
 	}
-	call("POST", "/v1/client-request", token, map[string]any{"body": "Changed reply", "confirmed": true}, 409)
 	var count int
 	var saved, state, from string
-	if err = db.QueryRow(`SELECT count(*),min(e.content),min(r.received_from) FROM work_replies r JOIN evidence e ON e.id=r.source_id WHERE r.request_id=$1`, requestID).Scan(&count, &saved, &from); err != nil || count != 1 || saved != "  Service end: 2027-08-31\nmethod_confirmed: true\nCard [card number ending 4242 removed]\nPortal password [removed]\n" || from != "Unverified request-link holder" {
+	if err = db.QueryRow(`SELECT count(*),min(e.content),min(r.received_from) FROM work_replies r JOIN evidence e ON e.id=r.source_id WHERE r.request_id=$1`, requestID).Scan(&count, &saved, &from); err != nil || count != 1 || !strings.HasSuffix(saved, "\nAnswer: Service end: 2027-08-31\nmethod_confirmed: true\nCard [card number ending 4242 removed]\nPortal password [removed]\n") || from != "Unverified request-link holder" {
 		t.Fatal("Reply not retained exactly once", count, saved, err)
 	}
 	if err = db.QueryRow("SELECT state FROM preparation_jobs WHERE id=$1", job).Scan(&state); err != nil || state != "waiting_evidence" {
@@ -149,6 +148,15 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	}
 	if !strings.Contains(string(call("GET", "/v1/client-request", token, nil, 200)), "received") {
 		t.Fatal("Receipt unavailable")
+	}
+	// While the work is open, a later reply on the same link replaces the earlier one, which stays in history.
+	call("POST", "/v1/client-request", token, map[string]any{"body": "Changed reply", "confirmed": true}, 200)
+	var superseded bool
+	if err = db.QueryRow(`SELECT e.superseded_by IS NOT NULL FROM work_replies r JOIN evidence e ON e.id=r.source_id WHERE r.request_id=$1 AND e.content LIKE '%Answer: Service end%'`, requestID).Scan(&superseded); err != nil || !superseded {
+		t.Fatal("a correction replaces the earlier reply", err)
+	}
+	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+		t.Fatal(err)
 	}
 	// Withdrawing an unanswered request also invalidates its link.
 	call("POST", path+"/request", auth, map[string]any{"revision": revision(), "recipient": "client@example.test", "body": "Please clarify the account."}, 200)
@@ -283,4 +291,161 @@ func TestLinkPasscodeGuardsTheRequest(t *testing.T) {
 	}
 	call("POST", "/v1/client-request", token, passcode, map[string]any{"body": "Statement to follow.", "confirmed": true}, 200)
 	call("POST", "/v1/client-request/scan-text", token, "", nil, 401)
+}
+
+func TestPartialClientRepliesKeepAnswersAndResumeOnlyWhenComplete(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_MODEL", "")
+	var closeID, source string
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES('Partial reply fixture','2026-09') RETURNING id::text`).Scan(&closeID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, table := range []string{"preparation_jobs", "request_drafts", "evidence", "client_closes"} {
+			column := "close_id"
+			if table == "client_closes" {
+				column = "id"
+			}
+			db.Exec(`UPDATE evidence SET superseded_by=NULL WHERE close_id=$1`, closeID)
+			db.Exec("DELETE FROM "+table+" WHERE "+column+"=$1", closeID)
+		}
+	}()
+	text := "Invoice amount: 1200.00\nService start: 2026-09-01\nCurrency: USD"
+	if err = db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'invoice.txt',$2,$3,'fixture') RETURNING id::text`, closeID, preparation.Digest([]byte(text+"partial")), text).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ := db.Begin()
+	job, err := preparation.StartIntake(context.Background(), tx, closeID, source, "fixture")
+	if err != nil || tx.Commit() != nil {
+		t.Fatal(err)
+	}
+	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	auth := strings.Repeat("s", 32)
+	h := apiWithStore(db, auth)
+	call := func(method, path, token string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	path := "/v1/closes/" + closeID + "/work/" + job
+	revision := func() int {
+		var n int
+		if e := db.QueryRow("SELECT revision FROM preparation_intakes WHERE job_id=$1", job).Scan(&n); e != nil {
+			t.Fatal(e)
+		}
+		return n
+	}
+	state := func() (s string) {
+		db.QueryRow("SELECT state FROM preparation_jobs WHERE id=$1", job).Scan(&s)
+		return
+	}
+	call("POST", path+"/request", auth, map[string]any{"revision": revision(), "recipient": "client@example.test", "body": "Please help us finish September:\n\n1. Confirm the service end date.\n2. Send the signed\ncontract.\n\nThank you."}, 200)
+	var requestID string
+	if err = db.QueryRow("SELECT id::text FROM work_requests WHERE job_id=$1", job).Scan(&requestID); err != nil {
+		t.Fatal(err)
+	}
+	var link map[string]string
+	json.Unmarshal(call("POST", path+"/link", auth, map[string]any{"revision": revision(), "request_id": requestID}, 200), &link)
+	token := link["link_token"]
+	type view struct {
+		Status    string
+		Open      bool
+		Questions []requestQuestion
+	}
+	var got view
+	json.Unmarshal(call("GET", "/v1/client-request", token, nil, 200), &got)
+	if len(got.Questions) != 2 || got.Questions[1].Text != "Send the signed contract." {
+		t.Fatalf("the approved request reads as its numbered questions: %+v", got.Questions)
+	}
+	answer := func(answers []clientAnswer, want int) view {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{"answers": answers})
+		var v view
+		json.Unmarshal(call("POST", "/v1/client-request", token, map[string]any{"body": string(raw), "confirmed": true}, want), &v)
+		return v
+	}
+	call("POST", path+"/resume", auth, map[string]any{"revision": revision()}, 409)
+	call("POST", "/v1/client-request", token, map[string]any{"body": `{"answers":[{"position":1,"state":"answered","answer":"x","extra":1}]}`, "confirmed": true}, 422)
+	call("POST", "/v1/client-request", token, map[string]any{"body": "It ends 2027-08-31", "confirmed": true}, 422)
+	if len(requestQuestions(strings.Repeat("1. Question\n", 51))) != 1 {
+		t.Fatal("a request with more than 50 numbered questions is answered as one, not truncated")
+	}
+	partial := []clientAnswer{{1, "answered", "It ends 2027-08-31"}, {2, "awaiting_document", "Scanning it tomorrow"}}
+	answer([]clientAnswer{{1, "answered", ""}}, 422)
+	answer([]clientAnswer{{3, "answered", "Extra"}}, 422)
+	answer([]clientAnswer{}, 422)
+	got = answer(partial, 200)
+	json.Unmarshal(call("POST", path+"/link", auth, map[string]any{"revision": revision(), "request_id": requestID}, 200), &link)
+	call("GET", "/v1/client-request", token, nil, 404)
+	token = link["link_token"]
+	answer(partial, 200)
+	var submissions int
+	var complete bool
+	var content string
+	db.QueryRow(`SELECT count(*),bool_or(complete) FROM request_submissions WHERE request_id::text=$1`, requestID).Scan(&submissions, &complete)
+	db.QueryRow(`SELECT e.content FROM request_submissions s JOIN evidence e ON e.id=s.source_id WHERE s.request_id::text=$1`, requestID).Scan(&content)
+	if state() != "waiting_client" || submissions != 1 || complete || got.Questions[1].State != "awaiting_document" || !got.Open || !strings.Contains(content, "Will send the document later. Scanning it tomorrow") {
+		t.Fatalf("a partial reply is kept once, lists what is outstanding and waits for the firm: %s %d %v %+v %q", state(), submissions, complete, got, content)
+	}
+	var inbox struct {
+		Items []struct {
+			Requests []struct {
+				Partial bool
+				Answers []struct{ Position int }
+			}
+		}
+	}
+	json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/work", auth, nil, 200), &inbox)
+	if len(inbox.Items) != 1 || !inbox.Items[0].Requests[0].Partial || len(inbox.Items[0].Requests[0].Answers) != 2 {
+		t.Fatalf("Work shows the partial reply's answers: %+v", inbox)
+	}
+	call("POST", path+"/resume", auth, map[string]any{"revision": revision()}, 200)
+	if state() != "waiting_evidence" {
+		t.Fatal("the firm can prepare from a partial reply", state())
+	}
+	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	got = answer([]clientAnswer{{2, "answered", "The contract is attached"}}, 200)
+	var superseded int
+	db.QueryRow(`SELECT count(*) FROM request_submissions s JOIN evidence e ON e.id=s.source_id WHERE s.request_id::text=$1 AND e.superseded_by IS NOT NULL`, requestID).Scan(&superseded)
+	db.QueryRow(`SELECT bool_or(complete) FROM request_submissions WHERE request_id::text=$1`, requestID).Scan(&complete)
+	if got.Questions[0].State != "answered" || got.Questions[1].State != "answered" || superseded != 1 || !complete || state() != "waiting_evidence" {
+		t.Fatalf("a later answer completes the reply, replaces the earlier one and resumes the work: %+v superseded %d %v %s", got.Questions, superseded, complete, state())
+	}
+	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	correction := []clientAnswer{{1, "answered", "It ends 2027-09-30"}}
+	answer(correction, 200)
+	answer([]clientAnswer{{1, "answered", "It ends 2027-10-31"}}, 200)
+	got = answer(correction, 200)
+	db.QueryRow(`SELECT count(*) FROM request_submissions WHERE request_id::text=$1`, requestID).Scan(&submissions)
+	if submissions != 5 || got.Questions[0].Answer != "It ends 2027-09-30" {
+		t.Fatalf("returning to an earlier answer is saved as a correction, not taken for a retry: %d %+v", submissions, got.Questions)
+	}
+	call("POST", path+"/cancel", auth, map[string]any{"revision": revision()}, 200)
+	answer(correction, 200)
+	answer([]clientAnswer{{1, "answered", "Actually it ends 2027-11-30"}}, 409)
+	call("POST", path+"/revoke_link", auth, map[string]any{"revision": revision(), "request_id": requestID}, 200)
+	call("GET", "/v1/client-request", token, nil, 404)
 }

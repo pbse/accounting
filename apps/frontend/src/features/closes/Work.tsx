@@ -73,6 +73,8 @@ type WorkItem = Plan & {
       revoked_at: string | null;
       used_at: string | null;
     } | null;
+    answers?: { position: number; state: string }[];
+    partial?: boolean;
   }[];
   replies: {
     id: string;
@@ -1251,6 +1253,7 @@ function WorkDetails({
           ))}
         </section>
       )}
+      {item.state !== "waiting_client" && latest && !latest.consolidated && latest.link && !latest.link.revoked_at && <p>This request's reply link is still active. <button disabled={busy} onClick={() => void act("revoke_link", { request_id: latest.id })}>Revoke reply link</button></p>}
       {item.state === "waiting_client" && latest?.consolidated && <p>Manage this consolidated request in <a href={`/dashboard/closes/${item.close_id}#coverage-work`}>Coverage and client evidence</a>.</p>}
       {item.state === "waiting_client" && latest && !latest.consolidated && !item.stale && (
         <fieldset disabled={busy}>
@@ -1286,14 +1289,19 @@ function WorkDetails({
                 {latest.link.revoked_at
                   ? "Link revoked."
                   : latest.link.used_at
-                    ? "Reply received."
+                    ? latest.partial
+                      ? `Partial reply: ${latest.answers?.filter((a) => a.state === "answered").length ?? 0} answered, ${latest.answers?.filter((a) => a.state === "awaiting_document").length ?? 0} awaiting a document. The client can add to it until the link expires; work waits for you or for a complete reply.`
+                      : "Reply received. The client can still add documents or correct it until the link expires."
                     : `Last link expires ${new Date(latest.link.expires_at).toLocaleString()}.`}
               </p>
+            )}
+            {latest.partial && item.state === "waiting_client" && (
+              <button onClick={() => void act("resume")}>Resume now with the partial reply</button>
             )}
             <button onClick={() => void act("link", { request_id: latest.id })}>
               Create new private reply link
             </button>
-            {latest.link && !latest.link.revoked_at && !latest.link.used_at && (
+            {latest.link && !latest.link.revoked_at && (
               <button
                 onClick={() =>
                   void act("revoke_link", { request_id: latest.id })

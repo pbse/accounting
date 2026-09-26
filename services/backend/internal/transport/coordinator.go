@@ -286,7 +286,7 @@ func recheckClose(ctx context.Context, tx *sql.Tx, org, subject, closeParam, con
 		if _, err = tx.ExecContext(ctx, `INSERT INTO recovery_actions(organization_id,close_id,job_id,action,prior_state,actor,reason) VALUES($1,$2,$3,'retry_preparation',$4,$5,'Close-wide recheck')`, org, closeID, job.ID, job.State, subject); err != nil {
 			break
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND used_at IS NULL AND revoked_at IS NULL`, job.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND revoked_at IS NULL`, job.ID); err != nil {
 			break
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=0 WHERE job_id=$1`, job.ID); err != nil {
@@ -338,7 +338,7 @@ func stopClose(ctx context.Context, tx *sql.Tx, closeParam, confirmed, reason, a
 	if err != nil {
 		return 0, closeRefusal(503, "Could not stop approved delivery.")
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE client_request_links SET revoked_at=now() WHERE revoked_at IS NULL AND used_at IS NULL AND request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
+	_, err = tx.ExecContext(ctx, `UPDATE client_request_links SET revoked_at=now() WHERE revoked_at IS NULL AND request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL WHERE job_id IN (SELECT j.id FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
 	}
