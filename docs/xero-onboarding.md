@@ -1,6 +1,6 @@
 # Xero month-end Trial Balance
 
-Connect a client's Xero organisation from its close, choose the exact organisation, and capture the Trial Balance at month-end as evidence. The only write is an approved draft's manual journal, under a client grant, after a person approves it and a person posts it (below).
+Connect a client's Xero organisation from its close, choose the exact organisation, and capture the Trial Balance at month-end as evidence. The only writes are an approved draft's manual journal and a reviewed bill line recode, each under a client grant, after a person approves it and a person executes it (below).
 
 ## Xero app
 

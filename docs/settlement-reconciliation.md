@@ -11,7 +11,7 @@ Stripe deposits a batch of charges, refunds, disputes and fees as one net payout
    - **Candidate deposit**: exactly one bank row carries the payout's net amount from one day before to four days after Stripe's expected date, and no other payout competes for it.
    - **Choose a deposit**: equal amounts compete for the same rows. Pick the verified row and give a reason.
    - **No deposit found**: find the row, or mark the payout **in transit at month-end**, citing the accountant-approved rule and your evidence. In transit is refused while a possible bank row exists.
-5. **Confirm linked facts and continue this job** queues the durable preparation job using the uploaded evidence. Saved drafts appear on the close as **Stripe settlement**. Approval, sign-off, the review package and the binder use the existing flows. The package adds `workpapers/{id}-payouts.csv` and `-categories.csv`.
+5. **Confirm linked facts and continue this job** queues the durable preparation job using the uploaded evidence. Saved drafts appear on the close as **Stripe settlement**. Approval, sign-off, the review package and the binder use the existing flows. The package adds `workpapers/{id}-payouts.csv` and, for automatic payouts or with the activity report, `-categories.csv`.
 
 Without a close, **Trace Stripe payouts** in the navigation previews local files or a synthetic example. It saves nothing.
 
