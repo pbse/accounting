@@ -235,6 +235,7 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
         {paper.proposal
           ? `Draft adjustment ${paper.proposal.date}: debit ${paper.proposal.debit_account}, credit ${paper.proposal.credit_account}, ${money(paper.proposal.amount, paper.input.currency)}.`
           : "No reclassification proposed."}
+        {paper.disposal?.map((e) => ` Disposal ${e.date}, book by hand: debit ${e.debit_account}, credit ${e.credit_account}, ${money(e.amount, paper.input.currency)}.`)}
       </p>
       <table>
         <caption>Saved {terms.name.toLowerCase()} schedule</caption>

@@ -14,6 +14,13 @@ export type PrepaidInput = {
   method: "equal_full_months_v1" | "actual_days_v1" | "declining_balance_v1";
   factor?: "2" | "1.5";
   convention?: "mid_month";
+  disposal_period?: string;
+  disposal_proceeds?: string;
+  disposal_reference?: string;
+  asset_account?: string;
+  proceeds_account?: string;
+  gain_loss_account?: string;
+  disposal_confirmed?: boolean;
   examples_confirmed?: boolean;
   credit_amount?: string;
   credit_period?: string;
@@ -51,4 +58,5 @@ export type PrepaidWorkpaper = {
     credit_account: string;
     amount: string;
   };
+  disposal?: { date: string; debit_account: string; credit_account: string; amount: string }[];
 };

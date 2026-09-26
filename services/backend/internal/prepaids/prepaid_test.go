@@ -3,6 +3,7 @@ package prepaids
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"close.local/backend/internal/reference"
@@ -289,5 +290,69 @@ func TestDecliningBalanceAndMidMonthDepreciation(t *testing.T) {
 	var inputErr *InputError
 	if _, err := Prepare(bad); !errors.As(err, &inputErr) || inputErr.Field != "factor" {
 		t.Fatalf("only factors 2 and 1.5 are supported: %v", err)
+	}
+}
+
+func TestAssetDisposalEndsTheScheduleAndProposesItsEntries(t *testing.T) {
+	in := example()
+	in.Schedule, in.Amount, in.ServiceEnd, in.ClosePeriod = Depreciation, "3600.00", "2029-08-31", "2027-09"
+	in.ExpenseAccount, in.PrepaidAccount = "Depreciation expense", "Accumulated depreciation"
+	in.BookedBalance, in.BookingReference, in.ExamplesConfirmed = "1200.00", "September ledger", true
+	in.DisposalPeriod, in.DisposalProceeds, in.DisposalReference = "2027-09", "1000.00", "Sale receipt 17"
+	in.AssetAccount, in.ProceedsAccount, in.GainLossAccount, in.AccountantRuleReference = "Computer equipment", "Cash", "Gain or loss on disposal", "Fixed asset policy v2"
+	in.DisposalConfirmed = true
+	entry := func(debit, credit, amount string) Adjustment { return Adjustment{"2027-09-30", debit, credit, amount} }
+	p, err := Prepare(in)
+	want := []Adjustment{entry("Accumulated depreciation", "Computer equipment", "1200.00"), entry("Cash", "Computer equipment", "1000.00"), entry("Gain or loss on disposal", "Computer equipment", "1400.00")}
+	if err != nil || len(p.Schedule) != 13 || p.Schedule[12].Expense != "0.00" || p.Schedule[12].Remaining != "0.00" || p.PrepaidBalance != "0.00" || p.Proposal != nil || !slices.Equal(p.Disposal, want) {
+		t.Fatalf("a full-month disposal takes no September depreciation and books a 1400 loss: %+v %+v %v", p.Schedule, p.Disposal, err)
+	}
+	in.DisposalProceeds = "2500.00"
+	if p, err = Prepare(in); err != nil || !slices.Equal(p.Disposal, []Adjustment{want[0], entry("Cash", "Computer equipment", "2400.00"), entry("Cash", "Gain or loss on disposal", "100.00")}) {
+		t.Fatalf("proceeds above book value book a gain: %+v %v", p.Disposal, err)
+	}
+	in.DisposalProceeds, in.SalvageValue, in.BookedBalance = "1000.00", "360.00", "1080.00"
+	if p, err = Prepare(in); err != nil || !slices.Equal(p.Disposal, []Adjustment{entry("Accumulated depreciation", "Computer equipment", "1080.00"), want[1], entry("Gain or loss on disposal", "Computer equipment", "1520.00")}) {
+		t.Fatalf("salvage stays in book value: %+v %v", p.Disposal, err)
+	}
+	final := in
+	final.ClosePeriod, final.DisposalPeriod, final.BookedBalance, final.SalvageValue = "2029-08", "2029-08", "3500.00", ""
+	if p, err = Prepare(final); err != nil || len(p.Schedule) != 36 || p.Schedule[35].Expense != "0.00" || p.Disposal[0].Amount != "3500.00" || p.Disposal[2].Amount != "900.00" {
+		t.Fatalf("a disposal in the life's last month skips that month's catch-up: %+v %v", p.Disposal, err)
+	}
+	in.SalvageValue, in.BookedBalance, in.Convention = "", "1150.00", MidMonth
+	if p, err = Prepare(in); err != nil || p.Schedule[12].Expense != "50.00" || p.Proposal.Amount != "50.00" || !slices.Equal(p.Disposal, want) {
+		t.Fatalf("a mid-month disposal takes half of September: %+v %+v %v", p.Schedule, p.Disposal, err)
+	}
+	for field, change := range map[string]func(*Input){
+		"disposal_period":           func(i *Input) { i.DisposalPeriod = "2027-10" },
+		"disposal_proceeds":         func(i *Input) { i.DisposalProceeds = "" },
+		"gain_loss_account":         func(i *Input) { i.GainLossAccount = " " },
+		"asset_account":             func(i *Input) { i.ProceedsAccount = "gain or loss on disposal" },
+		"accountant_rule_reference": func(i *Input) { i.AccountantRuleReference, i.Convention = "", "" },
+		"disposal_confirmed":        func(i *Input) { i.DisposalConfirmed = false },
+	} {
+		bad := in
+		change(&bad)
+		var inputErr *InputError
+		if _, err := Prepare(bad); !errors.As(err, &inputErr) || inputErr.Field != field {
+			t.Fatalf("%s must be refused: %v", field, err)
+		}
+	}
+	var inputErr *InputError
+	partial := in
+	partial.DisposalPeriod = ""
+	if _, err := Prepare(partial); !errors.As(err, &inputErr) || inputErr.Field != "disposal_period" {
+		t.Fatalf("a disposal without its month is refused, not dropped: %v", err)
+	}
+	lone := in
+	lone.DisposalPeriod, lone.DisposalProceeds, lone.DisposalReference, lone.AssetAccount, lone.ProceedsAccount, lone.GainLossAccount = "", "", "", "", "", ""
+	if _, err := Prepare(lone); !errors.As(err, &inputErr) || inputErr.Field != "disposal_period" {
+		t.Fatalf("a lone disposal confirmation is refused, not dropped: %v", err)
+	}
+	prepaid := example()
+	prepaid.DisposalPeriod, prepaid.AccountantRuleReference = "2026-09", "Fixed asset policy v2"
+	if _, err := Prepare(prepaid); !errors.As(err, &inputErr) || inputErr.Field != "disposal_period" {
+		t.Fatalf("only depreciation has disposals: %v", err)
 	}
 }

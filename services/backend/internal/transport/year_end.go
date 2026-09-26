@@ -213,6 +213,9 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 				}
 				prepaidRows = append(prepaidRows, []string{p.period, csvText(wp.Input.SourceReference), csvText(wp.Input.PrepaidAccount), csvText(wp.Input.ExpenseAccount), credit, wp.PeriodExpense, wp.PrepaidBalance, wp.Input.Currency, p.id, cmp.Or(wp.Input.Schedule, "prepaid")})
 				propose(p, wp.Proposal)
+				for i := range wp.Disposal {
+					propose(p, &wp.Disposal[i])
+				}
 			case "loan":
 				var wp loans.Workpaper
 				if json.Unmarshal(p.raw, &wp) != nil {

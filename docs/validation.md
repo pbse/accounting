@@ -1427,3 +1427,19 @@ Code review: GPT-6 Sol (high) found the design minimal and the rounding, switch 
 Tests added for the fixes: `TestCarryForwardRoundingLineageAndFreshReview` carries an approved mid-month schedule from August 2029 into September 2029; `TestLearnedRuleRequiresApprovedExampleBeforeActivation` refuses a mid-month paper under an approved full-month procedure. Each observed red with its fix removed.
 
 Not verified: the form in a browser.
+
+## Asset disposals (2026-09-25)
+
+Request: asset disposals, the third of the user's chosen accounting methods. A depreciation workpaper can record a disposal in its close month (`prepaids.Prepare`): the schedule ends there (no depreciation that month under the full-month convention, half a month under mid-month, no final-month catch-up), the existing true-up of booked accumulated depreciation stays, and `disposal` lists the entries to book by hand (accumulated depreciation, proceeds up to book value, gain or loss, crediting cost in full). Depreciation never posts. Tie-out supports zero accumulated depreciation for a disposed asset and proposes its entries; the disposal month's remaining balance is zero, so the year-end handoff rolls it forward to zero, and adjustments.csv lists the entries; the review package summary lists them.
+
+Plan review: GPT-6 Sol (high). Adopted: the preparer confirms the cost is still booked, the booked accumulated depreciation is before the disposal and nothing for it is recorded; the four accounts must differ; year-end includes the entries and a zero remaining balance; the documentation does not claim a procedure approves a disposal.
+
+Tests:
+
+- `TestAssetDisposalEndsTheScheduleAndProposesItsEntries` (pure): a full-month disposal takes no September depreciation and books a 1,400 loss; proceeds above book value book a gain; salvage stays in book value; a mid-month disposal takes half of September with the true-up; a disposal outside its close month, blank proceeds, a missing account, a repeated account, no confirmation, no policy and a prepaid disposal are refused.
+- `TestTieOutComparesBalancesWithLatestSupport` adds a disposed server whose accumulated depreciation ties after its disposal entry.
+- `TestYearEndHandoffRollsForwardApprovedWork` adds a disposed asset rolled forward to zero with its entry in the adjustment history.
+
+Code review: GPT-6 Sol (high). Adopted: the disposal month's remaining balance and the paper's balance are zero (the entries use the book value before disposal, and the true-up still uses the booked balance before disposal), which let the year-end special case be deleted; disposal fields entered without a month, or a lone confirmation, are refused rather than dropped (the form sends whatever was entered); the documentation spells out the gain entry. A disposal in the useful life's last month is now covered too. Each fix observed red when removed (3 mutations). One delta round closed both findings.
+
+Not verified: the form in a browser.

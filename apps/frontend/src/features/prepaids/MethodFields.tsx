@@ -37,6 +37,7 @@ export function PrepaidMethodFields({values={},credits=[],schedule=""}: {values?
         <tr><td>Deferred revenue: 12,000 billed for September 2026–August 2027; booked liability 12,000</td><td>September earns 1,000: debit deferred revenue / credit revenue 1,000.</td></tr>
         <tr><td>Depreciation: 3,600 laptop, September 2026–August 2029, equal months, salvage 360, booked accumulated depreciation 0</td><td>90.00 a month: debit depreciation expense / credit accumulated depreciation 90.00.</td></tr>
         <tr><td>Same laptop, no salvage, double declining balance (factor 2)</td><td>1/18 of book value a month: 200.00, then 188.88, 178.39…; from month 19 straight-line over the remaining months, 71.48 a month, with the 71.49 residual last. Never below salvage.</td></tr>
+        <tr><td>Same laptop, equal months, sold for 1,000 in September 2027</td><td>No September depreciation; 1,200 accumulated. Debit accumulated depreciation 1,200, cash 1,000 and loss on disposal 1,400; credit the laptop's cost 3,600.</td></tr>
         <tr><td>Same laptop, equal months, mid-month convention</td><td>September 2026 50.00, then 100.00 a month, and 50.00 in September 2029, the month after the life ends.</td></tr>
       </tbody></table>
     </details>
@@ -46,7 +47,17 @@ export function PrepaidMethodFields({values={},credits=[],schedule=""}: {values?
       <label>Salvage value (optional)<input name="salvage_value" defaultValue={values.salvage_value ?? ""} inputMode="decimal" maxLength={13} /></label>
       <label>Declining-balance factor<select name="factor" defaultValue={values.factor ?? ""}><option value="">Not declining balance</option><option value="2">2 · double declining</option><option value="1.5">1.5</option></select></label>
       <label>Convention<select name="convention" defaultValue={values.convention ?? ""}><option value="">Full month (start on the first of the in-service month)</option><option value="mid_month">Mid-month: half a month at each end</option></select></label>
-      <label>Client accountant's depreciation policy (required for declining balance or mid-month)<input name="accountant_rule_reference" maxLength={200} defaultValue={values.accountant_rule_reference ?? ""} placeholder="Policy and version" /></label>
+      <label>Client accountant's depreciation policy (required for declining balance, mid-month or a disposal)<input name="accountant_rule_reference" maxLength={200} defaultValue={values.accountant_rule_reference ?? ""} placeholder="Policy and version" /></label>
+      <details><summary>Disposal in this close month (optional)</summary>
+        <p>Ends the schedule this month: no depreciation this month under the full-month convention, half a month under mid-month. Proposes entries to remove the asset's cost and accumulated depreciation and record the proceeds and any gain or loss, to book by hand.</p>
+        <label>Disposal month<input name="disposal_period" type="month" defaultValue={values.disposal_period ?? ""} /></label>
+        <label>Proceeds (0.00 if scrapped)<input name="disposal_proceeds" inputMode="decimal" maxLength={13} defaultValue={values.disposal_proceeds ?? ""} /></label>
+        <label>Sale or disposal evidence<input name="disposal_reference" maxLength={200} defaultValue={values.disposal_reference ?? ""} /></label>
+        <label>Asset cost account<input name="asset_account" maxLength={200} defaultValue={values.asset_account ?? ""} /></label>
+        <label>Proceeds account<input name="proceeds_account" maxLength={200} defaultValue={values.proceeds_account ?? ""} /></label>
+        <label>Gain or loss on disposal account<input name="gain_loss_account" maxLength={200} defaultValue={values.gain_loss_account ?? ""} /></label>
+        <label><input name="disposal_confirmed" type="checkbox" /> The asset's cost is still booked, the booked accumulated depreciation above is before the disposal, and nothing for this disposal has been recorded.</label>
+      </details>
       <label><input name="examples_confirmed" type="checkbox" required /> I reviewed these synthetic examples and the client's approved treatment. This confirms a draft method, not final workpaper or posting approval.</label>
     </> : <>
     <details><summary>Cancellation at a month boundary (optional)</summary>
