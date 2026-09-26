@@ -166,13 +166,14 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 			provisional := 0
 			for _, row := range board.Rows {
 				by[row.Status] = append(by[row.Status], row.Account)
-				if row.Provisional && (row.Status == "ties" || row.Status == "ties_after_entries") {
+				if row.Provisional && (row.Status == "ties" || row.Status == "ties_after_entries" || row.Status == "within_materiality") {
 					provisional++
 				}
 			}
 			parts := []string{fmt.Sprintf("%d of %s tie.", len(by["ties"]), plural(len(board.Rows), "balance-sheet account", "balance-sheet accounts"))}
 			for _, s := range []struct{ status, text string }{
 				{"ties_after_entries", "Tie once proposed entries post: "},
+				{"within_materiality", "Differ by less than the firm's materiality: "},
 				{"differs", "Differ: "},
 				{"posting_unknown", "Posting outcome unknown: "},
 				{"unsupported", "No support yet: "},

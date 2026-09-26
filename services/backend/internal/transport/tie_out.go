@@ -166,10 +166,16 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Could not read saved workpapers.")
 			return
 		}
+		var materialityText string
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(o.materiality_amount::text,'') FROM organizations o JOIN client_closes c ON c.organization_id=o.id WHERE c.id::text=$1`, id).Scan(&materialityText); err != nil {
+			problem(w, 503, "Firm materiality is unavailable.")
+			return
+		}
 		if err = tx.Commit(); err != nil {
 			problem(w, 503, "Could not complete the snapshot.")
 			return
 		}
+		materiality, _ := new(big.Rat).SetString(materialityText)
 
 		supports, entries, unmatched := []tieSupport{}, []tieEntry{}, []map[string]string{}
 		bad := false
@@ -389,6 +395,8 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 				for _, e := range row.Entries {
 					row.Provisional = row.Provisional || !e.settled
 				}
+			case len(row.Entries) == 0 && materiality != nil && new(big.Rat).Abs(difference).Cmp(materiality) < 0:
+				row.Status = "within_materiality"
 			default:
 				row.Status = "differs"
 			}

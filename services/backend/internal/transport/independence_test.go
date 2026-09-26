@@ -169,4 +169,15 @@ func TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance(t *testing.
 		db.Exec(`UPDATE organizations SET independent_review_min_amount=NULL WHERE id='local-development'`)
 		t.Fatal("the shared local workspace must not set a review minimum")
 	}
+
+	// Materiality is recorded with every later change, and the local workspace may set it too.
+	policy(org, []string{"org:manage"}, 422, `{"materiality_amount":"0","reason":"Synthetic materiality"}`)
+	policy(org, []string{"org:manage"}, 200, `{"materiality_amount":"250","reason":"Synthetic materiality"}`)
+	policy(org, []string{"org:manage"}, 200, `{"link_passcode":false,"reason":"Synthetic other change"}`)
+	if err = db.QueryRow(`SELECT COALESCE(materiality_amount::text,'') FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded); err != nil || recorded != "250.00" {
+		t.Fatalf("every change records the resulting materiality: %q %v", recorded, err)
+	}
+	defer db.Exec(`DELETE FROM organization_policy_changes WHERE organization_id='local-development' AND actor='user_admin' AND reason LIKE 'Synthetic local materiality%'`)
+	policy("", nil, 200, `{"materiality_amount":"5","reason":"Synthetic local materiality"}`)
+	policy("", nil, 200, `{"materiality_amount":"","reason":"Synthetic local materiality cleared"}`)
 }

@@ -1456,3 +1456,21 @@ Each check was observed red with its rule removed (10 mutations).
 Code review: GPT-6 Sol (high). Adopted: the Work intake route, which cannot collect the contract and invoiced amounts, no longer offers the method; the service period is limited to ten years (day counting stays exact); the review package names the basis of every accrual method; two explanatory comments were deleted. One delta round closed the findings; its copy note (the intake form also hides the pro-rata example) was applied. Routed to the backlog: learning an approved procedure for the new methods (pro-rata, declining balance, mid-month); until then a client with an approved procedure naming another method refuses them.
 
 Not verified: the form in a browser.
+
+## Firm materiality (2026-09-25)
+
+Request: firm materiality thresholds. A firm sets one optional materiality amount in Firm settings (migration 066; `POST /v1/closes/organization/policy` `materiality_amount`, org:manage for hosted firms, allowed for the local workspace; recorded with the resulting state of every setting on each policy change). In the tie-out, a balance-sheet account with a nonzero difference below it and no proposed entry pending shows **differs by less than the firm's materiality** instead of **differs**; the close brief lists it separately, counts it as provisional when its support is unapproved, and does not raise it as a need. It is per account, in the Trial Balance's currency; it approves nothing and waives no entry. Readiness, sign-off and exports do not read tie-out status.
+
+Plan review: GPT-6 Sol (high). Adopted: materiality is read in the tie-out's repeatable-read snapshot and a failed read is refused; a row that a proposed entry only partly closes stays a difference; within-materiality rows count as provisional in the brief; the Firm control is outside the hosted-only independent-review controls; every policy change records the resulting materiality; the MCP tie-out description names the status.
+
+Tests:
+
+- `TestTieOutComparesBalancesWithLatestSupport`: under a 1,000.00 materiality a 5.00 difference is within materiality, while a 450.00 difference that a proposed entry only partly closes, and a 5.00 difference with two opposing entries still pending, still differ.
+- `TestCloseBriefNarratesWhatNeedsAPerson`: under 500.00, the 100.00 prepaid difference is listed as within materiality, still rests on unapproved support, and is not a need.
+- `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`: zero is refused; a set materiality is recorded again on a later unrelated change; the local workspace can set and clear it.
+
+Each check was observed red with its rule removed (7 mutations).
+
+Code review: GPT-6 Sol (high). Adopted: "no entry pending" means no pending entry at all, not entries netting to zero; the documentation names the four recorded settings and who may change materiality; an unused response field was deleted. One delta round closed both findings.
+
+Not verified: the Firm settings and tie-out panels in a browser.

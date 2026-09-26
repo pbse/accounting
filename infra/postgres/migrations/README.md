@@ -61,3 +61,5 @@ This schema does not claim tenant isolation, durable jobs, approvals or posting.
 `064_line_recodes.sql` lets a correction recode one line of an expense (Purchase) or an income deposit as well as a Bill, keyed by kind, records the accountant's rule reference with each correction, and adds the `purchase_correction` and `deposit_correction` grant kinds. Apply after 063 with API/worker stopped; `/readyz` checks it.
 
 `065_credit_applications.sql` records each unapplied customer payment applied to an open invoice and each vendor credit applied to an open bill (preview, approval, one attempt, readback), with row-level security like 050, and adds the `payment_application` and `credit_application` grant kinds. Apply after 064 with API/worker stopped; `/readyz` checks it.
+
+`066_materiality.sql` adds a firm's optional materiality amount and records it with every firm policy change. Apply after 065 with API/worker stopped; `/readyz` checks it.

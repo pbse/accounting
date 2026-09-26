@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 
-type Status = "ties" | "ties_after_entries" | "differs" | "posting_unknown" | "unsupported";
+type Status = "ties" | "ties_after_entries" | "within_materiality" | "differs" | "posting_unknown" | "unsupported";
 type Row = {
   account_id: string;
   account: string;
@@ -28,6 +28,7 @@ type Board = {
 const labels: Record<Status, [string, string]> = {
   ties: ["Ties", "ok"],
   ties_after_entries: ["Ties after proposed entries", "info"],
+  within_materiality: ["Differs by less than the firm's materiality", "info"],
   differs: ["Differs", "warn"],
   posting_unknown: ["Posting outcome unknown", "warn"],
   unsupported: ["No support yet", "info"],
@@ -54,6 +55,7 @@ export function TieOut({ closeId }: { closeId: string }) {
   const summary = [
     `${count("ties")} of ${board.rows.length} accounts tie`,
     count("ties_after_entries") && `${count("ties_after_entries")} tie once proposed entries post`,
+    count("within_materiality") && `${count("within_materiality")} differ by less than the firm's materiality`,
     count("differs") && `${count("differs")} differ`,
     count("posting_unknown") && `${count("posting_unknown")} wait on a posting outcome`,
     count("unsupported") && `${count("unsupported")} have no support yet`,
