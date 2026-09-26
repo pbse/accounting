@@ -158,6 +158,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerSetup(mux, db)
 	registerInvitations(mux, db)
 	registerStatements(mux, db)
+	registerCanvas(mux, db)
 	registerSearch(mux, db)
 	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
 	mux.HandleFunc("GET /v1/closes/{id}/binder", exportClose(db, true))

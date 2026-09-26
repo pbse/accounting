@@ -1204,7 +1204,8 @@ a.row:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.source-line > span:first-child {
+.source-line > span:first-child,
+.source-line > .line-number {
   color: var(--faint);
   text-align: right;
   padding-right: 0.8rem;
@@ -1594,4 +1595,10 @@ a.row:hover {
 .assistant-card textarea {
   width: 100%;
   font: inherit;
+}
+.source-line .line-number {
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
 }

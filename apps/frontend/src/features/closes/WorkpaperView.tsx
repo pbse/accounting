@@ -21,6 +21,8 @@ import { StandingApproval } from "./StandingApproval";
 import { VendorCredit } from "./VendorCredit";
 import { scheduleTerms } from "../prepaids/MethodFields";
 import { money, workspaceRequest } from "./workspace";
+import { citedLines, citedPage } from "./citation";
+import { Comments, type PickedLine } from "./Comments";
 
 export type Profile = { currency: string; fiscal_year_start: number; state: "detected" | "none" | "unknown" | "conflict" };
 export type Close = { id: string; entity: string; period: string; basis?: "cash" | "modified_cash" | "accrual"; basis_scope?: "client" | "firm"; profile?: Profile } & Plan;
@@ -101,17 +103,20 @@ export function useClose(id: string | undefined) {
   return { close, papers, more, error, loading, reload: load };
 }
 
-function citedLines(location: string) {
-  const match = /lines?\s+(\d+)(?:\s*(?:-|–|to)\s*(\d+))?/i.exec(location);
-  if (!match) return undefined;
-  const first = Number(match[1]);
-  return [first, Number(match[2] ?? first)] as const;
-}
-
-function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[] }) {
+function EvidencePane({ closeId, sources, onPickLine }: { closeId: string; sources: Source[]; onPickLine: (line: PickedLine) => void }) {
   const [active, setActive] = useState(0);
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
+  const [original, setOriginal] = useState("");
+  const shown = useRef("");
+  const mounted = useRef(false);
+  shown.current = sources[active]?.id ?? "";
+  useEffect(() => {
+    mounted.current = true;
+    return () => void (mounted.current = false);
+  }, []);
+  useEffect(() => () => URL.revokeObjectURL(original), [original]);
+  useEffect(() => setOriginal(""), [active]);
   const firstCited = useRef<HTMLDivElement>(null);
   const source = sources[active];
   const text = source ? texts[source.id] : undefined;
@@ -139,7 +144,8 @@ function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[]
         <p className="empty">No linked evidence. Prepare this work from uploaded evidence before approval.</p>
       </section>
     );
-  const cited = citedLines(source.location);
+  const cited = text === undefined ? undefined : citedLines(source.location, text);
+  const pdf = source.name.toLowerCase().endsWith(".pdf");
   return (
     <section className="evidence-pane" aria-label="Evidence as received">
       <header>
@@ -152,6 +158,7 @@ function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[]
           ))}
         </div>
       </header>
+      {original && <iframe title={`${source.name}, page ${citedPage(source.location)}`} src={`${original}#page=${citedPage(source.location)}`} style={{ width: "100%", height: "32rem", border: 0 }} />}
       {error ? (
         <p role="alert" className="empty">{error}</p>
       ) : text === undefined ? (
@@ -163,7 +170,7 @@ function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[]
             const highlighted = !!cited && number >= cited[0] && number <= cited[1];
             return (
               <div key={index} ref={highlighted && number === cited[0] ? firstCited : undefined} className={highlighted ? "source-line cited" : "source-line"}>
-                <span>{number}</span>
+                <button type="button" className="line-number" title="Comment on this line" onClick={() => onPickLine({ sourceId: source.id, name: source.name, line: number })}>{number}</button>
                 <span>{line || " "}</span>
               </div>
             );
@@ -173,6 +180,25 @@ function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[]
       <div className="evidence-meta">
         <strong>{source.name}</strong>
         <span className="chip">Cited: {source.location}</span>
+        {pdf && (
+          <button
+            type="button"
+            onClick={async () => {
+              if (original) return setOriginal("");
+              const asked = source.id;
+              try {
+                const url = URL.createObjectURL(await workspaceRequest(`/${closeId}/evidence/${asked}`, undefined, true));
+                // A late answer for a source no longer shown is dropped.
+                if (mounted.current && shown.current === asked) setOriginal(url);
+                else URL.revokeObjectURL(url);
+              } catch (e) {
+                if (mounted.current && shown.current === asked) setError(e instanceof Error ? e.message : "The original is unavailable.");
+              }
+            }}
+          >
+            {original ? "Hide original" : `View original, page ${citedPage(source.location)}`}
+          </button>
+        )}
         <span>revision {source.digest.slice(0, 12)}</span>
         <button
           type="button"
@@ -299,6 +325,7 @@ export default function WorkpaperView() {
   const { id, paperId } = useParams();
   const { close, papers, more, error, loading, reload } = useClose(id);
   const [older, setOlder] = useState<Paper>();
+  const [picked, setPicked] = useState<PickedLine & { paper: string }>();
   const [olderError, setOlderError] = useState("");
   const listed = papers.find((paper) => paper.id === paperId);
   useEffect(() => {
@@ -363,7 +390,7 @@ export default function WorkpaperView() {
       </div>
       {more && <p className="note">Review navigation covers the latest 100 drafts in this close.</p>}
       <div className="canvas">
-        <EvidencePane key={saved.id} closeId={close.id} sources={saved.paper.sources ?? []} />
+        <EvidencePane key={saved.id} closeId={close.id} sources={saved.paper.sources ?? []} onPickLine={(line) => setPicked({ ...line, paper: saved.id })} />
         <div className="stack">
           {blockers.length > 0 && (
             <section role="status">
@@ -392,6 +419,7 @@ export default function WorkpaperView() {
             }}
             autoLoad
           />
+          <Comments key={`comments-${saved.id}`} closeId={close.id} paperId={saved.id} fields={Object.keys((saved.paper as { input?: object }).input ?? {})} picked={picked?.paper === saved.id ? picked : undefined} canComment={saved.review_state !== "approved"} />
           {(saved.kind === "prepaid" || saved.kind === "loan" || (saved.kind === "accrual" && saved.paper.input.method === "fixed_recurring_incurred_v1")) && (
             <StandingApproval key={`standing-${saved.id}-${saved.review_state}`} closeId={close.id} paperId={saved.id} kind={saved.kind} approved={saved.review_state === "approved"} />
           )}
