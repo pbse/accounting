@@ -360,14 +360,20 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 				problem(w, 409, "Review and confirm the exact correction first.")
 				return
 			}
-			if issue, err := correctionIndependenceIssue(r.Context(), db, closeID, item.ProposedBy, a.Subject, recodedAmount(item, sandbox)); err != nil {
+			tx, err := db.BeginTx(r.Context(), nil)
+			if err != nil {
+				problem(w, 503, "Approval unavailable.")
+				return
+			}
+			defer tx.Rollback()
+			if issue, err := correctionIndependenceIssue(r.Context(), tx, closeID, item.ProposedBy, a.Subject, recodedAmount(item, sandbox)); err != nil {
 				problem(w, 503, "Firm review policy could not be checked. No write was made.")
 				return
 			} else if issue != "" {
 				problem(w, 409, issue)
 				return
 			}
-			result, err := db.ExecContext(r.Context(), `UPDATE bill_corrections SET state='approved',approved_by=$2,approval_expires_at=now()+interval '10 minutes' WHERE id::text=$1 AND digest=$3 AND state IN ('preview','approved')`, item.ID, a.Subject, item.Digest)
+			result, err := tx.ExecContext(r.Context(), `UPDATE bill_corrections SET state='approved',approved_by=$2,approval_expires_at=now()+interval '10 minutes' WHERE id::text=$1 AND digest=$3 AND state IN ('preview','approved')`, item.ID, a.Subject, item.Digest)
 			if err != nil {
 				problem(w, 503, "Approval unavailable.")
 				return
@@ -375,6 +381,10 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 			n, _ := result.RowsAffected()
 			if n != 1 {
 				problem(w, 409, "Correction changed.")
+				return
+			}
+			if tx.Commit() != nil {
+				problem(w, 503, "Approval unavailable.")
 				return
 			}
 		case "execute":
@@ -426,7 +436,7 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 					return
 				}
 			}
-			result, err := tx.ExecContext(r.Context(), `UPDATE bill_corrections SET state='executing',attempted_by=$2,attempted_at=now() WHERE id::text=$1 AND digest=$3 AND state='approved' AND approval_expires_at>now() AND approved_by IS NOT NULL AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$4 AND subject=bill_corrections.approved_by AND granted)`, item.ID, a.Subject, item.Digest, a.Organization)
+			result, err := tx.ExecContext(r.Context(), `UPDATE bill_corrections SET state='executing',attempted_by=$2,attempted_at=now() WHERE id::text=$1 AND digest=$3 AND state='approved' AND approval_expires_at>now() AND approved_by=$5 AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$4 AND subject=bill_corrections.approved_by AND granted)`, item.ID, a.Subject, item.Digest, a.Organization, item.ApprovedBy)
 			if err != nil {
 				problem(w, 503, "Could not reserve one attempt.")
 				return
