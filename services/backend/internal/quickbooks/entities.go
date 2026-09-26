@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -221,4 +222,123 @@ func openItems(ctx context.Context, env, realm, token, kind, last string) ([]jso
 		}
 	}
 	return open, nil
+}
+
+// reportedKinds maps a TransactionList transaction type to the entity the capture reads it as.
+var reportedKinds = map[string]string{"Bill": "Bill", "Bill Payment (Check)": "BillPayment", "Bill Payment (Credit Card)": "BillPayment", "Check": "Purchase", "Expense": "Purchase", "Cash Expense": "Purchase", "Credit Card Expense": "Purchase", "Credit Card Credit": "Purchase", "Deposit": "Deposit", "Journal Entry": "JournalEntry", "General Journal": "JournalEntry", "Invoice": "Invoice", "Payment": "Payment", "Sales Receipt": "SalesReceipt", "Refund": "RefundReceipt", "Transfer": "Transfer", "Vendor Credit": "VendorCredit", "Credit Memo": "CreditMemo"}
+
+// Certification is how a period's TransactionList report and the transaction capture compare, transaction by transaction.
+type Certification struct {
+	Agrees      bool     `json:"agrees"`
+	Reported    int      `json:"reported"`
+	Captured    int      `json:"captured"`
+	NonPosting  int      `json:"non_posting"`
+	Missing     []string `json:"missing"`
+	Extra       []string `json:"extra"`
+	Unsupported []string `json:"unsupported"`
+}
+
+// Certify compares the posting transactions a TransactionList report lists with those a capture read, by type and
+// QuickBooks ID. counts are the capture's per-type counts and captured its IDs; every captured type must be present.
+func Certify(report json.RawMessage, counts map[string]int, captured map[string][]string) (Certification, error) {
+	result := Certification{Missing: []string{}, Extra: []string{}, Unsupported: []string{}}
+	have := map[string]bool{}
+	for _, kind := range periodEntityTypes {
+		count, ok := counts[kind]
+		if !ok || count != len(captured[kind]) {
+			return result, fmt.Errorf("The transaction capture has no complete %s count", kind)
+		}
+		for _, id := range captured[kind] {
+			have[kind+" "+id] = true
+		}
+	}
+	result.Captured = len(have)
+	var root struct {
+		Columns struct {
+			Column []struct {
+				ColType  string
+				MetaData []struct{ Name, Value string }
+			}
+		}
+		Rows struct{ Row []json.RawMessage }
+	}
+	if json.Unmarshal(report, &root) != nil {
+		return result, fmt.Errorf("TransactionList is unreadable")
+	}
+	typeColumn, postColumn := -1, -1
+	for i, column := range root.Columns.Column {
+		key := column.ColType
+		for _, m := range column.MetaData {
+			if m.Name == "ColKey" {
+				key = m.Value
+			}
+		}
+		switch key {
+		case "txn_type":
+			typeColumn = i
+		case "is_no_post":
+			postColumn = i
+		}
+	}
+	if typeColumn < 0 {
+		return result, fmt.Errorf("TransactionList has no transaction type column")
+	}
+	reported := map[string]bool{}
+	var walk func(rows []json.RawMessage) error
+	walk = func(rows []json.RawMessage) error {
+		for _, raw := range rows {
+			var row struct {
+				ColData []struct{ Value, ID string }
+				Rows    struct{ Row []json.RawMessage }
+			}
+			if json.Unmarshal(raw, &row) != nil {
+				return fmt.Errorf("TransactionList row is unreadable")
+			}
+			if err := walk(row.Rows.Row); err != nil {
+				return err
+			}
+			if len(row.ColData) <= typeColumn {
+				continue
+			}
+			cell := row.ColData[typeColumn]
+			if postColumn >= 0 && postColumn < len(row.ColData) {
+				if flag := strings.ToLower(row.ColData[postColumn].Value); flag == "yes" || flag == "true" {
+					result.NonPosting++
+					continue
+				}
+			}
+			if cell.ID == "" {
+				return fmt.Errorf("A TransactionList row has no transaction ID")
+			}
+			kind, known := reportedKinds[cell.Value]
+			if !known {
+				result.Unsupported = append(result.Unsupported, cell.Value+" "+cell.ID)
+				continue
+			}
+			key := kind + " " + cell.ID
+			if reported[key] {
+				return fmt.Errorf("TransactionList lists %s more than once", key)
+			}
+			reported[key] = true
+		}
+		return nil
+	}
+	if err := walk(root.Rows.Row); err != nil {
+		return result, err
+	}
+	result.Reported = len(reported)
+	for key := range reported {
+		if !have[key] {
+			result.Missing = append(result.Missing, key)
+		}
+	}
+	for key := range have {
+		if !reported[key] {
+			result.Extra = append(result.Extra, key)
+		}
+	}
+	slices.Sort(result.Missing)
+	slices.Sort(result.Extra)
+	result.Agrees = len(result.Missing)+len(result.Extra)+len(result.Unsupported) == 0
+	return result, nil
 }

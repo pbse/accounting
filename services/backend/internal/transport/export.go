@@ -48,28 +48,30 @@ type closePackage struct {
 	Evidence          []packageEvidence `json:"evidence"`
 	LedgerSnapshots   []packageLedger   `json:"-"`
 
-	Version            string          `json:"version"`
-	Close              savedClose      `json:"close"`
-	DataCutAt          time.Time       `json:"data_cut_at"`
-	Scope              string          `json:"scope"`
-	SignOff            string          `json:"sign_off"`
-	Workpapers         []savedPaper    `json:"workpapers"`
-	SandboxPostings    json.RawMessage `json:"sandbox_postings"`
-	VendorCredits      json.RawMessage `json:"vendor_credits"`
-	BillCorrections    json.RawMessage `json:"bill_corrections"`
-	CreditApplications json.RawMessage `json:"credit_applications"`
-	ProductionPostings json.RawMessage `json:"production_postings"`
-	XeroPostings       json.RawMessage `json:"xero_postings"`
-	Reviews            json.RawMessage `json:"reviews"`
-	WorkHistory        json.RawMessage `json:"work_history"`
-	RequestDrafts      json.RawMessage `json:"request_drafts"`
+	Version             string          `json:"version"`
+	Close               savedClose      `json:"close"`
+	DataCutAt           time.Time       `json:"data_cut_at"`
+	Scope               string          `json:"scope"`
+	SignOff             string          `json:"sign_off"`
+	Workpapers          []savedPaper    `json:"workpapers"`
+	SandboxPostings     json.RawMessage `json:"sandbox_postings"`
+	VendorCredits       json.RawMessage `json:"vendor_credits"`
+	BillCorrections     json.RawMessage `json:"bill_corrections"`
+	CreditApplications  json.RawMessage `json:"credit_applications"`
+	ProductionPostings  json.RawMessage `json:"production_postings"`
+	XeroPostings        json.RawMessage `json:"xero_postings"`
+	LedgerCertification map[string]any  `json:"ledger_certification"`
+	LedgerCompleteness  string          `json:"ledger_completeness"`
+	Reviews             json.RawMessage `json:"reviews"`
+	WorkHistory         json.RawMessage `json:"work_history"`
+	RequestDrafts       json.RawMessage `json:"request_drafts"`
 }
 type reviewPaper struct {
 	ID, Kind, Source, Method string
 	Issues                   []string
 }
 
-var packageHTML = template.Must(template.New("review").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>{{if .Package.ReleaseReady}}Accountant binder{{else}}Close review package{{end}}</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}section{border-top:1px solid #ccc;margin-top:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:.6rem}@media print{button{display:none}section{break-inside:avoid}}</style><h1>{{.Package.Close.Entity}} · {{.Package.Close.Period}}</h1><p>Saved-work snapshot: {{.Package.DataCutAt}}</p><p>{{.Package.Scope}}</p><p><strong>Firm sign-off: {{.Package.SignOff}}</strong></p>{{if .Package.ReleaseReady}}<p>Accountant binder for the signed-off supported scope. Decision #{{.Package.Readiness.DecisionID}} binds snapshot digest {{.Package.Readiness.Digest}}. This is not an audit or assurance opinion. Verify current provider facts before external reliance.</p>{{end}}{{if .Package.Readiness}}<h2>Supported scope</h2><p>{{.Package.Readiness.Scope.Description}}</p><p>Required draft IDs: {{.Package.Readiness.Scope.RequiredPapers}}</p><ul>{{range .Package.Readiness.Scope.ExternalSteps}}<li>{{.Name}} · complete: {{.Complete}} · {{.Reference}}</li>{{end}}{{range .Package.Readiness.Blockers}}<li>{{.}}</li>{{end}}</ul><p>Decision history and the exact snapshot are preserved in manifest.json. Local development decisions are not verified individual firm identities.</p>{{end}}<p>All saved versions are included. Versions are not additive; do not sum alternative drafts. Source references are user-supplied, not verified attachments. Originals are in evidence/{id}.txt or .pdf; PDF extraction is in evidence/{id}-extracted.txt; no documents outside these uploads are included.</p><p>Portable workpapers.pdf contains every saved draft. The JSON files and checksums preserve exact calculations and provenance.</p><h2>Workpapers · {{len .Papers}}</h2>{{if not .Papers}}<p>No saved workpapers. This close has no prepared evidence in this package.</p>{{end}}{{range .Papers}}<section><h3>{{.Kind}} · draft #{{.ID}}</h3><p>Source: {{.Source}}</p><p>Method: {{.Method}}</p><ul>{{range .Issues}}<li>{{.}}</li>{{end}}</ul><p>Full inputs and calculations: workpapers/{{.ID}}.json. Tables are in the same directory.</p></section>{{end}}<h2>Sandbox posting receipts</h2><p>These are stored sandbox states at export time, not a new provider readback. Executing or unknown means unresolved. Sandbox verification does not imply production posting or close sign-off.</p><pre>{{.Receipts}}</pre><h2>Native supplier credit receipts</h2><p>These are stored sandbox VendorCredit attempts and readbacks; unknown outcomes require investigation.</p><pre>{{.VendorReceipts}}</pre><h2>Native Bill correction receipts</h2><p>Stored sandbox Bill attempts and readbacks; unknown outcomes require investigation.</p><pre>{{.Package.BillCorrections}}</pre><h2>Production posting receipts</h2><p>Stored attempts and canonical readback at verification time; export does not perform a new QuickBooks read. Unknown outcomes need investigation.</p><pre>{{.Package.ProductionPostings}}</pre><h2>Xero journal receipts</h2><p>Stored attempts and readback at verification time; export does not perform a new Xero read. Unknown outcomes need investigation.</p><pre>{{.Package.XeroPostings}}</pre><h2>Review still required</h2><ul><li>Verify source completeness and ledger freshness independently.</li><li>Review accounting assumptions, alternative draft versions and unresolved items.</li><li>Resolve uncertain sandbox attempts without blindly retrying a write.</li><li>Confirm that recorded sign-off covers your intended scope; unlisted work is not certified.</li></ul></html>`))
+var packageHTML = template.Must(template.New("review").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>{{if .Package.ReleaseReady}}Accountant binder{{else}}Close review package{{end}}</title><style>body{font:16px system-ui;max-width:960px;margin:3rem auto;padding:0 1rem;color:#203c33}section{border-top:1px solid #ccc;margin-top:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:.6rem}@media print{button{display:none}section{break-inside:avoid}}</style><h1>{{.Package.Close.Entity}} · {{.Package.Close.Period}}</h1><p>Saved-work snapshot: {{.Package.DataCutAt}}</p><p>{{.Package.Scope}}</p><p><strong>Firm sign-off: {{.Package.SignOff}}</strong></p>{{if .Package.ReleaseReady}}<p>Accountant binder for the signed-off supported scope. Decision #{{.Package.Readiness.DecisionID}} binds snapshot digest {{.Package.Readiness.Digest}}. This is not an audit or assurance opinion. Verify current provider facts before external reliance.</p>{{end}}{{if .Package.Readiness}}<h2>Supported scope</h2><p>{{.Package.Readiness.Scope.Description}}</p><p>Required draft IDs: {{.Package.Readiness.Scope.RequiredPapers}}</p><ul>{{range .Package.Readiness.Scope.ExternalSteps}}<li>{{.Name}} · complete: {{.Complete}} · {{.Reference}}</li>{{end}}{{range .Package.Readiness.Blockers}}<li>{{.}}</li>{{end}}</ul><p>Decision history and the exact snapshot are preserved in manifest.json. Local development decisions are not verified individual firm identities.</p>{{end}}<p>All saved versions are included. Versions are not additive; do not sum alternative drafts. Source references are user-supplied, not verified attachments. Originals are in evidence/{id}.txt or .pdf; PDF extraction is in evidence/{id}-extracted.txt; no documents outside these uploads are included.</p><p>Portable workpapers.pdf contains every saved draft. The JSON files and checksums preserve exact calculations and provenance.</p><h2>Workpapers · {{len .Papers}}</h2>{{if not .Papers}}<p>No saved workpapers. This close has no prepared evidence in this package.</p>{{end}}{{range .Papers}}<section><h3>{{.Kind}} · draft #{{.ID}}</h3><p>Source: {{.Source}}</p><p>Method: {{.Method}}</p><ul>{{range .Issues}}<li>{{.}}</li>{{end}}</ul><p>Full inputs and calculations: workpapers/{{.ID}}.json. Tables are in the same directory.</p></section>{{end}}<h2>Sandbox posting receipts</h2><p>These are stored sandbox states at export time, not a new provider readback. Executing or unknown means unresolved. Sandbox verification does not imply production posting or close sign-off.</p><pre>{{.Receipts}}</pre><h2>Native supplier credit receipts</h2><p>These are stored sandbox VendorCredit attempts and readbacks; unknown outcomes require investigation.</p><pre>{{.VendorReceipts}}</pre><h2>Native Bill correction receipts</h2><p>Stored sandbox Bill attempts and readbacks; unknown outcomes require investigation.</p><pre>{{.Package.BillCorrections}}</pre><h2>Production posting receipts</h2><p>Stored attempts and canonical readback at verification time; export does not perform a new QuickBooks read. Unknown outcomes need investigation.</p><pre>{{.Package.ProductionPostings}}</pre><h2>Ledger completeness</h2><p>{{.Package.LedgerCompleteness}}</p><h2>Xero journal receipts</h2><p>Stored attempts and readback at verification time; export does not perform a new Xero read. Unknown outcomes need investigation.</p><pre>{{.Package.XeroPostings}}</pre><h2>Review still required</h2><ul><li>Verify source completeness and ledger freshness independently.</li><li>Review accounting assumptions, alternative draft versions and unresolved items.</li><li>Resolve uncertain sandbox attempts without blindly retrying a write.</li><li>Confirm that recorded sign-off covers your intended scope; unlisted work is not certified.</li></ul></html>`))
 
 func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +174,11 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 			problem(w, 503, "Could not read Xero journal receipts.")
 			return
 		}
+		if pack.LedgerCertification, err = ledgerCertification(ctx, tx, pack.Close.ID); err != nil {
+			problem(w, 503, "Could not read ledger certification.")
+			return
+		}
+		pack.LedgerCompleteness = certificationSentence(pack.LedgerCertification)
 		err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb) FROM workpaper_reviews r JOIN workpapers w ON w.id=r.workpaper_id WHERE w.close_id=$1`, pack.Close.ID).Scan(&pack.Reviews)
 		if err != nil {
 			problem(w, 503, "Could not read review history.")

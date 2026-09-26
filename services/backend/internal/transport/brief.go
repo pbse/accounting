@@ -89,7 +89,21 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 				add("ledger", "attention", fmt.Sprintf("The %s Trial Balance from %s is out of date: its source was replaced or the connection is inactive. Capture a new snapshot.", source, when), "evidence")
 				needs = append(needs, "capture a new snapshot")
 			default:
-				add("ledger", "done", fmt.Sprintf("Books read from the %s Trial Balance captured %s.", source, when), "evidence")
+				text, state := fmt.Sprintf("Books read from the %s Trial Balance captured %s.", source, when), "done"
+				// Whether the QuickBooks transaction capture agrees with the period's TransactionList report.
+				if source == "QuickBooks" {
+					certification, err := ledgerCertification(r.Context(), db, r.PathValue("id"))
+					switch {
+					case err != nil:
+						text += " Ledger certification could not be read."
+					case certification["status"] == "differs":
+						text, state = text+" "+certificationSentence(certification), "attention"
+						needs = append(needs, "capture the ledger again")
+					default:
+						text += " " + certificationSentence(certification)
+					}
+				}
+				add("ledger", state, text, "evidence")
 			}
 		}
 
