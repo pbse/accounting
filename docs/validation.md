@@ -1409,3 +1409,21 @@ Code review: GPT-6 Sol (high) judged the design relevant and proportionate. Adop
 Tests added for the fixes: open amounts that fell without the invoice link, a bill payment on another date or bank account, and one line linking both documents, fail readback; a production bank account outside the grant is refused at preview and at the write; a capture of another company is refused; a found bill payment is bound after readback without a second write, and verification without an ID fails. Each observed red with its rule removed (12 more mutations).
 
 Not verified: QuickBooks' live behaviour for a payment line update and a zero-amount bill payment (why both stay off in production until enabled after a sandbox check), and the panel in a browser.
+
+## Declining-balance depreciation and the mid-month convention (2026-09-25)
+
+Built while the GPT-6 Sol reviewer was over its usage limit, at the user's direction: committed on its own branch and reviewed (plan and code in one pass) before it was opened.
+
+Request: new calculation methods for depreciation. `declining_balance_v1` (factor 2 or 1.5) and the `mid_month` convention extend the depreciation schedule in `prepaids.Prepare`; both need the accountant's cited policy (5–200 characters). The schedule, booked accumulated depreciation, the true-up proposal, recurring refresh and tie-out work unchanged, since they read cost, salvage and what remains to depreciate. Carry-forward now ends at the schedule's last month rather than the service end, so the mid-month half month after the useful life carries forward. The convention counts as part of the method against an approved procedure.
+
+Tests:
+
+- `TestDecliningBalanceAndMidMonthDepreciation` (pure): double declining 200.00 / 188.88, the switch to straight-line at month 19 (75.69 → 71.48) and the final residual; salvage stops depreciation at book value equal to salvage (a 3,000 salvage leaves 32.73 in month 4 and nothing after); factor 1.5; mid-month halves for straight-line (50 / 100… / 50 over 37 months) and declining balance; the month after the life can be closed; a missing policy, a convention outside depreciation, a factor without declining balance, declining balance outside depreciation and factor 3 refused.
+
+Each check was observed red with its rule removed (11 mutations; one survivor showed the last month's half weight was dead code, since the final month always takes the residual, and it was removed).
+
+Code review: GPT-6 Sol (high) found the design minimal and the rounding, switch and salvage cap correct. Adopted: carry-forward eligibility uses the schedule's last month (the mid-month final month could not be carried); an approved full-month procedure refuses the mid-month convention; the saved workpaper shows the policy citation; the documentation no longer calls all depreciation straight-line and gives the 71.49 residual; the unrequested "2.0" factor alias was deleted. One delta round closed all five findings.
+
+Tests added for the fixes: `TestCarryForwardRoundingLineageAndFreshReview` carries an approved mid-month schedule from August 2029 into September 2029; `TestLearnedRuleRequiresApprovedExampleBeforeActivation` refuses a mid-month paper under an approved full-month procedure. Each observed red with its fix removed.
+
+Not verified: the form in a browser.

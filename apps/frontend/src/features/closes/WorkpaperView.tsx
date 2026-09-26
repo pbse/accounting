@@ -225,7 +225,7 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
         </section>
       ) : (
         <p>
-          Method: {paper.input.method}, final-month rounding. {paper.input.booked_balance ? `${terms.booked} ${money(paper.input.booked_balance, paper.input.currency)} · ${paper.input.booking_reference}.` : terms.blank}{paper.input.salvage_value ? ` Salvage value ${money(paper.input.salvage_value, paper.input.currency)}.` : ""} {paper.input.credit_amount ? `Credit ${money(paper.input.credit_amount, paper.input.currency)} effective ${paper.input.credit_period} · ${paper.input.credit_reference}.` : ""} {paper.input.cancellation_method ? `Cancellation ${paper.input.cancellation_method} effective ${paper.input.cancellation_period} · ${paper.input.cancellation_reference}.` : ""}
+          Method: {paper.input.method}{paper.input.factor && ` × ${paper.input.factor}`}{paper.input.convention && `, ${paper.input.convention}`}{paper.input.accountant_rule_reference && ` under ${paper.input.accountant_rule_reference}`}, final-month rounding. {paper.input.booked_balance ? `${terms.booked} ${money(paper.input.booked_balance, paper.input.currency)} · ${paper.input.booking_reference}.` : terms.blank}{paper.input.salvage_value ? ` Salvage value ${money(paper.input.salvage_value, paper.input.currency)}.` : ""} {paper.input.credit_amount ? `Credit ${money(paper.input.credit_amount, paper.input.currency)} effective ${paper.input.credit_period} · ${paper.input.credit_reference}.` : ""} {paper.input.cancellation_method ? `Cancellation ${paper.input.cancellation_method} effective ${paper.input.cancellation_period} · ${paper.input.cancellation_reference}.` : ""}
         </p>
       )}
       <p>

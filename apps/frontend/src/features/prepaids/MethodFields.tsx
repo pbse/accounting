@@ -23,7 +23,7 @@ export function PrepaidMethodFields({values={},credits=[],schedule=""}: {values?
   return <>
     <label>Allocation method<select name="method" required defaultValue="" onChange={e=>{
       for(const name of ["method_confirmed","examples_confirmed"]){const field=e.currentTarget.form?.elements.namedItem(name);if(field instanceof HTMLInputElement)field.checked=false;}
-    }}><option value="">Choose the accountant-approved method</option><option value="equal_full_months_v1">Equal full calendar months · v1</option><option value="actual_days_v1">Actual service days, inclusive · v1</option></select></label>
+    }}><option value="">Choose the accountant-approved method</option><option value="equal_full_months_v1">Equal full calendar months · v1</option><option value="actual_days_v1">Actual service days, inclusive · v1</option>{schedule === "depreciation" && <option value="declining_balance_v1">Declining balance · v1</option>}</select></label>
     <details><summary>Synthetic examples to review before confirming</summary>
       <p>These illustrate supported calculations, not a recommendation of accounting policy. Accrual basis only, in the client's home currency. Each month rounds down to cents; the last month receives the residual.</p>
       <table><caption>Method examples · version 1</caption><thead><tr><th>Terms</th><th>Expected result</th></tr></thead><tbody>
@@ -36,12 +36,17 @@ export function PrepaidMethodFields({values={},credits=[],schedule=""}: {values?
         <tr><td>$120 January–March, $10 effective and recorded February, $5 effective January and recorded March</td><td>Revised schedule: January $38.33, February $33.33, March $33.34; total expense $105. Current close true-up compares the revised target with the booked prepaid balance; prior-period journals are not silently changed.</td></tr>
         <tr><td>Deferred revenue: 12,000 billed for September 2026–August 2027; booked liability 12,000</td><td>September earns 1,000: debit deferred revenue / credit revenue 1,000.</td></tr>
         <tr><td>Depreciation: 3,600 laptop, September 2026–August 2029, equal months, salvage 360, booked accumulated depreciation 0</td><td>90.00 a month: debit depreciation expense / credit accumulated depreciation 90.00.</td></tr>
+        <tr><td>Same laptop, no salvage, double declining balance (factor 2)</td><td>1/18 of book value a month: 200.00, then 188.88, 178.39…; from month 19 straight-line over the remaining months, 71.48 a month, with the 71.49 residual last. Never below salvage.</td></tr>
+        <tr><td>Same laptop, equal months, mid-month convention</td><td>September 2026 50.00, then 100.00 a month, and 50.00 in September 2029, the month after the life ends.</td></tr>
       </tbody></table>
     </details>
     {schedule === "depreciation" ? <>
       <label>Booked accumulated depreciation<input name="booked_balance" required defaultValue={values.booked_balance ?? ""} inputMode="decimal" maxLength={13} placeholder="Enter 0.00 explicitly if none" /></label>
       <label>Ledger balance and cutoff reference<input name="booking_reference" required defaultValue={values.booking_reference ?? ""} maxLength={200} /></label>
       <label>Salvage value (optional)<input name="salvage_value" defaultValue={values.salvage_value ?? ""} inputMode="decimal" maxLength={13} /></label>
+      <label>Declining-balance factor<select name="factor" defaultValue={values.factor ?? ""}><option value="">Not declining balance</option><option value="2">2 · double declining</option><option value="1.5">1.5</option></select></label>
+      <label>Convention<select name="convention" defaultValue={values.convention ?? ""}><option value="">Full month (start on the first of the in-service month)</option><option value="mid_month">Mid-month: half a month at each end</option></select></label>
+      <label>Client accountant's depreciation policy (required for declining balance or mid-month)<input name="accountant_rule_reference" maxLength={200} defaultValue={values.accountant_rule_reference ?? ""} placeholder="Policy and version" /></label>
       <label><input name="examples_confirmed" type="checkbox" required /> I reviewed these synthetic examples and the client's approved treatment. This confirms a draft method, not final workpaper or posting approval.</label>
     </> : <>
     <details><summary>Cancellation at a month boundary (optional)</summary>

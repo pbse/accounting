@@ -268,4 +268,25 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 	if state != "failed" {
 		t.Fatal("Worker accepted a stale predecessor", state)
 	}
+	// A mid-month depreciation schedule carries into the month after its useful life.
+	var august, asset string
+	if err = db.QueryRow("INSERT INTO client_closes(entity,period) VALUES($1,'2029-08') RETURNING id::text", entity).Scan(&august); err != nil {
+		t.Fatal(err)
+	}
+	laptop := prepaids.Input{Entity: entity, SourceReference: "Synthetic laptop invoice", Amount: "3600.00", ServiceStart: "2026-09-01", ServiceEnd: "2029-08-31", ClosePeriod: "2029-08", Currency: "USD", Basis: "accrual", ExpenseAccount: "Depreciation expense", PrepaidAccount: "Accumulated depreciation", Schedule: prepaids.Depreciation, Convention: prepaids.MidMonth, AccountantRuleReference: "Fixed asset policy v2", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true, ExamplesConfirmed: true, BookedBalance: "3550.00", BookingReference: "August ledger"}
+	var invoice string
+	if err = db.QueryRow("INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'laptop.txt',$2,'laptop.txt','fixture') RETURNING id::text", august, preparation.Digest([]byte("laptop.txt"))).Scan(&invoice); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(laptop)
+	if body, err = preparation.Calculate(preparation.Plan{Kind: "prepaid", Input: raw, Sources: []preparation.Source{{ID: invoice, Digest: preparation.Digest([]byte("laptop.txt")), Name: "laptop.txt", Role: "invoice", Location: "line 1"}}}, entity, "2029-08"); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow("INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text", august, preparation.Digest(body), string(body)).Scan(&asset); err != nil {
+		t.Fatal(err)
+	}
+	approve(august, asset, "approved")
+	if items := preview(august); len(items) != 1 || !items[0].Eligible {
+		t.Fatalf("the half month after the useful life must carry forward: %+v", items)
+	}
 }

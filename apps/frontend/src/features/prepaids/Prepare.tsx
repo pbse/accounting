@@ -85,6 +85,8 @@ export default function Prepare() {
       currency,
       ...(schedule && { schedule }),
       ...(text("salvage_value") && { salvage_value: text("salvage_value") }),
+      ...(text("factor") && { factor: text("factor") as PrepaidInput["factor"] }),
+      ...(text("convention") && { convention: "mid_month" as const }),
       basis: "accrual",
       method: text("method") as PrepaidInput["method"],
       examples_confirmed: data.has("examples_confirmed"),
@@ -314,7 +316,7 @@ export default function Prepare() {
                   {result.input.service_start} → {result.input.service_end}
                 </dd>
                 <dt>Method</dt>
-                <dd>{result.input.method} · residual in final month.</dd>
+                <dd>{result.input.method}{result.input.factor && ` × ${result.input.factor}`}{result.input.convention && ` · ${result.input.convention}`}{result.input.accountant_rule_reference && ` · ${result.input.accountant_rule_reference}`} · residual in final month.</dd>
                 {result.input.cancellation_method && <><dt>Cancellation</dt><dd>{result.input.cancellation_method} effective {result.input.cancellation_period} · {result.input.cancellation_reference}</dd></>}
                 {!!result.input.credits?.length && <><dt>Reviewed credit rule</dt><dd>{result.input.accountant_rule_reference}</dd><dt>Credits</dt><dd>{result.input.credits.map(c => `${money(c.amount, result.input.currency)} effective ${c.effective_period}, booked ${c.recorded_period} · ${c.reference}`).join("; ")}</dd></>}
                 {result.input.salvage_value && <><dt>Salvage value</dt><dd>{money(result.input.salvage_value, result.input.currency)}</dd></>}

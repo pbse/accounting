@@ -233,3 +233,61 @@ func TestDepreciationTruesUpAccumulatedDepreciation(t *testing.T) {
 		t.Fatalf("a carried depreciation schedule needs no ledger balance: %+v %v", p, err)
 	}
 }
+
+func TestDecliningBalanceAndMidMonthDepreciation(t *testing.T) {
+	in := example()
+	in.Schedule, in.Amount, in.ServiceEnd = Depreciation, "3600.00", "2029-08-31"
+	in.ExpenseAccount, in.PrepaidAccount = "Depreciation expense", "Accumulated depreciation"
+	in.BookedBalance, in.BookingReference, in.ExamplesConfirmed = "0.00", "September ledger", true
+	in.Method, in.Factor, in.AccountantRuleReference = DecliningMethod, "2", "Fixed asset policy v2"
+	p, err := Prepare(in)
+	if err != nil || len(p.Schedule) != 36 || p.Schedule[0].Expense != "200.00" || p.Schedule[1].Expense != "188.88" || p.Schedule[17].Expense != "75.69" || p.Schedule[18].Expense != "71.48" || p.Schedule[35].Expense != "71.49" || p.Schedule[35].Remaining != "0.00" || p.Proposal.Amount != "200.00" {
+		t.Fatalf("double declining takes 1/18 of book value until straight-line is larger: %+v %v", p.Schedule, err)
+	}
+	in.SalvageValue = "360.00"
+	if p, err = Prepare(in); err != nil || p.Schedule[0].Expense != "200.00" || p.Schedule[35].Expense != "45.46" || p.Schedule[35].Remaining != "0.00" {
+		t.Fatalf("the rate applies to book value and stops at salvage: %+v %v", p.Schedule, err)
+	}
+	in.SalvageValue = "3000.00"
+	if p, err = Prepare(in); err != nil || p.Schedule[2].Expense != "178.39" || p.Schedule[3].Expense != "32.73" || p.Schedule[4].Expense != "0.00" || p.Schedule[4].Remaining != "0.00" {
+		t.Fatalf("depreciation never takes book value below salvage: %+v %v", p.Schedule, err)
+	}
+	in.SalvageValue, in.Factor = "", "1.5"
+	if p, err = Prepare(in); err != nil || p.Schedule[0].Expense != "150.00" || p.Schedule[1].Expense != "143.75" {
+		t.Fatalf("150%% declining takes 1/24 of book value: %+v %v", p.Schedule, err)
+	}
+	in.Factor, in.Convention = "2", MidMonth
+	if p, err = Prepare(in); err != nil || len(p.Schedule) != 37 || p.Schedule[0].Expense != "100.00" || p.Schedule[1].Expense != "194.44" || p.Schedule[36].Period != "2029-09" || p.Schedule[36].Expense != "35.75" {
+		t.Fatalf("mid-month takes half the first month and ends a month after the life: %+v %v", p.Schedule, err)
+	}
+	in.Method, in.Factor = Method, ""
+	if p, err = Prepare(in); err != nil || len(p.Schedule) != 37 || p.Schedule[0].Expense != "50.00" || p.Schedule[1].Expense != "100.00" || p.Schedule[35].Expense != "100.00" || p.Schedule[36].Expense != "50.00" {
+		t.Fatalf("straight-line mid-month splits 100 a month into halves at both ends: %+v %v", p.Schedule, err)
+	}
+	in.ClosePeriod, in.BookedBalance = "2029-09", "3550.00"
+	if p, err = Prepare(in); err != nil || p.PeriodExpense != "50.00" || p.Proposal.Amount != "50.00" {
+		t.Fatalf("the month after the life can be closed under mid-month: %+v %v", p, err)
+	}
+	in.ClosePeriod, in.BookedBalance = "2026-09", "0.00"
+	for field, change := range map[string]func(*Input){
+		"accountant_rule_reference": func(i *Input) { i.AccountantRuleReference = "" },
+		"convention":                func(i *Input) { i.Schedule, i.BookedBalance, i.BookingReference = "", "", "" },
+		"factor":                    func(i *Input) { i.Factor = "2" },
+		"method_confirmed": func(i *Input) {
+			i.Method, i.Factor, i.Convention, i.Schedule = DecliningMethod, "2", "", DeferredRevenue
+		},
+	} {
+		bad := in
+		change(&bad)
+		var inputErr *InputError
+		if _, err := Prepare(bad); !errors.As(err, &inputErr) || inputErr.Field != field {
+			t.Fatalf("%s must be refused: %v", field, err)
+		}
+	}
+	bad := in
+	bad.Method, bad.Factor = DecliningMethod, "3"
+	var inputErr *InputError
+	if _, err := Prepare(bad); !errors.As(err, &inputErr) || inputErr.Field != "factor" {
+		t.Fatalf("only factors 2 and 1.5 are supported: %v", err)
+	}
+}

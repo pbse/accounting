@@ -133,7 +133,7 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 				item.Reason = "Requires a current approved review."
 			case len(item.paper.Sources) == 0:
 				item.Reason = "Requires linked source evidence."
-			case item.paper.Input.ServiceEnd[:min(7, len(item.paper.Input.ServiceEnd))] < next:
+			case len(item.paper.Schedule) == 0 || item.paper.Schedule[len(item.paper.Schedule)-1].Period < next:
 				item.Reason = "Schedule ends before next month."
 			default:
 				check := item.paper.Input
