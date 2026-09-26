@@ -128,12 +128,29 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 		}
 		// The capture's open documents a person can pair, by party.
 		candidates, suggestions := map[string][]map[string]string{}, []quickbooks.Suggestion{}
-		captureID, _, currency, open, openErr := capturedOpen(r.Context(), db, r.PathValue("id"))
+		captureID, realm, currency, open, openErr := capturedOpen(r.Context(), db, r.PathValue("id"))
 		if openErr == nil {
-			// A document already in any saved application is left to that application.
+			// A document already in any saved application of this company, in any close, is left to that application.
 			used := map[string]bool{}
-			for _, a := range items {
-				used[a.Kind+"/source/"+a.SourceID], used[a.Kind+"/target/"+a.TargetID] = true, true
+			saved, err := db.QueryContext(r.Context(), `SELECT kind,source_id,target_id FROM credit_applications WHERE realm=$1`, realm)
+			if err != nil {
+				problem(w, 503, "Applications unavailable.")
+				return
+			}
+			for saved.Next() {
+				var kind, source, target string
+				if err = saved.Scan(&kind, &source, &target); err != nil {
+					saved.Close()
+					problem(w, 503, "Applications unavailable.")
+					return
+				}
+				used[kind+"/source/"+source], used[kind+"/target/"+target] = true, true
+			}
+			err = saved.Err()
+			saved.Close()
+			if err != nil {
+				problem(w, 503, "Applications unavailable.")
+				return
 			}
 			for _, s := range quickbooks.SuggestApplications(open, currency) {
 				if !used[s.Kind+"/source/"+s.SourceID] && !used[s.Kind+"/target/"+s.TargetID] {

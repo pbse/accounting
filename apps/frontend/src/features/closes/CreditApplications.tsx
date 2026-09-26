@@ -39,7 +39,7 @@ export function CreditApplications({ closeId }: { closeId: string }) {
       await workspaceRequest(`/${closeId}/quickbooks/applications`, body);
       setMessage(done);
       setConfirmed(false);
-      setFromCapture("");
+      if (body.action === "preview") setFromCapture("");
       await load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "The application could not be saved.");
@@ -53,7 +53,7 @@ export function CreditApplications({ closeId }: { closeId: string }) {
   const set = (key: keyof typeof form, value: string) => setForm((f) => ({ ...f, [key]: value }));
   function use(s: Suggestion) {
     setKind(s.kind);
-    setForm((f) => ({ ...f, source_id: s.source_id, target_id: s.target_id, amount: s.amount, reason: s.basis }));
+    setForm((f) => ({ ...f, source_id: s.source_id, target_id: s.target_id, amount: s.amount, reason: s.basis, rule_reference: "" }));
     setFromCapture(suggestions.capture);
     setConfirmed(false);
   }

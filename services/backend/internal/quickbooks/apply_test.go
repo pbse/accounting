@@ -127,8 +127,8 @@ func TestApplicationsAreSuggestedOnlyWithoutAmbiguity(t *testing.T) {
 			doc("99", "7", "100", `,"DocNumber":"INV-500"`),
 			doc("88", "8", "70", `,"DocNumber":"INV-800"`), doc("89", "8", "75", `,"DocNumber":"INV-800"`),
 		},
-		"VendorCredit": {doc("80", "21", "60", `,"PrivateNote":"Credit for bill B-7"`), doc("81", "22", "10", ``), doc("82", "22", "10", ``)},
-		"Bill":         {doc("41", "21", "100", `,"DocNumber":"B-7"`), doc("42", "22", "10", ``)},
+		"VendorCredit": {doc("80", "21", "60", `,"PrivateNote":"Credit for bill B-7"`), doc("81", "22", "10", ``), doc("82", "22", "10", ``), doc("83", "23", "25", `,"DocNumber":"B-9"`)},
+		"Bill":         {doc("41", "21", "100", `,"DocNumber":"B-7"`), doc("42", "22", "10", ``), doc("44", "23", "70", `,"DocNumber":"B-9"`)},
 	}
 	got := map[string]Suggestion{}
 	for _, s := range SuggestApplications(open, "USD") {
@@ -146,7 +146,7 @@ func TestApplicationsAreSuggestedOnlyWithoutAmbiguity(t *testing.T) {
 	if s := got["75"]; s.TargetID != "99" || s.Amount != "100.00" {
 		t.Fatalf("no more than the invoice's balance is suggested: %+v", s)
 	}
-	for _, id := range []string{"72", "73", "74", "76", "81", "82"} {
+	for _, id := range []string{"72", "73", "74", "76", "81", "82", "83"} {
 		if s, ok := got[id]; ok {
 			t.Fatalf("an ambiguous, unmatched or competing source gets no suggestion: %s %+v", id, s)
 		}

@@ -179,8 +179,17 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 	// A newer capture whose transactions did not change reads open items afresh, and its candidates are the ones offered.
 	fresh := `{"Id":"93","SyncToken":"1","TxnDate":"2026-09-20","CustomerRef":{"value":"4","name":"Acme"},"CurrencyRef":{"value":"USD"},"TotalAmt":200,"Balance":200}`
 	matchingBill := `{"Id":"43","SyncToken":"1","TxnDate":"2026-08-28","VendorRef":{"value":"21","name":"Staples"},"CurrencyRef":{"value":"USD"},"Balance":60}`
+	// Credit 85 equals bill 45, but bill 45 is already in an application in another close of this company.
+	otherCredit := `{"Id":"85","SyncToken":"1","TxnDate":"2026-09-02","VendorRef":{"value":"24","name":"Office Co"},"CurrencyRef":{"value":"USD"},"Balance":15}`
+	otherBill := `{"Id":"45","SyncToken":"1","TxnDate":"2026-08-29","VendorRef":{"value":"24","name":"Office Co"},"CurrencyRef":{"value":"USD"},"Balance":15}`
 	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at,payload) VALUES($1,$2,'2026-09','fixture','unchanged',$3,now(),$4)`, closeID, connectionID, evidenceID,
-		`{"counts":{},"open_items":{"Payment":[`+payment+`],"Invoice":[`+fresh+`],"VendorCredit":[`+credit+`],"Bill":[`+bill+`,`+matchingBill+`]}}`)
+		`{"counts":{},"open_items":{"Payment":[`+payment+`],"Invoice":[`+fresh+`],"VendorCredit":[`+credit+`,`+otherCredit+`],"Bill":[`+bill+`,`+matchingBill+`,`+otherBill+`]}}`)
+	must(err)
+	var august string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Apply fixture','2026-08') RETURNING id::text`, org).Scan(&august))
+	defer db.Exec(`DELETE FROM client_closes WHERE id=$1`, august)
+	defer db.Exec(`DELETE FROM credit_applications WHERE close_id=$1`, august)
+	_, err = db.Exec(`INSERT INTO credit_applications(close_id,kind,capture_id,realm,source_id,target_id,amount,reason,rule_reference,before_source,before_target,digest,state,proposed_by) SELECT $1,'vendor_credit',id,'123','86','45',15,'Earlier application','Supplier credit rule 2','{}','{}','d','preview','user_accountant' FROM quickbooks_entity_syncs WHERE close_id=$2 ORDER BY id LIMIT 1`, august, closeID)
 	must(err)
 	listRequest := httptest.NewRequest("GET", path, nil).WithContext(auth.WithActor(context.Background(), actor))
 	listed := httptest.NewRecorder()

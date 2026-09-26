@@ -272,9 +272,10 @@ func SuggestApplications(open map[string][]json.RawMessage, currency string) []S
 			if err != nil || json.Unmarshal(raw, &text) != nil || parsed.Open.Sign() <= 0 {
 				continue
 			}
+			// A credit's own number is not a reference to a bill; only its note can name one.
 			reference := text.PaymentRefNum + " " + text.PrivateNote
 			if entity == "VendorCredit" {
-				reference = text.DocNumber + " " + text.PrivateNote
+				reference = text.PrivateNote
 			}
 			out = append(out, doc{parsed, strings.ToLower(strings.TrimSpace(text.DocNumber)), reference})
 		}
