@@ -389,3 +389,23 @@ func ScheduleCandidates(rows []TransactionRow, accounts json.RawMessage) ([]Exce
 	}
 	return out, unknown, items, nil
 }
+
+// RecordAccounts lists the account names a captured transaction posts to: its lines' accounts and its bank, card,
+// deposit or payable account.
+func RecordAccounts(record json.RawMessage) []string {
+	var doc struct {
+		AccountRef, DepositToAccountRef, APAccountRef ref
+		Line                                          []map[string]json.RawMessage
+	}
+	json.Unmarshal(record, &doc)
+	names := []string{doc.AccountRef.Name, doc.DepositToAccountRef.Name, doc.APAccountRef.Name}
+	for _, line := range doc.Line {
+		for key, raw := range line {
+			var detail struct{ AccountRef ref }
+			if strings.HasSuffix(key, "Detail") && json.Unmarshal(raw, &detail) == nil {
+				names = append(names, detail.AccountRef.Name)
+			}
+		}
+	}
+	return slices.DeleteFunc(names, func(name string) bool { return strings.TrimSpace(name) == "" })
+}

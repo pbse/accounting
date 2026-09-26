@@ -81,6 +81,7 @@ type WorkItem = Plan & {
   }[];
 };
 type Dependency = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; upstream_workpaper_id: string };
+type Predicted = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; transaction: string; account: string; updated_at: string; approved_at: string; count: number };
 const labels: Record<string, string> = {
   waiting_evidence: "Reading evidence",
   needs_confirmation: "Needs your decision",
@@ -150,6 +151,7 @@ export function Work({
   const [dependencyMore, setDependencyMore] = useState(false);
   const [dependencyError, setDependencyError] = useState("");
   const [dependencyLoaded, setDependencyLoaded] = useState(false);
+  const [predicted, setPredicted] = useState<{ items: Predicted[]; more: boolean }>({ items: [], more: false });
   const [queue, setQueue] = useState<{ items: QueueItem[]; count: number }>();
   useEffect(() => {
     let live = true;
@@ -183,9 +185,10 @@ export function Work({
     setDependencyLoaded(false);
     setDependencies([]);
     setDependencyMore(false);
+    setPredicted({ items: [], more: false });
     setDependencyError("");
     workspaceRequest(`/dependencies?client=${encodeURIComponent(clientSearch)}`).then(data => {
-      if (live) { setDependencies(data.items); setDependencyMore(data.has_more); setDependencyError(""); setDependencyLoaded(true); }
+      if (live) { setDependencies(data.items); setDependencyMore(data.has_more); setPredicted({ items: data.predicted ?? [], more: data.predicted_more }); setDependencyError(""); setDependencyLoaded(true); }
     }).catch(e => {
       if (live) { setDependencyError(e instanceof Error ? e.message : "Dependency review unavailable."); setDependencyLoaded(true); }
     });
@@ -285,6 +288,26 @@ export function Work({
                 ))}
               </div>
               {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
+              {predicted.items.length > 0 && (
+                <div className="rows" aria-label="Predicted re-review">
+                  <p><strong>May need re-review</strong> · approved drafts in open closes whose account had a transaction updated in QuickBooks after the approval. The update may not change the balance; the approval stands until you review again.</p>
+                  {predicted.items.map(item => (
+                    <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
+                      <span className="row-main">
+                        <Avatar label={item.entity} />
+                        <span>
+                          <strong>{item.entity} · {item.period}</strong>
+                          <small>{kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}</small>
+                        </span>
+                      </span>
+                      <span className="status">May be affected</span>
+                      <small>{item.transaction} on {item.account} updated {new Date(item.updated_at).toLocaleString()}, after approval on {new Date(item.approved_at).toLocaleString()}{item.count > 1 ? ` (${item.count} such transactions)` : ""}</small>
+                      <Icon name="arrow" size={16} />
+                    </Link>
+                  ))}
+                  {predicted.more && <p>Showing 100 drafts. Filter by client or month to see more.</p>}
+                </div>
+              )}
               <DailyBooks refresh={refresh} onReviewed={() => setRefresh((n) => n + 1)} />
             </>
           )}

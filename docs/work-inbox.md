@@ -72,6 +72,10 @@ Work ranks jobs by what they need first (decisions and failures, then blocked or
 
 The review queue can approve up to 20 drafts at once, but only drafts that change nothing in the ledger and carry no reviewer judgment: no proposed adjustment, no open questions, no reviewer-chosen or in-transit payouts and no reviewer classifications. Everything else says why it needs individual review. The confirmation lists every draft, its effect and exceptions, the total effect and your authority. Each draft is rechecked inside its own transaction with fresh firm, membership and client-access checks, so a stale or inaccessible draft is refused while the others proceed. Apply migration 038 with the API and worker stopped; `/readyz` checks it.
 
+## Work needing re-review
+
+**Work needing re-review** lists drafts whose review was reopened through an explicit link: a revised draft, a cited source that changed or was replaced, or a changed predecessor in a carried schedule or recurring accrual. Below it, **May need re-review** predicts drafts that no link reaches: an approved, un-revised draft in an open (not signed-off) close whose balance-sheet account (a prepaid, liability, loan, owner, settlement bank or reconciled account, matched by name) has a transaction in the latest QuickBooks capture that QuickBooks updated after the approval. It names the transaction, the account and both times, and counts such transactions. The update may not change the balance, so the approval stands; the draft leaves the list once it is approved again after the update or revised. Expense and revenue accounts, Xero captures and procedure changes are not predicted.
+
 ## Exceptions the agent found
 
 The close Overview scans every row of the latest completed QuickBooks transaction capture, with no model call. It raises three kinds of question:
