@@ -115,6 +115,14 @@ The local agent recognizes exact labeled facts. To propose an accrual locally, p
   - A partnership draw or contribution needs the partner and that partner's account.
 - Earlier periods need the firm's prior-period approval and aren't handled here. Tax treatment (constructive dividends, basis tracking, reasonable salary) is never decided. Nothing is posted.
 
+## Reviewing a draft
+
+A draft's page keeps its evidence beside the calculation, the proposed entry and the review decision:
+
+- **Evidence as received** highlights the cited lines of the extracted text. A PDF citation "page P, line L" is counted from that page, so the highlight lands on the right line. **View original, page P** opens the original PDF inline at that page in the browser's own viewer; the extracted text beside it shows the highlighted line.
+- **Since your last review** (`GET /v1/closes/{id}/workpapers/{paper}/since-review`) finds your latest decision on this draft or any draft it revises (the whole chain). It shows what changed since that draft and why review reopened, naming only reasons that apply now: a newer draft replaces this one, it was revised since your review (and the drafts in between), a linked source is gone, changed or was replaced (with the replacement and its reason), the schedule it carries from is no longer the approved version it was built from, or someone requested changes after your review. The comparison with the direct predecessor stays below it.
+- **Comments** (migration 077, `GET`/`POST .../comments`) are questions anchored to the whole draft, one of its inputs, or a line of one of its linked sources (click the line number in the evidence). They go only on the current, unapproved draft; to question an approved draft, request changes first. A draft shows its own comments and those on the drafts it revises, each linked to the draft it was made on. Anyone who can open the close resolves a comment with a note. While any comment on the draft or its earlier versions is open, the draft cannot be approved, by hand, in bulk, with its posting or by a standing approval; comments and approvals take the close's lock, so neither can slip past the other.
+
 ## Review, carry-forward and posting boundaries
 
 Saved drafts retain method, example confirmation, credit/balance references, selected evidence revisions and any reversal proposal. The ZIP package includes their inputs and calculation outputs; prepaid CSV adds a credit column. Source changes invalidate reviews through the same existing path.

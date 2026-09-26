@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"sort"
@@ -24,7 +25,15 @@ func reviewActor(w http.ResponseWriter, r *http.Request) (string, bool) {
 		}
 		return actor.Subject, true
 	}
-	return "local-workspace (development)", true
+	return reviewerName(r), true
+}
+
+// reviewerName is the name review decisions are recorded under.
+func reviewerName(r *http.Request) string {
+	if a := auth.Actor(r.Context()); a != nil && a.Organization != "" {
+		return a.Subject
+	}
+	return "local-workspace (development)"
 }
 
 // Bulk review only covers drafts that change nothing in the ledger and carry no reviewer judgment.
@@ -69,6 +78,15 @@ func decideReview(ctx context.Context, tx *sql.Tx, closeID, paperID, actor, deci
 	}
 	if decision == "approved" && (state == "source_changed" || len(paper.Sources) == 0 || len(paper.Blockers) > 0) {
 		return "", 409, "Approval requires current linked evidence and no unresolved calculation blockers. Prepare a revised draft first."
+	}
+	if decision == "approved" {
+		open, err := openComments(ctx, tx, closeID, paperID)
+		if err != nil {
+			return "", 503, "Could not read the draft's comments."
+		}
+		if open > 0 {
+			return "", 409, fmt.Sprintf("Resolve the %s on this draft before approving it.", plural(open, "open comment", "open comments"))
+		}
 	}
 	if bulk && (decision != "approved" || state != "pending" || reason != "") {
 		return "", 409, "Review this draft individually: " + strings.ToLower(reason) + "."

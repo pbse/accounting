@@ -30,6 +30,7 @@ export function ReviewDecision({
     previous_id: string;
     changes: { field: string; before: string; after: string }[];
   }>();
+  const [since, setSince] = useState<{ last_review: null | { workpaper_id: string; decision: string; at: string }; changes: { field: string; before: string; after: string }[]; reasons: string[] }>();
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -37,12 +38,14 @@ export function ReviewDecision({
     setBusy(true);
     setError("");
     try {
-      const [decision, changes] = await Promise.all([
+      const [decision, changes, sinceReview] = await Promise.all([
         workspaceRequest(`/${closeId}/workpapers/${paperId}/reviews`),
         workspaceRequest(`/${closeId}/workpapers/${paperId}/changes`),
+        workspaceRequest(`/${closeId}/workpapers/${paperId}/since-review`),
       ]);
       setReview(decision);
       setComparison(changes);
+      setSince(sinceReview);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Review unavailable.");
     } finally {
@@ -97,6 +100,47 @@ export function ReviewDecision({
               supersedes this work. Compare the versions and review the current
               draft. Earlier decisions remain in history.
             </p>
+          )}
+          {since && (since.last_review || since.reasons.length > 0) && (
+            <section aria-label="Since your last review">
+              <h4>Since your last review</h4>
+              {since.last_review ? (
+                <p>
+                  You {since.last_review.decision.replaceAll("_", " ")} draft #{since.last_review.workpaper_id} on {new Date(since.last_review.at).toLocaleString()}.
+                  {since.last_review.workpaper_id !== paperId && ` ${since.changes.length} field${since.changes.length === 1 ? "" : "s"} changed since then.`}
+                </p>
+              ) : (
+                <p>You have not reviewed this draft or its earlier versions.</p>
+              )}
+              {since.reasons.length > 0 && (
+                <ul>
+                  {since.reasons.map((r) => (
+                    <li key={r}>{r}</li>
+                  ))}
+                </ul>
+              )}
+              {since.last_review && since.last_review.workpaper_id !== paperId && since.changes.length > 0 && (
+                <table>
+                  <caption>Your reviewed draft and this one</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Field</th>
+                      <th scope="col">You reviewed</th>
+                      <th scope="col">Now</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {since.changes.map((c) => (
+                      <tr key={c.field}>
+                        <th scope="row">{c.field.replaceAll("_", " ").replaceAll(".", " / ")}</th>
+                        <td>{c.before}</td>
+                        <td>{c.after}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
           )}
           {comparison?.previous_id && (
             <section>
