@@ -169,7 +169,22 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 		t.Fatalf("an old correction without a rule is previewed again: %s", body)
 	}
 	json.Unmarshal(call(path, preview, 200), &item)
+	// Under the firm's independent-review rule the person who prepared a correction cannot approve it.
+	_, err = db.Exec(`UPDATE organizations SET require_independent_review=true WHERE id=$1`, org)
+	must(err)
+	if body := call(path, map[string]any{"action": "approve", "digest": item.Digest, "confirmed": true}, 409); !strings.Contains(string(body), "another member") {
+		t.Fatalf("the preparer cannot approve under the firm's rule: %s", body)
+	}
+	_, err = db.Exec(`UPDATE organizations SET require_independent_review=false,independent_review_min_amount=1000000 WHERE id=$1`, org)
+	must(err)
 	call(path, map[string]any{"action": "approve", "digest": item.Digest, "confirmed": true}, 200)
+	_, err = db.Exec(`UPDATE organizations SET independent_review_min_amount=1 WHERE id=$1`, org)
+	must(err)
+	if body := call(path, map[string]any{"action": "execute", "digest": item.Digest, "confirmed": true}, 409); !strings.Contains(string(body), "another member") || writes != 0 {
+		t.Fatalf("a minimum the line reaches stops the preparer's own approval before the write: %s writes=%d", body, writes)
+	}
+	_, err = db.Exec(`UPDATE organizations SET independent_review_min_amount=NULL WHERE id=$1`, org)
+	must(err)
 	json.Unmarshal(call(path, map[string]any{"action": "execute", "digest": item.Digest, "confirmed": true}, 200), &item)
 	if writes != 1 || item.State != "verified" {
 		t.Fatalf("the approved correction posts once and verifies: %+v writes=%d", item, writes)
