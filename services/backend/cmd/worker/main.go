@@ -35,5 +35,6 @@ func main() {
 	go transport.RunReplays(ctx, db)
 	go transport.RunXeroRefresh(ctx, db)
 	go transport.RunStripeReports(ctx, db)
+	go transport.RunChatExpiry(ctx, db)
 	transport.Run(transport.Worker())
 }

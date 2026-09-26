@@ -98,3 +98,5 @@ Fresh Compose volumes run every migration automatically. Existing Compose volume
 `070_reminder_rules.sql` adds a firm's reminder rule (days after delivery before a reminder is due, 0–6, default 0; reminders per request, 1–5, default 3) and records it with every firm policy change. Apply after 069 with API/worker stopped; `/readyz` checks it.
 
 `071_agent_attribution.sql` records which MCP client made evidence, intake jobs, close preparations, request drafts and approval requests through a member's approved agent access, beside the member who remains their author. Apply after 070 with API/worker stopped; `/readyz` checks it.
+
+`072_chat_messages.sql` stores each member's assistant conversation for one close or firm-wide, read only by its author, with row-level security like 047. Apply after 071 with API/worker stopped; `/readyz` checks it.

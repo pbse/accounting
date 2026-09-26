@@ -152,6 +152,8 @@ Approved firm procedures and assigned client accounting authority: [workflow and
 
 Approved optional email setup and recovery: [Resend delivery](docs/email-delivery.md).
 
+In-app assistant that answers from your scoped reads: [context, history and boundaries](docs/chat.md).
+
 Close-wide scope and recovery: [coordinator flow](docs/close-coordinator.md) · [operations and local restore rehearsal](docs/operations.md).
 
 QuickBooks per-client setup: [sandbox OAuth and account snapshots](docs/quickbooks-onboarding.md).

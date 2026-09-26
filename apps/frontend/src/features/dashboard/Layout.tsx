@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useRef } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { SidebarAccount } from "./Access";
+import { Assistant } from "./Assistant";
 import { Icon, type IconName } from "./Icon";
 
 const groups: { label: string; items: { to: string; label: string; icon: IconName; end?: boolean }[] }[] = [
@@ -93,6 +94,7 @@ export default function WorkspaceLayout() {
           </Suspense>
         </div>
       </main>
+      <Assistant />
     </div>
   );
 }
