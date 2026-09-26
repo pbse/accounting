@@ -1,6 +1,6 @@
 import { PrepaidMethodFields, readCredits } from "../prepaids/MethodFields";
 import { AccrualConfirmations } from "../accruals/Prepare";
-import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord } from "./Email";
+import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { Avatar, Icon, type IconName } from "../dashboard/Icon";
@@ -66,6 +66,7 @@ type WorkItem = Plan & {
       provider_id: string | null;
       error: string;
     } | null;
+    reminder?: ReminderStatus;
     link?: {
       expires_at: string;
       revoked_at: string | null;
@@ -1163,10 +1164,11 @@ function WorkDetails({
       {item.state === "waiting_client" && latest?.consolidated && <p>Manage this consolidated request in <a href={`/dashboard/closes/${item.close_id}#coverage-work`}>Coverage and client evidence</a>.</p>}
       {item.state === "waiting_client" && latest && !latest.consolidated && !item.stale && (
         <fieldset disabled={busy}>
-          {(!latest.email || (latest.email.state === "accepted" && latest.email.delivery === "delivered")) && !latest.link?.used_at && !latest.link?.revoked_at && (
+          {(!latest.email || (latest.email.state === "accepted" && latest.email.delivery === "delivered") || (latest.reminder?.left ?? 1) <= 0) && !latest.link?.used_at && !latest.link?.revoked_at && (
             <SendRequestEmail
               key={latest.email?.id ?? "initial"}
               previousId={latest.email?.id}
+              reminder={latest.reminder}
               closeId={item.close_id}
               jobId={item.id}
               requestId={latest.id}

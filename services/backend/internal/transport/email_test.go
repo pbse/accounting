@@ -356,6 +356,40 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	approve(first, 409) // Provider acceptance is not delivery.
 	event(first, "delivered", "group-delivered", false, 204)
 	event(first, "sent", "group-out-of-order", false, 204)
+	rule := func(after, most int) {
+		t.Helper()
+		_, e := db.Exec(`UPDATE organizations SET reminder_after_days=$2,reminder_max=$3 WHERE id=(SELECT organization_id FROM client_closes WHERE id=$1)`, closeID, after, most)
+		must(e)
+	}
+	reminderState := func() (left int, due *time.Time, expires *time.Time) {
+		t.Helper()
+		var v struct {
+			Requests []struct {
+				ID       string `json:"id"`
+				Reminder struct {
+					Left      int        `json:"left"`
+					DueAt     *time.Time `json:"due_at"`
+					ExpiresAt *time.Time `json:"expires_at"`
+				} `json:"reminder"`
+			} `json:"requests"`
+		}
+		must(json.Unmarshal(call("GET", coveragePath, nil, 200), &v))
+		for _, q := range v.Requests {
+			if q.ID == group.ID {
+				return q.Reminder.Left, q.Reminder.DueAt, q.Reminder.ExpiresAt
+			}
+		}
+		t.Fatal("request missing from coverage")
+		return
+	}
+	rule(2, 1)
+	_, err = db.Exec(`UPDATE email_delivery_events SET occurred_at=now() WHERE event_id='group-delivered'`)
+	must(err)
+	if left, due, expires := reminderState(); left != 1 || due == nil || due.Before(time.Now().Add(47*time.Hour)) || expires == nil || !expires.After(time.Now()) {
+		t.Fatalf("the next reminder is due two days after delivery, with one allowed, before the emailed link expires: %d %v %v", left, due, expires)
+	}
+	approve(first, 409)
+	rule(0, 1)
 	reminder := approve(first, 200)
 	if approve(first, 200) != reminder {
 		t.Fatal("duplicate approval queued another reminder")
@@ -369,6 +403,11 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 		t.Fatal("reminder replaced approved link")
 	}
 	event(reminder, "delivered", "reminder-delivered", false, 204)
+	if left, _, _ := reminderState(); left != 0 {
+		t.Fatalf("the one allowed reminder is used: %d", left)
+	}
+	approve(reminder, 409)
+	rule(0, 3)
 	// A staff-recorded answer also blocks a reminder even with an unused link.
 	_, err = db.Exec(`INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,'fixture','client@example.test')`, group.ID, ledger)
 	must(err)

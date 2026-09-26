@@ -7,7 +7,7 @@ import { EmailSettings } from "./Email";
 import { FirmEnrollment, FirmOperations } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
+type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
 
 function IndependentReview() {
   const [policy, setPolicy] = useState<Policy>();
@@ -138,6 +138,77 @@ function LinkPasscodes() {
   );
 }
 
+// Each reminder still needs a person's approval; the rule says when one is due and how many a request can have.
+function ReminderRule() {
+  const [policy, setPolicy] = useState<Policy>();
+  const [after, setAfter] = useState(0);
+  const [most, setMost] = useState(3);
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/organization/policy")
+      .then((data: Policy) => {
+        if (!live) return;
+        setPolicy(data);
+        setAfter(data.reminder_after_days);
+        setMost(data.reminder_max);
+      })
+      .catch((e) => live && setMessage(e instanceof Error ? e.message : "Firm policy is unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [refresh]);
+  if (!policy) return message ? <p role="alert">{message}</p> : null;
+  async function change() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await workspaceRequest("/organization/policy", { reminder_after_days: after, reminder_max: most, reason });
+      setReason("");
+      setRefresh((n) => n + 1);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Policy change failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-label="Reminder rule">
+      <h2>Reminder rule</h2>
+      <p>
+        A reminder becomes due {policy.reminder_after_days === 0 ? "as soon as" : `${policy.reminder_after_days} ${policy.reminder_after_days === 1 ? "day" : "days"} after`} the previous email is delivered, and a request can have {policy.reminder_max} {policy.reminder_max === 1 ? "reminder" : "reminders"}. Each reminder still needs a person's approval. After the last one, or once the private link expires, contact the client another way.
+      </p>
+      {policy.can_manage_links ? (
+        <>
+          <label>
+            Days after delivery
+            <select value={after} onChange={(e) => setAfter(Number(e.target.value))}>
+              {[0, 1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <label>
+            Reminders per request
+            <select value={most} onChange={(e) => setMost(Number(e.target.value))}>
+              {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          <label>
+            Reason for the change
+            <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change()}>Save reminder rule</button>
+        </>
+      ) : (
+        <p className="note">A firm administrator with org:manage can change this policy.</p>
+      )}
+      {message && <p role="alert">{message}</p>}
+    </section>
+  );
+}
+
 function Materiality() {
   const [policy, setPolicy] = useState<Policy>();
   const [amount, setAmount] = useState("");
@@ -234,6 +305,7 @@ export default function Firm() {
           <IndependentReview />
       <LinkPasscodes />
       <Materiality />
+      <ReminderRule />
           <AgentAccess />
           <FirmOperations />
           <ClientAccess entities={entities} />
