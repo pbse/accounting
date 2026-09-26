@@ -18,6 +18,7 @@ const ClientClose = lazy(() => import("./features/closes/ClientClose"));
 const WorkpaperView = lazy(() => import("./features/closes/WorkpaperView"));
 const Firm = lazy(() => import("./features/closes/Firm"));
 const Measure = lazy(() => import("./features/closes/Measure"));
+const Attention = lazy(() => import("./features/closes/Attention"));
 
 function Gated({ children }: { children: ReactNode }) {
   return <WorkspaceGate>{children}</WorkspaceGate>;
@@ -72,6 +73,7 @@ export function App() {
             <Route path="closes/:id" element={<Gated><ClientClose /></Gated>} />
             <Route path="closes/:id/workpapers/:paperId" element={<Gated><WorkpaperView /></Gated>} />
             <Route path="firm" element={<Gated><Firm /></Gated>} />
+            <Route path="attention" element={<Gated><Attention /></Gated>} />
             <Route path="measure" element={<Gated><Measure /></Gated>} />
             <Route path="reconciliations/new" element={<CloseScoped><Reconciliation /></CloseScoped>} />
             <Route path="settlements/new" element={<CloseScoped><Settlement /></CloseScoped>} />

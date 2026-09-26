@@ -2,10 +2,17 @@ import { Suspense, useEffect, useRef } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { SidebarAccount } from "./Access";
 import { Assistant } from "./Assistant";
+import { AttentionBadge } from "../closes/Attention";
 import { Icon, type IconName } from "./Icon";
 
 const groups: { label: string; items: { to: string; label: string; icon: IconName; end?: boolean }[] }[] = [
-  { label: "Essentials", items: [{ to: "/dashboard", label: "Work", icon: "work", end: true }] },
+  {
+    label: "Essentials",
+    items: [
+      { to: "/dashboard", label: "Work", icon: "work", end: true },
+      { to: "/dashboard/attention", label: "Attention", icon: "decision" },
+    ],
+  },
   { label: "Clients", items: [{ to: "/dashboard/closes", label: "Client closes", icon: "clients" }] },
   {
     label: "Prepare",
@@ -77,6 +84,7 @@ export default function WorkspaceLayout() {
                 <NavLink className="nav-item" end={item.end} to={item.to} key={item.to}>
                   <Icon name={item.icon} />
                   {item.label}
+                  {item.to === "/dashboard/attention" && <AttentionBadge />}
                 </NavLink>
               ))}
             </div>
