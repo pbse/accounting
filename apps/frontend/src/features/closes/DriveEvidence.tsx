@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
-type DriveFile = { id: string; name: string; filename: string; size: string; modified: string };
+type DriveFile = { id: string; name: string; filename: string; modified: string };
 
 // Off unless the firm has configured Google Drive through WorkOS; a picked file goes through the ordinary evidence upload.
 export function DriveEvidence({ closeId, onAdded }: { closeId: string; onAdded: () => void }) {

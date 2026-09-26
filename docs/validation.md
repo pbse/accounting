@@ -1502,4 +1502,6 @@ Tests:
 
 Each check was observed red with its rule removed (10 mutations).
 
+Code review: GPT-6 Sol (high) found no defect in token handling, hosts, redirects, file IDs, query escaping, the access boundary, the filename header or the limits. Adopted: `WORKOS_API_KEY` is forwarded to the API in the staging deploy, the edge container and Compose; the evidence documentation no longer calls Drive access deferred (only automatic syncing is); the unused file size was removed. One delta round closed both findings.
+
 Not verified: a live WorkOS Pipes integration and Google Drive responses (the provider slug and scopes depend on the firm's WorkOS dashboard), and the panel in a browser.

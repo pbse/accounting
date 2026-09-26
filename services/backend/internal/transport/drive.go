@@ -129,10 +129,10 @@ func registerDrive(mux *http.ServeMux) {
 		}
 		var list struct {
 			Files []struct {
-				ID, Name, MimeType, Size, ModifiedTime string
+				ID, Name, MimeType, ModifiedTime string
 			} `json:"files"`
 		}
-		params := url.Values{"q": {query}, "fields": {"files(id,name,mimeType,size,modifiedTime)"}, "pageSize": {"25"}, "orderBy": {"modifiedTime desc"}}
+		params := url.Values{"q": {query}, "fields": {"files(id,name,mimeType,modifiedTime)"}, "pageSize": {"25"}, "orderBy": {"modifiedTime desc"}}
 		if _, err = driveCall(r.Context(), "GET", "https://www.googleapis.com/drive/v3/files?"+params.Encode(), token, nil, &list, 1<<20); err != nil {
 			problem(w, 502, "Google Drive is unavailable. Upload the file directly instead.")
 			return
@@ -140,7 +140,7 @@ func registerDrive(mux *http.ServeMux) {
 		files := []map[string]string{}
 		for _, f := range list.Files {
 			if driveTypes[f.MimeType] != "" && driveFileID.MatchString(f.ID) {
-				files = append(files, map[string]string{"id": f.ID, "name": f.Name, "filename": driveName(f.Name, f.MimeType), "size": f.Size, "modified": f.ModifiedTime})
+				files = append(files, map[string]string{"id": f.ID, "name": f.Name, "filename": driveName(f.Name, f.MimeType), "modified": f.ModifiedTime})
 			}
 		}
 		jsonReply(w, 200, map[string]any{"configured": true, "connected": true, "files": files})
