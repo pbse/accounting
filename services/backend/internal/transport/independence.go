@@ -56,6 +56,23 @@ func independenceIssue(ctx context.Context, q querier, closeID, paperID, approve
 	return "", nil
 }
 
+// correctionIndependenceIssue applies the firm's independent-review rule to a native QuickBooks correction: when the rule
+// covers its amount, whoever prepared the correction cannot approve it.
+func correctionIndependenceIssue(ctx context.Context, q querier, closeID, proposer, approver, amount string) (string, error) {
+	var always, large bool
+	var minimum string
+	err := q.QueryRowContext(ctx, `SELECT o.require_independent_review,COALESCE(o.independent_review_min_amount::text,''),o.independent_review_min_amount IS NOT NULL AND $2::numeric>=o.independent_review_min_amount
+ FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE c.id::text=$1 FOR SHARE OF o`, closeID, amount).Scan(&always, &minimum, &large)
+	if err != nil || !always && !large || proposer != "" && proposer != approver {
+		return "", err
+	}
+	rule := "This firm requires an independent reviewer"
+	if !always {
+		rule += " for amounts of at least " + minimum
+	}
+	return rule + ". You prepared this correction, so another member must approve it.", nil
+}
+
 func registerIndependence(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/organization/policy", func(w http.ResponseWriter, r *http.Request) {
 		var required, passcode bool

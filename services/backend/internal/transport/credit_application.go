@@ -335,6 +335,13 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Review and confirm the exact application first.")
 				return
 			}
+			if issue, err := correctionIndependenceIssue(r.Context(), db, closeID, item.ProposedBy, a.Subject, item.Amount); err != nil {
+				problem(w, 503, "Firm review policy could not be checked. No write was made.")
+				return
+			} else if issue != "" {
+				problem(w, 409, issue)
+				return
+			}
 			result, err := db.ExecContext(r.Context(), `UPDATE credit_applications SET state='approved',approved_by=$2,approval_expires_at=now()+interval '10 minutes' WHERE id::text=$1 AND digest=$3 AND state IN ('preview','approved')`, item.ID, a.Subject, item.Digest)
 			if err != nil {
 				problem(w, 503, "Approval unavailable.")
@@ -363,6 +370,13 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 			var signedNow bool
 			if tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID).Scan(&locked) != nil || tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=$1 ORDER BY id DESC LIMIT 1),false)`, closeID).Scan(&signedNow) != nil || signedNow {
 				problem(w, 409, "The close changed or was signed off. Reopen and review before applying.")
+				return
+			}
+			if issue, err := correctionIndependenceIssue(r.Context(), tx, closeID, item.ProposedBy, item.ApprovedBy, item.Amount); err != nil {
+				problem(w, 503, "Firm review policy could not be checked. No write was made.")
+				return
+			} else if issue != "" {
+				problem(w, 409, issue)
 				return
 			}
 			var currentCapture string

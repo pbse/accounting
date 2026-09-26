@@ -85,6 +85,17 @@ func capturedTxn(ctx context.Context, db *sql.DB, closeID, entity, id, realm str
 	return "", "", nil, errors.New("Select a supported " + entity + " from the latest complete capture")
 }
 
+// recodedAmount is the amount of the line a correction moves; empty when it cannot be read, which fails the policy check.
+func recodedAmount(item billCorrection, sandbox quickbooks.Sandbox) string {
+	_, _, _, lines, _ := quickbooks.ParseRecodable(item.Entity, item.BeforeBill, cmp.Or(sandbox.Currency, "USD"))
+	for _, line := range lines {
+		if line.ID == item.TargetLineID {
+			return line.Amount
+		}
+	}
+	return ""
+}
+
 // recodeCurrent checks a saved correction still matches the capture, the live transaction (by version), the open
 // period, the selected line and the new account.
 func recodeCurrent(ctx context.Context, db *sql.DB, closeID string, item billCorrection, sandbox quickbooks.Sandbox) error {
@@ -349,6 +360,13 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 				problem(w, 409, "Review and confirm the exact correction first.")
 				return
 			}
+			if issue, err := correctionIndependenceIssue(r.Context(), db, closeID, item.ProposedBy, a.Subject, recodedAmount(item, sandbox)); err != nil {
+				problem(w, 503, "Firm review policy could not be checked. No write was made.")
+				return
+			} else if issue != "" {
+				problem(w, 409, issue)
+				return
+			}
 			result, err := db.ExecContext(r.Context(), `UPDATE bill_corrections SET state='approved',approved_by=$2,approval_expires_at=now()+interval '10 minutes' WHERE id::text=$1 AND digest=$3 AND state IN ('preview','approved')`, item.ID, a.Subject, item.Digest)
 			if err != nil {
 				problem(w, 503, "Approval unavailable.")
@@ -382,6 +400,13 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 			var signedNow bool
 			if tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id=$1 ORDER BY id DESC LIMIT 1),false)`, closeID).Scan(&signedNow) != nil || signedNow {
 				problem(w, 409, "Close sign-off changed. Reopen and review before correcting.")
+				return
+			}
+			if issue, err := correctionIndependenceIssue(r.Context(), tx, closeID, item.ProposedBy, item.ApprovedBy, recodedAmount(item, sandbox)); err != nil {
+				problem(w, 503, "Firm review policy could not be checked. No write was made.")
+				return
+			} else if issue != "" {
+				problem(w, 409, issue)
 				return
 			}
 			var currentCapture string

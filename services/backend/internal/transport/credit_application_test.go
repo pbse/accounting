@@ -159,7 +159,25 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 	must(err)
 	var item creditApplication
 	must(json.Unmarshal(call(path, apply(nil), 200), &item))
+	// Under the firm's independent-review rule the person who prepared an application cannot approve it.
+	_, err = db.Exec(`UPDATE organizations SET require_independent_review=true WHERE id=$1`, org)
+	must(err)
+	if body := call(path, map[string]any{"action": "approve", "id": item.ID, "digest": item.Digest, "confirmed": true}, 409); !strings.Contains(string(body), "another member") {
+		t.Fatalf("the preparer cannot approve under the firm's rule: %s", body)
+	}
+	actor.Subject = "user_reviewer"
 	call(path, map[string]any{"action": "approve", "id": item.ID, "digest": item.Digest, "confirmed": true}, 200)
+	actor.Subject = "user_accountant"
+	_, err = db.Exec(`UPDATE organizations SET require_independent_review=false,independent_review_min_amount=1000 WHERE id=$1`, org)
+	must(err)
+	call(path, map[string]any{"action": "approve", "id": item.ID, "digest": item.Digest, "confirmed": true}, 200)
+	_, err = db.Exec(`UPDATE organizations SET independent_review_min_amount=100 WHERE id=$1`, org)
+	must(err)
+	if body := call(path, map[string]any{"action": "execute", "id": item.ID, "digest": item.Digest, "confirmed": true}, 409); !strings.Contains(string(body), "at least 100") || paymentWrites != 0 {
+		t.Fatalf("a minimum the amount now reaches stops the preparer's own approval before the write: %s writes=%d", body, paymentWrites)
+	}
+	_, err = db.Exec(`UPDATE organizations SET independent_review_min_amount=NULL WHERE id=$1`, org)
+	must(err)
 	must(json.Unmarshal(call(path, map[string]any{"action": "execute", "id": item.ID, "digest": item.Digest, "confirmed": true}, 200), &item))
 	if paymentWrites != 1 || item.State != "verified" || item.Amount != "150.00" {
 		t.Fatalf("the approved application is written once and read back: %+v writes=%d", item, paymentWrites)
