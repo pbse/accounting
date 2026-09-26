@@ -93,7 +93,7 @@ export function ProductionAccess({ closeId, entity, currency }: { closeId: strin
         <p>No active grant. A user with client access and posting approval permission must choose exact account IDs from the production Chart of Accounts.</p>
         <label>Account IDs the grant allows (2–20, from the Chart of Accounts)<input value={accounts} onChange={e => setAccounts(e.target.value)} placeholder="For example 30, 31, 32" /></label>
         <fieldset><legend>Draft kinds this grant covers</legend>
-          {[["prepaid", "Prepaid schedules"], ["accrual", "Accrued expenses"], ["loan", "Loan schedules"], ["owner", "Owner items"], ["settlement", "Stripe fee entries"], ["bill_correction", "Bill expense corrections"], ["purchase_correction", "Expense line recodes"], ["deposit_correction", "Income deposit line recodes"], ["vendor_credit", "Supplier credits"]].map(([kind, label]) => (
+          {[["prepaid", "Prepaid schedules"], ["accrual", "Accrued expenses"], ["loan", "Loan schedules"], ["owner", "Owner items"], ["settlement", "Stripe fee entries"], ["bill_correction", "Bill expense corrections"], ["purchase_correction", "Expense line recodes"], ["deposit_correction", "Income deposit line recodes"], ["payment_application", "Customer payment applications"], ["credit_application", "Vendor credit applications"], ["vendor_credit", "Supplier credits"]].map(([kind, label]) => (
             <label key={kind}><input type="checkbox" checked={kinds.includes(kind)} onChange={e => setKinds(e.target.checked ? [...kinds, kind] : kinds.filter(k => k !== kind))} /> {label}</label>
           ))}
           <small>Kinds other than prepaid also need the server to enable them after the QuickBooks sandbox balance check.</small>

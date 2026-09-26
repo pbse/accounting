@@ -1390,3 +1390,18 @@ Each check was observed red with its rule removed (17 mutations).
 Code review: GPT-6 Sol (high). Adopted: copies are compared on every field (numbers by value), not the version alone, so a changed payee at the same version is caught before the write; the readback also refuses a field that appears after the write; a correction saved before rules were required must be previewed again with one. Two delta rounds closed all three findings.
 
 Not verified: QuickBooks' live sparse Line updates for Purchase and Deposit (the reason both kinds stay off in production until the operator enables them after a sandbox check), and the panels in a browser.
+
+## QuickBooks payment and vendor credit applications (2026-09-25)
+
+Built while the GPT-6 Sol reviewer was over its usage limit, at the user's direction for an unavailable reviewer: committed on its own branch, reviewed before it is opened or merged. No plan review.
+
+Request: apply an unapplied customer payment to an invoice, and a vendor credit to a bill. One flow and one table (migration 065) for both: a customer payment is updated with its lines as read plus a line linking the invoice; a vendor credit is applied by a zero-amount bill payment linking the bill and the credit, under a request ID. Preview checks both documents in the capture's open items and live (same version and open amount), the same party, the amount within both, the open period, a bank account and a close-month date for bill payments, the rule reference and, in production, the grant kind and maximum. Execution reserves one attempt under the close lock; readback requires each open amount to fall by exactly the amount and, for a vendor credit, the bill payment to link exactly the two documents and pay nothing. Uncertain attempts block sign-off (checked outside the signed snapshot, so existing sign-offs stay intact) and close deletion; receipts are in the review package.
+
+Tests:
+
+- `TestCreditApplicationsLinkBothDocumentsAndReadBack` (pure): the payment keeps its applied line and gains one; readback passes only when both open amounts fell; the bill payment has total zero, two lines and the request ID; a bill payment that pays money fails readback; a credit is never applied to another vendor's bill.
+- `TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack` (PostgreSQL, mocked production QuickBooks): off until enabled; an amount above the unapplied amount, another customer's invoice and a short rule refused; a payment application and a vendor credit application each written once and verified (the bill payment's ID saved); a date outside the month and a non-bank account refused; an uncertain attempt blocks sign-off.
+
+Each check was observed red with its rule removed (12 mutations).
+
+Not verified: QuickBooks' live behaviour for a payment line update and a zero-amount bill payment (why both stay off in production until enabled after a sandbox check), and the panel in a browser. Review pending.
