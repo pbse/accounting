@@ -48,7 +48,7 @@ func ValidateRecurringAccrual(ctx context.Context, tx *sql.Tx, p Plan, targetID,
 		return fmt.Errorf("Current period ledger capture changed; refresh the recurring accrual")
 	}
 	var latest string
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT id::text FROM workpapers WHERE close_id::text=$1 AND kind='accrual' AND paper->'recurring_accrual'->>'paper_id'=$2 AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=workpapers.close_id AND newer.paper->>'revises'=workpapers.id::text) ORDER BY id DESC LIMIT 1),'')`, targetID, lineage.PaperID).Scan(&latest)
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT id::text FROM workpapers WHERE close_id::text=$1 AND kind='accrual' AND paper->'recurring_accrual'->>'paper_id'=$2 AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=workpapers.close_id AND newer.paper->>'revises'=workpapers.id::text) ORDER BY workpapers.id DESC LIMIT 1),'')`, targetID, lineage.PaperID).Scan(&latest)
 	if err != nil || p.Revises != latest {
 		return fmt.Errorf("Current recurring accrual changed; refresh the comparison")
 	}

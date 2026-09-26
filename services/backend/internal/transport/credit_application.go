@@ -111,7 +111,7 @@ func applicationCurrent(ctx context.Context, sandbox quickbooks.Sandbox, kind st
 
 func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/quickbooks/applications", func(w http.ResponseWriter, r *http.Request) {
-		rows, err := db.QueryContext(r.Context(), `SELECT `+applicationColumns+` FROM credit_applications WHERE close_id::text=$1 ORDER BY id DESC`, r.PathValue("id"))
+		rows, err := db.QueryContext(r.Context(), `SELECT `+applicationColumns+` FROM credit_applications WHERE close_id::text=$1 ORDER BY credit_applications.id DESC`, r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Applications unavailable.")
 			return
@@ -424,7 +424,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			var currentCapture string
-			if e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state IN ('completed','unchanged') AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1`, closeID).Scan(&currentCapture); e != nil || currentCapture != item.CaptureID {
+			if e := tx.QueryRowContext(r.Context(), `SELECT id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state IN ('completed','unchanged') AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY quickbooks_entity_syncs.id DESC LIMIT 1`, closeID).Scan(&currentCapture); e != nil || currentCapture != item.CaptureID {
 				problemCode(w, 409, "SOURCE_STALE", "Transaction capture changed. Review a new application.")
 				return
 			}
