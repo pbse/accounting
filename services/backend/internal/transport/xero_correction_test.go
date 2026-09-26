@@ -102,7 +102,9 @@ func TestXeroBillLineIsRecodedOnceAfterIndependentApproval(t *testing.T) {
 			return reply(map[string]any{"Organisations": []map[string]string{{"PeriodLockDate": lock}}})
 		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/Invoices/i-1"):
 			posts++
-			var body struct{ Invoices []struct{ LineItems []map[string]any } }
+			var body struct {
+				Invoices []struct{ LineItems []map[string]any }
+			}
 			json.NewDecoder(r.Body).Decode(&body)
 			sent.key, sent.lines = r.Header.Get("Idempotency-Key"), body.Invoices[0].LineItems
 			var current map[string]any

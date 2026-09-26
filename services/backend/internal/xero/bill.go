@@ -29,10 +29,10 @@ type BillLine struct {
 
 // Bill is the accounting projection of a Xero invoice that a recode must leave unchanged.
 type Bill struct {
-	InvoiceID       string `json:"InvoiceID"`
-	Type            string `json:"Type"`
-	Status          string `json:"Status"`
-	Contact         struct {
+	InvoiceID string `json:"InvoiceID"`
+	Type      string `json:"Type"`
+	Status    string `json:"Status"`
+	Contact   struct {
 		ContactID string `json:"ContactID"`
 	} `json:"Contact"`
 	Date            string      `json:"Date"`
