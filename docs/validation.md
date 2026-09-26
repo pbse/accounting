@@ -1537,3 +1537,13 @@ Request: review item 4. The worker runs `quickbooks.RunSync` and `transport.RunX
 Checks: the queue worker typechecks; `compose.yaml` and the workflow parse. No Go code changed, so no Go tests apply.
 
 Code review: GPT-6 Sol (high) found the three worker paths complete and no other worker loop missing a setting. Adopted: the Compose API also gets the three `QBO_PRODUCTION_*` settings, so a production connection can be made locally, and so does the cloud API container (`workers/edge/src/index.ts`), which dropped them although the deploy sent them; the validation note says no Go code changed. One delta round closed both findings. Not verified: a staging deploy and a scheduled refresh in the cloud.
+
+## Truthful refresh state (2026-09-25)
+
+Request: review item 5.
+
+- **Application candidates**: a capture whose transactions did not change is saved as `unchanged` with freshly read open items (`quickbooks/sync.go`), but `capturedOpen` and the execute-time recheck in `credit_application.go` read only `completed` captures, so candidates could be stale. Both now take the newest `completed` or `unchanged` capture. Line recodes still read `completed` captures, which hold the transaction records.
+- **Daily Books**: a close whose newest capture is a Xero snapshot without transactions was dropped, and Work could then say "No new exceptions since the last review". It is now listed as not checked with the capture's reason (`dailyLatest.unchecked`, from the snapshot's `transactions_error`), the "no new exceptions" line appears only when nothing is unchecked, and such a capture still cannot be marked reviewed. The morning brief counts only new findings and is unchanged.
+- **Change hints**: the QuickBooks webhook updates only sandbox connections. Rather than add a production verifier, Work's Daily Books line and the docs now say sandbox companies refresh after a change and production companies through the daily capture.
+
+Tests: `TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack` adds a newer unchanged capture whose open items differ and finds the candidates taken from it, and its later vendor credit executes against that capture. `TestDailyBooksShowsExceptionsNewSinceTheLastReview` now expects a newest Xero snapshot without transactions to be listed as not checked, with no findings, and refused for marking reviewed. Both capture queries, the join and the reason were observed red when broken (4 mutations).

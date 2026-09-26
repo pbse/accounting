@@ -379,7 +379,7 @@ export function Work({
   );
 }
 
-type Daily = { close_id: string; entity: string; period: string; source: "quickbooks" | "xero"; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[] };
+type Daily = { close_id: string; entity: string; period: string; source: "quickbooks" | "xero"; sync_id: string; captured_at: string; requested_by: string; total: number; new: { type: string; question: string }[]; unchecked?: string };
 
 // New exceptions from this and last month's captures since each client was last reviewed.
 function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () => void }) {
@@ -410,16 +410,29 @@ function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () =
     }
   }
   const open = items?.filter((item) => item.new.length > 0) ?? [];
+  const unchecked = items?.filter((item) => item.unchecked) ?? [];
   return (
     <>
       <div className="section-title" id="daily-books">
         <h2>Daily books</h2>
-        <small>New since each client's last review. QuickBooks and Xero captures refresh daily, and QuickBooks also after a change.</small>
+        <small>New since each client's last review. QuickBooks and Xero captures refresh daily, and QuickBooks sandbox companies also after a change.</small>
       </div>
       <div className="rows" aria-label="Daily books">
         {!items && !error && <p role="status" className="empty">Checking captures…</p>}
         {error && <p role="alert" className="empty">{error}</p>}
-        {items && open.length === 0 && <p className="empty">No new exceptions since the last review.</p>}
+        {items && open.length === 0 && unchecked.length === 0 && <p className="empty">No new exceptions since the last review.</p>}
+        {unchecked.map((item) => (
+          <div className="row" key={`unchecked-${item.close_id}`}>
+            <span className="row-main">
+              <Avatar label={item.entity} />
+              <span>
+                <strong>{item.entity} · {item.period}</strong>
+                <small>Transactions not checked in the {item.source === "xero" ? "Xero" : "QuickBooks"} capture of {new Date(item.captured_at).toLocaleString()}: {item.unchecked}</small>
+              </span>
+            </span>
+            <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open the close</Link>
+          </div>
+        ))}
         {open.map((item) => (
           <div className="row" key={item.close_id}>
             <span className="row-main">

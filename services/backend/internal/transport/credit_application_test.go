@@ -183,6 +183,17 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 		t.Fatalf("the approved application is written once and read back: %+v writes=%d", item, paymentWrites)
 	}
 
+	// A newer capture whose transactions did not change reads open items afresh, and its candidates are the ones offered.
+	fresh := `{"Id":"93","SyncToken":"1","TxnDate":"2026-09-20","CustomerRef":{"value":"4","name":"Acme"},"CurrencyRef":{"value":"USD"},"TotalAmt":40,"Balance":40}`
+	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at,payload) VALUES($1,$2,'2026-09','fixture','unchanged',$3,now(),$4)`, closeID, connectionID, evidenceID,
+		`{"realm":"123","open_items":{"Payment":[`+payment+`],"Invoice":[`+fresh+`],"VendorCredit":[`+credit+`],"Bill":[`+bill+`]}}`)
+	must(err)
+	listRequest := httptest.NewRequest("GET", path, nil).WithContext(auth.WithActor(context.Background(), actor))
+	listed := httptest.NewRecorder()
+	mux.ServeHTTP(listed, listRequest)
+	if !strings.Contains(listed.Body.String(), `"id":"93"`) || strings.Contains(listed.Body.String(), `"id":"91"`) {
+		t.Fatalf("candidates come from the newest capture, changed or not: %s", listed.Body.String())
+	}
 	credited := func(changes map[string]any) map[string]any {
 		out := apply(map[string]any{"kind": "vendor_credit", "source_id": "80", "target_id": "41", "amount": "60.00", "txn_date": "2026-09-30", "bank_account_id": "35", "rule_reference": "Supplier credit rule 2"})
 		for k, v := range changes {
