@@ -118,7 +118,15 @@ func TestAssistantAnswersFromTheMembersOwnScopedReads(t *testing.T) {
 	if got := ask("hello"); !strings.Contains(got.Body, "I answer from this close's saved work") {
 		t.Fatalf("an unmatched question gets the help reply: %+v", got)
 	}
-	if history := call("user_a", nil, "GET", closeChat, nil, 200); len(history.Messages) != 16 {
+	// The latest message stays last when ids gain a digit (9 → 10), which a text sort would break.
+	var gap string
+	must(db.QueryRow(`SELECT (10^(length(max(id)::text)))::bigint FROM chat_messages`).Scan(&gap))
+	_, err = db.Exec(`SELECT setval(pg_get_serial_sequence('chat_messages','id'),$1::bigint-1)`, gap)
+	must(err)
+	if got := ask("What blocks sign-off?"); !strings.Contains(got.Body, "blocks sign-off") {
+		t.Fatalf("the answer after the ids gain a digit is the last message: %+v", got)
+	}
+	if history := call("user_a", nil, "GET", closeChat, nil, 200); len(history.Messages) != 18 {
 		t.Fatalf("the conversation keeps every question and answer: %d", len(history.Messages))
 	}
 	// Another member never sees it, even with access to the client; a member without access to a client cannot use its chat.
