@@ -135,6 +135,10 @@ func registerMembers(mux *http.ServeMux, db *sql.DB) {
 		}
 		var id string
 		err = tx.QueryRowContext(r.Context(), `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, org, in.Subject, in.Granted, in.Reason, subject(r)).Scan(&id)
+		// A removed member's assistant history goes with their membership.
+		if err == nil && !in.Granted {
+			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE organization_id=$1 AND author=$2`, org, in.Subject)
+		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Member access change could not be confirmed. Refresh before retrying.")
 			return

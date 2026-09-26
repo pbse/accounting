@@ -1399,3 +1399,111 @@ a.row:hover {
 .table-scroll td {
   white-space: nowrap;
 }
+
+.assistant-toggle {
+  position: fixed;
+  right: 1.2rem;
+  bottom: 1.2rem;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  background: #153e35;
+  color: #fff;
+  border-color: #153e35;
+  box-shadow: 0 6px 20px rgb(21 62 53 / 25%);
+}
+.assistant-toggle:hover:not(:disabled) {
+  background: #25594c;
+}
+.assistant {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: min(400px, 100vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: var(--surface, #fff);
+  border-left: 1px solid var(--border, #e4e4e0);
+  box-shadow: -8px 0 24px rgb(0 0 0 / 8%);
+}
+.assistant header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.assistant header strong {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.assistant header button {
+  padding: 0.2rem 0.6rem;
+}
+.assistant-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+}
+.assistant-messages {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.assistant-messages > li {
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+  background: var(--subtle, #f7f7f5);
+}
+.assistant-messages > li.user {
+  align-self: flex-end;
+  background: #e5eee2;
+  max-width: 85%;
+}
+.assistant-messages > li p {
+  margin: 0;
+  white-space: pre-line;
+}
+.assistant-messages > li a {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.85rem;
+}
+.assistant-hint {
+  color: var(--muted, #6b6b65);
+}
+.assistant form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.assistant form textarea {
+  width: 100%;
+  font: inherit;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong, #cfcfca);
+}
+.assistant form div {
+  display: flex;
+  justify-content: space-between;
+}
+.assistant form .primary {
+  margin-top: 0;
+}
+.assistant-note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted, #6b6b65);
+}
