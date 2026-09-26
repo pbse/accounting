@@ -22,6 +22,7 @@ export class CapabilityAPI extends Container<Env> {
     XERO_CLIENT_ID: this.env.XERO_CLIENT_ID ?? "",
     XERO_CLIENT_SECRET: this.env.XERO_CLIENT_SECRET ?? "",
     XERO_REDIRECT_URI: this.env.XERO_REDIRECT_URI ?? "",
+    XERO_WEBHOOK_KEY: this.env.XERO_WEBHOOK_KEY ?? "",
     PUBLIC_APP_URL: this.env.PUBLIC_APP_URL ?? "",
     EMAIL_INTAKE_ADDRESS: this.env.EMAIL_INTAKE_ADDRESS ?? "",
     EMAIL_INTAKE_KEY: this.env.EMAIL_INTAKE_KEY ?? "",
@@ -62,6 +63,7 @@ interface Env {
   XERO_CLIENT_ID?: string;
   XERO_CLIENT_SECRET?: string;
   XERO_REDIRECT_URI?: string;
+  XERO_WEBHOOK_KEY?: string;
   WORKOS_CLIENT_ID?: string;
   WORKOS_ORGANIZATION_ID?: string;
   WORKOS_ISSUER?: string;

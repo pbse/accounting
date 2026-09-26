@@ -1590,3 +1590,11 @@ Tests: `TestNativeReconciliationCountsXerosFlagsPerBankAccount` (pure) and `Test
 Code review: GPT-6 Sol (high). Adopted: the QuickBooks side of the books-in-use comparison now counts only period snapshots of the close month on the current QuickBooks reading connection, so another month's snapshot or a disconnected company's no longer hides Xero's flags (both tested, 2 more mutations killed; one delta round closed both findings, its wording note applied); the documentation says the package shows each account's count or why none could be read, and no longer states QuickBooks' API capability categorically.
 
 Not verified: live Xero payloads and the workpaper note in a browser.
+
+## Xero change hints (2026-09-26)
+
+Request: Xero change hints. `POST /v1/webhooks/xero` (system route, `XERO_WEBHOOK_KEY`, migration 067) checks `x-xero-signature` as the base64 HMAC-SHA256 of the raw body (401 otherwise, 503 without the key), answers Xero's intent-to-receive check, and records the newest INVOICE or CREDITNOTE change time (with or without a zone suffix, never in the future, never moved back) on the tenant's connections as `xero_connections.changed_at`. The scheduled Xero refresh treats a close as due when its client's active connection changed after both its last scheduled claim and its last snapshot, with no claim in the past 30 minutes; the daily rule is unchanged. No Xero call is made by the webhook. `XERO_WEBHOOK_KEY` is forwarded to the API through `.env.example`, Compose, the edge container and the deploy workflow.
+
+Tests: `TestXeroWebhookHintsTheTenantAndTheSweepCapturesHintedCloses` (signature, intent to receive, ignored contact, older and future events, the due rule with a never-claimed close, a recent claim, an older claim, a claim after the change, a capture after the change, and a connection that is not active). 15 mutations, all failing the test; the tenant and connection-state filters in the webhook were deleted as redundant (the due rule checks the active connection).
+
+Not verified: live Xero delivery and intent-to-receive against a registered app.
