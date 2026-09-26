@@ -85,7 +85,10 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	save(feb, "prepaid", prepaid("Maintenance", "50.00", "400.00", prepaids.Row{Period: "2026-01", Expense: "50.00", Remaining: "450.00"}, prepaids.Row{Period: "2026-02", Expense: "50.00", Remaining: "400.00"}), true)
 	olderSoftware := save(feb, "prepaid", prepaid("Software", "30.00", "330.00", prepaids.Row{Period: "2026-02", Expense: "30.00", Remaining: "330.00"}), true)
 	save(feb, "prepaid", prepaid("Software", "35.00", "325.00", prepaids.Row{Period: "2026-02", Expense: "35.00", Remaining: "325.00"}), false)
-	save(mar, "prepaid", prepaid("Hosting", "20.00", "280.00", prepaids.Row{Period: "2026-02", Expense: "20.00", Remaining: "300.00"}, prepaids.Row{Period: "2026-03", Expense: "20.00", Remaining: "280.00"}), true)
+	// Hosting equipment is disposed of in March: nothing is left to depreciate and its disposal entry is history.
+	hosting := prepaid("Hosting", "20.00", "280.00", prepaids.Row{Period: "2026-02", Expense: "20.00", Remaining: "300.00"}, prepaids.Row{Period: "2026-03", Expense: "20.00", Remaining: "280.00"})
+	hosting.Disposal = []prepaids.Adjustment{{Date: "2026-03-31", DebitAccount: "Gain or loss on disposal", CreditAccount: "Hosting equipment", Amount: "280.00"}}
+	save(mar, "prepaid", hosting, true)
 	save(jan, "prepaid", prepaid("Warranty", "10.00", "110.00", prepaids.Row{Period: "2026-01", Expense: "10.00", Remaining: "110.00"}), true)
 	save(feb, "prepaid", prepaid("Warranty", "10.00", "100.00", prepaids.Row{Period: "2026-02", Expense: "10.00", Remaining: "100.00"}), true)
 	loan := func(lender, opening, closing string) loans.Workpaper {
@@ -150,6 +153,9 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	}
 	if got := column("prepaids.csv", 1); got != "2026-01 Insurance, 2026-01 Maintenance, 2026-01 Warranty, 2026-02 Insurance, 2026-02 Maintenance, 2026-02 Warranty, 2026-03 Insurance, 2026-03 Hosting" {
 		t.Fatalf("only this client's approved latest prepaids for the year: %s", got)
+	}
+	if got := column("prepaids.csv", 6); !strings.HasSuffix(got, "2026-03 736.36, 2026-03 0.00") || !strings.Contains(files["adjustments.csv"], "Gain or loss on disposal,Hosting equipment,280.00") {
+		t.Fatalf("a disposed asset rolls forward to zero and its disposal entry is in the history: %s\n%s", got, files["adjustments.csv"])
 	}
 	if got := column("prepaids.csv", 9); !strings.HasPrefix(got, "2026-01 prepaid, ") {
 		t.Fatalf("each roll-forward row names its schedule: %s", got)

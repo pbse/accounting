@@ -228,7 +228,15 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 					if wp.Input.SalvageValue != "" {
 						base.Sub(base, amount(wp.Input.SalvageValue))
 					}
-					support("Depreciation · "+wp.Input.SourceReference, wp.Input.PrepaidAccount, remaining.Sub(remaining, base))
+					net := remaining.Sub(remaining, base)
+					// A disposal removes the asset's accumulated depreciation; its lines are proposed like the true-up.
+					if len(wp.Disposal) > 0 {
+						net = new(big.Rat)
+					}
+					support("Depreciation · "+wp.Input.SourceReference, wp.Input.PrepaidAccount, net)
+					for i := range wp.Disposal {
+						proposeAs("proposed", &wp.Disposal[i])
+					}
 				default:
 					support("Prepaid · "+wp.Input.SourceReference, wp.Input.PrepaidAccount, remaining)
 				}

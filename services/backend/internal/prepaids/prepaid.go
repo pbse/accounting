@@ -3,6 +3,7 @@ package prepaids
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,13 @@ type Input struct {
 	SalvageValue            string   `json:"salvage_value,omitempty"`
 	Factor                  string   `json:"factor,omitempty"`
 	Convention              string   `json:"convention,omitempty"`
+	DisposalPeriod          string   `json:"disposal_period,omitempty"`
+	DisposalProceeds        string   `json:"disposal_proceeds,omitempty"`
+	DisposalReference       string   `json:"disposal_reference,omitempty"`
+	AssetAccount            string   `json:"asset_account,omitempty"`
+	ProceedsAccount         string   `json:"proceeds_account,omitempty"`
+	GainLossAccount         string   `json:"gain_loss_account,omitempty"`
+	DisposalConfirmed       bool     `json:"disposal_confirmed,omitempty"`
 	ExamplesConfirmed       bool     `json:"examples_confirmed,omitempty"`
 	CreditAmount            string   `json:"credit_amount,omitempty"`
 	CreditPeriod            string   `json:"credit_period,omitempty"`
@@ -87,6 +95,9 @@ type Workpaper struct {
 	RecognizedExpense string      `json:"recognized_expense"`
 	PrepaidBalance    string      `json:"prepaid_balance"`
 	Proposal          *Adjustment `json:"proposal"`
+	// Disposal removes a disposed asset's cost and accumulated depreciation and records proceeds and any gain or loss.
+	// It is booked by hand.
+	Disposal []Adjustment `json:"disposal,omitempty"`
 }
 
 type InputError struct {
@@ -173,8 +184,8 @@ func Prepare(input Input) (Workpaper, error) {
 		return empty, invalid("convention", "The mid-month convention applies to depreciation in equal months or declining balance.")
 	}
 	input.AccountantRuleReference = strings.TrimSpace(input.AccountantRuleReference)
-	if (input.Method == DecliningMethod || input.Convention == MidMonth) && (len(input.AccountantRuleReference) < 5 || len(input.AccountantRuleReference) > 200) {
-		return empty, &InputError{"POLICY_REQUIRED", "accountant_rule_reference", "Cite the client accountant's approved depreciation policy for this method or convention."}
+	if (input.Method == DecliningMethod || input.Convention == MidMonth || input.DisposalPeriod != "") && (len(input.AccountantRuleReference) < 5 || len(input.AccountantRuleReference) > 200) {
+		return empty, &InputError{"POLICY_REQUIRED", "accountant_rule_reference", "Cite the client accountant's approved depreciation policy for this method, convention or disposal."}
 	}
 	if input.Convention == MidMonth {
 		months++
@@ -229,6 +240,38 @@ func Prepare(input Input) (Workpaper, error) {
 			return empty, invalid("booked_balance", "Booked accumulated depreciation exceeds cost less salvage. Resolve the ledger difference separately.")
 		}
 		booked = total - booked
+	}
+	// A disposal ends the schedule in its close month: no depreciation that month under the full-month convention, half
+	// a month under mid-month.
+	var disposal time.Time
+	var proceeds int64
+	if input.DisposalPeriod != "" || input.DisposalProceeds != "" || input.DisposalReference != "" || input.AssetAccount != "" || input.ProceedsAccount != "" || input.GainLossAccount != "" {
+		if input.Schedule != Depreciation || !monthly {
+			return empty, invalid("disposal_period", "Disposals apply to depreciation in equal months or declining balance.")
+		}
+		if disposal, err = time.Parse("2006-01", input.DisposalPeriod); err != nil || !disposal.Equal(period) {
+			return empty, invalid("disposal_period", "Prepare a disposal in its close month.")
+		}
+		if proceeds, err = Amount(input.DisposalProceeds); err != nil {
+			return empty, invalid("disposal_proceeds", "Enter the disposal proceeds, including an explicit 0.00 for a scrapped asset.")
+		}
+		input.DisposalProceeds = Money(proceeds)
+		for _, field := range []struct {
+			name  string
+			value *string
+		}{{"disposal_reference", &input.DisposalReference}, {"asset_account", &input.AssetAccount}, {"proceeds_account", &input.ProceedsAccount}, {"gain_loss_account", &input.GainLossAccount}} {
+			if *field.value = strings.TrimSpace(*field.value); *field.value == "" || len(*field.value) > 200 {
+				return empty, invalid(field.name, "Cite the disposal evidence and name the asset cost, proceeds and gain or loss accounts.")
+			}
+		}
+		accounts := []string{strings.ToLower(input.PrepaidAccount), strings.ToLower(input.AssetAccount), strings.ToLower(input.ProceedsAccount), strings.ToLower(input.GainLossAccount)}
+		slices.Sort(accounts)
+		if len(slices.Compact(accounts)) != 4 || strings.EqualFold(input.AssetAccount, input.ExpenseAccount) {
+			return empty, invalid("asset_account", "Use different accumulated depreciation, asset cost, proceeds and gain or loss accounts, and an asset cost account other than the expense account.")
+		}
+		if !input.DisposalConfirmed {
+			return empty, invalid("disposal_confirmed", "Confirm the asset's cost is still booked, the booked accumulated depreciation is before the disposal, and nothing for this disposal has been recorded.")
+		}
 	}
 	if input.CreditAmount != "" {
 		credit, err = Amount(input.CreditAmount)
@@ -293,7 +336,11 @@ func Prepare(input Input) (Workpaper, error) {
 	if input.Method == DailyMethod {
 		denominator = int64(end.Sub(start).Hours()/24) + 1
 	}
-	for i := 0; i < months; i++ {
+	rows := months
+	if !disposal.IsZero() {
+		rows = (disposal.Year()-first.Year())*12 + int(disposal.Month()-first.Month()) + 1
+	}
+	for i := 0; i < rows; i++ {
 		month := first.AddDate(0, i, 0)
 		from, to := month, month.AddDate(0, 1, -1)
 		if from.Before(start) {
@@ -360,7 +407,7 @@ func Prepare(input Input) (Workpaper, error) {
 		if input.Convention == MidMonth || input.Method == DecliningMethod {
 			// Half months weigh 1 and full months 2; the life's total weight is twice its months.
 			weight = 2
-			if input.Convention == MidMonth && i == 0 {
+			if input.Convention == MidMonth && (i == 0 || month.Equal(disposal)) {
 				weight = 1
 			}
 			left := 2*int64(months-i) - 1
@@ -379,6 +426,9 @@ func Prepare(input Input) (Workpaper, error) {
 		if i == months-1 {
 			amount = remaining
 		}
+		if month.Equal(disposal) && input.Convention != MidMonth {
+			amount = 0
+		}
 		if !cancellation.IsZero() && !month.Before(cancellation) {
 			amount = 0
 		}
@@ -395,6 +445,21 @@ func Prepare(input Input) (Workpaper, error) {
 					debit, creditAccount = creditAccount, debit
 				}
 				result.Proposal = &Adjustment{period.AddDate(0, 1, -1).Format("2006-01-02"), debit, creditAccount, Money(delta)}
+			}
+		}
+	}
+	if !disposal.IsZero() {
+		// Book value is cost less the schedule's depreciation; the asset's cost is credited in full.
+		accumulated, book := total-remaining, remaining+salvage
+		date := period.AddDate(0, 1, -1).Format("2006-01-02")
+		for _, line := range []Adjustment{
+			{date, input.PrepaidAccount, input.AssetAccount, Money(accumulated)},
+			{date, input.ProceedsAccount, input.AssetAccount, Money(min(proceeds, book))},
+			{date, input.ProceedsAccount, input.GainLossAccount, Money(max(proceeds-book, 0))},
+			{date, input.GainLossAccount, input.AssetAccount, Money(max(book-proceeds, 0))},
+		} {
+			if line.Amount != "0.00" {
+				result.Disposal = append(result.Disposal, line)
 			}
 		}
 	}

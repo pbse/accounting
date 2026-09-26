@@ -97,6 +97,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 		{"14", "Retained Earnings", "Equity", "Equity", "", "2000.00"},
 		{"15", "Accrued audit fees", "Other Current Liability", "Liability", "", "50.00"},
 		{"16", "Stripe clearing", "Other Current Asset", "Asset", "100.00", ""},
+		{"17", "Server accumulated depreciation", "Fixed Asset", "Asset", "", "500.00"},
 	}
 	directory, report := []map[string]string{}, []map[string]any{}
 	for _, a := range accounts {
@@ -146,6 +147,11 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	depreciation := prepaid("Laptops", "Accumulated depreciation", "1800.00")
 	depreciation.Input.Schedule, depreciation.Input.Amount, depreciation.Input.SalvageValue = prepaids.Depreciation, "3000.00", "600.00"
 	save("prepaid", depreciation, true)
+	// A disposed server's accumulated depreciation is removed once its disposal entry is booked.
+	server := prepaid("Server", "Server accumulated depreciation", "500.00")
+	server.Input.Schedule, server.Input.Amount = prepaids.Depreciation, "1000.00"
+	server.Disposal = []prepaids.Adjustment{{Date: "2026-09-30", DebitAccount: "Server accumulated depreciation", CreditAccount: "Office equipment", Amount: "500.00"}, {Date: "2026-09-30", DebitAccount: "Utilities", CreditAccount: "Office equipment", Amount: "500.00"}}
+	save("prepaid", server, true)
 	deferred := prepaid("Annual plan", "Deferred revenue", "1200.00")
 	deferred.Input.Schedule = prepaids.DeferredRevenue
 	save("prepaid", deferred, true)
@@ -167,6 +173,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 		"Prepaid insurance": "ties", "Accumulated depreciation": "ties", "Deferred revenue": "ties", "Checking": "ties", "Business card": "ties",
 		"Accrued liabilities": "ties_after_entries", "Accrued payroll": "ties", "Accrued rent": "posting_unknown", "Accrued audit fees": "differs",
 		"Term loan": "ties", "Loan current portion": "ties", "Loan payable": "unsupported", "Office equipment": "unsupported",
+		"Server accumulated depreciation": "ties_after_entries",
 	} {
 		if rows[name].Status != want {
 			t.Errorf("%s is %q, want %q: %+v", name, rows[name].Status, want, rows[name])
@@ -175,7 +182,7 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 	if clearing := rows["Stripe clearing"].Entries; len(clearing) != 1 || clearing[0].Posting != "proposed" {
 		t.Errorf("a posted fee entry is in the balance, but the settlement's refund draft is still proposed: %+v", rows["Stripe clearing"])
 	}
-	if _, found := rows["Retained Earnings"]; found || len(b.Rows) != 14 {
+	if _, found := rows["Retained Earnings"]; found || len(b.Rows) != 15 {
 		t.Errorf("equity and supportless expense accounts are left off the board: %+v", b.Rows)
 	}
 	if rows["Prepaid insurance"].Provisional || !rows["Business card"].Provisional {

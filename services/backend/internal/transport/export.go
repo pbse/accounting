@@ -363,6 +363,9 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			if carried.CarryForward != nil {
 				summary.Issues = []string{"Carried schedule only; opening scheduled balance " + carried.CarryForward.OpeningBalance + " " + paper.Input.Currency + " is not a verified ledger balance.", "Prior-period draft #" + carried.CarryForward.PaperID + " from close #" + carried.CarryForward.CloseID + "; fresh review required. No journal proposal or inherited approval."}
 			}
+			for _, e := range paper.Disposal {
+				summary.Issues = append(summary.Issues, fmt.Sprintf("Disposal entry (book by hand) %s: Dr %s / Cr %s %s", e.Date, e.DebitAccount, e.CreditAccount, ledger.Show(e.Amount, paper.Input.Currency)))
+			}
 			records := [][]string{{"Period", map[string]string{"": "Expense", prepaids.DeferredRevenue: "Revenue", prepaids.Depreciation: "Depreciation"}[paper.Input.Schedule] + " " + paper.Input.Currency, "Remaining " + paper.Input.Currency, "Credit " + paper.Input.Currency}}
 			for _, row := range paper.Schedule {
 				records = append(records, []string{row.Period, row.Expense, row.Remaining, row.Credit})
