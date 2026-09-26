@@ -1393,7 +1393,7 @@ Not verified: QuickBooks' live sparse Line updates for Purchase and Deposit (the
 
 ## QuickBooks payment and vendor credit applications (2026-09-25)
 
-Built while the GPT-6 Sol reviewer was over its usage limit, at the user's direction for an unavailable reviewer: committed on its own branch, reviewed before it is opened or merged. No plan review.
+Built while the GPT-6 Sol reviewer was over its usage limit, at the user's direction for an unavailable reviewer: committed on its own branch and reviewed (plan and code in one pass) before it was opened.
 
 Request: apply an unapplied customer payment to an invoice, and a vendor credit to a bill. One flow and one table (migration 065) for both: a customer payment is updated with its lines as read plus a line linking the invoice; a vendor credit is applied by a zero-amount bill payment linking the bill and the credit, under a request ID. Preview checks both documents in the capture's open items and live (same version and open amount), the same party, the amount within both, the open period, a bank account and a close-month date for bill payments, the rule reference and, in production, the grant kind and maximum. Execution reserves one attempt under the close lock; readback requires each open amount to fall by exactly the amount and, for a vendor credit, the bill payment to link exactly the two documents and pay nothing. Uncertain attempts block sign-off (checked outside the signed snapshot, so existing sign-offs stay intact) and close deletion; receipts are in the review package.
 
@@ -1404,4 +1404,8 @@ Tests:
 
 Each check was observed red with its rule removed (12 mutations).
 
-Not verified: QuickBooks' live behaviour for a payment line update and a zero-amount bill payment (why both stay off in production until enabled after a sandbox check), and the panel in a browser. Review pending.
+Code review: GPT-6 Sol (high) judged the design relevant and proportionate. Adopted: the payment readback requires every earlier link kept and the invoice linked for the applied amount more, not only the open amounts; the bill payment readback also binds the approved date, bank account, check pay type and currency; a production bill payment's bank account must be a granted account, at preview and at the write; a bill payment whose create response was lost can be bound by the ID a person finds in QuickBooks, only if it passes the same readback, with nothing sent again; the candidate list and preview read the same capture, and a capture of another company is refused; the documentation no longer states QuickBooks' zero-amount bill payment and request-ID behaviour as established; an unused field was deleted. Routed to the backlog: the transaction-detail read (like the Bill correction read) has no per-client access check beyond the firm boundary; applications are composed by a person rather than proposed from the open items. Two delta rounds closed findings 1–4 and 6. Rejected: merging the panel's QuickBooks type keys with their labels (they differ for vendor credits).
+
+Tests added for the fixes: open amounts that fell without the invoice link, a bill payment on another date or bank account, and one line linking both documents, fail readback; a production bank account outside the grant is refused at preview and at the write; a capture of another company is refused; a found bill payment is bound after readback without a second write, and verification without an ID fails. Each observed red with its rule removed (12 more mutations).
+
+Not verified: QuickBooks' live behaviour for a payment line update and a zero-amount bill payment (why both stay off in production until enabled after a sandbox check), and the panel in a browser.

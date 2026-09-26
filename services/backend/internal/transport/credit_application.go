@@ -60,17 +60,17 @@ func scanApplication(row interface{ Scan(...any) error }) (creditApplication, er
 	return a, err
 }
 
-// capturedOpen reads the open items of the close's latest complete transaction capture of the realm.
-func capturedOpen(ctx context.Context, db *sql.DB, closeID, realm string) (string, map[string][]json.RawMessage, error) {
-	var captureID string
+// capturedOpen reads the open items and company of the close's latest complete transaction capture.
+func capturedOpen(ctx context.Context, db *sql.DB, closeID string) (string, string, map[string][]json.RawMessage, error) {
+	var captureID, realm string
 	var raw []byte
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state='completed' AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND s.payload->>'realm'=$2 AND e.superseded_by IS NULL`, closeID, realm).Scan(&captureID, &raw)
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,COALESCE(s.payload->>'realm',''),COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state='completed' AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &raw)
 	if err != nil {
-		return "", nil, errors.New("A current completed QuickBooks transaction capture is required")
+		return "", "", nil, errors.New("A current completed QuickBooks transaction capture is required")
 	}
 	open := map[string][]json.RawMessage{}
 	json.Unmarshal(raw, &open)
-	return captureID, open, nil
+	return captureID, realm, open, nil
 }
 
 // findOpen returns the captured open document of a type with an ID.
@@ -126,10 +126,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 		}
 		// The capture's open documents a person can pair, by party.
 		candidates := map[string][]map[string]string{}
-		var raw []byte
-		if db.QueryRowContext(r.Context(), `SELECT COALESCE(payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND state='completed' AND connection_id=COALESCE(`+quickbooks.ReadingConnection("$1::bigint")+`,connection_id) ORDER BY id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw) == nil {
-			var open map[string][]json.RawMessage
-			json.Unmarshal(raw, &open)
+		if _, _, open, err := capturedOpen(r.Context(), db, r.PathValue("id")); err == nil {
 			for _, entity := range []string{"Payment", "Invoice", "VendorCredit", "Bill"} {
 				for _, record := range open[entity] {
 					var f struct {
@@ -173,6 +170,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 			Reason        string `json:"reason"`
 			RuleReference string `json:"rule_reference"`
 			Confirmed     bool   `json:"confirmed"`
+			BillPaymentID string `json:"bill_payment_id"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -248,7 +246,10 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			amount := big.NewRat(cents, 100)
-			captureID, open, err := capturedOpen(r.Context(), db, closeID, sandbox.Realm)
+			captureID, realm, open, err := capturedOpen(r.Context(), db, closeID)
+			if err == nil && realm != sandbox.Realm {
+				err = errors.New("The latest transaction capture is of another QuickBooks company; capture this one")
+			}
 			if err != nil {
 				problem(w, 409, err.Error())
 				return
@@ -406,7 +407,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 			if external != "" {
 				_, _ = db.ExecContext(persist, `UPDATE credit_applications SET external_id=$2 WHERE id::text=$1`, item.ID, external)
 			}
-			readback, readErr := sandbox.VerifyApplication(r.Context(), item.Kind, source, target, item.Amount, external)
+			readback, readErr := sandbox.VerifyApplication(r.Context(), item.Kind, source, target, item.Amount, external, item.TxnDate, item.BankAccountID)
 			if readErr != nil {
 				_, _ = db.ExecContext(persist, `UPDATE credit_applications SET state='unknown',last_error=$2 WHERE id::text=$1 AND state='executing'`, item.ID, readErr.Error())
 				problemCode(w, 502, "EXECUTION_UNKNOWN", "The application returned, but canonical readback is unverified.")
@@ -421,7 +422,12 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Only an attempted application can be verified.")
 				return
 			}
-			readback, err := sandbox.VerifyApplication(r.Context(), item.Kind, source, target, item.Amount, item.ExternalID)
+			// A bill payment whose create response was lost is found in QuickBooks by a person and bound only if it verifies.
+			external := item.ExternalID
+			if external == "" && item.Kind == "vendor_credit" {
+				external = strings.TrimSpace(in.BillPaymentID)
+			}
+			readback, err := sandbox.VerifyApplication(r.Context(), item.Kind, source, target, item.Amount, external, item.TxnDate, item.BankAccountID)
 			if err != nil {
 				if item.State == "verified" {
 					_, _ = db.ExecContext(r.Context(), `UPDATE credit_applications SET state='unknown',last_error=$2 WHERE id::text=$1 AND state='verified'`, item.ID, err.Error())
@@ -429,7 +435,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Canonical readback differs. Investigate manually; do not retry.")
 				return
 			}
-			if _, err = db.ExecContext(r.Context(), `UPDATE credit_applications SET state='verified',readback=$2,verified_at=now(),last_error='' WHERE id::text=$1`, item.ID, string(readback)); err != nil {
+			if _, err = db.ExecContext(r.Context(), `UPDATE credit_applications SET state='verified',readback=$2,verified_at=now(),last_error='',external_id=NULLIF($3,'') WHERE id::text=$1`, item.ID, string(readback), external); err != nil {
 				problem(w, 503, "Readback receipt could not be saved.")
 				return
 			}

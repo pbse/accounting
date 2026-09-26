@@ -77,7 +77,8 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 		path := r.URL.Path[strings.Index(r.URL.Path, "/123/")+4:]
 		body := map[string]string{"/invoice/92": `{"Invoice":` + otherInvoice + `}`, "/preferences": `{"Preferences":{"AccountingInfoPrefs":{"BookCloseDate":""}}}`,
 			"/account/35": `{"Account":{"Id":"35","Name":"Checking","Active":true,"AccountType":"Bank","CurrencyRef":{"value":"USD"}}}`,
-			"/account/36": `{"Account":{"Id":"36","Name":"Supplies","Active":true,"AccountType":"Expense","CurrencyRef":{"value":"USD"}}}`}[path]
+			"/account/36": `{"Account":{"Id":"36","Name":"Supplies","Active":true,"AccountType":"Expense","CurrencyRef":{"value":"USD"}}}`,
+			"/account/37": `{"Account":{"Id":"37","Name":"Savings","Active":true,"AccountType":"Bank","CurrencyRef":{"value":"USD"}}}`}[path]
 		switch {
 		case r.Method == "POST" && path == "/payment":
 			paymentWrites++
@@ -86,11 +87,11 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 			billPayments++
 			body = `{"BillPayment":{"Id":"95"}}`
 		case path == "/billpayment/95":
-			body = `{"BillPayment":{"Id":"95","VendorRef":{"value":"21"},"TotalAmt":0,"Line":[{"Amount":60,"LinkedTxn":[{"TxnId":"41","TxnType":"Bill"}]},{"Amount":60,"LinkedTxn":[{"TxnId":"80","TxnType":"VendorCredit"}]}]}}`
+			body = `{"BillPayment":{"Id":"95","TxnDate":"2026-09-30","PayType":"Check","CheckPayment":{"BankAccountRef":{"value":"35"}},"CurrencyRef":{"value":"USD"},"VendorRef":{"value":"21"},"TotalAmt":0,"Line":[{"Amount":60,"LinkedTxn":[{"TxnId":"41","TxnType":"Bill"}]},{"Amount":60,"LinkedTxn":[{"TxnId":"80","TxnType":"VendorCredit"}]}]}}`
 		case path == "/payment/70":
 			body = `{"Payment":` + payment + `}`
 			if paymentWrites > 0 {
-				body = `{"Payment":` + strings.Replace(strings.Replace(payment, `"SyncToken":"1"`, `"SyncToken":"2"`, 1), `"UnappliedAmt":200`, `"UnappliedAmt":50`, 1) + `}`
+				body = `{"Payment":` + strings.NewReplacer(`"SyncToken":"1"`, `"SyncToken":"2"`, `"UnappliedAmt":200`, `"UnappliedAmt":50`, `"Line":[]`, `"Line":[{"Amount":150,"LinkedTxn":[{"TxnId":"91","TxnType":"Invoice"}]}]`).Replace(payment) + `}`
 			}
 		case path == "/invoice/91":
 			body = `{"Invoice":` + invoice + `}`
@@ -149,6 +150,13 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 		t.Fatalf("a payment is never applied to another customer's invoice: %s", body)
 	}
 	call(path, apply(map[string]any{"rule_reference": "x"}), 422)
+	_, err = db.Exec(`UPDATE quickbooks_entity_syncs SET payload=jsonb_set(payload,'{realm}','"999"') WHERE close_id=$1`, closeID)
+	must(err)
+	if body := call(path, apply(nil), 409); !strings.Contains(string(body), "another QuickBooks company") {
+		t.Fatalf("a capture of another company is refused: %s", body)
+	}
+	_, err = db.Exec(`UPDATE quickbooks_entity_syncs SET payload=jsonb_set(payload,'{realm}','"123"') WHERE close_id=$1`, closeID)
+	must(err)
 	var item creditApplication
 	must(json.Unmarshal(call(path, apply(nil), 200), &item))
 	call(path, map[string]any{"action": "approve", "id": item.ID, "digest": item.Digest, "confirmed": true}, 200)
@@ -170,11 +178,23 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 	if body := call(path, credited(map[string]any{"bank_account_id": "36"}), 422); !strings.Contains(string(body), "bank account") {
 		t.Fatalf("the bill payment names a bank account: %s", body)
 	}
+	if body := call(path, credited(map[string]any{"bank_account_id": "37"}), 422); !strings.Contains(string(body), "grant") {
+		t.Fatalf("the bank account must be in the production grant: %s", body)
+	}
 	must(json.Unmarshal(call(path, credited(nil), 200), &item))
 	call(path, map[string]any{"action": "approve", "id": item.ID, "digest": item.Digest, "confirmed": true}, 200)
 	must(json.Unmarshal(call(path, map[string]any{"action": "execute", "id": item.ID, "digest": item.Digest, "confirmed": true}, 200), &item))
 	if billPayments != 1 || item.State != "verified" || item.ExternalID != "95" {
 		t.Fatalf("the vendor credit is applied once by a bill payment that is read back: %+v", item)
+	}
+
+	// A bill payment whose create response was lost is bound by its ID only when it verifies.
+	_, err = db.Exec(`UPDATE credit_applications SET state='unknown',external_id=NULL WHERE id=$1`, item.ID)
+	must(err)
+	call(path, map[string]any{"action": "verify", "id": item.ID, "digest": item.Digest}, 409)
+	must(json.Unmarshal(call(path, map[string]any{"action": "verify", "id": item.ID, "digest": item.Digest, "bill_payment_id": "95"}, 200), &item))
+	if billPayments != 1 || item.State != "verified" || item.ExternalID != "95" {
+		t.Fatalf("a found bill payment is bound after readback, without a second write: %+v", item)
 	}
 
 	// An uncertain attempt blocks sign-off.

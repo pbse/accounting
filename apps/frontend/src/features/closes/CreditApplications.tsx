@@ -17,6 +17,7 @@ export function CreditApplications({ closeId }: { closeId: string }) {
   const [confirmed, setConfirmed] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [found, setFound] = useState<Record<string, string>>({});
   const l = labels[kind];
   async function load() {
     try {
@@ -91,7 +92,8 @@ export function CreditApplications({ closeId }: { closeId: string }) {
               {a.error && <span role="alert"> · {a.error}</span>}{" "}
               {a.state === "preview" && <button type="button" disabled={busy || !confirmed} onClick={() => void send({ action: "approve", id: a.id, digest: a.digest, confirmed }, "Approved for 10 minutes.")}>Approve for 10 minutes</button>}
               {a.state === "approved" && <button type="button" disabled={busy || !confirmed} onClick={() => void send({ action: "execute", id: a.id, digest: a.digest, confirmed }, "QuickBooks readback verified. Refresh the transaction capture.")}>Apply once</button>}
-              {["executing", "unknown", "verified"].includes(a.state) && <button type="button" disabled={busy} onClick={() => void send({ action: "verify", id: a.id, digest: a.digest }, "Canonical readback verified.")}>Read back from QuickBooks</button>}
+              {a.kind === "vendor_credit" && !a.external_id && ["executing", "unknown"].includes(a.state) && <label>Bill payment ID found in QuickBooks<input inputMode="numeric" value={found[a.id] ?? ""} onChange={(e) => setFound((f) => ({ ...f, [a.id]: e.target.value }))} /></label>}
+              {["executing", "unknown", "verified"].includes(a.state) && <button type="button" disabled={busy} onClick={() => void send({ action: "verify", id: a.id, digest: a.digest, bill_payment_id: found[a.id] ?? "" }, "Canonical readback verified.")}>Read back from QuickBooks</button>}
             </li>
           ))}
         </ul>

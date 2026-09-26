@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math/big"
 	"net/url"
+	"slices"
 )
 
 // OpenDocument is an invoice, bill, customer payment or vendor credit with what is still open on it.
@@ -21,9 +23,38 @@ type OpenDocument struct {
 }
 
 // applyKinds names each application's source and target: what is applied, and the document it settles.
-var applyKinds = map[string]struct{ source, target, party string }{
-	"payment":       {"Payment", "Invoice", "CustomerRef"},
-	"vendor_credit": {"VendorCredit", "Bill", "VendorRef"},
+var applyKinds = map[string]struct{ source, target string }{
+	"payment":       {"Payment", "Invoice"},
+	"vendor_credit": {"VendorCredit", "Bill"},
+}
+
+// linkedTotals sums a document's line amounts by the transaction each line links, keyed "Type/ID".
+func linkedTotals(raw json.RawMessage) map[string]*big.Rat {
+	var doc struct {
+		Line []struct {
+			Amount    json.Number
+			LinkedTxn []struct{ TxnId, TxnType string }
+		}
+	}
+	json.Unmarshal(raw, &doc)
+	totals := map[string]*big.Rat{}
+	for _, line := range doc.Line {
+		amount, ok := new(big.Rat).SetString(line.Amount.String())
+		for _, link := range line.LinkedTxn {
+			key := link.TxnType + "/" + link.TxnId
+			if totals[key] == nil {
+				totals[key] = new(big.Rat)
+			}
+			if ok {
+				totals[key].Add(totals[key], amount)
+			}
+		}
+	}
+	return totals
+}
+
+func sameTotals(a, b map[string]*big.Rat) bool {
+	return maps.EqualFunc(a, b, func(x, y *big.Rat) bool { return x.Cmp(y) == 0 })
 }
 
 // ReadOpenDocument reads one document of the given QuickBooks type and what is open on it, in the client's currency.
@@ -93,6 +124,9 @@ func (s Sandbox) ApplyVendorCredit(ctx context.Context, credit, bill OpenDocumen
 	if !identifier.MatchString(bankAccount) || credit.Party != bill.Party {
 		return "", errors.New("The approved credit application is invalid")
 	}
+	if s.Production && !slices.Contains(s.Accounts, bankAccount) {
+		return "", errors.New("The bank account must be allowed by this client's production grant")
+	}
 	body := map[string]any{
 		"VendorRef": credit.Party, "PayType": "Check", "CheckPayment": map[string]any{"BankAccountRef": Reference{bankAccount}},
 		"TotalAmt": json.Number("0"), "TxnDate": date, "CurrencyRef": credit.Currency,
@@ -116,9 +150,10 @@ func (s Sandbox) ApplyVendorCredit(ctx context.Context, credit, bill OpenDocumen
 }
 
 // VerifyApplication reads both documents back and requires each open amount to have fallen by exactly the applied
-// amount, with the same party; for a vendor credit it also reads the bill payment and requires it to link exactly the
-// bill and the credit for that amount, with nothing paid.
-func (s Sandbox) VerifyApplication(ctx context.Context, kind string, source, target OpenDocument, amount, billPayment string) (json.RawMessage, error) {
+// amount, with the same party. A payment must keep every link it had and link the invoice for the amount more; a vendor
+// credit's bill payment must link exactly the bill and the credit for that amount, pay nothing, and carry the approved
+// date, bank account and currency.
+func (s Sandbox) VerifyApplication(ctx context.Context, kind string, source, target OpenDocument, amount, billPayment, date, bankAccount string) (json.RawMessage, error) {
 	spec, known := applyKinds[kind]
 	applied, ok := new(big.Rat).SetString(amount)
 	if !known || !ok || applied.Sign() <= 0 {
@@ -139,38 +174,39 @@ func (s Sandbox) VerifyApplication(ctx context.Context, kind string, source, tar
 		}
 		receipt[pair.entity] = after.Raw
 	}
+	if kind == "payment" {
+		want := linkedTotals(source.Raw)
+		key := "Invoice/" + target.ID
+		if want[key] == nil {
+			want[key] = new(big.Rat)
+		}
+		want[key].Add(want[key], applied)
+		if !sameTotals(want, linkedTotals(receipt["Payment"])) {
+			return nil, errors.New("The payment's links are not its earlier links plus the invoice for the applied amount")
+		}
+	}
 	if kind == "vendor_credit" {
 		if !identifier.MatchString(billPayment) {
 			return nil, errors.New("The bill payment's ID is needed to verify the credit application")
 		}
-		var result struct {
-			BillPayment struct {
-				VendorRef Reference
-				TotalAmt  json.Number
-				Line      []struct {
-					Amount    json.Number
-					LinkedTxn []struct{ TxnId, TxnType string }
-				}
-			}
+		var payment struct {
+			ID, TxnDate, PayType   string
+			VendorRef, CurrencyRef Reference
+			TotalAmt               json.Number
+			CheckPayment           struct{ BankAccountRef Reference }
+			Line                   []struct{ LinkedTxn []json.RawMessage }
 		}
 		raw := map[string]json.RawMessage{}
 		if err := s.request(ctx, "GET", "/billpayment/"+billPayment, nil, &raw); err != nil {
 			return nil, err
 		}
-		payment := &result.BillPayment
-		if json.Unmarshal(raw["BillPayment"], payment) != nil || payment.VendorRef != source.Party || payment.TotalAmt.String() == "" || len(payment.Line) != 2 {
+		if json.Unmarshal(raw["BillPayment"], &payment) != nil || payment.ID != billPayment || payment.VendorRef != source.Party || payment.TxnDate != date || payment.PayType != "Check" || payment.CheckPayment.BankAccountRef.Value != bankAccount || payment.CurrencyRef.Value != s.currency() {
 			return nil, errors.New("The bill payment does not match the approved application")
 		}
-		paid, _ := new(big.Rat).SetString(payment.TotalAmt.String())
-		linked := map[string]string{}
-		for _, line := range payment.Line {
-			lineAmount, ok := new(big.Rat).SetString(line.Amount.String())
-			if !ok || lineAmount.Cmp(applied) != 0 || len(line.LinkedTxn) != 1 {
-				return nil, errors.New("The bill payment's lines do not match the approved application")
-			}
-			linked[line.LinkedTxn[0].TxnType] = line.LinkedTxn[0].TxnId
-		}
-		if paid == nil || paid.Sign() != 0 || linked["Bill"] != target.ID || linked["VendorCredit"] != source.ID {
+		paid, ok := new(big.Rat).SetString(payment.TotalAmt.String())
+		links := map[string]*big.Rat{"Bill/" + target.ID: applied, "VendorCredit/" + source.ID: applied}
+		oneLinkEach := len(payment.Line) == 2 && len(payment.Line[0].LinkedTxn) == 1 && len(payment.Line[1].LinkedTxn) == 1
+		if !ok || paid.Sign() != 0 || !oneLinkEach || !sameTotals(links, linkedTotals(raw["BillPayment"])) {
 			return nil, errors.New("The bill payment pays money or links other documents")
 		}
 		receipt["BillPayment"] = raw["BillPayment"]
@@ -197,6 +233,9 @@ func (s Sandbox) ValidateBankAccount(ctx context.Context, id string) (string, er
 		return "", err
 	}
 	a := result.Account
+	if s.Production && !slices.Contains(s.Accounts, id) {
+		return "", errors.New("The bank account must be allowed by this client's production grant")
+	}
 	if a.ID != id || !a.Active || a.AccountType != "Bank" || a.Name == "" || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != s.currency()) {
 		return "", errors.New("The account is not an active bank account in the client's currency")
 	}
