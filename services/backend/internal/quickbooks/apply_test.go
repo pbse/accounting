@@ -103,3 +103,55 @@ func TestCreditApplicationsLinkBothDocumentsAndReadBack(t *testing.T) {
 		t.Fatal("a credit is never applied to another vendor's bill")
 	}
 }
+
+func TestApplicationsAreSuggestedOnlyWithoutAmbiguity(t *testing.T) {
+	doc := func(id, party, amount, extra string) json.RawMessage {
+		return json.RawMessage(`{"Id":"` + id + `","SyncToken":"1","TxnDate":"2026-09-10","CustomerRef":{"value":"` + party + `"},"VendorRef":{"value":"` + party + `"},"CurrencyRef":{"value":"USD"},"Balance":` + amount + `,"UnappliedAmt":` + amount + extra + `}`)
+	}
+	open := map[string][]json.RawMessage{
+		"Payment": {
+			doc("70", "4", "200", ``),                                  // equals invoice 91 only
+			doc("71", "4", "80", `,"PaymentRefNum":"Remit INV-1042."`), // names invoice 92, pays part of it
+			doc("72", "5", "50", ``),                                   // two invoices of 50 for customer 5
+			doc("73", "4", "300", `,"PrivateNote":"for INV-1042-A"`),   // INV-1042-A is not INV-1042; no match
+			doc("74", "6", "90", `,"PaymentRefNum":"INV-7"`),
+			doc("75", "7", "150", `,"PaymentRefNum":"INV-500"`),
+			doc("76", "8", "30", `,"PaymentRefNum":"INV-800"`), // equals invoice 97 but names 98
+		},
+		"Invoice": {
+			doc("91", "4", "200", `,"DocNumber":"INV-9"`),
+			doc("92", "4", "120", `,"DocNumber":"INV-1042"`),
+			doc("93", "5", "50", ``), doc("94", "5", "50", ``),
+			doc("95", "9", "200", ``),
+			doc("97", "6", "90", `,"DocNumber":"INV-6"`), doc("98", "6", "40", `,"DocNumber":"INV-7"`),
+			doc("99", "7", "100", `,"DocNumber":"INV-500"`),
+			doc("88", "8", "70", `,"DocNumber":"INV-800"`), doc("89", "8", "75", `,"DocNumber":"INV-800"`),
+		},
+		"VendorCredit": {doc("80", "21", "60", `,"PrivateNote":"Credit for bill B-7"`), doc("81", "22", "10", ``), doc("82", "22", "10", ``), doc("83", "23", "25", `,"DocNumber":"B-9"`)},
+		"Bill":         {doc("41", "21", "100", `,"DocNumber":"B-7"`), doc("42", "22", "10", ``), doc("44", "23", "70", `,"DocNumber":"B-9"`)},
+	}
+	got := map[string]Suggestion{}
+	for _, s := range SuggestApplications(open, "USD") {
+		got[s.SourceID] = s
+	}
+	if s := got["70"]; s.TargetID != "91" || s.Amount != "200.00" || !strings.Contains(s.Basis, "equals") {
+		t.Fatalf("an unapplied amount equal to one invoice of the customer is suggested: %+v", s)
+	}
+	if s := got["71"]; s.TargetID != "92" || s.Amount != "80.00" || !strings.Contains(s.Basis, "reference names") {
+		t.Fatalf("a remittance naming one invoice is suggested for what is open on both: %+v", s)
+	}
+	if s := got["80"]; s.Kind != "vendor_credit" || s.TargetID != "41" || s.Amount != "60.00" {
+		t.Fatalf("a vendor credit naming one bill of the vendor is suggested: %+v", s)
+	}
+	if s := got["75"]; s.TargetID != "99" || s.Amount != "100.00" {
+		t.Fatalf("no more than the invoice's balance is suggested: %+v", s)
+	}
+	for _, id := range []string{"72", "73", "74", "76", "81", "82", "83"} {
+		if s, ok := got[id]; ok {
+			t.Fatalf("an ambiguous, unmatched or competing source gets no suggestion: %s %+v", id, s)
+		}
+	}
+	if len(got) != 4 {
+		t.Fatalf("no invoice of another customer is suggested: %+v", got)
+	}
+}
