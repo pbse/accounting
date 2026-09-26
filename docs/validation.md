@@ -1441,5 +1441,18 @@ Tests:
 - `TestYearEndHandoffRollsForwardApprovedWork` adds a disposed asset rolled forward to zero with its entry in the adjustment history.
 
 Code review: GPT-6 Sol (high). Adopted: the disposal month's remaining balance and the paper's balance are zero (the entries use the book value before disposal, and the true-up still uses the booked balance before disposal), which let the year-end special case be deleted; disposal fields entered without a month, or a lone confirmation, are refused rather than dropped (the form sends whatever was entered); the documentation spells out the gain entry. A disposal in the useful life's last month is now covered too. Each fix observed red when removed (3 mutations). One delta round closed both findings.
+## Pro-rata service accrual (2026-09-25)
+
+Request: pro-rata service accrual, the last of the user's chosen accounting methods. `pro_rata_service_days_v1` in `accruals.Prepare` sets the target liability to the contract amount × elapsed service days through month-end ÷ all service days (inclusive, cents rounded down) less invoiced to date; the service may end after month-end. Tie-out, the proposal, the reversal and year-end read the target as for the other methods.
+
+Plan review: GPT-6 Sol (high). Adopted: method-specific end-date and zero-target rules; contract and invoiced amounts refused on other methods; the form's target field is optional for this method and the confirmations say invoices count only when booked outside the accrued liability; the draft shows the contract, the invoiced amount and the computed target; the review package summary names each accrual method's basis.
+
+Tests:
+
+- `TestProRataAccrualTakesTheElapsedShareLessInvoiced` (pure): 47 of 92 days of 9,000 accrue 4,597.82; invoiced 3,000 and booked 1,000 propose 597.82; a resent target is recomputed; a service ended by month-end accrues the whole contract less invoiced; a fully invoiced share clears the booked liability; invoiced above the share, a service not yet started, a missing invoiced amount, a missing rule, contract amounts on another method and future service on another method and a period over ten years are refused, each by its own message.
+
+Each check was observed red with its rule removed (10 mutations).
+
+Code review: GPT-6 Sol (high). Adopted: the Work intake route, which cannot collect the contract and invoiced amounts, no longer offers the method; the service period is limited to ten years (day counting stays exact); the review package names the basis of every accrual method; two explanatory comments were deleted. One delta round closed the findings; its copy note (the intake form also hides the pro-rata example) was applied. Routed to the backlog: learning an approved procedure for the new methods (pro-rata, declining balance, mid-month); until then a client with an approved procedure naming another method refuses them.
 
 Not verified: the form in a browser.
