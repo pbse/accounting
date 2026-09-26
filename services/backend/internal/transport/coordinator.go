@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
 )
 
@@ -129,7 +130,7 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var run json.RawMessage
-		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT jsonb_build_object('id',p.id::text,'inventory_digest',p.inventory_digest,'actor',p.actor,'created_at',p.created_at,'items',COALESCE((SELECT jsonb_agg(s || jsonb_build_object('state',COALESCE(j.state,'missing'),'error',COALESCE(j.error,''),'revision',i.revision,'proposal',jsonb_build_object('kind',i.proposal->'kind','questions',COALESCE(NULLIF(i.proposal->'questions','null'::jsonb),'[]'::jsonb)||jsonb_path_query_array(COALESCE(i.proposal,'{}'::jsonb),'$.facts[*].question')),'workpaper_ids',j.workpaper_ids,'stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR e.digest IS DISTINCT FROM s->>'digest','reviews',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',w.id::text,'state',w.review_state,'blockers',w.paper->'blockers')) FROM workpaper_review_state w WHERE w.close_id=p.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text)),'[]'::jsonb)) ORDER BY (s->>'job_id')::bigint) FROM jsonb_array_elements(p.scope) s LEFT JOIN preparation_jobs j ON j.id::text=s->>'job_id' AND j.close_id=p.close_id LEFT JOIN preparation_intakes i ON i.job_id=j.id LEFT JOIN evidence e ON e.id::text=s->>'source_id' AND e.close_id=p.close_id),'[]'::jsonb)) FROM close_preparations p WHERE p.close_id=$1 ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`, r.PathValue("id")).Scan(&run)
+		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT jsonb_build_object('id',p.id::text,'inventory_digest',p.inventory_digest,'actor',p.actor,'agent',p.agent,'created_at',p.created_at,'items',COALESCE((SELECT jsonb_agg(s || jsonb_build_object('state',COALESCE(j.state,'missing'),'error',COALESCE(j.error,''),'revision',i.revision,'proposal',jsonb_build_object('kind',i.proposal->'kind','questions',COALESCE(NULLIF(i.proposal->'questions','null'::jsonb),'[]'::jsonb)||jsonb_path_query_array(COALESCE(i.proposal,'{}'::jsonb),'$.facts[*].question')),'workpaper_ids',j.workpaper_ids,'stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR e.digest IS DISTINCT FROM s->>'digest','reviews',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',w.id::text,'state',w.review_state,'blockers',w.paper->'blockers')) FROM workpaper_review_state w WHERE w.close_id=p.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text)),'[]'::jsonb)) ORDER BY (s->>'job_id')::bigint) FROM jsonb_array_elements(p.scope) s LEFT JOIN preparation_jobs j ON j.id::text=s->>'job_id' AND j.close_id=p.close_id LEFT JOIN preparation_intakes i ON i.job_id=j.id LEFT JOIN evidence e ON e.id::text=s->>'source_id' AND e.close_id=p.close_id),'[]'::jsonb)) FROM close_preparations p WHERE p.close_id=$1 ORDER BY p.id DESC LIMIT 1),'null'::jsonb)`, r.PathValue("id")).Scan(&run)
 		if err != nil {
 			problem(w, 503, "Could not read preparation progress.")
 			return
@@ -342,7 +343,7 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			raw, _ = json.Marshal(linked)
 		}
 		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_preparations(close_id,inventory_digest,scope,actor) VALUES($1,$2,$3,$4) ON CONFLICT(close_id,inventory_digest) DO UPDATE SET inventory_digest=close_preparations.inventory_digest RETURNING id::text`, closeID, in.Digest, string(raw), actor).Scan(&id)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_preparations(close_id,inventory_digest,scope,actor,agent) VALUES($1,$2,$3,$4,NULLIF($5,'')) ON CONFLICT(close_id,inventory_digest) DO UPDATE SET inventory_digest=close_preparations.inventory_digest RETURNING id::text`, closeID, in.Digest, string(raw), actor, auth.Agent(r.Context())).Scan(&id)
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Preparation could not be confirmed. Retry the same scope safely.")
 			return

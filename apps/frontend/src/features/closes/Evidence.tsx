@@ -23,6 +23,8 @@ export type EvidenceFile = {
   procedure_id?: string | null;
   procedure_kind?: string | null;
   checks?: { pages: number; warnings: string[]; questions: string[] };
+  created_by?: string;
+  agent?: string | null;
 };
 
 export function SourceReview({
@@ -390,7 +392,7 @@ export function Evidence({
           sources={files.map((f) => ({
             ...f,
             role: "uploaded",
-            location: `${f.bytes} bytes${f.superseded_by ? ` · replaced by source #${f.superseded_by}: ${f.replacement_reason}` : " · current"}`,
+            location: `${f.bytes} bytes${f.agent ? ` · added by ${f.created_by} via ${f.agent}` : ""}${f.superseded_by ? ` · replaced by source #${f.superseded_by}: ${f.replacement_reason}` : " · current"}`,
           }))}
         />
       )}

@@ -59,7 +59,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Review queue unavailable.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.created_at,w.digest,w.review_id,`+bulkReason+`,COALESCE(c.due_on::text,''),c.priority,c.owner<>'' AND c.owner=$3,COALESCE((SELECT a.note FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),'')`+where+` ORDER BY c.due_on NULLS LAST,`+priorityOrder+`,w.id DESC LIMIT 100`, organization(r), firmAccess(r), subject(r), search)
+		rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.created_at,w.digest,w.review_id,`+bulkReason+`,COALESCE(c.due_on::text,''),c.priority,c.owner<>'' AND c.owner=$3,COALESCE((SELECT a.note FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),''),COALESCE((SELECT a.requested_by FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),''),COALESCE((SELECT a.agent FROM approval_requests a WHERE a.workpaper_id=w.id ORDER BY a.id DESC LIMIT 1),'')`+where+` ORDER BY c.due_on NULLS LAST,`+priorityOrder+`,w.id DESC LIMIT 100`, organization(r), firmAccess(r), subject(r), search)
 		if err != nil {
 			problem(w, 503, "Review queue unavailable.")
 			return
@@ -67,14 +67,14 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		defer rows.Close()
 		items := []map[string]any{}
 		for rows.Next() {
-			var id, closeID, entity, period, kind, digest, review, reason, dueOn, priority, approval string
+			var id, closeID, entity, period, kind, digest, review, reason, dueOn, priority, approval, requester, agent string
 			var created time.Time
 			var mine bool
-			if err := rows.Scan(&id, &closeID, &entity, &period, &kind, &created, &digest, &review, &reason, &dueOn, &priority, &mine, &approval); err != nil {
+			if err := rows.Scan(&id, &closeID, &entity, &period, &kind, &created, &digest, &review, &reason, &dueOn, &priority, &mine, &approval, &requester, &agent); err != nil {
 				problem(w, 503, "Review queue unavailable.")
 				return
 			}
-			items = append(items, map[string]any{"workpaper_id": id, "close_id": closeID, "entity": entity, "period": period, "kind": kind, "created_at": created, "digest": digest, "review_id": review, "bulk_reason": reason, "due_on": dueOn, "priority": priority, "owned_by_me": mine, "approval_note": approval})
+			items = append(items, map[string]any{"workpaper_id": id, "close_id": closeID, "entity": entity, "period": period, "kind": kind, "created_at": created, "digest": digest, "review_id": review, "bulk_reason": reason, "due_on": dueOn, "priority": priority, "owned_by_me": mine, "approval_note": approval, "approval_requested_by": requester, "approval_agent": agent})
 		}
 		if rows.Err() != nil {
 			problem(w, 503, "Review queue unavailable.")

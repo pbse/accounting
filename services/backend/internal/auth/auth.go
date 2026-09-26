@@ -24,8 +24,16 @@ type Claims struct {
 	Organization string   `json:"org_id"`
 	Session      string   `json:"sid"`
 	Permissions  []string `json:"permissions"`
+	ClientID     string   `json:"client_id"`
 }
 type contextKey struct{}
+type agentKey struct{}
+
+// WithAgent marks a request as made by an MCP client under a member's agent access; Agent returns it, or "".
+func WithAgent(ctx context.Context, agent string) context.Context {
+	return context.WithValue(ctx, agentKey{}, agent)
+}
+func Agent(ctx context.Context) string { agent, _ := ctx.Value(agentKey{}).(string); return agent }
 
 func Actor(ctx context.Context) *Claims { actor, _ := ctx.Value(contextKey{}).(*Claims); return actor }
 func WithActor(ctx context.Context, actor *Claims) context.Context {

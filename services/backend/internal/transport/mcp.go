@@ -58,6 +58,10 @@ var mcpTools = []mcpTool{
 	{name: "explain_changes", title: "Explain changes from last month", description: "The largest Profit and Loss movements from last month's close to this one, with the payees behind each (new, missing, changed) and questions about bills that did not recur.", method: "GET", path: "/v1/closes/{close_id}/flux", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
 	{name: "tie_out", title: "Balance sheet tie-out", description: "Each asset and liability in the newest month-end Trial Balance compared with the balance the close's workpapers support: ties, ties after proposed entries, differs by less than the firm's materiality with no entry pending, differs, posting outcome unknown, or no support yet.", method: "GET", path: "/v1/closes/{close_id}/tie-out", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
 	{name: "get_readiness", title: "Close readiness", description: "What still blocks sign-off for a close.", method: "GET", path: "/v1/closes/{close_id}/readiness", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
+	{name: "native_reconciliation", title: "Xero reconciled flags", description: "For Xero books: per bank account, how many captured transactions Xero flags as reconciled, unreconciled or unknown. Xero's own flags, not a completed reconciliation.", method: "GET", path: "/v1/closes/{close_id}/native-reconciliation", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
+	{name: "proposed_state", title: "Proposed-state preview", description: "Production journal proposals awaiting approval or execution (up to 100): each draft's account balances before, the projected balances after, other open proposals on the same accounts, and the combined rehearsal. Built from saved account observations; not a current ledger balance or a financial statement.", method: "GET", path: "/v1/closes/{close_id}/proposed-state", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
+	{name: "workpaper_changes", title: "Changes between draft versions", description: "What changed between a draft and the earlier version it revises.", method: "GET", path: "/v1/closes/{close_id}/workpapers/{workpaper_id}/changes", props: map[string]any{"close_id": mcpCloseID, "workpaper_id": mcpText("Workpaper (draft) ID.")}, required: []string{"close_id", "workpaper_id"}, readOnly: true},
+	{name: "list_close_jobs", title: "Preparation jobs of a close", description: "The close's 20 newest preparation jobs with their state, error and the drafts they produced.", method: "GET", path: "/v1/closes/{close_id}/jobs", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
 	{name: "list_client_requests", title: "List client request drafts", description: "Saved client request drafts for a close, newest first; use the latest id as expected_id when drafting.", method: "GET", path: "/v1/closes/{close_id}/requests", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
 	{name: "preview_close_preparation", title: "Preview close preparation", description: "The evidence a close preparation would coordinate, with the inventory_digest prepare_close needs.", method: "GET", path: "/v1/closes/{close_id}/prepare-close", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
 	{name: "open_close", title: "Open a close", description: "Open or return the close for a client and month. Repeating it returns the same close.", method: "POST", path: "/v1/closes", body: []string{"entity", "period"}, props: map[string]any{"entity": mcpText("Client name."), "period": mcpText("Close month, YYYY-MM.")}, required: []string{"entity", "period"}, idempotent: true},
@@ -231,7 +235,7 @@ func mcpHandler(store http.Handler, token string, db *sql.DB) http.Handler {
 			return
 		}
 		actor, err := verifier.Authenticate(r, token)
-		scope := "prepare"
+		scope, agent := "prepare", ""
 		if err != nil && oauth != nil {
 			raw, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if claims, e := oauth.Verify(r.Context(), raw); e == nil {
@@ -251,6 +255,10 @@ func mcpHandler(store http.Handler, token string, db *sql.DB) http.Handler {
 					granted.Permissions = []string{"workpapers:review"}
 				}
 				actor, err = &granted, nil
+				agent = "MCP (client unverified)"
+				if claims.ClientID != "" {
+					agent = "MCP client " + claims.ClientID
+				}
 			}
 		}
 		if err != nil {
@@ -274,6 +282,10 @@ func mcpHandler(store http.Handler, token string, db *sql.DB) http.Handler {
 			problem(w, 429, "Too many MCP requests. Wait a minute and retry.")
 			return
 		}
-		protocol.ServeHTTP(noStore{w}, r.WithContext(context.WithValue(auth.WithActor(r.Context(), actor), mcpScope{}, scope)))
+		ctx := context.WithValue(auth.WithActor(r.Context(), actor), mcpScope{}, scope)
+		if agent != "" {
+			ctx = auth.WithAgent(ctx, agent)
+		}
+		protocol.ServeHTTP(noStore{w}, r.WithContext(ctx))
 	})
 }
