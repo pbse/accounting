@@ -323,7 +323,7 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 			valid = valid && xeroID.MatchString(id) && !slices.Contains(in.AccountIDs[:i], id)
 		}
 		for i, kind := range in.Kinds {
-			valid = valid && slices.Contains(postableKinds, kind) && !slices.Contains(in.Kinds[:i], kind)
+			valid = valid && (slices.Contains(postableKinds, kind) || kind == "bill_correction") && !slices.Contains(in.Kinds[:i], kind)
 		}
 		if in.Action != "grant" || in.Confirmation != "GRANT XERO POSTING" || !valid || amountErr != nil || amount <= 0 || in.ExpiresAt.Before(time.Now()) || in.ExpiresAt.After(time.Now().Add(30*24*time.Hour)) || len(strings.TrimSpace(in.Reason)) < 10 || len(in.Reason) > 2000 {
 			problem(w, 422, "Confirm 2–20 distinct Xero account IDs, the draft kinds covered, a positive limit, expiry within 30 days and a reason of at least 10 characters.")

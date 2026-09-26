@@ -53,7 +53,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
  'coverage',COALESCE((SELECT jsonb_agg(to_jsonb(b) ORDER BY b.id) FROM coverage_bindings b WHERE b.close_id=c.id),'[]'),
  'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'digest',a.digest,'state',a.state,'source_id',a.source_id,'scan_version',a.scan_version,'decision_note',a.decision_note) ORDER BY a.id) FROM client_attachments a WHERE a.close_id=c.id),'[]'),
  'requests',COALESCE((SELECT jsonb_agg(to_jsonb(q) ORDER BY q.id) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id),'[]')
- )||COALESCE((SELECT jsonb_build_object('xero_postings',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_postings p WHERE p.close_id=c.id HAVING count(*)>0),'{}') FROM client_closes c WHERE c.id::text=$1`, id).Scan(&raw)
+ )||COALESCE((SELECT jsonb_build_object('xero_postings',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_postings p WHERE p.close_id=c.id HAVING count(*)>0),'{}')||COALESCE((SELECT jsonb_build_object('xero_corrections',jsonb_agg(to_jsonb(p) ORDER BY p.id)) FROM xero_corrections p WHERE p.close_id=c.id HAVING count(*)>0),'{}') FROM client_closes c WHERE c.id::text=$1`, id).Scan(&raw)
 	if err != nil {
 		return out, err
 	}
@@ -179,7 +179,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	}
 	// Credit applications and Xero journals are checked apart from the signed snapshot, so adding them left existing
 	// sign-offs intact.
-	uncertain, err := tx.QueryContext(ctx, `SELECT 'Credit application',id FROM credit_applications WHERE close_id::text=$1 AND state IN ('executing','unknown') UNION ALL SELECT 'Xero journal',id FROM xero_postings WHERE close_id::text=$1 AND state IN ('executing','unknown') ORDER BY 1,2`, id)
+	uncertain, err := tx.QueryContext(ctx, `SELECT 'Credit application',id FROM credit_applications WHERE close_id::text=$1 AND state IN ('executing','unknown') UNION ALL SELECT 'Xero journal',id FROM xero_postings WHERE close_id::text=$1 AND state IN ('executing','unknown') UNION ALL SELECT 'Xero bill correction',id FROM xero_corrections WHERE close_id::text=$1 AND state IN ('executing','unknown') ORDER BY 1,2`, id)
 	if err != nil {
 		return out, err
 	}
@@ -193,6 +193,13 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		out.Blockers = append(out.Blockers, fmt.Sprintf("%s attempt #%d must be resolved.", kind, attempt))
 	}
 	uncertain.Close()
+	var recoded sql.NullInt64
+	if err = tx.QueryRowContext(ctx, `SELECT max(id) FROM xero_corrections c WHERE close_id::text=$1 AND state='verified' AND verified_at>COALESCE((SELECT max((s.payload->>'trial_balance_requested_at')::timestamptz) FROM xero_snapshots s WHERE s.close_id=c.close_id),'-infinity')`, id).Scan(&recoded); err != nil {
+		return out, err
+	}
+	if recoded.Valid {
+		out.Blockers = append(out.Blockers, fmt.Sprintf("Capture Xero again: bill correction #%d changed the ledger after the latest capture.", recoded.Int64))
+	}
 	for _, p := range snapshot.ProductionPostings {
 		if p.State == "executing" || p.State == "unknown" {
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Production attempt #%d requires canonical readback or investigation.", p.ID))

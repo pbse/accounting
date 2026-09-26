@@ -23,8 +23,8 @@ import (
 )
 
 // Granular scopes are required for apps created after 2 March 2026. Manual journals are available on every Xero plan;
-// accounting.manualjournals also reads them.
-const scopes = "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals accounting.invoices.read accounting.payments.read accounting.banktransactions.read"
+// accounting.manualjournals also reads them, and accounting.invoices, for bill corrections, also reads invoices.
+const scopes = "offline_access accounting.settings.read accounting.reports.trialbalance.read accounting.manualjournals accounting.invoices accounting.payments.read accounting.banktransactions.read"
 
 // granted lists the scopes an access token carries.
 func granted(access string) []string {
