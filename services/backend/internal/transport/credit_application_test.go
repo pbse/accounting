@@ -177,15 +177,29 @@ func TestCreditApplicationsAreApprovedAttemptedOnceAndReadBack(t *testing.T) {
 	}
 
 	// A newer capture whose transactions did not change reads open items afresh, and its candidates are the ones offered.
-	fresh := `{"Id":"93","SyncToken":"1","TxnDate":"2026-09-20","CustomerRef":{"value":"4","name":"Acme"},"CurrencyRef":{"value":"USD"},"TotalAmt":40,"Balance":40}`
+	fresh := `{"Id":"93","SyncToken":"1","TxnDate":"2026-09-20","CustomerRef":{"value":"4","name":"Acme"},"CurrencyRef":{"value":"USD"},"TotalAmt":200,"Balance":200}`
+	matchingBill := `{"Id":"43","SyncToken":"1","TxnDate":"2026-08-28","VendorRef":{"value":"21","name":"Staples"},"CurrencyRef":{"value":"USD"},"Balance":60}`
 	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,finished_at,payload) VALUES($1,$2,'2026-09','fixture','unchanged',$3,now(),$4)`, closeID, connectionID, evidenceID,
-		`{"counts":{},"open_items":{"Payment":[`+payment+`],"Invoice":[`+fresh+`],"VendorCredit":[`+credit+`],"Bill":[`+bill+`]}}`)
+		`{"counts":{},"open_items":{"Payment":[`+payment+`],"Invoice":[`+fresh+`],"VendorCredit":[`+credit+`],"Bill":[`+bill+`,`+matchingBill+`]}}`)
 	must(err)
 	listRequest := httptest.NewRequest("GET", path, nil).WithContext(auth.WithActor(context.Background(), actor))
 	listed := httptest.NewRecorder()
 	mux.ServeHTTP(listed, listRequest)
 	if !strings.Contains(listed.Body.String(), `"id":"93"`) || strings.Contains(listed.Body.String(), `"id":"91"`) {
 		t.Fatalf("candidates come from the newest capture, changed or not: %s", listed.Body.String())
+	}
+	// The agent suggests the vendor credit for the one bill it equals; payment 70 already has an application, so its
+	// equal invoice is not suggested again.
+	var offered struct {
+		CaptureID   string                  `json:"capture_id"`
+		Suggestions []quickbooks.Suggestion `json:"suggestions"`
+	}
+	must(json.Unmarshal(listed.Body.Bytes(), &offered))
+	if len(offered.Suggestions) != 1 || offered.Suggestions[0] != (quickbooks.Suggestion{Kind: "vendor_credit", SourceID: "80", TargetID: "43", Amount: "60.00", Basis: offered.Suggestions[0].Basis}) || offered.CaptureID == "" {
+		t.Fatalf("one suggestion, for the credit and the bill it equals: %+v", offered)
+	}
+	if body := call(path, apply(map[string]any{"kind": "vendor_credit", "source_id": "80", "target_id": "43", "amount": "60.00", "txn_date": "2026-09-30", "bank_account_id": "35", "capture_id": "1"}), 409); !strings.Contains(string(body), "captured again") {
+		t.Fatalf("a suggestion from an earlier capture is reviewed again: %s", body)
 	}
 	credited := func(changes map[string]any) map[string]any {
 		out := apply(map[string]any{"kind": "vendor_credit", "source_id": "80", "target_id": "41", "amount": "60.00", "txn_date": "2026-09-30", "bank_account_id": "35", "rule_reference": "Supplier credit rule 2"})

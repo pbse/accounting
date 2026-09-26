@@ -63,16 +63,16 @@ func scanApplication(row interface{ Scan(...any) error }) (creditApplication, er
 // capturedOpen reads the open items and company of the close's latest transaction capture; an unchanged capture reuses
 // its predecessor's transactions but reads the open items afresh, and records no realm, so the company comes from its
 // connection.
-func capturedOpen(ctx context.Context, db *sql.DB, closeID string) (string, string, map[string][]json.RawMessage, error) {
-	var captureID, realm string
+func capturedOpen(ctx context.Context, db *sql.DB, closeID string) (string, string, string, map[string][]json.RawMessage, error) {
+	var captureID, realm, currency string
 	var raw []byte
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,x.realm,COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state IN ('completed','unchanged') AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &raw)
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,x.realm,COALESCE(NULLIF(x.home_currency,''),'USD'),COALESCE(s.payload->'open_items','{}'::jsonb) FROM quickbooks_entity_syncs s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.state IN ('completed','unchanged') AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state IN ('completed','unchanged') AND z.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,z.connection_id)) AND e.superseded_by IS NULL`, closeID).Scan(&captureID, &realm, &currency, &raw)
 	if err != nil {
-		return "", "", nil, errors.New("A current completed QuickBooks transaction capture is required")
+		return "", "", "", nil, errors.New("A current completed QuickBooks transaction capture is required")
 	}
 	open := map[string][]json.RawMessage{}
 	json.Unmarshal(raw, &open)
-	return captureID, realm, open, nil
+	return captureID, realm, currency, open, nil
 }
 
 // findOpen returns the captured open document of a type with an ID.
@@ -127,8 +127,19 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 			items = append(items, a)
 		}
 		// The capture's open documents a person can pair, by party.
-		candidates := map[string][]map[string]string{}
-		if _, _, open, err := capturedOpen(r.Context(), db, r.PathValue("id")); err == nil {
+		candidates, suggestions := map[string][]map[string]string{}, []quickbooks.Suggestion{}
+		captureID, _, currency, open, openErr := capturedOpen(r.Context(), db, r.PathValue("id"))
+		if openErr == nil {
+			// A document already in any saved application is left to that application.
+			used := map[string]bool{}
+			for _, a := range items {
+				used[a.Kind+"/source/"+a.SourceID], used[a.Kind+"/target/"+a.TargetID] = true, true
+			}
+			for _, s := range quickbooks.SuggestApplications(open, currency) {
+				if !used[s.Kind+"/source/"+s.SourceID] && !used[s.Kind+"/target/"+s.TargetID] {
+					suggestions = append(suggestions, s)
+				}
+			}
 			for _, entity := range []string{"Payment", "Invoice", "VendorCredit", "Bill"} {
 				for _, record := range open[entity] {
 					var f struct {
@@ -151,7 +162,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 		}
-		jsonReply(w, 200, map[string]any{"applications": items, "candidates": candidates})
+		jsonReply(w, 200, map[string]any{"applications": items, "candidates": candidates, "suggestions": suggestions, "capture_id": captureID})
 	})
 	mux.HandleFunc("POST /v1/closes/{id}/quickbooks/applications", func(w http.ResponseWriter, r *http.Request) {
 		a := auth.Actor(r.Context())
@@ -173,6 +184,7 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 			RuleReference string `json:"rule_reference"`
 			Confirmed     bool   `json:"confirmed"`
 			BillPaymentID string `json:"bill_payment_id"`
+			CaptureID     string `json:"capture_id"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -248,9 +260,12 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			amount := big.NewRat(cents, 100)
-			captureID, realm, open, err := capturedOpen(r.Context(), db, closeID)
+			captureID, realm, _, open, err := capturedOpen(r.Context(), db, closeID)
 			if err == nil && realm != sandbox.Realm {
 				err = errors.New("The latest transaction capture is of another QuickBooks company; capture this one")
+			}
+			if err == nil && in.CaptureID != "" && in.CaptureID != captureID {
+				err = errors.New("Transactions were captured again since this suggestion; review the suggestions again")
 			}
 			if err != nil {
 				problem(w, 409, err.Error())

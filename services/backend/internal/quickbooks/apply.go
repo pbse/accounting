@@ -7,7 +7,9 @@ import (
 	"maps"
 	"math/big"
 	"net/url"
+	"regexp"
 	"slices"
+	"strings"
 )
 
 // OpenDocument is an invoice, bill, customer payment or vendor credit with what is still open on it.
@@ -240,4 +242,86 @@ func (s Sandbox) ValidateBankAccount(ctx context.Context, id string) (string, er
 		return "", errors.New("The account is not an active bank account in the client's currency")
 	}
 	return a.Name, nil
+}
+
+// Suggestion is an application the open items support by a deterministic rule, with no competing reading.
+type Suggestion struct {
+	Kind     string `json:"kind"`
+	SourceID string `json:"source_id"`
+	TargetID string `json:"target_id"`
+	Amount   string `json:"amount"`
+	Basis    string `json:"basis"`
+}
+
+// referenceToken splits remittance text into whole references: letters, digits and . - _ / stay together.
+var referenceToken = regexp.MustCompile(`[A-Za-z0-9._/-]+`)
+
+// SuggestApplications proposes applying a payment's unapplied amount, or a vendor credit, to the one open invoice or
+// bill of the same party that either equals it exactly or is named by its reference. A source with more than one
+// possible target, or a target claimed by more than one source, gets no suggestion.
+func SuggestApplications(open map[string][]json.RawMessage, currency string) []Suggestion {
+	type doc struct {
+		OpenDocument
+		number, reference string
+	}
+	read := func(entity string) []doc {
+		out := []doc{}
+		for _, raw := range open[entity] {
+			parsed, err := ParseOpenDocument(entity, raw, currency)
+			var text struct{ DocNumber, PaymentRefNum, PrivateNote string }
+			if err != nil || json.Unmarshal(raw, &text) != nil || parsed.Open.Sign() <= 0 {
+				continue
+			}
+			reference := text.PaymentRefNum + " " + text.PrivateNote
+			if entity == "VendorCredit" {
+				reference = text.DocNumber + " " + text.PrivateNote
+			}
+			out = append(out, doc{parsed, strings.ToLower(strings.TrimSpace(text.DocNumber)), reference})
+		}
+		return out
+	}
+	suggestions := []Suggestion{}
+	for _, kind := range []struct{ kind, source, target, label string }{{"payment", "Payment", "Invoice", "invoice"}, {"vendor_credit", "VendorCredit", "Bill", "bill"}} {
+		targets := read(kind.target)
+		for _, s := range read(kind.source) {
+			tokens := map[string]bool{}
+			for _, token := range referenceToken.FindAllString(s.reference, -1) {
+				tokens[strings.ToLower(strings.TrimRight(token, "._/-"))] = true
+			}
+			matched, basis := []doc{}, map[string][]string{}
+			for _, t := range targets {
+				if t.Party != s.Party {
+					continue
+				}
+				equal := t.Open.Cmp(s.Open) == 0
+				named := t.number != "" && tokens[t.number]
+				if equal {
+					basis[t.ID] = append(basis[t.ID], "the "+strings.ToLower(kind.source)+"'s open "+s.Open.FloatString(2)+" equals its balance")
+				}
+				if named {
+					basis[t.ID] = append(basis[t.ID], "the "+strings.ToLower(kind.source)+"'s reference names it")
+				}
+				if equal || named {
+					matched = append(matched, t)
+				}
+			}
+			if len(matched) != 1 {
+				continue
+			}
+			t := matched[0]
+			amount := s.Open
+			if t.Open.Cmp(amount) < 0 {
+				amount = t.Open
+			}
+			if !new(big.Rat).Mul(amount, big.NewRat(100, 1)).IsInt() {
+				continue
+			}
+			suggestions = append(suggestions, Suggestion{kind.kind, s.ID, t.ID, amount.FloatString(2), "Same party; " + strings.Join(basis[t.ID], " and ") + " (" + kind.label + " #" + t.ID + ")."})
+		}
+	}
+	claims := map[string]int{}
+	for _, s := range suggestions {
+		claims[s.Kind+"\x00"+s.TargetID]++
+	}
+	return slices.DeleteFunc(suggestions, func(s Suggestion) bool { return claims[s.Kind+"\x00"+s.TargetID] > 1 })
 }
