@@ -15,6 +15,9 @@ export class CapabilityAPI extends Container<Env> {
     QBO_CLIENT_SECRET: this.env.QBO_CLIENT_SECRET ?? "",
     QBO_REDIRECT_URI: this.env.QBO_REDIRECT_URI ?? "",
     QBO_WEBHOOK_VERIFIER: this.env.QBO_WEBHOOK_VERIFIER ?? "",
+    QBO_PRODUCTION_CLIENT_ID: this.env.QBO_PRODUCTION_CLIENT_ID ?? "",
+    QBO_PRODUCTION_CLIENT_SECRET: this.env.QBO_PRODUCTION_CLIENT_SECRET ?? "",
+    QBO_PRODUCTION_REDIRECT_URI: this.env.QBO_PRODUCTION_REDIRECT_URI ?? "",
     WORKOS_API_KEY: this.env.WORKOS_API_KEY ?? "",
     XERO_CLIENT_ID: this.env.XERO_CLIENT_ID ?? "",
     XERO_CLIENT_SECRET: this.env.XERO_CLIENT_SECRET ?? "",
@@ -52,6 +55,9 @@ interface Env {
   QBO_CLIENT_SECRET?: string;
   QBO_REDIRECT_URI?: string;
   QBO_WEBHOOK_VERIFIER?: string;
+  QBO_PRODUCTION_CLIENT_ID?: string;
+  QBO_PRODUCTION_CLIENT_SECRET?: string;
+  QBO_PRODUCTION_REDIRECT_URI?: string;
   WORKOS_API_KEY?: string;
   XERO_CLIENT_ID?: string;
   XERO_CLIENT_SECRET?: string;
