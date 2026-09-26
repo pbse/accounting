@@ -118,6 +118,17 @@ func TestCloseBriefNarratesWhatNeedsAPerson(t *testing.T) {
 		}
 	}
 
+	// Under a 500.00 materiality the 100.00 prepaid difference is explained, not a need, and still rests on unapproved support.
+	_, err = db.Exec(`UPDATE organizations SET materiality_amount=500 WHERE id='local-development'`)
+	must(err)
+	b, _ = read()
+	_, err = db.Exec(`UPDATE organizations SET materiality_amount=NULL WHERE id='local-development'`)
+	must(err)
+	for _, line := range b.Lines {
+		if line.Area == "balance sheet" && (!strings.Contains(line.Text, "Differ by less than the firm's materiality: Prepaid insurance.") || !strings.Contains(line.Text, "3 matches rest")) || strings.Contains(b.Headline, "explain") {
+			t.Errorf("materiality explains the difference: %q | %q", line.Text, b.Headline)
+		}
+	}
 	_, err = db.Exec(`UPDATE quickbooks_connections SET state='reconnect_required' WHERE id=$1`, connection)
 	must(err)
 	if b, states = read(); !strings.HasPrefix(states, "ledger=attention") || !strings.Contains(b.Headline, "capture a new snapshot") {

@@ -7,7 +7,7 @@ import { EmailSettings } from "./Email";
 import { FirmEnrollment, FirmOperations } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { independent_review: boolean; independent_review_min_amount: string; link_passcode: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
+type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
 
 function IndependentReview() {
   const [policy, setPolicy] = useState<Policy>();
@@ -138,6 +138,66 @@ function LinkPasscodes() {
   );
 }
 
+function Materiality() {
+  const [policy, setPolicy] = useState<Policy>();
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/organization/policy")
+      .then((data) => live && setPolicy(data))
+      .catch((e) => live && setMessage(e instanceof Error ? e.message : "Firm policy is unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [refresh]);
+  if (!policy) return message ? <p role="alert">{message}</p> : null;
+  async function change(materiality_amount: string) {
+    setBusy(true);
+    setMessage("");
+    try {
+      await workspaceRequest("/organization/policy", { materiality_amount, reason });
+      setReason("");
+      setAmount("");
+      setRefresh((n) => n + 1);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Policy change failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-label="Materiality">
+      <h2>Materiality</h2>
+      <p>
+        {policy.materiality_amount
+          ? `${policy.materiality_amount}: a balance-sheet account whose Trial Balance differs from its support by less than this, with no proposed entry pending, is shown as within materiality instead of a difference to explain. The comparison is per account, in the client's currency. It does not approve a draft or waive an entry.`
+          : "Not set: every Trial Balance difference is shown as a difference to explain."}
+      </p>
+      {policy.can_manage_links ? (
+        <>
+          <label>
+            Materiality amount
+            <input value={amount} inputMode="decimal" placeholder={policy.materiality_amount || "500.00"} onChange={(e) => setAmount(e.target.value)} />
+          </label>
+          <label>
+            Reason for the change
+            <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button type="button" disabled={busy || reason.trim().length < 5 || !amount.trim()} onClick={() => void change(amount)}>Set materiality</button>
+          {policy.materiality_amount && <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change("")}>Clear materiality</button>}
+        </>
+      ) : (
+        <p className="note">A firm administrator with org:manage can change this policy.</p>
+      )}
+      {message && <p role="alert">{message}</p>}
+    </section>
+  );
+}
+
 export default function Firm() {
   const [entities, setEntities] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -173,6 +233,7 @@ export default function Firm() {
         <div className="stack">
           <IndependentReview />
       <LinkPasscodes />
+      <Materiality />
           <AgentAccess />
           <FirmOperations />
           <ClientAccess entities={entities} />
