@@ -92,3 +92,5 @@ Fresh Compose volumes run every migration automatically. Existing Compose volume
 `067_xero_change_hints.sql` records the newest change time a signed Xero webhook reported for each connection, so a hinted close is captured again early. Apply after 066 with API/worker stopped; `/readyz` checks it.
 
 `068_xero_corrections.sql` records each reviewed recode of one Xero bill line (preview, approval, one attempt, readback), with row-level security like 060. Apply after 067 with API/worker stopped; `/readyz` checks it.
+
+`069_stripe_report_kinds.sql` lets a close capture Stripe's itemized Payouts and balance activity reports as well as the payout reconciliation, one of each in flight. Apply after 068 with API/worker stopped; `/readyz` checks it.

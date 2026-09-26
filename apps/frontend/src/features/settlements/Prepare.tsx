@@ -528,6 +528,7 @@ export default function Prepare() {
       );
       const text = await blob.text();
       if (latest.current[slot] !== id) return;
+      if (slot === "report") detectMethod(text);
       // An automatically picked file must be a bank CSV, not another Stripe report.
       if (auto && !/^\ufeff?id,date,amount\s*$/i.test(text.split("\n")[0].trim())) {
         latest.current[slot] = "";
@@ -618,6 +619,10 @@ export default function Prepare() {
         : {}),
     });
   }
+  // A Payouts report is traced with the Payouts report method, unless a saved draft chose the method.
+  function detectMethod(text: string) {
+    if (!revision.savedInput) setManual(/payout_expected_arrival_date/.test(text.split("\n")[0]));
+  }
   function readFile(file: File | undefined, set: (value?: Chosen) => void) {
     setError("");
     if (!file) return set(undefined);
@@ -666,7 +671,7 @@ export default function Prepare() {
           <input
             type="file"
             accept=".csv,text/csv"
-            onChange={(e) => readFile(e.target.files?.[0], set)}
+            onChange={(e) => readFile(e.target.files?.[0], (value) => { set(value); if (slot === "report" && value) detectMethod(value.text); })}
           />
         )}
         <small>

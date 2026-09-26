@@ -416,9 +416,26 @@ func stripeActivity(source, period, currency string) (map[string]*totals, totals
 	return categories, all, nil
 }
 
-// StripeReportSummary recognizes an itemized payout export without a model. ok is false for any other file.
+// StripeReportSummary recognizes an itemized payout reconciliation export or Payouts report without a model. ok is
+// false for any other file.
 func StripeReportSummary(source, period string) (string, bool, error) {
-	header, err := csv.NewReader(strings.NewReader(source)).Read()
+	reader := csv.NewReader(strings.NewReader(source))
+	header, err := reader.Read()
+	if index, ok := stripeHeader(header, payoutColumns...); err == nil && ok {
+		currency := ""
+		if record, e := reader.Read(); e == nil && len(record) == len(header) {
+			currency = strings.ToUpper(strings.TrimSpace(record[index["currency"]]))
+		}
+		groups, _, _, earlier, _, _, err := stripeManualPayouts(source, period, currency)
+		if err != nil {
+			return "", true, err
+		}
+		summary := fmt.Sprintf("Stripe itemized Payouts report with %d returns of earlier payouts.", len(earlier))
+		if len(groups) > 0 {
+			summary = fmt.Sprintf("Stripe itemized Payouts report: %d payouts expected %s to %s.", len(groups), groups[0].date, groups[len(groups)-1].date)
+		}
+		return summary + " Trace it with the Payouts report method, with the bank account's CSV for the same month and, to roll the Stripe balance forward, the month's balance activity report.", true, nil
+	}
 	if _, ok := stripeHeader(header); err != nil || !ok {
 		return "", false, nil
 	}

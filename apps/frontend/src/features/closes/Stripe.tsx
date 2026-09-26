@@ -3,16 +3,23 @@ import { workspaceRequest } from "./workspace";
 
 type Status = {
   connection: { id: string; state: string; livemode: boolean; key_last4: string; account_id: string; account_name: string } | null;
-  runs: { id: string; period: string; state: string; error: string; evidence_id?: string; created_at: string }[];
+  runs: { id: string; period: string; report: string; state: string; error: string; evidence_id?: string; created_at: string }[];
 };
 
-// A read-only Stripe connection brings the month's itemized payout reconciliation into the close, as if uploaded.
+const reports: Record<string, string> = {
+  payout_reconciliation: "Payout reconciliation (automatic payouts)",
+  payouts: "Every payout (manual, instant or mixed)",
+  activity: "Balance change from activity",
+};
+
+// A read-only Stripe connection brings the month's itemized reports into the close, as if uploaded.
 export function Stripe({ closeId, entity }: { closeId: string; entity: string }) {
   const [status, setStatus] = useState<Status>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [key, setKey] = useState("");
+  const [report, setReport] = useState("payout_reconciliation");
   async function load() {
     try {
       setStatus(await workspaceRequest(`/${closeId}/stripe`));
@@ -27,7 +34,7 @@ export function Stripe({ closeId, entity }: { closeId: string; entity: string })
     setBusy(true);
     setError("");
     try {
-      setStatus(await workspaceRequest(`/${closeId}/stripe`, { action, key, connection_id: status?.connection?.id ?? "", confirmed }));
+      setStatus(await workspaceRequest(`/${closeId}/stripe`, { action, key, connection_id: status?.connection?.id ?? "", confirmed, report }));
       setKey("");
       setConfirmed(false);
     } catch (e) {
@@ -45,10 +52,11 @@ export function Stripe({ closeId, entity }: { closeId: string; entity: string })
   );
   return (
     <details>
-      <summary>Stripe payout reconciliation</summary>
+      <summary>Stripe reports</summary>
       <p>
-        Reads the month's itemized payout reconciliation report from the client's Stripe account and adds it to this close as evidence, like an
-        uploaded export. It never changes anything in Stripe except asking it to generate the report.
+        Reads the month's itemized payout reconciliation, Payouts or balance activity report from the client's Stripe account and adds it to this
+        close as evidence, like an uploaded export. It never changes anything in Stripe except asking it to generate the report. For manual or
+        instant payouts, capture every payout and the balance activity, then trace them together.
       </p>
       {error && <p role="alert">{error}</p>}
       {!status ? null : !c ? (
@@ -82,9 +90,15 @@ export function Stripe({ closeId, entity }: { closeId: string; entity: string })
           <p>
             Connected to <strong>{c.account_name || c.account_id}</strong> ({c.livemode ? "live" : "test"} mode, key ending {c.key_last4}).
           </p>
+          <label>
+            Report
+            <select value={report} onChange={(e) => setReport(e.target.value)}>
+              {Object.entries(reports).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
           {confirm}
           <button disabled={busy || !confirmed} onClick={() => void act("capture")}>
-            {busy ? "Asking Stripe…" : "Capture this month's payout reconciliation"}
+            {busy ? "Asking Stripe…" : "Capture this month's report"}
           </button>
         </>
       )}
@@ -92,7 +106,7 @@ export function Stripe({ closeId, entity }: { closeId: string; entity: string })
         <ul>
           {status!.runs.map((r) => (
             <li key={r.id}>
-              {r.period}: {r.state === "saved" ? "saved as evidence; review it in Work" : r.state === "failed" ? `failed. ${r.error}` : "Stripe is preparing the report; it is saved within a few minutes"}
+              {r.period} · {reports[r.report] ?? r.report}: {r.state === "saved" ? (r.report === "activity" ? "saved as evidence; choose it as the activity report when tracing the Payouts report" : "saved as evidence; review it in Work") : r.state === "failed" ? `failed. ${r.error}` : "Stripe is preparing the report; it is saved within a few minutes"}
             </li>
           ))}
         </ul>
