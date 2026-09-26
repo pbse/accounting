@@ -2,6 +2,10 @@
 
 Any MCP client can use close preparation at `POST /mcp`: Claude, ChatGPT, Cursor, VS Code, or an in-house agent. The server uses the official MCP Go SDK in stateless mode. Clients on the current protocol (2026-07-28) and on earlier versions that start with `initialize` (2025-11-25, 2025-06-18, 2025-03-26) are both served.
 
+## Deployment boundary
+
+The Go API implements this transport. The current Cloudflare edge explicitly returns 404 for `/mcp`, does not route OAuth discovery, and does not forward `WORKOS_AUTHKIT_DOMAIN`, `MCP_RESOURCE_URL` or `MCP_ALLOWED_ORIGINS`. Native API testing is available now; hosted MCP needs those deployment changes before the setup below can work through Cloudflare. Adding secrets alone does not enable it. See [deployment](deployment.md#production-and-remaining-deployment-work).
+
 ## Connect
 
 - **Local development:** point the client at `http://127.0.0.1:8080/mcp` and send the header `Authorization: Bearer <WORKSPACE_TOKEN>`.

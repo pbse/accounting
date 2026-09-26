@@ -44,6 +44,8 @@ Firms can require independent review (Firm settings, `org:manage`, hosted firms 
 
 ## Enabling accrual, loan, owner and Stripe fee posting
 
+Deployment boundary: Go reads `PRODUCTION_POSTING_KINDS`, but Compose, the Cloudflare container adapters and staging workflow do not currently forward it. Native Go can receive the exported value; hosted activation requires wiring it through those layers first. Adding a GitHub secret alone has no effect.
+
 These kinds stay off until `PRODUCTION_POSTING_KINDS` lists them (default `prepaid`), for example `prepaid,accrual,loan,owner,settlement`. Turn a kind on only after observing QuickBooks behavior in the sandbox company:
 
 1. Post a test journal in the sandbox that touches each account type the kind uses: Expense and Liability for accruals and loan interest, Liability-to-Liability for current portion, Equity or Asset against Expense for owner items, Expense against Revenue (or the deposit account) for Stripe fee entries.

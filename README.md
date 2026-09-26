@@ -2,11 +2,11 @@
 
 **Client attachment requirement:** configure [Cloudflare WAF upload scanning](docs/cloudflare-upload-scanning.md) before releasing client PDFs. PDFs need Cloudflare; local TXT/CSV use the separate scanner service.
 
-A foundation for an agent-first accounting preparation workspace. React presents the decisions; Go owns capabilities and accounting; Cloudflare supplies delivery and runtime adapters. The connected ledger remains the ledger of record.
+A foundation for an agent-first accounting preparation workspace. React presents the decisions; Go owns capabilities and accounting; Cloudflare supplies ingress and runtime adapters. The connected ledger remains the ledger of record.
 
-**Implemented locally:** saved closes; exact prepaid, accrual and reconciliation calculations; reviewed prepaid carry-forward and recurring accrual refresh; secure evidence upload with PDF/OCR; source-linked review and recalculation; a live Work inbox that connects proposed facts, approved requests, held email replies, client replies, and durable preparation. OpenAI interpretation needs worker credentials; without them, local proposals recognize labeled fields and require review. WorkOS AuthKit, QuickBooks sandbox VendorCredit and controlled production prepaid posting, and Cloudflare/GitHub delivery have code but require provider activation. Supported-scope readiness, sign-off, release-gated accountant binders with PDF workpapers, firm membership and operational controls are available locally. See [the Work inbox guide](docs/work-inbox.md).
+**Implemented:** multi-firm/client access; evidence-to-preparation jobs with optional OpenAI interpretation; TXT/CSV/PDF and OCR; live Work and review queues; reviewed prepaid, accrual, loan, depreciation, owner, reconciliation and settlement methods; recurring closes and dependency re-review; QuickBooks/Xero reads and controlled supported writes; client requests, scanned attachments, approved email/replies; procedure learning; Daily Books, aging, year-end handoff, binders and operational controls. Supported scope and activation differ by feature: [current coverage and limits](docs/implementation-backlog.md).
 
-See [onboarding and end-to-end flows](docs/onboarding.md), [enterprise controls and recovery](docs/operations.md), and the [current delivery backlog](docs/implementation-backlog.md). Multi-firm API access is bound to enrolled WorkOS organizations; existing local data belongs to the development workspace. Agents connect through [MCP](docs/mcp.md) with the same sign-in and permissions as the app. Live enterprise validation remains pending.
+**Start with [onboarding and the acceptance matrix](docs/onboarding.md), then [staging/production setup and costs](docs/deployment.md).** WorkOS organizations represent accounting firms; clients and monthly closes live within them. Provider accounts, hosted resources and accountant acceptance are not provisioned by this repository. The production deployment workflow, Cloudflare MCP routing/configuration and broader posting-kind forwarding still require implementation. [MCP](docs/mcp.md) describes the Go surface and current hosting boundary.
 
 ## Start locally
 
@@ -21,7 +21,7 @@ npm run dev
 
 Open http://localhost:5173. Compose installs locked dependencies, starts the API on localhost:8080, the worker on localhost:8081, and Postgres on localhost:5432. React hot-reloads; Go edits rebuild through Compose Watch. Stop with Ctrl-C; `docker compose down` removes containers while preserving the database volume.
 
-No Cloudflare account, model key, live ledger, or Go installation is needed for this path. Saved closes connect to Postgres. Fresh Compose volumes receive all numbered migrations; existing volumes need the explicit migration command in the onboarding guide. Its local-only credentials are in `compose.yaml`; never reuse them in cloud environments.
+No Cloudflare account, model key, live ledger, or Go installation is needed for this path. Saved closes connect to Postgres. Fresh Compose volumes receive all numbered migrations; existing volumes need the reviewed migration procedure linked from the onboarding guide. Its local-only credentials are in `compose.yaml`; never reuse them in cloud environments.
 
 For faster native iteration (Node 24 and Go 1.27 installed):
 
@@ -96,7 +96,7 @@ The frontend is one SPA with separate public and product features:
 - `/dashboard/firm`: firm membership, client access, email sender and operations.
 - `/dashboard/close`, `/dashboard/review`: labeled synthetic examples.
 
-React Router handles links and browser history; Cloudflare's existing SPA fallback supports direct URL loads. The dashboard is loaded separately from marketing and only it requests workpaper data. Reference pages are public synthetic examples. Saved client data requires the private workspace token.
+React Router handles links and browser history; Cloudflare's existing SPA fallback supports direct URL loads. The dashboard is loaded separately from marketing and only it requests workpaper data. Reference pages are public synthetic examples. Saved client data requires the local development token or, in hosted mode, an authorized WorkOS firm session and client access.
 
 ### Independently hosted backend
 
@@ -114,7 +114,7 @@ For direct cross-origin access, run Go with the exact frontend origin:
 FRONTEND_ORIGIN=http://127.0.0.1:5173 go run ./cmd/api
 ```
 
-Run that command from `services/backend`. With Compose, set `FRONTEND_ORIGIN` in the shell before startup. With Cloudflare, set the edge Worker's `FRONTEND_ORIGIN` variable in its Wrangler configuration; it is forwarded to the Go container. An empty value enables no cross-origin browser access. CORS is not authentication. Saved-close requests separately require the workspace bearer token; hosted user sessions use WorkOS organization JWTs.
+Run that command from `services/backend`. With Compose, set `FRONTEND_ORIGIN` in the shell before startup. With Cloudflare, set the edge Worker's `FRONTEND_ORIGIN` variable in its Wrangler configuration; it is forwarded to the Go container. An empty value enables no cross-origin browser access. CORS is not authentication. Saved-close requests use the local workspace bearer token only in development; hosted sessions use WorkOS organization JWTs and recorded membership/client access.
 
 
 ## First working feature: prepaid preparation
@@ -123,7 +123,7 @@ Open `/dashboard/prepaids/new` (or choose **Prepare a prepaid** in the dashboard
 
 The Go capability computes exact-cent allocation and a proposed reclassification, then the UI shows every month, the month-end balances and supplied source context. Changing an input clears the previous result. Export the complete draft as JSON or the schedule as CSV, or start from a client close and save an immutable draft before leaving.
 
-Supported: USD accrual-basis prepaids using equal full months or inclusive actual days (up to 120 months), one prospective credit and adjustments against a confirmed booked prepaid balance. Fixed incurred accruals with optional next-month reversal proposals are also available from a client close. Review the [method definitions, synthetic examples and accountant approval flow](docs/accounting-methods.md). These remain draft calculations, not verified ledger facts or permission to post.
+Supported methods now include equal-month and actual-day prepaids, reviewed credits/cancellations/booked-balance adjustments, and several explicitly reviewed accrual treatments. Client currency, basis, eligibility and approved procedures constrain each method. Review the [method definitions, synthetic examples and accountant approval flow](docs/accounting-methods.md). These remain draft calculations, not verified ledger facts or permission to post.
 
 - Capability: `POST /v1/workpapers:prepare` (`application/json`, maximum 16 KiB).
 - Contract: `packages/contracts/prepaid.ts`; implementation: `services/backend/internal/prepaids`.
@@ -138,7 +138,7 @@ Open `/dashboard/closes` to unlock the private workspace and create a client/mon
 
 ## AuthKit and sandbox posting
 
-[Setup and verification boundaries](docs/auth-sandbox-staging.md) covers hosted sign-in, explicit sandbox approval/execution/readback, and the staging workflow. Provider accounts and live validation are still required. The private local token cannot authorize a posting.
+[Setup and verification boundaries](docs/auth-sandbox-staging.md) covers hosted sign-in, explicit sandbox approval/execution/readback, and the staging workflow. Provider accounts and live validation are still required. The private local token cannot authorize a posting. Per-client connectors are the multi-client path; the legacy global sandbox journal is single-firm.
 
 Revised workpapers and PDF/OCR: [workflow, local setup and activation status](docs/recalculation-and-pdf.md).
 

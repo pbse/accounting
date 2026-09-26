@@ -16,19 +16,9 @@ Synthetic review examples: (1) Opening statement $1,000 and ledger $900 with a p
 
 QuickBooks' own reconciliation status is separate. A reviewer may record the status observed in [QuickBooks' reconciliation report](https://quickbooks.intuit.com/learn-support/en-us/help-article/statement-reconciliation/reconcile-account-quickbooks-online/L3XzsllsK_US_en_US), and a source-linked workpaper requires the report as separate PDF or text evidence. This does not read or change a native flag through the API. Page inventory and native status remain reviewer-cited observations, not independent provider verification. Automatic timing classification, implied accountant policy and posting from this workpaper are unsupported.
 
-Ponytail ladder: reuse the existing calculator and React form patterns; stdlib CSV, JSON, integer arithmetic, HTTP and token comparison; native PostgreSQL constraints and transactions. One new runtime dependency, pgx, supplies the required PostgreSQL driver. No repository interface, ORM, auth-provider abstraction or queue for short synchronous calculations.
-
 ## Local setup
 
-Copy `.env.example` to `.env`, generate `WORKSPACE_TOKEN` with `openssl rand -hex 32`, and keep `.env` private. The token grants access to the entire single workspace. It is not a user identity or firm-level authorization model. The browser retains it in tab memory only; refreshing requires unlocking again. Use synthetic/non-sensitive data during development. WorkOS AuthKit is the likely hosted identity choice; it is not configured in this feature.
-
-`npm run dev` uses Compose's Postgres and applies SQL migrations on a fresh database volume. For an existing volume, apply explicitly:
-
-```sh
-docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/001_saved_closes.sql
-```
-
-Native Go needs `DATABASE_URL`, `WORKSPACE_TOKEN` and optional exact `FRONTEND_ORIGIN` exported before `go run ./cmd/api`. Go does not implicitly load `.env`. Apply migration with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/migrations/001_saved_closes.sql` from the repository root. Migration runs separately from API startup.
+Follow [local onboarding](onboarding.md#local-development). The shared token is for synthetic local development; hosted firms use AuthKit, enrolled membership and client assignments. Fresh Compose volumes apply all numbered migrations; existing volumes follow the [upgrade procedure](../infra/postgres/migrations/README.md#existing-database-upgrades). Native Go needs exported settings and does not load `.env` automatically.
 
 Open `/dashboard/closes`, unlock, create a close, choose a preparation type, then save the resulting draft. Inputs must match the selected client and month. Changing inputs requires a new calculation and creates a new snapshot; old snapshots are retained. Lists currently show the latest 100 records and explicitly disclose truncation. This local development ceiling needs pagination before larger workspaces.
 
@@ -43,13 +33,13 @@ Standalone preparation still supports export without saving. CSV format is `id,d
 - `GET /v1/closes/{id}`: close and saved workpapers.
 - `POST /v1/closes/{id}/workpapers`: `{kind: "prepaid" | "reconciliation", input: ...}`. Recalculates on the server; never trusts client-supplied results.
 
-All saved-close routes require `Authorization: Bearer <WORKSPACE_TOKEN>`. Missing configuration fails closed. Exact-origin CORS permits Content-Type and Authorization, not credentialed cookies. Repeat writes are deduplicated by server-calculated content digest. Preparation endpoints remain stateless and public like prepaid preparation; they do not log/store inputs. There is no MCP transport or autonomous agent coordinator yet.
+Saved-close routes require either local development authorization or a verified AuthKit token, active firm membership and client access. Exact-origin CORS permits Content-Type and Authorization, not credentialed cookies. Repeat saves are deduplicated by a server-calculated content digest. Stateless calculators do not persist inputs. [MCP](mcp.md) and the [durable preparation coordinator](evidence-and-preparation.md) reuse the authenticated application flows.
 
 ## Cloudflare and CI
 
-Edge forwards server-side `DATABASE_URL` and `WORKSPACE_TOKEN` secrets to Go. Never put either in a VITE variable or Wrangler plaintext vars. Cloud deployment needs a reachable TLS-enabled PostgreSQL database, separately applied migrations, restricted database roles and hosted identity/data controls before real client use. No provider was provisioned and no cloud secrets or deployments were changed.
+The hosted edge forwards server-only database and AuthKit settings to Go; it does not enable the local workspace token. Use the [deployment guide](deployment.md) for runtime-role isolation and complete environment setup.
 
-CI has a disposable Postgres service, applies migration, and runs the persistence test through `TEST_DATABASE_URL`. Docker Compose validation uses a non-production CI token. Local focused checks:
+CI has a disposable Postgres service, applies all numbered migrations, and runs the persistence test through `TEST_DATABASE_URL`. Docker Compose validation uses a non-production CI token. Local focused checks:
 
 ```sh
 cd services/backend
@@ -58,7 +48,3 @@ go vet ./internal/transport ./internal/reconciliation
 ```
 
 The test database must be disposable: the persistence test inserts and removes its own synthetic fixture. These checks validate software behavior, not accounting-policy approval or hosted multi-tenant security.
-
-## Subsequent identity and sandbox integration
-
-WorkOS AuthKit and the controlled sandbox-posting path now have implementation code and local checks. They require provider configuration and live verification before activation. The development token remains local-only and cannot authorize posting. See `auth-sandbox-staging.md` for the current setup and verification boundary.

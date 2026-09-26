@@ -1,3 +1,7 @@
+# Validation history
+
+Dated records below describe checks at their recorded revisions, not current deployment or provider readiness. Use [onboarding](onboarding.md) and [deployment](deployment.md) for current setup and acceptance.
+
 # Scaffold validation — September 21, 2026
 
 ## Passed locally

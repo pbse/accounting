@@ -1,20 +1,45 @@
 # Product-state migrations
 
-`001_saved_closes.sql` creates single-workspace client/month closes and immutable workpaper snapshots. PostgreSQL uniqueness protects repeated creation and repeated saves. Calculation results are JSONB snapshots; money remains exact decimal strings from Go integer arithmetic.
+Apply every numbered SQL file in filename order for a fresh database. These migrations collectively implement firm isolation, durable jobs, review and posting; the notes below describe individual historical additions, not the full current schema.
 
-Apply with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/migrations/001_saved_closes.sql`. Fresh Compose volumes apply it automatically; existing volumes need an explicit migration. Do not apply production migrations as part of container startup. Migration and runtime roles must be separated before hosted use.
+## Fresh hosted database
 
-This schema does not claim tenant isolation, durable jobs, approvals or posting. Add those with their owning features. See `docs/saved-closes-and-reconciliation.md`.
+Use a dedicated database and its owning role for migration. Stop API/worker traffic and set `DATABASE_URL` privately to that database's **direct** TLS endpoint. From the repository root, the following applies migrations only after verifying that `public` has no application tables:
 
-`003_evidence_preparation.sql` adds immutable bounded text evidence, preparation instructions and durable close jobs. Existing databases must apply it explicitly before running the new API and worker. See `docs/evidence-and-preparation.md`. These later migrations extend the original single-workspace schema; they do not add multi-firm isolation.
+```sh
+bash <<'SH'
+set -euo pipefail
+: "${DATABASE_URL:?Set the approved fresh database owner URL privately}"
+test "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")" = 0
+for migration in infra/postgres/migrations/[0-9]*.sql; do
+  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
+done
+SH
+```
 
-`002_sandbox_posting.sql` adds digest-bound sandbox intents, expiring human approvals, durable execution attempts and readback status. Apply it explicitly to existing databases before enabling sandbox posting. See `docs/auth-sandbox-staging.md`; no production ledger writer is enabled.
+Create a separate login role, for example `close_runtime`, with no superuser, role creation, database creation or BYPASSRLS, and no membership in the owner role. Set its password through the provider's secure role UI or interactive `psql` `\password close_runtime`, never a committed command. As the migration owner, grant it `CONNECT` to this database, `USAGE` on schema `public`, `SELECT, INSERT, UPDATE, DELETE` on all tables in `public`, and `USAGE, SELECT` on all sequences in `public`. Apply matching `ALTER DEFAULT PRIVILEGES` **for the migration owner** so future tables/sequences receive those grants. Views are included in PostgreSQL's table grants. Do not grant schema creation or ownership.
 
-`004_workpaper_review.sql` adds append-only review decisions, explicit evidence replacement metadata and the derived workpaper review-state view. Apply before starting the updated API and worker. Hosted reviewers need `workpapers:review`; development decisions remain attributed to the shared workspace. See `docs/workpaper-review.md`.
+Use this runtime role's direct TLS URL for both API and worker; never use Neon's transaction-pooling endpoint with the current session-context adapter. Hosted `/readyz` rejects runtime RLS bypass and missing policies. Local Compose uses a superuser and cannot prove hosted isolation; test two firms with the restricted hosted role before client use. See [operations](../../../docs/operations.md#row-level-security).
 
-`019_email_followup.sql` extends the existing outbox with uniquely linked reminders and signed, deduplicated delivery events. Apply after 018 with API/worker stopped, then restart both. Fresh volumes apply it automatically. See `docs/email-delivery.md` for per-firm webhook setup and synthetic local checks.
+## Existing database upgrades
 
-`020_accruals.sql` permits accrued-expense drafts and procedure versions. Apply after 019 with API/worker stopped. No existing workpaper or policy is rewritten. See `docs/accounting-methods.md`.
+The repository has no automatic migration ledger. Keep an operator record of exactly which files succeeded; readiness checks are not a replacement for that record. Back up, stop API/worker, compare the recorded list with this directory, and apply only unapplied files in numeric order as the migration owner. Do not rerun all migrations against an existing volume, delete that volume to upgrade, or guess the last migration from a single table. If history is unknown or a migration fails, inspect the schema and reconcile the record before continuing. Restart API/worker from the same revision and check `/readyz` plus a durable job.
+
+Fresh Compose volumes run every migration automatically. Existing Compose volumes do not; apply each confirmed pending file using `docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1` with that file on stdin. Hosted migrations remain an explicitly authorized operator action; the staging workflow only checks schema readiness.
+
+## Historical migration notes
+
+`001_saved_closes.sql` introduced client/month closes and immutable snapshots. Later migrations add organizations and permissions.
+
+`003_evidence_preparation.sql` adds immutable bounded text evidence, preparation instructions and durable close jobs. Existing databases must apply it explicitly before running the new API and worker. See `../../../docs/evidence-and-preparation.md`. Multi-firm isolation arrives in later migrations; all files are required.
+
+`002_sandbox_posting.sql` adds digest-bound sandbox intents, expiring human approvals, durable execution attempts and readback status. Apply it explicitly to existing databases before enabling sandbox posting. See `../../../docs/auth-sandbox-staging.md`; no production ledger writer is enabled.
+
+`004_workpaper_review.sql` adds append-only review decisions, explicit evidence replacement metadata and the derived workpaper review-state view. Apply before starting the updated API and worker. Hosted reviewers need `workpapers:review`; development decisions remain attributed to the shared workspace. See `../../../docs/workpaper-review.md`.
+
+`019_email_followup.sql` extends the existing outbox with uniquely linked reminders and signed, deduplicated delivery events. Apply after 018 with API/worker stopped, then restart both. Fresh volumes apply it automatically. See `../../../docs/email-delivery.md` for per-firm webhook setup and synthetic local checks.
+
+`020_accruals.sql` permits accrued-expense drafts and procedure versions. Apply after 019 with API/worker stopped. No existing workpaper or policy is rewritten. See `../../../docs/accounting-methods.md`.
 
 `021_ledger_selections.sql` records immutable account-scoped General Ledger pages. `022_ledger_search.sql` adds the search term to their identity, so two distinct searches at the same offset cannot reuse the wrong evidence. Apply both in order with API/worker stopped before deploying ledger search.
 

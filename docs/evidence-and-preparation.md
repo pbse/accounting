@@ -1,58 +1,41 @@
 # Evidence-backed close preparation
 
-This slice connects uploaded evidence, human-confirmed preparation instructions and durable execution of the existing calculators. It uses the existing single private workspace. It is not yet model-driven extraction or the full PRD evidence pipeline.
+Uploaded evidence starts durable intake and optional OpenAI interpretation. The worker proposes cited facts and specific questions, the reviewer confirms accounting assumptions, and the same deterministic calculators produce immutable workpapers. Without model settings, local proposals are explicitly limited. See [the Work inbox](work-inbox.md), [coordinator](close-coordinator.md) and [onboarding](onboarding.md).
 
 ## Use it
 
-1. Open a client close and upload authorized UTF-8 `.txt` or `.csv` evidence.
-2. Open prepaid or reconciliation preparation from that close. For reconciliation, select uploaded CSVs to populate the form; confirm balances, page inventory and method. For prepaids, inspect the invoice text and enter its terms.
-3. Prepare the preview, select the source files and their locations, then **Save source-linked instructions**. Reconciliation instructions use the uploaded CSV bytes, replacing pasted rows. Prepaid facts remain human-entered and unverified.
-4. Return to the close, select the instruction revisions you intend to run, and choose **Prepare selected work**. The durable job returns immediately. You can leave the page or close the browser.
-5. The independent worker creates immutable drafts. **Show prepared drafts** opens the results; **Inspect source** displays the exact uploaded text alongside the calculation. The export contains source hashes and originals under `evidence/{id}.txt`, preserving bytes with a non-executable text extension.
+1. Open a client/month and upload authorized TXT/CSV or PDF evidence. The upload returns a durable source/job identity; PDF text extraction must finish before interpretation can use it.
+2. Inspect the proposed facts and quoted source locations in Work. Resolve identity ambiguity, missing evidence and method questions. A proposal is not a verified booking fact.
+3. Confirm the supported method and assumptions. The original job resumes and prepares a draft for review. For manually selected work, save source-linked instructions and choose **Prepare selected work**; this remains available beside agent intake.
+4. Inspect the calculation, originals and blockers; approve or request changes. Client requests and scanned/released replies can resume the affected work: [coverage requests](coverage-requests.md).
+5. Explicitly replace a changed source, then review/recalculate dependent work. Exact-byte copies reuse their evidence identity; a different new file alone does not establish supersession. [Source review](workpaper-review.md)
 
-Alternative instructions are not additive. The product does not choose which revision represents the correct accounting treatment. Uploading a new file does not automatically invalidate old instructions; explicitly replace the old source to invalidate dependent review and block stale preparation. See [workpaper review](workpaper-review.md).
+## Storage and processing boundaries
 
-## Local startup
+- Hosted access requires active firm membership, client access and applicable permissions. Source/plan/job references are checked against the close. The development token is shared and local-only.
+- PostgreSQL stores original bytes, hashes, extracted text and revisions. Current original-evidence limits are 100 files / 20 MiB per close, 512 KiB per TXT/CSV, and 5 MiB / 20 pages per PDF. R2 is not deployed.
+- Staff direct uploads use file validation and bounded parsing; do not describe them as malware-scanned. Public client attachments are quarantined, scanned and explicitly released. Forwarded documents have a separate reviewed intake path. [Scanning](cloudflare-upload-scanning.md), [forwarding/Drive](source-sync-and-forwarding.md)
+- Text is escaped in the UI; originals download with restrictive headers. Poppler/Tesseract run in bounded subprocesses with no provider/database credentials. OCR is not proof of complete or correct facts. [PDF details](recalculation-and-pdf.md)
+- PostgreSQL jobs, fenced claims/checkpoints and source checks own recovery. A stopped worker leaves work visible rather than losing it. Deterministic calculation replay preserves identities; OCR/model recovery may repeat processing/cost. External posting/email has separate attempt rules.
+- Supersession, revocation and changed approvals can block resumed work. A cancellation prevents future work where possible, but cannot recall already-sent provider requests.
 
-Fresh `npm run dev` starts API, frontend, Postgres and worker with all migrations. For an existing database, apply migration 003 explicitly:
+## Manual capability routes
 
-```sh
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f infra/postgres/migrations/003_evidence_preparation.sql
-```
-
-For native development, export `DATABASE_URL` and run `go run ./cmd/worker` from `services/backend`, using `HTTP_ADDR=127.0.0.1:8081` alongside the API. The worker needs database access only; do not give it ledger credentials.
-
-Jobs remain queued when the worker is unavailable. Their UI label is **Waiting for worker or processing**, because calculation and completion occur within one short transaction. Cancellation succeeds only before a worker claims the job. Failed validation produces a visible failed job; correct the instructions and submit a new selection. Repeating the same selection returns the existing job; explicitly resubmitting a cancelled selection requeues it.
-
-## Storage and durability
-
-- Reuses workspace authentication on every read/write. Every source, plan and job lookup includes its close ID. This does not add multi-firm or per-staff entity authorization.
-- Text originals are immutable through the API, SHA-256 identified and deduplicated within the close. The first uploaded filename remains canonical for identical bytes.
-- Uploads permit only bounded valid UTF-8 text without binary control characters. No PDF, image, archive, HTML rendering, embedded script execution, OCR, or external model transmission occurs. Display uses escaped React text; raw reads use attachment, no-sniff, no-store and sandbox headers.
-- Limits: 512 KiB per file, 100 files / 20 MiB per close, 20 instruction revisions per job. Existing calculator limits still apply. The UI shows the latest 100 instructions and 20 jobs.
-- Postgres stores the originals for this bounded slice. R2 and scanning/extraction services are deferred until richer document intake is supported. Production retention, deletion, backups and tenant isolation remain separate work.
-- The worker locks a queued row with `FOR UPDATE SKIP LOCKED`, checks source hashes, calculates locally, and commits all draft IDs and completion together. Process loss before commit rolls back the attempt. Another worker resumes the still-queued job; uniqueness also prevents duplicate drafts on replay.
-- No external effects occur in the job transaction. Slow extraction, evidence waits and external tools will need checkpoints before joining this loop.
-
-## API
-
-All routes use the existing workspace bearer authentication and configured frontend/backend URL separation:
+These routes remain usable beside the coordinator; hosted authentication and current client scope apply. [MCP](mcp.md) exposes a narrower permitted subset.
 
 | Route | Behavior |
 | --- | --- |
-| `POST /v1/closes/{id}/evidence` | Multipart `file` upload; returns source ID and hash |
-| `GET /v1/closes/{id}/evidence` | Source inventory without file bodies |
-| `GET /v1/closes/{id}/evidence/{source}` | Exact original text, scoped to close |
-| `POST /v1/closes/{id}/preparations` | Save `{kind,input,sources:[{id,role,location}]}`; server supplies names and hashes |
-| `GET /v1/closes/{id}/preparations` | Latest 100 immutable instructions |
-| `POST /v1/closes/{id}/jobs` | Queue `{plans:["id",...]}`; returns durable job ID |
-| `GET /v1/closes/{id}/jobs` | Latest 20 job states and resulting workpaper IDs |
-| `POST /v1/closes/{id}/jobs/{job}/cancel` | Cancel an unclaimed job |
+| `POST /v1/closes/{id}/evidence` | Multipart file intake; returns source/hash/job |
+| `GET /v1/closes/{id}/evidence` | Source inventory without original bodies |
+| `GET /v1/closes/{id}/evidence/{source}` | Scoped original download |
+| `POST /v1/closes/{id}/preparations` | Save typed input and cited source instructions |
+| `GET /v1/closes/{id}/preparations` | Instruction revisions |
+| `POST /v1/closes/{id}/jobs` | Queue selected plan identities |
+| `GET /v1/closes/{id}/jobs` | Durable states and resulting workpapers |
+| `POST /v1/closes/{id}/jobs/{job}/cancel` | Request cancellation subject to current state |
 
-Roles are `invoice` for prepaids or separate `statement` and `ledger` for reconciliation. Agents can use these same routes, but cannot create accounting authority by attaching evidence or queueing work.
+## Runtime setup
 
-## Cloudflare
+Compose starts PostgreSQL, API, worker, frontend and scanner. Fresh volumes receive all numbered migrations; see [migration instructions](../infra/postgres/migrations/README.md) for upgrades. Native Go must receive environment variables explicitly.
 
-The GitHub staging workflow now deploys the existing preparation-worker container with only `DATABASE_URL`, after checking migration 003. A [Cron Trigger](https://developers.cloudflare.com/workers/configuration/cron-triggers/) wakes the container once a minute; Postgres polling owns delivery and replay protection. No queue consumer or second scheduler is required for these short deterministic jobs. This keeps the worker active and has a runtime cost; it is not a claim of scale-to-zero operation.
-
-Hosted startup, container networking, secrets and actual deployment remain unverified until staging is configured. The root `deploy:staging` command still deploys the API/frontend only; GitHub Actions additionally deploys the worker. Docker/Cloudflare runtime execution was unavailable in the current local environment.
+The complete GitHub staging workflow deploys API/assets, worker and scanner. The worker receives only its required server credentials for enabled preparation, scheduled reads and approved delivery; API and worker share the encryption key. It is no longer a database-only worker. A cron wakes it once a minute; internal PostgreSQL polling handles work, with no subscribed Cloudflare Queue. This has ongoing container/database cost. [Environment settings](deployment.md#github-environment-settings)

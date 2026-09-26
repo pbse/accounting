@@ -4,44 +4,15 @@
 
 ## Local development
 
-1. Install Node 24 and Docker Desktop (Compose 2.22 or later); start Docker.
-2. Copy `.env.example` to `.env`. Set `WORKSPACE_TOKEN` to a privately generated `openssl rand -hex 32` value. Keep provider settings empty for a fully local synthetic workflow.
-3. Run `npm run dev`. Open http://localhost:5173. The API runs on port 8080, worker on 8081 and PostgreSQL on 5432. Fresh volumes apply every migration automatically.
-4. On an existing volume, stop API/worker first, back up the database, and apply only unapplied migrations in numeric order. For an installation already at migration 010, the current upgrade is 011–034:
+1. Install Node 24 and Docker with Compose 2.22 or later; start Docker.
+2. Copy `.env.example` to `.env` without overwriting an existing file. Generate separate private values for `WORKSPACE_TOKEN` and `UPLOAD_SCAN_KEY` (for each, `openssl rand -hex 32`). Keep provider settings empty for a fully local synthetic workflow.
+3. From the repository root run `npm run dev`. Open http://localhost:5173. The API is on localhost:8080, worker on localhost:8081 and PostgreSQL on localhost:5432. A fresh Compose volume applies all numbered migrations. Existing volumes are not upgraded automatically: follow [database migration instructions](../infra/postgres/migrations/README.md#existing-database-upgrades).
+4. Check http://localhost:8080/readyz. Open Client closes and unlock with the private token from `.env`; it remains in tab memory. Create a synthetic client and month.
+5. For real model interpretation, set both `OPENAI_API_KEY` and `OPENAI_MODEL` privately in `.env`, then recreate API/worker. Both processes have model features. Without them, local proposals recognize labeled fields and require review.
 
-   ```sh
-   docker compose stop api worker
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/011_organizations.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/012_close_signoff.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/013_firm_procedures.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/014_client_access.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/015_email_delivery.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/016_close_preparation.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/017_quickbooks_connections.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/018_coverage_requests_attachments.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/019_email_followup.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/020_accruals.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/021_ledger_selections.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/022_ledger_search.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/023_production_posting.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/024_enterprise_controls.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/025_quickbooks_entity_sync.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/026_forwarded_evidence.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/027_inbound_replies.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/028_vendor_credits.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/029_agent_checkpoint.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/030_dependency_review.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/031_external_alerts.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/032_bill_corrections.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/033_source_coverage.sql
-   docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1 < infra/postgres/migrations/034_bill_line_correction.sql
-   docker compose up -d --build api worker
-   ```
+Compose includes Poppler/Tesseract for staff-uploaded PDF extraction and an isolated scanner for TXT/CSV client attachments. Client PDF **release** still needs real Cloudflare scanning; local extraction is not a clean scan receipt. Use staging for the complete client PDF flow. Provider OAuth, real sending, separate human roles and multi-firm isolation need hosted identity; the shared local token does not test them.
 
-   Do not rerun earlier migrations indiscriminately. Migration 011 assigns existing closes to `local-development`; it never guesses which hosted firm owns old records.
-5. Check http://localhost:8080/readyz. Open Client closes and unlock with the private token. It stays in tab memory, so a refresh requires unlocking again.
-
-Compose is the supported no-Go-install path. For native setup use the README, install PostgreSQL plus Poppler and Tesseract (including English data), and run API and worker separately. A frontend alone does not process jobs. Never point a development worker at production.
+For native setup use the README; Go does not load `.env` automatically. Never point a development worker at production. Stop with Ctrl-C; `docker compose down` preserves the database volume. Do not delete volumes to upgrade an existing workspace.
 
 ## First evidence-to-preparation flow
 
@@ -96,13 +67,13 @@ For detailed feature behavior follow the README links. For what remains and its 
 
 On a client close, open **Close readiness → Define or update scope**. **Replace selection with latest drafts** proposes the current end of each draft revision chain; inspect and change the selection before saving. The suggestion covers only drafts already in this close, not the client's complete ledger or missing documents. Describe the included work and exclusions, and list external steps such as an independently performed ledger tie-out or prior-month follow-up. A scope containing only external steps is permitted. Mark an external step done only with its completion reference. Save the scope revision.
 
-Readiness explains unresolved reviews/calculation blockers, active or failed work, outstanding client jobs and uncertain sandbox attempts. Resolve or explicitly cancel work as appropriate; cancellation does not establish source completeness. Refresh readiness before deciding. A hosted signer needs both `workpapers:review` and `close:signoff`. Review the defined scope, record your reason, affirm your authority and choose **Sign off supported scope**.
+Readiness explains unresolved reviews/calculation blockers, active or failed work, outstanding client jobs and uncertain ledger attempts, including Xero. Resolve or explicitly cancel work as appropriate; cancellation does not establish source completeness. Refresh readiness before deciding. A hosted signer needs both `workpapers:review` and `close:signoff`. Review the defined scope, record your reason, affirm your authority and choose **Sign off supported scope**.
 
-The decision captures organization, client/month, required scope, evidence identities, reviews, job states and sandbox receipts. A changed snapshot shows **Changed since sign-off — reopen required**. Choose **Reopen with reason**, resolve the change, review again and make a new decision. Earlier decisions and their exact snapshots remain immutable in the database and exported manifest. Editing scope cannot silently overwrite a signed decision.
+The decision captures organization, client/month, required scope, evidence identities, reviews, job states and saved posting receipts. A changed snapshot shows **Changed since sign-off — reopen required**. Choose **Reopen with reason**, resolve the change, review again and make a new decision. Earlier decisions and their exact snapshots remain immutable in the database and exported manifest. Editing scope cannot silently overwrite a signed decision.
 
-Apply migration 012 (`012_close_signoff.sql`) after 011 to use this flow; stop API/worker during migration and restart both on the same code revision. Fresh Compose volumes apply both. No real firm authority is inferred from the shared local token: local decisions explicitly identify development.
+Use the complete current schema; see [migration instructions](../infra/postgres/migrations/README.md). No real firm authority is inferred from the shared local token: local decisions explicitly identify development.
 
-For approved procedures, client-side accountant access and permission setup, follow [firm procedures and assignments](firm-procedures.md). Apply migrations 013–014 as well when upgrading an existing database.
+For approved procedures, client-side accountant access and permission setup, follow [firm procedures and assignments](firm-procedures.md). Apply only unapplied migrations in numeric order when upgrading an existing database.
 
 ## Approved email delivery
 
@@ -117,3 +88,34 @@ For automatic coverage status, multi-job requests, mandatory scanning and attach
 For partial-month prepaids, prospective credits, prior-balance adjustments, month-boundary cancellations and fixed incurred accruals, follow [accounting methods and accountant acceptance](accounting-methods.md).
 
 Separate production OAuth, client grants, review, one-attempt posting and readback: [production posting](production-posting.md). Leave production credentials unset during ordinary local development.
+
+## Multi-client model and first pilot
+
+One WorkOS organization is one accounting firm, not one accounting client. Within that firm, each client has monthly closes, its own ledger connection and approved procedures. Current client identity is the organization plus a case-insensitive client label; choose stable names that match the confirmed ledger company. A rename/merge flow is not implemented. A connection is reused across periods of that client, never across firms.
+
+For the first pilot create Firm A and Firm B, each with a same-named synthetic client, and a second client in Firm A. Invite a preparer, a separate reviewer and a client-side accountant assigned only to the first client. A request-only recipient can answer through a scoped secure link without a product account; that link cannot approve accounting treatment or posting.
+
+Onboarding is currently operator-assisted: WorkOS invitations/roles, in-app enrollment/memberships, client assignments, connector consent and accounting-procedure approval are separate steps. The desired first-use flow is sign in → join firm → create client/month → connect ledger or upload evidence → receive one reviewable proposal. A unified invitation/setup wizard and narrower Google file picker remain product work, not current features.
+
+## Staging acceptance matrix
+
+Record the deployed commit, environment, fixture, expected result, observed result and any blocked step. Keep client documents, tokens and private request URLs out of public tickets/logs. Use synthetic documents and approved test recipients; a code test or green deploy is not a live-provider result.
+
+| Flow | Steps and required result |
+| --- | --- |
+| Enrollment and isolation | Sign into both firms. Create same-named client/month closes; copied foreign close, evidence and export URLs must fail, and Work/search must not leak the other firm's counts or names. |
+| Client access and revocation | Assign an accountant only to Client A; Client B remains inaccessible. Revoke app membership/assignment and WorkOS access, then verify subsequent requests fail. |
+| Evidence to prepared draft | Upload a labeled invoice and a PDF. Verify extraction, cited facts, specific unanswered questions, confirmed method and exact calculator output; missing evidence stays blocked. |
+| Review and procedures | Separate preparer/reviewer approve the supported example. Enable independent review and prove self-approval is refused. Draft a procedure, approve its example, preview affected clients and activate/apply it explicitly. |
+| Changed evidence | Replace a source. Only dependent work becomes stale; prepare/review a new immutable version while earlier history remains inspectable. |
+| Client follow-up | Approve a consolidated request to a test recipient, verify Resend delivery, approve one reminder, reply through the link, scan/release an attachment and observe the original affected jobs resume. A reply or bounce prevents further reminders. |
+| Inbound email | Use the configured reply-to address. Replies remain held until verified/released; unauthorized senders cannot resume work. Keep reply attachments on the secure link. |
+| Scan boundary | Exercise clean PDF and TXT/CSV plus the provider's harmless malware-test fixture. Failed, stale, mismatched or missing scan receipts never permit release. Confirm direct-origin/spoofed-header refusal. |
+| Per-client ledger | Connect/confirm each sandbox company, capture reports/transactions and trace a proposed fact back to the source. Check scheduled refresh and visible failures. Use supported per-client native sandbox corrections for write/readback; the legacy global prepaid journal is a separate single-firm demo. |
+| Posting controls | Approve an exact preview, change a precondition and confirm refusal; execute one supported fresh sandbox action and verify canonical readback. Repeated clicks must not produce a second effect. Investigate an uncertain attempt rather than retrying. |
+| Recurring close | Carry forward reviewed schedules, refresh new-period sources/booked balances and review fresh work. Prior-period approval does not prove this month's balance. |
+| Close and binder | Define supported scope, resolve blockers and sign off. Confirm journal decisions are refused until reopen; export the binder and verify its checksums, originals and posting receipts. |
+| Recovery | Restart the worker during preparation and observe one durable result. Restore an isolated database with workers disabled; check both firms and evidence hashes, then reconcile external attempts before enabling delivery. |
+| Operations and UX | Check aged jobs, resource/model limits and a test alert. Walk through empty, unavailable and incomplete-source states; none may falsely claim completion or no exceptions. Record human time and accountant corrections. |
+
+Production entry needs this matrix on the released revision, accountant acceptance of the intended methods, and [production deployment/recovery setup](deployment.md#production-and-remaining-deployment-work). Cloudflare MCP and broader posting-kind configuration remain subject to the deployment gaps documented there.
