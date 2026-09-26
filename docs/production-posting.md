@@ -4,7 +4,7 @@ Production posting is a separate, manually activated capability. Ordinary local 
 
 The same controls apply to Xero manual journals; see [Xero posting](xero-onboarding.md#approved-journal-posting). A draft, or another draft of its source, reaches at most one of the two ledgers.
 
-**Rule: agents prepare, people approve before anything is written.** Agents may prepare drafts, comparisons and proposed entries, and may read from QuickBooks and Xero. Every write to an outside system needs a person's approval first: a QuickBooks journal, Bill or supplier credit (`posting:approve`, then `posting:execute`), or a client email (each message, including every reminder). No background worker writes to QuickBooks or sends email on its own, and no agent tool can post.
+**Rule: agents prepare, people approve before anything is written.** Agents may prepare drafts, comparisons and proposed entries, and may read from QuickBooks and Xero. Every write to an outside system needs a person's approval first: a QuickBooks journal, Bill or line recode, payment or credit application, or supplier credit, a Xero manual journal or bill line recode (`posting:approve`, then `posting:execute`), or a client email (each message, including every reminder; the firm's reminder rule only says when one is due). No background worker writes to QuickBooks or Xero or sends email on its own, and no agent tool can post.
 
 ## Setup
 
