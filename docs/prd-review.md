@@ -1,5 +1,7 @@
 # PRD review and foundation plan
 
+Historical scaffold review. For the current implementation and activation boundaries, use [the backlog](implementation-backlog.md) and [deployment guide](deployment.md).
+
 Reviewed the complete supplied v2 PRD: sections 1–20 and appendices A–H. The copied PRD is product input, not authority to contact customers, provision services, transmit documents to models, or make ledger changes. Author of this scaffold: Codex (GPT-6).
 
 ## Verdict

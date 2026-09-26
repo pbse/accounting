@@ -12,12 +12,10 @@ Inspect source text and download original are separate actions. Close packages i
 
 ## Local development
 
-Compose builds the API/worker image with Poppler, Tesseract English data and `prlimit`; no extra configuration is needed for PDF extraction. For native Go development on macOS, run `brew install poppler tesseract`. Apply `infra/postgres/migrations/005_pdf_extraction.sql` to an existing local database before restarting API and worker. A fresh Compose database applies every migration. PDF/OCR checks require these tools and generate a synthetic two-page mixed text/scanned fixture at test time.
+Compose builds the API/worker image with Poppler, Tesseract English data and `prlimit`; no extra configuration is needed for PDF extraction. For native Go development on macOS, run `brew install poppler tesseract`. For an existing database, apply all outstanding migrations using the [upgrade procedure](../infra/postgres/migrations/README.md#existing-database-upgrades) before restarting API and worker. A fresh Compose database applies every migration. PDF/OCR checks require these tools and generate a synthetic two-page mixed text/scanned fixture at test time.
 
 Tool reference: [Tesseract command-line usage](https://tesseract-ocr.github.io/tessdoc/Command-Line-Usage.html).
 
-## Staging activation status — September 22, 2026
+## Hosted validation
 
-Staging workflow includes the PDF-capable worker and verifies migration 005 before deploying. GitHub authentication works as `pbse`. This checkout still has no commits or remote. Cloudflare is not authenticated. No target GitHub repository, Cloudflare account/domain, WorkOS application/organization configuration or hosted PostgreSQL connection has been supplied; no cloud deployment occurred.
-
-Provide the target identifiers, authenticate Cloudflare locally or configure the protected GitHub environment, and supply the settings listed in `auth-sandbox-staging.md` through secrets/settings, not chat. After the exact code is committed/reviewed and migrations are applied to the designated database, dispatch Deploy staging and verify AuthKit login, a synthetic PDF upload/extraction, a confirmed revised draft and its pending review state. Hosted database mutation and release approval remain explicit actions; a local test/build does not prove activation.
+Follow [staging setup](deployment.md) and the [acceptance matrix](onboarding.md#staging-acceptance-matrix). Verify a synthetic multipage PDF upload/extraction, a confirmed revised draft and its pending review state. Client-submitted attachments additionally require [malware scanning](cloudflare-upload-scanning.md) and firm release. CI or a deploy does not prove OCR accuracy, provider configuration or accountant acceptance.

@@ -69,9 +69,11 @@ Stop API, worker and deployment traffic. Preserve a verified database backup and
 
 Migration 047 enables row-level security on every public table and makes every public view check it as the caller. Each statement from the API carries the signed-in firm (`app.organization`), so a query that forgets its firm filter still returns only that firm's rows, and a write into another firm fails. Token-checked public routes (client links, provider webhooks, the QuickBooks callback) and the worker run as system work and see every firm, which is what they need today. API work with neither a signed-in firm nor a system mark sees nothing.
 
+Use a direct database endpoint, not a transaction pooler: the current adapter caches session-level tenant context on each connection. See [database setup and role grants](../infra/postgres/migrations/README.md#fresh-hosted-database).
+
 Policies bind the runtime role only. Run migrations as the owning role and run the API and worker as a separate role that does not own the tables and has neither superuser nor BYPASSRLS; grant it `SELECT, INSERT, UPDATE, DELETE` on all tables and `USAGE, SELECT` on all sequences in `public`. Hosted `/readyz` (WorkOS configured) returns 503 when the runtime role would bypass the policies or any table or view lacks them. Local development connects as a superuser, so policies do not apply there. The key-rotation command marks its own transaction as system work.
 
-Pending enterprise controls include a configured/live-validated alert receiver, backup expiry verification, scoped MCP access and a hosted recovery exercise. Keep these gaps visible during any pilot review.
+Pending deployment checks include a configured/live-validated alert receiver, backup expiry verification, Cloudflare routing/configuration for the implemented scoped MCP server, and a hosted recovery exercise. See [deployment boundaries](deployment.md#production-and-remaining-deployment-work). Keep these gaps visible during any pilot review.
 
 ## Human effort measurement
 
