@@ -245,6 +245,10 @@ func TestLearnedRuleRequiresApprovedExampleBeforeActivation(t *testing.T) {
 	if err = preparation.CheckProcedureMethod(context.Background(), db, closeID, "prepaid", otherRaw); err == nil {
 		t.Fatal("new work could bypass the approved method")
 	}
+	midMonth, _ := json.Marshal(map[string]any{"input": map[string]string{"method": prepaids.Method, "convention": prepaids.MidMonth}})
+	if err = preparation.CheckProcedureMethod(context.Background(), db, closeID, "prepaid", midMonth); err == nil {
+		t.Fatal("a convention could bypass the approved full-month method")
+	}
 	var connection string
 	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,environment,home_currency,fiscal_year_start) VALUES($1,$2,'Synthetic client','fixture','active',$3,now(),'123','production','CAD',1) RETURNING id::text`, closeID, org, rand.Text()).Scan(&connection))
 	defer db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, connection)

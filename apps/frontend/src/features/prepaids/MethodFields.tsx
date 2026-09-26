@@ -36,7 +36,7 @@ export function PrepaidMethodFields({values={},credits=[],schedule=""}: {values?
         <tr><td>$120 January–March, $10 effective and recorded February, $5 effective January and recorded March</td><td>Revised schedule: January $38.33, February $33.33, March $33.34; total expense $105. Current close true-up compares the revised target with the booked prepaid balance; prior-period journals are not silently changed.</td></tr>
         <tr><td>Deferred revenue: 12,000 billed for September 2026–August 2027; booked liability 12,000</td><td>September earns 1,000: debit deferred revenue / credit revenue 1,000.</td></tr>
         <tr><td>Depreciation: 3,600 laptop, September 2026–August 2029, equal months, salvage 360, booked accumulated depreciation 0</td><td>90.00 a month: debit depreciation expense / credit accumulated depreciation 90.00.</td></tr>
-        <tr><td>Same laptop, no salvage, double declining balance (factor 2)</td><td>1/18 of book value a month: 200.00, then 188.88, 178.39…; from month 19 straight-line over the remaining months, 71.48 a month. Never below salvage.</td></tr>
+        <tr><td>Same laptop, no salvage, double declining balance (factor 2)</td><td>1/18 of book value a month: 200.00, then 188.88, 178.39…; from month 19 straight-line over the remaining months, 71.48 a month, with the 71.49 residual last. Never below salvage.</td></tr>
         <tr><td>Same laptop, equal months, mid-month convention</td><td>September 2026 50.00, then 100.00 a month, and 50.00 in September 2029, the month after the life ends.</td></tr>
       </tbody></table>
     </details>

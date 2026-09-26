@@ -58,16 +58,16 @@ Synthetic example: $100 allocated equally over January–March 2028 produces Jan
 
 ## Deferred revenue and depreciation
 
-Both use the prepaid schedule's straight-line math (equal full months or actual days, cents rounded down, residual in the final month) under the client's approved prepaid method. Open them from **Deferred revenue** or **Depreciation** on the close page.
+Both use the prepaid schedule's math (equal full months or actual days, cents rounded down, residual in the final month) under the client's approved prepaid method; depreciation can instead use declining balance or the mid-month convention below. Open them from **Deferred revenue** or **Depreciation** on the close page.
 
 - **Deferred revenue**: the amount billed in advance over the contract's service period, between a revenue account and a deferred revenue liability. The entry recognizes the earned month: 12,000 billed for September 2026–August 2027 with 12,000 booked proposes debit deferred revenue, credit revenue 1,000 at September 30. A blank booked balance means the invoice was booked straight to revenue, so the unearned part is deferred. Customer credits and cancellations work as they do for prepaids.
 - **Depreciation**: straight-line depreciation of an asset's cost less any salvage value, between depreciation expense and accumulated depreciation. Equal months use the full-month convention (start on the first day of the in-service month); the end is the last day of the useful life, inclusive. The booked accumulated depreciation is required, including an explicit 0.00. A 3,600 laptop over September 2026–August 2029 depreciates 100.00 a month, or 90.00 with a 360 salvage value. Impairments are not supported.
-- **Declining balance** (depreciation only, `declining_balance_v1`): each month takes the factor (2 or 1.5) ÷ the useful life in months of the net book value (cost less booked-to-date depreciation, salvage included), switching to straight-line over the remaining months once that is larger, and never taking book value below salvage. The same laptop at factor 2 depreciates 200.00, 188.88, 178.39… and 71.48 a month from month 19.
+- **Declining balance** (depreciation only, `declining_balance_v1`): each month takes the factor (2 or 1.5) ÷ the useful life in months of the net book value (cost less the schedule's depreciation to date), switching to straight-line over the remaining months once that is larger, and never taking book value below salvage. The same laptop at factor 2 depreciates 200.00, 188.88, 178.39… and from month 19 71.48 a month, with the 71.49 residual in the last month.
 - **Mid-month convention** (depreciation, equal months or declining balance): the first month takes half a month and the month after the useful life ends takes the other half. The laptop depreciates 50.00 in September 2026, 100.00 a month to August 2029 and 50.00 in September 2029.
 
-Declining balance and the mid-month convention each require the client accountant's cited depreciation policy. A client whose approved prepaid procedure names another method refuses them.
+Declining balance and the mid-month convention each require the client accountant's cited depreciation policy. A client whose approved prepaid procedure names another method refuses them; the convention counts as part of the method, so a procedure approving equal full months refuses the mid-month convention too.
 
-Carry-forward and **Refresh recurring schedules** work for both; the refresh reads the client's DeferredRevenue or AccumulatedDepreciation account from the Trial Balance. Both stay draft-only: book the approved entry in the ledger.
+Carry-forward and **Refresh recurring schedules** work for both, through the last month of the schedule (the month after the useful life under the mid-month convention); the refresh reads the client's DeferredRevenue or AccumulatedDepreciation account from the Trial Balance. Both stay draft-only: book the approved entry in the ledger.
 
 ## Fixed incurred accruals
 

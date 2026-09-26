@@ -162,7 +162,7 @@ func Prepare(input Input) (Workpaper, error) {
 	var factorTenths int64
 	life := int64(months)
 	if input.Method == DecliningMethod {
-		factorTenths = map[string]int64{"2": 20, "2.0": 20, "1.5": 15}[input.Factor]
+		factorTenths = map[string]int64{"2": 20, "1.5": 15}[input.Factor]
 		if factorTenths == 0 {
 			return empty, invalid("factor", "Choose a declining-balance factor of 2 (double) or 1.5.")
 		}

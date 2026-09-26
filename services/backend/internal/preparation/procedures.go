@@ -202,7 +202,7 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 	var result struct {
 		Method string `json:"method"`
 		Input  struct {
-			Method string `json:"method"`
+			Method, Convention string
 		} `json:"input"`
 	}
 	if json.Unmarshal(paper, &result) != nil {
@@ -211,6 +211,10 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 	used := result.Method
 	if used == "" {
 		used = result.Input.Method
+	}
+	// A convention changes the calculation, so it is part of what the procedure must approve.
+	if result.Input.Convention != "" {
+		used += "+" + result.Input.Convention
 	}
 	if used != method {
 		return PolicyRequired(fmt.Sprintf("Prepared method %q differs from the approved procedure method %q; review the procedure before saving", used, method))
