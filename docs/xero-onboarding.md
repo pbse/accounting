@@ -61,6 +61,8 @@ This keeps the same human steps and refusals as production QuickBooks posting (m
 
 Balances after posting are not re-checked; the readback compares the journal's lines, date and status.
 
+An executing or unknown Xero journal blocks sign-off, a signed-off close takes no Xero journal decision until it is reopened, and the close package carries each Xero attempt and its readback as a receipt.
+
 ## Not included
 
 No complete-journal sync (complete Journals need Xero's Advanced tier), no corrections to invoices, bills or credit notes, and no cash-basis reports. Agent-prepared recurring comparisons stay QuickBooks-only. Xero prohibits using its API data to train AI or ML models; this connector sends none of it to a model.

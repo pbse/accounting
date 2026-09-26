@@ -86,7 +86,8 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Period snapshot unavailable.")
 			return
 		}
-		xeroErr := tx.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,x.state<>'active',s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, id).Scan(&xeroID, &xeroAt, &xeroStale, &xeroPayload)
+		var tenant string
+		xeroErr := tx.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,x.state<>'active',s.payload,s.tenant_id FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, id).Scan(&xeroID, &xeroAt, &xeroStale, &xeroPayload, &tenant)
 		if xeroErr != nil && xeroErr != sql.ErrNoRows {
 			problem(w, 503, "Xero snapshot unavailable.")
 			return
@@ -98,9 +99,14 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 		switch {
 		case xeroErr == nil && (err == sql.ErrNoRows || xeroAt.After(capturedAt)):
 			snapshot = map[string]any{"id": xeroID, "captured_at": xeroAt, "stale": xeroStale, "source": "xero"}
-			realm = ""
+			// Without Xero's report time, no journal is taken to be in its Trial Balance.
+			realm, started = "", time.Time{}
+			if at, ok := xero.ReportTime(xeroPayload); ok {
+				started = at
+			}
 			currency, balances, readErr = xero.AccountBalances(xeroPayload)
 		case err == nil:
+			tenant = ""
 			snapshot = map[string]any{"id": snapshotID, "captured_at": capturedAt, "stale": stale, "source": "quickbooks"}
 			currency, balances, readErr = quickbooks.TrialBalance(accounts, trialBalance)
 		default:
@@ -114,7 +120,7 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 
 		// A posting already in the snapshot's company before the capture began is in the Trial Balance.
 		postings := map[string]string{}
-		rows, err := tx.QueryContext(ctx, `SELECT workpaper_id::text,CASE WHEN state='verified' AND verified_at<$3 THEN 'in_balance' WHEN state='verified' THEN 'posted_after_capture' WHEN state IN ('executing','unknown') THEN 'unknown' ELSE 'proposed' END FROM (SELECT workpaper_id,state,verified_at FROM production_postings WHERE close_id::text=$1 AND realm=$2 UNION ALL SELECT workpaper_id,state,verified_at FROM sandbox_postings WHERE close_id::text=$1 AND realm=$2) p`, id, realm, started)
+		rows, err := tx.QueryContext(ctx, `SELECT workpaper_id::text,CASE WHEN state='verified' AND verified_at<$3 THEN 'in_balance' WHEN state='verified' THEN 'posted_after_capture' WHEN state IN ('executing','unknown') THEN 'unknown' ELSE 'proposed' END FROM (SELECT workpaper_id,state,verified_at FROM production_postings WHERE close_id::text=$1 AND realm=$2 UNION ALL SELECT workpaper_id,state,verified_at FROM sandbox_postings WHERE close_id::text=$1 AND realm=$2 UNION ALL SELECT workpaper_id,state,verified_at FROM xero_postings WHERE close_id::text=$1 AND tenant_id=$4) p`, id, realm, started, tenant)
 		if err != nil {
 			problem(w, 503, "Could not read posting records.")
 			return

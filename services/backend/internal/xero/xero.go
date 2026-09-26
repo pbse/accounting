@@ -315,6 +315,19 @@ func instant(value string) (time.Time, bool) {
 	return time.UnixMilli(millis), true
 }
 
+// ReportTime is when Xero produced a snapshot's Trial Balance.
+func ReportTime(payload json.RawMessage) (time.Time, bool) {
+	var snapshot struct {
+		TrialBalance struct {
+			Reports []struct{ UpdatedDateUTC string }
+		} `json:"trial_balance"`
+	}
+	if json.Unmarshal(payload, &snapshot) != nil || len(snapshot.TrialBalance.Reports) != 1 {
+		return time.Time{}, false
+	}
+	return instant(snapshot.TrialBalance.Reports[0].UpdatedDateUTC)
+}
+
 // Day reads a Xero date, which arrives as "/Date(1727654400000+0000)/" or "2026-09-30T00:00:00".
 func Day(value string) (time.Time, error) {
 	if ms, ok := strings.CutPrefix(value, "/Date("); ok {

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -132,6 +133,7 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_accountant"}, Organization: org, Permissions: []string{"clients:all", "posting:approve", "posting:execute"}}
 	mux := http.NewServeMux()
 	registerXeroPosting(mux, db)
+	mux.HandleFunc("GET /v1/closes/{id}/export", exportClose(db, false))
 	call := func(path string, input any, want int) []byte {
 		t.Helper()
 		body, _ := json.Marshal(input)
@@ -233,6 +235,24 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 	call(path, map[string]string{"action": "execute", "digest": intent.Digest, "confirmation": "POST TO XERO"}, 409)
 	if puts != 1 {
 		t.Fatal("a verified journal is never posted again")
+	}
+	exported := httptest.NewRecorder()
+	mux.ServeHTTP(exported, httptest.NewRequest("GET", "/v1/closes/"+closeID+"/export", nil).WithContext(auth.WithActor(context.Background(), actor)))
+	archive, err := zip.NewReader(bytes.NewReader(exported.Body.Bytes()), int64(exported.Body.Len()))
+	if err != nil {
+		t.Fatalf("export: %d %s", exported.Code, exported.Body.String())
+	}
+	var manifest closePackage
+	for _, file := range archive.File {
+		if file.Name == "manifest.json" {
+			reader, e := file.Open()
+			must(e)
+			must(json.NewDecoder(reader).Decode(&manifest))
+			reader.Close()
+		}
+	}
+	if !strings.Contains(string(manifest.XeroPostings), intent.ExternalID) {
+		t.Fatalf("the close package carries the verified Xero journal's receipt: %s", manifest.XeroPostings)
 	}
 	var sourceKey string
 	must(db.QueryRow(`SELECT source_key FROM xero_postings WHERE workpaper_id=$1`, first).Scan(&sourceKey))
