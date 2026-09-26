@@ -211,12 +211,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 				case !approvedBefore && !pending && prior != nil && previous.period >= from && closes[previous.period] != "":
 					ask(p.period, where, fmt.Sprintf("%s has a %s balance in this schedule but no %s workpaper.", wp.Input.SourceReference, previous.period, previous.period))
 				}
-				// A disposed asset has nothing left to depreciate once its disposal entry is booked.
-				remaining := wp.PrepaidBalance
-				if len(wp.Disposal) > 0 {
-					remaining = "0.00"
-				}
-				prepaidRows = append(prepaidRows, []string{p.period, csvText(wp.Input.SourceReference), csvText(wp.Input.PrepaidAccount), csvText(wp.Input.ExpenseAccount), credit, wp.PeriodExpense, remaining, wp.Input.Currency, p.id, cmp.Or(wp.Input.Schedule, "prepaid")})
+				prepaidRows = append(prepaidRows, []string{p.period, csvText(wp.Input.SourceReference), csvText(wp.Input.PrepaidAccount), csvText(wp.Input.ExpenseAccount), credit, wp.PeriodExpense, wp.PrepaidBalance, wp.Input.Currency, p.id, cmp.Or(wp.Input.Schedule, "prepaid")})
 				propose(p, wp.Proposal)
 				for i := range wp.Disposal {
 					propose(p, &wp.Disposal[i])

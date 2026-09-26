@@ -86,7 +86,7 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	olderSoftware := save(feb, "prepaid", prepaid("Software", "30.00", "330.00", prepaids.Row{Period: "2026-02", Expense: "30.00", Remaining: "330.00"}), true)
 	save(feb, "prepaid", prepaid("Software", "35.00", "325.00", prepaids.Row{Period: "2026-02", Expense: "35.00", Remaining: "325.00"}), false)
 	// Hosting equipment is disposed of in March: nothing is left to depreciate and its disposal entry is history.
-	hosting := prepaid("Hosting", "20.00", "280.00", prepaids.Row{Period: "2026-02", Expense: "20.00", Remaining: "300.00"}, prepaids.Row{Period: "2026-03", Expense: "20.00", Remaining: "280.00"})
+	hosting := prepaid("Hosting", "20.00", "0.00", prepaids.Row{Period: "2026-02", Expense: "20.00", Remaining: "300.00"}, prepaids.Row{Period: "2026-03", Expense: "20.00", Remaining: "0.00"})
 	hosting.Disposal = []prepaids.Adjustment{{Date: "2026-03-31", DebitAccount: "Gain or loss on disposal", CreditAccount: "Hosting equipment", Amount: "280.00"}}
 	save(mar, "prepaid", hosting, true)
 	save(jan, "prepaid", prepaid("Warranty", "10.00", "110.00", prepaids.Row{Period: "2026-01", Expense: "10.00", Remaining: "110.00"}), true)

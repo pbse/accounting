@@ -87,7 +87,7 @@ export default function Prepare() {
       ...(text("salvage_value") && { salvage_value: text("salvage_value") }),
       ...(text("factor") && { factor: text("factor") as PrepaidInput["factor"] }),
       ...(text("convention") && { convention: "mid_month" as const }),
-      ...(text("disposal_period") && { disposal_period: text("disposal_period"), disposal_proceeds: text("disposal_proceeds"), disposal_reference: text("disposal_reference"), asset_account: text("asset_account"), proceeds_account: text("proceeds_account"), gain_loss_account: text("gain_loss_account"), disposal_confirmed: data.has("disposal_confirmed") }),
+      ...((["disposal_period", "disposal_proceeds", "disposal_reference", "asset_account", "proceeds_account", "gain_loss_account"].some(text) || data.has("disposal_confirmed")) && { disposal_period: text("disposal_period"), disposal_proceeds: text("disposal_proceeds"), disposal_reference: text("disposal_reference"), asset_account: text("asset_account"), proceeds_account: text("proceeds_account"), gain_loss_account: text("gain_loss_account"), disposal_confirmed: data.has("disposal_confirmed") }),
       basis: "accrual",
       method: text("method") as PrepaidInput["method"],
       examples_confirmed: data.has("examples_confirmed"),

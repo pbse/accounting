@@ -245,7 +245,7 @@ func Prepare(input Input) (Workpaper, error) {
 	// a month under mid-month.
 	var disposal time.Time
 	var proceeds int64
-	if input.DisposalPeriod != "" || input.DisposalProceeds != "" || input.DisposalReference != "" || input.AssetAccount != "" || input.ProceedsAccount != "" || input.GainLossAccount != "" {
+	if input.DisposalPeriod != "" || input.DisposalProceeds != "" || input.DisposalReference != "" || input.AssetAccount != "" || input.ProceedsAccount != "" || input.GainLossAccount != "" || input.DisposalConfirmed {
 		if input.Schedule != Depreciation || !monthly {
 			return empty, invalid("disposal_period", "Disposals apply to depreciation in equal months or declining balance.")
 		}
@@ -462,6 +462,8 @@ func Prepare(input Input) (Workpaper, error) {
 				result.Disposal = append(result.Disposal, line)
 			}
 		}
+		// Nothing is left to depreciate once the disposal is booked.
+		result.PrepaidBalance, result.Schedule[len(result.Schedule)-1].Remaining = "0.00", "0.00"
 	}
 	// Deferred revenue is a liability: recognizing it debits the deferred account and credits revenue.
 	if input.Schedule == DeferredRevenue && result.Proposal != nil {
