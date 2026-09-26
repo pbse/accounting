@@ -206,7 +206,12 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(), `INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,$3,'Unverified request-link holder') ON CONFLICT DO NOTHING`, rid, sid, actor)
 			}
+			// Work waiting on a partial reply stays with the firm until the client completes it or the firm resumes it.
+			var partial bool
 			if err == nil {
+				err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT NOT complete FROM request_submissions WHERE request_id=$1 ORDER BY id DESC LIMIT 1),false)`, rid).Scan(&partial)
+			}
+			if err == nil && !partial {
 				err = preparation.ResumeRequestJobs(r.Context(), tx, rid)
 			}
 		default:

@@ -148,17 +148,28 @@ func linkPasscode(w http.ResponseWriter, r *http.Request, db *sql.DB, token stri
 
 // Staff capture and scoped client replies share the same evidence/queue writer; every reply is redacted first.
 func saveWorkReply(ctx context.Context, tx *sql.Tx, closeID, jobID, requestID, body, actor, from string) (int, error) {
+	_, status, err := recordReply(ctx, tx, closeID, jobID, requestID, body, actor, from)
+	if err == nil && jobID != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='waiting_evidence',error='' WHERE id=$1`, jobID); err != nil {
+			return 503, fmt.Errorf("Reply could not be saved. Try again.")
+		}
+	}
+	return status, err
+}
+
+// recordReply saves a reply as evidence and links it to its request (or a preparer answer to its job), without resuming work.
+func recordReply(ctx context.Context, tx *sql.Tx, closeID, jobID, requestID, body, actor, from string) (string, int, error) {
 	if len(strings.TrimSpace(body)) == 0 || len(body) > 20000 || !utf8.ValidString(body) || strings.ContainsRune(body, 0) || len(from) == 0 || len(from) > 254 {
-		return 422, fmt.Errorf("Provide an original reply of at most 20,000 bytes and its reported sender.")
+		return "", 422, fmt.Errorf("Provide an original reply of at most 20,000 bytes and its reported sender.")
 	}
 	body, _ = redactSensitive(body)
 	from, _ = redactSensitive(from)
 	var count, size int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil {
-		return 503, fmt.Errorf("Could not check evidence storage.")
+		return "", 503, fmt.Errorf("Could not check evidence storage.")
 	}
 	if count >= 100 || size+len(body) > 20*1024*1024 {
-		return 413, fmt.Errorf("Close evidence limit reached. Contact the firm.")
+		return "", 413, fmt.Errorf("Close evidence limit reached. Contact the firm.")
 	}
 	name := "Client reply to request " + requestID + ".txt"
 	if requestID == "" {
@@ -173,13 +184,121 @@ func saveWorkReply(ctx context.Context, tx *sql.Tx, closeID, jobID, requestID, b
 			_, err = tx.ExecContext(ctx, `INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, requestID, source, actor, from)
 		}
 	}
-	if err == nil && jobID != "" {
-		_, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='waiting_evidence',error='' WHERE id=$1`, jobID)
-	}
 	if err != nil {
-		return 503, fmt.Errorf("Reply could not be saved. Try again.")
+		return "", 503, fmt.Errorf("Reply could not be saved. Try again.")
 	}
-	return 200, nil
+	return source, 200, nil
+}
+
+var requestQuestionLine = regexp.MustCompile(`^\s*[0-9]{1,2}[.)]\s+(\S.*)$`)
+
+// requestQuestions splits a firm-approved request into its numbered questions; a line continues its question until a
+// blank line, and a request without numbered lines, or with more than 50, is one question.
+func requestQuestions(body string) []string {
+	questions := []string{}
+	open := false
+	for _, line := range strings.Split(body, "\n") {
+		if m := requestQuestionLine.FindStringSubmatch(line); m != nil {
+			questions = append(questions, strings.TrimSpace(m[1]))
+			open = true
+		} else if strings.TrimSpace(line) == "" {
+			open = false
+		} else if open {
+			questions[len(questions)-1] += " " + strings.TrimSpace(line)
+		}
+	}
+	if len(questions) == 0 || len(questions) > 50 {
+		return []string{strings.TrimSpace(body)}
+	}
+	return questions
+}
+
+type clientAnswer struct {
+	Position int    `json:"position"`
+	State    string `json:"state"`
+	Answer   string `json:"answer"`
+}
+
+type requestQuestion struct {
+	Position int    `json:"position"`
+	Text     string `json:"text"`
+	State    string `json:"state"`
+	Answer   string `json:"answer"`
+}
+
+// requestAnswers reads the client's current answer to each question.
+func requestAnswers(ctx context.Context, tx *sql.Tx, requestID string, questions []string) ([]requestQuestion, error) {
+	out := make([]requestQuestion, len(questions))
+	for i, q := range questions {
+		out[i] = requestQuestion{Position: i + 1, Text: q}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT position,state,answer FROM work_request_answers WHERE request_id::text=$1`, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a requestQuestion
+		if err = rows.Scan(&a.Position, &a.State, &a.Answer); err != nil {
+			return nil, err
+		}
+		if a.Position >= 1 && a.Position <= len(out) {
+			out[a.Position-1].State, out[a.Position-1].Answer = a.State, a.Answer
+		}
+	}
+	return out, rows.Err()
+}
+
+// compiledReply is the client's whole current reply, one document listing every question's answer or what is outstanding.
+func compiledReply(entity, period string, update int, questions []requestQuestion) (string, bool) {
+	var b strings.Builder
+	complete := true
+	fmt.Fprintf(&b, "Client reply for %s · %s (update %d)\n", entity, period, update)
+	for _, q := range questions {
+		fmt.Fprintf(&b, "\n%d. %s\n", q.Position, q.Text)
+		switch q.State {
+		case "answered":
+			fmt.Fprintf(&b, "Answer: %s\n", q.Answer)
+		case "awaiting_document":
+			complete = false
+			b.WriteString("Will send the document later.")
+			if q.Answer != "" {
+				b.WriteString(" " + q.Answer)
+			}
+			b.WriteString("\n")
+		default:
+			complete = false
+			b.WriteString("Not answered yet.\n")
+		}
+	}
+	return b.String(), complete
+}
+
+// requestOpen reports whether a replied request still takes additions: every job it covers is unfinished with no newer
+// request, and a consolidated request's coverage is unchanged.
+func requestOpen(ctx context.Context, tx *sql.Tx, closeID, requestID string) (bool, error) {
+	var open bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM request_jobs WHERE request_id=$1) AND NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=$1 AND (j.state IN ('completed','cancelled') OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))`, requestID).Scan(&open)
+	if err == nil && open {
+		open = preparation.RequestCoverageCurrent(ctx, tx, closeID, requestID) == nil
+	}
+	return open, err
+}
+
+// requestLinkable is why a request cannot get a new link: before any reply it must be exactly as approved, after one it
+// must still take additions.
+func requestLinkable(ctx context.Context, tx *sql.Tx, closeID, requestID string) error {
+	var replied bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=$1)`, requestID).Scan(&replied); err != nil {
+		return fmt.Errorf("Request unavailable.")
+	}
+	if !replied {
+		return preparation.FreshClientRequest(ctx, tx, closeID, requestID)
+	}
+	if open, err := requestOpen(ctx, tx, closeID, requestID); err != nil || !open {
+		return fmt.Errorf("This request is complete or was replaced, so it takes no more answers.")
+	}
+	return nil
 }
 
 func clientRequest(db *sql.DB) http.HandlerFunc {
@@ -203,23 +322,27 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		var confirmed bool
 		files := []clientFile{}
 		removed := []string{}
+		// A structured reply answers numbered questions; plain text answers a request with one question.
+		var answers []clientAnswer
+		plain := false
 		if r.Method == "POST" {
 			var valid bool
 			bodyInput, confirmed, files, valid = clientSubmission(w, r)
 			if !valid {
 				return
 			}
-			// Receipts and retries use the redacted text, so no fingerprint of a removed value is kept.
-			bodyInput, removed = redactSensitive(bodyInput)
-		}
-		receipt := preparation.Digest([]byte(bodyInput))
-		if len(files) > 0 {
-			parts := []string{bodyInput}
-			for _, f := range files {
-				parts = append(parts, f.Name, f.Digest)
+			var structured struct {
+				Answers []clientAnswer `json:"answers"`
 			}
-			raw, _ := json.Marshal(parts)
-			receipt = preparation.Digest(raw)
+			if strings.HasPrefix(strings.TrimSpace(bodyInput), "{") {
+				if preparation.Strict([]byte(bodyInput), &structured) != nil || structured.Answers == nil {
+					problem(w, 422, "Send answers as {\"answers\": [...]}.")
+					return
+				}
+				answers = structured.Answers
+			} else if strings.TrimSpace(bodyInput) != "" {
+				answers, plain = []clientAnswer{{1, "answered", bodyInput}}, true
+			}
 		}
 		digest := preparation.Digest([]byte(token))
 		tx, err := db.BeginTx(r.Context(), nil)
@@ -248,35 +371,115 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		} else {
 			state = "waiting_client"
 		}
-		var requestID, body, replyDigest, expires string
+		var requestID, body, expires string
 		var valid, used, latest bool
-		err = tx.QueryRowContext(r.Context(), `SELECT q.id::text,d.body,COALESCE(l.reply_digest,''),l.expires_at::text,l.revoked_at IS NULL AND l.expires_at>now(),l.used_at IS NOT NULL,(q.job_id IS NULL OR q.id=(SELECT max(id) FROM work_requests WHERE job_id::text=$2)) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE l.digest=$1 FOR UPDATE OF l`, digest, jobID).Scan(&requestID, &body, &replyDigest, &expires, &valid, &used, &latest)
+		err = tx.QueryRowContext(r.Context(), `SELECT q.id::text,d.body,l.expires_at::text,l.revoked_at IS NULL AND l.expires_at>now(),l.used_at IS NOT NULL OR EXISTS(SELECT 1 FROM request_submissions s WHERE s.request_id=q.id),(q.job_id IS NULL OR q.id=(SELECT max(id) FROM work_requests WHERE job_id::text=$2)) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE l.digest=$1 FOR UPDATE OF l`, digest, jobID).Scan(&requestID, &body, &expires, &valid, &used, &latest)
 		if err != nil || !valid {
 			problem(w, 404, "Request link expired or was revoked. Ask the firm for a new link.")
 			return
 		}
-		if used {
-			if r.Method == "POST" && (!confirmed || receipt != replyDigest) {
-				problem(w, 409, "A reply was already received. Contact the firm to make a correction.")
-				return
-			}
-			jsonReply(w, 200, map[string]any{"status": "received", "removed": removed})
+		questions, err := requestAnswers(r.Context(), tx, requestID, requestQuestions(body))
+		if err != nil {
+			problem(w, 503, "Request unavailable.")
 			return
 		}
-		if !latest || state != "waiting_client" {
-			problem(w, 409, "This request is no longer accepting replies. Contact the firm.")
+		active, err := requestOpen(r.Context(), tx, closeID, requestID)
+		if err != nil {
+			problem(w, 503, "Request unavailable.")
 			return
 		}
-		if err = preparation.FreshClientRequest(r.Context(), tx, closeID, requestID); err != nil {
-			problem(w, 409, err.Error())
-			return
+		reply := func(status string) {
+			jsonReply(w, 200, map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed})
 		}
 		if r.Method == "GET" {
-			jsonReply(w, 200, map[string]string{"status": "open", "entity": entity, "period": period, "body": body, "expires_at": expires})
+			switch {
+			case used:
+				reply("received")
+			case !latest || state != "waiting_client":
+				problem(w, 409, "This request is no longer accepting replies. Contact the firm.")
+			default:
+				if err = preparation.FreshClientRequest(r.Context(), tx, closeID, requestID); err != nil {
+					problem(w, 409, err.Error())
+					return
+				}
+				reply("open")
+			}
 			return
 		}
 		if !confirmed {
 			problem(w, 422, "Confirm that your reply is for this client and period.")
+			return
+		}
+		if plain && len(questions) != 1 {
+			problem(w, 422, "This request has numbered questions. Answer each one.")
+			return
+		}
+		sent := []clientAnswer{}
+		for _, a := range answers {
+			a.Answer = strings.TrimSpace(a.Answer)
+			if a.Position < 1 || a.Position > len(questions) || utf8.RuneCountInString(a.Answer) > 4000 || !slices.Contains([]string{"answered", "awaiting_document", ""}, a.State) || a.State == "answered" && a.Answer == "" {
+				problem(w, 422, "Answer each question in up to 4,000 characters, or mark it as a document you will send later.")
+				return
+			}
+			if a.State == "" {
+				continue
+			}
+			redacted, gone := redactSensitive(a.Answer)
+			for _, kind := range gone {
+				if !slices.Contains(removed, kind) {
+					removed = append(removed, kind)
+				}
+			}
+			questions[a.Position-1].State, questions[a.Position-1].Answer = a.State, redacted
+			sent = append(sent, clientAnswer{a.Position, a.State, redacted})
+		}
+		if len(sent) == 0 && len(files) == 0 {
+			problem(w, 422, "Answer at least one question, mark a document you will send later, or attach a document.")
+			return
+		}
+		// A retry sends the same answers, so its receipt comes from them (redacted), not from the compiled reply.
+		normalized, _ := json.Marshal(sent)
+		receipt := preparation.Digest(normalized)
+		if len(files) > 0 {
+			parts := []string{string(normalized)}
+			for _, f := range files {
+				parts = append(parts, f.Name, f.Digest)
+			}
+			raw, _ := json.Marshal(parts)
+			receipt = preparation.Digest(raw)
+		}
+		// Only the latest reply can be a retry, so returning to an earlier answer is saved as a correction.
+		var repeat bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT receipt=$2 FROM request_submissions WHERE request_id::text=$1 ORDER BY id DESC LIMIT 1),false)`, requestID, receipt).Scan(&repeat); err != nil {
+			problem(w, 503, "Request unavailable.")
+			return
+		}
+		if repeat {
+			reply("received")
+			return
+		}
+		// The first reply needs the request exactly as approved; later ones need its work still open to them.
+		if !used {
+			if !latest || state != "waiting_client" {
+				problem(w, 409, "This request is no longer accepting replies. Contact the firm.")
+				return
+			}
+			if err = preparation.FreshClientRequest(r.Context(), tx, closeID, requestID); err != nil {
+				problem(w, 409, err.Error())
+				return
+			}
+		} else if !active {
+			problem(w, 409, "This request is complete or was replaced, so it takes no more answers. Contact the firm to change anything.")
+			return
+		}
+		var update int
+		if err = tx.QueryRowContext(r.Context(), `SELECT count(*)+1 FROM request_submissions WHERE request_id::text=$1`, requestID).Scan(&update); err != nil {
+			problem(w, 503, "Request unavailable.")
+			return
+		}
+		compiled, complete := compiledReply(entity, period, update, questions)
+		if len(compiled) > 20000 {
+			problem(w, 422, "Your answers together are too long. Shorten them to under 20,000 characters in total.")
 			return
 		}
 		var pendingCount, pendingSize int
@@ -292,27 +495,55 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			problem(w, 413, "Client attachment capacity reached. Contact the firm.")
 			return
 		}
-		status, err := saveWorkReply(r.Context(), tx, closeID, jobID, requestID, bodyInput, "request-link holder (identity unverified)", "Unverified request-link holder")
-		if err != nil {
-			problem(w, status, err.Error())
+		// Each reply replaces the previous one as the client's current reply; the earlier one stays in history, and work that
+		// cited it is reviewed again.
+		var previous sql.NullString
+		if err = tx.QueryRowContext(r.Context(), `SELECT (SELECT s.source_id::text FROM request_submissions s JOIN evidence e ON e.id=s.source_id WHERE s.request_id::text=$1 AND e.superseded_by IS NULL ORDER BY s.id DESC LIMIT 1)`, requestID).Scan(&previous); err != nil {
+			problem(w, 503, "Request unavailable.")
 			return
 		}
+		// Documents alone leave the current reply as it is.
+		source := previous.String
+		if len(sent) > 0 || !previous.Valid {
+			var status int
+			if source, status, err = recordReply(r.Context(), tx, closeID, jobID, requestID, compiled, "request-link holder (identity unverified)", "Unverified request-link holder"); err != nil {
+				problem(w, status, err.Error())
+				return
+			}
+			if previous.Valid && previous.String != source {
+				_, err = tx.ExecContext(r.Context(), `UPDATE evidence SET superseded_by=$2,replacement_reason='Replaced by the client''s later reply' WHERE id::text=$1 AND superseded_by IS NULL`, previous.String, source)
+			}
+		}
+		for _, q := range questions {
+			if err == nil && q.State != "" {
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO work_request_answers(request_id,position,state,answer) VALUES($1,$2,$3,$4) ON CONFLICT (request_id,position) DO UPDATE SET state=EXCLUDED.state,answer=EXCLUDED.answer`, requestID, q.Position, q.State, q.Answer)
+			}
+		}
 		for _, file := range files {
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_attachments(request_id,close_id,name,digest,body) VALUES($1,$2,$3,$4,$5)`, requestID, closeID, file.Name, file.Digest, file.Body)
-			if err != nil {
-				break
+			if err == nil {
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO client_attachments(request_id,close_id,name,digest,body) VALUES($1,$2,$3,$4,$5) ON CONFLICT (request_id,digest) DO NOTHING`, requestID, closeID, file.Name, file.Digest, file.Body)
+			}
+		}
+		// Work resumes on its own only once every question is answered; a partial reply waits for the firm.
+		if err == nil && complete {
+			if jobID != "" {
+				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_evidence',error='' WHERE id=$1 AND state='waiting_client'`, jobID)
+			}
+			if err == nil {
+				err = preparation.ResumeRequestJobs(r.Context(), tx, requestID)
 			}
 		}
 		if err == nil {
-			err = preparation.ResumeRequestJobs(r.Context(), tx, requestID)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO request_submissions(request_id,receipt,source_id,complete) VALUES($1,$2,$3,$4)`, requestID, receipt, source, complete)
 		}
 		if err == nil {
-			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET used_at=now(),reply_digest=$2 WHERE digest=$1`, digest, receipt)
+			_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET used_at=COALESCE(used_at,now()),reply_digest=$2 WHERE digest=$1`, digest, receipt)
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Reply could not be confirmed. Retry the same reply.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"status": "received", "removed": removed})
+		used = true
+		reply("received")
 	}
 }

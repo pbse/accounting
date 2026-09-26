@@ -242,7 +242,7 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 			}
 			token, passcode := "", ""
 			if in.Action == "link" {
-				if err = preparation.FreshClientRequest(r.Context(), tx, closeID, rid); err != nil {
+				if err = requestLinkable(r.Context(), tx, closeID, rid); err != nil {
 					problem(w, 409, err.Error())
 					return
 				}
