@@ -389,16 +389,20 @@ func xeroWording(items []quickbooks.Exception) []quickbooks.Exception {
 	return items
 }
 
-// xeroDue is SQL: close c's firm is enabled and the close is open, in the current or prior month, not attempted and not captured in the past day.
+// xeroDue is SQL: close c's firm is enabled and the close is open, in the current or prior month, and either not attempted
+// and not captured in the past day, or its client's active connection reported a change after the last attempt and capture,
+// with no attempt in the past 30 minutes.
 const xeroDue = `EXISTS(SELECT 1 FROM organizations o WHERE o.id=c.organization_id AND o.enabled)
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
- AND (c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '24 hours')
- AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id AND s.captured_at>now()-interval '24 hours')`
+ AND (((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '24 hours')
+   AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id AND s.captured_at>now()-interval '24 hours'))
+  OR ((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '30 minutes')
+   AND EXISTS(SELECT 1 FROM xero_connections h WHERE h.organization_id=c.organization_id AND lower(h.client_entity)=lower(c.entity) AND h.state='active'
+    AND h.changed_at>GREATEST(c.xero_refresh_at,(SELECT max(captured_at) FROM xero_snapshots s WHERE s.close_id=c.id)))))`
 
-// sweepXeroRefresh captures, for up to 10 open current or prior-month closes with an active Xero connection,
-// the month-end Trial Balance when the close has none from the past day. Claiming the close first means
-// one attempt per close a day, whichever worker makes it and however it ends.
+// sweepXeroRefresh captures, for up to 10 due closes with an active Xero connection, the month-end Trial Balance.
+// Claiming the close first means one attempt per due close, whichever worker makes it and however it ends.
 func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 	if !xero.Configured() {
 		return nil

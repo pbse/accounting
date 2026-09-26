@@ -88,3 +88,5 @@ Fresh Compose volumes run every migration automatically. Existing Compose volume
 `065_credit_applications.sql` records each unapplied customer payment applied to an open invoice and each vendor credit applied to an open bill (preview, approval, one attempt, readback), with row-level security like 050, and adds the `payment_application` and `credit_application` grant kinds. Apply after 064 with API/worker stopped; `/readyz` checks it.
 
 `066_materiality.sql` adds a firm's optional materiality amount and records it with every firm policy change. Apply after 065 with API/worker stopped; `/readyz` checks it.
+
+`067_xero_change_hints.sql` records the newest change time a signed Xero webhook reported for each connection, so a hinted close is captured again early. Apply after 066 with API/worker stopped; `/readyz` checks it.
