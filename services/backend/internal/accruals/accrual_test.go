@@ -92,6 +92,7 @@ func TestProRataAccrualTakesTheElapsedShareLessInvoiced(t *testing.T) {
 		"treat the excess as a prepaid":      func(i *Input) { i.InvoicedToDate = "4597.83" },
 		"inferred estimates are unsupported": func(i *Input) { i.ServiceStart, i.ServiceEnd, i.InvoicedToDate = "2026-10-01", "2026-12-31", "0.00" },
 		"including an explicit 0.00":         func(i *Input) { i.InvoicedToDate = "" },
+		"ten years":                          func(i *Input) { i.ServiceEnd = "2036-08-16" },
 		"pro-rata rule":                      func(i *Input) { i.AccountantRuleReference = "" },
 		"pro-rata method only":               func(i *Input) { i.Method, i.ServiceEnd, i.AccountantRuleReference = Method, "2026-09-30", "" },
 		"future services": func(i *Input) {

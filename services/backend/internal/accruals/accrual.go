@@ -11,9 +11,6 @@ import (
 const Method = "fixed_incurred_amount_v1"
 const ActualMethod = "actual_invoice_true_up_v1"
 const RecurringMethod = "fixed_recurring_incurred_v1"
-
-// ProRataMethod accrues the share of a contract amount for the service days elapsed by month-end, less what the vendor
-// has already invoiced for it.
 const ProRataMethod = "pro_rata_service_days_v1"
 
 type Input struct {
@@ -71,7 +68,6 @@ func Prepare(in Input) (Workpaper, error) {
 	start, e1 := time.Parse("2006-01-02", in.ServiceStart)
 	end, e2 := time.Parse("2006-01-02", in.ServiceEnd)
 	monthEnd := period.AddDate(0, 1, -1)
-	// A pro-rata service may continue past month-end; only its elapsed share is accrued.
 	if e1 != nil || e2 != nil || start.Year() < 1000 || end.Before(start) || start.After(monthEnd) || (end.After(monthEnd) && in.Method != ProRataMethod) {
 		return empty, fmt.Errorf("Service must have been incurred by month-end; future services and inferred estimates are unsupported")
 	}
@@ -80,6 +76,9 @@ func Prepare(in Input) (Workpaper, error) {
 		invoiced, invoicedErr := prepaids.Amount(in.InvoicedToDate)
 		if contractErr != nil || contract == 0 || invoicedErr != nil {
 			return empty, fmt.Errorf("Enter the positive contract amount for the whole service period and the amount invoiced to date, including an explicit 0.00")
+		}
+		if end.After(start.AddDate(10, 0, 0)) {
+			return empty, fmt.Errorf("A pro-rata service period is limited to ten years")
 		}
 		through := end
 		if through.After(monthEnd) {
