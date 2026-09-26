@@ -98,7 +98,7 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	for _, kind := range []string{"bank", "credit_card"} {
 		save(mar, "reconciliation", reconciliation.Workpaper{Status: "reconciled", Input: reconciliation.Input{Account: "Operating", AccountType: kind, StatementClosing: "900.00", LedgerClosing: "900.00"}, ClosingDifference: "0.00"}, true)
 	}
-	save(mar, "settlement", reconciliation.SettlementWorkpaper{Status: "draft", Input: reconciliation.SettlementInput{ReportReference: "stripe-mar.csv"}, Proposal: &prepaids.Adjustment{Date: "2026-03-31", DebitAccount: "Stripe fees", CreditAccount: "Sales", Amount: "29.22"}}, true)
+	save(mar, "settlement", reconciliation.SettlementWorkpaper{Status: "draft", Input: reconciliation.SettlementInput{ReportReference: "stripe-mar.csv"}, Proposal: &prepaids.Adjustment{Date: "2026-03-31", DebitAccount: "Stripe fees", CreditAccount: "Sales", Amount: "29.22"}, RefundProposal: &prepaids.Adjustment{Date: "2026-03-31", DebitAccount: "Refunds", CreditAccount: "Sales", Amount: "100.00"}}, true)
 	save(open(local, entity, "2025-12"), "prepaid", prepaid("Last year", "10.00", "0.00"), true)
 	save(open(local, "Another client "+rand.Text(), "2026-02"), "prepaid", prepaid("Another client", "10.00", "0.00"), true)
 	save(open(other, entity, "2026-02"), "prepaid", prepaid("Other firm", "10.00", "0.00"), true)
@@ -163,7 +163,7 @@ func TestYearEndHandoffRollsForwardApprovedWork(t *testing.T) {
 	if got := table("postings.csv"); len(got) != 1 || got[0][2] != olderSoftware || got[0][3] != "verified" || got[0][6] != "Debit account 21 30; Credit account 20 30" {
 		t.Fatalf("the verified posting on an older version stays in the history: %v", got)
 	}
-	if !strings.Contains(files["adjustments.csv"], "2026-03,settlement,") || !strings.Contains(files["adjustments.csv"], "Stripe fees,Sales,29.22") {
+	if !strings.Contains(files["adjustments.csv"], "2026-03,settlement,") || !strings.Contains(files["adjustments.csv"], "Stripe fees,Sales,29.22") || !strings.Contains(files["adjustments.csv"], "Refunds,Sales,100.00") {
 		t.Fatalf("an approved Stripe fee entry is part of the adjustment history:\n%s", files["adjustments.csv"])
 	}
 	questions := files["open-questions.csv"]

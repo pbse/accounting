@@ -264,7 +264,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 					problem(w, 500, "A saved Stripe settlement could not be read. No partial handoff was downloaded.")
 					return
 				}
-				propose(p, wp.Proposal)
+				propose(p, wp.Proposal, wp.RefundProposal, wp.RevenueProposal)
 			case "reconciliation":
 				var wp reconciliation.Workpaper
 				if json.Unmarshal(p.raw, &wp) != nil {

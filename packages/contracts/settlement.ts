@@ -23,6 +23,8 @@ export type SettlementInput = {
     booked_fees: string;
     rule_reference: string;
   };
+  refund_entry?: { refund_account: string; booked_refunds: string; rule_reference: string };
+  revenue_entry?: { revenue_account: string; booked_revenue: string; rule_reference: string; clearing_confirmed: boolean };
 };
 export type SettlementCategory = {
   category: string;
@@ -57,4 +59,8 @@ export type SettlementWorkpaper = {
   blockers: string[];
   fees?: string;
   proposal?: { date: string; debit_account: string; credit_account: string; amount: string };
+  refunds?: string;
+  revenue?: string;
+  refund_proposal?: { date: string; debit_account: string; credit_account: string; amount: string };
+  revenue_proposal?: { date: string; debit_account: string; credit_account: string; amount: string };
 };

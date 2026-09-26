@@ -35,6 +35,25 @@ type SettlementInput struct {
 	ReviewedDeposits  []ReviewedDeposit `json:"reviewed_deposits,omitempty"`
 	InTransit         []InTransit       `json:"in_transit,omitempty"`
 	FeeEntry          *FeeEntry         `json:"fee_entry,omitempty"`
+	RefundEntry       *RefundEntry      `json:"refund_entry,omitempty"`
+	RevenueEntry      *RevenueEntry     `json:"revenue_entry,omitempty"`
+}
+
+// RefundEntry moves the refunds netted into deposits booked this month from the fee entry's deposit account to a
+// refunds (contra-revenue) account, under the client accountant's rule.
+type RefundEntry struct {
+	RefundAccount string `json:"refund_account"`
+	BookedRefunds string `json:"booked_refunds"`
+	RuleReference string `json:"rule_reference"`
+}
+
+// RevenueEntry records the gross charges of deposits booked this month to a revenue account, when the accountant's rule
+// says the fee entry's deposit account is a clearing account.
+type RevenueEntry struct {
+	RevenueAccount    string `json:"revenue_account"`
+	BookedRevenue     string `json:"booked_revenue"`
+	RuleReference     string `json:"rule_reference"`
+	ClearingConfirmed bool   `json:"clearing_confirmed"`
 }
 
 // FeeEntry applies a client accountant's rule for deposits booked net of Stripe fees: the fees of
@@ -88,6 +107,11 @@ type SettlementWorkpaper struct {
 	Blockers   []string             `json:"blockers"`
 	Fees       string               `json:"fees,omitempty"`
 	Proposal   *prepaids.Adjustment `json:"proposal,omitempty"`
+	Refunds    string               `json:"refunds,omitempty"`
+	Revenue    string               `json:"revenue,omitempty"`
+	// Refund and revenue entries are drafts to book by hand; only the fee entry can post.
+	RefundProposal  *prepaids.Adjustment `json:"refund_proposal,omitempty"`
+	RevenueProposal *prepaids.Adjustment `json:"revenue_proposal,omitempty"`
 }
 
 var stripeColumns = []string{"balance_transaction_id", "currency", "gross", "fee", "net", "reporting_category", "automatic_payout_id", "automatic_payout_effective_at"}
@@ -374,6 +398,24 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 		}
 		f.BookedFees, bookedFees = money(booked), booked
 	}
+	var bookedRefunds, bookedRevenue int64
+	if r := input.RefundEntry; r != nil {
+		r.RefundAccount, r.RuleReference = strings.TrimSpace(r.RefundAccount), strings.TrimSpace(r.RuleReference)
+		booked, err := cents(strings.TrimSpace(r.BookedRefunds))
+		if input.FeeEntry == nil || r.RefundAccount == "" || len(r.RefundAccount) > 200 || strings.EqualFold(r.RefundAccount, input.FeeEntry.DepositAccount) || strings.EqualFold(r.RefundAccount, input.FeeEntry.FeeAccount) || len(r.RuleReference) < 5 || len(r.RuleReference) > 200 || err != nil || booked < 0 {
+			return fail("A refund entry needs the fee entry (which names the deposit account), a separate refunds account, the refunds already booked for these payouts this month (enter zero explicitly) and the client accountant's rule reference.")
+		}
+		r.BookedRefunds, bookedRefunds = money(booked), booked
+	}
+	if v := input.RevenueEntry; v != nil {
+		v.RevenueAccount, v.RuleReference = strings.TrimSpace(v.RevenueAccount), strings.TrimSpace(v.RuleReference)
+		booked, err := cents(strings.TrimSpace(v.BookedRevenue))
+		clash := input.FeeEntry == nil || strings.EqualFold(v.RevenueAccount, input.FeeEntry.DepositAccount) || strings.EqualFold(v.RevenueAccount, input.FeeEntry.FeeAccount) || (input.RefundEntry != nil && strings.EqualFold(v.RevenueAccount, input.RefundEntry.RefundAccount))
+		if clash || !v.ClearingConfirmed || v.RevenueAccount == "" || len(v.RevenueAccount) > 200 || len(v.RuleReference) < 5 || len(v.RuleReference) > 200 || err != nil || booked < 0 {
+			return fail("A revenue entry needs the fee entry, the accountant's rule that its deposit account is a clearing account, a separate revenue account, the revenue already booked for these payouts this month (enter zero explicitly) and the rule reference.")
+		}
+		v.BookedRevenue, bookedRevenue = money(booked), booked
+	}
 	if len(input.ReviewedDeposits)+len(input.InTransit) > 100 {
 		return fail("Review at most 100 payouts per workpaper.")
 	}
@@ -515,38 +557,70 @@ func PrepareSettlement(input SettlementInput) (SettlementWorkpaper, error) {
 	}
 	if input.FeeEntry != nil {
 		// Only payouts whose deposit landed this month were booked net this month. Their fees are the
-		// per-transaction fees plus Stripe fees charged as their own rows (category "fee", negative gross).
+		// per-transaction fees plus Stripe fees charged as their own rows (category "fee", negative gross);
+		// their refunds and revenue are the signed gross of those categories.
 		monthEnd := month.AddDate(0, 1, -1).Format("2006-01-02")
-		var fees, deferred, untraced int64
+		type amounts struct{ fee, refund, revenue, other int64 }
+		var current, deferred, untraced amounts
 		for _, payout := range result.Payouts {
-			fee, _ := cents(payout.Fee)
+			var a amounts
+			a.fee, _ = cents(payout.Fee)
 			for _, category := range payout.Categories {
-				if category.Category == "fee" {
-					gross, _ := cents(category.Gross)
-					fee -= gross
+				gross, _ := cents(category.Gross)
+				switch category.Category {
+				case "fee":
+					a.fee -= gross
+				case "refund", "refund_failure":
+					a.refund -= gross
+				case "charge", "partial_capture_reversal":
+					a.revenue += gross
+				default:
+					a.other += gross
 				}
 			}
+			bucket := &deferred
 			switch {
 			case payout.Status == "unmatched" || payout.Status == "ambiguous":
-				untraced += fee
+				bucket = &untraced
 			case payout.Deposit != nil && strings.HasPrefix(payout.Deposit.Date, input.ClosePeriod+"-"):
-				fees += fee
-			default:
-				deferred += fee
+				bucket = &current
 			}
+			bucket.fee, bucket.refund, bucket.revenue, bucket.other = bucket.fee+a.fee, bucket.refund+a.refund, bucket.revenue+a.revenue, bucket.other+a.other
 		}
-		result.Fees = money(fees)
-		if deferred != 0 {
-			result.Questions = append(result.Questions, fmt.Sprintf("Fees of %s belong to payouts in transit or deposited outside this month; they are left for the month their deposit is booked.", ledger.Show(money(deferred), input.Currency)))
-		}
-		if untraced != 0 {
-			result.Questions = append(result.Questions, fmt.Sprintf("Fees of %s belong to payouts not yet traced to a deposit; trace them before the fee entry is proposed.", ledger.Show(money(untraced), input.Currency)))
-		}
-		if delta := fees - bookedFees; len(result.Blockers) == 0 && delta != 0 {
-			result.Proposal = &prepaids.Adjustment{Date: monthEnd, DebitAccount: input.FeeEntry.FeeAccount, CreditAccount: input.FeeEntry.DepositAccount, Amount: money(delta)}
+		// entry proposes debit/credit for the difference from what is booked, reversed when more was booked.
+		entry := func(delta int64, debit, credit string) *prepaids.Adjustment {
+			if len(result.Blockers) > 0 || delta == 0 {
+				return nil
+			}
 			if delta < 0 {
-				result.Proposal.DebitAccount, result.Proposal.CreditAccount, result.Proposal.Amount = input.FeeEntry.DepositAccount, input.FeeEntry.FeeAccount, money(-delta)
+				debit, credit, delta = credit, debit, -delta
 			}
+			return &prepaids.Adjustment{Date: monthEnd, DebitAccount: debit, CreditAccount: credit, Amount: money(delta)}
+		}
+		left := func(label string, later, open int64) {
+			if later != 0 {
+				result.Questions = append(result.Questions, fmt.Sprintf("%s of %s belong to payouts in transit or deposited after this month. This workpaper leaves them out, and next month's report does not include these payouts, so record them with the deposit month's books by hand.", label, ledger.Show(money(later), input.Currency)))
+			}
+			if open != 0 {
+				result.Questions = append(result.Questions, fmt.Sprintf("%s of %s belong to payouts not yet traced to a deposit; trace them before the entry is proposed.", label, ledger.Show(money(open), input.Currency)))
+			}
+		}
+		deposit := input.FeeEntry.DepositAccount
+		result.Fees = money(current.fee)
+		left("Fees", deferred.fee, untraced.fee)
+		result.Proposal = entry(current.fee-bookedFees, input.FeeEntry.FeeAccount, deposit)
+		if r := input.RefundEntry; r != nil {
+			result.Refunds = money(current.refund)
+			left("Refunds", deferred.refund, untraced.refund)
+			result.RefundProposal = entry(current.refund-bookedRefunds, r.RefundAccount, deposit)
+		}
+		if v := input.RevenueEntry; v != nil {
+			result.Revenue = money(current.revenue)
+			left("Gross charges", deferred.revenue, untraced.revenue)
+			result.RevenueProposal = entry(current.revenue-bookedRevenue, deposit, v.RevenueAccount)
+		}
+		if (input.RefundEntry != nil || input.RevenueEntry != nil) && current.other != 0 {
+			result.Questions = append(result.Questions, fmt.Sprintf("Disputes and other Stripe categories in payouts deposited this month total %s gross. No entry covers them, so they stay in %s; confirm their treatment.", ledger.Show(money(current.other), input.Currency), deposit))
 		}
 	}
 	return result, nil
