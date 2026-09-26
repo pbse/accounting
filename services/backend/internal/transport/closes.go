@@ -171,7 +171,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 422, "Client search is too long.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$3 FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)) AND ($4='' OR entity ILIKE '%'||$4||'%' OR period=$4) ORDER BY period DESC,id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,entity,period,`+closePlanning+`$3 FROM client_closes WHERE organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)) AND ($4='' OR entity ILIKE '%'||$4||'%' OR period=$4) ORDER BY period DESC,client_closes.id DESC LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
 		if err != nil {
 			problem(w, 503, "Saved closes are unavailable.")
 			return
@@ -267,7 +267,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 503, "Could not open the close.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE close_id=$1 ORDER BY id DESC LIMIT 101`, item.ID)
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE close_id=$1 ORDER BY workpaper_review_state.id DESC LIMIT 101`, item.ID)
 		if err != nil {
 			problem(w, 503, "Could not open workpapers.")
 			return

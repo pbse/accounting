@@ -148,7 +148,7 @@ func tieOut(db *sql.DB) http.HandlerFunc {
 		}
 		latest := map[string]paper{}
 		order := []string{}
-		rows, err = tx.QueryContext(ctx, `SELECT id::text,kind,review_state,review_state='approved' AND (jsonb_typeof(paper->'blockers') IS DISTINCT FROM 'array' OR paper->'blockers'='[]'::jsonb),paper FROM workpaper_review_state WHERE close_id::text=$1 AND kind IN ('prepaid','accrual','loan','owner','reconciliation','settlement') ORDER BY id`, id)
+		rows, err = tx.QueryContext(ctx, `SELECT id::text,kind,review_state,review_state='approved' AND (jsonb_typeof(paper->'blockers') IS DISTINCT FROM 'array' OR paper->'blockers'='[]'::jsonb),paper FROM workpaper_review_state WHERE close_id::text=$1 AND kind IN ('prepaid','accrual','loan','owner','reconciliation','settlement') ORDER BY workpaper_review_state.id`, id)
 		if err != nil {
 			problem(w, 503, "Could not read saved workpapers.")
 			return

@@ -215,7 +215,7 @@ func registerRecurringAccrual(mux *http.ServeMux, db *sql.DB) {
 		plan := preparation.Plan{Kind: "accrual", Input: raw, Sources: []preparation.Source{{ID: in.EvidenceID, Digest: sourceDigest, Name: sourceName, Role: "current_service"}, {ID: snapshot.SourceID, Digest: snapshot.SourceDigest, Name: "QuickBooks " + period + " period reports", Role: "period_ledger", Location: selected.Location}}, RecurringAccrual: &preparation.RecurringAccrual{CloseID: "", PaperID: selected.ID, Digest: selected.Digest, ReviewID: selected.ReviewID, Period: previous}}
 		err = tx.QueryRowContext(r.Context(), `SELECT close_id::text FROM workpapers WHERE id::text=$1`, selected.ID).Scan(&plan.RecurringAccrual.CloseID)
 		if err == nil {
-			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM workpapers WHERE close_id::text=$1 AND kind='accrual' AND paper->'recurring_accrual'->>'paper_id'=$2 AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=workpapers.close_id AND newer.paper->>'revises'=workpapers.id::text) ORDER BY id DESC LIMIT 1),'')`, r.PathValue("id"), selected.ID).Scan(&plan.Revises)
+			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM workpapers WHERE close_id::text=$1 AND kind='accrual' AND paper->'recurring_accrual'->>'paper_id'=$2 AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=workpapers.close_id AND newer.paper->>'revises'=workpapers.id::text) ORDER BY workpapers.id DESC LIMIT 1),'')`, r.PathValue("id"), selected.ID).Scan(&plan.Revises)
 		}
 		if err != nil || preparation.ValidateRecurringAccrual(r.Context(), tx, plan, r.PathValue("id"), entity, period) != nil {
 			problem(w, 409, "Reviewed predecessor changed.")

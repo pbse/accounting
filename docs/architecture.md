@@ -15,6 +15,7 @@ flowchart TD
   Worker --> Reads[Scheduled ledger reads / Stripe reports]
   Worker --> Mail[Approved Resend delivery]
   Email[Cloudflare Email Routing] --> Edge
+  Hooks[QuickBooks / Xero change webhooks] --> Edge
   API --> Scanner[Isolated on-demand ClamAV]
 ```
 
@@ -43,7 +44,7 @@ A WorkOS organization represents an accounting firm. A client is a case-insensit
 
 PostgreSQL row-level security checks `app.organization` using a non-owner runtime role. The connection wrapper sets session state: use a **direct/session-preserving database connection**, not a transaction pooler. System routes and the background worker intentionally access multiple firms and retain application-level scope/authority checks. See [operations](operations.md#row-level-security).
 
-Agents propose facts, questions, scope and supported work. Deterministic Go functions calculate amounts. People approve accounting treatments, posting, email and sign-off. Browser, natural-language and MCP surfaces reuse existing capabilities; model text cannot grant authority. See [MCP deployment boundary](mcp.md#deployment-boundary).
+Agents propose facts, questions, scope and supported work. Deterministic Go functions calculate amounts. People approve accounting treatments, posting, email and sign-off. Browser, natural-language and MCP surfaces reuse existing capabilities; model text cannot grant authority. Evidence, intake jobs, close preparations, request drafts and approval requests an agent makes under a member's MCP agent access stay the member's and also record the MCP client's ID when the token carries one, otherwise an unverified MCP marker. See [MCP deployment boundary](mcp.md#deployment-boundary).
 
 ## Durable work and external effects
 
@@ -51,7 +52,8 @@ Agents propose facts, questions, scope and supported work. Deterministic Go func
 - Preparation uses persisted jobs, fenced extraction/model claims, checkpoints and current-source checks. Known deterministic calculations do not need a second queue or model call.
 - Client replies and released attachments resume the affected durable work. Receipt, malware scan, firm release and accounting confirmation are distinct states.
 - Ledger writes persist an attempt before the external call. Approvals bind current evidence, proposal, company, accounts and authority. Unknown outcomes remain blocked for reconciliation; no generic retry creates another write.
-- Approved email has its own durable outbox and bounded provider-specific retries. A delivered email does not establish that its recipient read or answered it.
+- Approved email has its own durable outbox and bounded provider-specific retries. A delivered email does not establish that its recipient read or answered it. A firm's reminder rule bounds reminders; each is still approved individually.
+- Signed QuickBooks and Xero webhooks only record change hints; the scheduled reads decide what to capture again. A hint is not proof that a capture is complete.
 - Close sign-off covers a defined scope. Prepared, reviewed, posted, verified and signed off are different outcomes.
 
 ## Data, money and models

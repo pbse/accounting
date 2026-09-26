@@ -103,6 +103,10 @@ func TestProcedureOverridesPinAndInvalidate(t *testing.T) {
 	}
 	publish("", "Firm insurance", "")
 	first := publish("Same client", "Client insurance", "")
+	if _, err = db.Exec(`SELECT setval(pg_get_serial_sequence('procedure_versions','id'),(10^length(max(id)::text))::bigint-1) FROM procedure_versions`); err != nil {
+		t.Fatal(err)
+	}
+	first = publish("Same client", "Client insurance", publish("Same client", "Client insurance", first))
 	call("/v1/closes/procedures", map[string]any{"client_entity": "Same client", "kind": "prepaid", "instructions": "Stale", "reason": "Stale test", "confirmed": true, "enabled": true}, 409)
 	ctx := context.Background()
 	tx, _ := db.BeginTx(ctx, nil)
