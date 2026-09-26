@@ -29,6 +29,24 @@ Every answer comes from an existing read, made with your own permissions, and li
 
 A firm-wide answer shows its current details once, under the reply. History keeps only the generic reply and its link, so it never keeps an answer's client details you might later lose access to; your own questions are kept as you typed them. A close answer is kept in full, since the close conversation is reachable only with access to the close.
 
+## Commands
+
+Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type **/** in the assistant's box for the same commands. Commands run without a model: each asks the assistant one of the questions above or opens the screen that does the work, where every action keeps its preview and confirmation.
+
+| Command | Does |
+| --- | --- |
+| `/ask <question>` | Asks the assistant in the current context |
+| `/status` | Where this close stands, or, outside a close, what needs you today |
+| `/explain [account]` | Whether that account ties, or what blocks sign-off |
+| `/compare [account]` | What changed from last month, for that account or overall |
+| `/find <client or YYYY-MM>` | Opens Client closes filtered to it |
+| `/prepare`, `/stop` | Opens the close's preparation, with its preview, confirmation and stop |
+| `/request` | Opens the close's client requests |
+| `/review` | Opens the first draft in the review queue |
+| `/rehearse`, `/export` | Opens the close's sign-off tab: the saved-proposal rehearsal and the package downloads |
+
+A command that needs a close uses the one you are on. Elsewhere the palette lists your closes matching what you type after the command (for example `/prepare Acme`); picking one runs it there, and for `/explain` and `/compare` the chosen close becomes a chip and you then type the account. Typing such a command in the firm-wide assistant opens the palette to pick the close. The palette also finds commands by their descriptions, keeps focus inside it and returns it on close. In the assistant's box, Tab completes a command.
+
 ## Boundaries
 
 The assistant reads and explains; it never approves, sends, posts, signs off or starts work, and it calls no POST route. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.

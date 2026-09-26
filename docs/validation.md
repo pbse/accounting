@@ -1664,3 +1664,11 @@ Tests: `TestProcedureOverridesPinAndInvalidate` moves the procedure id sequence 
 Code review: GPT-6 Sol (high).
 
 Not verified: production rows past a digit boundary were not replayed.
+
+## Command palette and / menu (2026-09-26)
+
+Request: a `/` command menu and a keyboard command palette (chat foundation step 2). Cmd/Ctrl+K opens a palette in any signed-in workspace page and `/` in the assistant's box lists the same eleven commands (`/ask`, `/status`, `/explain`, `/compare`, `/find`, `/prepare`, `/request`, `/review`, `/rehearse`, `/export`, `/stop`). They run in the browser without a model: they ask the assistant a question it answers from reads (in the close the command targets, opening it first) or open the screen that does the work, where actions keep their preview and confirmation. A close-scoped command outside a close lists the member's matching closes (cleared while a new search loads); `/explain` and `/compare` then take the account after the close is chosen, and a close command typed in the firm-wide assistant opens the palette. The palette is a modal combobox with arrow-key selection that keeps focus inside and returns it on close; commands match by name or description; Cmd/Ctrl+K requires no other modifier. A palette question is asked once the conversation's history has loaded. No backend change.
+
+Code review: GPT-6 Sol (high). Adopted: the history-then-question order (a question could be hidden by a later history read), the account kept separate from close search, stale close results cleared, Tab no longer trapped and the composer suggestions no longer claim listbox semantics, focus contained and exact modifiers, the firm-wide composer handing close commands to the palette, description search, and two redundant comments deleted. A second delta round carried the firm-wide composer's account separately into the palette and showed close results only for the search that produced them.
+
+Tests: `apps/frontend/src/features/dashboard/commands.test.ts` (Node, added to `npm test`): parsing, and each command's question or destination, including `/review`, the close requirement and `/ask` without a question. The frontend typecheck now allows `.ts` import paths so the test runs under Node.
