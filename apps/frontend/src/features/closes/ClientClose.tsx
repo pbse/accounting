@@ -280,6 +280,8 @@ export default function ClientClose() {
           <RecurringAccruals closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
           <CarryForward key={close.id} closeId={close.id} />
           <BillCorrection closeId={close.id} />
+          <BillCorrection closeId={close.id} kind="purchases" />
+          <BillCorrection closeId={close.id} kind="deposits" />
           <Replay key={`replay-${close.id}`} closeId={close.id} />
         </div>
       )}

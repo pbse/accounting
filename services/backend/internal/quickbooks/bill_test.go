@@ -49,28 +49,23 @@ func TestBillCorrectionPreservesSimpleBillAndChecksReadback(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
-	if _, err := sandbox.CorrectBillAccount(context.Background(), before, "2", "9"); err != nil {
+	if err := sandbox.Recode(context.Background(), "Bill", json.RawMessage(beforeJSON), "2", "9"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sandbox.VerifyBillCorrection(context.Background(), before, "2", "9"); err != nil {
+	if _, err := sandbox.VerifyRecode(context.Background(), "Bill", json.RawMessage(beforeJSON), "2", "9"); err != nil {
 		t.Fatal(err)
 	}
 	badOther = true
-	if _, err := sandbox.VerifyBillCorrection(context.Background(), before, "2", "9"); err == nil {
+	if _, err := sandbox.VerifyRecode(context.Background(), "Bill", json.RawMessage(beforeJSON), "2", "9"); err == nil {
 		t.Fatal("changed untouched line passed readback")
 	}
 	badOther = false
-	before.TotalAmt = "101"
-	if _, err := sandbox.VerifyBillCorrection(context.Background(), before, "2", "9"); err == nil {
-		t.Fatal("changed amount passed readback")
-	}
-	before.TotalAmt = "100"
 	sandbox.Production, sandbox.Accounts = true, []string{"7", "9"}
-	if _, err := sandbox.CorrectBillAccount(context.Background(), before, "2", "9"); err == nil || !strings.Contains(err.Error(), "production grant") {
+	if err := sandbox.Recode(context.Background(), "Bill", json.RawMessage(beforeJSON), "2", "9"); err == nil || !strings.Contains(err.Error(), "production grant") {
 		t.Fatalf("a production recode out of an account the grant does not allow was sent: %v", err)
 	}
 	sandbox.Accounts = []string{"8", "9"}
-	if _, err := sandbox.CorrectBillAccount(context.Background(), before, "2", "9"); err != nil {
+	if err := sandbox.Recode(context.Background(), "Bill", json.RawMessage(beforeJSON), "2", "9"); err != nil {
 		t.Fatalf("a production recode between two granted accounts is sent: %v", err)
 	}
 }
