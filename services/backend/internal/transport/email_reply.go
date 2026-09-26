@@ -172,7 +172,7 @@ func registerEmailReplies(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var raw []byte
-		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(x) ORDER BY x.id DESC),'[]'::jsonb) FROM (SELECT id::text,request_id::text,envelope_from,header_from,body,addresses_match,state,received_at,decided_by,decision_note,verification_reference FROM inbound_replies WHERE close_id::text=$1 ORDER BY id DESC LIMIT 100) x`, r.PathValue("id")).Scan(&raw)
+		err := db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(x) ORDER BY x.id::bigint DESC),'[]'::jsonb) FROM (SELECT id::text,request_id::text,envelope_from,header_from,body,addresses_match,state,received_at,decided_by,decision_note,verification_reference FROM inbound_replies WHERE close_id::text=$1 ORDER BY inbound_replies.id DESC LIMIT 100) x`, r.PathValue("id")).Scan(&raw)
 		if err != nil {
 			problem(w, 503, "Held replies unavailable.")
 			return
