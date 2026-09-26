@@ -4,6 +4,7 @@ package xero
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -645,4 +646,71 @@ func MonthlyActivity(payload json.RawMessage) (string, []ledger.AccountBalance, 
 		out = append(out, ledger.AccountBalance{ID: row.AccountID, Name: row.Name, Class: class, Net: net})
 	}
 	return currency, out, nil
+}
+
+// NativeStatus counts, for one bank account, the month's captured authorised bank transactions (transfer sides
+// included) and payments that Xero flags reconciled, not reconciled, or leaves unflagged.
+type NativeStatus struct {
+	AccountID    string `json:"account_id"`
+	Account      string `json:"account"`
+	Reconciled   int    `json:"reconciled"`
+	Unreconciled int    `json:"unreconciled"`
+	Unknown      int    `json:"unknown"`
+}
+
+// NativeReconciliation reads Xero's own reconciled flags from a snapshot's captured records, per bank account. It is an
+// observation of record flags at capture time, not a statement reconciliation.
+func NativeReconciliation(payload json.RawMessage) ([]NativeStatus, error) {
+	type flagged struct {
+		Status       string
+		IsReconciled *bool
+		BankAccount  struct{ AccountID string }
+		Account      struct{ AccountID string }
+	}
+	var snapshot struct {
+		Accounts struct {
+			Accounts []struct{ AccountID, Name, Type string }
+		}
+		Transactions *struct {
+			Records struct {
+				BankTransactions []flagged
+				Payments         []flagged
+			} `json:"records"`
+		} `json:"transactions"`
+		TransactionsError string `json:"transactions_error"`
+	}
+	if err := json.Unmarshal(payload, &snapshot); err != nil {
+		return nil, errors.New("The Xero snapshot is unreadable")
+	}
+	if snapshot.Transactions == nil {
+		return nil, errors.New(cmp.Or(snapshot.TransactionsError, "Transactions were not read in this capture"))
+	}
+	statuses, byID := []NativeStatus{}, map[string]int{}
+	for _, a := range snapshot.Accounts.Accounts {
+		if a.Type == "BANK" && a.AccountID != "" {
+			byID[a.AccountID] = len(statuses)
+			statuses = append(statuses, NativeStatus{AccountID: a.AccountID, Account: a.Name})
+		}
+	}
+	count := func(id string, r flagged) {
+		i, bank := byID[id]
+		if !bank || r.Status != "AUTHORISED" {
+			return
+		}
+		switch {
+		case r.IsReconciled == nil:
+			statuses[i].Unknown++
+		case *r.IsReconciled:
+			statuses[i].Reconciled++
+		default:
+			statuses[i].Unreconciled++
+		}
+	}
+	for _, r := range snapshot.Transactions.Records.BankTransactions {
+		count(r.BankAccount.AccountID, r)
+	}
+	for _, r := range snapshot.Transactions.Records.Payments {
+		count(r.Account.AccountID, r)
+	}
+	return statuses, nil
 }

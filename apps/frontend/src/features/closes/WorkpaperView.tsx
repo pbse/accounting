@@ -196,6 +196,30 @@ function EvidencePane({ closeId, sources }: { closeId: string; sources: Source[]
   );
 }
 
+type NativeAccount = { account_id: string; account: string; reconciled: number; unreconciled: number; unknown: number };
+
+// Xero's own reconciled flags for this account, beside (not confirming) the reviewer's cited native status.
+function NativeFlags({ closeId, account }: { closeId: string; account: string }) {
+  const [text, setText] = useState("");
+  useEffect(() => {
+    let live = true;
+    workspaceRequest(`/${closeId}/native-reconciliation`)
+      .then((out: { status: string; reason?: string; captured_at?: string; accounts?: NativeAccount[] }) => {
+        if (!live) return;
+        if (out.status !== "read") return setText(`Provider flags not read: ${out.reason ?? ""}`);
+        const named = (out.accounts ?? []).filter((a) => a.account.trim().toLowerCase() === account.trim().toLowerCase());
+        if (named.length !== 1) return setText(`No single Xero bank account is named ${account}, so Xero's flags are not shown.`);
+        const a = named[0];
+        setText(`Xero flagged ${a.reconciled} of ${a.reconciled + a.unreconciled + a.unknown} captured records for ${a.account} as reconciled at ${new Date(out.captured_at ?? "").toLocaleString()}${a.unknown ? ` (${a.unknown} without a flag)` : ""}; native account completion and statement settlement were not verified.`);
+      })
+      .catch(() => live && setText("Provider flags are unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [closeId, account]);
+  return text ? <p className="note">{text}</p> : null;
+}
+
 export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
   const posting = (
     <>
@@ -207,7 +231,7 @@ export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }
   if (saved.kind === "accrual") return <><AccrualResult result={saved.paper} />{saved.paper.proposal && posting}</>;
   if (saved.kind === "loan") return <><LoanResult result={saved.paper} />{saved.paper.proposals.length > 0 && saved.paper.blockers.length === 0 && posting}</>;
   if (saved.kind === "owner") return <><OwnerResult result={saved.paper} />{saved.paper.proposal && posting}</>;
-  if (saved.kind === "reconciliation") return <ReconciliationResult result={saved.paper} />;
+  if (saved.kind === "reconciliation") return <><ReconciliationResult result={saved.paper} /><NativeFlags closeId={close.id} account={saved.paper.input.account} /></>;
   const paper = saved.paper;
   const terms = scheduleTerms[paper.input.schedule ?? ""];
   return (
