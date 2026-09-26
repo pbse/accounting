@@ -79,10 +79,31 @@ func TestNativeReconciliationReadsXerosFlagsForTheBooksInUse(t *testing.T) {
 			}
 		}
 	}
-	// Books read from a newer QuickBooks snapshot have no provider flags to read.
+	// A newer QuickBooks snapshot of another month, or of a disconnected company, does not replace Xero's books.
 	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&quickbooksConnection))
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123','d','{"period":"2026-08"}',now(),now()+interval '1 minute','fixture')`, closeID, quickbooksConnection)
+	must(err)
 	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123','d','{"period":"2026-09"}',now(),now()+interval '1 minute','fixture')`, closeID, quickbooksConnection)
 	must(err)
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='disconnected' WHERE id=$1`, quickbooksConnection)
+	must(err)
+	native.Status, native.Accounts = "", nil
+	must(json.Unmarshal(get("/native-reconciliation").Body.Bytes(), &native))
+	if native.Status != "read" {
+		t.Fatalf("a disconnected company's QuickBooks snapshot leaves Xero's books in use: %+v", native)
+	}
+	_, err = db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1 AND payload->>'period'='2026-09'`, closeID)
+	must(err)
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='active' WHERE id=$1`, quickbooksConnection)
+	must(err)
+	native.Status, native.Accounts = "", nil
+	must(json.Unmarshal(get("/native-reconciliation").Body.Bytes(), &native))
+	if native.Status != "read" {
+		t.Fatalf("a newer QuickBooks snapshot of another month leaves Xero's books in use: %+v", native)
+	}
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123','d','{"period":"2026-09"}',now(),now()+interval '1 minute','fixture')`, closeID, quickbooksConnection)
+	must(err)
+	// Books read from a newer QuickBooks snapshot of the month have no provider flags to read.
 	native.Status, native.Accounts = "", nil
 	must(json.Unmarshal(get("/native-reconciliation").Body.Bytes(), &native))
 	if native.Status != "unavailable" || !strings.Contains(native.Reason, "QuickBooks") {

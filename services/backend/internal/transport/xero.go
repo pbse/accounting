@@ -460,23 +460,23 @@ func RunXeroRefresh(ctx context.Context, db *sql.DB) {
 	}
 }
 
-// nativeReconciliation reports Xero's own reconciled flags per bank account from the close month's newest Xero capture,
-// when the close's books are read from Xero (its newest snapshot is newer than any QuickBooks one, as the tie-out
-// chooses). QuickBooks' API offers no per-record reconciliation status.
+// nativeReconciliation reports Xero's own reconciled flags per bank account from the close month's newest Xero capture on
+// an active connection, when that capture is newer than any QuickBooks period snapshot of the month on the current
+// QuickBooks reading connection. QuickBooks' API offers no verified per-record reconciliation status.
 func nativeReconciliation(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, closeID string) (map[string]any, error) {
 	var quickbooksAt, xeroAt sql.NullTime
 	var snapshotID string
 	var payload []byte
-	if err := q.QueryRowContext(ctx, `SELECT (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("c.id")+`,s.connection_id)),
+	if err := q.QueryRowContext(ctx, `SELECT (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload->>'period'=c.period AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+`),
  x.captured_at,COALESCE(x.id::text,''),x.payload FROM client_closes c LEFT JOIN LATERAL (SELECT s.id,s.captured_at,s.payload FROM xero_snapshots s JOIN xero_connections k ON k.id=s.connection_id AND k.state='active' WHERE s.close_id=c.id AND s.period=c.period ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) x ON true WHERE c.id::text=$1`, closeID).Scan(&quickbooksAt, &xeroAt, &snapshotID, &payload); err != nil {
 		return nil, err
 	}
 	if !xeroAt.Valid || quickbooksAt.Valid && !xeroAt.Time.After(quickbooksAt.Time) {
 		reason := "No Xero capture for this month."
 		if quickbooksAt.Valid {
-			reason = "QuickBooks' API does not report reconciliation status per record; the reviewer's cited observation stands."
+			reason = "The app reads no per-record reconciliation status from QuickBooks; the reviewer's cited observation stands."
 		}
 		return map[string]any{"status": "unavailable", "reason": reason}, nil
 	}
