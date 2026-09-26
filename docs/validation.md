@@ -1387,6 +1387,6 @@ Tests:
 
 Each check was observed red with its rule removed (17 mutations).
 
-Code review: GPT-6 Sol (high). Adopted: copies are compared on ID, version, date and every line's ID, amount and account, not the version alone; the readback also refuses a field that appears after the write; a correction saved before rules were required must be previewed again with one. Delta review pending (the reviewer hit its usage limit).
+Code review: GPT-6 Sol (high). Adopted: copies are compared on every field (numbers by value), not the version alone, so a changed payee at the same version is caught before the write; the readback also refuses a field that appears after the write; a correction saved before rules were required must be previewed again with one. Two delta rounds closed all three findings.
 
 Not verified: QuickBooks' live sparse Line updates for Purchase and Deposit (the reason both kinds stay off in production until the operator enables them after a sandbox check), and the panels in a browser.
