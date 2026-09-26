@@ -88,6 +88,14 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 		}
 		return out, nil
 	}
+	mux.HandleFunc("GET /v1/closes/{id}/native-reconciliation", func(w http.ResponseWriter, r *http.Request) {
+		out, err := nativeReconciliation(r.Context(), db, r.PathValue("id"))
+		if err != nil {
+			problem(w, 503, "Native reconciliation status unavailable.")
+			return
+		}
+		jsonReply(w, 200, out)
+	})
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
 		out, err := status(r.Context(), r.PathValue("id"))
 		if err != nil {
@@ -450,4 +458,50 @@ func RunXeroRefresh(ctx context.Context, db *sql.DB) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// nativeReconciliation reports Xero's own reconciled flags per bank account from the close month's newest Xero capture,
+// when the close's books are read from Xero (its newest snapshot is newer than any QuickBooks one, as the tie-out
+// chooses). QuickBooks' API offers no per-record reconciliation status.
+func nativeReconciliation(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID string) (map[string]any, error) {
+	var quickbooksAt, xeroAt sql.NullTime
+	var snapshotID string
+	var payload []byte
+	if err := q.QueryRowContext(ctx, `SELECT (SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("c.id")+`,s.connection_id)),
+ x.captured_at,COALESCE(x.id::text,''),x.payload FROM client_closes c LEFT JOIN LATERAL (SELECT s.id,s.captured_at,s.payload FROM xero_snapshots s JOIN xero_connections k ON k.id=s.connection_id AND k.state='active' WHERE s.close_id=c.id AND s.period=c.period ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) x ON true WHERE c.id::text=$1`, closeID).Scan(&quickbooksAt, &xeroAt, &snapshotID, &payload); err != nil {
+		return nil, err
+	}
+	if !xeroAt.Valid || quickbooksAt.Valid && !xeroAt.Time.After(quickbooksAt.Time) {
+		reason := "No Xero capture for this month."
+		if quickbooksAt.Valid {
+			reason = "QuickBooks' API does not report reconciliation status per record; the reviewer's cited observation stands."
+		}
+		return map[string]any{"status": "unavailable", "reason": reason}, nil
+	}
+	accounts, err := xero.NativeReconciliation(payload)
+	if err != nil {
+		return map[string]any{"status": "unavailable", "source": "xero", "snapshot_id": snapshotID, "captured_at": xeroAt.Time, "reason": err.Error()}, nil
+	}
+	return map[string]any{"status": "read", "source": "xero", "snapshot_id": snapshotID, "captured_at": xeroAt.Time, "accounts": accounts}, nil
+}
+
+// nativeSentences states, per bank account, what Xero flagged, without claiming the account or its statement is settled.
+func nativeSentences(out map[string]any) []string {
+	accounts, _ := out["accounts"].([]xero.NativeStatus)
+	if out["status"] != "read" {
+		reason, _ := out["reason"].(string)
+		return []string{"Native reconciliation status was not read: " + reason}
+	}
+	at, _ := out["captured_at"].(time.Time)
+	sentences := []string{}
+	for _, a := range accounts {
+		text := fmt.Sprintf("Xero flagged %d of %d captured records for %s as reconciled at %s", a.Reconciled, a.Reconciled+a.Unreconciled+a.Unknown, a.Account, at.UTC().Format("Jan 2, 15:04 UTC"))
+		if a.Unknown > 0 {
+			text += fmt.Sprintf(" (%d without a flag)", a.Unknown)
+		}
+		sentences = append(sentences, text+"; native account completion and statement settlement were not verified.")
+	}
+	return sentences
 }

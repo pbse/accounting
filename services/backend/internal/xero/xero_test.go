@@ -114,3 +114,20 @@ func TestNetRefusesAnAccountListedTwice(t *testing.T) {
 		t.Fatal("an account listed twice cannot prove an unchanged balance")
 	}
 }
+
+func TestNativeReconciliationCountsXerosFlagsPerBankAccount(t *testing.T) {
+	payload := json.RawMessage(`{"accounts":{"Accounts":[{"AccountID":"b-1","Name":"Operating","Type":"BANK"},{"AccountID":"b-2","Name":"Savings","Type":"BANK"},{"AccountID":"s-1","Name":"Sales","Type":"REVENUE"}]},
+		"transactions":{"records":{"BankTransactions":[
+			{"Status":"AUTHORISED","IsReconciled":true,"BankAccount":{"AccountID":"b-1"}},
+			{"Status":"AUTHORISED","IsReconciled":false,"BankAccount":{"AccountID":"b-1"},"Type":"SPEND-TRANSFER"},
+			{"Status":"AUTHORISED","BankAccount":{"AccountID":"b-1"}},
+			{"Status":"VOIDED","IsReconciled":false,"BankAccount":{"AccountID":"b-1"}}],
+		"Payments":[{"Status":"AUTHORISED","IsReconciled":true,"Account":{"AccountID":"b-1"}},{"Status":"AUTHORISED","IsReconciled":true,"Account":{"AccountID":"s-1"}}]}}}`)
+	got, err := NativeReconciliation(payload)
+	if err != nil || len(got) != 2 || got[0] != (NativeStatus{"b-1", "Operating", 2, 1, 1}) || got[1] != (NativeStatus{AccountID: "b-2", Account: "Savings"}) {
+		t.Fatalf("each bank account counts its authorised records by Xero's flag, a missing flag as unknown: %+v %v", got, err)
+	}
+	if _, err := NativeReconciliation(json.RawMessage(`{"accounts":{"Accounts":[]},"transactions_error":"Reconnect to read transactions"}`)); err == nil || !strings.Contains(err.Error(), "Reconnect") {
+		t.Fatalf("a snapshot without transactions says why: %v", err)
+	}
+}
