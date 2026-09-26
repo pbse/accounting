@@ -481,7 +481,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		var reply chatReply
 		var live []string
 		var linked []chatCitation
-		if closeID == "" {
+		if _, err := parsePortfolioGoal(in.Text, time.Now().UTC()); closeID == "" && err == nil {
+			reply = chatReply{body: "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts.", citations: []chatCitation{{"Open this goal in Work", "/dashboard?goal=" + url.QueryEscape(in.Text)}}}
+		} else if closeID == "" {
 			reply, live, linked = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, chatIntent(in.Text, false, false), in.Text)
 		} else if action := chatAction(in.Text); action != "" {
 			reply = chatReply{body: chatActionReply[action], citations: []chatCitation{{"Close preparation", "/dashboard/closes/" + closeID + "?tab=overview"}}, action: action}

@@ -303,9 +303,12 @@ func TestAssistantCardsRunTheClosePagesOwnRoutes(t *testing.T) {
 	must(tx.Commit())
 	store := savedCloses(db, strings.Repeat("a", 32))
 	type message struct {
-		ID      string `json:"id"`
-		Role    string `json:"role"`
-		Action  string `json:"action"`
+		ID        string `json:"id"`
+		Role      string `json:"role"`
+		Action    string `json:"action"`
+		Citations []struct {
+			Href string `json:"href"`
+		} `json:"citations"`
 		Outcome *struct {
 			RunID string `json:"run_id"`
 			Jobs  []struct {
@@ -397,7 +400,11 @@ func TestAssistantCardsRunTheClosePagesOwnRoutes(t *testing.T) {
 	}
 	var firm struct{ Messages []message }
 	must(json.Unmarshal(call("user_a", nil, "POST", "/v1/closes/chat", map[string]string{"text": "Prepare everything"}, 200), &firm))
-	if firm.Messages[len(firm.Messages)-1].Action != "" {
-		t.Fatal("a firm-wide conversation has no close to act on")
+	if firm.Messages[len(firm.Messages)-1].Action != "" || len(firm.Messages[len(firm.Messages)-1].Citations) != 1 || firm.Messages[len(firm.Messages)-1].Citations[0].Href != "/dashboard?goal=Prepare+everything" {
+		t.Fatalf("a firm-wide conversation has no close to act on; it opens the goal in Work: %+v", firm.Messages[len(firm.Messages)-1])
+	}
+	must(json.Unmarshal(call("user_a", nil, "POST", "/v1/closes/chat", map[string]string{"text": "Prepare me for sign-off"}, 200), &firm))
+	if len(firm.Messages[len(firm.Messages)-1].Citations) != 0 {
+		t.Fatalf("a phrase that is not a goal gets the firm-wide help, not a goal link: %+v", firm.Messages[len(firm.Messages)-1])
 	}
 }
