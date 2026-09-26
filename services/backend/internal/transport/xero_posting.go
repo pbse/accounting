@@ -482,6 +482,9 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Close changed.")
 			return
 		}
+		if refuseSignedOff(w, r.Context(), tx, closeID) {
+			return
+		}
 		var activeMember bool
 		if err = tx.QueryRowContext(r.Context(), `SELECT enabled AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) FROM organizations WHERE id=$1 FOR UPDATE`, org, a.Subject).Scan(&activeMember); err != nil || !activeMember {
 			problem(w, 403, "Firm or member access was revoked before this posting decision.")

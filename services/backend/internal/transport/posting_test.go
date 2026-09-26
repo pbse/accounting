@@ -48,6 +48,7 @@ func TestSandboxAttemptIsDurableAndNotRepeated(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() {
+				db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, closeID)
 				db.Exec(`DELETE FROM sandbox_postings WHERE close_id=$1`, closeID)
 				db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, closeID)
 				db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
@@ -130,6 +131,16 @@ func TestSandboxAttemptIsDurableAndNotRepeated(t *testing.T) {
 				t.Fatal("Posting bypassed requested changes")
 			}
 			if _, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'test','approved','Reviewed corrected treatment','fixture')`, paperID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','d','{}','Signed fixture','fixture')`, closeID); err != nil {
+				t.Fatal(err)
+			}
+			call("execute", preview.Digest, "POST TO SANDBOX", 409)
+			if writes != 0 {
+				t.Fatal("a signed-off close took a sandbox write")
+			}
+			if _, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'reopened','d','{}','Reopened fixture','fixture')`, closeID); err != nil {
 				t.Fatal(err)
 			}
 			status := 200

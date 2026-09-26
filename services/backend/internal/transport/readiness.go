@@ -177,18 +177,20 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Bill correction attempt #%d must be resolved.", p.ID))
 		}
 	}
-	// Credit applications are checked apart from the signed snapshot, so adding them left existing sign-offs intact.
-	uncertain, err := tx.QueryContext(ctx, `SELECT id FROM credit_applications WHERE close_id::text=$1 AND state IN ('executing','unknown') ORDER BY id`, id)
+	// Credit applications and Xero journals are checked apart from the signed snapshot, so adding them left existing
+	// sign-offs intact.
+	uncertain, err := tx.QueryContext(ctx, `SELECT 'Credit application',id FROM credit_applications WHERE close_id::text=$1 AND state IN ('executing','unknown') UNION ALL SELECT 'Xero journal',id FROM xero_postings WHERE close_id::text=$1 AND state IN ('executing','unknown') ORDER BY 1,2`, id)
 	if err != nil {
 		return out, err
 	}
 	for uncertain.Next() {
+		var kind string
 		var attempt int64
-		if err = uncertain.Scan(&attempt); err != nil {
+		if err = uncertain.Scan(&kind, &attempt); err != nil {
 			uncertain.Close()
 			return out, err
 		}
-		out.Blockers = append(out.Blockers, fmt.Sprintf("Credit application attempt #%d must be resolved.", attempt))
+		out.Blockers = append(out.Blockers, fmt.Sprintf("%s attempt #%d must be resolved.", kind, attempt))
 	}
 	uncertain.Close()
 	for _, p := range snapshot.ProductionPostings {

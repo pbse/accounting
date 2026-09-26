@@ -34,6 +34,20 @@ func draftApproved(ctx context.Context, tx *sql.Tx, closeID, paperID string, act
 	return status, message
 }
 
+// refuseSignedOff answers and reports true when the close's latest sign-off stands, or cannot be read; call it while
+// holding the close's row lock.
+func refuseSignedOff(w http.ResponseWriter, ctx context.Context, tx *sql.Tx, closeID string) bool {
+	var signed bool
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1),false)`, closeID).Scan(&signed); err != nil {
+		problem(w, 503, "Sign-off state is unavailable.")
+		return true
+	}
+	if signed {
+		problem(w, 409, "This close is signed off. Reopen it before approving or executing a journal.")
+	}
+	return signed
+}
+
 // approvalLapsed reports whether a saved posting approval's ten minutes ran out before execution.
 func approvalLapsed(state string, expires *time.Time) bool {
 	return state == "approved" && expires != nil && !expires.After(time.Now())
@@ -185,6 +199,9 @@ func registerPosting(mux *http.ServeMux, db *sql.DB) {
 			var closeID string
 			if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
 				problem(w, 503, "Could not lock the close.")
+				return
+			}
+			if refuseSignedOff(w, r.Context(), tx, closeID) {
 				return
 			}
 			if status, message := draftApproved(r.Context(), tx, closeID, r.PathValue("paper"), actor, input.Action == "approve"); status != 0 {
