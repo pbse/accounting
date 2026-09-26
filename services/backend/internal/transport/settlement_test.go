@@ -132,6 +132,23 @@ func TestStripeExportIsRecognizedPreparedAndExported(t *testing.T) {
 	if len(paper.Blockers) != 0 || len(paper.Payouts) != 2 || paper.Payouts[1].Deposit == nil || paper.Payouts[1].Deposit.ID != "B2" || paper.Input.ReportReference != "stripe-payouts-2026-09.csv · All rows" || len(paper.Sources) != 2 || paper.Sources[0].ID != bank["id"] || paper.Sources[0].Role != "bank" {
 		t.Fatalf("evidence-bound settlement: %s", paperRaw)
 	}
+	payouts := upload("stripe-payouts-report-2026-09.csv", "balance_transaction_id,currency,effective_at,net,payout_expected_arrival_date,payout_id,payout_status,reporting_category\ntxn_m1,usd,2026-09-02 10:00:00,-125.05,2026-09-03,po_M1,paid,payout\n")
+	activity := upload("stripe-activity-2026-09.csv", "balance_transaction_id,created,currency,gross,fee,net,reporting_category\ntxn_a1,2026-09-01 12:00:00,usd,130.00,4.95,125.05,charge\n")
+	deposits := upload("bank-manual-2026-09.csv", "id,date,amount\nM1,2026-09-03,125.05\n")
+	manual, _ := json.Marshal(reconciliation.SettlementInput{Method: reconciliation.PayoutsMethod, Entity: entity, ClosePeriod: "2026-09", Currency: "USD", BankAccount: "Operating bank", ReportReference: "linked", BankReference: "linked", MethodConfirmed: true, CoverageConfirmed: true})
+	body, _ := json.Marshal(map[string]any{"kind": "settlement", "input": json.RawMessage(manual), "sources": []map[string]string{{"id": payouts["id"], "role": "processor_report", "location": "All rows"}, {"id": deposits["id"], "role": "bank", "location": "All rows"}, {"id": activity["id"], "role": "activity_report", "location": "All rows"}}})
+	var created map[string]string
+	json.Unmarshal(send("POST", base+"/preparations", "application/json", bytes.NewReader(body), 200), &created)
+	var stored struct {
+		Input reconciliation.SettlementInput `json:"input"`
+	}
+	if err = db.QueryRow(`SELECT plan FROM preparation_plans WHERE id::text=$1 AND close_id=$2`, created["id"], closeID).Scan(&raw); err != nil || json.Unmarshal(raw, &stored) != nil {
+		t.Fatal(err)
+	}
+	rolled, err := reconciliation.PrepareSettlement(stored.Input)
+	if err != nil || rolled.RollForward == nil || rolled.RollForward.Change != "0.00" || stored.Input.ActivityReference != "stripe-activity-2026-09.csv · All rows" {
+		t.Fatalf("the activity report is bound from its evidence and rolls the balance forward: %v %s", err, raw)
+	}
 	exported := send("GET", base+"/export", "application/json", nil, 200)
 	archive, err := zip.NewReader(bytes.NewReader(exported), int64(len(exported)))
 	if err != nil {

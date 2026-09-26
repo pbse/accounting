@@ -489,6 +489,9 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 				return nil, err
 			}
 			summary.Source = paper.Input.ReportReference + " / " + paper.Input.BankReference
+			if paper.Input.ActivityReference != "" {
+				summary.Source += " / " + paper.Input.ActivityReference
+			}
 			summary.Method = paper.Method
 			entry := ""
 			for _, draft := range []struct {
@@ -539,12 +542,17 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			if err = csvFile(root+"-payouts.csv", records); err != nil {
 				return nil, err
 			}
-			if !lineage {
+			if !lineage && paper.RollForward == nil {
 				break
 			}
 			records = [][]string{{"Stripe category", "Transactions", "Gross " + paper.Input.Currency, "Fee " + paper.Input.Currency, "Net " + paper.Input.Currency}}
-			for _, category := range append(paper.Categories, paper.Total) {
+			for _, category := range paper.Categories {
 				records = append(records, []string{csvText(category.Category), fmt.Sprint(category.Count), category.Gross, category.Fee, category.Net})
+			}
+			if r := paper.RollForward; r != nil {
+				records = append(records, []string{"activity", "", "", "", r.Activity}, []string{"paid out", "", "", "", "-" + r.PaidOut}, []string{"returned", "", "", "", r.Returned}, []string{"balance change (computed, not tied)", "", "", "", r.Change})
+			} else {
+				records = append(records, []string{"all", fmt.Sprint(paper.Total.Count), paper.Total.Gross, paper.Total.Fee, paper.Total.Net})
 			}
 			if err = csvFile(root+"-categories.csv", records); err != nil {
 				return nil, err

@@ -49,6 +49,7 @@ const roleLabels: Record<string, string> = {
   ledger: "Ledger",
   statement: "Statement",
   processor_report: "Stripe export",
+  activity_report: "Stripe activity report",
   bank: "Bank CSV",
   procedure: "Approved procedure",
   client_reply: "Client reply",

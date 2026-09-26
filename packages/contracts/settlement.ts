@@ -9,6 +9,8 @@ export type SettlementInput = {
   bank_reference: string;
   report_csv: string;
   bank_csv: string;
+  activity_reference?: string;
+  activity_csv?: string;
   method_confirmed: boolean;
   coverage_confirmed: boolean;
   reviewed_deposits?: { payout_id: string; bank_id: string; reason: string }[];
@@ -63,4 +65,5 @@ export type SettlementWorkpaper = {
   revenue?: string;
   refund_proposal?: { date: string; debit_account: string; credit_account: string; amount: string };
   revenue_proposal?: { date: string; debit_account: string; credit_account: string; amount: string };
+  roll_forward?: { activity: string; paid_out: string; returned: string; change: string };
 };
