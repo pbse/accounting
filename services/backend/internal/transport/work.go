@@ -123,17 +123,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		if view == "" {
 			view = "all"
 		}
-		issues := `EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=j.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND (w.review_state IN ('source_changed','changes_requested') OR jsonb_array_length(COALESCE(w.paper->'blockers','[]'))>0))`
-		predicates := map[string]string{
-			"active":             "j.state NOT IN ('completed','cancelled') OR " + issues,
-			"mine":               "c.owner<>'' AND c.owner=$5 AND (j.state NOT IN ('completed','cancelled') OR " + issues + ")",
-			"needs_confirmation": "j.state='needs_confirmation'",
-			"blocked":            "j.state='failed' OR e.superseded_by IS NOT NULL OR i.proposal->>'kind'='unsupported' OR EXISTS(SELECT 1 FROM email_delivery m JOIN work_requests q ON q.id=m.request_id WHERE EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND rj.job_id=j.id) AND (m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))) OR " + issues,
-			"running":            "j.state IN ('waiting_evidence','interpreting','queued')",
-			"waiting_client":     "j.state='waiting_client'",
-			"completed":          "j.state='completed'",
-			"all":                "true",
-		}
+		issues, predicates := workPredicates()
 		predicate, ok := predicates[view]
 		if !ok {
 			problem(w, 422, "Unknown inbox view.")
@@ -680,4 +670,20 @@ func predictedReviews(r *http.Request, db *sql.DB, search string) ([]map[string]
 		return nil, false, err
 	}
 	return items[:min(len(items), 100)], len(items) > 100, nil
+}
+
+// workPredicates are the inbox views as SQL over a job j, its intake i, evidence e and close c, with the member at $5.
+func workPredicates() (issues string, predicates map[string]string) {
+	issues = `EXISTS(SELECT 1 FROM workpaper_review_state w WHERE w.close_id=j.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND (w.review_state IN ('source_changed','changes_requested') OR jsonb_array_length(COALESCE(w.paper->'blockers','[]'))>0))`
+	predicates = map[string]string{
+		"active":             "j.state NOT IN ('completed','cancelled') OR " + issues,
+		"mine":               "c.owner<>'' AND c.owner=$5 AND (j.state NOT IN ('completed','cancelled') OR " + issues + ")",
+		"needs_confirmation": "j.state='needs_confirmation'",
+		"blocked":            "j.state='failed' OR e.superseded_by IS NOT NULL OR i.proposal->>'kind'='unsupported' OR EXISTS(SELECT 1 FROM email_delivery m JOIN work_requests q ON q.id=m.request_id WHERE EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND rj.job_id=j.id) AND (m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))) OR " + issues,
+		"running":            "j.state IN ('waiting_evidence','interpreting','queued')",
+		"waiting_client":     "j.state='waiting_client'",
+		"completed":          "j.state='completed'",
+		"all":                "true",
+	}
+	return
 }

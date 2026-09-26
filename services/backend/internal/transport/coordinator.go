@@ -159,43 +159,16 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var closeID string
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
-			problem(w, 404, "Close not found.")
-			return
-		}
-		jobs, digest, err := recheckableJobs(r.Context(), tx, closeID, true)
-		if err != nil {
-			problem(w, 503, "Could not lock recheckable work.")
-			return
-		}
-		if len(jobs) == 0 || len(jobs) > 100 || digest != in.Digest {
-			problem(w, 409, "Work changed. Refresh the preview before rechecking.")
-			return
-		}
-		for _, job := range jobs {
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO recovery_actions(organization_id,close_id,job_id,action,prior_state,actor,reason) VALUES($1,$2,$3,'retry_preparation',$4,$5,'Close-wide recheck')`, organization(r), closeID, job.ID, job.State, subject(r)); err != nil {
-				break
-			}
-			if _, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND used_at IS NULL AND revoked_at IS NULL`, job.ID); err != nil {
-				break
-			}
-			if _, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=0 WHERE job_id=$1`, job.ID); err != nil {
-				break
-			}
-			if _, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_evidence',error='',finished_at=NULL WHERE id=$1`, job.ID); err != nil {
-				break
-			}
-		}
-		if err != nil {
-			jobProblem(w, err, "Recheck could not be confirmed. Refresh before retrying.")
+		count, refused := recheckClose(r.Context(), tx, organization(r), subject(r), r.PathValue("id"), in.Digest)
+		if refused != nil {
+			refused.write(w)
 			return
 		}
 		if tx.Commit() != nil {
 			problem(w, 503, "Recheck could not be confirmed. Refresh before retrying.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"count": len(jobs)})
+		jsonReply(w, 200, map[string]any{"count": count})
 	})
 	mux.HandleFunc("POST /v1/closes/{id}/prepare-close/cancel", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := reviewActor(w, r)
@@ -221,60 +194,16 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		mailRows, err := tx.QueryContext(r.Context(), `SELECT m.state FROM email_outbox m WHERE m.request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled')) AND m.state IN ('queued','sending') FOR UPDATE OF m`, r.PathValue("id"))
-		if err != nil {
-			problem(w, 503, "Could not lock approved delivery.")
+		stopped, refused := stopClose(r.Context(), tx, r.PathValue("id"), in.Digest, in.Reason, actor)
+		if refused != nil {
+			refused.write(w)
 			return
 		}
-		sending := false
-		for mailRows.Next() {
-			var state string
-			if err = mailRows.Scan(&state); err != nil {
-				break
-			}
-			sending = sending || state == "sending"
-		}
-		readErr := mailRows.Err()
-		mailRows.Close()
-		if err != nil || readErr != nil {
-			problem(w, 503, "Could not inspect approved delivery.")
-			return
-		}
-		var closeID string
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
-			problem(w, 404, "Close not found.")
-			return
-		}
-		jobs, digest, err := cancellableJobs(r.Context(), tx, closeID, true)
-		if err != nil {
-			problem(w, 503, "Could not lock work.")
-			return
-		}
-		if digest != in.Digest || len(jobs) == 0 {
-			problem(w, 409, "Work changed. Refresh the list before stopping it.")
-			return
-		}
-		if sending {
-			problem(w, 409, "An approved client email is being sent. Check its outcome, then refresh before stopping remaining work.")
-			return
-		}
-		_, err = tx.ExecContext(r.Context(), `UPDATE email_outbox m SET state='cancelled',error='Close work stopped before delivery.',finished_at=now(),claim=NULL WHERE m.state='queued' AND m.request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
-		if err != nil {
-			problem(w, 503, "Could not stop approved delivery.")
-			return
-		}
-		_, err = tx.ExecContext(r.Context(), `UPDATE client_request_links SET revoked_at=now() WHERE revoked_at IS NULL AND used_at IS NULL AND request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
-		if err == nil {
-			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL WHERE job_id IN (SELECT j.id FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
-		}
-		if err == nil {
-			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='cancelled',error=$2,finished_at=now() WHERE close_id=$1 AND id IN (SELECT job_id FROM preparation_intakes) AND state NOT IN ('completed','cancelled')`, closeID, "Stopped by "+actor+": "+in.Reason)
-		}
-		if err != nil || tx.Commit() != nil {
+		if tx.Commit() != nil {
 			problem(w, 503, "Could not stop work. Refresh and inspect current status.")
 			return
 		}
-		jsonReply(w, 200, map[string]int{"stopped": len(jobs)})
+		jsonReply(w, 200, map[string]int{"stopped": stopped})
 	})
 	mux.HandleFunc("POST /v1/closes/{id}/prepare-close", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := reviewActor(w, r)
@@ -298,59 +227,175 @@ func registerCoordinator(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var closeID string
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err != nil {
-			problem(w, 404, "Close not found.")
+		id, created, refused := prepareClose(r.Context(), tx, r.PathValue("id"), in.Digest, actor, auth.Agent(r.Context()))
+		if refused != nil {
+			refused.write(w)
 			return
 		}
-		raw, err := preparationInventory(r.Context(), tx, closeID)
-		if err != nil {
-			problem(w, 503, "Evidence inventory unavailable.")
-			return
-		}
-		coverage, err := ledgerCoverage(r.Context(), tx, closeID)
-		if err != nil {
-			problem(w, 503, "Ledger coverage unavailable.")
-			return
-		}
-		if scopeDigest(raw, coverage) != in.Digest {
-			problemCode(w, 409, "SOURCE_STALE", "Evidence changed. Refresh and inspect the current scope.")
-			return
-		}
-		raw = scopeSources(raw)
-		var items []json.RawMessage
-		if json.Unmarshal(raw, &items) != nil || len(items) == 0 || len(items) > 100 {
-			problem(w, 422, "Upload between one and 100 source documents before preparing this close.")
-			return
-		}
-		if string(coverage) != "null" {
-			var linked []map[string]any
-			if json.Unmarshal(raw, &linked) != nil {
-				problem(w, 503, "Invalid scope.")
-				return
-			}
-			var ledger struct {
-				SnapshotID string `json:"snapshot_id"`
-				SourceID   string `json:"source_id"`
-				Digest     string `json:"digest"`
-			}
-			if json.Unmarshal(coverage, &ledger) != nil {
-				problem(w, 503, "Invalid ledger scope.")
-				return
-			}
-			for _, item := range linked {
-				item["ledger_coverage"] = ledger
-			}
-			raw, _ = json.Marshal(linked)
-		}
-		var id string
-		var created bool
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_preparations(close_id,inventory_digest,scope,actor,agent) VALUES($1,$2,$3,$4,NULLIF($5,'')) ON CONFLICT(close_id,inventory_digest) DO UPDATE SET inventory_digest=close_preparations.inventory_digest RETURNING id::text,xmax::text='0'`, closeID, in.Digest, string(raw), actor, auth.Agent(r.Context())).Scan(&id, &created)
-		if err != nil || tx.Commit() != nil {
+		if tx.Commit() != nil {
 			problem(w, 503, "Preparation could not be confirmed. Retry the same scope safely.")
 			return
 		}
 		// created is false when the same scope was already confirmed and this returns that run.
 		jsonReply(w, 200, map[string]any{"id": id, "created": created})
 	})
+}
+
+// closeActionError is a refused close action: the status, optional code and message its route replies with.
+type closeActionError struct {
+	status  int
+	code    string
+	message string
+}
+
+func closeRefusal(status int, message string) *closeActionError {
+	return &closeActionError{status, "", message}
+}
+
+func jobRefusal(err error, message string) *closeActionError {
+	if err != nil && strings.Contains(err.Error(), "Firm active job limit reached") {
+		return closeRefusal(429, "This firm has reached its active preparation limit. Resolve or cancel existing work before starting more.")
+	}
+	return closeRefusal(503, message)
+}
+
+func (e *closeActionError) write(w http.ResponseWriter) {
+	if e.code != "" {
+		problemCode(w, e.status, e.code, e.message)
+		return
+	}
+	problem(w, e.status, e.message)
+}
+
+// recheckClose, stopClose and prepareClose are the close page's actions inside the caller's transaction, so a
+// portfolio run can record each close's result in the same commit.
+func recheckClose(ctx context.Context, tx *sql.Tx, org, subject, closeParam, confirmed string) (int, *closeActionError) {
+	var err error
+	var closeID string
+	if err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeParam).Scan(&closeID); err != nil {
+		return 0, closeRefusal(404, "Close not found.")
+	}
+	jobs, digest, err := recheckableJobs(ctx, tx, closeID, true)
+	if err != nil {
+		return 0, closeRefusal(503, "Could not lock recheckable work.")
+	}
+	if len(jobs) == 0 || len(jobs) > 100 || digest != confirmed {
+		return 0, closeRefusal(409, "Work changed. Refresh the preview before rechecking.")
+	}
+	for _, job := range jobs {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO recovery_actions(organization_id,close_id,job_id,action,prior_state,actor,reason) VALUES($1,$2,$3,'retry_preparation',$4,$5,'Close-wide recheck')`, org, closeID, job.ID, job.State, subject); err != nil {
+			break
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE client_request_links SET revoked_at=now() WHERE request_id IN (SELECT id FROM work_requests WHERE job_id=$1) AND used_at IS NULL AND revoked_at IS NULL`, job.ID); err != nil {
+			break
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,agent_attempts=0 WHERE job_id=$1`, job.ID); err != nil {
+			break
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='waiting_evidence',error='',finished_at=NULL WHERE id=$1`, job.ID); err != nil {
+			break
+		}
+	}
+	if err != nil {
+		return 0, jobRefusal(err, "Recheck could not be confirmed. Refresh before retrying.")
+	}
+	return len(jobs), nil
+}
+
+func stopClose(ctx context.Context, tx *sql.Tx, closeParam, confirmed, reason, actor string) (int, *closeActionError) {
+	mailRows, err := tx.QueryContext(ctx, `SELECT m.state FROM email_outbox m WHERE m.request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled')) AND m.state IN ('queued','sending') FOR UPDATE OF m`, closeParam)
+	if err != nil {
+		return 0, closeRefusal(503, "Could not lock approved delivery.")
+	}
+	sending := false
+	for mailRows.Next() {
+		var state string
+		if err = mailRows.Scan(&state); err != nil {
+			break
+		}
+		sending = sending || state == "sending"
+	}
+	readErr := mailRows.Err()
+	mailRows.Close()
+	if err != nil || readErr != nil {
+		return 0, closeRefusal(503, "Could not inspect approved delivery.")
+	}
+	var closeID string
+	if err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeParam).Scan(&closeID); err != nil {
+		return 0, closeRefusal(404, "Close not found.")
+	}
+	jobs, digest, err := cancellableJobs(ctx, tx, closeID, true)
+	if err != nil {
+		return 0, closeRefusal(503, "Could not lock work.")
+	}
+	if digest != confirmed || len(jobs) == 0 {
+		return 0, closeRefusal(409, "Work changed. Refresh the list before stopping it.")
+	}
+	if sending {
+		return 0, closeRefusal(409, "An approved client email is being sent. Check its outcome, then refresh before stopping remaining work.")
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE email_outbox m SET state='cancelled',error='Close work stopped before delivery.',finished_at=now(),claim=NULL WHERE m.state='queued' AND m.request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
+	if err != nil {
+		return 0, closeRefusal(503, "Could not stop approved delivery.")
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE client_request_links SET revoked_at=now() WHERE revoked_at IS NULL AND used_at IS NULL AND request_id IN (SELECT q.request_id FROM request_jobs q JOIN preparation_jobs j ON j.id=q.job_id JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL WHERE job_id IN (SELECT j.id FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=$1 AND j.state NOT IN ('completed','cancelled'))`, closeID)
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='cancelled',error=$2,finished_at=now() WHERE close_id=$1 AND id IN (SELECT job_id FROM preparation_intakes) AND state NOT IN ('completed','cancelled')`, closeID, "Stopped by "+actor+": "+reason)
+	}
+	if err != nil {
+		return 0, closeRefusal(503, "Could not stop work. Refresh and inspect current status.")
+	}
+	return len(jobs), nil
+}
+
+func prepareClose(ctx context.Context, tx *sql.Tx, closeParam, confirmed, actor, agent string) (string, bool, *closeActionError) {
+	var err error
+	var closeID string
+	if err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeParam).Scan(&closeID); err != nil {
+		return "", false, closeRefusal(404, "Close not found.")
+	}
+	raw, err := preparationInventory(ctx, tx, closeID)
+	if err != nil {
+		return "", false, closeRefusal(503, "Evidence inventory unavailable.")
+	}
+	coverage, err := ledgerCoverage(ctx, tx, closeID)
+	if err != nil {
+		return "", false, closeRefusal(503, "Ledger coverage unavailable.")
+	}
+	if scopeDigest(raw, coverage) != confirmed {
+		return "", false, &closeActionError{409, "SOURCE_STALE", "Evidence changed. Refresh and inspect the current scope."}
+	}
+	raw = scopeSources(raw)
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil || len(items) == 0 || len(items) > 100 {
+		return "", false, closeRefusal(422, "Upload between one and 100 source documents before preparing this close.")
+	}
+	if string(coverage) != "null" {
+		var linked []map[string]any
+		if json.Unmarshal(raw, &linked) != nil {
+			return "", false, closeRefusal(503, "Invalid scope.")
+		}
+		var ledger struct {
+			SnapshotID string `json:"snapshot_id"`
+			SourceID   string `json:"source_id"`
+			Digest     string `json:"digest"`
+		}
+		if json.Unmarshal(coverage, &ledger) != nil {
+			return "", false, closeRefusal(503, "Invalid ledger scope.")
+		}
+		for _, item := range linked {
+			item["ledger_coverage"] = ledger
+		}
+		raw, _ = json.Marshal(linked)
+	}
+	var id string
+	var created bool
+	err = tx.QueryRowContext(ctx, `INSERT INTO close_preparations(close_id,inventory_digest,scope,actor,agent) VALUES($1,$2,$3,$4,NULLIF($5,'')) ON CONFLICT(close_id,inventory_digest) DO UPDATE SET inventory_digest=close_preparations.inventory_digest RETURNING id::text,xmax::text='0'`, closeID, confirmed, string(raw), actor, agent).Scan(&id, &created)
+	if err != nil {
+		return "", false, closeRefusal(503, "Preparation could not be confirmed. Retry the same scope safely.")
+	}
+	return id, created, nil
 }

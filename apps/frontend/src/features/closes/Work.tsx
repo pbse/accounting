@@ -2,7 +2,7 @@ import { PrepaidMethodFields, readCredits } from "../prepaids/MethodFields";
 import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
 import { useEffect, useState, type FormEvent } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { Avatar, Icon, type IconName } from "../dashboard/Icon";
 import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
@@ -264,7 +264,7 @@ export function Work({
       {loaded && (
         <>
           {!closeId && <MorningBrief refresh={refresh} />}
-          {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} hasMore={more} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />}
+          {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} view={filter} client={clientSearch} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />}
           {!closeId && (
             <>
               <div className="section-title" id="review-queue">
@@ -594,9 +594,74 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
   );
 }
 
-function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];hasMore:boolean;onFilter:(view:string)=>void;onChange:()=>void}) {
+type Goal = { id: string; action: "prepare" | "recheck" | "stop"; goal: string; scope: string; has_more: boolean; reason: string; items: { close_id: string; label: string; count: number; state: string; result: string }[] };
+
+// A goal's exact server-selected closes. Each run acts on at most ten, each checked again against its preview.
+function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void }) {
+  const [current, setCurrent] = useState(goal);
+  const [reason, setReason] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const pending = current.items.filter((i) => i.state === "pending").length;
+  const needsReason = current.action === "stop" && !current.reason;
+  const noun = current.action === "prepare" ? "source document" : "job";
+  async function run() {
+    setBusy(true);
+    setError("");
+    try {
+      let left = pending;
+      while (left > 0) {
+        const next: Goal = await workspaceRequest("/portfolio/run", { id: current.id, confirmed: true, reason: reason.trim() });
+        setCurrent(next);
+        const now = next.items.filter((i) => i.state === "pending").length;
+        if (now >= left) break;
+        left = now;
+      }
+      onChange();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The goal could not run.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-label={`Goal: ${current.goal}`}>
+      <h3>{current.goal}</h3>
+      <p>
+        {current.scope}.{current.has_more && " More than 100 closes matched; this goal covers the first 100 by due date."}
+      </p>
+      {current.items.length === 0 ? <p>No closes match this goal.</p> : (
+        <ul>
+          {current.items.map((i, n) => (
+            <li key={i.close_id || n}>
+              {i.close_id ? <Link to={`/dashboard/closes/${i.close_id}`}>{i.label}</Link> : i.label}: {i.state === "pending" ? `${i.count} ${noun}${i.count === 1 ? "" : "s"} to ${current.action}` : i.result || i.state}
+            </li>
+          ))}
+        </ul>
+      )}
+      {pending > 0 && (
+        <>
+          {needsReason && <label>Reason for stopping<textarea value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></label>}
+          <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {current.action[0].toUpperCase() + current.action.slice(1)} the {pending} listed close{pending === 1 ? "" : "s"}; facts and methods still need separate review.</label>
+          <button type="button" disabled={busy || !confirmed || (needsReason && !reason.trim())} onClick={() => void run()}>{busy ? "Running…" : `Run for ${pending} close${pending === 1 ? "" : "s"}`}</button>
+        </>
+      )}
+      {error && <p role="alert">{error}</p>}
+    </section>
+  );
+}
+
+function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem[];view:string;client:string;onFilter:(view:string)=>void;onChange:()=>void}) {
   const [mode,setMode] = useState<"prepare"|"stop"|"recheck">("prepare");
-  const [command,setCommand] = useState("");
+  const [params] = useSearchParams();
+  const [command,setCommand] = useState(params.get("goal") ?? "");
+  const [goals,setGoals] = useState<Goal[]>([]);
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/portfolio").then((data: { operations: Goal[] }) => live && setGoals(data.operations)).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
   const [answer,setAnswer] = useState("");
   const [answerClose,setAnswerClose] = useState("");
   const closesFor = (action:"prepare"|"stop"|"recheck") => [...new Map(items.filter(i=>action === "prepare" || (action === "recheck" ? ["failed","needs_confirmation"].includes(i.state) : !["completed","cancelled"].includes(i.state))).map(i=>[i.close_id,{id:i.close_id,label:`${i.entity} · ${i.period}`,entity:i.entity.toLowerCase()}])).values()];
@@ -627,6 +692,7 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
       setBusy(true);
       return workspaceRequest("/work/interpret",{text:text.trim(),labels}).then(r=>interpret(r.command,true)).catch(e=>setError(e instanceof Error?e.message:"Could not interpret that request.")).finally(()=>setBusy(false));
     };
+    if (/^(?:show|list)(?: me)?(?: everything| all work)? waiting (?:on|for) (?:the )?(?:client|clients|replies)$/i.test(text.trim())) {onFilter("waiting_client");return;}
     const view = /^(?:show|list)(?: me)? (decisions|blockers|running work|client requests|prepared work|all work|dependencies)$/i.exec(text.trim());
     if (view) {
       if (view[1].toLowerCase() === "dependencies") {setAnswer("Changed workpapers are listed in Work needing re-review.");return;}
@@ -658,18 +724,17 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
       return;
     }
     const match = /^(prepare|recheck|stop) (.+)$/i.exec(text.trim());
-    if (!match) {askAgent("Try ‘show blockers’, ‘rehearse Client · YYYY-MM’, ‘prepare all visible’ or ‘why is Client · YYYY-MM waiting?’.");return;}
+    if (!match) {askAgent("Try ‘show blockers’, ‘prepare my clients due Friday’, ‘rehearse Client · YYYY-MM’ or ‘why is Client · YYYY-MM waiting?’.");return;}
     const action = match[1].toLowerCase() as "prepare"|"stop"|"recheck";
     const query = match[2].trim().toLowerCase();
     const eligible = closesFor(action);
-    if (query === "all visible" || query === "visible closes") {
-      if (hasMore || eligible.length > 10) {setError("Narrow the inbox to at most 10 visible closes before a portfolio command.");return;}
-      if (eligible.length === 0) {setError("No eligible visible closes match this command.");return;}
-      setMode(action);setSelected(eligible.map(c=>c.id));setPreview(undefined);void inspect(eligible.map(c=>c.id),action);
+    const matches = eligible.filter(c=>c.entity === query || c.label.toLowerCase() === query);
+    if (matches.length > 1) {setError("Several closes match. Include the close month shown below.");return;}
+    if (matches.length !== 1) {
+      setBusy(true);
+      void workspaceRequest("/portfolio",{text:text.trim(),view,client,today:new Date().toLocaleDateString("en-CA")}).then((goal:Goal)=>{setBusy(false);setGoals(current=>[goal,...current.filter(g=>g.id!==goal.id)]);}).catch(e=>{setBusy(false);void askAgent(e instanceof Error?e.message:"Could not preview that goal.");});
       return;
     }
-    const matches = eligible.filter(c=>c.entity === query || c.label.toLowerCase() === query);
-    if (matches.length !== 1) {askAgent(matches.length ? "Several closes match. Include the close month shown below." : "No eligible visible close matches. Change the inbox filter or use the exact client name and month.");return;}
     setMode(action);setSelected([matches[0].id]);setPreview(undefined);setError("");
     void inspect([matches[0].id],action);
   }
@@ -689,9 +754,9 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
     setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
   }
   return <details open className="agent-card"><summary><Icon name="agent" /> Ask the agent · find, explain and preview actions</summary>
-    <p>Select up to 10 visible closes. Each close is checked again when submitted and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
-    <div className="ask-row"><label>Ask Work<input value={command} readOnly={busy} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();if(!busy) interpret();}}} placeholder="show blockers · prepare all visible · rehearse Client · YYYY-MM" maxLength={220} /></label><button type="button" className="primary" disabled={busy || !command.trim()} onClick={()=>interpret()}>Find and preview</button></div>
-    <p>Ask in your own words, or try “show decisions”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, or “prepare/recheck/stop all visible”. Actions always need a preview and confirmation.</p>
+    <p>Ask for a goal such as “prepare my clients due Friday”, “recheck failed work” or “stop work waiting on the client”: the server lists exactly which closes it selects before anything runs. Each close is checked again when it runs and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
+    <div className="ask-row"><label>Ask Work<input value={command} readOnly={busy} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();if(!busy) interpret();}}} placeholder="show blockers · prepare my clients due Friday · rehearse Client · YYYY-MM" maxLength={220} /></label><button type="button" className="primary" disabled={busy || !command.trim()} onClick={()=>interpret()}>Find and preview</button></div>
+    <p>Ask in your own words, or try “show decisions”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, “prepare my clients due Friday” or “stop all visible”. Actions always need a preview and confirmation.</p>
     {answer && <p role="status" style={{whiteSpace:"pre-line"}}>{answer}</p>}
     {answerClose && <Link to={`/dashboard/closes/${answerClose}`}>Open close rehearsal</Link>}
     <details><summary>Choose closes for a portfolio action</summary>
@@ -700,6 +765,7 @@ function PortfolioCommands({items,hasMore,onFilter,onChange}:{items:WorkItem[];h
     <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect(selected,mode)}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
     </details>
     {preview && <div><h3>Exact {mode} preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} {mode === "prepare" ? "source" : "unresolved"} job{close.count===1?"":"s"}</li>)}</ul>{mode === "stop" && <label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label>}<button type="button" disabled={busy || (mode === "stop" && !reason.trim()) || preview.every(close=>close.count===0)} onClick={()=>void submit()}>{mode === "prepare" ? "Coordinate selected closes" : mode === "recheck" ? "Recheck listed proposals" : "Stop listed work"}</button></div>}
+    {goals.map(goal=><PortfolioGoal key={goal.id} goal={goal} onChange={onChange} />)}
     {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
     {error && <p role="alert">{error}</p>}
   </details>;

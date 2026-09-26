@@ -49,7 +49,7 @@ func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 			return
 		}
 		path := strings.TrimPrefix(r.URL.EscapedPath(), "/v1/closes")
-		if path != "" && path != "/work" && path != "/work/interpret" && path != "/chat" && path != "/search" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/track-record" && path != "/organization/policy" && path != "/agent-access" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" && path != "/daily" && path != "/morning" && path != "/index-rates" {
+		if path != "" && path != "/work" && path != "/work/interpret" && path != "/chat" && path != "/search" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/track-record" && path != "/organization/policy" && path != "/agent-access" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" && path != "/daily" && path != "/morning" && path != "/index-rates" && path != "/portfolio" && path != "/portfolio/run" {
 			id, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 			id, err = url.PathUnescape(id)
 			if err != nil {
@@ -57,7 +57,7 @@ func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 				return
 			}
 			var exists bool
-			err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_closes WHERE id::text=$1 AND organization_id=$2 AND ($3 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$4 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)))`, id, org, firmAccess(r), subject(r)).Scan(&exists)
+			err = db.QueryRowContext(r.Context(), closeAccess, id, org, firmAccess(r), subject(r)).Scan(&exists)
 			if err != nil {
 				problem(w, 503, "Close access unavailable.")
 				return
