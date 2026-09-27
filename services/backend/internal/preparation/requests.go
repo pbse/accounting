@@ -8,15 +8,14 @@ import (
 	"strings"
 )
 
-// Inspect only selected, same-close work and the evidence inventory. A new upload
-// or review changes the snapshot even if no existing source was replaced.
+// The context is the selected work and the close's evidence less unrelated scheduled ledger captures: an upload or review changes it.
 func RequestContext(ctx context.Context, tx *sql.Tx, closeID string, ids []string) (string, string, error) {
 	var entity, period string
 	if err := tx.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id=$1`, closeID).Scan(&entity, &period); err != nil {
 		return "", "", err
 	}
 	var evidence []byte
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_array(id,digest,superseded_by,extraction_state) ORDER BY id),'[]'::jsonb) FROM evidence WHERE close_id=$1`, closeID).Scan(&evidence); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_array(id,digest,superseded_by,extraction_state) ORDER BY id),'[]'::jsonb) FROM evidence WHERE close_id=$1 AND created_by NOT IN ('quickbooks-sync','scheduled-quickbooks-refresh')`, closeID).Scan(&evidence); err != nil {
 		return "", "", err
 	}
 	contextParts := []string{entity, period, string(evidence)}
@@ -49,7 +48,7 @@ func RequestContext(ctx context.Context, tx *sql.Tx, closeID string, ids []strin
 	if len(questions) == 0 {
 		body.WriteString("\n[Add the specific missing fact or document and why it is needed. No request was inferred from the selected work.]\n")
 	}
-	body.WriteString("\nThank you. Please use the firm's agreed secure channel for sensitive documents.\n")
+	body.WriteString("\nThank you. Please use the firm's agreed secure channel for sensitive documents.")
 	encoded, _ := json.Marshal(contextParts)
 	return Digest(encoded), body.String(), nil
 }

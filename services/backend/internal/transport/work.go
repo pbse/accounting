@@ -422,7 +422,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 					return
 				}
 				fresh, _, e := preparation.RequestContext(r.Context(), tx, closeID, ids)
-				if e != nil || fresh != digest || body != savedBody {
+				if e != nil || fresh != digest || body != strings.TrimSpace(savedBody) {
 					problem(w, 409, "The draft or its evidence context changed. Regenerate and review before approval.")
 					return
 				}
