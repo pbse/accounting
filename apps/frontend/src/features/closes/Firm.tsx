@@ -7,7 +7,7 @@ import { EmailSettings } from "./Email";
 import { FirmEnrollment } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
+type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
 
 function IndependentReview() {
   const [policy, setPolicy] = useState<Policy>();
@@ -139,6 +139,63 @@ function LinkPasscodes() {
 }
 
 // Each reminder still needs a person's approval; the rule says when one is due and how many a request can have.
+// Written answers send a close's saved reads to OpenAI, so they stay off until an administrator turns them on.
+function WrittenAnswers() {
+  const [policy, setPolicy] = useState<Policy>();
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/organization/policy")
+      .then((data) => live && setPolicy(data))
+      .catch((e) => live && setMessage(e instanceof Error ? e.message : "Firm policy is unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [refresh]);
+  if (!policy) return message ? <p role="alert">{message}</p> : null;
+  async function change() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await workspaceRequest("/organization/policy", { model_answers: !policy!.model_answers, reason });
+      setReason("");
+      setRefresh((n) => n + 1);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Policy change failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-label="Written assistant answers">
+      <h2>Written assistant answers</h2>
+      <p>
+        {policy.model_answers
+          ? "On: when a question in a client close matches none of the assistant's fixed reads, the model writes an answer."
+          : "Off: the assistant answers only from its fixed reads and calls no model."}{" "}
+        When on, the question and that close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft) go to OpenAI, with card, bank and sign-in details removed and a request not to store them. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. Each attempt counts against the firm's daily model limit. Questions across the firm are never sent.
+      </p>
+      {policy.can_manage_model_answers ? (
+        <>
+          <label>
+            Reason for the change
+            <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change()}>
+            {policy.model_answers ? "Stop written answers" : "Turn on written answers"}
+          </button>
+        </>
+      ) : (
+        <p className="note">A firm administrator with org:manage can change this policy.</p>
+      )}
+      {message && <p role="alert">{message}</p>}
+    </section>
+  );
+}
+
 function ReminderRule() {
   const [policy, setPolicy] = useState<Policy>();
   const [after, setAfter] = useState(0);
@@ -302,6 +359,7 @@ export default function Firm() {
         <div className="stack">
           <IndependentReview />
       <LinkPasscodes />
+      <WrittenAnswers />
       <Materiality />
       <ReminderRule />
           <p>

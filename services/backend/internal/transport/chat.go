@@ -21,8 +21,9 @@ import (
 )
 
 // The assistant answers from existing reads, replayed through the saved-closes mux under the caller's own
-// permissions, and writes only its own history. It calls no model. An action card runs the close page's own
-// route, replayed the same way, only when its author confirms the scope the card showed.
+// permissions, and writes only its own history. Only when a firm turns written answers on does a close question
+// that no fixed read matches go to the model, with those reads. An action card runs the close page's own route,
+// replayed the same way, only when its author confirms the scope the card showed.
 
 type chatCitation struct {
 	Label string `json:"label"`
@@ -654,6 +655,18 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				intent = chatIntent(previous, true, in.WorkpaperID != "")
 			}
 			reply = closeAnswer(func(path string, out any) bool { return read(r, "/v1/closes/"+url.PathEscape(closeID)+path, out) }, closeID, in.WorkpaperID, intent, in.Text, previous)
+			if intent == "" {
+				_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
+				readRaw := func(path string) (string, bool) {
+					rec := replay(r, "GET", "/v1/closes/"+url.PathEscape(closeID)+path, nil)
+					return rec.Body.String(), rec.Code == 200
+				}
+				if written, why, ok := writtenReply(r.Context(), db, org, readRaw, closeID, in.WorkpaperID, in.Text); ok {
+					reply = written
+				} else if why != "" {
+					reply.body += " " + why
+				}
+			}
 		}
 		body := strings.Join(append([]string{reply.body}, reply.lines...), "\n")
 		if len(body) > 8000 {
