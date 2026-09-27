@@ -21,9 +21,9 @@ The Work inbox also offers a **Prepare selected closes** portfolio command for u
 
 ## Portfolio goals
 
-Type a goal in **Ask Work**, such as “prepare my clients due Friday”, “recheck failed work”, “stop work waiting on the client” or “prepare all visible” (migration 074). The server reads it without a model:
+Type a goal in **Ask Work**, such as “prepare my clients due Friday”, “hand over my clients due Friday”, “recheck failed work”, “stop work waiting on the client” or “prepare all visible” (migration 074). The server reads it without a model:
 
-- **The verb** is prepare, recheck or stop.
+- **The verb** is prepare, recheck, stop, or **hand over** (or delegate), which hands each close to the agent ([below](#hand-many-closes-over-at-once)); a hand-over may add “to the agent” and one finish line, “for review” or “for sign-off” (also “ready for …”, “signed off”).
 - **my clients** (or mine) keeps closes you own.
 - **due on / before / by** a day (today, tomorrow, a weekday, this week) or a YYYY-MM-DD date keeps closes due that day, earlier, or that day or earlier; plain "due" means by. Day names resolve from your browser's date.
 - **waiting on the client** (or clients, replies) keeps closes with a job waiting on the client; **failed** keeps closes with a failed job.
@@ -31,6 +31,10 @@ Type a goal in **Ask Work**, such as “prepare my clients due Friday”, “rec
 - Anything else is not a goal: Work hands it to its plain-language interpreter when the model is configured, and otherwise shows examples. Statement requests are not told apart from other client requests.
 
 `POST /v1/closes/portfolio` selects the closes you can access that are not signed off, by due date, up to 100 (it says when more matched), and saves the goal with each close's name, current count and the digest the close page's own preview would show; a close with nothing to do is listed as skipped. The goal lists them with the selection in words and its resolved date. Confirming (and, to stop, a reason) runs `POST /v1/closes/portfolio/run`, which acts on at most ten pending closes per call; the browser calls it until none are left. Each close runs the close page's own prepare, recheck or stop, under your `workpapers:review` permission and current access to that close, with the saved digest, and its result is recorded in the same transaction: coordinated with the run number, already being prepared, rechecking or stopped, or the refusal (for example work that changed since the preview, a firm job limit, or access you no longer have), with none of a refused action's writes kept. A temporary failure (a read the action could not make) leaves the close pending and stops the run, so running the goal again retries it. A stop uses the first reason saved for the goal. Leaving the page stops only the calling; Work lists your unfinished goals (up to 5) to resume, and only you can see or run a goal. A close you can no longer access shows neither its name nor its result. Deleting a close removes its goal rows; removing a member removes their goals. The assistant, asked firm-wide for a goal it can read, links to Work with the goal filled in.
+
+### Hand many closes over at once
+
+“Hand over my clients due Friday” (or “… for sign-off”) previews every selected close (migration 086). A close already with the agent is listed as skipped, with who handed it over; each other close shows its document count and the agent's deadline: its own due date, when the close page would accept it (from yesterday to a year ahead), and otherwise no deadline, as for an overdue close. Confirming hands each pending close to the agent as you, with that deadline and finish line, exactly as its own card would, and the goal's history names the request it came from. Each close records its result: "Handed to the agent as goal #N.", or why not (for example, signed off or handed over since the preview). They then appear under **Handed to the agent** in Work. Monthly hand-overs are set up from a close's own card.
 
 ## Hand the close to the agent
 

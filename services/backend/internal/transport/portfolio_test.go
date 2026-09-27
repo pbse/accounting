@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,21 +21,29 @@ import (
 func TestPortfolioGoalsReadDaysAndModifiers(t *testing.T) {
 	monday := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
 	for text, want := range map[string]portfolioGoal{
-		"Prepare my clients due Friday":    {action: "prepare", mine: true, due: "2026-10-02", compare: "by"},
-		"prepare closes due on Monday":     {action: "prepare", due: "2026-09-28", compare: "on"},
-		"stop work due before 2026-10-15":  {action: "stop", due: "2026-10-15", compare: "before"},
-		"prepare everything due this week": {action: "prepare", due: "2026-10-04", compare: "by"},
-		"prepare all due tomorrow":         {action: "prepare", due: "2026-09-29", compare: "by"},
-		"recheck failed work":              {action: "recheck", state: "failed"},
-		"stop work waiting on the client":  {action: "stop", state: "waiting_client"},
-		"prepare all visible":              {action: "prepare", visible: true},
-		"prepare my clients due sunday":    {action: "prepare", mine: true, due: "2026-10-04", compare: "by"},
+		"Prepare my clients due Friday":                            {action: "prepare", mine: true, due: "2026-10-02", compare: "by"},
+		"prepare closes due on Monday":                             {action: "prepare", due: "2026-09-28", compare: "on"},
+		"stop work due before 2026-10-15":                          {action: "stop", due: "2026-10-15", compare: "before"},
+		"prepare everything due this week":                         {action: "prepare", due: "2026-10-04", compare: "by"},
+		"prepare all due tomorrow":                                 {action: "prepare", due: "2026-09-29", compare: "by"},
+		"recheck failed work":                                      {action: "recheck", state: "failed"},
+		"stop work waiting on the client":                          {action: "stop", state: "waiting_client"},
+		"prepare all visible":                                      {action: "prepare", visible: true},
+		"prepare my clients due sunday":                            {action: "prepare", mine: true, due: "2026-10-04", compare: "by"},
+		"Hand over my clients due Friday":                          {action: "delegate", finish: "review", mine: true, due: "2026-10-02", compare: "by"},
+		"delegate failed work for sign-off":                        {action: "delegate", finish: "signoff", state: "failed"},
+		"hand my clients due friday to the agent ready for review": {action: "delegate", finish: "review", mine: true, due: "2026-10-02", compare: "by"},
+		"hand over closes due on monday for sign off":              {action: "delegate", finish: "signoff", due: "2026-09-28", compare: "on"},
+		"hand over work waiting on the client signed off":          {action: "delegate", finish: "signoff", state: "waiting_client"},
 	} {
 		if got, err := parsePortfolioGoal(text, monday); err != nil || got != want {
 			t.Errorf("%q: %+v %v, want %+v", text, got, err, want)
 		}
 	}
-	for _, text := range []string{"show my clients", "prepare Acme", "prepare due someday", "stop waiting on statements"} {
+	// A hand-over's instructions are whole phrases; anything else, or two finish lines, is refused rather than dropped.
+	for _, text := range []string{"show my clients", "prepare Acme", "prepare due someday", "stop waiting on statements",
+		"hand over my clients and sign", "hand over my clients for sign", "hand over my clients for review for sign-off", "hand over my clients to the client",
+		"hand over my clients and email them", "delegate over my clients", "hand over my clients ready", "hand over my clients signed review", "prepare my clients for review"} {
 		if g, err := parsePortfolioGoal(text, monday); err == nil {
 			t.Errorf("%q was read as %+v", text, g)
 		}
@@ -81,10 +90,14 @@ func TestPortfolioGoalsRunOnlyTheServerSelectedCloses(t *testing.T) {
 		must(tx.Commit())
 		return id
 	}
-	due := close("Alpha", "2026-09", "2026-10-02", "user_a")
-	close("Alpha", "2026-08", "2026-10-09", "user_a")
-	close("Alpha", "2026-07", "2026-10-01", "user_b")
-	close("Beta", "2026-09", "2026-10-02", "user_a")
+	// Dates follow the clock: the server reads a browser's date only within a day of its own.
+	today := browserToday(time.Now().UTC().Format("2006-01-02"))
+	friday, _, _ := parseDay([]string{"friday"}, 0, today)
+	day := func(n int) string { return friday.AddDate(0, 0, n).Format("2006-01-02") }
+	due := close("Alpha", "2026-09", day(0), "user_a")
+	close("Alpha", "2026-08", day(7), "user_a")
+	close("Alpha", "2026-07", day(-1), "user_b")
+	close("Beta", "2026-09", day(0), "user_a")
 	store := savedCloses(db, strings.Repeat("a", 32))
 	call := func(subject string, permissions []string, method, path string, body any, want int) portfolioOperation {
 		t.Helper()
@@ -101,9 +114,9 @@ func TestPortfolioGoalsRunOnlyTheServerSelectedCloses(t *testing.T) {
 		return op
 	}
 	reviewer := []string{"workpapers:review"}
-	goal := map[string]string{"text": "Prepare my clients due Friday", "today": "2026-09-28"}
+	goal := map[string]string{"text": "Prepare my clients due Friday", "today": today.Format("2006-01-02")}
 	op := call("user_a", nil, "POST", "/v1/closes/portfolio", goal, 200)
-	if len(op.Items) != 1 || op.Items[0].CloseID != due || op.Items[0].Count != 1 || op.Items[0].State != "pending" || !strings.Contains(op.Scope, "that you own, due on or before Fri 2 Oct 2026") || op.HasMore {
+	if len(op.Items) != 1 || op.Items[0].CloseID != due || op.Items[0].Count != 1 || op.Items[0].State != "pending" || !strings.Contains(op.Scope, "that you own, due on or before "+friday.Format("Mon 2 Jan 2006")) || op.HasMore {
 		t.Fatalf("the preview selects only the member's accessible close due by Friday: %+v", op)
 	}
 	if visible := call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "prepare all visible", "view": "running", "client": "2026-08"}, 200); len(visible.Items) != 1 || visible.Items[0].Label != "Alpha · 2026-08" || !strings.Contains(visible.Scope, "running view matching “2026-08”") {
@@ -139,7 +152,7 @@ func TestPortfolioGoalsRunOnlyTheServerSelectedCloses(t *testing.T) {
 	if repeat = call("user_a", reviewer, "POST", path, map[string]any{"id": repeat.ID, "confirmed": true}, 200); repeat.Items[0].Result != "Already being prepared as run #"+run+"." {
 		t.Fatalf("a goal repeated over the same scope claims no new run: %+v", repeat.Items)
 	}
-	stop := call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "stop my clients due Friday", "today": "2026-09-28"}, 200)
+	stop := call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "stop my clients due Friday", "today": today.Format("2006-01-02")}, 200)
 	if len(stop.Items) != 1 || stop.Items[0].Count != 1 {
 		t.Fatalf("the stop preview counts the unresolved job: %+v", stop)
 	}
@@ -152,7 +165,7 @@ func TestPortfolioGoalsRunOnlyTheServerSelectedCloses(t *testing.T) {
 	if stale.Items[0].State != "failed" || !strings.Contains(stale.Items[0].Result, "Work changed") || state != "failed" {
 		t.Fatalf("work that changed since the preview is not stopped: %+v %s", stale.Items, state)
 	}
-	recheck := call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "recheck failed work", "today": "2026-09-28"}, 200)
+	recheck := call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "recheck failed work", "today": today.Format("2006-01-02")}, 200)
 	if len(recheck.Items) != 1 || recheck.Items[0].CloseID != due {
 		t.Fatalf("failed work selects the close with a failed job: %+v", recheck)
 	}
@@ -169,7 +182,7 @@ func TestPortfolioGoalsRunOnlyTheServerSelectedCloses(t *testing.T) {
 	}
 	_, err = db.Exec(`UPDATE organizations SET max_pending_jobs=DEFAULT WHERE id=$1`, org)
 	must(err)
-	recheck = call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "recheck failed work", "today": "2026-09-28"}, 200)
+	recheck = call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "recheck failed work", "today": today.Format("2006-01-02")}, 200)
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',false,'Synthetic revocation','fixture')`, org)
 	must(err)
 	revoked := call("user_a", reviewer, "POST", path, map[string]any{"id": recheck.ID, "confirmed": true}, 200)
@@ -180,5 +193,106 @@ func TestPortfolioGoalsRunOnlyTheServerSelectedCloses(t *testing.T) {
 	must(db.QueryRow(`SELECT result FROM portfolio_items WHERE operation_id::text=$1`, recheck.ID).Scan(&result))
 	if result != "You can no longer access this close." {
 		t.Fatalf("the refusal is recorded: %q", result)
+	}
+}
+
+func TestPortfolioHandsClosesToTheAgent(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_Over" + rand.Text()
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Hand-over fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	defer func() {
+		for _, q := range []string{`DELETE FROM portfolio_operations WHERE organization_id=$1`, `DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	today := browserToday(time.Now().UTC().Format("2006-01-02"))
+	day := func(n int) string { return today.AddDate(0, 0, n).Format("2006-01-02") }
+	open := func(entity, due string) string {
+		t.Helper()
+		var id string
+		must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period,due_on) VALUES($1,$2,'2026-09',$3) RETURNING id::text`, org, entity, due).Scan(&id))
+		return id
+	}
+	soon, overdue, taken := open("Alpha", day(2)), open("Beta", day(-3)), open("Gamma", day(1))
+	open("Delta", day(30))
+	signed := open("Epsilon", day(1))
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, signed)
+	must(err)
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(method, path string, body any) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"workpapers:review", "clients:all"}}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s %s %v: %d %s", method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	call("POST", "/v1/closes/"+taken+"/goal", map[string]any{"confirmed": true})
+
+	// One request hands over every selected close not already with the agent, each keeping its due date as the
+	// agent's deadline when the close page would accept it; an overdue one has none.
+	text := "hand over closes due by " + day(5) + " for sign-off"
+	var op portfolioOperation
+	must(json.Unmarshal(call("POST", "/v1/closes/portfolio", map[string]string{"text": text, "today": day(0)}), &op))
+	preview := []string{}
+	for _, i := range op.Items {
+		preview = append(preview, i.CloseID+" "+i.State+" "+i.DueOn+" "+i.Result)
+	}
+	want := []string{overdue + " pending  ", taken + " skipped  Already handed to the agent by user_a on " + time.Now().UTC().Format("2 Jan 2006") + ".", soon + " pending " + day(2) + " "}
+	if op.Action != "delegate" || op.Finish != "signoff" || strings.Join(preview, "|") != strings.Join(want, "|") {
+		t.Fatalf("the preview lists each close with its deadline: %s %s %q", op.Action, op.Finish, preview)
+	}
+	must(json.Unmarshal(call("POST", "/v1/closes/portfolio/run", map[string]any{"id": op.ID, "confirmed": true}), &op))
+	for _, c := range []struct{ id, due, by string }{{soon, day(2), " by " + today.AddDate(0, 0, 2).Format("Mon 2 Jan 2006")}, {overdue, "", ""}} {
+		var goal, author, finish, due, first string
+		must(db.QueryRow(`SELECT id::text,author,finish,COALESCE(due_on::text,''),events->0->>'text' FROM close_goals WHERE close_id::text=$1`, c.id).Scan(&goal, &author, &finish, &due, &first))
+		if author != "user_a" || finish != "signoff" || due != c.due || first != "Handed over by user_a with the goal “"+text+"”, to get it signed off"+c.by {
+			t.Fatalf("the close is handed over as the member asked: %s %s %s %q", author, finish, due, first)
+		}
+		i := slices.IndexFunc(op.Items, func(i portfolioItem) bool { return i.CloseID == c.id })
+		if i < 0 || op.Items[i].State != "done" || op.Items[i].Result != "Handed to the agent as goal #"+goal+"." {
+			t.Fatalf("each close records its result: %+v", op.Items)
+		}
+	}
+	var goals int
+	must(db.QueryRow(`SELECT count(*) FROM close_goals WHERE close_id::text=$1`, taken).Scan(&goals))
+	if goals != 1 {
+		t.Fatal("a close already with the agent is left as it is")
+	}
+
+	// Read back without access to a close, a pending hand-over hides its deadline with its name.
+	open("Zeta", day(2))
+	call("POST", "/v1/closes/portfolio", map[string]string{"text": text, "today": day(0)})
+	r := httptest.NewRequest("GET", "/v1/closes/portfolio", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"workpapers:review"}}))
+	w := httptest.NewRecorder()
+	store.ServeHTTP(w, r)
+	var unseen struct{ Operations []portfolioOperation }
+	must(json.Unmarshal(w.Body.Bytes(), &unseen))
+	if len(unseen.Operations) != 1 || !slices.ContainsFunc(unseen.Operations[0].Items, func(i portfolioItem) bool { return i.State == "pending" }) || slices.ContainsFunc(unseen.Operations[0].Items, func(i portfolioItem) bool { return i.DueOn != "" || i.CloseID != "" }) {
+		t.Fatalf("a close the member cannot see shows neither its name nor its deadline: %+v", unseen.Operations)
 	}
 }

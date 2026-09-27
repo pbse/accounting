@@ -57,6 +57,8 @@ type goalRow struct {
 	ready                                        bool
 }
 
+var goalFinishes = map[string]string{"review": "ready for review", "signoff": "signed off"}
+
 var goalForms = map[string]string{"deferred_revenue": "Deferred revenue", "depreciation": "Depreciation", "loan": "Loan schedule", "owner": "Owner items", "settlement": "Settlement"}
 
 // goalJobs is each current document's job with its proposal, the drafts it made and its latest client request.
@@ -355,6 +357,35 @@ func signedOff(ctx context.Context, tx *sql.Tx, closeID string) (bool, error) {
 func goalEvent(ctx context.Context, tx *sql.Tx, id, actor, text string) error {
 	_, err := tx.ExecContext(ctx, `UPDATE close_goals SET events=events||jsonb_build_array(jsonb_build_object('actor',$2::text,'text',$3::text,'at',now())) WHERE id=$1`, id, actor, text)
 	return err
+}
+
+// handOver hands the close g.close, whose row the caller holds, to the agent as g.author, with text as the first line of
+// its history, unless the close is signed off or already handed over.
+func handOver(ctx context.Context, tx *sql.Tx, g *goalRow, due, text string) *closeActionError {
+	done, err := signedOff(ctx, tx, g.close)
+	if err != nil {
+		return closeRefusal(503, "Close readiness unavailable.")
+	}
+	if done {
+		return closeRefusal(409, "This close is signed off. Reopen it before handing it to the agent.")
+	}
+	var owner string
+	var since time.Time
+	switch err = tx.QueryRowContext(ctx, `SELECT author,created_at FROM close_goals WHERE close_id=$1 AND state<>'stopped'`, g.close).Scan(&owner, &since); err {
+	case nil:
+		return closeRefusal(409, owner+" already handed this close to the agent on "+since.UTC().Format("2 Jan 2006")+".")
+	case sql.ErrNoRows:
+	default:
+		return closeRefusal(503, "The agent is unavailable.")
+	}
+	err = tx.QueryRowContext(ctx, `INSERT INTO close_goals(close_id,author,due_on,finish,events) VALUES($1,$2,NULLIF($3,'')::date,$5,jsonb_build_array(jsonb_build_object('actor',$2::text,'text',$4::text,'at',now()))) RETURNING id::text`, g.close, g.author, due, text, g.finish).Scan(&g.id)
+	if err == nil {
+		err = advanceGoal(ctx, tx, *g)
+	}
+	if err != nil {
+		return closeRefusal(503, "The close could not be handed to the agent. Refresh and try again.")
+	}
+	return nil
 }
 
 func stopGoal(ctx context.Context, tx *sql.Tx, id, actor, text string) error {
@@ -694,7 +725,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Confirm that the agent may work on this close until it is ready for review or signed off.")
 			return
 		}
-		text, finish := "Handed over by "+actor, map[string]string{"review": "ready for review", "signoff": "signed off"}[in.Finish]
+		text, finish := "Handed over by "+actor, goalFinishes[in.Finish]
 		var due time.Time
 		if in.DueOn == "" {
 			text += ", to get it " + finish
@@ -743,35 +774,19 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		done, err := signedOff(r.Context(), tx, g.close)
-		if err != nil {
-			problem(w, 503, "Close readiness unavailable.")
+		if refused := handOver(r.Context(), tx, &g, in.DueOn, text); refused != nil {
+			problem(w, refused.status, refused.message)
 			return
 		}
-		if done {
-			problem(w, 409, "This close is signed off. Reopen it before handing it to the agent.")
-			return
-		}
-		var owner string
-		var since time.Time
-		switch err = tx.QueryRowContext(r.Context(), `SELECT author,created_at FROM close_goals WHERE close_id=$1 AND state<>'stopped'`, g.close).Scan(&owner, &since); err {
-		case nil:
-			problem(w, 409, owner+" already handed this close to the agent on "+since.UTC().Format("2 Jan 2006")+".")
-			return
-		case sql.ErrNoRows:
-		default:
-			problem(w, 503, "The agent is unavailable.")
-			return
-		}
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_goals(close_id,author,due_on,finish,events) VALUES($1,$2,NULLIF($3,'')::date,$5,jsonb_build_array(jsonb_build_object('actor',$2::text,'text',$4::text,'at',now()))) RETURNING id::text`, g.close, actor, in.DueOn, text, in.Finish).Scan(&g.id)
-		if err == nil {
-			err = advanceGoal(r.Context(), tx, g)
-		}
-		if err == nil && in.EveryMonth {
+		if in.EveryMonth {
 			// Months that ended before the hand-over was set up are not new; it starts after this close or with the current month.
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,due_days,last_period) VALUES($1,$2,$3,$4,$5,$6,$7)`, g.org, entity, actor, !firmAccess(r), in.Finish, dueDays, max(period, endedMonth(time.Now())))
+			if err != nil {
+				problem(w, 503, "The close could not be handed to the agent. Refresh and try again.")
+				return
+			}
 		}
-		if err != nil || tx.Commit() != nil {
+		if tx.Commit() != nil {
 			problem(w, 503, "The close could not be handed to the agent. Refresh and try again.")
 			return
 		}

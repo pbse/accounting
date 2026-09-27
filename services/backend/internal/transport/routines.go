@@ -197,7 +197,7 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string) error {
 	}
 	if !signed {
 		g := goalRow{close: closeID, org: org, author: author, state: "active", finish: finish}
-		due, text := "", "Handed over by the monthly hand-over "+author+" set up, to get it "+map[string]string{"review": "ready for review", "signoff": "signed off"}[finish]
+		due, text := "", "Handed over by the monthly hand-over "+author+" set up, to get it "+goalFinishes[finish]
 		if dueDays.Valid {
 			day := monthEnd(period).AddDate(0, 0, int(dueDays.Int64))
 			due, text = day.Format("2006-01-02"), text+" by "+day.Format("Mon 2 Jan 2006")
