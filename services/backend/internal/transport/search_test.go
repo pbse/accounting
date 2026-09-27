@@ -249,3 +249,60 @@ func TestSearchFindsTheNewestXeroCaptureRows(t *testing.T) {
 		t.Fatalf("a newer capture without transactions leaves no older rows in the results: %+v", hits)
 	}
 }
+
+func TestBackfillGivesTheNewestOldXeroCaptureItsRows(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_XeroBackfill" + rand.Text()
+	var alpha, beta, connection, betaConnection, older, newest, empty string
+	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Xero backfill fixture')`, org)
+	must(err)
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Beta','2026-09') RETURNING id::text`, org).Scan(&beta))
+	defer func() {
+		for _, q := range []string{`DELETE FROM xero_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM xero_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,'Alpha','fixture','active',$3,now(),'t') RETURNING id::text`, alpha, org, rand.Text()).Scan(&connection))
+	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,'Beta','fixture','active',$3,now(),'t') RETURNING id::text`, beta, org, rand.Text()).Scan(&betaConnection))
+	books := func(payee string) string {
+		return `{"date":"2026-09-30","Organisation":{"Organisations":[{"BaseCurrency":"NZD"}]},"transactions":{"records":{"Invoices":[{"Type":"ACCPAY","InvoiceID":"b-9","InvoiceNumber":"B-9","Status":"PAID","Date":"2026-09-12T00:00:00","Contact":{"ContactID":"c-9","Name":"` + payee + `"},"CurrencyCode":"NZD","Total":40}]},"open":{}}}`
+	}
+	snapshot := func(close, connection, payload string) (id string) {
+		t.Helper()
+		must(db.QueryRow(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,'t','2026-09',$3,$4,'fixture') RETURNING id::text`, close, connection, rand.Text(), payload).Scan(&id))
+		return
+	}
+	older = snapshot(alpha, connection, books("Harbor Printing (older capture)"))
+	newest = snapshot(alpha, connection, books("Harbor Printing"))
+	empty = snapshot(beta, betaConnection, `{"transactions_error":"Connect Xero again to read transactions."}`)
+	rows := func(snapshot string) (n int) {
+		t.Helper()
+		must(db.QueryRow(`SELECT count(*) FROM xero_transaction_rows WHERE snapshot_id::text=$1`, snapshot).Scan(&n))
+		return
+	}
+	BackfillXeroRows(t.Context(), db)
+	if rows(newest) != 1 || rows(older) != 0 || rows(empty) != 0 {
+		t.Fatalf("only the newest capture of the month with transactions gets rows: %d %d %d", rows(newest), rows(older), rows(empty))
+	}
+	var payee string
+	must(db.QueryRow(`SELECT record->'VendorRef'->>'name' FROM xero_transaction_rows WHERE snapshot_id::text=$1`, newest).Scan(&payee))
+	BackfillXeroRows(t.Context(), db)
+	if payee != "Harbor Printing" || rows(newest) != 1 {
+		t.Fatalf("the rows are the newest capture's, and a second run adds none: %q %d", payee, rows(newest))
+	}
+}
