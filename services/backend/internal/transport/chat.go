@@ -749,7 +749,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			err = tx.QueryRowContext(r.Context(), closeAccess, closeID, org, firmAccess(r), author).Scan(&member)
 		}
 		if err != nil || !member {
-			problem(w, 403, "Your firm membership changed. Nothing was saved.")
+			problem(w, 403, "Your access changed. Nothing was saved.")
 			return
 		}
 		if attempted != "" {
