@@ -260,9 +260,6 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	}
 
 	// The worker captures an open current-month close once a day under its own name, one attempt per close a day.
-	if err = db.QueryRow(`SELECT id::text FROM client_closes WHERE organization_id=$1 AND entity='Xero client' AND period=$2`, org, time.Now().UTC().Format("2006-01")).Scan(&due); err == sql.ErrNoRows {
-		must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Xero client',$2) RETURNING id::text`, org, time.Now().UTC().Format("2006-01")).Scan(&due))
-	}
 	scheduled := func() (n int) {
 		t.Helper()
 		must(db.QueryRow(`SELECT count(*) FROM xero_snapshots WHERE close_id=$1 AND actor='scheduled-xero-refresh'`, due).Scan(&n))
