@@ -567,6 +567,17 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		}
 		var progress goalProgress
 		var done bool
+		var routine *closeRoutine
+		var closeInfo struct {
+			Entity string `json:"entity"`
+			Period string `json:"period"`
+		}
+		if err == nil {
+			routine, err = readRoutine(r.Context(), tx, closeID)
+		}
+		if err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT entity,period FROM client_closes WHERE id=$1`, closeID).Scan(&closeInfo.Entity, &closeInfo.Period)
+		}
 		if err == nil {
 			finish := "review"
 			if goal != nil && goal.State != "stopped" {
@@ -581,7 +592,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The agent's progress is unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"goal": goal, "progress": progress, "activity": history, "activity_total": total, "signed_off": done})
+		jsonReply(w, 200, map[string]any{"goal": goal, "progress": progress, "activity": history, "activity_total": total, "signed_off": done, "routine": routine, "close": closeInfo})
 	})
 	mux.HandleFunc("POST /v1/closes/{id}/goal", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := reviewActor(w, r); !ok {
@@ -589,9 +600,10 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		}
 		actor := subject(r)
 		var in struct {
-			Confirmed bool   `json:"confirmed"`
-			DueOn     string `json:"due_on"`
-			Finish    string `json:"finish"`
+			Confirmed  bool   `json:"confirmed"`
+			DueOn      string `json:"due_on"`
+			Finish     string `json:"finish"`
+			EveryMonth bool   `json:"every_month"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -604,13 +616,14 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		text, finish := "Handed over by "+actor, map[string]string{"review": "ready for review", "signoff": "signed off"}[in.Finish]
+		var due time.Time
 		if in.DueOn == "" {
 			text += ", to get it " + finish
 		} else {
 			// The browser's date may be a day behind the server's.
 			today := time.Now().UTC().Truncate(24 * time.Hour)
-			due, err := time.Parse("2006-01-02", in.DueOn)
-			if err != nil || due.Before(today.AddDate(0, 0, -1)) || due.After(today.AddDate(1, 0, 1)) {
+			var err error
+			if due, err = time.Parse("2006-01-02", in.DueOn); err != nil || due.Before(today.AddDate(0, 0, -1)) || due.After(today.AddDate(1, 0, 1)) {
 				problem(w, 422, "Choose a due date from today to a year ahead.")
 				return
 			}
@@ -623,9 +636,33 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		g := goalRow{author: actor, state: "active", finish: in.Finish}
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,organization_id FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&g.close, &g.org); err != nil {
+		var entity, period string
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,organization_id,entity,period FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&g.close, &g.org, &entity, &period); err != nil {
 			problem(w, 404, "Close not found.")
 			return
+		}
+		// A monthly hand-over keeps the due date's distance after month end; one on or before month end has none.
+		var dueDays *int
+		if in.EveryMonth {
+			if due.After(monthEnd(period)) {
+				days := int(due.Sub(monthEnd(period)).Hours() / 24)
+				if days > 60 {
+					problem(w, 422, "For a monthly hand-over, choose a due date at most 60 days after the month ends.")
+					return
+				}
+				dueDays = &days
+			}
+			var owner string
+			switch err = tx.QueryRowContext(r.Context(), `SELECT author FROM close_routines WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND stopped_at IS NULL`, g.org, entity).Scan(&owner); err {
+			case nil:
+				problem(w, 409, owner+" already hands every new month of "+entity+" to the agent.")
+				return
+			case sql.ErrNoRows:
+				text += ". Every new month of " + entity + " will be handed over too"
+			default:
+				problem(w, 503, "The agent is unavailable.")
+				return
+			}
 		}
 		done, err := signedOff(r.Context(), tx, g.close)
 		if err != nil {
@@ -650,6 +687,10 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_goals(close_id,author,due_on,finish,events) VALUES($1,$2,NULLIF($3,'')::date,$5,jsonb_build_array(jsonb_build_object('actor',$2::text,'text',$4::text,'at',now()))) RETURNING id::text`, g.close, actor, in.DueOn, text, in.Finish).Scan(&g.id)
 		if err == nil {
 			err = advanceGoal(r.Context(), tx, g)
+		}
+		if err == nil && in.EveryMonth {
+			// Months that ended before the hand-over was set up are not new; it starts after this close or with the current month.
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,due_days,last_period) VALUES($1,$2,$3,$4,$5,$6,$7)`, g.org, entity, actor, !firmAccess(r), in.Finish, dueDays, max(period, endedMonth(time.Now())))
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The close could not be handed to the agent. Refresh and try again.")
@@ -698,12 +739,14 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// RunCloseGoals takes each open goal's next step about once a minute, the longest unchecked first.
+// RunCloseGoals takes each open goal's next step about once a minute, the longest unchecked first, then hands each
+// client's newly ended month over for its monthly hand-over.
 func RunCloseGoals(ctx context.Context, db *sql.DB) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
 		sweepCloseGoals(ctx, db)
+		sweepCloseRoutines(ctx, db, time.Now())
 		select {
 		case <-ctx.Done():
 			return

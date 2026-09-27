@@ -695,10 +695,11 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	// the jobs it covered on the card. The route checks permission and re-checks the digest under its own lock.
 	confirm := func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Digest string `json:"digest"`
-			Reason string `json:"reason"`
-			DueOn  string `json:"due_on"`
-			Finish string `json:"finish"`
+			Digest     string `json:"digest"`
+			Reason     string `json:"reason"`
+			DueOn      string `json:"due_on"`
+			Finish     string `json:"finish"`
+			EveryMonth bool   `json:"every_month"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -738,7 +739,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		if action == "delegate" {
 			// Handing over binds no digest: the goal follows the close's documents as they change.
-			rec := replay(r, "POST", base+"/goal", map[string]any{"confirmed": true, "due_on": in.DueOn, "finish": in.Finish})
+			rec := replay(r, "POST", base+"/goal", map[string]any{"confirmed": true, "due_on": in.DueOn, "finish": in.Finish, "every_month": in.EveryMonth})
 			if rec.Code != 200 {
 				relay(rec)
 				return

@@ -86,6 +86,13 @@ func TestChatDelegateIsOnlyAnAskToHandOverTheClose(t *testing.T) {
 	}
 }
 
+// chatDay is the date the chat reads a day phrase as today, and today as the browser sends it.
+func chatDay(words ...string) (time.Time, string) {
+	today := time.Now().UTC().Format("2006-01-02")
+	day, _, _ := parseDay(words, 0, browserToday(today))
+	return day, today
+}
+
 func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -207,9 +214,10 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 		Outcome json.RawMessage `json:"outcome"`
 	}
 	var chat struct{ Messages []message }
-	must(json.Unmarshal(call("user_a", nil, "POST", "/v1/closes/"+alpha+"/chat", map[string]string{"text": "Get this close ready for review by Friday", "today": "2026-09-27"}, 200), &chat))
+	friday, today := chatDay("friday")
+	must(json.Unmarshal(call("user_a", nil, "POST", "/v1/closes/"+alpha+"/chat", map[string]string{"text": "Get this close ready for review by Friday", "today": today}, 200), &chat))
 	card := chat.Messages[len(chat.Messages)-1]
-	if card.Action != "delegate" || card.DueOn != "2026-10-02" {
+	if card.Action != "delegate" || card.DueOn != friday.Format("2006-01-02") {
 		t.Fatalf("the request becomes a delegate card with its deadline: %+v", card)
 	}
 	confirm := "/v1/closes/" + alpha + "/chat/" + card.ID + "/confirm"
@@ -225,7 +233,7 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	s := read(alpha)
 	var actor string
 	must(db.QueryRow(`SELECT actor FROM close_preparations WHERE close_id::text=$1`, alpha).Scan(&actor))
-	if s.Goal == nil || s.Goal.State != "active" || s.Goal.DueOn != "2026-10-02" || s.Goal.Events[0].Text != "Handed over by user_a, to get it ready for review by Fri 2 Oct 2026" || !strings.HasPrefix(lastEvent(s), "I brought 1 document into preparation as run #") || actor != "close goal #"+s.Goal.ID+" for user_a" {
+	if s.Goal == nil || s.Goal.State != "active" || s.Goal.DueOn != friday.Format("2006-01-02") || s.Goal.Events[0].Text != "Handed over by user_a, to get it ready for review by "+friday.Format("Mon 2 Jan 2006") || !strings.HasPrefix(lastEvent(s), "I brought 1 document into preparation as run #") || actor != "close goal #"+s.Goal.ID+" for user_a" {
 		t.Fatalf("handing over records the goal and brings the documents into preparation as the agent: %+v %q", s.Goal, actor)
 	}
 	if len(s.Progress.Items) != 1 || s.Progress.Items[0].Status != "working" || s.Progress.Ready || len(s.Activity) != 2 || s.Activity[1].Text != s.Goal.Events[0].Text {
@@ -406,9 +414,10 @@ func TestFirmWideRequestLinksTheCloseItNames(t *testing.T) {
 		}
 	}()
 	store := savedCloses(db, strings.Repeat("a", 32))
+	friday, today := chatDay("friday")
 	ask := func(subject, text string) (string, []chatCitation) {
 		t.Helper()
-		raw, _ := json.Marshal(map[string]string{"text": text, "today": "2026-09-27"})
+		raw, _ := json.Marshal(map[string]string{"text": text, "today": today})
 		r := httptest.NewRequest("POST", "/v1/closes/chat", bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org}))
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -425,7 +434,7 @@ func TestFirmWideRequestLinksTheCloseItNames(t *testing.T) {
 		return out.Messages[len(out.Messages)-1].Body, out.Live
 	}
 	body, links := ask("user_a", "Get Alpha Labs' September close ready for review by Friday")
-	want := "/dashboard/closes/" + alpha + "?ask=" + url.QueryEscape("Get this close ready for review by 2026-10-02")
+	want := "/dashboard/closes/" + alpha + "?ask=" + url.QueryEscape("Get this close ready for review by "+friday.Format("2006-01-02"))
 	if len(links) != 1 || links[0].Href != want || strings.Contains(body, "Alpha") {
 		t.Fatalf("the named close is linked once and history keeps a generic reply: %q %+v", body, links)
 	}
@@ -435,7 +444,7 @@ func TestFirmWideRequestLinksTheCloseItNames(t *testing.T) {
 	if _, links = ask("user_a", "Get Alpha Labs' August close ready for review"); len(links) != 0 {
 		t.Fatalf("another month is not this close: %+v", links)
 	}
-	if _, links = ask("user_a", "Get Alpha Labs signed off by Friday"); len(links) != 1 || links[0].Href != "/dashboard/closes/"+alpha+"?ask="+url.QueryEscape("Get this close signed off by 2026-10-02") {
+	if _, links = ask("user_a", "Get Alpha Labs signed off by Friday"); len(links) != 1 || links[0].Href != "/dashboard/closes/"+alpha+"?ask="+url.QueryEscape("Get this close signed off by "+friday.Format("2006-01-02")) {
 		t.Fatalf("a firm-wide link keeps the finish line: %+v", links)
 	}
 	if body, links = ask("user_a", "Get Alpha's September close ready for review by Friday. Use our approved procedures."); len(links) != 0 || !strings.Contains(body, "I don't act on other instructions, such as “use approved procedures”") {
@@ -549,13 +558,14 @@ func TestSignOffGoalCarriesTheCloseThroughSignOff(t *testing.T) {
 			Finish string `json:"finish"`
 		}
 	}
-	must(json.Unmarshal(call("POST", "/v1/closes/"+alpha+"/chat", map[string]string{"text": "Get this close signed off by the 10th", "today": "2026-09-27"}, 200), &chat))
+	tenth, today := chatDay("the", "10th")
+	must(json.Unmarshal(call("POST", "/v1/closes/"+alpha+"/chat", map[string]string{"text": "Get this close signed off by the 10th", "today": today}, 200), &chat))
 	card := chat.Messages[len(chat.Messages)-1]
-	if card.Action != "delegate" || card.Finish != "signoff" || card.DueOn != "2026-10-10" {
+	if card.Action != "delegate" || card.Finish != "signoff" || card.DueOn != tenth.Format("2006-01-02") {
 		t.Fatalf("the card proposes sign-off by the 10th: %+v", card)
 	}
 	call("POST", "/v1/closes/"+alpha+"/chat/"+card.ID+"/confirm", map[string]string{"due_on": card.DueOn, "finish": card.Finish}, 200)
-	if s := read(); s.Goal.Finish != "signoff" || s.Goal.Events[0].Text != "Handed over by user_a, to get it signed off by Sat 10 Oct 2026" || s.Progress.Signoff != nil {
+	if s := read(); s.Goal.Finish != "signoff" || s.Goal.Events[0].Text != "Handed over by user_a, to get it signed off by "+tenth.Format("Mon 2 Jan 2006") || s.Progress.Signoff != nil {
 		t.Fatalf("a sign-off goal carries its finish line, and sign-off waits for the documents: %+v %+v", s.Goal, s.Progress.Signoff)
 	}
 
