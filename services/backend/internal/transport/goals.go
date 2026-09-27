@@ -36,6 +36,8 @@ type goalProgress struct {
 	Ready    bool          `json:"ready"`
 	Signoff  *goalSignoff  `json:"signoff,omitempty"`
 	Coverage *goalCoverage `json:"coverage,omitempty"`
+	// accounts is the capture's coverage when it was read, for handing accounts to teammates.
+	accounts *coverageView
 }
 
 // goalCoverage counts the accounts of the close's ledger capture, and those not yet resolved or excluded.
@@ -309,6 +311,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 		return p, err
 	}
 	if accounts.SnapshotID != "" {
+		p.accounts = &accounts
 		p.Coverage = &goalCoverage{Total: len(accounts.Items)}
 		for _, item := range accounts.Items {
 			if item.State != "resolved" && item.State != "excluded" {
@@ -470,7 +473,7 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			}
 			progress, err := readGoalProgress(ctx, tx, g.close, g.finish)
 			if err == nil {
-				err = settleHandoffs(ctx, tx, g, nil, true)
+				err = settleHandoffs(ctx, tx, g, goalProgress{}, true)
 			}
 			if err == nil {
 				err = saveSummary(ctx, tx, g, progress)
@@ -495,7 +498,7 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			}
 		}
 		if err == nil {
-			err = settleHandoffs(ctx, tx, g, nil, true)
+			err = settleHandoffs(ctx, tx, g, goalProgress{}, true)
 		}
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now()) WHERE id=$1`, g.id, current.State)
@@ -543,7 +546,7 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 	// Ready for review is the finish of a review goal and a milestone, kept in ready_at, of a sign-off goal.
 	progress, err := readGoalProgress(ctx, tx, g.close, "review")
 	if err == nil {
-		err = settleHandoffs(ctx, tx, g, progress.Items, false)
+		err = settleHandoffs(ctx, tx, g, progress, false)
 	}
 	if err != nil {
 		return err

@@ -5,7 +5,8 @@ import { Avatar, Icon } from "../dashboard/Icon";
 import { workspaceRequest } from "./workspace";
 
 type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
-type Handoff = { id: string; job_id: string; name: string; note: string; by: string; at: string; mine: boolean };
+type Handoff = { id: string; job_id: string; account_id?: string; name: string; note: string; by: string; at: string; mine: boolean; handed: string };
+type Account = { account_id: string; name: string; state: string };
 type Person = { subject: string; name: string };
 type Finish = "review" | "signoff";
 type Goal = { id: string; author: string; due_on: string; state: "active" | "reached" | "stopped"; finish: Finish; created_at: string; reached_at: string | null; ready_at: string | null; finished_at: string | null; events: { actor: string; text: string; at: string }[] };
@@ -60,8 +61,9 @@ function dueRule(days: number | null) {
   return days ? `due ${days} day${days === 1 ? "" : "s"} after each month ends` : "with no due date";
 }
 
-// HandOff hands a document that needs a person to a teammate who can review the client's work, or says who has it.
-function HandOff({ closeId, item, handoff, refresh }: { closeId: string; item: Item; handoff?: Handoff; refresh: () => void }) {
+// HandOff hands a document or an account that needs a person to a teammate who can review the client's work, or says
+// who has it.
+function HandOff({ closeId, target, handable, handoff, refresh }: { closeId: string; target: { job_id: string } | { account_id: string }; handable: boolean; handoff?: Handoff; refresh: () => void }) {
   const [people, setPeople] = useState<Person[]>();
   const [to, setTo] = useState("");
   const [note, setNote] = useState("");
@@ -92,7 +94,8 @@ function HandOff({ closeId, item, handoff, refresh }: { closeId: string; item: I
         {error && <span role="alert"> {error}</span>}
       </>
     );
-  if (!item.handable) return null;
+  if (!handable) return null;
+  const document = "job_id" in target;
   function load(open: boolean) {
     if (!open || people) return;
     workspaceRequest(`/${closeId}/people`)
@@ -120,12 +123,64 @@ function HandOff({ closeId, item, handoff, refresh }: { closeId: string; item: I
             What should they look into?
             <textarea value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
           </label>
-          <button type="button" disabled={busy || !to} onClick={() => void send(`/${closeId}/goal/handoffs`, { job_id: item.job_id, assignee: to, note: note.trim() })}>
+          <button type="button" disabled={busy || !to} onClick={() => void send(`/${closeId}/goal/handoffs`, { ...target, assignee: to, note: note.trim() })}>
             {busy ? "Handing over…" : "Hand it over"}
           </button>
-          <p className="assistant-note">They'll find it in their attention list and act on it in Work. I'll close the hand-off once the document no longer needs anyone.</p>
+          <p className="assistant-note">
+            They'll find it in their attention list and act on it in {document ? "Work" : "Coverage"}. I'll close the hand-off once {document ? "the document" : "the account's coverage"} no longer needs anyone.
+          </p>
         </>
       )}
+      {error && <p role="alert">{error}</p>}
+    </details>
+  );
+}
+
+const accountStates: Record<string, string> = { missing_evidence: "needs evidence", awaiting_work: "waits on its work", needs_review: "needs review", source_changed: "recapture first" };
+
+// AccountHandOffs lists the capture's accounts whose coverage still needs a person, read each time it is opened, so one
+// can be handed to a teammate; a stale capture's accounts are recaptured first. Accounts already handed stay listed,
+// so they can be taken back, even when coverage cannot be read.
+function AccountHandOffs({ closeId, status, refresh }: { closeId: string; status: Status; refresh: () => void }) {
+  const [accounts, setAccounts] = useState<Account[]>();
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+  function load() {
+    setError("");
+    workspaceRequest(`/${closeId}/coverage`)
+      .then((data: { coverage: { items: Account[] } }) => setAccounts(data.coverage.items.filter((a) => a.state !== "resolved" && a.state !== "excluded")))
+      .catch((e) => setError(e instanceof Error ? e.message : "Coverage is unavailable."));
+  }
+  const handed = status.handoffs.filter((h) => h.account_id);
+  const matching = accounts?.filter((a) => !handed.some((h) => h.account_id === a.account_id) && `${a.name} ${a.account_id}`.toLowerCase().includes(search.toLowerCase().trim())) ?? [];
+  return (
+    <details onToggle={(e) => e.currentTarget.open && load()}>
+      <summary>
+        Hand an account to a teammate{handed.length > 0 && ` · ${handed.length} with teammates`}
+      </summary>
+      <button type="button" onClick={load}>
+        Refresh
+      </button>
+      {accounts && accounts.length > 50 && (
+        <label>
+          Find an account <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </label>
+      )}
+      <ul>
+        {handed.map((h) => (
+          <li key={h.id}>
+            {h.handed}
+            <HandOff closeId={closeId} target={{ account_id: h.account_id ?? "" }} handable={false} handoff={h} refresh={refresh} />
+          </li>
+        ))}
+        {matching.slice(0, 50).map((a) => (
+          <li key={a.account_id}>
+            {a.name} · {accountStates[a.state] ?? a.state.replaceAll("_", " ")}
+            <HandOff closeId={closeId} target={{ account_id: a.account_id }} handable={a.state !== "source_changed"} refresh={refresh} />
+          </li>
+        ))}
+      </ul>
+      {matching.length > 50 && <p className="assistant-note">Showing 50 of {matching.length}; search to find the rest.</p>}
       {error && <p role="alert">{error}</p>}
     </details>
   );
@@ -267,6 +322,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
               <Link to={`/dashboard/closes/${closeId}#coverage-work`}>{coverage.open ? "Review them in Coverage →" : "See Coverage →"}</Link>
             </p>
           )}
+          {(!!coverage?.open || status.handoffs.some((h) => h.account_id)) && <AccountHandOffs closeId={closeId} status={status} refresh={refresh} />}
           {sections.map(([key, title]) => {
             const items = progress.items.filter((i) => i.status === key);
             return (
@@ -279,7 +335,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
                     {items.map((i) => (
                       <li key={i.job_id}>
                         <Link to={link(i)}>{i.name}</Link>: {i.text}
-                        <HandOff closeId={closeId} item={i} handoff={status.handoffs.find((h) => h.job_id === i.job_id)} refresh={refresh} />
+                        <HandOff closeId={closeId} target={{ job_id: i.job_id }} handable={!!i.handable} handoff={status.handoffs.find((h) => h.job_id === i.job_id)} refresh={refresh} />
                       </li>
                     ))}
                   </ul>
