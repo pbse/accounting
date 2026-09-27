@@ -33,6 +33,7 @@ type readiness struct {
 	Blockers          []string        `json:"blockers"`
 	History           json.RawMessage `json:"history"`
 	Snapshot          json.RawMessage `json:"snapshot"`
+	coverage          coverageView
 }
 
 // Read from the caller's consistent snapshot. Sign-off never relies on browser counts.
@@ -61,6 +62,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	if err != nil {
 		return out, err
 	}
+	out.coverage = coverage
 	for _, item := range coverage.Items {
 		if item.State != "resolved" && item.State != "excluded" {
 			out.Blockers = append(out.Blockers, "Coverage for "+item.Name+": "+strings.ReplaceAll(item.State, "_", " ")+".")
