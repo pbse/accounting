@@ -12,7 +12,7 @@ The recommended starting stack is Cloudflare Workers/Containers, WorkOS AuthKit,
 | WorkOS | Staging environment | Production environment |
 | QuickBooks | Sandbox companies | Explicitly connected client production companies |
 | Email/model credentials | Test sender/recipients and separate model project | Verified firm sender and separately monitored model usage |
-| GitHub environment | `staging` | Protected `production` environment; workflow still to implement |
+| GitHub environment | `staging` | Protected `production` environment, **Deploy production** workflow |
 
 Use one public origin for SPA and API initially. Leave `VITE_API_BASE_URL` empty; the browser calls the same origin. If hosting the frontend separately, set it at build time to the API origin (no `/v1`) and configure exact `FRONTEND_ORIGIN`. Keep SPA fallback for deep links. All `VITE_*` values are public.
 
@@ -75,9 +75,11 @@ Start client communication with [Resend](email-delivery.md), secure request link
 
 ## Production and remaining deployment work
 
-**There is no production workflow/configuration yet.** Do not rename or repoint the staging resources to production. Before a live release:
+**Deploy production** (`.github/workflows/deploy-production.yml`) mirrors the staging workflow against GitHub environment `production`, using the `production` Wrangler environments (`close-production`, `close-queue-production`, `close-upload-scanner-production`). Do not rename or repoint the staging resources to production. It reads `PRODUCTION_URL` instead of `STAGING_URL`; the other settings match the table above.
 
-1. Add separate production Worker/container names, hostname, protected GitHub environment, secrets, concurrency and a reviewed migration/release procedure. Promote a reviewed revision after staging acceptance.
+Until a custom hostname exists, `close-production` serves on its `workers.dev` URL. Leave `UPLOAD_SCAN_HOST` empty there: the edge then refuses every PDF scan, so client PDFs stay quarantined while TXT/CSV use the text scanner (`TEXT_SCANNER_URL` = `https://close-upload-scanner-production.<your-workers-subdomain>.workers.dev/scan`). After moving to a WAF-protected custom hostname, set `PRODUCTION_URL` and `UPLOAD_SCAN_HOST` to it and turn off `workers_dev`. Before a live release:
+
+1. Keep a reviewed migration/release procedure; the workflow only checks schema readiness. Promote a reviewed revision after staging acceptance.
 2. Provision a separate production database/auth environment, matching encryption-key backup, sender, connector apps and approved client grants. Keep test and real-company credentials apart.
 3. Verify runtime RLS, restore a backup into isolation with workers disabled, reconcile external outcomes, and validate alert routing and retention. See [operations](operations.md).
 4. Validate accountant-approved examples and each enabled provider write in the sandbox first, then authorize only the intended production methods/clients.
