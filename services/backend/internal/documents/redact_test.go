@@ -23,6 +23,7 @@ func TestRedactRemovesCardsBankNumbersAndSecrets(t *testing.T) {
 		{"Amex 3782 822463 10005", "Amex [card number ending 0005 removed]", "card number"},
 		{"2026-08-03 2026-08-03 Deposit Customer A 2,500.00", "2026-08-03 2026-08-03 Deposit Customer A 2,500.00", ""},
 		{"2026-08-01 2026-08-05 4111 1111 1111 1111", "2026-08-01 2026-08-05 [card number ending 1111 removed]", "card number"},
+		{"Paid 4111 1111 1111 1111 123 today", "Paid [card number ending 1111 removed] 123 today", "card number"},
 	} {
 		got, kinds := Redact(c.in)
 		if got != c.out || strings.Join(kinds, ",") != c.kinds {

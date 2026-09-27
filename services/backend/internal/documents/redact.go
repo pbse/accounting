@@ -62,8 +62,8 @@ func Redact(text string) (string, []string) {
 		note("SSN")
 		return "[SSN ending " + last4(m) + " removed]"
 	})
-	text = cardPattern.ReplaceAllStringFunc(text, func(m string) string {
-		digits, sum := plain(m), 0
+	luhn := func(digits string) bool {
+		sum := 0
 		for i := range len(digits) {
 			d := int(digits[len(digits)-1-i] - '0')
 			if i%2 == 1 {
@@ -73,11 +73,22 @@ func Redact(text string) (string, []string) {
 			}
 			sum += d
 		}
-		if sum%10 != 0 {
-			return m
+		return sum%10 == 0
+	}
+	// A trailing group may be a separate number; drop trailing groups until the check digit holds.
+	text = cardPattern.ReplaceAllStringFunc(text, func(m string) string {
+		for card := m; len(plain(card)) >= 13; {
+			if luhn(plain(card)) {
+				note("card number")
+				return "[card number ending " + last4(plain(card)) + " removed]" + strings.TrimPrefix(m, card)
+			}
+			cut := strings.LastIndexAny(card, " -")
+			if cut < 0 {
+				break
+			}
+			card = card[:cut]
 		}
-		note("card number")
-		return "[card number ending " + last4(digits) + " removed]"
+		return m
 	})
 	return text, removed
 }
