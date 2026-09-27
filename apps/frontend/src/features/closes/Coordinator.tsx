@@ -203,7 +203,7 @@ export function Coordinator({ closeId }: { closeId: string }) {
                       ))}
                     </ul>
                   </details>
-                  {!status.coverage && <p role="status">No period ledger is linked. This proposal covers uploaded documents only; capture QuickBooks reports or document external ledger work before signing off.</p>}
+                  {!status.coverage && <p role="status">No QuickBooks account coverage is linked. This proposal covers uploaded documents only; capture QuickBooks period reports, or document other ledger work, before signing off.</p>}
                   {status.coverage?.stale && <p role="alert">The ledger capture is stale. Recapture it before relying on these account suggestions.</p>}
                   {status.coverage && <details>
                     <summary>{status.coverage.items.length} ledger accounts in proposed scope</summary>
