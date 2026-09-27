@@ -230,7 +230,7 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Choose one of the organisations authorised in this sign-in.")
 				return
 			}
-			if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='active',tenant_id=$2,tenant_name=$3,confirmed_by=$4,confirmed_at=now(),updated_at=now() WHERE id=$1 AND state='choose_tenant'`, id, list[i].ID, list[i].Name, a.Subject)) {
+			if changed(db.ExecContext(ctx, `UPDATE xero_connections SET state='active',tenant_id=$2,tenant_name=$3,confirmed_by=$4,confirmed_at=now(),updated_at=now(),changed_at=now() WHERE id=$1 AND state='choose_tenant'`, id, list[i].ID, list[i].Name, a.Subject)) {
 				return
 			}
 		case "snapshot":
