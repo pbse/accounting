@@ -415,7 +415,7 @@ func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text, pr
 		if !read("/search?q="+url.QueryEscape(q), &s) {
 			return chatReply{body: "I couldn't search for “" + q + "”. Use 3–100 characters, or try a more specific phrase."}
 		}
-		return chatReply{body: fmt.Sprintf("%s for “%s” in this close. I searched %s.", plural(len(s.Results), "match", "matches"), q, s.Searched), citations: searchCitations(s.Results)}
+		return chatReply{body: fmt.Sprintf("Showing %s for “%s” in this close. I searched %s.", plural(len(s.Results), "match", "matches"), q, s.Searched), citations: searchCitations(s.Results)}
 	case "draft":
 		var p struct {
 			Kind        string `json:"kind"`
@@ -460,7 +460,7 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 		if !read("/search?q="+url.QueryEscape(q), &found) {
 			return chatReply{body: "I couldn't search for that. Use 3–100 characters, or try a more specific phrase."}, nil, nil
 		}
-		return chatReply{body: "I searched your accessible closes. The matches are shown once; search again to see them."}, []string{fmt.Sprintf("%s for “%s”. I searched %s.", plural(len(found.Results), "match", "matches"), q, found.Searched)}, searchCitations(found.Results)
+		return chatReply{body: "I searched your accessible closes. The matches are shown once; search again to see them."}, []string{fmt.Sprintf("Showing %s for “%s”. I searched %s.", plural(len(found.Results), "match", "matches"), q, found.Searched)}, searchCitations(found.Results)
 	case "today":
 		var m struct {
 			Needing int `json:"needing"`
@@ -500,17 +500,21 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 		}
 		return chatReply{body: "Here is the review queue. Open Work to review the current drafts.", citations: work}, lines, nil
 	case "blocked":
+		// Work lists at most 100 items; its counts hold the whole number.
 		var b struct {
 			Items []struct {
 				Entity     string `json:"entity"`
 				Period     string `json:"period"`
 				SourceName string `json:"source_name"`
 			} `json:"items"`
+			Counts struct {
+				Blocked int `json:"blocked"`
+			} `json:"counts"`
 		}
 		if !read("/work?view=blocked", &b) {
 			return unread, nil, nil
 		}
-		lines := []string{plural(len(b.Items), "item is", "items are") + " blocked."}
+		lines := []string{plural(b.Counts.Blocked, "item is", "items are") + " blocked."}
 		for i, item := range b.Items {
 			if i < 5 {
 				lines = append(lines, label(item.Entity, item.Period)+": "+item.SourceName)
