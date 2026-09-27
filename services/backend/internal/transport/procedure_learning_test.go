@@ -43,6 +43,11 @@ func TestModelProcedureDraftUsesOnlySelectedSource(t *testing.T) {
 		if calls <= 2 && !strings.Contains(payload.Input[1].Content, document) || calls == 3 && (strings.Contains(payload.Input[1].Content, document) || !strings.Contains(payload.Input[1].Content, "input.expense_account")) {
 			t.Fatal("wrong model source context")
 		}
+		if calls == 3 || calls == 5 {
+			if strings.Contains(string(raw), "4111-1111-1111-1111") || !strings.Contains(string(raw), "card number ending 1111 removed") {
+				t.Fatal("reviewer edits and policy text reach the model with card numbers removed")
+			}
+		}
 		if calls == 4 {
 			var contextData map[string]any
 			if json.Unmarshal([]byte(payload.Input[1].Content), &contextData) != nil || contextData["document"] != escapedDocument {
@@ -62,7 +67,7 @@ func TestModelProcedureDraftUsesOnlySelectedSource(t *testing.T) {
 		t.Fatal("fabricated citation was accepted")
 	}
 	output = map[string]string{"instructions": "Reviewer changed the expense account; confirm policy and applicability.", "quote": ""}
-	edits := []paperChange{{Field: "input.expense_account", Before: "Old", After: "New"}}
+	edits := []paperChange{{Field: "input.expense_account", Before: "Old, paid by card 4111-1111-1111-1111", After: "New"}}
 	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, "", edits); err != nil {
 		t.Fatal("bounded approved edits could not be drafted", err)
 	}
@@ -74,6 +79,9 @@ func TestModelProcedureDraftUsesOnlySelectedSource(t *testing.T) {
 	output = map[string]string{"instructions": "Review annual insurance under the cited equal-month policy.", "quote": quote}
 	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, escapedDocument, nil); err != nil || calls != 4 {
 		t.Fatal("valid 16 KiB policy was rejected after JSON escaping", err)
+	}
+	if _, cited, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, "Policy: vendors paid by card 4111-1111-1111-1111. "+quote, nil); err != nil || cited != quote || calls != 5 {
+		t.Fatal("a policy with a card number is drafted from its redacted text", err)
 	}
 }
 

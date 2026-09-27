@@ -93,7 +93,7 @@ func selectEvidence(ctx context.Context, client *http.Client, key, model, primar
 	}
 	metadata := make([]map[string]string, 0, len(sources))
 	for _, s := range sources {
-		excerpt := s.Content
+		excerpt, _ := documents.Redact(s.Content)
 		if len(excerpt) > 512 {
 			excerpt = excerpt[:512]
 		}
@@ -290,6 +290,11 @@ func interpret(ctx context.Context, client *http.Client, key, model, entity, per
 	var p Proposal
 	if key == "" || model == "" {
 		return p, fmt.Errorf("Set OPENAI_API_KEY and OPENAI_MODEL on the worker, then retry interpretation.")
+	}
+	// The model sees, and its quotes are checked against, text with card, bank and sign-in details removed.
+	sources = slices.Clone(sources)
+	for i := range sources {
+		sources[i].Content, _ = documents.Redact(sources[i].Content)
 	}
 	// The schema describes only proposals. There are deliberately no executable
 	// tools, URLs, journal fields, confirmations, or credentials in model context.

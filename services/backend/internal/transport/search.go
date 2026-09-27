@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/quickbooks"
 )
 
@@ -22,7 +23,7 @@ type searchHit struct {
 // searchSnippet redacts the whole text first, so no cut can separate a secret from its label, then keeps about 200
 // characters around the first word.
 func searchSnippet(text, word string) string {
-	clean, _ := redactSensitive(text)
+	clean, _ := documents.Redact(text)
 	clean = strings.Join(strings.Fields(clean), " ")
 	runes := []rune(clean)
 	at := len([]rune(clean[:max(strings.Index(strings.ToLower(clean), word), 0)]))
@@ -86,7 +87,7 @@ func searchWork(ctx context.Context, db *sql.DB, r *http.Request, closeID, query
 				return nil, err
 			}
 			base := "/dashboard/closes/" + close
-			title, _ = redactSensitive(title)
+			title, _ = documents.Redact(title)
 			hit := searchHit{Kind: q.kind, Title: title, Close: label, Snippet: searchSnippet(text, words[0])}
 			switch q.kind {
 			case "document":

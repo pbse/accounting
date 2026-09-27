@@ -16,6 +16,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/preparation"
 )
 
@@ -123,7 +124,7 @@ func receiveEmailReply(db *sql.DB) http.HandlerFunc {
 			problem(w, 422, "Use a UTF-8 plain-text reply without attachments, or use the secure request link.")
 			return
 		}
-		body, _ = redactSensitive(body)
+		body, _ = documents.Redact(body)
 		envelope := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Close-Envelope-From")))
 		address, err := mail.ParseAddress(envelope)
 		if err != nil || address.Address != envelope || len(envelope) > 254 {

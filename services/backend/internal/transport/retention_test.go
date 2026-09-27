@@ -97,7 +97,35 @@ func TestCloseDeletionRequiresPolicyAndSettledWork(t *testing.T) {
 	if len(status.Blockers) != 0 {
 		t.Fatal(status.Blockers)
 	}
+	if _, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,retired_by,retired_at,retire_reason) VALUES('local-development',$1,'fixture trading name','fixture',NULL,NULL,NULL),('local-development',upper($1),'fixture old name','fixture','fixture',now(),'Old name')`, entity); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DELETE FROM client_aliases WHERE organization_id='local-development' AND lower(client_entity)=lower($1)`, entity)
+	aliases := func() (n int) {
+		t.Helper()
+		if e := db.QueryRow(`SELECT count(*) FROM client_aliases WHERE organization_id='local-development' AND lower(client_entity)=lower($1)`, entity).Scan(&n); e != nil {
+			t.Fatal(e)
+		}
+		return n
+	}
 	call(base+"/delete", map[string]any{"expected_version": status.Version, "entity": entity, "period": "2026-09", "reason_code": "retention_expired", "confirmed": true}, 200)
+	if aliases() != 2 {
+		t.Fatal("deleting a month whose retention expired keeps the client's other names")
+	}
+	// Deleting a month at the client's request forgets the other names its documents use, retired ones too.
+	var requested string
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-10') RETURNING id::text`, entity).Scan(&requested); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DELETE FROM client_closes WHERE id::text=$1`, requested)
+	defer db.Exec(`DELETE FROM close_deletion_receipts WHERE close_id::text=$1`, requested)
+	call("/v1/closes/"+requested+"/retention", map[string]any{"retain_until": "2000-01-01", "legal_hold": false, "expected_version": 0, "reason": "Client asked for deletion", "confirmed": true}, 200)
+	var other retentionStatus
+	json.Unmarshal(call("/v1/closes/"+requested+"/retention", nil, 200), &other)
+	call("/v1/closes/"+requested+"/delete", map[string]any{"expected_version": other.Version, "entity": entity, "period": "2026-10", "reason_code": "client_request", "confirmed": true}, 200)
+	if aliases() != 0 {
+		t.Fatal("deleting a month at the client's request forgets its other names")
+	}
 	var digest, period string
 	var productionCount int
 	if err = db.QueryRow(`SELECT entity_digest,period,production_postings FROM close_deletion_receipts WHERE close_id::text=$1`, closeID).Scan(&digest, &period, &productionCount); err != nil || digest != preparation.Digest([]byte("local-development\x00"+strings.ToLower(entity)+"\x002026-09")) || period != "2026-09" || productionCount != 0 {
