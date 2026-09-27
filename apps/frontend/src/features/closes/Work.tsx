@@ -1,7 +1,7 @@
 import { PrepaidMethodFields, readCredits } from "../prepaids/MethodFields";
 import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { Avatar, Icon, type IconName } from "../dashboard/Icon";
 import { SourceReview, type Source } from "./Evidence";
@@ -164,13 +164,29 @@ export function Work({
   const [dependencyLoaded, setDependencyLoaded] = useState(false);
   const [predicted, setPredicted] = useState<{ items: Predicted[]; more: boolean }>({ items: [], more: false });
   const [queue, setQueue] = useState<{ items: QueueItem[]; count: number }>();
+  // A link to one document of this close shows only that document, open.
+  const [params] = useSearchParams();
+  const job = closeId ? (params.get("job") ?? "") : "";
+  const opened = useRef("");
+  useEffect(() => {
+    if (!job) {
+      opened.current = "";
+      return;
+    }
+    const target = document.getElementById(`work-${job}`);
+    if (opened.current !== job && target instanceof HTMLDetailsElement) {
+      opened.current = job;
+      target.open = true;
+      target.scrollIntoView({ block: "start" });
+    }
+  }, [job, items]);
   useEffect(() => {
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     async function load() {
       try {
         const data = await workspaceRequest(
-          `${closeId ? `/${closeId}/work` : "/work"}?view=${filter}&client=${encodeURIComponent(clientSearch)}`,
+          `${closeId ? `/${closeId}/work` : "/work"}?view=${filter}&client=${encodeURIComponent(clientSearch)}${job ? `&jobs=${encodeURIComponent(job)}` : ""}`,
         );
         if (!live) return;
         setItems(data.items);
@@ -189,7 +205,7 @@ export function Work({
       live = false;
       clearTimeout(timer);
     };
-  }, [closeId, refresh, filter, clientSearch]);
+  }, [closeId, refresh, filter, clientSearch, job]);
   useEffect(() => {
     if (closeId) return;
     let live = true;
@@ -334,6 +350,11 @@ export function Work({
             </div>
             <button type="button" onClick={() => setRefresh((n) => n + 1)}>Refresh</button>
           </div>
+          {job && (
+            <p className="assistant-note">
+              Showing the document you opened. <Link to={`/dashboard/closes/${closeId}`}>Show all work</Link>
+            </p>
+          )}
           {items.length === 0 && (
             <p className="empty">
               No work matches this view. Change the filters or upload evidence

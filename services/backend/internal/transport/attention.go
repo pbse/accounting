@@ -11,7 +11,7 @@ import (
 )
 
 // attentionKinds are the events that need a person; running, queued, waiting and finished work never is one.
-var attentionKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "release", "send", "email", "goal"}
+var attentionKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "release", "send", "email", "goal", "handoff"}
 
 // undeliveredEmail is SQL for an email m, the latest for its request, that did not reach the client.
 const undeliveredEmail = `(m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))`
@@ -66,9 +66,13 @@ const attentionQuery = `WITH scope AS (
   CASE g.state WHEN 'reached' THEN 'Every uploaded document has a draft ready for review' ELSE g.events->-1->>'text' END,''
   FROM close_goals g WHERE g.close_id IN (SELECT id FROM scope) AND g.author=$3
   AND (g.state='reached' OR (g.state='stopped' AND g.events->-1->>'actor' NOT IN ($3,'agent') AND g.finished_at>now()-interval '14 days'))
+ UNION ALL
+ SELECT 'handoff:'||h.id,'handoff',g.close_id,h.created_at,h.created_by||' handed you '||h.document||CASE WHEN h.note<>'' THEN ': '||h.note ELSE '' END,''
+  FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE g.close_id IN (SELECT id FROM scope) AND h.assignee=$3 AND h.closed_at IS NULL
 )
-SELECT v.key,v.kind,v.close_id::text,v.at,v.text,v.workpaper,s.entity,s.period,s.due_on,s.priority,s.owner,mk.read_at IS NOT NULL,mk.snoozed_until
+SELECT v.key,v.kind,v.close_id::text,v.at,v.text,v.workpaper,COALESCE(h.job_id::text,''),s.entity,s.period,s.due_on,s.priority,s.owner,mk.read_at IS NOT NULL,mk.snoozed_until
 FROM events v JOIN scope s ON s.id=v.close_id LEFT JOIN attention_marks mk ON mk.organization_id=$1 AND mk.subject=$3 AND mk.key=v.key
+LEFT JOIN goal_handoffs h ON v.key='handoff:'||h.id
 ORDER BY v.at DESC,v.key`
 
 type attentionEvent struct {
@@ -77,6 +81,7 @@ type attentionEvent struct {
 	Text         string     `json:"text"`
 	At           time.Time  `json:"at"`
 	WorkpaperID  string     `json:"workpaper_id,omitempty"`
+	JobID        string     `json:"job_id,omitempty"`
 	Read         bool       `json:"read"`
 	SnoozedUntil *time.Time `json:"snoozed_until,omitempty"`
 	group        attentionGroup
@@ -103,7 +108,7 @@ func attentionEvents(ctx context.Context, db *sql.DB, r *http.Request) ([]attent
 		var e attentionEvent
 		var snoozed sql.NullTime
 		g := &e.group
-		if err = rows.Scan(&e.Key, &e.Kind, &g.CloseID, &e.At, &e.Text, &e.WorkpaperID, &g.Entity, &g.Period, &g.DueOn, &g.Priority, &g.Owner, &e.Read, &snoozed); err != nil {
+		if err = rows.Scan(&e.Key, &e.Kind, &g.CloseID, &e.At, &e.Text, &e.WorkpaperID, &e.JobID, &g.Entity, &g.Period, &g.DueOn, &g.Priority, &g.Owner, &e.Read, &snoozed); err != nil {
 			return nil, err
 		}
 		if snoozed.Valid && snoozed.Time.After(time.Now()) {

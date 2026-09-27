@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { workspaceRequest } from "./workspace";
 
-type Event = { key: string; kind: string; text: string; at: string; workpaper_id?: string; read: boolean; snoozed_until?: string };
+type Event = { key: string; kind: string; text: string; at: string; workpaper_id?: string; job_id?: string; read: boolean; snoozed_until?: string };
 type Group = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: Event[] };
 type Inbox = { groups: Group[]; unread: number; unread_keys: string[]; page: number; has_more: boolean; kinds: string[]; preferences: { kinds: string[]; browser: boolean } };
 
@@ -17,6 +17,7 @@ const kindLabels: Record<string, string> = {
   send: "Approved requests with no delivery",
   email: "Undelivered request emails",
   goal: "Closes the agent has ready for review",
+  handoff: "Documents handed to you",
 };
 const views = { all: "All", mine: "Assigned to me", unread: "Unread", snoozed: "Snoozed" } as const;
 
@@ -170,7 +171,7 @@ export default function Attention() {
               {g.events.map((e) => (
                 <li key={e.key}>
                   {!e.read && <span className="pill">New</span>}{" "}
-                  <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}`}>{e.text}</Link> · {new Date(e.at).toLocaleString()}
+                  <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : ""}`}>{e.text}</Link> · {new Date(e.at).toLocaleString()}
                   {e.snoozed_until && ` · snoozed until ${new Date(e.snoozed_until).toLocaleString()}`}{" "}
                   <button disabled={busy} onClick={() => mark(e.read ? "unread" : "read", [e.key])}>
                     {e.read ? "Mark unread" : "Mark read"}
