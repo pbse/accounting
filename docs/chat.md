@@ -47,7 +47,7 @@ Closing the assistant does not stop the work: the jobs run as they would from th
 
 ## Search
 
-`GET /v1/closes/search?q=` (across your closes) and `GET /v1/closes/{id}/search?q=` (one close) find literal matches of every word you type (3–100 characters, up to six words; more are refused), up to 8 of each kind:
+`GET /v1/closes/search?q=` (across your closes) and `GET /v1/closes/{id}/search?q=` (one close) find literal matches of every word you type (3–100 characters, up to six words; more are refused), up to 8 of each kind (transactions: up to 8 from QuickBooks and 8 from Xero):
 
 - **Documents** by name or extracted text, current versions only, including saved Stripe reports (each report is one document, not individual transactions); a client's reply is marked as a reply. Each links to the document on the close's Evidence tab.
 - **Drafts**, current versions only, linked to the draft.

@@ -289,7 +289,8 @@ func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, acto
 	}
 	defer tx.Rollback()
 	// The insert's foreign key waits on the close lock Daily books' Mark reviewed takes, so a review never passes over it.
-	// Search reads the newest capture's ledger rows, so only those are kept.
+	// Search reads the newest capture's ledger rows; each capture removes only older captures' rows, so one committing
+	// late never removes a newer capture's.
 	var snapshot string
 	if err = tx.QueryRowContext(ctx, `INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,exceptions) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6,$7) RETURNING id::text`, closeID, id, tenant, period, string(payload), actor, findings).Scan(&snapshot); err != nil {
 		return failed
@@ -299,7 +300,7 @@ func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, acto
  ON CONFLICT DO NOTHING`, snapshot, ledger); err != nil {
 		return failed
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM xero_transaction_rows t USING xero_snapshots s WHERE t.snapshot_id=s.id AND s.close_id::text=$1 AND s.id::text<>$2`, closeID, snapshot); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM xero_transaction_rows t USING xero_snapshots s WHERE t.snapshot_id=s.id AND s.close_id::text=$1 AND s.id<$2::bigint`, closeID, snapshot); err != nil {
 		return failed
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE xero_connections SET home_currency=$2,fiscal_year_start=$3 WHERE id::text=$1`, id, currency, fiscalStart); err != nil || tx.Commit() != nil {

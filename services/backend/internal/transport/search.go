@@ -31,7 +31,7 @@ func searchSnippet(text, word string) string {
 	return string(runes[start:min(start+200, len(runes))])
 }
 
-const searchScope = "documents (including Stripe report documents), drafts, the supported ledger rows of the latest QuickBooks and Xero transaction captures, procedures and review decisions, up to 8 of each"
+const searchScope = "documents (including Stripe report documents), drafts, the supported ledger rows of the latest QuickBooks and Xero transaction captures, procedures and review decisions, up to 8 of each (transactions: 8 from QuickBooks and 8 from Xero)"
 
 // searchWork finds literal matches in the closes the caller can access (one close when closeID is set). It reads only,
 // under a statement timeout, and every snippet is redacted like a client reply.

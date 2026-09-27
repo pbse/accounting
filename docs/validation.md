@@ -2034,4 +2034,6 @@ Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `main @ 40da2e7`
 
 Tests: `TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance` (its mock now returns one paid bill for the month): the capture with transactions keeps that bill's row, and a newer capture replaces the older capture's rows. `TestSearchFindsTheNewestXeroCaptureRows`: only the newest capture of an accessible client is found, with the Xero title and link; the word "Xero" finds it; a newer capture without transactions leaves nothing. `TestSearchFindsMatchesOnlyInAccessibleCloses` checks the new scope text. Removing the row insert's cleanup, the newest-capture rule, the "xero" match or the Xero link each fails a test.
 
-Not verified: search timing on a firm with many large Xero captures.
+Code review: GPT-6 Sol (reasoning high) found that two captures of one close at once (the daily sweep and a person's capture) could let the earlier one, committing later, remove the newer capture's rows, leaving search empty; each capture now removes only older captures' rows, so a late commit leaves at most stale older rows, which search never reads and the next capture removes. It also found the documented cap understated transactions (8 from each provider); the scope text and docs say so. Gemini (agy-review) approved.
+
+Not verified: search timing on a firm with many large Xero captures; the late-commit case, which needs two concurrent captures.
