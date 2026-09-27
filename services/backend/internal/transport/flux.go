@@ -193,6 +193,7 @@ func flux(db *sql.DB) http.HandlerFunc {
 			}
 		}
 		out := []map[string]any{}
+		when, _ := time.Parse("2006-01", period)
 		for _, c := range changes {
 			item := map[string]any{"account_id": c.id, "account": c.name, "class": c.class, "this_month": c.now.FloatString(2), "last_month": c.before.FloatString(2), "change": c.delta.FloatString(2)}
 			if foreign[c.id] && unavailable == "" {
@@ -251,9 +252,10 @@ func flux(db *sql.DB) http.HandlerFunc {
 			item["new"], item["missing"], item["changed"] = largest(added), largest(missing), largest(changed)
 			item["unattributed"] = map[string]string{"this_month": a.Unattributed.FloatString(2), "last_month": b.Unattributed.FloatString(2)}
 			item["reconciled"] = explained.Cmp(c.delta) == 0
+			// Questions are written for the client, who sees them once a person approves a request.
 			questions := []string{}
 			for _, p := range item["missing"].([]payeeAmount) {
-				questions = append(questions, fmt.Sprintf("Last month %s was %s in %s; this month's capture shows nothing. Was there a bill for %s, or should it be accrued? Check the current books first.", p.Name, ledger.Show(p.LastMonth, currency), c.name, period))
+				questions = append(questions, fmt.Sprintf("%s: %s was %s in %s, and nothing is recorded for them in %s yet. Is there a bill or invoice for %s? If so, please send a copy.", c.name, p.Name, ledger.Show(p.LastMonth, currency), when.AddDate(0, -1, 0).Format("January 2006"), when.Format("January 2006"), when.Format("January")))
 			}
 			item["questions"] = questions
 			out = append(out, item)

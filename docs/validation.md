@@ -2025,3 +2025,42 @@ Browser check (headless Chrome 154 against the API, worker and Vite build of thi
 Code review: GPT-6 Sol found that the account list was read once, so a recapture left stale rows until the page reloaded, and that with coverage unreadable the card hid the section while the hand-off stayed open, leaving no way to take it back. The list is now read each time it is opened and has **Refresh**, and every account already handed is listed first, by what was handed, whatever the page, search or read; its one-use helper was inlined. The two delta reviews closed these; the second noted that after a failed read the accounts loaded earlier stay offered, which the server refuses if they changed, and was left as is.
 
 Not verified: a real WorkOS directory behind the teammate list (a fixture in tests, local members in the browser).
+
+## Changes from last month: ask the client (2026-09-27)
+
+Request: capability 8 of the close-orchestration plan, reports that lead to follow-through. When Changes from last month finds a payee billed last month and missing this month, the agent drafts the question into a client request for a person to approve; before, the panel only copied the questions. The question is now written for the client ("Software: CloudSuite was $49.00 in August 2026, and nothing is recorded for them in September 2026 yet. Is there a bill or invoice for September? If so, please send a copy."), and the accountant's caveat to check the books first moved beside the approval. For a QuickBooks close the panel drafts every askable question into one request: the account must be open in account coverage for the same capture and not already in a request whose link is live or answered. Approving posts the existing consolidated-request action with those accounts, so there is no new endpoint, table or migration. It first reads both months and coverage again. The private link, passcode notice and email approval then follow in place. Xero closes have no account coverage and keep the copy button.
+
+Plan review: GPT-6 Sol (reasoning high) judged it real, undone work and the reuse of the coverage request proportionate. Adopted:
+- Approval re-reads the comparison and coverage, and stops if either month's capture or the draft changed. Coverage's digest alone was not enough, because the two read their newest capture differently.
+- Nothing is drafted while either month's capture is out of date.
+- An account already in a request says "Already in request #N" rather than claiming the client was asked.
+
+Not adopted: leaving out accounts whose bound jobs are running. Changes from last month compares income and expense accounts, and coverage never binds those accounts to jobs (it refuses a job binding for an accountant-review account).
+
+Tests:
+- `TestFluxExplainsMovementsByPayee` checks the client wording exactly.
+- `ask.test.ts` (node:test) covers:
+  - an open account is asked about; an excluded or resolved one is not;
+  - one in a live request, or one already answered, shows that request;
+  - one whose request was withdrawn, or expired unanswered, is asked again;
+  - one whose open request was made on an earlier capture must be withdrawn first;
+  - a change with no questions adds nothing;
+  - a Xero month, a different capture, or a stale month or coverage asks nothing.
+- Sixteen mutations of these guards each fail it.
+- `TestCoverageRequestsQuarantineAndResolution` still passes.
+
+Browser check: headless Chrome 154 against the API and Vite of this branch, on PostgreSQL at migration 088. The data was two Acme QuickBooks captures in which CloudSuite (Software) and Delta (Travel) billed in August and not in September.
+- The panel showed the drafted request with both questions, the caveat, and the confirmation naming Travel and Software.
+- Approving with a recipient created request #1, bound to accounts 21 and 28 of capture #3. The panel showed the private link and the email approval, and both changes then read "Already in request #1".
+- The client's link showed the two numbered questions.
+- With request #1 withdrawn, the month was recaptured while the draft was open, now with CloudSuite present. Approving stopped with "The comparison or its coverage changed while you were reviewing. Check the updated draft." and created nothing. The draft then held only Travel, with the recipient defaulting to ap@acme.test.
+- No console errors.
+
+Code review: GPT-6 Sol found three issues, all fixed:
+- An unanswered request made on an earlier capture still showed as "Already in request", though the client can no longer answer it. After a recapture, the server refuses its link with "Request coverage changed". The panel now says to withdraw it in Coverage to ask again, and drafts nothing for that account until then, because the server refuses a second open link. In the browser, request #2 approved on capture #5 read this way after capture #6, and its link returned 409.
+- After the email was queued, the panel still said nothing had been sent and offered the send again. It now says the email is queued, and the control goes away.
+- The approval re-check compared the questions but not the accounts they are filed against. It now compares both.
+
+A delta review confirmed that each fix closes its finding.
+
+Not verified: sending the email, and the queued state that follows it. Both need a hosted session and a verified sender.
