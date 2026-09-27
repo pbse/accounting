@@ -637,7 +637,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if goal, err := parsePortfolioGoal(in.Text, time.Now().UTC()); closeID == "" && err == nil {
 			body := "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts."
 			if goal.action == "show" {
-				body = "Work lists exactly which of your closes this selects."
+				body = "Work shows what this selects."
 			}
 			reply = chatReply{body: body, citations: []chatCitation{{"Open this goal in Work", "/dashboard?goal=" + url.QueryEscape(in.Text)}}}
 		} else if len(targets) == 1 {

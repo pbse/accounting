@@ -763,11 +763,13 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
       setError("");setAnswer(related.map(i=>`${i.source_name}: ${labels[i.state] ?? i.state}${i.blockers.length ? ` — ${i.blockers.join("; ")}` : i.error ? ` — ${i.error}` : ""}`).join("\n"));
       return;
     }
-    const previewGoal = () => {
+    // A listing the server refuses shows its guidance rather than going to the interpreter.
+    const previewGoal = (direct = false) => {
       setBusy(true);
-      void workspaceRequest("/portfolio",{text:text.trim(),view,client,today:new Date().toLocaleDateString("en-CA")}).then((goal:Goal)=>{setBusy(false);setGoals(current=>[goal,...current.filter(g=>g.id!==goal.id)]);}).catch(e=>{setBusy(false);void askAgent(e instanceof Error?e.message:"Could not preview that goal.");});
+      void workspaceRequest("/portfolio",{text:text.trim(),view,client,today:new Date().toLocaleDateString("en-CA")}).then((goal:Goal)=>{setBusy(false);setGoals(current=>[goal,...current.filter(g=>g.id!==goal.id)]);}).catch(e=>{setBusy(false);const message=e instanceof Error?e.message:"Could not preview that goal.";if(direct){setError(message);}else{void askAgent(message);}});
     };
-    if (/^(hand|delegate|show|list)\b/i.test(text.trim())) {previewGoal();return;}
+    if (/^(show|list)\b/i.test(text.trim())) {previewGoal(true);return;}
+    if (/^(hand|delegate)\b/i.test(text.trim())) {previewGoal();return;}
     const match = /^(prepare|recheck|stop) (.+)$/i.exec(text.trim());
     if (!match) {askAgent("Try ‘show blockers’, ‘prepare my clients due Friday’, ‘hand over my clients due Friday’, ‘rehearse Client · YYYY-MM’ or ‘why is Client · YYYY-MM waiting?’.");return;}
     const action = match[1].toLowerCase() as "prepare"|"stop"|"recheck";

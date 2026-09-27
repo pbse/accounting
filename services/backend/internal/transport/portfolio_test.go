@@ -131,13 +131,8 @@ func TestPortfolioGoalsRunOnlyTheServerSelectedCloses(t *testing.T) {
 	if listed.ID != "" || listed.Action != "show" || len(listed.Items) != 1 || listed.Items[0].CloseID != due || listed.Items[0].State != "listed" || !strings.HasPrefix(listed.Items[0].Result, "due ") || listed.Scope != op.Scope {
 		t.Fatalf("a listing shows the goal's closes without saving an operation: %+v", listed)
 	}
-	none := httptest.NewRecorder()
-	raw, _ := json.Marshal(map[string]string{"text": "show my clients due before 2000-01-01"})
-	empty := httptest.NewRequest("POST", "/v1/closes/portfolio", bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org}))
-	empty.Header.Set("Content-Type", "application/json")
-	store.ServeHTTP(none, empty)
-	if none.Code != 200 || !strings.Contains(none.Body.String(), `"items":[]`) {
-		t.Fatalf("a listing that matches nothing returns an empty list: %d %s", none.Code, none.Body.String())
+	if none := call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "show my clients due before 2000-01-01"}, 200); none.Items == nil || len(none.Items) != 0 {
+		t.Fatalf("a listing that matches nothing returns an empty list: %+v", none)
 	}
 	path := "/v1/closes/portfolio/run"
 	call("user_b", reviewer, "POST", path, map[string]any{"id": op.ID, "confirmed": true}, 404)
