@@ -92,6 +92,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [pending, setPending] = useState("");
   const generation = useRef(0);
   const list = useRef<HTMLOListElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -125,16 +126,21 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
     setBusy(true);
     setError("");
     try {
-      // The member's own date resolves day names such as "by Friday".
-      const data = await workspaceRequest(path, { ...body, today: localDate() });
+      // The member's own date resolves day names such as "by Friday"; a written answer streams in as it is written.
+      const data = await workspaceRequest(path, { ...body, today: localDate() }, false, (delta) => asked === generation.current && setPending((p) => p + delta));
       if (asked !== generation.current) return;
       setMessages(data.messages);
       setLive(data.live ?? []);
       setLiveLinks(data.live_citations ?? []);
       setText("");
     } catch (e) {
-      if (asked === generation.current) setError(e instanceof Error ? e.message : "The assistant is unavailable.");
+      if (asked === generation.current) {
+        setError(e instanceof Error ? e.message : "The assistant is unavailable.");
+        // What was saved, if anything, replaces text that streamed before the answer broke off.
+        workspaceRequest(path).then((data) => asked === generation.current && setMessages(data.messages), () => undefined);
+      }
     } finally {
+      if (asked === generation.current) setPending("");
       setBusy(false);
     }
   }
@@ -226,6 +232,12 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
         ))}
       </ol>
       {error && <p role="alert">{error}</p>}
+      {pending && (
+        <div className="assistant-pending">
+          <strong>Being written by the model, not checked yet</strong>
+          <p>{pending}</p>
+        </div>
+      )}
       <form onSubmit={submit}>
         {slash.length > 0 && (
           <ul className="assistant-commands" aria-label="Command suggestions">
