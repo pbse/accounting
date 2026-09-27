@@ -139,6 +139,9 @@ func registerMembers(mux *http.ServeMux, db *sql.DB) {
 		if err == nil && !in.Granted {
 			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE organization_id=$1 AND author=$2`, org, in.Subject)
 			if err == nil {
+				_, err = tx.ExecContext(r.Context(), `DELETE FROM assistant_answers WHERE organization_id=$1 AND author=$2`, org, in.Subject)
+			}
+			if err == nil {
 				_, err = tx.ExecContext(r.Context(), `DELETE FROM portfolio_operations WHERE organization_id=$1 AND author=$2`, org, in.Subject)
 			}
 			for _, table := range []string{"attention_marks", "attention_preferences"} {

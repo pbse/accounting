@@ -580,6 +580,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		return rec.Code == 200 && json.Unmarshal(rec.Body.Bytes(), out) == nil
 	}
 	post := func(w http.ResponseWriter, r *http.Request) {
+		// A written answer streams; once its first line is out, the reply keeps its status and ends with the conversation.
+		var streamed *streamWriter
+		var attempt *struct {
+			outcome string
+			latency sql.NullInt64
+		}
 		var in struct {
 			Action      string `json:"action"`
 			Text        string `json:"text"`
@@ -680,10 +686,54 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 					rec := replay(r, "GET", "/v1/closes/"+url.PathEscape(closeID)+path, nil)
 					return rec.Body.String(), rec.Code == 200
 				}
-				if written, why, ok := writtenReply(r.Context(), db, org, readRaw, closeID, in.WorkpaperID, in.Text); ok {
+				// The first streamed line waits until the member's firm membership and close access are checked again.
+				denied := false
+				emit := func(delta string) bool {
+					if streamed == nil {
+						var allowed, member bool
+						err := db.QueryRowContext(r.Context(), closeAccess, closeID, org, firmAccess(r), author).Scan(&allowed)
+						if err == nil && allowed {
+							err = db.QueryRowContext(r.Context(), `SELECT enabled AND ($1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)) FROM organizations WHERE id=$1`, org, author).Scan(&member)
+						}
+						if err != nil || !allowed || !member {
+							denied = true
+							return false
+						}
+						w.Header().Set("Content-Type", "application/x-ndjson")
+						w.Header().Set("Cache-Control", "no-store")
+						w.WriteHeader(http.StatusOK)
+						streamed = &streamWriter{w}
+						w = streamed
+					}
+					line, _ := json.Marshal(map[string]string{"delta": delta})
+					if _, err := streamed.ResponseWriter.Write(append(line, '\n')); err != nil {
+						return false
+					}
+					_ = http.NewResponseController(streamed.ResponseWriter).Flush()
+					return true
+				}
+				began := time.Now()
+				written, why, outcome := writtenReply(r.Context(), db, org, readRaw, closeID, in.WorkpaperID, in.Text, emit)
+				if denied {
+					problem(w, 403, "Your access changed. Nothing was saved.")
+					return
+				}
+				switch {
+				case outcome == "kept":
 					reply = written
-				} else if why != "" {
+				case streamed != nil:
+					reply.body = "The written answer could not be checked against this close's saved work, so it was withdrawn. " + reply.body
+				case why != "":
 					reply.body += " " + why
+				}
+				if outcome != "" {
+					attempt = &struct {
+						outcome string
+						latency sql.NullInt64
+					}{outcome, sql.NullInt64{Int64: time.Since(began).Milliseconds(), Valid: outcome != "limit"}}
+					if outcome == "stopped" {
+						attempt.outcome = "failed"
+					}
 				}
 			}
 		}
@@ -707,6 +757,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if err != nil || !member {
 			problem(w, 403, "Your firm membership changed. Nothing was saved.")
 			return
+		}
+		if attempt != nil {
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5)`, org, author, closeID, attempt.outcome, attempt.latency)
 		}
 		for _, m := range []struct{ role, body, citations, action, due, finish string }{{"user", in.Text, "[]", "", "", ""}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish}} {
 			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''))`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish); err != nil {
