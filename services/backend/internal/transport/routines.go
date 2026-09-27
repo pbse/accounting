@@ -100,27 +100,32 @@ func registerRoutines(mux *http.ServeMux, db *sql.DB) {
 }
 
 // sweepCloseRoutines hands the next ended month to the agent for up to 50 routines of enabled firms, the least
-// recently tried first, one month per routine per sweep so no month is skipped. A routine whose step fails is logged
-// and marked waiting, so it cannot hold up the others.
+// recently tried first, one month per routine per sweep so no month is skipped. A routine whose step fails, or whose
+// firm's roles cannot be read, is logged and marked waiting, so it cannot hold up the others.
 func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) {
-	rows, err := db.QueryContext(ctx, `SELECT r.id::text,r.last_period FROM close_routines r JOIN organizations o ON o.id=r.organization_id WHERE r.stopped_at IS NULL AND o.enabled AND r.last_period<$1 ORDER BY r.checked_at NULLS FIRST,r.id LIMIT 50`, endedMonth(now))
+	rows, err := db.QueryContext(ctx, `SELECT r.id::text,r.last_period,r.organization_id FROM close_routines r JOIN organizations o ON o.id=r.organization_id WHERE r.stopped_at IS NULL AND o.enabled AND r.last_period<$1 ORDER BY r.checked_at NULLS FIRST,r.id LIMIT 50`, endedMonth(now))
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Print("Monthly hand-overs could not be read: ", err)
 		}
 		return
 	}
-	due := [][2]string{}
+	due := [][3]string{}
 	for rows.Next() {
-		var id, last string
-		if rows.Scan(&id, &last) == nil {
-			due = append(due, [2]string{id, nextMonth(last)})
+		var id, last, org string
+		if rows.Scan(&id, &last, &org) == nil {
+			due = append(due, [3]string{id, nextMonth(last), org})
 		}
 	}
 	rows.Close()
+	roles := sweepRoles{}
 	for _, step := range due {
 		id, period := step[0], step[1]
-		if err = stepRoutine(ctx, db, id, period); err != nil && ctx.Err() == nil {
+		members, err := roles.of(ctx, step[2])
+		if err == nil {
+			err = stepRoutine(ctx, db, id, period, members)
+		}
+		if err != nil && ctx.Err() == nil {
 			log.Printf("Monthly hand-over #%s could not hand over %s: %v", id, period, err)
 			db.ExecContext(ctx, `UPDATE close_routines SET waiting=$2,checked_at=now() WHERE id=$1 AND stopped_at IS NULL AND last_period<$3`, id, "I couldn't hand over "+period+" yet. I'll try again.", period)
 		}
@@ -129,7 +134,7 @@ func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) {
 
 // stepRoutine opens the client's close for period, the month after the routine's last, if needed and hands it to
 // the agent, once.
-func stepRoutine(ctx context.Context, db *sql.DB, id, period string) error {
+func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[string]reviewer) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -160,11 +165,12 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string) error {
 	if err = tx.QueryRowContext(ctx, `SELECT enabled,max_closes FROM organizations WHERE id=$1 `+lock, org).Scan(&enabled, &limit); err != nil || !enabled {
 		return err
 	}
-	var allowed bool
-	if err = tx.QueryRowContext(ctx, `SELECT ($1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted))
- AND (NOT $3 OR EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($4) AND granted))`, org, author, viaGrant, entity).Scan(&allowed); err != nil {
+	var member, granted bool
+	if err = tx.QueryRowContext(ctx, `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted),
+ EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, author, entity).Scan(&member, &granted); err != nil {
 		return err
 	}
+	allowed := mayAct(roles, author, member, viaGrant, granted)
 	if err = tx.QueryRowContext(ctx, `SELECT last_period FROM close_routines WHERE id=$1 AND stopped_at IS NULL FOR UPDATE`, id).Scan(&last); err == sql.ErrNoRows || err == nil && last >= period {
 		return nil
 	} else if err != nil {
@@ -206,7 +212,7 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string) error {
 		err = tx.QueryRowContext(ctx, `INSERT INTO close_goals(close_id,author,due_on,finish,routine_id,events) VALUES($1,$2,NULLIF($3,'')::date,$4,$5,jsonb_build_array(jsonb_build_object('actor','agent','text',$6::text,'at',now()))) ON CONFLICT DO NOTHING RETURNING id::text`, closeID, author, due, finish, id, text).Scan(&g.id)
 		switch err {
 		case nil:
-			err = advanceGoal(ctx, tx, g)
+			err = advanceGoal(ctx, tx, g, roles)
 		case sql.ErrNoRows:
 			err = nil
 		}

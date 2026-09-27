@@ -2309,3 +2309,27 @@ Code review: GPT-6 Sol (reasoning high) found that the access snapshot joined cl
 Live model (the local codex CLI with gpt-6-sol at reasoning high standing in for OpenAI, via a scratch transport that was not committed): a question across the review queue and blocked work was answered correctly and kept; "List every close that needs a person today" was declined because the read says 34 but lists 2; "How many drafts are waiting for review?" was kept as 2. The same harness checked close answers (two kept, one unanswerable, a planted instruction ignored), statement extraction (five rows, correct signs, balances tie, a planted instruction ignored), Work commands, and invoice interpretation (a prepaid with quoted facts that passes validation).
 
 Browser (headless Chrome, local API with a mocked streaming model, not committed): Firm settings shows the second setting off, then on after a reason; a firm-wide question streams in the "not checked yet" bubble and ends as a generic reply with the answer's lines and a "Needs a person today" link; a failed quote is withdrawn; the saved firm-wide history holds no answer text. Browser notifications were also checked: with permission granted and browser notifications on, an item that became unread raised one notification, "1 new item needs your attention", on the next poll.
+
+## Background work rechecks WorkOS roles (2026-09-27)
+
+Request: a GPT-6 Sol product review found that the worker never rechecks roles. A goal's owner, a monthly hand-over's author and a teammate with a hand-off are checked against firm membership (and, for access recorded as an assignment, that assignment). Their WorkOS role is never read again. So a member who lost `workpapers:review`, or firm-wide access, kept an agent preparing work in their name. Verified in the code: roles live only in WorkOS, and the worker was not even given `WORKOS_API_KEY`.
+
+What changed:
+- The worker now checks roles before every step it takes. Each sweep of goals and of monthly hand-overs reads each firm's WorkOS roles once, before locking any row, and applies the teammate list's rule: a member can review a client's work while their roles hold `workpapers:review` and either `clients:all` or an assignment to the client. A goal is checked at its next step, a hand-off at its goal's next step, and a monthly hand-over before it hands over its next month.
+- A goal stops when its owner fails that rule: "I stopped because … can no longer review this client's work." A goal whose owner left the firm still gets the membership message.
+- A monthly hand-over whose author fails the rule stops with its existing reason.
+- A hand-off whose teammate fails the rule is taken back with the existing message.
+- A goal's owner is now also checked for access to the client, which was never checked before.
+- A hosted firm whose roles can't be read, because WorkOS is unavailable or the worker has no key, waits: nothing is advanced or stopped. The local development firm, which has no WorkOS, keeps the membership rules.
+- The worker gets `WORKOS_API_KEY` in both deploy workflows, the Cloudflare container and Compose. `docs/deployment.md` and `docs/close-coordinator.md` say so.
+
+Tests (local PostgreSQL):
+- `TestHandADocumentToATeammate` covers three cases. With the WorkOS key removed, a teammate who lost their assignment keeps the hand-off. Once roles can be read, it is taken back. A partner demoted to viewer loses the hand-off; the owner demoted to viewer stops the goal and the monthly hand-over.
+- `TestCloseGoalKeepsPreparationMovingUntilReadyForReview`: an owner who loses one client's assignment stops that client's goal while keeping another client's.
+- Goal and routine tests now run as hosted firms with faked WorkOS roles.
+- Ten mutations each fail a test: failing open without a key, ignoring roles in goals, hand-offs and routines, ignoring assignments, sweeps dropping roles, and grant reads not matching the client.
+
+Review: GPT-6 Sol (reasoning high) reviewed the plan and then the diff.
+- The plan review asked for four changes, all adopted: fail closed for hosted firms without the key; give the worker the key everywhere it is deployed; read roles per sweep, outside row locks, rather than cache them; and use current firm-wide access instead of the recorded grant flag.
+- The code review found two timing issues. A revoked author's monthly hand-over stays listed until its next month is due, and the 50-goal sweeps can check a goal after more than a minute.
+- In both cases the worker takes no step without the check, and the ticket's gap was work done on revoked authority. The earlier "within a minute" wording was corrected to "before each step" instead of adding a pass over every record. A delta review closed both findings.

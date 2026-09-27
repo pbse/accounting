@@ -48,10 +48,11 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	month := func(n int) string { return first.AddDate(0, n, 0).Format("2006-01") }
 	on := func(n, day int) time.Time { return first.AddDate(0, n, day-1) }
 	org := "org_Month" + rand.Text()
+	asFirm(t, map[string]string{"user_a": "reviewer", "user_admin": "partner"}, org)
 	var setUp string
 	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Routine fixture')`,
 		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture'),($1,'user_admin',true,'Synthetic','fixture')`,
-		`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`} {
+		`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture'),($1,'user_a','Beta',true,'Synthetic','fixture')`} {
 		_, err = db.Exec(q, org)
 		must(err)
 	}
@@ -227,6 +228,7 @@ func TestMonthlyHandOversTakeTurns(t *testing.T) {
 	defer db.Close()
 	// Fifty routines of a firm at its close limit wait on every sweep; another firm's waiting routine still gets its turn.
 	busy, free := "org_Busy"+rand.Text(), "org_Free"+rand.Text()
+	asFirm(t, map[string]string{"user_a": "partner"}, busy, free)
 	defer func() {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id IN ($1,$2))`,
 			`DELETE FROM close_routines WHERE organization_id IN ($1,$2)`, `DELETE FROM client_closes WHERE organization_id IN ($1,$2)`,
