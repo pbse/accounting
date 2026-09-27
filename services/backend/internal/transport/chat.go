@@ -689,7 +689,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		var clients string
 		clientsNow := func(q querier) (string, error) {
 			var c string
-			return c, q.QueryRowContext(r.Context(), `SELECT COALESCE(string_agg(lower(client_entity),',' ORDER BY lower(client_entity)),'') FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND granted`, org, author).Scan(&c)
+			return c, q.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(lower(client_entity) ORDER BY lower(client_entity)),'[]')::text FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND granted`, org, author).Scan(&c)
 		}
 		still := func(q querier) (bool, error) {
 			var ok bool

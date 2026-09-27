@@ -306,6 +306,14 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 		_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Back','fixture')`, org)
 		must(err)
 	}
+	// A client whose name holds a comma, swapped for clients with its two halves, is still a change.
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Gamma,Zeta',true,'Synthetic','fixture')`, org)
+	must(err)
+	respond, revoke = func(reads map[string]string) modelAnswer {
+		return modelAnswer{true, firmAnswer, []support{{"today", reads["today"][1:13]}}}
+	}, `INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Gamma,Zeta',false,'Split','fixture'),($1,'user_a','Gamma',true,'Split','fixture'),($1,'user_a','Zeta',true,'Split','fixture')`
+	call("user_a", nil, "/v1/closes/chat", map[string]string{"text": firmQuestion}, 403)
+	revoke = ""
 	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1`, org).Scan(&after))
 	if after != before {
 		t.Fatalf("nothing is saved for a member who lost a client: %d %d", before, after)

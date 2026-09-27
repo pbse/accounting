@@ -175,7 +175,7 @@ function WrittenAnswers() {
       <p>
         {policy.model_answers
           ? "On: when a question in a client close matches none of the assistant's fixed reads, the model writes an answer."
-          : "Off: the assistant answers only from its fixed reads and calls no model."}{" "}
+          : "Off: questions in a client close are answered only from the assistant's fixed reads and are never sent."}{" "}
         When on, the question and that close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft) go to OpenAI, with card, bank and sign-in details removed and a request not to store them. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. Each attempt counts against the firm's daily model limit.
       </p>
       <p>
