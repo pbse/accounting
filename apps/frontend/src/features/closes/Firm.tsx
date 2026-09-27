@@ -7,7 +7,7 @@ import { EmailSettings } from "./Email";
 import { FirmEnrollment } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
+type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
 
 function IndependentReview() {
   const [policy, setPolicy] = useState<Policy>();
@@ -156,11 +156,11 @@ function WrittenAnswers() {
     };
   }, [refresh]);
   if (!policy) return message ? <p role="alert">{message}</p> : null;
-  async function change() {
+  async function change(setting: "model_answers" | "firm_answers") {
     setBusy(true);
     setMessage("");
     try {
-      await workspaceRequest("/organization/policy", { model_answers: !policy!.model_answers, reason });
+      await workspaceRequest("/organization/policy", { [setting]: !policy![setting], reason });
       setReason("");
       setRefresh((n) => n + 1);
     } catch (e) {
@@ -176,7 +176,13 @@ function WrittenAnswers() {
         {policy.model_answers
           ? "On: when a question in a client close matches none of the assistant's fixed reads, the model writes an answer."
           : "Off: the assistant answers only from its fixed reads and calls no model."}{" "}
-        When on, the question and that close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft) go to OpenAI, with card, bank and sign-in details removed and a request not to store them. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. Each attempt counts against the firm's daily model limit. Questions across the firm are never sent.
+        When on, the question and that close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft) go to OpenAI, with card, bank and sign-in details removed and a request not to store them. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. Each attempt counts against the firm's daily model limit.
+      </p>
+      <p>
+        {policy.firm_answers
+          ? "Firm-wide answers are on: a question asked outside a client close that matches none of the fixed reads is also answered by the model."
+          : "Firm-wide answers are off: questions asked outside a client close are never sent."}{" "}
+        When on, the question and the member's own lists of what needs a person today, the review queue and blocked work, across the clients they can open, go to OpenAI under the same removals and checks. The answer is shown once and never kept in the conversation.
       </p>
       {policy.can_manage_model_answers ? (
         <>
@@ -184,8 +190,11 @@ function WrittenAnswers() {
             Reason for the change
             <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
           </label>
-          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change()}>
+          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change("model_answers")}>
             {policy.model_answers ? "Stop written answers" : "Turn on written answers"}
+          </button>
+          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change("firm_answers")}>
+            {policy.firm_answers ? "Stop firm-wide answers" : "Turn on firm-wide answers"}
           </button>
         </>
       ) : (

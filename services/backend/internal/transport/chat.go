@@ -626,6 +626,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		var live []string
 		var linked []chatCitation
 		var targets []chatCitation
+		// ask is set when no fixed read matched, so a written answer may be tried.
+		ask := false
 		var extra []string
 		if closeID == "" {
 			var err error
@@ -656,7 +658,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			}
 			reply = chatReply{body: "I can take a close from here, but I don't act on other instructions, such as “" + strings.Join(extra, " ") + "”. Say " + say + " to hand it to me."}
 		} else if closeID == "" {
-			reply, live, linked = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, chatIntent(in.Text, false, false), in.Text)
+			intent := chatIntent(in.Text, false, false)
+			reply, live, linked = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, intent, in.Text)
+			ask = intent == ""
 		} else if delegate {
 			reply = chatReply{body: "I can take this close from here. Check my plan and hand it over.", action: "delegate", due: due, finish: finish}
 		} else if action := chatAction(in.Text); action != "" {
@@ -678,52 +682,92 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				intent = chatIntent(previous, true, in.WorkpaperID != "")
 			}
 			reply = closeAnswer(func(path string, out any) bool { return read(r, "/v1/closes/"+url.PathEscape(closeID)+path, out) }, closeID, in.WorkpaperID, intent, in.Text, previous)
-			if intent == "" {
-				_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
-				readRaw := func(path string) (string, bool) {
-					rec := replay(r, "GET", "/v1/closes/"+url.PathEscape(closeID)+path, nil)
-					return rec.Body.String(), rec.Code == 200
-				}
-				// The first streamed line waits until the member's firm membership and close access are checked again.
-				denied := false
-				emit := func(delta string) bool {
-					if streamed == nil {
-						var allowed, member bool
-						err := db.QueryRowContext(r.Context(), closeAccess, closeID, org, firmAccess(r), author).Scan(&allowed)
-						if err == nil && allowed {
-							err = db.QueryRowContext(r.Context(), `SELECT enabled AND ($1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)) FROM organizations WHERE id=$1`, org, author).Scan(&member)
-						}
-						if err != nil || !allowed || !member {
-							denied = true
-							return false
-						}
-						w.Header().Set("Content-Type", "application/x-ndjson")
-						w.Header().Set("Cache-Control", "no-store")
-						w.WriteHeader(http.StatusOK)
-						streamed = &streamWriter{w}
-						w = streamed
-					}
-					line, _ := json.Marshal(map[string]string{"delta": delta})
-					if _, err := streamed.ResponseWriter.Write(append(line, '\n')); err != nil {
-						return false
-					}
-					_ = http.NewResponseController(streamed.ResponseWriter).Flush()
-					return true
-				}
-				began := time.Now()
-				written, why, outcome := writtenReply(r.Context(), db, org, readRaw, closeID, in.WorkpaperID, in.Text, emit)
-				if denied {
-					problem(w, 403, "Your access changed. Nothing was saved.")
+			ask = intent == ""
+		}
+		// still says whether the member may still see what a written answer was made from: the close, or across the firm
+		// the same clients as when the reads were made.
+		var clients string
+		clientsNow := func(q querier) (string, error) {
+			var c string
+			return c, q.QueryRowContext(r.Context(), `SELECT COALESCE(string_agg(lower(client_entity),',' ORDER BY lower(client_entity)),'') FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND granted`, org, author).Scan(&c)
+		}
+		still := func(q querier) (bool, error) {
+			var ok bool
+			if closeID != "" {
+				return ok, q.QueryRowContext(r.Context(), closeAccess, closeID, org, firmAccess(r), author).Scan(&ok)
+			}
+			now, err := clientsNow(q)
+			return now == clients, err
+		}
+		if ask {
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
+			prefix := "/v1/closes"
+			if closeID != "" {
+				prefix += "/" + url.PathEscape(closeID)
+			}
+			readRaw := func(path string) (string, bool) {
+				rec := replay(r, "GET", prefix+path, nil)
+				return rec.Body.String(), rec.Code == 200
+			}
+			if closeID == "" {
+				var err error
+				if clients, err = clientsNow(db); err != nil {
+					problem(w, 503, "Conversation unavailable.")
 					return
 				}
-				switch {
-				case outcome == "kept":
-					reply = written
-				case streamed != nil:
-					reply.body = "The written answer could not be checked against this close's saved work, so it was withdrawn. " + reply.body
-				case why != "":
-					reply.body += " " + why
+			}
+			// The first streamed line waits until the member's firm membership and access are checked again.
+			denied := false
+			emit := func(delta string) bool {
+				if streamed == nil {
+					allowed, err := still(db)
+					var member bool
+					if err == nil && allowed {
+						err = db.QueryRowContext(r.Context(), `SELECT enabled AND ($1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)) FROM organizations WHERE id=$1`, org, author).Scan(&member)
+					}
+					if err != nil || !allowed || !member {
+						denied = true
+						return false
+					}
+					w.Header().Set("Content-Type", "application/x-ndjson")
+					w.Header().Set("Cache-Control", "no-store")
+					w.WriteHeader(http.StatusOK)
+					streamed = &streamWriter{w}
+					w = streamed
 				}
+				line, _ := json.Marshal(map[string]string{"delta": delta})
+				if _, err := streamed.ResponseWriter.Write(append(line, '\n')); err != nil {
+					return false
+				}
+				_ = http.NewResponseController(streamed.ResponseWriter).Flush()
+				return true
+			}
+			began := time.Now()
+			written, why, outcome := writtenReply(r.Context(), db, org, readRaw, closeID, in.WorkpaperID, in.Text, emit)
+			if denied {
+				problem(w, 403, "Your access changed. Nothing was saved.")
+				return
+			}
+			switch {
+			case outcome == "kept" && closeID == "":
+				// Across the firm the answer is shown once, like the fixed reads, so history keeps no client details.
+				reply = chatReply{body: "I wrote an answer from your firm's work lists. It was shown once and not kept; ask again to see it."}
+				for _, line := range strings.Split(written.body, "\n") {
+					if line = strings.TrimSpace(line); line != "" {
+						live = append(live, line)
+					}
+				}
+				live, linked = append(live, written.lines...), written.citations
+			case outcome == "kept":
+				reply = written
+			case streamed != nil && closeID == "":
+				reply.body = "The written answer could not be checked against your firm's work lists, so it was withdrawn. " + reply.body
+			case streamed != nil:
+				reply.body = "The written answer could not be checked against this close's saved work, so it was withdrawn. " + reply.body
+			case why != "":
+				reply.body += " " + why
+			}
+			if closeID != "" {
 				attempted, latency = outcome, sql.NullInt64{Int64: time.Since(began).Milliseconds(), Valid: outcome != "limit"}
 			}
 		}
@@ -744,9 +788,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR SHARE`, org).Scan(&enabled); err == nil && enabled {
 			err = tx.QueryRowContext(r.Context(), `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, org, author).Scan(&member)
 		}
-		// Access to the close is read again too, since a written answer can take seconds.
-		if err == nil && member && closeID != "" {
-			err = tx.QueryRowContext(r.Context(), closeAccess, closeID, org, firmAccess(r), author).Scan(&member)
+		// Access is read again too, since a written answer can take seconds.
+		if err == nil && member && (closeID != "" || ask) {
+			member, err = still(tx)
 		}
 		if err != nil || !member {
 			problem(w, 403, "Your access changed. Nothing was saved.")

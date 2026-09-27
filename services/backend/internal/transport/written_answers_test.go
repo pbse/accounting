@@ -6,9 +6,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -116,16 +118,19 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 		return w.Body.Bytes()
 	}
 	type citation struct{ Label, Href string }
-	// ask returns the saved reply, its links and the text that streamed before it.
-	ask := func(text string) (string, []citation, string) {
+	type conversation struct {
+		Messages []struct {
+			Body      string     `json:"body"`
+			Citations []citation `json:"citations"`
+		} `json:"messages"`
+		Live          []string   `json:"live"`
+		LiveCitations []citation `json:"live_citations"`
+	}
+	// post returns the conversation after a question and the text that streamed before it.
+	post := func(path, text string) (conversation, string) {
 		t.Helper()
-		var out struct {
-			Messages []struct {
-				Body      string     `json:"body"`
-				Citations []citation `json:"citations"`
-			} `json:"messages"`
-		}
-		lines := strings.Split(strings.TrimSpace(string(call("user_a", nil, "/v1/closes/"+alpha+"/chat", map[string]string{"text": text}, 200))), "\n")
+		var out conversation
+		lines := strings.Split(strings.TrimSpace(string(call("user_a", nil, path, map[string]string{"text": text}, 200))), "\n")
 		streamed := ""
 		for _, line := range lines[:len(lines)-1] {
 			var delta struct{ Delta string }
@@ -136,6 +141,12 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 			streamed += delta.Delta
 		}
 		must(json.Unmarshal([]byte(lines[len(lines)-1]), &out))
+		return out, streamed
+	}
+	// ask returns the saved reply in the close, its links and the text that streamed before it.
+	ask := func(text string) (string, []citation, string) {
+		t.Helper()
+		out, streamed := post("/v1/closes/"+alpha+"/chat", text)
 		last := out.Messages[len(out.Messages)-1]
 		return last.Body, last.Citations, streamed
 	}
@@ -242,7 +253,64 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	if after != before {
 		t.Fatalf("nothing is saved for a member who lost access: %d %d", before, after)
 	}
+	// Firm-wide questions need their own consent; the answer is shown once and never stored.
+	firmQuestion, firmHelp := "Which client has the oldest open close?", "Across the firm I can"
 	spent := calls
+	if out, _ := post("/v1/closes/chat", firmQuestion); !strings.HasPrefix(out.Messages[len(out.Messages)-1].Body, firmHelp) || calls != spent {
+		t.Fatalf("close written answers alone never send a firm-wide question: calls=%d", calls)
+	}
+	call("user_a", nil, "/v1/closes/organization/policy", map[string]any{"firm_answers": true, "reason": "Pilot firm-wide answers"}, 403)
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"firm_answers": true, "reason": "Pilot firm-wide answers"}, 200)
+	must(db.QueryRow(`SELECT assistant_firm_answers FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded))
+	security = httptest.NewRecorder()
+	store.ServeHTTP(security, httptest.NewRequest("GET", "/v1/closes/security", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: org, Permissions: []string{"clients:all", "members:manage"}})))
+	if !recorded || !strings.Contains(security.Body.String(), "Firm-wide written answers are on") {
+		t.Fatalf("the firm-wide policy change is recorded and shown: %v %s", recorded, security.Body.String())
+	}
+	firmAnswer := "Alpha has the oldest open close.\n\nCheck its blockers first."
+	respond = func(reads map[string]string) modelAnswer {
+		return modelAnswer{true, firmAnswer, []support{{"today", reads["today"][1:13]}}}
+	}
+	out, streamed := post("/v1/closes/chat", firmQuestion)
+	sentReads := slices.Sorted(maps.Keys(readsSent))
+	if calls != spent+1 || streamed != firmAnswer || !slices.Equal(sentReads, []string{"blocked", "review", "today"}) {
+		t.Fatalf("a firm-wide question goes with the member's work lists and streams: calls=%d reads=%v streamed=%q", calls, sentReads, streamed)
+	}
+	if body := out.Messages[len(out.Messages)-1].Body; strings.Contains(body, "Alpha") || !slices.Equal(out.Live, []string{"Alpha has the oldest open close.", "Check its blockers first.", firmWrittenNote}) || len(out.LiveCitations) != 1 || out.LiveCitations[0] != (citation{"Needs a person today", "/dashboard"}) {
+		t.Fatalf("the firm-wide answer is shown once, line by line, with its read's link: %q %q %v", body, out.Live, out.LiveCitations)
+	}
+	respond = func(map[string]string) modelAnswer {
+		return modelAnswer{true, firmAnswer, []support{{"today", "Everything was approved"}}}
+	}
+	if out, streamed := post("/v1/closes/chat", firmQuestion); streamed != firmAnswer || len(out.Live) != 0 || !strings.HasPrefix(out.Messages[len(out.Messages)-1].Body, "The written answer could not be checked against your firm's work lists, so it was withdrawn. "+firmHelp) {
+		t.Fatalf("a firm-wide answer that fails its checks is withdrawn: %q", out.Messages[len(out.Messages)-1].Body)
+	}
+	var stored int
+	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1 AND close_id IS NULL AND body LIKE '%Alpha%'`, org).Scan(&stored))
+	if stored != 0 {
+		t.Fatalf("firm-wide history keeps no answer text: %d", stored)
+	}
+	// A member who loses a client while the model answers across the firm sees and saves nothing, streamed or not.
+	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1`, org).Scan(&before))
+	for _, reply := range []modelAnswer{{true, firmAnswer, nil}, {false, "", []support{}}} {
+		respond, revoke = func(reads map[string]string) modelAnswer {
+			if reply.Answerable {
+				reply.Support = []support{{"today", reads["today"][1:13]}}
+			}
+			return reply
+		}, `INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',false,'Moved','fixture')`
+		if denied := string(call("user_a", nil, "/v1/closes/chat", map[string]string{"text": firmQuestion}, 403)); strings.Contains(denied, "delta") {
+			t.Fatalf("a member who lost a client gets no streamed text: %s", denied)
+		}
+		revoke = ""
+		_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Back','fixture')`, org)
+		must(err)
+	}
+	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1`, org).Scan(&after))
+	if after != before {
+		t.Fatalf("nothing is saved for a member who lost a client: %d %d", before, after)
+	}
+	spent = calls
 	if body, _, _ := ask("Where does this close stand?"); strings.HasPrefix(body, help) || calls != spent {
 		t.Fatalf("a question a fixed read answers never goes to the model: %q", body)
 	}
