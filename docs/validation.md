@@ -1904,6 +1904,20 @@ Local end to end (API and worker built from the final code, over HTTP, with two 
 
 Not verified: the card and Attention in a real browser; live WorkOS responses; a member's WorkOS role change, which the worker cannot see.
 
+## Close goals: every delegated close's progress in Work (2026-09-27)
+
+Request: step 3 of the close-orchestration plan ends with portfolio progress: Work as a short list of decisions, deadlines and outcomes, so someone who delegated closes and left can come back to where each stands. Migration 085 adds `close_goals.summary`, what the agent last found (what people owe, counted as the goal card counts it; whether every document has a draft ready for review; the sign-off state; when), written by each goal step. Worked out on every Work read, the card's live progress would cost several queries per delegated close. `GET /v1/closes/goals` lists the delegated closes the member can see; Work shows them under **Handed to the agent**.
+
+Plan review: GPT-6 Sol (reasoning high), the only reviewer from this change on, judged it real, undone work and the stored summary the minimum. Adopted: ready to sign off and needing reopening rank with those needing a person; each summary says when it was found, the list shows "Updating…" before the first and when progress is more than ten minutes old; Work's client or month filter narrows the list past its 100; it says a thing needs "a person", not "you", since a teammate may hold it; signed-off closes stay visible (Attention's exclusion is not copied).
+
+Code review: GPT-6 Sol found that the list read the delegated closes only when Work reloaded, so "Updating…" or a new monthly hand-over could stay stale; it now reads them again every minute, as often as the agent updates them. The delta review closed it and found nothing new.
+
+Tests: `TestWorkListsEveryDelegatedClose` (its own firm): the close needing a person comes first, then those in progress, then those finished; a stopped goal and one finished 15 days ago are left out; a signed-off close stays; each summary carries its count, readiness and time, with the hand-off count; a member assigned to two clients sees those two; the client filter narrows it. `TestSignOffGoalCarriesTheCloseThroughSignOff` also checks that a sign-off goal's summary counts the approval and sign-off needs the card lists, and says signed off once it is. Ten mutations of these guards each fail a test.
+
+Local end to end (API and worker built from this branch): before the worker's first step every delegated close read as updating, in progress before finished; after it, the three monthly hand-overs with no documents came first, each with one thing needing a person, then the closes ready for review and the signed-off one; the client filter narrowed the list to one close.
+
+Not verified: the list in a real browser.
+
 ## Browser pass of the chat roadmap (2026-09-27)
 
 Request: check the chat roadmap's pages in a real browser. Headless Chrome 154 (its own throwaway profile) drove the Vite frontend, API and worker built from `origin/main` against a fresh, fully migrated local PostgreSQL database, unlocked with a workspace token generated for the run. No model key was configured, so model steps were checked only as far as their refusal, and one synthetic statement reading was written to the local database to exercise the statement review table.

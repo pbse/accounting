@@ -8,6 +8,7 @@ import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
 import { MorningBrief } from "./Morning";
+import { DelegatedCloses } from "./Goal";
 import { Setup } from "./Setup";
 
 type Fact = {
@@ -284,6 +285,7 @@ export function Work({
       {loaded && (
         <>
           {!closeId && <MorningBrief refresh={refresh} />}
+          {!closeId && <DelegatedCloses refresh={refresh} client={clientSearch} />}
           {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} view={filter} client={clientSearch} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />}
           {!closeId && (
             <>

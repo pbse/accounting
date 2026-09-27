@@ -412,7 +412,7 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			err = settleHandoffs(ctx, tx, g, nil, true)
 		}
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now() WHERE id=$1`, g.id)
+			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now()) WHERE id=$1`, g.id, current.State)
 		}
 		return err
 	case g.finish == "signoff" && g.state == "reached":
@@ -490,9 +490,25 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			err = goalEvent(ctx, tx, g.id, "agent", "New work arrived after the drafts were ready, so I'm back on it.")
 		}
 	}
-	if err == nil {
-		_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now() WHERE id=$1`, g.id)
+	if err != nil {
+		return err
 	}
+	// Work lists every delegated close from this summary; what people owe is counted as the goal card counts it.
+	if g.finish == "signoff" {
+		if progress, err = readGoalProgress(ctx, tx, g.close, g.finish); err != nil {
+			return err
+		}
+	}
+	needs, signoff := len(progress.Needs), ""
+	for _, item := range progress.Items {
+		if item.Status == "needs_you" || item.Status == "unsupported" {
+			needs++
+		}
+	}
+	if progress.Signoff != nil {
+		needs, signoff = needs+len(progress.Signoff.Needs), progress.Signoff.State
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now()) WHERE id=$1`, g.id, needs, progress.Ready, signoff)
 	return err
 }
 
@@ -522,6 +538,52 @@ SELECT at,actor,text,count(*) OVER () FROM (
 ) a WHERE at>=$3 ORDER BY at DESC,n DESC LIMIT $4`
 
 func registerGoals(mux *http.ServeMux, db *sql.DB) {
+	// Every close handed to the agent that the member can access, with what the agent last found: those needing a person
+	// first, then the rest still in progress, then those finished in the past 14 days.
+	mux.HandleFunc("GET /v1/closes/goals", func(w http.ResponseWriter, r *http.Request) {
+		search := strings.TrimSpace(r.URL.Query().Get("client"))
+		if len(search) > 200 {
+			problem(w, 422, "Client search is too long.")
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT g.id::text,c.id::text,c.entity,c.period,g.finish,COALESCE(g.due_on::text,''),g.state,g.author,g.summary,
+ (SELECT count(*) FROM goal_handoffs h WHERE h.goal_id=g.id AND h.closed_at IS NULL)
+ FROM close_goals g JOIN client_closes c ON c.id=g.close_id
+ WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access a WHERE a.organization_id=c.organization_id AND a.subject=$3 AND lower(a.client_entity)=lower(c.entity) AND a.granted))
+ AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4) AND (g.state='active' OR g.state='reached' AND g.reached_at>now()-interval '14 days')
+ ORDER BY CASE WHEN (g.summary->>'needs')::int>0 OR g.summary->>'signoff'='reopen_required' OR g.summary->>'signoff'='open' AND (g.summary->>'ready')::boolean THEN 0 WHEN g.state='active' THEN 1 ELSE 2 END,g.due_on NULLS LAST,lower(c.entity),c.period LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+		if err != nil {
+			problem(w, 503, "Delegated closes are unavailable.")
+			return
+		}
+		defer rows.Close()
+		type delegated struct {
+			ID      string          `json:"id"`
+			CloseID string          `json:"close_id"`
+			Entity  string          `json:"entity"`
+			Period  string          `json:"period"`
+			Finish  string          `json:"finish"`
+			DueOn   string          `json:"due_on"`
+			State   string          `json:"state"`
+			Author  string          `json:"author"`
+			Summary json.RawMessage `json:"summary"`
+			Handed  int             `json:"handed"`
+		}
+		goals := []delegated{}
+		for rows.Next() {
+			var d delegated
+			if err = rows.Scan(&d.ID, &d.CloseID, &d.Entity, &d.Period, &d.Finish, &d.DueOn, &d.State, &d.Author, &d.Summary, &d.Handed); err != nil {
+				problem(w, 503, "Delegated closes are unavailable.")
+				return
+			}
+			goals = append(goals, d)
+		}
+		if rows.Err() != nil {
+			problem(w, 503, "Delegated closes are unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"goals": goals[:min(len(goals), 100)], "more": len(goals) > 100})
+	})
 	mux.HandleFunc("GET /v1/closes/{id}/goal", func(w http.ResponseWriter, r *http.Request) {
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
