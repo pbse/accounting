@@ -189,7 +189,7 @@ func trackRecord(db *sql.DB) http.HandlerFunc {
 		// Written-answer attempts on closes this member can open, over 30 days; a limit hit has no time.
 		var asked, kept int
 		var median *float64
-		if err = db.QueryRowContext(r.Context(), `SELECT count(*),count(*) FILTER (WHERE a.outcome='kept'),percentile_cont(0.5) WITHIN GROUP (ORDER BY a.latency_ms) FILTER (WHERE a.latency_ms IS NOT NULL)/1000 FROM assistant_answers a JOIN client_closes c ON c.id=a.close_id WHERE `+access+` AND a.created_at>now()-interval '30 days'`, organization(r), firmAccess(r), subject(r)).Scan(&asked, &kept, &median); err != nil {
+		if err = db.QueryRowContext(r.Context(), `SELECT count(*),count(*) FILTER (WHERE a.outcome='kept'),percentile_cont(0.5) WITHIN GROUP (ORDER BY a.latency_ms) FILTER (WHERE a.latency_ms IS NOT NULL)/1000 FROM assistant_answers a JOIN client_closes c ON c.id=a.close_id WHERE a.organization_id=$1 AND `+access+` AND a.created_at>now()-interval '30 days'`, organization(r), firmAccess(r), subject(r)).Scan(&asked, &kept, &median); err != nil {
 			problem(w, 503, "Track record is unavailable.")
 			return
 		}

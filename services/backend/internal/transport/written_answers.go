@@ -137,14 +137,16 @@ func writtenReply(ctx context.Context, db *sql.DB, org string, readRaw func(stri
 				return reply, unanswered, "failed"
 			}
 			output.WriteString(event.Delta)
-			if text, answerable := streamedAnswer(output.String()); answerable && len(text) > shown && shown < 1500 {
+			if text, answerable := streamedAnswer(output.String()); answerable && shown < 1500 {
 				for len(text) > 1500 || !utf8.ValidString(text) {
 					text = text[:len(text)-1]
 				}
-				if !emit(text[shown:]) {
-					return reply, "", "failed"
+				if len(text) > shown {
+					if !emit(text[shown:]) {
+						return reply, "", "failed"
+					}
+					shown = len(text)
 				}
-				shown = len(text)
 			}
 		case "response.refusal.delta", "response.refusal.done":
 			refused = true

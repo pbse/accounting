@@ -130,6 +130,9 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 		for _, line := range lines[:len(lines)-1] {
 			var delta struct{ Delta string }
 			must(json.Unmarshal([]byte(line), &delta))
+			if delta.Delta == "" {
+				t.Fatalf("a streamed line carries text: %s", line)
+			}
 			streamed += delta.Delta
 		}
 		must(json.Unmarshal([]byte(lines[len(lines)-1]), &out))
@@ -192,6 +195,13 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 			t.Fatalf("%s is withdrawn after streaming: %q %q", name, body, streamed)
 		}
 	}
+	// A character that would cross the 1,500-byte cap is held back, and nothing empty is sent after it.
+	respond = func(reads map[string]string) modelAnswer {
+		return modelAnswer{true, strings.Repeat("a", 1498) + "€ more", []support{{"status", headline(reads)}}}
+	}
+	if _, _, streamed := ask(question); streamed != strings.Repeat("a", 1498) {
+		t.Fatalf("the stream stops at the cap on a whole character: %d bytes", len(streamed))
+	}
 	var leaked int
 	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1 AND role='assistant' AND body LIKE '%captured%yet%'`, org).Scan(&leaked))
 	if leaked != 1 {
@@ -246,7 +256,7 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	// Each attempt leaves its outcome and time, and no text; a limit hit has no time.
 	var outcomes string
 	must(db.QueryRow(`SELECT string_agg(outcome||':'||(latency_ms IS NOT NULL)::text,',' ORDER BY id) FROM assistant_answers WHERE organization_id=$1`, org).Scan(&outcomes))
-	if outcomes != "kept:true,not_kept:true,not_kept:true,unanswerable:true,not_kept:true,failed:true,limit:false" {
+	if outcomes != "kept:true,not_kept:true,not_kept:true,not_kept:true,unanswerable:true,not_kept:true,failed:true,limit:false" {
 		t.Fatalf("each written attempt is measured without its text: %s", outcomes)
 	}
 	tracked := httptest.NewRecorder()
@@ -257,7 +267,7 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 			MedianSeconds *float64 `json:"median_seconds"`
 		}
 	}
-	if json.Unmarshal(tracked.Body.Bytes(), &track) != nil || track.Assistant.Asked != 7 || track.Assistant.Kept != 1 || track.Assistant.MedianSeconds == nil {
+	if json.Unmarshal(tracked.Body.Bytes(), &track) != nil || track.Assistant.Asked != 8 || track.Assistant.Kept != 1 || track.Assistant.MedianSeconds == nil {
 		t.Fatalf("the track record counts written answers on closes the member can open: %s", tracked.Body.String())
 	}
 }
