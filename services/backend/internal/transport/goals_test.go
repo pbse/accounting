@@ -111,6 +111,7 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	}
 	ctx := context.Background()
 	org := "org_Goal" + rand.Text()
+	asFirm(t, map[string]string{"user_a": "reviewer", "user_b": "reviewer"}, org)
 	var alpha, beta string
 	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Goal fixture')`, org)
 	must(err)
@@ -364,6 +365,16 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 		t.Fatalf("the history keeps the request's steps, newest first: %q", history)
 	}
 
+	// The owner losing a client stops its goal; their other clients' goals carry on.
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Beta',false,'Moved to another client','fixture')`, org)
+	must(err)
+	sweepCloseGoals(ctx, db)
+	var betaState, betaLast string
+	must(db.QueryRow(`SELECT state,events->-1->>'text' FROM close_goals WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, beta).Scan(&betaState, &betaLast))
+	if betaState != "stopped" || betaLast != "I stopped because user_a can no longer review this client's work." {
+		t.Fatalf("an owner who lost the client stops its goal: %s %q", betaState, betaLast)
+	}
+
 	// The owner leaving the firm stops the goal before it brings in anything more.
 	call("user_a", reviewer, "POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true}, 200)
 	before := runs(alpha)
@@ -473,6 +484,7 @@ func TestSignOffGoalCarriesTheCloseThroughSignOff(t *testing.T) {
 	}
 	ctx := context.Background()
 	org := "org_Sign" + rand.Text()
+	asFirm(t, map[string]string{"user_a": "reviewer"}, org)
 	var alpha string
 	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Sign-off fixture')`,
 		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`,
@@ -922,7 +934,7 @@ func TestGoalCountsAccountCoverage(t *testing.T) {
 	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed',workpaper_ids=jsonb_build_array($2::text),finished_at=now() WHERE id::text=$1`, job, paper)
 	must(err)
 	goal, _ := read()
-	must(stepGoal(ctx, db, goal))
+	must(stepGoal(ctx, db, goal, nil))
 	_, p := read()
 	if p.Signoff == nil || p.Coverage == nil || *p.Coverage != (goalCoverage{Total: 3, Open: 2}) || slices.ContainsFunc(p.Signoff.Needs, func(n string) bool { return strings.HasPrefix(n, "Coverage for ") }) {
 		t.Fatalf("with its documents ready the sign-off goal keeps the accounts as one count: %+v %+v", p.Coverage, p.Signoff)
@@ -953,7 +965,7 @@ func TestGoalCountsAccountCoverage(t *testing.T) {
 	}
 	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, alpha)
 	must(err)
-	must(stepGoal(ctx, db, goal))
+	must(stepGoal(ctx, db, goal, nil))
 	_, p = read()
 	var signoff string
 	must(db.QueryRow(`SELECT summary->>'signoff' FROM close_goals WHERE id::text=$1`, goal).Scan(&signoff))

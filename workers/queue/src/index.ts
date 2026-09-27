@@ -21,6 +21,7 @@ export class PreparationWorker extends Container<Env> {
     PUBLIC_APP_URL: this.env.PUBLIC_APP_URL ?? "",
     UPLOAD_SCAN_KEY: this.env.UPLOAD_SCAN_KEY ?? "",
     TEXT_SCANNER_URL: this.env.TEXT_SCANNER_URL ?? "",
+    WORKOS_API_KEY: this.env.WORKOS_API_KEY ?? "",
   };
   defaultPort = 8080;
   sleepAfter = "5m";
@@ -46,6 +47,7 @@ interface Env {
   PUBLIC_APP_URL?: string;
   UPLOAD_SCAN_KEY?: string;
   TEXT_SCANNER_URL?: string;
+  WORKOS_API_KEY?: string;
   WORKER: DurableObjectNamespace<PreparationWorker>;
 }
 

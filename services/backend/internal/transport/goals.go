@@ -428,7 +428,7 @@ func handOver(ctx context.Context, tx *sql.Tx, g *goalRow, due, text string) *cl
 	}
 	err = tx.QueryRowContext(ctx, `INSERT INTO close_goals(close_id,author,due_on,finish,events) VALUES($1,$2,NULLIF($3,'')::date,$5,jsonb_build_array(jsonb_build_object('actor',$2::text,'text',$4::text,'at',now()))) RETURNING id::text`, g.close, g.author, due, text, g.finish).Scan(&g.id)
 	if err == nil {
-		err = advanceGoal(ctx, tx, *g)
+		err = advanceGoal(ctx, tx, *g, nil)
 	}
 	if err != nil {
 		return closeRefusal(503, "The close could not be handed to the agent. Refresh and try again.")
@@ -446,19 +446,24 @@ func stopGoal(ctx context.Context, tx *sql.Tx, id, actor, text string) error {
 	return goalEvent(ctx, tx, id, actor, text)
 }
 
-// advanceGoal takes the goal's next step in tx, whose caller holds the close row and then the goal row.
-func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
+// advanceGoal takes the goal's next step in tx, whose caller holds the close row and then the goal row. roles, when
+// known, are the firm's current WorkOS roles, which the author and teammates must still hold.
+func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]reviewer) error {
 	// Holding the firm row serializes this step with a member's removal; membership is read in a second statement so it
 	// sees a removal the lock waited for. A suspended firm's goals wait.
-	var enabled, member bool
+	var enabled, member, granted bool
 	if err := tx.QueryRowContext(ctx, `SELECT enabled FROM organizations WHERE id=$1 FOR SHARE`, g.org).Scan(&enabled); err != nil || !enabled {
 		return err
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, g.org, g.author).Scan(&member); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted),
+ EXISTS(SELECT 1 FROM current_client_access a JOIN client_closes c ON lower(c.entity)=lower(a.client_entity) WHERE c.id=$3 AND a.organization_id=$1 AND a.subject=$2 AND a.granted)`, g.org, g.author, g.close).Scan(&member, &granted); err != nil {
 		return err
 	}
 	if !member {
 		return stopGoal(ctx, tx, g.id, "agent", "I stopped because "+g.author+" is no longer a member of the firm.")
+	}
+	if !mayAct(roles, g.author, member, false, granted) {
+		return stopGoal(ctx, tx, g.id, "agent", "I stopped because "+g.author+" can no longer review this client's work.")
 	}
 	signed, err := signedOff(ctx, tx, g.close)
 	switch {
@@ -482,7 +487,7 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			}
 			progress, err := readGoalProgress(ctx, tx, g.close, g.finish)
 			if err == nil {
-				err = settleHandoffs(ctx, tx, g, goalProgress{}, true)
+				err = settleHandoffs(ctx, tx, g, goalProgress{}, true, roles)
 			}
 			if err == nil {
 				err = saveSummary(ctx, tx, g, progress)
@@ -507,7 +512,7 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			}
 		}
 		if err == nil {
-			err = settleHandoffs(ctx, tx, g, goalProgress{}, true)
+			err = settleHandoffs(ctx, tx, g, goalProgress{}, true, roles)
 		}
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now()) WHERE id=$1`, g.id, current.State)
@@ -555,7 +560,7 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 	// Ready for review is the finish of a review goal and a milestone, kept in ready_at, of a sign-off goal.
 	progress, err := readGoalProgress(ctx, tx, g.close, "review")
 	if err == nil {
-		err = settleHandoffs(ctx, tx, g, progress, false)
+		err = settleHandoffs(ctx, tx, g, progress, false, roles)
 	}
 	if err != nil {
 		return err
@@ -924,33 +929,38 @@ func RunCloseGoals(ctx context.Context, db *sql.DB) {
 	}
 }
 
-// sweepCloseGoals steps up to 50 open goals of enabled firms. A goal whose step fails is logged and moved to the back,
-// so it cannot hold up the others.
+// sweepCloseGoals steps up to 50 open goals of enabled firms, each firm's roles read before any row is locked. A goal
+// whose step fails, or whose firm's roles cannot be read, is logged and moved to the back, so it cannot hold up the others.
 func sweepCloseGoals(ctx context.Context, db *sql.DB) {
-	rows, err := db.QueryContext(ctx, `SELECT g.id::text FROM close_goals g JOIN client_closes c ON c.id=g.close_id JOIN organizations o ON o.id=c.organization_id WHERE g.state<>'stopped' AND o.enabled ORDER BY g.checked_at NULLS FIRST,g.id LIMIT 50`)
+	rows, err := db.QueryContext(ctx, `SELECT g.id::text,c.organization_id FROM close_goals g JOIN client_closes c ON c.id=g.close_id JOIN organizations o ON o.id=c.organization_id WHERE g.state<>'stopped' AND o.enabled ORDER BY g.checked_at NULLS FIRST,g.id LIMIT 50`)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Print("Close goals could not be read: ", err)
 		}
 		return
 	}
-	ids := []string{}
+	goals := [][2]string{}
 	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
+		var id, org string
+		if rows.Scan(&id, &org) == nil {
+			goals = append(goals, [2]string{id, org})
 		}
 	}
 	rows.Close()
-	for _, id := range ids {
-		if err = stepGoal(ctx, db, id); err != nil && ctx.Err() == nil {
-			log.Printf("Close goal #%s could not take its next step: %v", id, err)
-			db.ExecContext(ctx, `UPDATE close_goals SET checked_at=now() WHERE id=$1`, id)
+	roles := sweepRoles{}
+	for _, g := range goals {
+		members, err := roles.of(ctx, g[1])
+		if err == nil {
+			err = stepGoal(ctx, db, g[0], members)
+		}
+		if err != nil && ctx.Err() == nil {
+			log.Printf("Close goal #%s could not take its next step: %v", g[0], err)
+			db.ExecContext(ctx, `UPDATE close_goals SET checked_at=now() WHERE id=$1`, g[0])
 		}
 	}
 }
 
-func stepGoal(ctx context.Context, db *sql.DB, id string) error {
+func stepGoal(ctx context.Context, db *sql.DB, id string, roles map[string]reviewer) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -966,7 +976,7 @@ func stepGoal(ctx context.Context, db *sql.DB, id string) error {
 		return nil
 	}
 	if err == nil {
-		err = advanceGoal(ctx, tx, g)
+		err = advanceGoal(ctx, tx, g, roles)
 	}
 	if err != nil {
 		return err

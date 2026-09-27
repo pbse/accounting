@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
@@ -35,6 +36,23 @@ func (w workosPages) RoundTrip(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": {"application/json"}}}, nil
 }
 
+// asFirm answers WorkOS for the firms as if each member held the role named: a partner reviews every client, a reviewer
+// only those granted to them.
+func asFirm(t *testing.T, roles map[string]string, orgs ...string) {
+	t.Setenv("WORKOS_API_KEY", "sk_test_synthetic")
+	members := []string{}
+	for subject, role := range roles {
+		members = append(members, `{"user_id":"`+subject+`","status":"active","role":{"slug":"`+role+`"}}`)
+	}
+	pages := map[string]string{"/user_management/organization_memberships?after=": `{"data":[` + strings.Join(members, ",") + `]}`}
+	for _, org := range orgs {
+		pages["/authorization/organizations/"+org+"/roles?after="] = `{"data":[{"slug":"partner","permissions":["workpapers:review","clients:all"]},{"slug":"reviewer","permissions":["workpapers:review"]}]}`
+	}
+	original := http.DefaultTransport
+	http.DefaultTransport = workosPages{next: original, pages: pages}
+	t.Cleanup(func() { http.DefaultTransport = original })
+}
+
 func TestHandADocumentToATeammate(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -56,12 +74,13 @@ func TestHandADocumentToATeammate(t *testing.T) {
 	// Partners review every client; reviewers only those they are assigned to; viewers review nothing. Cy is a viewer
 	// who also holds the reviewer role.
 	t.Setenv("WORKOS_API_KEY", "sk_test_synthetic")
-	original := http.DefaultTransport
-	http.DefaultTransport = workosPages{next: original, pages: map[string]string{
+	original, members := http.DefaultTransport, "/user_management/organization_memberships?after="
+	pages := map[string]string{
 		"/authorization/organizations/" + org + "/roles?after=": `{"data":[{"slug":"partner","permissions":["workpapers:review","clients:all"]},{"slug":"reviewer","permissions":["workpapers:review"]},{"slug":"viewer","permissions":[]}]}`,
-		"/user_management/organization_memberships?after=":      `{"data":[{"user_id":"user_a","status":"active","role":{"slug":"partner"}},{"user_id":"user_b","status":"active","role":{"slug":"partner"},"user":{"first_name":"Bea","last_name":"Brown","email":"bea@firm.test"}},{"user_id":"user_c","status":"active","role":{"slug":"viewer"},"roles":[{"slug":"viewer"},{"slug":"reviewer"}],"user":{"first_name":"","last_name":"","email":"cy@firm.test"}}],"list_metadata":{"after":"om_3"}}`,
-		"/user_management/organization_memberships?after=om_3":  `{"data":[{"user_id":"user_d","status":"active","role":{"slug":"viewer"}},{"user_id":"user_e","status":"active","role":{"slug":"reviewer"}},{"user_id":"user_f","status":"active","role":{"slug":"partner"}}],"list_metadata":{"after":null}}`,
-	}}
+		members: `{"data":[{"user_id":"user_a","status":"active","role":{"slug":"partner"}},{"user_id":"user_b","status":"active","role":{"slug":"partner"},"user":{"first_name":"Bea","last_name":"Brown","email":"bea@firm.test"}},{"user_id":"user_c","status":"active","role":{"slug":"viewer"},"roles":[{"slug":"viewer"},{"slug":"reviewer"}],"user":{"first_name":"","last_name":"","email":"cy@firm.test"}}],"list_metadata":{"after":"om_3"}}`,
+		"/user_management/organization_memberships?after=om_3": `{"data":[{"user_id":"user_d","status":"active","role":{"slug":"viewer"}},{"user_id":"user_e","status":"active","role":{"slug":"reviewer"}},{"user_id":"user_f","status":"active","role":{"slug":"partner"}}],"list_metadata":{"after":null}}`,
+	}
+	http.DefaultTransport = workosPages{next: original, pages: pages}
 	defer func() { http.DefaultTransport = original }()
 	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Hand-off fixture')`,
 		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) SELECT $1,s,s<>'user_f','Synthetic','fixture' FROM unnest(ARRAY['user_a','user_b','user_c','user_d','user_e','user_f']) s`,
@@ -73,6 +92,7 @@ func TestHandADocumentToATeammate(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
 	defer func() {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_routines WHERE organization_id=$1`,
 			`DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
@@ -202,10 +222,16 @@ func TestHandADocumentToATeammate(t *testing.T) {
 		t.Fatalf("nobody else is told: %v", got)
 	}
 
-	// Losing the assignment to the client ends the hand-off.
+	// Losing the assignment to the client ends the hand-off. While the firm's roles can't be read the agent waits.
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Alpha',false,'Moved to another client','fixture')`, org)
 	must(err)
-	must(stepGoal(ctx, db, goal))
+	t.Setenv("WORKOS_API_KEY", "")
+	sweepCloseGoals(ctx, db)
+	if len(read("user_a", partner).Handoffs) != 1 {
+		t.Fatal("without the firm's roles the agent changes nothing")
+	}
+	t.Setenv("WORKOS_API_KEY", "sk_test_synthetic")
+	sweepCloseGoals(ctx, db)
 	if text := last(); text != "cy@firm.test can no longer act for this client, so I took invoice.txt back." || len(read("user_a", partner).Handoffs) != 0 {
 		t.Fatalf("a lost assignment ends the hand-off: %q", text)
 	}
@@ -216,7 +242,7 @@ func TestHandADocumentToATeammate(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,'{}') RETURNING id::text`, alpha, "handoff-"+rand.Text()).Scan(&paper))
 	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed',workpaper_ids=jsonb_build_array($2::text),finished_at=now() WHERE id::text=$1`, invoice, paper)
 	must(err)
-	must(stepGoal(ctx, db, goal))
+	sweepCloseGoals(ctx, db)
 	if text := last(); text != "invoice.txt no longer needs anyone, so Bea Brown's hand-off is closed." {
 		t.Fatalf("the agent closes a resolved hand-off: %q", text)
 	}
@@ -236,6 +262,26 @@ func TestHandADocumentToATeammate(t *testing.T) {
 	must(db.QueryRow(`SELECT count(*) FROM goal_handoffs WHERE goal_id::text=$1 AND closed_at IS NULL`, goal).Scan(&open))
 	if open != 0 {
 		t.Fatal("stopping the agent closes its hand-offs")
+	}
+
+	// A teammate whose role no longer reviews loses the hand-off; the author, the goal and the monthly hand-over.
+	demote := func(user string) {
+		pages[members] = strings.Replace(pages[members], `"user_id":"`+user+`","status":"active","role":{"slug":"partner"}`, `"user_id":"`+user+`","status":"active","role":{"slug":"viewer"}`, 1)
+	}
+	call("user_a", partner, "POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true, "every_month": true}, 200)
+	hand(lease, "user_b", 200)
+	demote("user_b")
+	sweepCloseGoals(ctx, db)
+	if text := last(); text != "Bea Brown can no longer act for this client, so I took lease.txt back." {
+		t.Fatalf("a teammate who can no longer review loses the hand-off: %q", text)
+	}
+	demote("user_a")
+	sweepCloseGoals(ctx, db)
+	sweepCloseRoutines(ctx, db, time.Now().AddDate(0, 2, 0))
+	var reason string
+	must(db.QueryRow(`SELECT COALESCE(stop_reason,'') FROM close_routines WHERE organization_id=$1`, org).Scan(&reason))
+	if text := last(); text != "I stopped because user_a can no longer review this client's work." || reason != "Stopped because user_a can no longer act for Alpha." {
+		t.Fatalf("an author who can no longer review stops the agent: %q %q", text, reason)
 	}
 
 	// Without WorkOS a hosted firm offers nobody rather than an unchecked list.
@@ -375,7 +421,7 @@ func TestHandAnAccountToATeammate(t *testing.T) {
 	// Excluding the account ends the hand-off.
 	_, err = db.Exec(`INSERT INTO coverage_bindings(close_id,snapshot_id,account_id,job_ids,excluded,reason,actor) VALUES($1,$2,'a','[]',true,'Policy expensed','user_b')`, alpha, first)
 	must(err)
-	must(stepGoal(ctx, db, goal))
+	must(stepGoal(ctx, db, goal, nil))
 	if text := last(); text != "coverage for Prepaid insurance no longer needs anyone, so Bea Brown's hand-off is closed." || open() != 0 {
 		t.Fatalf("a covered account ends its hand-off: %q", text)
 	}
@@ -383,7 +429,7 @@ func TestHandAnAccountToATeammate(t *testing.T) {
 	// A new capture ends a hand-off made on the old one, even for the same account.
 	hand("b", 200)
 	capture()
-	must(stepGoal(ctx, db, goal))
+	must(stepGoal(ctx, db, goal, nil))
 	if text := last(); text != "The ledger capture changed, so Bea Brown's hand-off of coverage for Operating bank is closed." || open() != 0 {
 		t.Fatalf("a hand-off belongs to its capture: %q", text)
 	}
@@ -397,7 +443,7 @@ func TestHandAnAccountToATeammate(t *testing.T) {
 	hand("b", 200)
 	_, err = db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id::text=$1`, alpha)
 	must(err)
-	must(stepGoal(ctx, db, goal))
+	must(stepGoal(ctx, db, goal, nil))
 	if open() != 1 {
 		t.Fatal("a hand-off stays open while its coverage cannot be read")
 	}

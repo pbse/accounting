@@ -87,13 +87,37 @@ func teammates(ctx context.Context, db *sql.DB, r *http.Request, entity string) 
 		}
 		return members, nil
 	}
+	reviewers, err := firmReviewers(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	out := []teammate{}
+	for _, t := range members {
+		if r := reviewers[t.Subject]; r.review && (r.firmWide || t.viaGrant) {
+			t.viaGrant = !r.firmWide
+			t.Name = cmp.Or(r.name, t.Subject)
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// reviewer is what a member's WorkOS roles allow: reviewing work, on every client or only on those granted to them.
+type reviewer struct {
+	review, firmWide bool
+	name             string
+}
+
+// firmReviewers reads each active member's WorkOS roles in the firm; a member holds the permissions of all their roles,
+// as their session does.
+func firmReviewers(ctx context.Context, org string) (map[string]reviewer, error) {
 	if os.Getenv("WORKOS_API_KEY") == "" {
 		return nil, errors.New("WorkOS is not configured")
 	}
 	var roles struct {
 		Data []workosRole `json:"data"`
 	}
-	if err = workos(ctx, "GET", "/authorization/organizations/"+url.PathEscape(org)+"/roles", nil, &roles); err != nil {
+	if err := workos(ctx, "GET", "/authorization/organizations/"+url.PathEscape(org)+"/roles", nil, &roles); err != nil {
 		return nil, err
 	}
 	held := map[string][]string{}
@@ -119,27 +143,50 @@ func teammates(ctx context.Context, db *sql.DB, r *http.Request, entity string) 
 	if err != nil {
 		return nil, err
 	}
-	reviews, firmWide, names := map[string]bool{}, map[string]bool{}, map[string]string{}
+	out := map[string]reviewer{}
 	for _, m := range memberships {
-		// A member holds the permissions of all their roles, as their session does.
 		p := []string{}
 		for _, each := range append(m.Roles, m.Role) {
 			p = append(p, held[each.Slug]...)
 		}
+		r := reviewer{name: cmp.Or(strings.TrimSpace(m.User.FirstName+" "+m.User.LastName), m.User.Email)}
 		if m.Status == "active" && slices.Contains(p, "workpapers:review") {
-			reviews[m.UserID], firmWide[m.UserID] = true, slices.Contains(p, "clients:all")
+			r.review, r.firmWide = true, slices.Contains(p, "clients:all")
 		}
-		names[m.UserID] = cmp.Or(strings.TrimSpace(m.User.FirstName+" "+m.User.LastName), m.User.Email)
-	}
-	out := []teammate{}
-	for _, t := range members {
-		if reviews[t.Subject] && (firmWide[t.Subject] || t.viaGrant) {
-			t.viaGrant = !firmWide[t.Subject]
-			t.Name = cmp.Or(names[t.Subject], t.Subject)
-			out = append(out, t)
-		}
+		out[m.UserID] = r
 	}
 	return out, nil
+}
+
+// sweepRoles is each firm's WorkOS roles for one sweep of background work, read at most once per firm.
+type sweepRoles map[string]struct {
+	members map[string]reviewer
+	err     error
+}
+
+// of is the firm's members' roles: none for the local development firm, which has no WorkOS, and an error for a hosted
+// firm whose roles cannot be read, whose background work then waits rather than act on authority it cannot confirm.
+func (f sweepRoles) of(ctx context.Context, org string) (map[string]reviewer, error) {
+	if org == "local-development" {
+		return nil, nil
+	}
+	read, ok := f[org]
+	if !ok {
+		read.members, read.err = firmReviewers(ctx, org)
+		f[org] = read
+	}
+	return read.members, read.err
+}
+
+// mayAct says whether a firm member may still act for a client. With roles, their current ones decide, as for the
+// teammate list: review permission, on every client or through a current grant. Without, as for the local development
+// firm, membership does and, for access recorded as a grant, that grant.
+func mayAct(roles map[string]reviewer, subject string, member, viaGrant, granted bool) bool {
+	if roles == nil {
+		return member && (!viaGrant || granted)
+	}
+	r := roles[subject]
+	return member && r.review && (r.firmWide || granted)
 }
 
 // readHandoffs is the goal's open hand-offs, marking those handed to me.
@@ -163,10 +210,10 @@ func readHandoffs(ctx context.Context, tx *sql.Tx, goalID, me string) ([]goalHan
 // settleHandoffs closes the goal's open hand-offs whose document or account no longer needs a person, or whose teammate
 // can no longer act for the client; once the close is signed off, every one. An account's is closed only on coverage
 // read from its capture: a different capture ends it, and unread coverage leaves it open. The goal's history says why.
-func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress, signed bool) error {
-	rows, err := tx.QueryContext(ctx, `SELECT h.id::text,COALESCE(h.job_id::text,''),COALESCE(h.account_id,''),COALESCE(h.snapshot_id::text,''),h.document,h.assignee_name,
- EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=$1 AND m.subject=h.assignee AND m.granted)
- AND (NOT h.via_grant OR EXISTS(SELECT 1 FROM current_client_access a JOIN client_closes c ON lower(c.entity)=lower(a.client_entity) WHERE c.id=$3 AND a.organization_id=$1 AND a.subject=h.assignee AND a.granted))
+func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress, signed bool, roles map[string]reviewer) error {
+	rows, err := tx.QueryContext(ctx, `SELECT h.id::text,COALESCE(h.job_id::text,''),COALESCE(h.account_id,''),COALESCE(h.snapshot_id::text,''),h.document,h.assignee_name,h.assignee,h.via_grant,
+ EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=$1 AND m.subject=h.assignee AND m.granted),
+ EXISTS(SELECT 1 FROM current_client_access a JOIN client_closes c ON lower(c.entity)=lower(a.client_entity) WHERE c.id=$3 AND a.organization_id=$1 AND a.subject=h.assignee AND a.granted)
  FROM goal_handoffs h WHERE h.goal_id=$2 AND h.closed_at IS NULL ORDER BY h.id`, g.org, g.id, g.close)
 	if err != nil {
 		return err
@@ -178,10 +225,13 @@ func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress, 
 	handoffs := []open{}
 	for rows.Next() {
 		var h open
-		if err = rows.Scan(&h.id, &h.job, &h.account, &h.snapshot, &h.document, &h.name, &h.allowed); err != nil {
+		var assignee string
+		var viaGrant, member, granted bool
+		if err = rows.Scan(&h.id, &h.job, &h.account, &h.snapshot, &h.document, &h.name, &assignee, &viaGrant, &member, &granted); err != nil {
 			rows.Close()
 			return err
 		}
+		h.allowed = mayAct(roles, assignee, member, viaGrant, granted)
 		handoffs = append(handoffs, h)
 	}
 	rows.Close()
