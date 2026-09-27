@@ -123,7 +123,7 @@ func TestFluxExplainsMovementsByPayee(t *testing.T) {
 	if len(utilities.New) != 1 || utilities.New[0].Name != "Con Edison" || len(utilities.Changed) != 0 || len(utilities.Missing) != 0 || !utilities.Reconciled {
 		t.Errorf("a new payee explains the rise: %+v", utilities)
 	}
-	if len(software.Missing) != 1 || software.Missing[0].Name != "CloudSuite" || len(software.Questions) != 1 || !strings.Contains(software.Questions[0], "Was there a bill for 2026-09") || !software.Reconciled {
+	if len(software.Missing) != 1 || software.Missing[0].Name != "CloudSuite" || len(software.Questions) != 1 || software.Questions[0] != "Software: CloudSuite was $49.00 in August 2026, and nothing is recorded for them in September 2026 yet. Is there a bill or invoice for September? If so, please send a copy." || !software.Reconciled {
 		t.Errorf("a payee that did not recur is asked about: %+v", software)
 	}
 
