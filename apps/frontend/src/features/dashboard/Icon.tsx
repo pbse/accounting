@@ -19,6 +19,7 @@ const paths = {
   arrow: "M5 12h14M13 6l6 6-6 6",
   file: "M6 3h9l4 4v14H6zM15 3v4h4",
   measure: "M5 20V10M10 20V4M15 20v-7M20 20V8",
+  shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
 } as const;
 
 export type IconName = keyof typeof paths;

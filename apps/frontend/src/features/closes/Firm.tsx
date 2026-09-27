@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import { Icon } from "../dashboard/Icon";
 import { AgentAccess } from "./AgentAccess";
-import { ClientAccess } from "./ClientAccess";
 import { isEnrollmentError } from "./ClosesList";
 import { EmailSettings } from "./Email";
-import { FirmEnrollment, FirmOperations } from "./Enterprise";
+import { FirmEnrollment } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
 type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; hosted: boolean; can_manage: boolean; can_manage_links: boolean };
@@ -270,7 +270,6 @@ function Materiality() {
 }
 
 export default function Firm() {
-  const [entities, setEntities] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [refresh, setRefresh] = useState(0);
@@ -278,7 +277,6 @@ export default function Firm() {
     let live = true;
     setError("");
     workspaceRequest("")
-      .then((data: { closes: { entity: string }[] }) => live && setEntities([...new Set(data.closes.map((close) => close.entity))]))
       .catch((e) => live && setError(e instanceof Error ? e.message : "Firm settings are unavailable."))
       .finally(() => live && setLoaded(true));
     return () => {
@@ -294,7 +292,7 @@ export default function Firm() {
           </span>
           <span>
             <h1>Firm settings</h1>
-            <p>Membership, client access, approved email delivery and operational health for the whole firm.</p>
+            <p>Review policies, client link and reminder rules, your agent access and approved email delivery for the whole firm.</p>
           </span>
         </div>
       </div>
@@ -306,9 +304,10 @@ export default function Firm() {
       <LinkPasscodes />
       <Materiality />
       <ReminderRule />
+          <p>
+            People, client assignments, agent grants, connected services and recent changes are in the <Link to="/dashboard/security">Security center</Link>. Request or give up your own agent access here.
+          </p>
           <AgentAccess />
-          <FirmOperations />
-          <ClientAccess entities={entities} />
           <EmailSettings />
         </div>
       )}
