@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"close.local/backend/internal/auth"
+	"close.local/backend/internal/preparation"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestHintsRememberApprovedAccountsAndCheckTheLedger(t *testing.T) {
@@ -159,5 +164,135 @@ func TestHintsRememberApprovedAccountsAndCheckTheLedger(t *testing.T) {
 	must(err)
 	if h := read(current, job, 200); h["prepaid_account"].InLedger == nil || !*h["prepaid_account"].InLedger || h["expense_account"].InLedger == nil || !*h["expense_account"].InLedger {
 		t.Fatalf("the proposed accounts are checked against the Xero chart of accounts: %+v", h)
+	}
+}
+
+func TestClientMemoryShowsWhoDecidedAndRetiresAliases(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_Memory" + rand.Text()
+	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Memory fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture'),($1,'user_b',true,'Synthetic','fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`, org)
+	must(err)
+	var current, prior, beta, paper, review string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&current))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-08') RETURNING id::text`, org).Scan(&prior))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Beta','2026-09') RETURNING id::text`, org).Scan(&beta))
+	defer func() {
+		for _, q := range []string{`DELETE FROM standing_approvals WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`,
+			`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT w.id FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1)`,
+			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','memory-paper','{"input":{"source_reference":"Allianz","expense_account":"Insurance expense","prepaid_account":"Prepaid insurance"}}') RETURNING id::text`, prior).Scan(&paper))
+	must(db.QueryRow(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'memory-paper','approved','Reviewed','user_partner') RETURNING id::text`, paper).Scan(&review))
+	_, err = db.Exec(`INSERT INTO standing_approvals(organization_id,client_entity,workpaper_id,review_id,granted_by,reason) VALUES($1,'Alpha',$2,$3,'user_a','Carry the schedule while nothing changes')`, org, paper, review)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) VALUES($1,'Alpha','alpha holdings','user_a'),($1,'Beta','beta co','user_b')`, org)
+	must(err)
+
+	store := savedCloses(db, strings.Repeat("a", 32))
+	type memory struct {
+		Aliases []struct {
+			Alias        string
+			RetireReason string  `json:"retire_reason"`
+			RetiredBy    string  `json:"retired_by"`
+			RetiredAt    *string `json:"retired_at"`
+		}
+		Standing []struct {
+			CloseID     string `json:"close_id"`
+			WorkpaperID string `json:"workpaper_id"`
+			GrantedBy   string `json:"granted_by"`
+			InForce     bool   `json:"in_force"`
+		} `json:"standing_approvals"`
+		Accounts []struct {
+			Kind, Field string
+			Values      []usualValue
+		}
+	}
+	call := func(subject string, permissions []string, method, closeID string, body any, want int) memory {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, "/v1/closes/"+closeID+"/memory", bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s %v: %d %s", method, closeID, body, w.Code, w.Body.String())
+		}
+		var out memory
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	reviewer := []string{"workpapers:review"}
+	got := call("user_a", nil, "GET", current, nil, 200)
+	if len(got.Aliases) != 1 || got.Aliases[0].Alias != "alpha holdings" || len(got.Standing) != 1 || !got.Standing[0].InForce || got.Standing[0].CloseID != prior || got.Standing[0].WorkpaperID != paper {
+		t.Fatalf("the client's names and standing approvals, with where they were granted: %+v", got)
+	}
+	if len(got.Accounts) != 2 || got.Accounts[0].Field != "expense_account" || got.Accounts[0].Values[0].Value != "Insurance expense" || got.Accounts[0].Values[0].WorkpaperID != paper || got.Accounts[0].Values[0].CloseID != prior || got.Accounts[0].Values[0].ApprovedBy != "user_partner" {
+		t.Fatalf("each account used before names the approved draft it comes from and who approved it: %+v", got.Accounts)
+	}
+	call("user_b", nil, "GET", current, nil, 404)
+	retire := func(subject string, permissions []string, closeID, alias, reason string, want int) {
+		t.Helper()
+		call(subject, permissions, "POST", closeID, map[string]any{"action": "retire_alias", "alias": alias, "reason": reason, "confirmed": true}, want)
+	}
+	retire("user_a", nil, current, "alpha holdings", "Sold the holding company", 403)
+	retire("user_a", reviewer, current, "alpha holdings", "", 422)
+	retire("user_a", reviewer, current, "beta co", "Not this client", 404)
+	retire("user_a", reviewer, current, "alpha holdings", "Sold the holding company", 200)
+	retire("user_a", reviewer, current, "alpha holdings", "Again", 404)
+	tx, _ := db.Begin()
+	names, err := preparation.ClientAliases(t.Context(), tx, current)
+	tx.Rollback()
+	if err != nil || len(names) != 0 {
+		t.Fatalf("a retired name no longer identifies the client: %v %v", names, err)
+	}
+	got = call("user_a", nil, "GET", current, nil, 200)
+	if len(got.Aliases) != 1 || got.Aliases[0].RetiredAt == nil || got.Aliases[0].RetiredBy != "user_a" || got.Aliases[0].RetireReason != "Sold the holding company" {
+		t.Fatalf("a retired name stays listed with who retired it and why: %+v", got.Aliases)
+	}
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) VALUES($1,'Alpha','alpha holdings','user_a') ON CONFLICT DO NOTHING`, org)
+	must(err)
+	tx, _ = db.Begin()
+	names, _ = preparation.ClientAliases(t.Context(), tx, current)
+	tx.Rollback()
+	if len(names) != 1 {
+		t.Fatalf("a retired name can be confirmed again: %v", names)
+	}
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'memory-paper','changes_requested','Reopened','user_partner')`, paper)
+	must(err)
+	if got = call("user_a", nil, "GET", current, nil, 200); len(got.Standing) != 1 || got.Standing[0].InForce || len(got.Accounts) != 0 {
+		t.Fatalf("a grant whose approval changed is listed as not in force, and the reopened draft is no longer an approval: %+v", got)
+	}
+	var changed string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','memory-changed','{"sources":[{"id":"1","digest":"gone"}],"input":{"source_reference":"Zurich","expense_account":"Old expense","prepaid_account":"Old prepaid"}}') RETURNING id::text`, prior).Scan(&changed))
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'memory-changed','approved','Reviewed','user_partner')`, changed)
+	must(err)
+	if got = call("user_a", nil, "GET", current, nil, 200); len(got.Accounts) != 0 {
+		t.Fatalf("an approved draft whose source changed contributes no account: %+v", got.Accounts)
+	}
+	_, err = db.Exec(`UPDATE standing_approvals SET revoked_by='user_a',revoked_at=now() WHERE organization_id=$1`, org)
+	must(err)
+	if got = call("user_a", nil, "GET", current, nil, 200); len(got.Standing) != 0 {
+		t.Fatalf("a revoked grant is no longer listed: %+v", got.Standing)
 	}
 }

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -15,10 +16,80 @@ import (
 var hintFields = map[string][]string{"prepaid": {"expense_account", "prepaid_account"}, "accrual": {"expense_account", "liability_account"}, "reconciliation": {"account"}}
 
 type usualValue struct {
-	Value      string `json:"value"`
-	Count      int    `json:"count"`
-	LastPeriod string `json:"last_period"`
-	Usable     bool   `json:"usable"`
+	Value       string    `json:"value"`
+	Count       int       `json:"count"`
+	LastPeriod  string    `json:"last_period"`
+	Usable      bool      `json:"usable"`
+	CloseID     string    `json:"close_id"`
+	WorkpaperID string    `json:"workpaper_id"`
+	ApprovedBy  string    `json:"approved_by"`
+	ApprovedAt  time.Time `json:"approved_at"`
+}
+
+// approvedAccounts is what the client's approved, unrevised papers of one kind named in each account field over the 12 close
+// months ending with period: the top three values, each with the latest paper that used it and who approved that paper.
+func approvedAccounts(ctx context.Context, tx *sql.Tx, org, entity, period, kind string) (map[string][]usualValue, error) {
+	end, _ := time.Parse("2006-01", period)
+	// A draft revised since, or whose sources changed after its approval, no longer counts as approved.
+	rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,w.id::text,w.paper,v.actor,v.created_at FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id
+ JOIN workpaper_reviews v ON v.id::text=w.review_id
+ WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND c.period BETWEEN $3 AND $4 AND w.kind=$5 AND w.review_state='approved' ORDER BY c.period,w.id`, org, entity, end.AddDate(0, -11, 0).Format("2006-01"), period, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type paper struct {
+		usualValue
+		input map[string]json.RawMessage
+	}
+	latest, order := map[string]paper{}, []string{}
+	for rows.Next() {
+		var p paper
+		var body json.RawMessage
+		if err = rows.Scan(&p.CloseID, &p.LastPeriod, &p.WorkpaperID, &body, &p.ApprovedBy, &p.ApprovedAt); err != nil {
+			return nil, err
+		}
+		var parsed struct {
+			Input map[string]json.RawMessage `json:"input"`
+		}
+		json.Unmarshal(body, &parsed)
+		p.input = parsed.Input
+		key := p.CloseID + "\x00" + paperKey(kind, body)
+		if _, seen := latest[key]; !seen {
+			order = append(order, key)
+		}
+		latest[key] = p
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	out := map[string][]usualValue{}
+	for _, field := range hintFields[kind] {
+		usual := []usualValue{}
+		for _, key := range order {
+			p := latest[key]
+			value := strings.TrimSpace(factText(p.input[field]))
+			if value == "" {
+				continue
+			}
+			i := slices.IndexFunc(usual, func(u usualValue) bool { return strings.EqualFold(u.Value, value) })
+			if i < 0 {
+				usual = append(usual, usualValue{Value: value})
+				i = len(usual) - 1
+			}
+			count := usual[i].Count + 1
+			usual[i] = p.usualValue
+			usual[i].Value, usual[i].Count = value, count
+		}
+		slices.SortStableFunc(usual, func(a, b usualValue) int {
+			if a.Count != b.Count {
+				return b.Count - a.Count
+			}
+			return strings.Compare(b.LastPeriod, a.LastPeriod)
+		})
+		out[field] = usual[:min(3, len(usual))]
+	}
+	return out, nil
 }
 
 // workHints tells the person confirming a reading which accounts this client's accountant approved before and whether the proposed ones exist in QuickBooks.
@@ -51,41 +122,7 @@ func workHints(db *sql.DB) http.HandlerFunc {
 			return
 		}
 
-		// Approved, unrevised papers of this client and kind over the 12 close months ending with this one.
-		end, _ := time.Parse("2006-01", period)
-		rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,w.paper FROM workpapers w JOIN client_closes c ON c.id=w.close_id
- WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND c.period BETWEEN $3 AND $4 AND w.kind=$5
- AND NOT EXISTS (SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)
- AND (SELECT v.decision FROM workpaper_reviews v WHERE v.workpaper_id=w.id ORDER BY v.id DESC LIMIT 1)='approved' ORDER BY c.period,w.id`, org, entity, end.AddDate(0, -11, 0).Format("2006-01"), period, proposal.Kind)
-		if err != nil {
-			problem(w, 503, "Client memory is unavailable.")
-			return
-		}
-		type paper struct {
-			period string
-			input  map[string]json.RawMessage
-		}
-		latest, order := map[string]paper{}, []string{}
-		for rows.Next() {
-			var close, when string
-			var body json.RawMessage
-			if err = rows.Scan(&close, &when, &body); err != nil {
-				break
-			}
-			var p struct {
-				Input map[string]json.RawMessage `json:"input"`
-			}
-			json.Unmarshal(body, &p)
-			key := close + "\x00" + paperKey(proposal.Kind, body)
-			if _, seen := latest[key]; !seen {
-				order = append(order, key)
-			}
-			latest[key] = paper{when, p.Input}
-		}
-		if err == nil {
-			err = rows.Err()
-		}
-		rows.Close()
+		approved, err := approvedAccounts(ctx, tx, org, entity, period, proposal.Kind)
 		if err != nil {
 			problem(w, 503, "Client memory is unavailable.")
 			return
@@ -141,27 +178,7 @@ func workHints(db *sql.DB) http.HandlerFunc {
 				_, active := find(value)
 				return ledger && active && (procedure[field] == "" || strings.EqualFold(procedure[field], value))
 			}
-			usual := []usualValue{}
-			for _, key := range order {
-				value := strings.TrimSpace(factText(latest[key].input[field]))
-				if value == "" {
-					continue
-				}
-				i := slices.IndexFunc(usual, func(u usualValue) bool { return strings.EqualFold(u.Value, value) })
-				if i < 0 {
-					usual = append(usual, usualValue{Value: value})
-					i = len(usual) - 1
-				}
-				usual[i].Count++
-				usual[i].LastPeriod = latest[key].period
-			}
-			slices.SortStableFunc(usual, func(a, b usualValue) int {
-				if a.Count != b.Count {
-					return b.Count - a.Count
-				}
-				return strings.Compare(b.LastPeriod, a.LastPeriod)
-			})
-			usual = usual[:min(3, len(usual))]
+			usual := approved[field]
 			for i := range usual {
 				usual[i].Usable = usable(usual[i].Value)
 			}
@@ -173,5 +190,132 @@ func workHints(db *sql.DB) http.HandlerFunc {
 			out = append(out, hint)
 		}
 		jsonReply(w, 200, map[string]any{"fields": out})
+	}
+}
+
+// clientMemory shows what the system remembers about the close's client, with who decided it and when, and retires an alias.
+// Rules for future preparation are the client's procedures, shown and changed with their impact on the same page.
+func clientMemory(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, closeID := r.Context(), r.PathValue("id")
+		if r.Method == "POST" {
+			actor, ok := reviewActor(w, r)
+			if !ok {
+				return
+			}
+			var in struct {
+				Action    string `json:"action"`
+				Alias     string `json:"alias"`
+				Reason    string `json:"reason"`
+				Confirmed bool   `json:"confirmed"`
+			}
+			if !decode(w, r, &in) {
+				return
+			}
+			in.Reason = strings.TrimSpace(in.Reason)
+			if in.Action != "retire_alias" || !in.Confirmed || in.Reason == "" || len(in.Reason) > 2000 {
+				problem(w, 422, "Confirm retiring the name and give a reason (1–2,000 characters).")
+				return
+			}
+			var retired string
+			err := db.QueryRowContext(ctx, `UPDATE client_aliases a SET retired_by=$3,retired_at=now(),retire_reason=$4 FROM client_closes c
+ WHERE c.id::text=$1 AND a.organization_id=c.organization_id AND lower(a.client_entity)=lower(c.entity) AND a.alias=$2 AND a.retired_at IS NULL RETURNING a.alias`, closeID, in.Alias, actor, in.Reason).Scan(&retired)
+			if err == sql.ErrNoRows {
+				problem(w, 404, "This client has no such name in use. Refresh the client's memory.")
+				return
+			}
+			if err != nil {
+				problem(w, 503, "The name could not be retired.")
+				return
+			}
+			jsonReply(w, 200, map[string]string{"retired": retired})
+			return
+		}
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			problem(w, 503, "Client memory is unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		var org, entity, period string
+		if err = tx.QueryRowContext(ctx, `SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1`, closeID).Scan(&org, &entity, &period); err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		type alias struct {
+			Alias        string     `json:"alias"`
+			ConfirmedBy  string     `json:"confirmed_by"`
+			ConfirmedAt  time.Time  `json:"confirmed_at"`
+			RetiredBy    string     `json:"retired_by,omitempty"`
+			RetiredAt    *time.Time `json:"retired_at,omitempty"`
+			RetireReason string     `json:"retire_reason,omitempty"`
+		}
+		type grant struct {
+			ID          string    `json:"id"`
+			CloseID     string    `json:"close_id"`
+			Period      string    `json:"period"`
+			WorkpaperID string    `json:"workpaper_id"`
+			Kind        string    `json:"kind"`
+			GrantedBy   string    `json:"granted_by"`
+			Reason      string    `json:"reason"`
+			CreatedAt   time.Time `json:"created_at"`
+			InForce     bool      `json:"in_force"`
+			reviewID    string
+		}
+		type account struct {
+			Kind   string       `json:"kind"`
+			Field  string       `json:"field"`
+			Values []usualValue `json:"values"`
+		}
+		aliases, grants, accounts := []alias{}, []grant{}, []account{}
+		rows, err := tx.QueryContext(ctx, `SELECT alias,confirmed_by,confirmed_at,COALESCE(retired_by,''),retired_at,COALESCE(retire_reason,'') FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=lower($2) ORDER BY retired_at IS NOT NULL,confirmed_at DESC`, org, entity)
+		for err == nil && rows.Next() {
+			var a alias
+			if err = rows.Scan(&a.Alias, &a.ConfirmedBy, &a.ConfirmedAt, &a.RetiredBy, &a.RetiredAt, &a.RetireReason); err == nil {
+				aliases = append(aliases, a)
+			}
+		}
+		if err == nil {
+			err = rows.Err()
+			rows.Close()
+		}
+		if err == nil {
+			rows, err = tx.QueryContext(ctx, `SELECT a.id::text,g.close_id::text,gc.period,a.workpaper_id::text,g.kind,a.review_id::text,a.granted_by,a.reason,a.created_at FROM standing_approvals a JOIN workpapers g ON g.id=a.workpaper_id JOIN client_closes gc ON gc.id=g.close_id
+ WHERE a.organization_id=$1 AND lower(a.client_entity)=lower($2) AND a.revoked_at IS NULL ORDER BY a.id DESC`, org, entity)
+			for err == nil && rows.Next() {
+				var g grant
+				if err = rows.Scan(&g.ID, &g.CloseID, &g.Period, &g.WorkpaperID, &g.Kind, &g.reviewID, &g.GrantedBy, &g.Reason, &g.CreatedAt); err == nil {
+					grants = append(grants, g)
+				}
+			}
+			if err == nil {
+				err = rows.Err()
+				rows.Close()
+			}
+		}
+		// An unrevoked grant stops applying once its approval changes or its granter leaves; the same check as approval uses.
+		for i := range grants {
+			if err == nil {
+				err = tx.QueryRowContext(ctx, grantInForce, grants[i].WorkpaperID, grants[i].reviewID, org, grants[i].GrantedBy).Scan(&grants[i].InForce)
+			}
+		}
+		for _, kind := range []string{"prepaid", "accrual", "reconciliation"} {
+			if err != nil {
+				break
+			}
+			var approved map[string][]usualValue
+			if approved, err = approvedAccounts(ctx, tx, org, entity, period, kind); err == nil {
+				for _, field := range hintFields[kind] {
+					if len(approved[field]) > 0 {
+						accounts = append(accounts, account{kind, field, approved[field]})
+					}
+				}
+			}
+		}
+		if err != nil {
+			problem(w, 503, "Client memory is unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"entity": entity, "aliases": aliases, "standing_approvals": grants, "accounts": accounts})
 	}
 }

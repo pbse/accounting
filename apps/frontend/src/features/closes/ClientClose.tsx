@@ -16,6 +16,7 @@ import { RetentionControls } from "./Enterprise";
 import { Evidence, PreparationJobs } from "./Evidence";
 import { ProposedStatePreview } from "./Posting";
 import { Procedures } from "./Procedures";
+import { Memory } from "./Memory";
 import { ProductionAccess } from "./ProductionAccess";
 import { QuickBooks } from "./QuickBooks";
 import { Xero } from "./Xero";
@@ -306,6 +307,7 @@ export default function ClientClose() {
       )}
       {tab === "settings" && (
         <div className="stack">
+          <Memory key={`memory-${close.id}`} closeId={close.id} />
           <Procedures key={`procedures-${close.id}`} closeId={close.id} entity={close.entity} onApplied={() => void reload()} />
           <ProductionAccess closeId={close.id} entity={close.entity} currency={close.profile?.currency ?? "USD"} />
           <RetentionControls close={close} onDeleted={setDeleted} />

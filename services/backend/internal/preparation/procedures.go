@@ -89,11 +89,11 @@ func CurrencyIssue(ctx context.Context, q interface {
 	return nil
 }
 
-// ClientAliases returns the close client's confirmed aliases, normalized.
+// ClientAliases returns the close client's confirmed aliases that are not retired, normalized.
 func ClientAliases(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, closeID string) ([]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT a.alias FROM client_aliases a JOIN client_closes c ON c.organization_id=a.organization_id AND lower(c.entity)=lower(a.client_entity) WHERE c.id::text=$1`, closeID)
+	rows, err := q.QueryContext(ctx, `SELECT a.alias FROM client_aliases a JOIN client_closes c ON c.organization_id=a.organization_id AND lower(c.entity)=lower(a.client_entity) WHERE c.id::text=$1 AND a.retired_at IS NULL`, closeID)
 	if err != nil {
 		return nil, err
 	}
