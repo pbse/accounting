@@ -1792,3 +1792,47 @@ Tests: `TestClientMemoryShowsWhoDecidedAndRetiresAliases`:
 Code review: GPT-6 Sol (high). Adopted: accounts come only from drafts still approved in `workpaper_review_state` (a source change after approval, which the hints could otherwise offer for **Use**, drops the account); the panel's one-click Revoke was removed in favour of the draft's existing Revoke control with its confirmation.
 
 Not verified: the panel in a browser.
+
+## Security center (2026-09-27)
+
+Request: a usable security center showing people, client assignments, connected services, agent grants, activity and revocation controls in one place, and which providers receive which data; as an agent-first product, agents must be as visible and governable as people. `GET /v1/closes/security` (firm administrators only, `canManageMembers`) returns, in one read-only transaction:
+- people with their latest decision, recorded assignments and agent access in force (`effective_agent_access`), and pending invitations;
+- connections that are not disconnected (QuickBooks, Xero, Stripe) and the email sending connection, with no credential, OAuth digest, token or webhook secret selected;
+- QuickBooks production and Xero posting grants in force;
+- the newest 100 recorded access, connection and grant changes and records agents made for members;
+- what each outside service receives, with evidence of use;
+- the firm's ID and every client.
+
+The Security page shows these, links each connection and grant to where it is disconnected or revoked, and hosts the existing membership, invitation, operations, client access and agent access controls. It also adds the first interface for the existing firm suspension (`org:manage`, typing the firm's ID). Firm settings keeps policies, email, and each member's own agent access request, with a link to Security. The Get started team step now points to Security.
+
+Plan review: GPT-6 Sol (high). Adopted:
+- the route is registered and on the organization boundary's firm-route list;
+- Xero posting grants are shown with QuickBooks ones, including accounts and kinds;
+- members keep self-service agent access in Firm settings;
+- Google Drive is described honestly, since its grants are held by WorkOS;
+- recorded assignments are labelled as not in effect while a membership is revoked, and the client selector uses every client (not the list capped at 100);
+- model calls are labelled as a reserved budget, the Work command's model use is disclosed, the webhook is described as set on the worker, and activity is described as derived from durable histories, not a complete audit trail.
+
+Tests: `TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly`:
+- a member without `members:manage` or without `clients:all` is refused;
+- the administrator's response contains no seeded credential, OAuth digest or webhook secret;
+- each member's decision, assignments (not an unassigned client) and agent access: in force for a current member, not in force when bound to a revoked membership;
+- only connections that are not disconnected, with where to manage them;
+- only grants in force, with accounts and kinds;
+- activity includes an agent's evidence, a revocation, an agent approval, a revoked Xero grant and a production connection;
+- providers in use from model calls, an enabled sending connection and an active QuickBooks connection;
+- the firm ID and every client.
+
+13 mutations, all failing the tests.
+
+Security code review: GPT-6 Sol (high), briefed to review adversarially. It found no authorization bypass or cross-tenant read. Adopted:
+- the agent scope in force (`effective_agent_access`) is returned and shown apart from the latest decision, so a later read-only request no longer looks like the approved prepare access;
+- posting grants are listed only when posting would honour them (current granter, active connection to the granted company, as in `production_posting.go` and `xero_posting.go`);
+- the Stripe key's last digits were removed from the response.
+
+Tests: a member with a pending read request shows prepare in force; a grant by a departed member, and one on a connection needing reconnection, are not listed.
+
+Not adopted: keeping Client access in Firm settings for the local development actor (local mode has no members to assign).
+
+Not verified: the page in a browser; live WorkOS or provider state. Free-text reasons and evidence names appear in activity as recorded.
+

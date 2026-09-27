@@ -52,9 +52,22 @@ PGHOST=127.0.0.1 PGPORT=15432 PGUSER=close infra/postgres/check-restore.sh
 
 Use your own local port/user. The script rejects non-loopback hosts, creates two uniquely named temporary databases, applies all migrations, inserts two synthetic firms with same-named clients, dumps/restores, verifies source hashes and durable jobs/scopes, and removes only its own databases and dump. No API, worker or provider is started. The rehearsal proves schema/data recovery for those fixtures, not live credentials, backup scheduling or hosted recovery objectives.
 
+## Security center
+
+**Security** in the sidebar (`GET /v1/closes/security`) is one page for firm administrators (`clients:all` and `members:manage`; anyone else is refused):
+
+- **People and their agents:** each member's latest enrollment decision (who decided, when, why), their recorded client assignments (labelled not in effect while the membership is revoked; firm-wide access comes from the WorkOS role), the agent (MCP) scope actually in force, shown apart from the latest agent access decision (a later request or decline never changes an approval in force), and pending invitations.
+- **Connected services:** every QuickBooks, Xero and Stripe connection that is not disconnected, with the client, company or account, mode, state and who connected and confirmed it, each linked to the close page that disconnects it; the email sending connection. Google Drive grants are held by WorkOS per person and are managed there.
+- **Posting authority in force:** only QuickBooks production and Xero posting grants that posting would honour now (unrevoked, unexpired, granted by a current member, on an active connection to the granted company), with their kinds, accounts, limit, expiry and granter, linked to where they are revoked.
+- **What outside services receive:** OpenAI, Resend, QuickBooks, Xero, Stripe, Cloudflare, the text scanner, WorkOS and the operations webhook, each with what the code sends it and what shows it is in use here (for OpenAI, the model calls reserved in the last 30 days, which is a budget count rather than proof of delivery; OpenAI requests ask it not to store them).
+- **Recent changes:** the newest 100 recorded membership, client-access and agent-access decisions, invitations, connections, posting grants and revocations, email sending changes, and records an agent made for a member (evidence, preparation, close preparation, client request drafts, approval requests). It is derived from those histories and is not a complete audit trail.
+- **Controls:** membership, invitations and operations; client assignments over every client; agent access decisions; and suspending the whole firm (`org:manage`, typing the firm's ID). Each keeps its own confirmation.
+
+No credential, OAuth digest, token, webhook secret or value derived from one (such as a key's last digits) is ever returned. Members still request or give up their own agent access in Firm settings.
+
 ## Access and incidents
 
-- Suspected firm exposure: stop provider activity and suspend the exact registered organization through an authorized database change; preserve evidence. Application checks reject subsequent requests/claims. Already-running work and already-downloaded data cannot be recalled.
+- Suspected firm exposure: stop provider activity and suspend the exact registered organization from the Security center (`org:manage`, typing the firm's ID and a reason) or through an authorized database change; preserve evidence. Application checks reject subsequent requests/claims. Already-running work and already-downloaded data cannot be recalled.
 - Individual access: revoke app firm membership and client assignments, then revoke WorkOS membership/roles/sessions. A previously issued token is denied by the app's current membership check on subsequent requests.
 - If every firm administrator is revoked, app enrollment will not silently reclaim the firm. Restore an exact member only through an authorized, reviewed database change and WorkOS identity verification.
 - Unknown external result: preserve the attempt and inspect provider canonical records. Never reset state to `queued` simply to make the dashboard green.

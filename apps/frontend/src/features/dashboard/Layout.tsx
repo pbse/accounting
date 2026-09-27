@@ -26,7 +26,13 @@ const groups: { label: string; items: { to: string; label: string; icon: IconNam
     ],
   },
   { label: "Measure", items: [{ to: "/dashboard/measure", label: "Human effort", icon: "measure" }] },
-  { label: "Firm", items: [{ to: "/dashboard/firm", label: "Firm settings", icon: "firm" }] },
+  {
+    label: "Firm",
+    items: [
+      { to: "/dashboard/firm", label: "Firm settings", icon: "firm" },
+      { to: "/dashboard/security", label: "Security", icon: "shield" },
+    ],
+  },
   {
     label: "Examples",
     items: [

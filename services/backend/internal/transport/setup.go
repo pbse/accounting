@@ -125,7 +125,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		base := "/dashboard/closes/" + closeID
 		steps := []setupStep{
 			{"firm", "Enroll the firm", true, firm, "/dashboard/firm"},
-			{"team", "Add a team member", teammates > 0, plural(teammates, "teammate", "teammates") + " besides you. A firm administrator invites members by email under Firm operations and membership.", "/dashboard/firm"},
+			{"team", "Add a team member", teammates > 0, plural(teammates, "teammate", "teammates") + " besides you. A firm administrator invites members by email in the Security center.", "/dashboard/security"},
 			{"client", "Open a client close", closes > 0, plural(closes, "client close", "client closes") + " you can open.", "/dashboard/closes"},
 		}
 		switch {
