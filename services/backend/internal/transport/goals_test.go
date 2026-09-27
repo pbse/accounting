@@ -586,6 +586,17 @@ func TestSignOffGoalCarriesTheCloseThroughSignOff(t *testing.T) {
 	if s.Goal.State != "active" || s.Goal.ReadyAt == nil || milestones != 1 || s.Progress.Items[0].Text != "Review and approve draft #"+paper+"." || !slices.Contains(s.Progress.Signoff.Needs, "Define the supported scope and required work before sign-off.") {
 		t.Fatalf("the milestone is recorded once and the goal lists approval and scope: %+v %+v", s.Goal, s.Progress)
 	}
+	// Work's list of delegated closes counts what the card lists: the approval and what sign-off needs.
+	summary := func() (int, string) {
+		t.Helper()
+		var needs int
+		var signoff string
+		must(db.QueryRow(`SELECT COALESCE((summary->>'needs')::int,-1),COALESCE(summary->>'signoff','') FROM close_goals WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, alpha).Scan(&needs, &signoff))
+		return needs, signoff
+	}
+	if needs, signoff := summary(); needs != 1+len(s.Progress.Signoff.Needs) || signoff != s.Progress.Signoff.State {
+		t.Fatalf("the summary counts what the card lists: %d %q %+v", needs, signoff, s.Progress.Signoff)
+	}
 	// Work on a replaced document is not on the list, so sign-off still names it.
 	stale := document("stale.pdf")
 	var replacement string
@@ -637,6 +648,9 @@ func TestSignOffGoalCarriesTheCloseThroughSignOff(t *testing.T) {
 	if s = read(); s.Goal.State != "reached" || last(s) != "Signed off by user_a." || s.Progress.Signoff.State != "signed_off" || s.Progress.Signoff.Signer != "user_a" {
 		t.Fatalf("a standing sign-off reaches the goal: %+v %+v", s.Goal, s.Progress.Signoff)
 	}
+	if _, signoff := summary(); signoff != "signed_off" {
+		t.Fatalf("the summary says the close is signed off: %q", signoff)
+	}
 	var next string
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-10') RETURNING id::text`, org).Scan(&next))
 	if s = read(); s.Progress.Signoff.NextClose != next {
@@ -669,5 +683,132 @@ func TestSignOffGoalCarriesTheCloseThroughSignOff(t *testing.T) {
 		if !slices.Contains(history, want) {
 			t.Fatalf("the history has %q: %q", want, history)
 		}
+	}
+}
+
+func TestWorkListsEveryDelegatedClose(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	ctx := context.Background()
+	org := "org_List" + rand.Text()
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Delegated list fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture'),($1,'user_b',true,'Synthetic','fixture')`,
+		`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_b','Alpha',true,'Synthetic','fixture'),($1,'user_b','Beta',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	defer func() {
+		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(subject string, permissions []string, method, path string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s %v: %d %s", method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	partner, reviewer := []string{"workpapers:review", "clients:all"}, []string{"workpapers:review"}
+	// Each close gets one document, waiting to be read unless it needs a person, and is handed to the agent.
+	handOver := func(entity string, needsPerson bool) (string, string) {
+		t.Helper()
+		var closeID, source string
+		must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,$2,'2026-09') RETURNING id::text`, org, entity).Scan(&closeID))
+		tx, err := db.BeginTx(ctx, nil)
+		must(err)
+		defer tx.Rollback()
+		must(tx.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'invoice.txt',$2,'Invoice','fixture') RETURNING id::text`, closeID, preparation.Digest([]byte(entity))).Scan(&source))
+		job, err := preparation.StartIntake(ctx, tx, closeID, source, "fixture")
+		must(err)
+		must(tx.Commit())
+		if needsPerson {
+			_, err = db.Exec(`UPDATE preparation_intakes SET proposal='{"kind":"prepaid","questions":["Which months does the policy cover?"],"facts":[]}' WHERE job_id::text=$1`, job)
+			must(err)
+			_, err = db.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`, job)
+			must(err)
+		}
+		call("user_a", partner, "POST", "/v1/closes/"+closeID+"/goal", map[string]any{"confirmed": true}, 200)
+		return closeID, job
+	}
+	handOver("Alpha", false)
+	_, betaJob := handOver("Beta", true)
+	gamma, _ := handOver("Gamma", false)
+	delta, _ := handOver("Delta", false)
+	epsilon, _ := handOver("Epsilon", false)
+	call("user_a", partner, "POST", "/v1/closes/"+delta+"/goal/stop", map[string]string{"reason": "Doing it myself"}, 200)
+	for _, q := range []string{`UPDATE close_goals SET state='reached',reached_at=now() WHERE close_id::text=$1`,
+		`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`} {
+		_, err = db.Exec(q, gamma)
+		must(err)
+	}
+	_, err = db.Exec(`UPDATE close_goals SET state='reached',reached_at=now()-interval '15 days' WHERE close_id::text=$1`, epsilon)
+	must(err)
+	_, err = db.Exec(`INSERT INTO goal_handoffs(goal_id,job_id,document,assignee,assignee_name,via_grant,created_by) SELECT g.id,$2::bigint,'invoice.txt','user_b','user_b',true,'user_a' FROM close_goals g JOIN client_closes c ON c.id=g.close_id WHERE c.organization_id=$1 AND c.entity='Beta'`, org, betaJob)
+	must(err)
+	type delegated struct {
+		Entity  string `json:"entity"`
+		State   string `json:"state"`
+		Handed  int    `json:"handed"`
+		Summary struct {
+			Needs int     `json:"needs"`
+			Ready bool    `json:"ready"`
+			AsOf  *string `json:"as_of"`
+		} `json:"summary"`
+	}
+	list := func(subject string, permissions []string, query string) []delegated {
+		t.Helper()
+		var out struct {
+			Goals []delegated `json:"goals"`
+		}
+		must(json.Unmarshal(call(subject, permissions, "GET", "/v1/closes/goals"+query, nil, 200), &out))
+		return out.Goals
+	}
+	names := func(goals []delegated) string {
+		out := []string{}
+		for _, g := range goals {
+			out = append(out, g.Entity)
+		}
+		return strings.Join(out, ",")
+	}
+
+	// A close needing a person comes first, then those in progress, then those finished; a stopped goal and one
+	// finished more than 14 days ago are not listed, and a signed-off close still is.
+	goals := list("user_a", partner, "")
+	if names(goals) != "Beta,Alpha,Gamma" {
+		t.Fatalf("delegated closes in order: %s", names(goals))
+	}
+	if a := goals[0]; a.Summary.Needs != 1 || a.Summary.AsOf == nil || a.Handed != 1 || goals[1].Summary.Needs != 0 || goals[1].Summary.Ready || goals[2].State != "reached" {
+		t.Fatalf("what the agent last found: %+v", goals)
+	}
+	if got := names(list("user_b", reviewer, "")); got != "Beta,Alpha" {
+		t.Fatalf("a member sees the clients they are assigned to: %s", got)
+	}
+	if got := names(list("user_a", partner, "?client=bet")); got != "Beta" {
+		t.Fatalf("Work's client filter narrows the list: %s", got)
 	}
 }
