@@ -13,7 +13,7 @@ type Signoff = { state: "open" | "signed_off" | "reopen_required"; signer: strin
 type Routine = { author: string; finish: Finish; due_days: number | null; next_period: string; waiting: string };
 type Status = {
   goal: Goal | null;
-  progress: { items: Item[]; needs: string[]; notes: string[]; ready: boolean; signoff?: Signoff };
+  progress: { items: Item[]; needs: string[]; notes: string[]; ready: boolean; signoff?: Signoff; coverage?: { total: number; open: number } };
   activity: { at: string; actor: string; text: string }[];
   activity_total: number;
   signed_off: boolean;
@@ -223,7 +223,9 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
   const full = all?.goal === goal.id && all.activity.length === total ? all.activity : undefined;
   const stopped = goal.state === "stopped";
   const signoff = goal.finish === "signoff" ? progress.signoff : undefined;
-  const needs = progress.items.filter((i) => i.status === "needs_you" || i.status === "unsupported").length + progress.needs.length + (signoff?.needs.length ?? 0);
+  const coverage = progress.coverage?.total ? progress.coverage : undefined;
+  // Sign-off needs every captured account covered or excluded, one decision the card counts once.
+  const needs = progress.items.filter((i) => i.status === "needs_you" || i.status === "unsupported").length + progress.needs.length + (signoff?.needs.length ?? 0) + (goal.finish === "signoff" && coverage?.open ? 1 : 0);
   const signoffTab = `/dashboard/closes/${closeId}?tab=signoff`;
   async function stop() {
     setBusy(true);
@@ -256,6 +258,14 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
                 <li key={n}>{n}</li>
               ))}
             </ul>
+          )}
+          {coverage && (
+            <p className={goal.finish === "signoff" && coverage.open ? undefined : "assistant-note"}>
+              {coverage.open
+                ? `${goal.finish === "signoff" ? "" : "Before sign-off, "}${coverage.open} of ${coverage.total} accounts in the ledger capture still ${coverage.open === 1 ? "needs" : "need"} a coverage decision or resolution. `
+                : `All ${coverage.total} accounts in the ledger capture are resolved or excluded. `}
+              <Link to={`/dashboard/closes/${closeId}#coverage-work`}>{coverage.open ? "Review them in Coverage →" : "See Coverage →"}</Link>
+            </p>
           )}
           {sections.map(([key, title]) => {
             const items = progress.items.filter((i) => i.status === key);

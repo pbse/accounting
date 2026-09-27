@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/mail"
 	"slices"
@@ -52,6 +52,9 @@ type coverageView struct {
 	Digest     string                `json:"digest"`
 }
 
+// errCoverageLimit is coverage refusing a close with more intake jobs than it reads.
+var errCoverageLimit = errors.New("Coverage supports up to 100 intake jobs per close")
+
 func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageView, error) {
 	out := coverageView{Items: []coverageRequirement{}, Jobs: []coverageJob{}}
 	raw, err := ledgerCoverage(ctx, tx, closeID)
@@ -78,7 +81,7 @@ func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageV
 		return out, err
 	}
 	if len(out.Jobs) > 100 {
-		return out, fmt.Errorf("Coverage supports up to 100 intake jobs per close")
+		return out, errCoverageLimit
 	}
 	bindings := map[string]struct {
 		ID       string
