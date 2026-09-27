@@ -202,21 +202,27 @@ func compiledReply(entity, period string, update int, questions []requestQuestio
 }
 
 // requestOpen reports whether a replied request still takes additions: every job it covers is unfinished with no newer
-// request, and a consolidated request's coverage is unchanged.
+// request, and a consolidated request's coverage is unchanged. A request for accounts alone covers no job, so it stays
+// open while its coverage is.
 func requestOpen(ctx context.Context, tx *sql.Tx, closeID, requestID string) (bool, error) {
 	var open bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM request_jobs WHERE request_id=$1) AND NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=$1 AND (j.state IN ('completed','cancelled') OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))`, requestID).Scan(&open)
+	err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=$1 AND (j.state IN ('completed','cancelled') OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=rj.job_id AND newer.request_id>rj.request_id)))`, requestID).Scan(&open)
 	if err == nil && open {
 		open = preparation.RequestCoverageCurrent(ctx, tx, closeID, requestID) == nil
 	}
 	return open, err
 }
 
+// requestReplied is whether request q has a reply: answers through any of its links, or an emailed reply that used one.
+func requestReplied(q string) string {
+	return `(EXISTS(SELECT 1 FROM request_submissions s WHERE s.request_id=` + q + `) OR EXISTS(SELECT 1 FROM client_request_links u WHERE u.request_id=` + q + ` AND u.used_at IS NOT NULL))`
+}
+
 // requestLinkable is why a request cannot get a new link: before any reply it must be exactly as approved, after one it
 // must still take additions.
 func requestLinkable(ctx context.Context, tx *sql.Tx, closeID, requestID string) error {
 	var replied bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=$1)`, requestID).Scan(&replied); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT `+requestReplied("$1"), requestID).Scan(&replied); err != nil {
 		return fmt.Errorf("Request unavailable.")
 	}
 	if !replied {
@@ -227,6 +233,9 @@ func requestLinkable(ctx context.Context, tx *sql.Tx, closeID, requestID string)
 	}
 	return nil
 }
+
+// staleRequest is what the client sees when the work behind their request changed before they replied.
+const staleRequest = "The work behind this request changed after it was sent, so it takes no replies. Contact the firm."
 
 func clientRequest(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -300,7 +309,7 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		}
 		var requestID, body, expires string
 		var valid, used, latest bool
-		err = tx.QueryRowContext(r.Context(), `SELECT q.id::text,d.body,l.expires_at::text,l.revoked_at IS NULL AND l.expires_at>now(),l.used_at IS NOT NULL OR EXISTS(SELECT 1 FROM request_submissions s WHERE s.request_id=q.id),(q.job_id IS NULL OR q.id=(SELECT max(id) FROM work_requests WHERE job_id::text=$2)) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE l.digest=$1 FOR UPDATE OF l`, digest, jobID).Scan(&requestID, &body, &expires, &valid, &used, &latest)
+		err = tx.QueryRowContext(r.Context(), `SELECT q.id::text,d.body,l.expires_at::text,l.revoked_at IS NULL AND l.expires_at>now(),`+requestReplied("q.id")+`,(q.job_id IS NULL OR q.id=(SELECT max(id) FROM work_requests WHERE job_id::text=$2)) FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE l.digest=$1 FOR UPDATE OF l`, digest, jobID).Scan(&requestID, &body, &expires, &valid, &used, &latest)
 		if err != nil || !valid {
 			problem(w, 404, "Request link expired or was revoked. Ask the firm for a new link.")
 			return
@@ -331,7 +340,7 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 				problem(w, 409, "This request is no longer accepting replies. Contact the firm.")
 			default:
 				if err = preparation.FreshClientRequest(r.Context(), tx, closeID, requestID); err != nil {
-					problem(w, 409, err.Error())
+					problem(w, 409, staleRequest)
 					return
 				}
 				reply("open")
@@ -397,7 +406,7 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 				return
 			}
 			if err = preparation.FreshClientRequest(r.Context(), tx, closeID, requestID); err != nil {
-				problem(w, 409, err.Error())
+				problem(w, 409, staleRequest)
 				return
 			}
 		} else if !active {

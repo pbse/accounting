@@ -5,7 +5,7 @@ import { workspaceRequest } from "./workspace";
 type Requirement = { account_id: string; name: string; kind: string; question: string; binding_id: string; job_ids: string[]; suggested_job_ids: string[]; suggested_ledger_queries: string[]; excluded: boolean; reason: string; state: string };
 type Status = {
   coverage: { snapshot_id: string; stale: boolean; digest: string; items: Requirement[]; jobs: { id: string; name: string; state: string }[] };
-  requests: { email?: EmailRecord; emails: EmailRecord[]; reminder?: ReminderStatus; id: string; body: string; recipient: string; link?: { used_at?: string; revoked_at?: string; expires_at: string } }[];
+  requests: { email?: EmailRecord; emails: EmailRecord[]; reminder?: ReminderStatus; id: string; body: string; recipient: string; link?: { used_at?: string; revoked_at?: string; expires_at: string }; replied: boolean; live: boolean; open?: boolean; stale?: string }[];
   attachments: { id: string; request_id: string; name: string; state: string; error: string; scan_version: string; scanned_at?: string; source_id?: string; decision_note?: string }[];
 };
 export function Coverage({ closeId }: { closeId: string }) {
@@ -96,10 +96,10 @@ export function Coverage({ closeId }: { closeId: string }) {
     <PasscodeNotice passcode={passcode} />
     {!!status?.requests.length && <details><summary>Approved consolidated requests ({status.requests.length})</summary>{status.requests.map(q => <article key={q.id}>
       <h4>Request #{q.id} · {q.recipient}</h4><pre style={{ whiteSpace: "pre-wrap" }}>{q.body}</pre>
-      <p>{q.link?.revoked_at ? "Link revoked" : q.link?.used_at ? "Reply received; the client can add to it until the link expires" : q.link ? `Expires ${new Date(q.link.expires_at).toLocaleString()}` : "No current link"}</p>
+      <p>{q.link?.revoked_at ? "Link revoked" : q.link && !q.live ? `${q.replied ? "Reply received; the link expired" : "Link expired"} ${new Date(q.link.expires_at).toLocaleString()}` : q.replied ? (q.open ? "Reply received; the client can add to it until the link expires" : "Reply received. It takes no more answers now that its work or coverage moved on; send a new request for anything still missing.") : q.stale ? `The client can no longer answer it: ${q.stale}` : q.link ? `Expires ${new Date(q.link.expires_at).toLocaleString()}` : "No current link"}</p>
       {!!q.emails?.length && <EmailHistory emails={q.emails} />}
-      {!q.link?.used_at && !q.link?.revoked_at && (!q.email || (q.email.state==="accepted" && q.email.delivery==="delivered") || (q.reminder?.left ?? 1) <= 0) && <SendRequestEmail key={q.email?.id ?? "initial"} closeId={closeId} requestId={q.id} recipient={q.recipient} previousId={q.email?.id} reminder={q.reminder} onQueued={(p)=>{if(!q.email){setLink("");setPasscode(p);}setVersion(v=>v+1);}} />}
-      {(!q.link?.used_at || !q.link.revoked_at) && <><button disabled={busy} onClick={() => void act({ action: "link", request_id: q.id, confirmed: true })}>Replace private link</button><button disabled={busy} onClick={() => void act({ action: "revoke", request_id: q.id, confirmed: true })}>Withdraw request</button></>}
+      {!q.replied && q.live && !q.stale && (!q.email || (q.email.state==="accepted" && q.email.delivery==="delivered") || (q.reminder?.left ?? 1) <= 0) && <SendRequestEmail key={q.email?.id ?? "initial"} closeId={closeId} requestId={q.id} recipient={q.recipient} previousId={q.email?.id} reminder={q.reminder} onQueued={(p)=>{if(!q.email){setLink("");setPasscode(p);}setVersion(v=>v+1);}} />}
+      {(!q.link?.used_at || !q.link.revoked_at) && <>{(q.replied ? q.open !== false : !q.stale) && <button disabled={busy} onClick={() => void act({ action: "link", request_id: q.id, confirmed: true })}>Replace private link</button>}<button disabled={busy} onClick={() => void act({ action: "revoke", request_id: q.id, confirmed: true })}>Withdraw request</button></>}
     </article>)}</details>}
     <details open={!!status?.attachments.length}><summary>Client attachments ({status?.attachments.length ?? 0})</summary>
       <p>Malware scanning is mandatory: Cloudflare for PDFs, a separate on-demand antivirus service for TXT/CSV. Clean results permit inspection; firm release is still required. Quarantined files never enter OCR, model inputs or workpapers.</p>

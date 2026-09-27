@@ -128,24 +128,27 @@ func RequestCandidates(ctx context.Context, tx *sql.Tx, closeID string) ([]Reque
 	return out, more, rows.Err()
 }
 
-// The approved draft fixes both wording and evidence context. Reissue requires
-// renewed review when a source or selected workpaper has changed.
+// RequestPapers is the state, as review reads it, of the drafts that request draft d was built from.
+const RequestPapers = `(SELECT COALESCE(jsonb_agg(jsonb_build_array(w.id::text,w.digest,w.review_state,w.review_id) ORDER BY w.id),'[]'::jsonb) FROM workpaper_review_state w WHERE w.close_id=d.close_id AND d.workpaper_ids ? w.id::text)`
+
+// FreshClientRequest says why an approved request cannot take its first reply: its coverage or target work changed, a
+// document its work was read from was replaced, or the drafts its wording came from are no longer as approved. Other
+// evidence the close gains does not matter.
 func FreshClientRequest(ctx context.Context, tx *sql.Tx, closeID, requestID string) error {
-	var digest string
-	var raw []byte
-	if err := tx.QueryRowContext(ctx, `SELECT d.context_digest,d.workpaper_ids FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id=$1`, requestID).Scan(&digest, &raw); err != nil {
-		return fmt.Errorf("Request context unavailable.")
-	}
-	var ids []string
-	if json.Unmarshal(raw, &ids) != nil {
-		return fmt.Errorf("Request context unavailable.")
-	}
 	if err := FreshRequestTargets(ctx, tx, closeID, requestID); err != nil {
 		return err
 	}
-	current, _, err := RequestContext(ctx, tx, closeID, ids)
-	if err != nil || current != digest {
-		return fmt.Errorf("Request evidence changed. Ask the firm to review and issue a new request.")
+	var papers, sources bool
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(q.approved_papers=`+RequestPapers+`,false),
+ NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_intakes i ON i.job_id=rj.job_id JOIN evidence e ON e.id=i.source_id WHERE rj.request_id=q.id AND e.superseded_by IS NOT NULL)
+ FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id=$1`, requestID).Scan(&papers, &sources); err != nil {
+		return fmt.Errorf("Request context unavailable.")
+	}
+	if !sources {
+		return fmt.Errorf("A document this request's work was read from was replaced. Review and issue a fresh request.")
+	}
+	if !papers {
+		return fmt.Errorf("The drafts this request asks about changed. Review and issue a fresh request.")
 	}
 	return nil
 }

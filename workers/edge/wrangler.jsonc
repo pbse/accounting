@@ -17,5 +17,19 @@
     "max_instances": 1
   }],
   "durable_objects": {"bindings": [{"name": "API", "class_name": "CapabilityAPI"}]},
-  "migrations": [{"tag": "v1", "new_sqlite_classes": ["CapabilityAPI"]}]
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["CapabilityAPI"]}],
+  "env": {
+    "production": {
+      "name": "close-production",
+      // Until a custom hostname exists, workers.dev is the only ingress. With no
+      // UPLOAD_SCAN_HOST the edge refuses every PDF scan, so no clean receipt is issued.
+      "workers_dev": true,
+      "containers": [{
+        "class_name": "CapabilityAPI",
+        "image": "../../services/backend/Dockerfile",
+        "max_instances": 1
+      }],
+      "durable_objects": {"bindings": [{"name": "API", "class_name": "CapabilityAPI"}]}
+    }
+  }
 }

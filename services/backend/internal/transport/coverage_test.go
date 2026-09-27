@@ -55,7 +55,7 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 	}
 	ledger = source("ledger.txt", "Synthetic ledger fixture")
 	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, cid, rand.Text()).Scan(&conn))
-	raw, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{{"account_id": "a", "name": "Prepaid A", "kind": "prepaid", "question": "Provide invoice A terms."}, {"account_id": "b", "name": "Prepaid B", "kind": "prepaid", "question": "Provide invoice B terms."}, {"account_id": "c", "name": "Prepaid C", "kind": "prepaid", "question": "Provide missing invoice C."}}})
+	raw, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{{"account_id": "a", "name": "Prepaid A", "kind": "prepaid", "question": "Provide invoice A terms."}, {"account_id": "b", "name": "Prepaid B", "kind": "prepaid", "question": "Provide invoice B terms."}, {"account_id": "c", "name": "Prepaid C", "kind": "prepaid", "question": "Provide missing invoice C."}, {"account_id": "d", "name": "Prepaid D", "kind": "prepaid", "question": "Provide missing invoice D."}, {"account_id": "e", "name": "Prepaid E", "kind": "prepaid", "question": "Provide missing invoice E."}}})
 	must(db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123','synthetic-ledger',$3,now(),'fixture') RETURNING id::text`, cid, conn, string(raw)).Scan(&snapshot))
 	jobs, sources := []string{}, []string{}
 	for _, name := range []string{"A", "B"} {
@@ -308,16 +308,77 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 	}
 	// A missing requirement can receive a scoped request before any job exists.
 	var noJob struct {
+		ID    string `json:"id"`
 		Token string `json:"link_token"`
 	}
 	must(json.Unmarshal(call("POST", path, token, map[string]any{"action": "request", "digest": v.Digest, "accounts": []string{"c"}, "jobs": []string{}, "recipient": "client@example.test", "body": "Please provide missing invoice C.", "confirmed": true}, 200), &noJob))
 	call("POST", "/v1/client-request", noJob.Token, map[string]any{"body": "Invoice C will follow.", "confirmed": true}, 200)
+	// A request for an account alone keeps taking answers after the first reply, and Coverage says so.
+	if !strings.Contains(string(call("GET", "/v1/client-request", noJob.Token, nil, 200)), `"open":true`) {
+		t.Fatal("a request for an account alone closed after its first reply")
+	}
+	call("POST", "/v1/client-request", noJob.Token, map[string]any{"body": "Invoice C is attached now.", "confirmed": true}, 200)
+	// A link replaced after the reply keeps taking answers, and Coverage reads the request's replies, not the new link's.
+	var replaced struct {
+		Token string `json:"link_token"`
+	}
+	must(json.Unmarshal(call("POST", path, token, map[string]any{"action": "link", "request_id": noJob.ID, "confirmed": true}, 200), &replaced))
+	call("POST", "/v1/client-request", replaced.Token, map[string]any{"body": "Invoice C is attached now, again.", "confirmed": true}, 200)
+	call("POST", path, token, map[string]any{"action": "link", "request_id": noJob.ID, "confirmed": true}, 200)
+	var listed struct {
+		Requests []struct {
+			Open  bool
+			Stale string
+		}
+	}
+	must(json.Unmarshal(call("GET", path, token, nil, 200), &listed))
+	if !listed.Requests[0].Open || listed.Requests[0].Stale != "" {
+		t.Fatalf("Coverage says the newest request no longer takes answers: %+v", listed.Requests[0])
+	}
 	replacement := source("replacement.txt", "Changed invoice evidence")
 	_, err = db.Exec(`UPDATE evidence SET superseded_by=$2 WHERE id=$1`, sources[0], replacement)
 	must(err)
 	v = view()
 	if v.Items[0].State == "resolved" || v.Items[1].State != "resolved" {
 		t.Fatal("source change did not selectively reopen coverage")
+	}
+	// A reply that arrived by email uses the link without answers; a replacement link then takes follow-ups.
+	var emailed struct {
+		ID string `json:"id"`
+	}
+	must(json.Unmarshal(call("POST", path, token, map[string]any{"action": "request", "digest": view().Digest, "accounts": []string{"d"}, "jobs": []string{}, "recipient": "client@example.test", "body": "Please provide missing invoice D.", "confirmed": true}, 200), &emailed))
+	_, err = db.Exec(`UPDATE client_request_links SET used_at=now() WHERE request_id=$1`, emailed.ID)
+	must(err)
+	var replied struct {
+		Requests []struct {
+			Open  bool
+			Stale string
+		}
+	}
+	must(json.Unmarshal(call("GET", path, token, nil, 200), &replied))
+	if !replied.Requests[0].Open || replied.Requests[0].Stale != "" {
+		t.Fatalf("Coverage misreads a reply that arrived by email: %+v", replied.Requests[0])
+	}
+	var relinked struct {
+		Token string `json:"link_token"`
+	}
+	must(json.Unmarshal(call("POST", path, token, map[string]any{"action": "link", "request_id": emailed.ID, "confirmed": true}, 200), &relinked))
+	call("POST", "/v1/client-request", relinked.Token, map[string]any{"body": "Invoice D follows the email.", "confirmed": true}, 200)
+	// Once the firm changes an account's coverage, Coverage says its answered request takes no more answers and its
+	// unanswered one can no longer be answered.
+	call("POST", path, token, map[string]any{"action": "request", "digest": view().Digest, "accounts": []string{"e"}, "jobs": []string{}, "recipient": "client@example.test", "body": "Please provide missing invoice E.", "confirmed": true}, 200)
+	for _, account := range []string{"c", "e"} {
+		call("POST", path, token, map[string]any{"action": "bind", "digest": view().Digest, "account_id": account, "jobs": []string{}, "excluded": true, "reason": "Handled outside this close", "confirmed": true}, 200)
+	}
+	var moved struct {
+		Requests []struct {
+			Open  bool
+			Stale string
+		}
+	}
+	must(json.Unmarshal(call("GET", path, token, nil, 200), &moved))
+	if moved.Requests[0].Stale == "" || !moved.Requests[1].Open || moved.Requests[2].Open {
+		t.Fatalf("Coverage misreports which requests still take answers: %+v", moved.Requests)
 	}
 }
 
