@@ -1960,8 +1960,10 @@ Request: close three security gaps from the roadmap review: remove sensitive num
 
 Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `main @ c2b989d`); both judged all four items real, undone work. Adopted: keep 13-digit cards written 4-4-4-1 and put the most specific card alternative first; redact inside `modelProcedureDraft`, which also covers reviewer edits sent to the model; test the selection excerpts; assert the hostile test's execution boundary with the real table names; show each new test failing without its fix instead of a separate mutation pass. Not adopted: special handling of 20-digit serials in 4-digit groups (they can only be over-redacted, the safe direction); a length check after redaction (nothing needs it).
 
+Code review: GPT-6 Sol (reasoning high) found that a grouped card followed by a separate short number ("4111 1111 1111 1111 123") was read as one 19-digit number, failed the check digit and stayed in the text (the old pattern did the same); the card branch now drops trailing groups until the check digit holds, as the IBAN branch does, and a delta review confirmed it closed. Gemini (agy-review) approved with no findings.
+
 Tests, each seen failing without its fix and passing with it:
-- `TestRedactRemovesCardsBankNumbersAndSecrets` (moved to `documents`): adds grouped, 4-4-4-1 and Amex cards, a date pair kept, and a card after a date pair removed; the old pattern fails the two date cases.
+- `TestRedactRemovesCardsBankNumbersAndSecrets` (moved to `documents`): adds grouped, 4-4-4-1 and Amex cards, a date pair kept, a card after a date pair removed, and a card followed by a separate number removed with the number kept; the old pattern fails the date cases.
 - `TestLargeInventorySelectionIsBoundedAndReviewable`: selection excerpts carry the card marker, not the card or account digits.
 - `TestStatementRowsNeedEveryPageRowAndBalanceChecked`: the statement's card number never reaches the model, and a row quoting the redacted line validates as before.
 - `TestModelProcedureDraftUsesOnlySelectedSource`: reviewer edits and policy text reach the model redacted, and a policy with a card is drafted from its redacted text; removing either redaction fails it.
