@@ -23,7 +23,7 @@ The Work inbox also offers a **Prepare selected closes** portfolio command for u
 
 Type a goal in **Ask Work**, such as “prepare my clients due Friday”, “hand over my clients due Friday”, “recheck failed work”, “stop work waiting on the client” or “prepare all visible” (migration 074). The server reads it without a model:
 
-- **The verb** is prepare, recheck, stop, or **hand over** (or delegate), which hands each close to the agent ([below](#hand-many-closes-over-at-once)); a hand-over may add “to the agent” and one finish line, “for review” or “for sign-off” (also “ready for …”, “signed off”).
+- **The verb** is prepare, recheck, stop, or **hand over** (or delegate), which hands each close to the agent ([below](#hand-many-closes-over-at-once)); a hand-over may add “to the agent” and one finish line, “for review” or “for sign-off” (also “ready for …”, “signed off”). **show** or **list** (optionally “show me”) only lists the closes the goal selects, each with its due date, linked to the close: nothing is saved and there is nothing to run. “Show decisions”, “show blockers” and the other inbox views, and “show everything waiting on the client”, still switch Work's own filter. There is no statement-specific selection, so “waiting on statements” is refused.
 - **my clients** (or mine) keeps closes you own.
 - **due on / before / by** a day (today, tomorrow, a weekday, this week) or a YYYY-MM-DD date keeps closes due that day, earlier, or that day or earlier; plain "due" means by. Day names resolve from your browser's date.
 - **waiting on the client** (or clients, replies) keeps closes with a job waiting on the client; **failed** keeps closes with a failed job.

@@ -35,13 +35,16 @@ func TestPortfolioGoalsReadDaysAndModifiers(t *testing.T) {
 		"hand my clients due friday to the agent ready for review": {action: "delegate", finish: "review", mine: true, due: "2026-10-02", compare: "by"},
 		"hand over closes due on monday for sign off":              {action: "delegate", finish: "signoff", due: "2026-09-28", compare: "on"},
 		"hand over work waiting on the client signed off":          {action: "delegate", finish: "signoff", state: "waiting_client"},
+		"Show my clients due Friday":                               {action: "show", mine: true, due: "2026-10-02", compare: "by"},
+		"show me failed work":                                      {action: "show", state: "failed"},
+		"list closes waiting on the client":                        {action: "show", state: "waiting_client"},
 	} {
 		if got, err := parsePortfolioGoal(text, monday); err != nil || got != want {
 			t.Errorf("%q: %+v %v, want %+v", text, got, err, want)
 		}
 	}
 	// A hand-over's instructions are whole phrases; anything else, or two finish lines, is refused rather than dropped.
-	for _, text := range []string{"show my clients", "prepare Acme", "prepare due someday", "stop waiting on statements",
+	for _, text := range []string{"show Acme", "prepare Acme", "prepare due someday", "stop waiting on statements",
 		"hand over my clients and sign", "hand over my clients for sign", "hand over my clients for review for sign-off", "hand over my clients to the client",
 		"hand over my clients and email them", "delegate over my clients", "hand over my clients ready", "hand over my clients signed review", "prepare my clients for review"} {
 		if g, err := parsePortfolioGoal(text, monday); err == nil {
@@ -123,6 +126,14 @@ func TestPortfolioGoalsRunOnlyTheServerSelectedCloses(t *testing.T) {
 		t.Fatalf("all visible uses the inbox's view and client search, not the visible list: %+v", visible)
 	}
 	call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "prepare all visible", "view": "everything"}, 422)
+	// A listing selects the same way, saves nothing, and has nothing to run.
+	listed := call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "Show my clients due Friday", "today": today.Format("2006-01-02")}, 200)
+	if listed.ID != "" || listed.Action != "show" || len(listed.Items) != 1 || listed.Items[0].CloseID != due || listed.Items[0].State != "listed" || !strings.HasPrefix(listed.Items[0].Result, "due ") || listed.Scope != op.Scope {
+		t.Fatalf("a listing shows the goal's closes without saving an operation: %+v", listed)
+	}
+	if none := call("user_a", nil, "POST", "/v1/closes/portfolio", map[string]string{"text": "show my clients due before 2000-01-01"}, 200); none.Items == nil || len(none.Items) != 0 {
+		t.Fatalf("a listing that matches nothing returns an empty list: %+v", none)
+	}
 	path := "/v1/closes/portfolio/run"
 	call("user_b", reviewer, "POST", path, map[string]any{"id": op.ID, "confirmed": true}, 404)
 	call("user_a", nil, "POST", path, map[string]any{"id": op.ID, "confirmed": true}, 403)

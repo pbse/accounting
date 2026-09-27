@@ -621,11 +621,13 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
   );
 }
 
-type Goal = { id: string; action: "prepare" | "recheck" | "stop" | "delegate"; finish?: "review" | "signoff"; goal: string; scope: string; has_more: boolean; reason: string; items: { close_id: string; label: string; count: number; state: string; result: string; due_on?: string }[] };
+type Goal = { id: string; action: "prepare" | "recheck" | "stop" | "delegate" | "show"; finish?: "review" | "signoff"; goal: string; scope: string; has_more: boolean; reason: string; items: { close_id: string; label: string; count: number; state: string; result: string; due_on?: string }[] };
 
 // A goal's exact server-selected closes. Each run acts on at most ten, each checked again against its preview.
 function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void }) {
   const [current, setCurrent] = useState(goal);
+  // A listing asked again comes back as a new goal with the same key.
+  useEffect(() => setCurrent(goal), [goal]);
   const [reason, setReason] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -696,7 +698,8 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
   const [goals,setGoals] = useState<Goal[]>([]);
   useEffect(() => {
     let live = true;
-    workspaceRequest("/portfolio").then((data: { operations: Goal[] }) => live && setGoals(data.operations)).catch(() => undefined);
+    // A listing is never saved, so one shown before the saved goals load is kept.
+    workspaceRequest("/portfolio").then((data: { operations: Goal[] }) => live && setGoals(current => [...current.filter(g => !g.id), ...data.operations])).catch(() => undefined);
     return () => { live = false; };
   }, []);
   const [answer,setAnswer] = useState("");
@@ -730,11 +733,11 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
       return workspaceRequest("/work/interpret",{text:text.trim(),labels}).then(r=>interpret(r.command,true)).catch(e=>setError(e instanceof Error?e.message:"Could not interpret that request.")).finally(()=>setBusy(false));
     };
     if (/^(?:show|list)(?: me)?(?: everything| all work)? waiting (?:on|for) (?:the )?(?:client|clients|replies)$/i.test(text.trim())) {onFilter("waiting_client");return;}
-    const view = /^(?:show|list)(?: me)? (decisions|blockers|running work|client requests|prepared work|all work|dependencies)$/i.exec(text.trim());
-    if (view) {
-      if (view[1].toLowerCase() === "dependencies") {setAnswer("Changed workpapers are listed in Work needing re-review.");return;}
+    const named = /^(?:show|list)(?: me)? (decisions|blockers|running work|client requests|prepared work|all work|dependencies)$/i.exec(text.trim());
+    if (named) {
+      if (named[1].toLowerCase() === "dependencies") {setAnswer("Changed workpapers are listed in Work needing re-review.");return;}
       const views:Record<string,string> = {decisions:"needs_confirmation",blockers:"blocked","running work":"running","client requests":"waiting_client","prepared work":"completed","all work":"all"};
-      onFilter(views[view[1].toLowerCase()]);
+      onFilter(views[named[1].toLowerCase()]);
       return;
     }
     const rehearsal = /^rehearse (.+)$/i.exec(text.trim());
@@ -760,10 +763,12 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
       setError("");setAnswer(related.map(i=>`${i.source_name}: ${labels[i.state] ?? i.state}${i.blockers.length ? ` — ${i.blockers.join("; ")}` : i.error ? ` — ${i.error}` : ""}`).join("\n"));
       return;
     }
-    const previewGoal = () => {
+    // A listing the server refuses shows its guidance rather than going to the interpreter.
+    const previewGoal = (direct = false) => {
       setBusy(true);
-      void workspaceRequest("/portfolio",{text:text.trim(),view,client,today:new Date().toLocaleDateString("en-CA")}).then((goal:Goal)=>{setBusy(false);setGoals(current=>[goal,...current.filter(g=>g.id!==goal.id)]);}).catch(e=>{setBusy(false);void askAgent(e instanceof Error?e.message:"Could not preview that goal.");});
+      void workspaceRequest("/portfolio",{text:text.trim(),view,client,today:new Date().toLocaleDateString("en-CA")}).then((goal:Goal)=>{setBusy(false);setGoals(current=>[goal,...current.filter(g=>g.id!==goal.id)]);}).catch(e=>{setBusy(false);const message=e instanceof Error?e.message:"Could not preview that goal.";if(direct){setError(message);}else{void askAgent(message);}});
     };
+    if (/^(show|list)\b/i.test(text.trim())) {previewGoal(true);return;}
     if (/^(hand|delegate)\b/i.test(text.trim())) {previewGoal();return;}
     const match = /^(prepare|recheck|stop) (.+)$/i.exec(text.trim());
     if (!match) {askAgent("Try ‘show blockers’, ‘prepare my clients due Friday’, ‘hand over my clients due Friday’, ‘rehearse Client · YYYY-MM’ or ‘why is Client · YYYY-MM waiting?’.");return;}
@@ -803,7 +808,7 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
     <button type="button" disabled={busy || selected.length===0} onClick={()=>void inspect(selected,mode)}>{busy?"Checking…":`Preview ${selected.length} selected close${selected.length===1?"":"s"}`}</button>
     </details>
     {preview && <div><h3>Exact {mode} preview</h3><ul>{preview.map(close=><li key={close.id}>{close.label}: {close.count} {mode === "prepare" ? "source" : "unresolved"} job{close.count===1?"":"s"}</li>)}</ul>{mode === "stop" && <label>Reason for stopping<textarea value={reason} onChange={e=>setReason(e.target.value)} maxLength={500} /></label>}<button type="button" disabled={busy || (mode === "stop" && !reason.trim()) || preview.every(close=>close.count===0)} onClick={()=>void submit()}>{mode === "prepare" ? "Coordinate selected closes" : mode === "recheck" ? "Recheck listed proposals" : "Stop listed work"}</button></div>}
-    {goals.map(goal=><PortfolioGoal key={goal.id} goal={goal} onChange={onChange} />)}
+    {goals.map(goal=><PortfolioGoal key={goal.id || goal.goal} goal={goal} onChange={onChange} />)}
     {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
     {error && <p role="alert">{error}</p>}
   </details>;

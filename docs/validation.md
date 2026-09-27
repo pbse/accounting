@@ -2086,3 +2086,13 @@ Code review: GPT-6 Sol found three issues, all fixed:
 A delta review confirmed that each fix closes its finding.
 
 Not verified: sending the email, and the queued state that follows it. Both need a hosted session and a verified sender.
+
+## Goals that list closes (2026-09-27)
+
+Request: portfolio goals that only show closes (roadmap review, step 5), such as "show my clients due Friday". `parsePortfolioGoal` reads "show" or "list" (optionally "show me") as a listing with the same modifiers; `POST /portfolio` returns the server's selection for it (no id, state "listed", each close's due date) before saving anything, so there is nothing to run or resume. Work routes show/list text that no inbox filter matched to the preview, keeps an unsaved listing when the saved goals finish loading, and keys and refreshes a repeated listing. The firm-wide assistant says Work lists what the goal selects. Found in review: Work's interpreter declared a local `view` that shadowed the current inbox view, so "prepare all visible" sent `"view": null` and the server used the "all" view; it is renamed, and the request now carries the view you are on.
+
+Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `main @ 221da40`); both judged it real, undone work. Adopted: keep "waiting on statements" refused and say so (no statement-specific state exists); keep an unsaved listing when saved goals load; a show example in the refusal message; return before the insert, with an empty list rather than null; the scope's date format; the assistant's wording for listings; the shadowed view. Not adopted: none.
+
+Code review: GPT-6 Sol (reasoning high) found that a refused listing went to the model interpreter and lost the server's guidance, and that the firm-wide assistant promised a close listing for phrases Work turns into its inbox filter; Work now shows a refused listing's guidance directly, and the assistant says "Work shows what this selects." A delta review closed both. Gemini (agy-review) approved; its shorter empty-listing assertion is applied.
+
+Tests: `TestPortfolioGoalsReadDaysAndModifiers` reads show/list goals and no longer refuses "show my clients"; `TestPortfolioGoalsRunOnlyTheServerSelectedCloses` gets the same close for "Show my clients due Friday" as for the prepare goal, listed with its due date, no id and the same scope, with no operation saved, and an empty listing as `[]`. Removing the early return or the empty list each fails it. Browser: "show all visible" listed the close with no run controls, both it and "prepare all visible" sent the current view, and "show waiting on statements" showed the refusal's guidance.
