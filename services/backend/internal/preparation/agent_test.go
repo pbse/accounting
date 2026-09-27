@@ -104,10 +104,14 @@ func TestLargeInventorySelectionIsBoundedAndReviewable(t *testing.T) {
 	for i := range sources {
 		sources[i] = IntakeSource{Source: Source{ID: string(rune('A' + i)), Name: "source.txt", Digest: "digest", Role: "evidence"}, Content: "Amount: 100.00"}
 	}
+	sources[1].Content = "Paid by card 4111-1111-1111-1111. Account number: 000123456789."
 	client := &http.Client{Transport: agentRoundTrip(func(r *http.Request) (*http.Response, error) {
 		body, _ := io.ReadAll(r.Body)
 		if !strings.Contains(string(body), "primary_source_id") || !strings.Contains(string(body), "content bytes") {
 			t.Fatal("selection lacked inventory or size bound")
+		}
+		if strings.Contains(string(body), "4111-1111-1111-1111") || strings.Contains(string(body), "000123456789") || !strings.Contains(string(body), "card number ending 1111 removed") {
+			t.Fatal("selection excerpts reach the model with card and bank numbers removed")
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"selected_ids\":[\"A\",\"B\"]}"}]}]}`)), Header: http.Header{}}, nil
 	})}

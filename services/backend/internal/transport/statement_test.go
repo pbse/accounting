@@ -46,7 +46,7 @@ func TestStatementRowsNeedEveryPageRowAndBalanceChecked(t *testing.T) {
 			db.Exec(q, org)
 		}
 	}()
-	text := "--- Page 1 · PDF text ---\nHarbor Bank Statement\nAccount: Checking ****1234\nStatement period 2026-09-01 to 2026-09-30\nOpening balance 1,000.00\n2026-09-02 Deposit ACME 200.00\n2026-09-05 Coffee -25.00\nPage 1 of 2\n--- Page 2 · PDF text ---\n2026-09-12 Rent -500.00\nClosing balance 675.00\nPage 2 of 2\n"
+	text := "--- Page 1 · PDF text ---\nHarbor Bank Statement\nAccount: Checking ****1234\nStatement period 2026-09-01 to 2026-09-30\nOpening balance 1,000.00\n2026-09-02 Deposit ACME 200.00\n2026-09-05 Coffee card 4111 1111 1111 1111 -25.00\nPage 1 of 2\n--- Page 2 · PDF text ---\n2026-09-12 Rent -500.00\nClosing balance 675.00\nPage 2 of 2\n"
 	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,original,extraction_state) VALUES($1,'statement.pdf','stmt-full',$2,'fixture','\x255044462d'::bytea,'ready') RETURNING id::text`, closeID, text).Scan(&pdf))
 	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,original,extraction_state) VALUES($1,'partial.pdf','stmt-partial',$2,'fixture','\x255044462d'::bytea,'ready') RETURNING id::text`, closeID, strings.ReplaceAll(text, "of 2", "of 3")).Scan(&partial))
 	t.Setenv("OPENAI_API_KEY", "mock-only-key")
@@ -56,7 +56,7 @@ func TestStatementRowsNeedEveryPageRowAndBalanceChecked(t *testing.T) {
 	}
 	reading, _ := json.Marshal(map[string]any{"rows": []any{
 		row(1, "2026-09-02", "200.00", "2026-09-02 Deposit ACME 200.00", true),
-		row(1, "2026-09-05", "-25.00", "2026-09-05 Coffee -25.00", false),
+		row(1, "2026-09-05", "-25.00", "2026-09-05 Coffee card [card number ending 1111 removed] -25.00", false),
 		row(1, "2026-09-12", "-500.00", "2026-09-12 Rent -500.00", true),
 		row(2, "2026-09-12", "-50.00", "2026-09-12 Rent -500.00", true),
 	}, "truncated": false, "account": "Checking ****1234", "account_quote": "Account: Checking ****1234", "period_start": "2026-09-01", "period_end": "2026-09-30", "period_quote": "Statement period 2026-09-01 to 2026-09-30", "opening_balance": "1000.00", "opening_quote": "Opening balance 1,000.00", "closing_balance": "675.00", "closing_quote": "Closing balance 675.00", "currency": "USD"})
@@ -66,6 +66,9 @@ func TestStatementRowsNeedEveryPageRowAndBalanceChecked(t *testing.T) {
 		raw, _ := io.ReadAll(r.Body)
 		if r.URL.Host != "api.openai.com" || !bytes.Contains(raw, []byte(`"store":false`)) || !bytes.Contains(raw, []byte("untrusted data")) {
 			t.Fatalf("unexpected model call %s", r.URL)
+		}
+		if bytes.Contains(raw, []byte("4111 1111 1111 1111")) || !bytes.Contains(raw, []byte("card number ending 1111 removed")) {
+			t.Fatal("the statement reaches the model with its card number removed")
 		}
 		body, _ := json.Marshal(map[string]any{"id": "resp-statement", "status": "completed", "output": []any{map[string]any{"content": []any{map[string]string{"type": "output_text", "text": string(reading)}}}}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}, nil

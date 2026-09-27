@@ -14,82 +14,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/preparation"
 )
-
-var (
-	secretPattern  = regexp.MustCompile(`(?i)\b(password|passcode|passphrase|pin|pwd|one[- ]time (?:pass)?code|otp|verification code|security code|security answer|user ?name|user ?id|login)\s*(?::|=|\bis\b|\bwas\b)[^\n]*`)
-	accountPattern = regexp.MustCompile(`(?i)(\b(?:bank|checking|savings|chequing|deposit)\s+(?:account|acct)\b|\b(?:account|acct|a/c)\s*(?:number|num|no\b\.?|#))([^\d\n]{0,20})(\d(?:[ -]?\d){5,19})\b`)
-	ibanPattern    = regexp.MustCompile(`(?i)\b[a-z]{2}\d{2}(?: ?[a-z0-9]){11,30}\b`)
-	ssnPattern     = regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)
-	cardPattern    = regexp.MustCompile(`\b\d(?:[ -]?\d){12,18}\b`)
-)
-
-// redactSensitive removes card, IBAN and SSN numbers, bank account numbers written after a bank label, and
-// everything after a password or sign-in label on its line. Each removal leaves a marker with at most the last
-// four digits; the original is never stored.
-func redactSensitive(text string) (string, []string) {
-	removed := []string{}
-	note := func(kind string) {
-		if !slices.Contains(removed, kind) {
-			removed = append(removed, kind)
-		}
-	}
-	plain := func(s string) string { return strings.NewReplacer(" ", "", "-", "").Replace(s) }
-	last4 := func(s string) string { return s[len(s)-4:] }
-	text = secretPattern.ReplaceAllStringFunc(text, func(m string) string {
-		note("password or sign-in detail")
-		return secretPattern.FindStringSubmatch(m)[1] + " [removed]"
-	})
-	text = accountPattern.ReplaceAllStringFunc(text, func(m string) string {
-		p := accountPattern.FindStringSubmatch(m)
-		note("bank account number")
-		return p[1] + p[2] + "[bank account number ending " + last4(plain(p[3])) + " removed]"
-	})
-	// The match may run into the following words; drop trailing ones until the check digits hold.
-	text = ibanPattern.ReplaceAllStringFunc(text, func(m string) string {
-		for tokens := strings.Fields(m); len(tokens) > 0; tokens = tokens[:len(tokens)-1] {
-			iban, remainder := strings.ToUpper(strings.Join(tokens, "")), 0
-			if len(iban) < 15 {
-				break
-			}
-			for _, c := range iban[4:] + iban[:4] {
-				if c >= 'A' {
-					remainder = (remainder*100 + int(c-'A') + 10) % 97
-				} else {
-					remainder = (remainder*10 + int(c-'0')) % 97
-				}
-			}
-			if remainder == 1 {
-				note("IBAN")
-				return "[IBAN ending " + last4(iban) + " removed]" + strings.TrimPrefix(m, strings.Join(tokens, " "))
-			}
-		}
-		return m
-	})
-	text = ssnPattern.ReplaceAllStringFunc(text, func(m string) string {
-		note("SSN")
-		return "[SSN ending " + last4(m) + " removed]"
-	})
-	text = cardPattern.ReplaceAllStringFunc(text, func(m string) string {
-		digits, sum := plain(m), 0
-		for i := range len(digits) {
-			d := int(digits[len(digits)-1-i] - '0')
-			if i%2 == 1 {
-				if d *= 2; d > 9 {
-					d -= 9
-				}
-			}
-			sum += d
-		}
-		if sum%10 != 0 {
-			return m
-		}
-		note("card number")
-		return "[card number ending " + last4(digits) + " removed]"
-	})
-	return text, removed
-}
 
 // issueLink stores a new private reply link. When the firm requires passcodes it also returns an 8-digit
 // passcode, salted by the raw token the database never holds; both are shown only to the issuing person.
@@ -162,8 +89,8 @@ func recordReply(ctx context.Context, tx *sql.Tx, closeID, jobID, requestID, bod
 	if len(strings.TrimSpace(body)) == 0 || len(body) > 20000 || !utf8.ValidString(body) || strings.ContainsRune(body, 0) || len(from) == 0 || len(from) > 254 {
 		return "", 422, fmt.Errorf("Provide an original reply of at most 20,000 bytes and its reported sender.")
 	}
-	body, _ = redactSensitive(body)
-	from, _ = redactSensitive(from)
+	body, _ = documents.Redact(body)
+	from, _ = documents.Redact(from)
 	var count, size int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, closeID).Scan(&count, &size); err != nil {
 		return "", 503, fmt.Errorf("Could not check evidence storage.")
@@ -424,7 +351,7 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			if a.State == "" {
 				continue
 			}
-			redacted, gone := redactSensitive(a.Answer)
+			redacted, gone := documents.Redact(a.Answer)
 			for _, kind := range gone {
 				if !slices.Contains(removed, kind) {
 					removed = append(removed, kind)

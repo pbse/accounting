@@ -257,6 +257,8 @@ func registerStatements(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "Choose a current PDF of this close whose text is extracted.")
 			return
 		}
+		// The model reads, and each row is checked against, the text with card, bank and sign-in details removed.
+		content, _ = documents.Redact(content)
 		pages, canonical := statementPages(content)
 		if !canonical {
 			problem(w, 422, "This PDF's extracted pages are not marked 1 to N. Extract it again before reading its rows.")

@@ -166,30 +166,6 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	call("GET", "/v1/client-request", token, nil, 404)
 }
 
-func TestRedactSensitiveRemovesCardsBankNumbersAndSecrets(t *testing.T) {
-	for _, c := range []struct{ in, out, kinds string }{
-		{"Card 4111-1111-1111-1111 exp 12/29", "Card [card number ending 1111 removed] exp 12/29", "card number"},
-		{"Invoice 4111111111111112 attached", "Invoice 4111111111111112 attached", ""},
-		{"Wire to GB82 WEST 1234 5698 7654 32 please", "Wire to [IBAN ending 5432 removed] please", "IBAN"},
-		{"Ref GB82 WEST 1234 5698 7654 33", "Ref GB82 WEST 1234 5698 7654 33", ""},
-		{"iban gb82 west 1234 5698 7654 32 okay thanks", "iban [IBAN ending 5432 removed] okay thanks", "IBAN"},
-		{"SSN 123-45-6789", "SSN [SSN ending 6789 removed]", "SSN"},
-		{"Account number: 000123456789, routing 021000021", "Account number: [bank account number ending 6789 removed], routing 021000021", "bank account number"},
-		{"Book to account 400100 and account 6010", "Book to account 400100 and account 6010", ""},
-		{"Online banking login is alice; one-time code is 123456\nThanks", "Online banking login [removed]\nThanks", "password or sign-in detail"},
-		{"PIN = 4455", "PIN [removed]", "password or sign-in detail"},
-		{"Service end: 2027-08-31", "Service end: 2027-08-31", ""},
-	} {
-		got, kinds := redactSensitive(c.in)
-		if got != c.out || strings.Join(kinds, ",") != c.kinds {
-			t.Errorf("%q → %q %v", c.in, got, kinds)
-		}
-		if again, more := redactSensitive(got); again != got || len(more) != 0 {
-			t.Errorf("redacted text is stable: %q → %q", got, again)
-		}
-	}
-}
-
 func TestLinkPasscodeGuardsTheRequest(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {

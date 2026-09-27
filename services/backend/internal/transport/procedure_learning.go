@@ -17,6 +17,7 @@ import (
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 )
@@ -149,6 +150,13 @@ func localProcedureDraft(source string, edits []paperChange) (string, string, er
 }
 
 func modelProcedureDraft(ctx context.Context, client *http.Client, key, model, kind, method, source string, edits []paperChange) (string, string, error) {
+	// The model sees, and the quote is checked against, text with card, bank and sign-in details removed.
+	source, _ = documents.Redact(source)
+	edits = slices.Clone(edits)
+	for i := range edits {
+		edits[i].Before, _ = documents.Redact(edits[i].Before)
+		edits[i].After, _ = documents.Redact(edits[i].After)
+	}
 	if source != "" {
 		if len(source) > 16384 {
 			return "", "", fmt.Errorf("Policy text exceeds the model draft limit")
