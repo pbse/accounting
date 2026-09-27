@@ -34,6 +34,7 @@ func main() {
 	go transport.RunComparisons(ctx, db)
 	go transport.RunReplays(ctx, db)
 	go transport.RunXeroRefresh(ctx, db)
+	go transport.BackfillXeroRows(ctx, db)
 	go transport.RunStripeReports(ctx, db)
 	go transport.RunChatExpiry(ctx, db)
 	go transport.RunCloseGoals(ctx, db)
