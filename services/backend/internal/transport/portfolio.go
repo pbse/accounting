@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/preparation"
 )
 
 // closeAccess is the organization boundary's check that member $4 can open close $1 in firm $2 ($3: all clients).
@@ -32,7 +33,7 @@ var portfolioFiller = strings.Fields("all the closes close clients client work e
 const waitingStatements = `(EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=c.id AND j.state='waiting_client' AND i.proposal->>'kind'='reconciliation')
  OR EXISTS(SELECT 1 FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id
   CROSS JOIN LATERAL (SELECT s.id,s.payload->'coverage' AS coverage FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1) snap
-  WHERE d.close_id=c.id AND q.coverage_scope->>'snapshot_id'=snap.id::text
+  WHERE d.close_id=c.id AND q.coverage_scope->>'snapshot_id'=snap.id::text AND ` + preparation.RequestCoverageIsCurrent + `
   AND EXISTS(SELECT 1 FROM client_request_links l WHERE l.request_id=q.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now())
   AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(q.coverage_scope->'bindings')='array' THEN q.coverage_scope->'bindings' ELSE '[]' END) b
    WHERE snap.coverage @> jsonb_build_array(jsonb_build_object('account_id',b->>'account_id','kind','reconciliation')))))`
@@ -117,7 +118,8 @@ func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 			if next(i) == "bank" || next(i) == "card" {
 				i++
 			}
-			if next(i) != "statement" && next(i) != "statements" {
+			// Acting on a close acts on all its work, so a statement wait only selects closes to list.
+			if (next(i) != "statement" && next(i) != "statements") || g.action != "show" {
 				return g, errPortfolioGoal
 			}
 			g.state = "waiting_statements"
@@ -136,10 +138,6 @@ func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 		case !slices.Contains(portfolioFiller, w):
 			return g, errPortfolioGoal
 		}
-	}
-	// Acting on a close acts on all its work, so a statement wait only selects closes to list.
-	if g.state == "waiting_statements" && g.action != "show" {
-		return g, errPortfolioGoal
 	}
 	if g.action == "delegate" && g.finish == "" {
 		g.finish = "review"

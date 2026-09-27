@@ -150,15 +150,19 @@ func FreshClientRequest(ctx context.Context, tx *sql.Tx, closeID, requestID stri
 	return nil
 }
 
+// RequestCoverageIsCurrent is SQL over work_requests q and request_drafts d: a consolidated request is still on its
+// close's latest ledger capture, with a current source and active connection, and every binding is the current one.
+const RequestCoverageIsCurrent = `(q.coverage_scope IS NULL OR (
+ q.coverage_scope->>'snapshot_id'=(SELECT id::text FROM quickbooks_snapshots WHERE close_id=d.close_id AND payload ? 'period' ORDER BY quickbooks_snapshots.id DESC LIMIT 1)
+ AND EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')
+ AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(q.coverage_scope->'bindings') b WHERE b->>'id' IS DISTINCT FROM COALESCE((SELECT id::text FROM coverage_bindings c WHERE c.close_id=d.close_id AND c.snapshot_id::text=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1),''))
+ ))`
+
 // Consolidated requests bind their exact jobs/revisions and ledger capture.
 // Legacy single-job requests keep their existing route-level state fences.
 func RequestCoverageCurrent(ctx context.Context, tx *sql.Tx, closeID, requestID string) error {
 	var valid bool
-	err := tx.QueryRowContext(ctx, `SELECT d.close_id::text=$2 AND (q.coverage_scope IS NULL OR (
- q.coverage_scope->>'snapshot_id'=(SELECT id::text FROM quickbooks_snapshots WHERE close_id=d.close_id AND payload ? 'period' ORDER BY quickbooks_snapshots.id DESC LIMIT 1)
- AND EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')
- AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(q.coverage_scope->'bindings') b WHERE b->>'id' IS DISTINCT FROM COALESCE((SELECT id::text FROM coverage_bindings c WHERE c.close_id=d.close_id AND c.snapshot_id::text=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1),''))
- )) FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id=$1`, requestID, closeID).Scan(&valid)
+	err := tx.QueryRowContext(ctx, `SELECT d.close_id::text=$2 AND `+RequestCoverageIsCurrent+` FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id=$1`, requestID, closeID).Scan(&valid)
 	if err != nil || !valid {
 		return fmt.Errorf("Request coverage changed. Review and issue a fresh request.")
 	}
