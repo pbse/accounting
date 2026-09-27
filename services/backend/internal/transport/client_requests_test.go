@@ -178,10 +178,11 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the policy invoice.',jsonb_build_array($2::text),$3,'fixture') RETURNING id::text`, closeID, paper, digest).Scan(&draft); err != nil {
+	// Wording saved with a trailing newline, as generated drafts were, is approved as saved.
+	if err = db.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,E'Please send the policy invoice.\n',jsonb_build_array($2::text),$3,'fixture') RETURNING id::text`, closeID, paper, digest).Scan(&draft); err != nil {
 		t.Fatal(err)
 	}
-	call("POST", path+"/request", auth, map[string]any{"revision": revision(), "recipient": "client@example.test", "body": "Please send the policy invoice.", "draft_id": draft}, 200)
+	call("POST", path+"/request", auth, map[string]any{"revision": revision(), "recipient": "client@example.test", "body": "Please send the policy invoice.\n", "draft_id": draft}, 200)
 	db.QueryRow("SELECT max(id)::text FROM work_requests WHERE job_id=$1", job).Scan(&requestID)
 	token = issue()
 	if _, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'later.txt','later-fixture','Other evidence','fixture')`, closeID); err != nil {

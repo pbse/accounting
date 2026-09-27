@@ -2208,3 +2208,23 @@ Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `main @ b5f59d2`
 Code review: GPT-6 Sol (reasoning high) found that a later "waiting on the client" could overwrite the statement wait and let an action through, and that a request whose binding, source or connection had changed still counted though the client could not answer it; the phrase is now refused for actions as it is parsed, and the selection uses `RequestCoverageIsCurrent`, the same SQL `RequestCoverageCurrent` now shares. A delta review closed both. Gemini (agy-review) approved.
 
 Tests: `TestPortfolioGoalsReadDaysAndModifiers` reads the new phrases and refuses them for actions and without "statement(s)"; `TestPortfolioListsClosesWaitingOnStatements` lists a close with statement reconciliation work waiting on the client and one with a current open request for its bank account, and not a close with prepaid work waiting, a request on an older capture, an answered request, or a request whose binding changed. Removing the current-capture, open-link, statement-kind or currentness rule each fails it.
+
+## Request drafts: approve as saved, ignore scheduled captures (2026-09-27)
+
+Request: two bugs found while fixing client request links.
+- A draft generated in the Requests tab could never be approved from Work as saved: it failed with "The draft or its evidence context changed. Regenerate and review before approval." The generated wording ended with a newline that only the generate path stored, while approval trims what it receives before comparing. Regenerating produced the same newline, so the firm went round in a loop. Reproduced with a throwaway test before the fix.
+- Drafts went stale whenever a scheduled ledger capture arrived. A draft's freshness digests the close's evidence, deliberately, so a client document that arrives, such as the statement page a draft asks for, prompts the firm to reconsider it. But the daily QuickBooks transaction sync and period refresh add evidence too, so drafts needed regenerating every day.
+
+What changed:
+- The generated wording no longer ends in whitespace.
+- Approval compares with the saved wording trimmed, so drafts saved with a trailing newline approve as saved without regenerating.
+- A draft's evidence check leaves out the two scheduled captures, `quickbooks-sync` and `scheduled-quickbooks-refresh`. Uploads, forwarded files, client replies, released attachments and person-requested Stripe reports still mark it stale. So does a scheduled capture that replaces a source a selected workpaper cites, through that workpaper's review.
+- In closes with scheduled captures, a draft saved before this change shows stale once and is regenerated with one click.
+
+Review: the fix was understood from the reproduction, so the plan and the diff went to GPT-6 Sol (reasoning high) together. It found the code correct across every caller of the request context, and the comment and docs promising more than the code: a scheduled capture that replaces a cited source still stales the draft, as it should. The wording was corrected and the comment condensed to one line, and a delta review confirmed it.
+
+Tests:
+- `TestRequestDraftRevisions`: generated wording has no trailing whitespace; a transaction sync and a period refresh leave the draft current; an uploaded statement page still marks it stale, as before.
+- `TestScopedClientReplyResumesJob`: a draft saved with a trailing newline is approved from Work with the same wording.
+- `TestAssistantRequestCardSavesTheWordingItShowed` still passes.
+- Five mutations each fail a test: dropping the exclusion, or either creator from it; restoring the newline; comparing untrimmed.

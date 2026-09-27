@@ -75,7 +75,7 @@ func TestRequestDraftRevisions(t *testing.T) {
 		return drafts
 	}
 	drafts := read()
-	if len(drafts) != 1 || drafts[0].Stale || strings.Count(drafts[0].Body, "Statement page 2 is missing.") != 1 {
+	if len(drafts) != 1 || drafts[0].Stale || strings.Count(drafts[0].Body, "Statement page 2 is missing.") != 1 || strings.TrimSpace(drafts[0].Body) != drafts[0].Body {
 		t.Fatal("Consolidation or snapshot failed", drafts)
 	}
 	original := drafts[0]
@@ -88,6 +88,13 @@ func TestRequestDraftRevisions(t *testing.T) {
 	}
 	edited["body"] = "Concurrent edit that must not replace newer wording"
 	call("POST", base+"/requests", edited, 409)
+	// The scheduled ledger captures never answer a client question, so they leave the draft current.
+	if _, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'QuickBooks transactions 2026-09','sync-capture','{}','quickbooks-sync'),($1,'QuickBooks 2026-09 accrual period evidence.txt','period-refresh','{}','scheduled-quickbooks-refresh')`, closeID); err != nil {
+		t.Fatal(err)
+	}
+	if drafts = read(); drafts[0].Stale {
+		t.Fatal("A scheduled ledger capture flagged the request for reinspection")
+	}
 	// New evidence makes the old question potentially unnecessary; do not silently keep it current.
 	if _, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'statement-page-2.txt','new-page','September statement page 2','fixture')`, closeID); err != nil {
 		t.Fatal(err)
