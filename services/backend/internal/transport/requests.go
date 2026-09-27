@@ -69,6 +69,37 @@ func registerRequests(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, drafts)
 	})
+	// candidates is what the assistant's request card shows: the drafts a request would ask about and the exact wording
+	// it would save, with one digest over both and the latest draft it would revise.
+	mux.HandleFunc("GET "+path+"/candidates", func(w http.ResponseWriter, r *http.Request) {
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			problem(w, 503, "Request drafts unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		candidates, more, err := preparation.RequestCandidates(r.Context(), tx, r.PathValue("id"))
+		var latest string
+		if err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM request_drafts WHERE close_id::text=$1 ORDER BY request_drafts.id DESC LIMIT 1),'')`, r.PathValue("id")).Scan(&latest)
+		}
+		ids := []string{}
+		for _, c := range candidates {
+			ids = append(ids, c.ID)
+		}
+		// The save route sorts the ids the same way before it words the request.
+		sort.Strings(ids)
+		var contextDigest, body string
+		if err == nil {
+			contextDigest, body, err = preparation.RequestContext(r.Context(), tx, r.PathValue("id"), ids)
+		}
+		if err != nil {
+			problem(w, 503, "Could not read the drafts a request would cover.")
+			return
+		}
+		digest := preparation.Digest([]byte(latest + "\x00" + strings.Join(ids, ",") + "\x00" + contextDigest))
+		jsonReply(w, 200, map[string]any{"workpapers": candidates, "more": more, "latest_id": latest, "context_digest": contextDigest, "body": body, "digest": digest})
+	})
 	mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			ExpectedID    string   `json:"expected_id"`

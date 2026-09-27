@@ -78,6 +78,14 @@ func chatAction(text string) string {
 	if len(words) > 0 && words[0] == "please" {
 		words = words[1:]
 	}
+	if len(words) > 0 && words[0] == "draft" && slices.Contains(words, "request") {
+		for _, w := range words[1:] {
+			if !slices.Contains(chatRequestWords, w) {
+				return ""
+			}
+		}
+		return "request"
+	}
 	if len(words) == 0 || !slices.Contains([]string{"prepare", "recheck", "re-check", "stop"}, words[0]) {
 		return ""
 	}
@@ -89,7 +97,10 @@ func chatAction(text string) string {
 	return strings.ReplaceAll(words[0], "-", "")
 }
 
+var chatRequestWords = strings.Fields("a an the this close close's client consolidated request for now please")
+
 var chatActionReply = map[string]string{
+	"request": "Here is what a consolidated client request would ask. Check the drafts and the wording, then confirm on the card to save it as a draft; nothing is approved or sent, and you can edit it in Requests.",
 	"prepare": "Here is what preparing this close would coordinate. Check the listed documents and confirm on the card to start; facts and methods still need their own review, and closing the assistant does not stop the work.",
 	"recheck": "Here are the failed or pending proposals that can be rechecked. Check the list and confirm on the card to recheck them.",
 	"stop":    "Here is the unresolved work in this close. Check the list, give a reason and confirm on the card to stop it; prepared drafts and sent messages stay in their history.",
@@ -641,7 +652,11 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		} else if delegate {
 			reply = chatReply{body: "I can take this close from here. Check my plan and hand it over.", action: "delegate", due: due, finish: finish}
 		} else if action := chatAction(in.Text); action != "" {
-			reply = chatReply{body: chatActionReply[action], citations: []chatCitation{{"Close preparation", "/dashboard/closes/" + closeID + "?tab=overview"}}, action: action}
+			link := chatCitation{"Close preparation", "/dashboard/closes/" + closeID + "?tab=overview"}
+			if action == "request" {
+				link = chatCitation{"Client requests", "/dashboard/closes/" + closeID + "?tab=requests"}
+			}
+			reply = chatReply{body: chatActionReply[action], citations: []chatCitation{link}, action: action}
 		} else {
 			// A follow-up may keep the account of the previous question in this conversation.
 			var previous string
@@ -762,6 +777,44 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			}
 			json.Unmarshal(rec.Body.Bytes(), &goal)
 			record(map[string]any{"goal_id": goal.ID}, "The agent has the close, but this card could not record it. Open the close to see its progress.")
+			return
+		}
+		if action == "request" {
+			// The card saves the wording it showed, through the Requests route's own freshness check; nothing is sent.
+			var c struct {
+				Workpapers    []struct{ ID string } `json:"workpapers"`
+				LatestID      string                `json:"latest_id"`
+				ContextDigest string                `json:"context_digest"`
+				Body          string                `json:"body"`
+				Digest        string                `json:"digest"`
+			}
+			if !read(r, base+"/requests/candidates", &c) {
+				problem(w, 503, "Client requests unavailable.")
+				return
+			}
+			if len(c.Workpapers) == 0 {
+				problem(w, 409, "No draft needs information from the client now.")
+				return
+			}
+			if in.Digest == "" || in.Digest != c.Digest {
+				problem(w, 409, "The drafts or the wording changed since the card showed them. Check the updated card and confirm again.")
+				return
+			}
+			ids := []string{}
+			for _, p := range c.Workpapers {
+				ids = append(ids, p.ID)
+			}
+			rec := replay(r, "POST", base+"/requests", map[string]any{"expected_id": c.LatestID, "workpaper_ids": ids, "body": c.Body, "context_digest": c.ContextDigest})
+			if rec.Code != 200 {
+				relay(rec)
+				return
+			}
+			var saved struct {
+				ID string `json:"id"`
+			}
+			json.Unmarshal(rec.Body.Bytes(), &saved)
+			// The route returns the latest draft rather than saving it again when its wording and context are the same.
+			record(map[string]any{"draft_id": saved.ID, "created": saved.ID != c.LatestID}, "The request draft was saved, but this card could not record it. Open Requests to see it.")
 			return
 		}
 		var scoped struct {
