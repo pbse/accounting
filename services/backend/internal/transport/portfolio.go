@@ -19,11 +19,11 @@ import (
 const closeAccess = `SELECT EXISTS(SELECT 1 FROM client_closes WHERE id::text=$1 AND organization_id=$2 AND ($3 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=client_closes.organization_id AND g.subject=$4 AND lower(g.client_entity)=lower(client_closes.entity) AND g.granted)))`
 
 type portfolioGoal struct {
-	action, due, compare, state string
-	mine, visible               bool
+	action, due, compare, state, finish string
+	mine, visible                       bool
 }
 
-var errPortfolioGoal = errors.New("Try a goal such as “prepare my clients due Friday”, “recheck failed work”, “stop work waiting on the client” or “prepare all visible”. A goal selects closes by: my clients, due on, before or by a day or date, work waiting on the client, failed work, or the inbox's current view.")
+var errPortfolioGoal = errors.New("Try a goal such as “prepare my clients due Friday”, “hand over my clients due Friday”, “recheck failed work”, “stop work waiting on the client” or “prepare all visible”. A goal selects closes by: my clients, due on, before or by a day or date, work waiting on the client, failed work, or the inbox's current view.")
 
 var portfolioFiller = strings.Fields("all the closes close clients client work everything jobs that are is with and of in")
 
@@ -31,18 +31,58 @@ var portfolioFiller = strings.Fields("all the closes close clients client work e
 func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 	words := strings.Fields(strings.ToLower(strings.Trim(strings.TrimSpace(text), ".!?")))
 	var g portfolioGoal
-	if len(words) == 0 || !slices.Contains([]string{"prepare", "recheck", "stop"}, words[0]) {
-		return g, errPortfolioGoal
-	}
-	g.action = words[0]
 	next := func(i int) string {
 		if i < len(words) {
 			return words[i]
 		}
 		return ""
 	}
-	for i := 1; i < len(words); i++ {
+	start := 1
+	switch {
+	case len(words) == 0:
+		return g, errPortfolioGoal
+	case words[0] == "hand" || words[0] == "delegate":
+		// Handing over gets each close ready for review, or signed off when a whole sign-off phrase says so.
+		g.action = "delegate"
+		if words[0] == "hand" && next(1) == "over" {
+			start = 2
+		}
+	case slices.Contains([]string{"prepare", "recheck", "stop"}, words[0]):
+		g.action = words[0]
+	default:
+		return g, errPortfolioGoal
+	}
+	for i := start; i < len(words); i++ {
 		switch w := words[i]; {
+		case g.action == "delegate" && w == "to":
+			if next(i+1) == "the" {
+				i++
+			}
+			if next(i+1) != "agent" {
+				return g, errPortfolioGoal
+			}
+			i++
+		case g.action == "delegate" && (w == "ready" || w == "for" || w == "signed"):
+			// Only a whole phrase sets the finish: "[ready] for review", "[ready] for sign-off" (or signoff, sign off) or
+			// "signed off"; a second one is refused rather than one of them being ignored.
+			finish := ""
+			if w == "ready" && next(i+1) == "for" {
+				w, i = "for", i+1
+			}
+			switch {
+			case w == "signed" && next(i+1) == "off":
+				finish, i = "signoff", i+1
+			case w == "for" && next(i+1) == "review":
+				finish, i = "review", i+1
+			case w == "for" && (next(i+1) == "sign-off" || next(i+1) == "signoff"):
+				finish, i = "signoff", i+1
+			case w == "for" && next(i+1) == "sign" && next(i+2) == "off":
+				finish, i = "signoff", i+2
+			}
+			if finish == "" || g.finish != "" {
+				return g, errPortfolioGoal
+			}
+			g.finish = finish
 		case w == "my" || w == "mine":
 			g.mine = true
 		case w == "visible":
@@ -73,6 +113,9 @@ func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 		case !slices.Contains(portfolioFiller, w):
 			return g, errPortfolioGoal
 		}
+	}
+	if g.action == "delegate" && g.finish == "" {
+		g.finish = "review"
 	}
 	return g, nil
 }
@@ -159,11 +202,13 @@ type portfolioItem struct {
 	Count   int    `json:"count"`
 	State   string `json:"state"`
 	Result  string `json:"result"`
+	DueOn   string `json:"due_on,omitempty"`
 }
 
 type portfolioOperation struct {
 	ID        string          `json:"id"`
 	Action    string          `json:"action"`
+	Finish    string          `json:"finish,omitempty"`
 	Goal      string          `json:"goal"`
 	Scope     string          `json:"scope"`
 	HasMore   bool            `json:"has_more"`
@@ -175,11 +220,11 @@ type portfolioOperation struct {
 // readPortfolio returns the member's own operation; a close they can no longer access shows neither its name nor its result.
 func readPortfolio(ctx context.Context, db *sql.DB, r *http.Request, id string) (portfolioOperation, error) {
 	var op portfolioOperation
-	err := db.QueryRowContext(ctx, `SELECT id::text,action,goal,scope,has_more,COALESCE(reason,''),created_at FROM portfolio_operations WHERE id::text=$1 AND organization_id=$2 AND author=$3`, id, organization(r), subject(r)).Scan(&op.ID, &op.Action, &op.Goal, &op.Scope, &op.HasMore, &op.Reason, &op.CreatedAt)
+	err := db.QueryRowContext(ctx, `SELECT id::text,action,COALESCE(finish,''),goal,scope,has_more,COALESCE(reason,''),created_at FROM portfolio_operations WHERE id::text=$1 AND organization_id=$2 AND author=$3`, id, organization(r), subject(r)).Scan(&op.ID, &op.Action, &op.Finish, &op.Goal, &op.Scope, &op.HasMore, &op.Reason, &op.CreatedAt)
 	if err != nil {
 		return op, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT p.close_id::text,p.label,p.count,p.state,p.result,($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) FROM portfolio_items p JOIN client_closes c ON c.id=p.close_id WHERE p.operation_id::text=$1 ORDER BY p.position`, id, firmAccess(r), subject(r))
+	rows, err := db.QueryContext(ctx, `SELECT p.close_id::text,p.label,p.count,p.state,p.result,COALESCE(p.due_on::text,''),($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) FROM portfolio_items p JOIN client_closes c ON c.id=p.close_id WHERE p.operation_id::text=$1 ORDER BY p.position`, id, firmAccess(r), subject(r))
 	if err != nil {
 		return op, err
 	}
@@ -188,11 +233,11 @@ func readPortfolio(ctx context.Context, db *sql.DB, r *http.Request, id string) 
 	for rows.Next() {
 		var item portfolioItem
 		var allowed bool
-		if err = rows.Scan(&item.CloseID, &item.Label, &item.Count, &item.State, &item.Result, &allowed); err != nil {
+		if err = rows.Scan(&item.CloseID, &item.Label, &item.Count, &item.State, &item.Result, &item.DueOn, &allowed); err != nil {
 			return op, err
 		}
 		if !allowed {
-			item.CloseID, item.Label, item.Result = "", "A close you can no longer access", ""
+			item.CloseID, item.Label, item.Result, item.DueOn = "", "A close you can no longer access", "", ""
 		}
 		op.Items = append(op.Items, item)
 	}
@@ -237,7 +282,7 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		rows, err := tx.QueryContext(r.Context(), `SELECT c.id::text,c.entity||' · '||c.period FROM client_closes c WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$5 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
+		rows, err := tx.QueryContext(r.Context(), `SELECT c.id::text,c.entity||' · '||c.period,COALESCE(c.due_on::text,'') FROM client_closes c WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$5 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
  AND ($3='' OR ($6='on' AND c.due_on=$3::date) OR ($6='before' AND c.due_on<$3::date) OR ($6='by' AND c.due_on<=$3::date))
  AND (NOT $4 OR (c.owner<>'' AND c.owner=$5))
@@ -248,11 +293,11 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Could not select closes for this goal.")
 			return
 		}
-		type selected struct{ id, label string }
+		type selected struct{ id, label, due string }
 		closes := []selected{}
 		for rows.Next() {
 			var c selected
-			if err = rows.Scan(&c.id, &c.label); err != nil {
+			if err = rows.Scan(&c.id, &c.label, &c.due); err != nil {
 				break
 			}
 			closes = append(closes, c)
@@ -264,14 +309,33 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 		more := len(closes) > 100
 		closes = closes[:min(len(closes), 100)]
 		var opID string
-		if err = tx.QueryRowContext(r.Context(), `INSERT INTO portfolio_operations(organization_id,author,action,goal,scope,has_more) VALUES($1,$2,$3,$4,$5,$6) RETURNING id::text`, organization(r), subject(r), goal.action, in.Text, goal.describe(in.View, in.Client), more).Scan(&opID); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO portfolio_operations(organization_id,author,action,goal,scope,has_more,finish) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')) RETURNING id::text`, organization(r), subject(r), goal.action, in.Text, goal.describe(in.View, in.Client), more, goal.finish).Scan(&opID); err != nil {
 			problem(w, 503, "Could not save this goal.")
 			return
 		}
+		// A hand-over keeps each close's due date as the agent's deadline when the close page's hand-over would accept it.
+		today := time.Now().UTC().Truncate(24 * time.Hour)
 		for n, c := range closes {
-			var digest string
+			var digest, due, skipped string
 			var count int
 			switch goal.action {
+			case "delegate":
+				var owner string
+				var since time.Time
+				switch err = tx.QueryRowContext(r.Context(), `SELECT author,created_at FROM close_goals WHERE close_id=$1 AND state<>'stopped'`, c.id).Scan(&owner, &since); err {
+				case nil:
+					skipped = "Already handed to the agent by " + owner + " on " + since.UTC().Format("2 Jan 2006") + "."
+				case sql.ErrNoRows:
+					var inventory []byte
+					var sources []json.RawMessage
+					if inventory, err = preparationInventory(r.Context(), tx, c.id); err == nil {
+						err = json.Unmarshal(scopeSources(inventory), &sources)
+						count = len(sources)
+					}
+					if day, e := time.Parse("2006-01-02", c.due); e == nil && !day.Before(today.AddDate(0, 0, -1)) && !day.After(today.AddDate(1, 0, 1)) {
+						due = c.due
+					}
+				}
 			case "prepare":
 				var inventory []byte
 				var coverage json.RawMessage
@@ -293,11 +357,14 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 				count = len(jobs)
 			}
 			state, result := "pending", ""
-			if count == 0 {
+			switch {
+			case skipped != "":
+				state, result = "skipped", skipped
+			case count == 0 && goal.action != "delegate":
 				state, result = "skipped", "Nothing to "+goal.action+"."
 			}
 			if err == nil {
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO portfolio_items(operation_id,position,close_id,label,digest,count,state,result) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, opID, n, c.id, c.label, digest, count, state, result)
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO portfolio_items(operation_id,position,close_id,label,digest,count,state,result,due_on) VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')::date)`, opID, n, c.id, c.label, digest, count, state, result, due)
 			}
 			if err != nil {
 				problem(w, 503, "Could not preview this goal.")
@@ -385,7 +452,7 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		for range 10 {
-			ran, err := runPortfolioItem(r.Context(), db, r, op.ID, op.Action, reason, actor)
+			ran, err := runPortfolioItem(r.Context(), db, r, op, reason, actor)
 			if err != nil {
 				problem(w, 503, "The run stopped before finishing. Run the goal again to continue.")
 				return
@@ -403,15 +470,15 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 }
 
 // runPortfolioItem claims one pending close and reports whether it did.
-func runPortfolioItem(ctx context.Context, db *sql.DB, r *http.Request, opID, action, reason, actor string) (bool, error) {
+func runPortfolioItem(ctx context.Context, db *sql.DB, r *http.Request, op portfolioOperation, reason, actor string) (bool, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
-	var closeID, digest string
+	var closeID, digest, due string
 	var count int
-	err = tx.QueryRowContext(ctx, `SELECT close_id::text,digest,count FROM portfolio_items WHERE operation_id::text=$1 AND state='pending' ORDER BY position LIMIT 1 FOR UPDATE SKIP LOCKED`, opID).Scan(&closeID, &digest, &count)
+	err = tx.QueryRowContext(ctx, `SELECT close_id::text,digest,count,COALESCE(due_on::text,'') FROM portfolio_items WHERE operation_id::text=$1 AND state='pending' ORDER BY position LIMIT 1 FOR UPDATE SKIP LOCKED`, op.ID).Scan(&closeID, &digest, &count, &due)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -428,7 +495,7 @@ func runPortfolioItem(ctx context.Context, db *sql.DB, r *http.Request, opID, ac
 			return false, err
 		}
 		var refused *closeActionError
-		switch action {
+		switch op.Action {
 		case "prepare":
 			var id string
 			var created bool
@@ -445,6 +512,19 @@ func runPortfolioItem(ctx context.Context, db *sql.DB, r *http.Request, opID, ac
 			var n int
 			n, refused = stopClose(ctx, tx, closeID, digest, reason, actor)
 			result = "Stopped " + plural(n, "job", "jobs") + "."
+		case "delegate":
+			// The goal's author is the member, as when they hand a close over from its page.
+			g := goalRow{author: subject(r), state: "active", finish: op.Finish}
+			if err = tx.QueryRowContext(ctx, `SELECT id::text,organization_id FROM client_closes WHERE id::text=$1 FOR UPDATE`, closeID).Scan(&g.close, &g.org); err != nil {
+				return false, err
+			}
+			text := "Handed over by " + g.author + " with the goal “" + op.Goal + "”, to get it " + goalFinishes[op.Finish]
+			if day, e := time.Parse("2006-01-02", due); e == nil {
+				text += " by " + day.Format("Mon 2 Jan 2006")
+			}
+			if refused = handOver(ctx, tx, &g, due, text); refused == nil {
+				result = "Handed to the agent as goal #" + g.id + "."
+			}
 		}
 		state = "done"
 		if refused != nil && refused.status >= 500 {
@@ -457,7 +537,7 @@ func runPortfolioItem(ctx context.Context, db *sql.DB, r *http.Request, opID, ac
 			state, result = "failed", refused.message
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE portfolio_items SET state=$3,result=$4,finished_at=now() WHERE operation_id::text=$1 AND close_id::text=$2`, opID, closeID, state, result); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE portfolio_items SET state=$3,result=$4,finished_at=now() WHERE operation_id::text=$1 AND close_id::text=$2`, op.ID, closeID, state, result); err != nil {
 		return false, err
 	}
 	return true, tx.Commit()

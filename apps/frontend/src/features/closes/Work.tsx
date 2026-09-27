@@ -621,7 +621,7 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
   );
 }
 
-type Goal = { id: string; action: "prepare" | "recheck" | "stop"; goal: string; scope: string; has_more: boolean; reason: string; items: { close_id: string; label: string; count: number; state: string; result: string }[] };
+type Goal = { id: string; action: "prepare" | "recheck" | "stop" | "delegate"; finish?: "review" | "signoff"; goal: string; scope: string; has_more: boolean; reason: string; items: { close_id: string; label: string; count: number; state: string; result: string; due_on?: string }[] };
 
 // A goal's exact server-selected closes. Each run acts on at most ten, each checked again against its preview.
 function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void }) {
@@ -632,7 +632,13 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
   const [error, setError] = useState("");
   const pending = current.items.filter((i) => i.state === "pending").length;
   const needsReason = current.action === "stop" && !current.reason;
-  const noun = current.action === "prepare" ? "source document" : "job";
+  const noun = current.action === "prepare" || current.action === "delegate" ? "source document" : "job";
+  const handing = current.action === "delegate";
+  // A hand-over shows each close's deadline for the agent: its own due date when the close page would accept it.
+  const pendingText = (i: Goal["items"][number]) =>
+    handing
+      ? `${i.count} ${noun}${i.count === 1 ? "" : "s"}; hand over ${i.due_on ? `with the deadline ${new Date(`${i.due_on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}` : "with no deadline"}`
+      : `${i.count} ${noun}${i.count === 1 ? "" : "s"} to ${current.action}`;
   async function run() {
     setBusy(true);
     setError("");
@@ -662,7 +668,7 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
         <ul>
           {current.items.map((i, n) => (
             <li key={i.close_id || n}>
-              {i.close_id ? <Link to={`/dashboard/closes/${i.close_id}`}>{i.label}</Link> : i.label}: {i.state === "pending" ? `${i.count} ${noun}${i.count === 1 ? "" : "s"} to ${current.action}` : i.result || i.state}
+              {i.close_id ? <Link to={`/dashboard/closes/${i.close_id}`}>{i.label}</Link> : i.label}: {i.state === "pending" ? pendingText(i) : i.result || i.state}
             </li>
           ))}
         </ul>
@@ -670,7 +676,9 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
       {pending > 0 && (
         <>
           {needsReason && <label>Reason for stopping<textarea value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></label>}
-          <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {current.action[0].toUpperCase() + current.action.slice(1)} the {pending} listed close{pending === 1 ? "" : "s"}; facts and methods still need separate review.</label>
+          <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {handing
+            ? `Hand the ${pending} pending close${pending === 1 ? "" : "s"} to the agent to get each ${current.finish === "signoff" ? "signed off" : "ready for review"}. The agent never confirms facts, approves, sends, posts or signs off.`
+            : `${current.action[0].toUpperCase() + current.action.slice(1)} the ${pending} pending close${pending === 1 ? "" : "s"}; facts and methods still need separate review.`}</label>
           <button type="button" disabled={busy || !confirmed || (needsReason && !reason.trim())} onClick={() => void run()}>{busy ? "Running…" : `Run for ${pending} close${pending === 1 ? "" : "s"}`}</button>
         </>
       )}
@@ -752,18 +760,19 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
       setError("");setAnswer(related.map(i=>`${i.source_name}: ${labels[i.state] ?? i.state}${i.blockers.length ? ` — ${i.blockers.join("; ")}` : i.error ? ` — ${i.error}` : ""}`).join("\n"));
       return;
     }
+    const previewGoal = () => {
+      setBusy(true);
+      void workspaceRequest("/portfolio",{text:text.trim(),view,client,today:new Date().toLocaleDateString("en-CA")}).then((goal:Goal)=>{setBusy(false);setGoals(current=>[goal,...current.filter(g=>g.id!==goal.id)]);}).catch(e=>{setBusy(false);void askAgent(e instanceof Error?e.message:"Could not preview that goal.");});
+    };
+    if (/^(hand|delegate)\b/i.test(text.trim())) {previewGoal();return;}
     const match = /^(prepare|recheck|stop) (.+)$/i.exec(text.trim());
-    if (!match) {askAgent("Try ‘show blockers’, ‘prepare my clients due Friday’, ‘rehearse Client · YYYY-MM’ or ‘why is Client · YYYY-MM waiting?’.");return;}
+    if (!match) {askAgent("Try ‘show blockers’, ‘prepare my clients due Friday’, ‘hand over my clients due Friday’, ‘rehearse Client · YYYY-MM’ or ‘why is Client · YYYY-MM waiting?’.");return;}
     const action = match[1].toLowerCase() as "prepare"|"stop"|"recheck";
     const query = match[2].trim().toLowerCase();
     const eligible = closesFor(action);
     const matches = eligible.filter(c=>c.entity === query || c.label.toLowerCase() === query);
     if (matches.length > 1) {setError("Several closes match. Include the close month shown below.");return;}
-    if (matches.length !== 1) {
-      setBusy(true);
-      void workspaceRequest("/portfolio",{text:text.trim(),view,client,today:new Date().toLocaleDateString("en-CA")}).then((goal:Goal)=>{setBusy(false);setGoals(current=>[goal,...current.filter(g=>g.id!==goal.id)]);}).catch(e=>{setBusy(false);void askAgent(e instanceof Error?e.message:"Could not preview that goal.");});
-      return;
-    }
+    if (matches.length !== 1) {previewGoal();return;}
     setMode(action);setSelected([matches[0].id]);setPreview(undefined);setError("");
     void inspect([matches[0].id],action);
   }
