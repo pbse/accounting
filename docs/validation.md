@@ -1772,3 +1772,23 @@ Code review: GPT-6 Sol (high). Adopted: paging so items past the first 200 stay 
 Tests: `TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState`: a member assigned to one client sees only its items and cannot mark another client's; firm access sees both; work waiting for evidence is not an item; an approved request with no delivery is; a partial link reply is an unread item, reading it stops the count (not another member's), and the next reply is a new unread item; snoozing hides it until expiry or waking, and a snooze past 30 days is refused; kinds turned off stop counting, and marks and preferences are per member; taking the close shows it as mine and to others as someone else's; a replaced source on an approved draft becomes its own item and gives way to the draft's revision; marks for vanished items are dropped; removing the member deletes their marks and preferences; the unread and assigned-to-me views filter on the server; a page past the end (even the largest integer) is the last page while the unread keys cover every item; a job's state change is dated when it happens. 22 mutations, all failing the tests. Not covered by a test: the undelivered-email item (its condition is Work's existing blocked-email condition), held email replies and scanned files awaiting release.
 
 Not verified: browser notifications in a real browser.
+
+## Client memory (2026-09-27)
+
+Request: visible, editable client memory: confirmed aliases, approved methods, account mappings and relevant prior decisions with provenance and effective dates; authorized users can correct or retire what is remembered; "Use this account this time" stays distinct from "Propose this as our future rule" (roadmap item 12). `GET /v1/closes/{id}/memory` lists the client's aliases (active and retired), its unrevoked standing approvals with where they were granted and whether they are still in force (`grantInForce`), and the accounts its currently approved drafts (read from `workpaper_review_state`, so a revised draft or one whose source changed after approval no longer counts) named over 12 months. The account aggregation was extracted from the confirm hints into `approvedAccounts`, which now also names the latest approved draft behind each value and its approver; the hints are unchanged. `POST /v1/closes/{id}/memory` (`retire_alias`, `workpapers:review`, a reason) retires only an active alias of the authorized close's own client. `ClientAliases` ignores retired names. Migration 080 adds `retired_by`, `retired_at` and `retire_reason`, and makes the alias uniqueness apply to active names only. The panel sits at the top of the close's Settings tab, above the existing Procedures section, which remains the future-rule path with its impact preview and pinned version.
+
+Plan review: GPT-6 Sol (high). Adopted: the retire update is bound to the close's organization and client and refuses a missing or already retired name; "in force" uses the existing validity check and each grant carries its own close for Revoke; account history names its approving draft, reviewer and date; rules are not repeated in the panel, because the Procedures section below already shows current rules, who approved them, when and the close's pinned version.
+
+Tests: `TestClientMemoryShowsWhoDecidedAndRetiresAliases`:
+- the panel lists the client's alias, its in-force standing approval and where it was granted, and each account's approving draft and reviewer;
+- a member without the client's access gets 404;
+- retiring needs `workpapers:review` and a reason, refuses another client's alias and an already retired one, and drops the name from `ClientAliases` while listing it with who retired it and why;
+- the name can be confirmed again;
+- a grant whose approval changed shows as not in force, and a revoked grant is not listed;
+- an approved draft whose source changed contributes no account.
+
+`TestHintsRememberApprovedAccountsAndCheckTheLedger` passes unchanged. 8 mutations, all failing the tests, plus one for the approval-state filter.
+
+Code review: GPT-6 Sol (high). Adopted: accounts come only from drafts still approved in `workpaper_review_state` (a source change after approval, which the hints could otherwise offer for **Use**, drops the account); the panel's one-click Revoke was removed in favour of the draft's existing Revoke control with its confirmation.
+
+Not verified: the panel in a browser.

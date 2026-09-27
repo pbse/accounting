@@ -147,6 +147,16 @@ When a person confirms a model reading, each account field (prepaid: expense and
 
 **Use** fills in the input, but only for an account that is a single active account in the current snapshot and agrees with the approved procedure. Nothing is filled in by itself; the person still confirms, and every existing check still applies. No model is called. Changing treatment for good stays with learned procedures.
 
+### What we remember about a client
+
+The top of a close's **Settings** tab (`GET /v1/closes/{id}/memory`) shows what the system remembers about the close's client, with who decided it and when:
+
+- **Other names its documents use:** each confirmed alias, who confirmed it and when. A reviewer (`workpapers:review`) can retire one with a reason (`POST /v1/closes/{id}/memory`, `retire_alias`); it stays listed with who retired it, when and why. Later documents using that name stop for a person again, work already done is unchanged, and the name can be confirmed again from Work.
+- **Standing approvals:** each unrevoked grant for the client, with the draft and close it was granted on, who granted it, when and why. A grant is marked not in force when its approval changed or the granter left the firm (the same check approval uses). Each links to its draft, where the existing **Revoke** control (with its confirmation) withdraws it.
+- **Accounts approved before:** the accounts named in the client's currently approved drafts (not revised, and no source changed since approval) over the 12 close months ending with this close (the same top three the confirm hints use), each linked to the latest approved draft that used it and who approved it when. This is a record, not a rule: **Use** while confirming fills in that one reading, while a rule for future preparation is the client's procedure, shown right below with its scope, who approved it, when and the version this close uses.
+
+Migration `080_alias_retirement.sql` adds who retired an alias, when and why, and lets a retired name be confirmed again.
+
 ## Agent track record
 
 **Measure** shows, per client, how the model's work has held up over the last 12 close months, including this one (`GET /v1/closes/track-record`, MCP `agent_track_record`). It uses only recorded history, with no model call.
