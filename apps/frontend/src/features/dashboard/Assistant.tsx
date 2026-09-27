@@ -55,6 +55,10 @@ function Panel() {
     navigate({ search: params.toString() }, { replace: true });
     askAssistant(question, closeId);
   }, [location.search, closeId]);
+  useEffect(() => {
+    document.body.classList.toggle("assistant-open", open);
+    return () => document.body.classList.remove("assistant-open");
+  }, [open]);
   const toggleButton = useRef<HTMLButtonElement>(null);
   const opened = useRef(open);
   useEffect(() => {

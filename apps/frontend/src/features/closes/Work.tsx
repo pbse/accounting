@@ -1278,7 +1278,9 @@ function WorkDetails({
                     ? `Email ${q.email.state.replaceAll("_", " ")}`
                     : q.delivered_at
                       ? "Delivery recorded by staff"
-                      : "Approved · not sent"}
+                      : q.id === latest.id
+                        ? "Approved · not sent"
+                        : `Replaced by request #${latest.id} · never sent`}
               </summary>
               <p>
                 To: {q.recipient} · approved by {q.approved_by}

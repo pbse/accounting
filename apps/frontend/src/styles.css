@@ -888,6 +888,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .app-main {
   min-width: 0;
 }
+/* On a wide screen the open assistant sits beside the page instead of over it. */
+@media (min-width: 1100px) {
+  body.assistant-open .app-main {
+    padding-right: min(400px, 100vw);
+  }
+}
 .page {
   max-width: 1320px;
   padding: 1.6rem clamp(1rem, 3vw, 2.2rem) 3rem;

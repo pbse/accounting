@@ -89,7 +89,7 @@ function Palette({ initial, account, onClose }: { initial: string; account: stri
   const options: Option[] = !command
     ? commands
         .filter((c) => c.name.startsWith(query) || c.description.toLowerCase().includes(query))
-        .map((c) => ({ key: c.name, label: `/${c.name}${c.argument ? ` <${c.argument}>` : ""}`, detail: c.description, run: () => setText(`/${c.name} `) }))
+        .map((c) => ({ key: c.name, label: `/${c.name}${c.argument ? ` <${c.argument}>` : ""}`, detail: c.description, run: () => (c.argument || (c.close && !target) ? setText(`/${c.name} `) : run(c, "", target)) }))
     : pickClose
       ? (closes ?? []).map((c) => ({ key: c.id, label: `${c.entity} · ${c.period}`, detail: `/${command.name}`, run: () => choose(command, c) }))
       : [{ key: "run", label: `/${command.name}${argument ? ` ${argument}` : ""}`, detail: chosen ? `${command.description} · ${chosen.entity} · ${chosen.period}` : command.description, run: () => run(command, argument, target) }];
