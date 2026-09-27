@@ -435,7 +435,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				err = tx.QueryRowContext(r.Context(), `INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,$2,'[]',$3,$4) RETURNING id::text`, closeID, body, digest, actor).Scan(&draftID)
 			}
 			if err == nil {
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO work_requests(job_id,draft_id,revision,recipient,approved_by) VALUES($1,$2,$3,$4,$5)`, jobID, draftID, revision, recipient.Address, actor)
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO work_requests(job_id,draft_id,revision,recipient,approved_by,approved_papers) VALUES($1,$2,$3,$4,$5,(SELECT `+preparation.RequestPapers+` FROM request_drafts d WHERE d.id=$2))`, jobID, draftID, revision, recipient.Address, actor)
 			}
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET state='waiting_client' WHERE id=$1`, jobID)

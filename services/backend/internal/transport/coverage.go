@@ -191,15 +191,35 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var requests, attachments json.RawMessage
-		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('email',(SELECT jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'error',m.error,'created_at',m.created_at) FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),'emails',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'approved_by',m.approved_by,'error',m.error,'created_at',m.created_at) ORDER BY m.created_at) FROM email_delivery m WHERE m.request_id=q.id),'[]'::jsonb),'id',q.id::text,'body',d.body,'recipient',q.recipient,'created_at',q.approved_at,'scope',q.coverage_scope,'reminder',`+reminderStatus+`,'link',(SELECT jsonb_build_object('used_at',used_at,'revoked_at',revoked_at,'expires_at',expires_at) FROM client_request_links WHERE request_id=q.id ORDER BY issued_at DESC LIMIT 1)) ORDER BY q.id DESC),'[]') FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1 AND q.coverage_scope IS NOT NULL`, r.PathValue("id")).Scan(&requests)
+		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('email',(SELECT jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'error',m.error,'created_at',m.created_at) FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),'emails',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m.id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'approved_by',m.approved_by,'error',m.error,'created_at',m.created_at) ORDER BY m.created_at) FROM email_delivery m WHERE m.request_id=q.id),'[]'::jsonb),'id',q.id::text,'body',d.body,'recipient',q.recipient,'created_at',q.approved_at,'scope',q.coverage_scope,'reminder',`+reminderStatus+`,'link',(SELECT jsonb_build_object('used_at',used_at,'revoked_at',revoked_at,'expires_at',expires_at) FROM client_request_links WHERE request_id=q.id ORDER BY issued_at DESC LIMIT 1),
+ 'replied',`+requestReplied("q.id")+`,
+ 'live',COALESCE((SELECT revoked_at IS NULL AND expires_at>now() FROM client_request_links WHERE request_id=q.id ORDER BY issued_at DESC LIMIT 1),false)) ORDER BY q.id DESC),'[]') FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1 AND q.coverage_scope IS NOT NULL`, r.PathValue("id")).Scan(&requests)
 		if err == nil {
 			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'request_id',request_id::text,'name',name,'digest',digest,'state',state,'error',error,'source_id',source_id::text,'scan_version',scan_version,'scanned_at',scanned_at,'decision_note',decision_note) ORDER BY id),'[]') FROM client_attachments WHERE close_id=$1`, r.PathValue("id")).Scan(&attachments)
+		}
+		// While its link is live, a replied request says whether the client can still add to it, and an unanswered one
+		// why the client can no longer answer it, as the link decides.
+		list := []map[string]any{}
+		if err == nil {
+			err = json.Unmarshal(requests, &list)
+		}
+		for _, q := range list {
+			id, _ := q["id"].(string)
+			switch {
+			case err != nil || q["live"] != true:
+			case q["replied"] == true:
+				q["open"], err = requestOpen(r.Context(), tx, r.PathValue("id"), id)
+			default:
+				if stale := preparation.FreshClientRequest(r.Context(), tx, r.PathValue("id"), id); stale != nil {
+					q["stale"] = stale.Error()
+				}
+			}
 		}
 		if err != nil {
 			problem(w, 503, "Request history unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"coverage": view, "requests": requests, "attachments": attachments})
+		jsonReply(w, 200, map[string]any{"coverage": view, "requests": list, "attachments": attachments})
 	})
 	mux.HandleFunc("POST /v1/closes/{id}/coverage", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := reviewActor(w, r)

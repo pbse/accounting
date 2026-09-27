@@ -275,7 +275,8 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	}
 	job, request = makeRequest("invoice-three")
 	stale := enqueue(job, request)
-	db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'changed','changed','changed','fixture')`, closeID)
+	// Replacing the document the request's work was read from stops the queued email.
+	db.Exec(`WITH fresh AS (INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'changed','changed','changed','fixture') RETURNING id) UPDATE evidence SET superseded_by=(SELECT id FROM fresh) WHERE close_id=$1 AND digest='invoice-three'`, closeID)
 	if _, err = delivery.ProcessOne(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}

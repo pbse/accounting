@@ -2124,3 +2124,61 @@ Code review: GPT-6 Sol found one low issue. Under React's StrictMode in developm
 A delta review confirmed the fix closes the finding. A second link to the same document cannot reach a mounted panel, because the links are on the Overview tab and returning to Workpapers mounts the panel afresh. After a failed load, the next load applies the pending link.
 
 Not verified: previewing and applying, which need a hosted firm session and the QuickBooks sandbox; they are unchanged.
+
+## Client request links keep working (2026-09-27)
+
+Request: fix two problems found after the Changes-from-last-month work.
+- An approved request stopped taking its first reply, emails and new links whenever any evidence in the close changed, because its freshness check digested the whole close's evidence inventory. The daily QuickBooks transaction sync alone adds evidence when transactions change, so a request emailed one day could be refused the next with "Request evidence changed".
+- A request for accounts alone (a consolidated request with no job) closed after the client's first reply, so a client who ticked "I'll send the document later" could not come back with it, although the docs and Coverage said they could.
+
+What changed:
+- Migration 091 adds `work_requests.approved_papers`: the state, as the review view reads it, of the drafts the request's wording came from, recorded at approval. The first-reply check (`FreshClientRequest`, also used for new links, email approval, the email worker and releasing an emailed reply) now requires:
+  - that state unchanged (a review, a revision or a replaced source changes it);
+  - no document the request's work was read from replaced;
+  - the existing coverage and target-work checks.
+- Other evidence the close gains no longer matters. Drafts in the Requests tab and approval from a draft keep the full evidence check, which is firm-side.
+- A request approved from drafts before migration 091 recorded no draft state, so it stays unanswerable until the firm issues a fresh one. Nothing is silently renewed.
+- A request for accounts alone takes follow-up answers and documents after a reply while its coverage is unchanged (`requestOpen` no longer needs a job).
+- The client sees "The work behind this request changed after it was sent, so it takes no replies. Contact the firm." instead of firm-directed wording.
+- In Coverage, **Approved consolidated requests** now says whether a replied request still takes answers, why an unanswered one can no longer be answered, and when a link expired. It offers no new link or email when those would be refused. Whether a request was replied to is read from its replies, not its newest link, so a link replaced after a reply keeps taking answers. That one definition (answers through any link, or an emailed reply that used one) now also decides a new link's rules and the client route's follow-ups, which before counted only answers through a link. So a link replaced after an emailed reply is issued and takes follow-ups; before, it was refused. Only requests whose newest link is live are checked on each poll.
+
+Plan review: GPT-6 Sol (reasoning high) judged it real work. Adopted:
+- The first-reply check keeps a replaced source as a reason. The whole-evidence digest had been the only guard for a job's replaced document, since replacing a source leaves its job waiting on the client.
+- Pre-migration approvals from drafts are not forgiven.
+- Coverage's text is made truthful.
+
+A condition the plan had added, that each such document be fully read, was dropped during implementation. A read document never goes back, and a consolidated request can target work whose document is still being read, which would have blocked the client for nothing.
+
+Not adopted:
+- Checking drafts again on follow-up replies. Follow-ups deliberately skip the first-reply check (commit 482b0de and the docs): the client's own reply changes the drafts that cite it, and corrections go through review.
+- Keeping a request for accounts alone open after the firm releases, binds or finishes work from part of the reply. Release is refused once a request's work finishes, and a binding change closes the request, so this needs the release and binding rules redesigned. It is a follow-up.
+
+Tests:
+- `TestScopedClientReplyResumesJob`:
+  - the first reply succeeds with unrelated evidence added after approval (it expected a refusal before);
+  - a request approved in Work from a draft that selects a workpaper opens with other evidence present;
+  - that request is refused once the approval's draft state is missing (as for a pre-migration request), and again once the workpaper is reviewed, with the client-facing message.
+- `TestCoverageRequestsQuarantineAndResolution`:
+  - a request for an account alone reports open after a reply and takes a follow-up, and Coverage says so, also after its link is replaced twice (reading the newest link's use instead was observed to fail this);
+  - a reply that arrived by email counts as a reply in Coverage, and a link replaced after it takes a follow-up;
+  - after the firm excludes accounts, Coverage says the replied request takes no more answers and the unanswered one can no longer be answered.
+- `TestApprovedEmailDurableRetryAndScope`: the queued email is cancelled when the job's own document is replaced (it used an unrelated evidence row before).
+- Thirteen mutations of the new guards each fail a test. The transport, preparation and delivery packages pass, as do tsc, build and `npm test`.
+
+Browser check: headless Chrome 154 against this branch's API and Vite, on local PostgreSQL at migration 091. The data was two requests for accounts alone, approved by the API.
+- After a transaction-capture evidence row was added, the client link opened and took a partial reply ("I'll send the document later"). The page then offered further answers, and a follow-up answer was saved as a second submission.
+- Coverage showed "Reply received; the client can add to it until the link expires".
+- After the firm excluded the accounts:
+  - the unanswered request's link showed the client-facing message;
+  - the answered request told the client it takes no more answers;
+  - Coverage showed "The client can no longer answer it: Request coverage changed…" and "Reply received. It takes no more answers…", each with only **Withdraw request**.
+- A third request, replied to and then given a replacement link, read "Reply received; the client can add to it until the link expires" with **Replace private link**. Once that link expired it read "Reply received; the link expired …", still with Replace and Withdraw.
+- No console errors.
+
+Code review: GPT-6 Sol found two issues, both fixed:
+- After a client replied, a link replaced later read as stale in Coverage and lost its Replace action, although the client could still add to the request. Coverage now reads whether a request was replied to from its replies, not its newest link.
+- Coverage ran status checks for every historical request on every 5-second poll. It now checks only requests whose newest link is live, which in practice means the few approved in the last seven days. A set-based rewrite of the read was not adopted, because it would restate the link rules in a second form.
+
+The first delta review confirmed both, and found that Coverage counted an emailed reply (a used link with no answer submission) as a reply while the rule for new links did not, so Coverage offered a replacement the server refused. Coverage, new links and the client route now share one definition of a reply: answers through any link, or an emailed reply that used one. A link replaced after an emailed reply is therefore issued and takes follow-ups while the request's work is unfinished, for per-job requests as for link replies. The second delta review confirmed it closed.
+
+Not verified: sending and queuing email, which needs a hosted session and a verified sender. The emailed reply in the test is simulated by marking its link used.

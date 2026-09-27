@@ -32,7 +32,7 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, table := range []string{"preparation_jobs", "request_drafts", "evidence", "client_closes"} {
+		for _, table := range []string{"preparation_jobs", "request_drafts", "workpapers", "evidence", "client_closes"} {
 			column := "close_id"
 			if table == "client_closes" {
 				column = "id"
@@ -113,10 +113,10 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	db.Exec("UPDATE client_request_links SET expires_at=now()-interval '1 second' WHERE digest=$1", preparation.Digest([]byte(token)))
 	call("GET", "/v1/client-request", token, nil, 404)
 	token = issue()
-	var extra string
-	db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'late.txt','late-fixture','Later evidence','fixture') RETURNING id::text`, closeID).Scan(&extra)
-	call("POST", "/v1/client-request", token, map[string]any{"body": "Stale reply", "confirmed": true}, 409)
-	db.Exec("DELETE FROM evidence WHERE id=$1", extra)
+	// Evidence the request does not ask about, such as a later upload, leaves it answerable.
+	if _, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'late.txt','late-fixture','Later evidence','fixture')`, closeID); err != nil {
+		t.Fatal(err)
+	}
 	reply := "  Service end: 2027-08-31\nmethod_confirmed: true\nCard 4242 4242 4242 4242\nPortal password: hunter2 again\n"
 	call("POST", "/v1/client-request", token, map[string]any{"body": reply, "confirmed": false}, 422)
 	call("POST", "/v1/client-request", token, map[string]any{"body": reply, "confirmed": true, "close_id": "other"}, 400)
@@ -164,6 +164,43 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	token = issue()
 	call("POST", path+"/retry", auth, map[string]any{"revision": revision()}, 200)
 	call("GET", "/v1/client-request", token, nil, 404)
+	// A request approved from a draft keeps to it: other evidence leaves the request answerable, a review of the draft does not.
+	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	var paper, draft string
+	if err = db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','asked-paper','{"input":{"source_reference":"Policy invoice"},"sources":[]}') RETURNING id::text`, closeID).Scan(&paper); err != nil {
+		t.Fatal(err)
+	}
+	tx, _ = db.Begin()
+	digest, _, err := preparation.RequestContext(context.Background(), tx, closeID, []string{paper})
+	tx.Rollback()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the policy invoice.',jsonb_build_array($2::text),$3,'fixture') RETURNING id::text`, closeID, paper, digest).Scan(&draft); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", path+"/request", auth, map[string]any{"revision": revision(), "recipient": "client@example.test", "body": "Please send the policy invoice.", "draft_id": draft}, 200)
+	db.QueryRow("SELECT max(id)::text FROM work_requests WHERE job_id=$1", job).Scan(&requestID)
+	token = issue()
+	if _, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'later.txt','later-fixture','Other evidence','fixture')`, closeID); err != nil {
+		t.Fatal(err)
+	}
+	call("GET", "/v1/client-request", token, nil, 200)
+	// An approval that recorded no drafts' state, as one made before it was recorded, is not taken as current.
+	var pinned string
+	db.QueryRow(`SELECT approved_papers::text FROM work_requests WHERE id=$1`, requestID).Scan(&pinned)
+	db.Exec(`UPDATE work_requests SET approved_papers=NULL WHERE id=$1`, requestID)
+	call("GET", "/v1/client-request", token, nil, 409)
+	db.Exec(`UPDATE work_requests SET approved_papers=$2::jsonb WHERE id=$1`, requestID, pinned)
+	call("GET", "/v1/client-request", token, nil, 200)
+	if _, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'asked-paper','changes_requested','Use the renewal invoice','fixture')`, paper); err != nil {
+		t.Fatal(err)
+	}
+	if body := call("GET", "/v1/client-request", token, nil, 409); !strings.Contains(string(body), "changed after it was sent") {
+		t.Fatalf("a reviewed draft leaves its request without replies: %s", body)
+	}
 }
 
 func TestLinkPasscodeGuardsTheRequest(t *testing.T) {
