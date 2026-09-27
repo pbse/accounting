@@ -30,42 +30,15 @@ func RequestContext(ctx context.Context, tx *sql.Tx, closeID string, ids []strin
 			return "", "", fmt.Errorf("Selected workpaper is unavailable in this close")
 		}
 		contextParts = append(contextParts, id, digest, state, reviewID)
-		var paper struct {
-			Sources  []Source `json:"sources"`
-			Blockers []string `json:"blockers"`
-			Input    struct {
-				SourceReference string `json:"source_reference"`
-				Account         string `json:"account"`
-			} `json:"input"`
-		}
-		if err = json.Unmarshal(raw, &paper); err != nil {
+		asks, err := paperQuestions(id, kind, state, note, raw)
+		if err != nil {
 			return "", "", err
 		}
-		add := func(question string) {
-			key := strings.ToLower(strings.TrimSpace(question))
-			if !seen[key] {
+		for _, question := range asks {
+			if key := strings.ToLower(strings.TrimSpace(question)); !seen[key] {
 				seen[key] = true
 				questions = append(questions, question)
 			}
-		}
-		label := paper.Input.SourceReference
-		if kind == "reconciliation" {
-			label = paper.Input.Account
-		}
-		if label == "" {
-			label = kind + " workpaper #" + id
-		}
-		if len(paper.Sources) == 0 {
-			add("Please provide the source documents for " + label + " so we can verify the preparation.")
-		}
-		if state == "source_changed" {
-			add("Please confirm the current supporting documents for " + label + ". Earlier preparation is out of date and must be rechecked.")
-		}
-		for _, blocker := range paper.Blockers {
-			add("For " + label + ", please provide supporting records or an explanation to help us investigate: " + blocker)
-		}
-		if state == "changes_requested" && note != "" {
-			add("For " + label + ", please clarify the following review question: " + note)
 		}
 	}
 	var body strings.Builder
@@ -79,6 +52,80 @@ func RequestContext(ctx context.Context, tx *sql.Tx, closeID string, ids []strin
 	body.WriteString("\nThank you. Please use the firm's agreed secure channel for sensitive documents.\n")
 	encoded, _ := json.Marshal(contextParts)
 	return Digest(encoded), body.String(), nil
+}
+
+// paperQuestions is what a request asks the client about one draft: its missing sources, a changed source, each blocker
+// and a reviewer's requested change.
+func paperQuestions(id, kind, state, note string, raw []byte) ([]string, error) {
+	var paper struct {
+		Sources  []Source `json:"sources"`
+		Blockers []string `json:"blockers"`
+		Input    struct {
+			SourceReference string `json:"source_reference"`
+			Account         string `json:"account"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(raw, &paper); err != nil {
+		return nil, err
+	}
+	label := paper.Input.SourceReference
+	if kind == "reconciliation" {
+		label = paper.Input.Account
+	}
+	if label == "" {
+		label = kind + " workpaper #" + id
+	}
+	questions := []string{}
+	if len(paper.Sources) == 0 {
+		questions = append(questions, "Please provide the source documents for "+label+" so we can verify the preparation.")
+	}
+	if state == "source_changed" {
+		questions = append(questions, "Please confirm the current supporting documents for "+label+". Earlier preparation is out of date and must be rechecked.")
+	}
+	for _, blocker := range paper.Blockers {
+		questions = append(questions, "For "+label+", please provide supporting records or an explanation to help us investigate: "+blocker)
+	}
+	if state == "changes_requested" && note != "" {
+		questions = append(questions, "For "+label+", please clarify the following review question: "+note)
+	}
+	return questions, nil
+}
+
+// RequestCandidate is a current draft a consolidated request would ask the client about.
+type RequestCandidate struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	ReviewState string `json:"review_state"`
+}
+
+// RequestCandidates lists the close's current drafts (no later draft revises them) that a request would ask about,
+// oldest first and at most 20, with the number of others.
+func RequestCandidates(ctx context.Context, tx *sql.Tx, closeID string) ([]RequestCandidate, int, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT w.id::text,w.kind,w.review_state,w.paper,COALESCE(r.note,'') FROM workpaper_review_state w LEFT JOIN workpaper_reviews r ON r.id::text=w.review_id
+ WHERE w.close_id::text=$1 AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text) ORDER BY w.id`, closeID)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out, more := []RequestCandidate{}, 0
+	for rows.Next() {
+		var c RequestCandidate
+		var raw []byte
+		var note string
+		if err = rows.Scan(&c.ID, &c.Kind, &c.ReviewState, &raw, &note); err != nil {
+			return nil, 0, err
+		}
+		asks, err := paperQuestions(c.ID, c.Kind, c.ReviewState, note, raw)
+		if err != nil {
+			return nil, 0, err
+		}
+		if len(asks) > 0 && len(out) < 20 {
+			out = append(out, c)
+		} else if len(asks) > 0 {
+			more++
+		}
+	}
+	return out, more, rows.Err()
 }
 
 // The approved draft fixes both wording and evidence context. Reissue requires

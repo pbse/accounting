@@ -5,12 +5,13 @@ import { authKitClientId } from "../auth/Auth";
 import { GoalCard, localDate } from "../closes/Goal";
 import { useUnlocked, workspaceRequest } from "../closes/workspace";
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
+import { RequestCard } from "./RequestCard";
 import { askAssistant, nextReview, takePending, usePending } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
 import { Icon } from "./Icon";
 
-type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate"; due_on?: string; finish?: string; outcome?: Outcome | null };
+type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request"; due_on?: string; finish?: string; outcome?: Outcome | null };
 
 function readOpen() {
   try {
@@ -200,6 +201,8 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
               closeId &&
               (m.action === "delegate" ? (
                 <GoalCard closeId={closeId} dueOn={m.due_on ?? ""} finish={m.finish ?? ""} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+              ) : m.action === "request" ? (
+                <RequestCard closeId={closeId} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ) : (
                 <ActionCard closeId={closeId} action={m.action} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ))}

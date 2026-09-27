@@ -60,7 +60,7 @@ export async function runCommand(command: Command, argument: string, ctx: Comman
       ctx.ask("Stop this close's unresolved work", close);
       return "";
     case "request":
-      ctx.navigate(`${base}?tab=requests`);
+      ctx.ask("Draft a client request", close);
       return "";
     case "rehearse":
     case "export":
