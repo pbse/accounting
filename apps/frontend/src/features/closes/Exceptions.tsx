@@ -55,12 +55,16 @@ export function Exceptions({ closeId }: { closeId: string }) {
   const balances = scan.balances;
   const questions = [...scan.items, ...balances.items].map((item) => item.question);
   const ledger = scan.capture?.source === "xero" ? "Xero" : "QuickBooks";
-  const correction = (item: Found): [string, string] | undefined =>
-    item.type !== "uncategorized" && item.type !== "inconsistent_coding"
+  const correction = (item: Found): [string, string] | undefined => {
+    // The agent suggests applying an unapplied payment or a supplier credit when the open items support one pairing.
+    const apply = ({ unapplied_payment: "apply-payment", open_supplier_credit: "apply-vendor_credit" } as Record<string, string>)[item.type];
+    if (apply) return scan.capture?.source === "quickbooks" ? ["workpapers", apply] : undefined;
+    return item.type !== "uncategorized" && item.type !== "inconsistent_coding"
       ? undefined
       : scan.capture?.source === "xero"
         ? item.kind === "Bill" ? ["evidence", "correct-xero"] : undefined
         : ({ Bill: ["workpapers", "correct-bills"], Purchase: ["workpapers", "correct-purchases"], Deposit: ["workpapers", "correct-deposits"] } as Record<string, [string, string]>)[item.kind];
+  };
   async function copy(items: string[]) {
     try {
       await navigator.clipboard.writeText(items.map((question) => `- ${question}`).join("\n"));

@@ -282,7 +282,7 @@ func SuggestApplications(open map[string][]json.RawMessage, currency string) []S
 		return out
 	}
 	suggestions := []Suggestion{}
-	for _, kind := range []struct{ kind, source, target, label string }{{"payment", "Payment", "Invoice", "invoice"}, {"vendor_credit", "VendorCredit", "Bill", "bill"}} {
+	for _, kind := range []struct{ kind, source, target, label, name string }{{"payment", "Payment", "Invoice", "invoice", "payment"}, {"vendor_credit", "VendorCredit", "Bill", "bill", "vendor credit"}} {
 		targets := read(kind.target)
 		for _, s := range read(kind.source) {
 			tokens := map[string]bool{}
@@ -297,10 +297,10 @@ func SuggestApplications(open map[string][]json.RawMessage, currency string) []S
 				equal := t.Open.Cmp(s.Open) == 0
 				named := t.number != "" && tokens[t.number]
 				if equal {
-					basis[t.ID] = append(basis[t.ID], "the "+strings.ToLower(kind.source)+"'s open "+s.Open.FloatString(2)+" equals its balance")
+					basis[t.ID] = append(basis[t.ID], "the "+kind.name+"'s open "+s.Open.FloatString(2)+" equals its balance")
 				}
 				if named {
-					basis[t.ID] = append(basis[t.ID], "the "+strings.ToLower(kind.source)+"'s reference names it")
+					basis[t.ID] = append(basis[t.ID], "the "+kind.name+"'s reference names it")
 				}
 				if equal || named {
 					matched = append(matched, t)
