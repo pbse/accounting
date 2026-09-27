@@ -169,12 +169,13 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "A current clean scan of these exact bytes is required. No bypass is available.")
 				return
 			}
-			if err = preparation.RequestCoverageCurrent(r.Context(), tx, closeID, rid); err != nil {
+			if err = preparation.RequestCoverageFollows(r.Context(), tx, closeID, rid); err != nil {
 				problem(w, 409, err.Error())
 				return
 			}
+			// Work the request was approved for must still be waiting; work from its released documents may have moved on.
 			var valid bool
-			err = tx.QueryRowContext(r.Context(), `SELECT NOT EXISTS(SELECT 1 FROM request_jobs t JOIN preparation_jobs j ON j.id=t.job_id JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE t.request_id=$1 AND (j.state IN ('queued','completed','cancelled') OR e.superseded_by IS NOT NULL OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>t.request_id)))`, rid).Scan(&valid)
+			err = tx.QueryRowContext(r.Context(), `SELECT NOT EXISTS(SELECT 1 FROM request_jobs rj JOIN work_requests q ON q.id=rj.request_id JOIN preparation_jobs j ON j.id=rj.job_id JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE rj.request_id=$1 AND ((j.state IN ('queued','completed','cancelled') AND NOT `+preparation.RequestReleased+`) OR e.superseded_by IS NOT NULL OR EXISTS(SELECT 1 FROM request_jobs newer WHERE newer.job_id=j.id AND newer.request_id>rj.request_id)))`, rid).Scan(&valid)
 			if err != nil || !valid {
 				problem(w, 409, "Affected work or ledger changed. Create a fresh reviewed request before releasing this attachment.")
 				return
@@ -192,7 +193,12 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 				original = body
 			}
 			var sid string
-			err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,original,extraction_state,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(close_id,digest) DO UPDATE SET digest=evidence.digest RETURNING id::text`, closeID, name, digest, content, original, extraction, fmt.Sprintf("Client request %s; released by %s", rid, actor)).Scan(&sid)
+			var current bool
+			err = tx.QueryRowContext(r.Context(), `INSERT INTO evidence(close_id,name,digest,content,original,extraction_state,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(close_id,digest) DO UPDATE SET digest=evidence.digest RETURNING id::text,superseded_by IS NULL`, closeID, name, digest, content, original, extraction, fmt.Sprintf("Client request %s; released by %s", rid, actor)).Scan(&sid, &current)
+			if err == nil && !current {
+				problem(w, 409, "This file is already in the close as a document that was replaced. Reject it, or ask the client for the current version.")
+				return
+			}
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(), `UPDATE client_attachments SET state='released',source_id=$2,decided_by=$3,decision_note=$4 WHERE id=$1`, id, sid, actor, in.Reason)
 			}

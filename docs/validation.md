@@ -2240,3 +2240,32 @@ Tests: `TestAssistantWritesAnswersOnlyWhenTheFirmAllows` now serves a mocked eve
 Code review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `claude/streaming-answers @ bbd2b89`) both found that an answer that never streams skipped the access check, so a member who lost the client while the model answered still had the conversation saved; the save now reads close access again after membership. Both also found that the metric reused the track record's period window, dropping answers about older closes; it now uses the access rule alone. Gemini found that a character crossing the 1,500-byte cap sent an empty line on every later event (the comparison now follows the trim), and that the metric query could not use its index without the answer's firm (added). Not adopted: hoisting the escape table (a nit on answers of at most 1,500 bytes) and guarding the message inserts after a failed attempt insert (the aborted transaction already fails them). Tests: losing client access while an unanswerable answer is written gives 403 and saves nothing; the fixture close is from 2024; no streamed line is empty, and an answer of 1,498 bytes then "€" streams exactly 1,498 bytes. Each fails without its fix.
 
 Browser (headless Chrome against a local API built with a mocked streaming model, which was not committed, plus Vite and PostgreSQL at migration 092): on Acme Ltd, a question no fixed read matches shows the answer growing in the "Being written by the model, not checked yet" bubble outside the live region, then the kept answer with its note and Close overview link. A question whose quote fails streams and is replaced by "The written answer could not be checked against this close's saved work, so it was withdrawn." followed by the help reply. The agent track record then reads "2 asked, 1 kept, typically 5.5 s to write". No console errors.
+
+## Client requests take the rest while the firm works (2026-09-27)
+
+Request: a multi-document request closed once the firm acted on part of the reply. The client sent invoice X and ticked "I'll send the document later" for Y. The firm released X, bound the work it started to account X, and that work finished. The client could then not send Y, and the firm could not have released it.
+
+What changed:
+- A consolidated request now records the work it was approved with (`coverage_scope.jobs`). A request's released work is whatever it covers beyond that: for a per-job request, anything beyond its job. Released work is what documents from the client started or were matched to. A consolidated request approved before this recorded nothing, so none of its work counts as released.
+- After a reply, released work finishing or being cancelled no longer closes the request (`requestOpen`), and no longer blocks releasing the next document. Work the request was approved for keeps today's rules, and a replaced source or a newer request still counts for all work.
+- For follow-ups and releases, an account's binding may also have moved, as long as it keeps every job approved with it and adds only released work. An exclusion, dropping approved work, adding other work or a recapture still closes the request. The first reply, emails, link issuance before a reply and the statement-waits portfolio view keep the strict rule, now built from the same shared capture and binding parts.
+- Release refuses a file identical to a document the close replaced, instead of reusing the replaced document.
+- The client page tells a client sending a document they promised to untick "I'll send the document later" on its question, because uploading a file does not change a question's answer.
+
+Plan review: GPT-6 Sol (reasoning high) judged it real work and the exception necessary, and all five points were adopted:
+- Released work is told apart by the approval's own record, not by matching released files. A reused document can lead back to approved work, which must keep its rules.
+- A changed binding must keep every approved job and add only released work.
+- Only finishing is exempted, never a replaced source or a newer request, and a reused replaced document is refused.
+- The shared strict expression stays strict for its other users.
+- The page explains how to mark a promised document sent.
+
+Tests:
+- `TestRequestTakesTheRestAfterTheFirmActs`, a three-account request with approved work on one account:
+  - X-then-Y works: the firm releases X, binds its work and finishes it, and the client's Y reply is then accepted and released;
+  - binding approved work away, excluding an account, or binding other work closes the request, and binding released work reopens it;
+  - a client file identical to a replaced document is not released;
+  - a client file identical to approved work's document leads back to that work, whose finishing still closes the request.
+- Ten mutations of these conditions each fail it.
+- The transport, preparation and delivery packages pass, as do build and `npm test`.
+
+Code review: GPT-6 Sol found no correctness or security defect in the edge cases it checked (a missing binding, an unbound account, legacy requests, per-job requests, resuming work after a release). It found two small issues, both fixed and confirmed by a delta review: the approved-binding lookup compared ids as text, which the key index cannot serve on Coverage's 5-second poll; and the client-link guide still said every covered job must stay unfinished.

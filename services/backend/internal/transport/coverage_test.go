@@ -397,3 +397,164 @@ func TestClientSubmissionRejectsUnknownFileField(t *testing.T) {
 		t.Fatalf("unknown file field accepted: %d", w.Code)
 	}
 }
+
+func TestRequestTakesTheRestAfterTheFirmActs(t *testing.T) {
+	database := os.Getenv("TEST_DATABASE_URL")
+	if database == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	var cid, conn string
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Follow-through "+rand.Text()).Scan(&cid))
+	defer func() {
+		for _, q := range []string{`DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`, `DELETE FROM coverage_bindings WHERE close_id=$1`, `DELETE FROM preparation_jobs WHERE close_id=$1`,
+			`DELETE FROM request_drafts WHERE close_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+			if _, e := db.Exec(q, cid); e != nil {
+				t.Error(e)
+			}
+		}
+	}()
+	source := func(name, content string) string {
+		t.Helper()
+		var id string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,'fixture') RETURNING id::text`, cid, name, preparation.Digest([]byte(content)), content).Scan(&id))
+		return id
+	}
+	ledger := source("ledger.txt", "Synthetic ledger")
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, cid, rand.Text()).Scan(&conn))
+	raw, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{{"account_id": "x", "name": "Prepaid X", "kind": "prepaid"}, {"account_id": "y", "name": "Prepaid Y", "kind": "prepaid"}, {"account_id": "z", "name": "Prepaid Z", "kind": "prepaid"}}})
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,$4,now(),'fixture')`, cid, conn, rand.Text(), string(raw))
+	must(err)
+	tx, err := db.Begin()
+	must(err)
+	jobZ, err := preparation.StartIntake(context.Background(), tx, cid, source("z.txt", "Invoice Z amount: 300.00"), "fixture")
+	must(err)
+	_, err = tx.Exec(`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id=$1`, jobZ)
+	must(err)
+	must(tx.Commit())
+	token := strings.Repeat("f", 32)
+	handler := apiWithStore(db, token)
+	call := func(method, path, bearer string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+bearer)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	path := "/v1/closes/" + cid + "/coverage"
+	digest := func() string {
+		t.Helper()
+		var got struct{ Coverage coverageView }
+		must(json.Unmarshal(call("GET", path, token, nil, 200), &got))
+		return got.Coverage.Digest
+	}
+	bind := func(account string, jobs []string, excluded bool) {
+		t.Helper()
+		call("POST", path, token, map[string]any{"action": "bind", "digest": digest(), "account_id": account, "jobs": jobs, "excluded": excluded, "reason": "Synthetic scope", "confirmed": true}, 200)
+	}
+	bind("z", []string{jobZ}, false)
+	var request struct {
+		ID    string `json:"id"`
+		Token string `json:"link_token"`
+	}
+	must(json.Unmarshal(call("POST", path, token, map[string]any{"action": "request", "digest": digest(), "accounts": []string{"x", "y", "z"}, "jobs": []string{}, "recipient": "client@example.test", "body": "Please help us complete this month's preparation:\n\n1. Invoice X\n\n2. Invoice Y\n\n3. Invoice Z", "confirmed": true}, 200), &request))
+	// reply sends answers and one file on the request link.
+	reply := func(answers []clientAnswer, name, content string, want int) {
+		t.Helper()
+		var b bytes.Buffer
+		m := multipart.NewWriter(&b)
+		body, _ := json.Marshal(map[string]any{"answers": answers})
+		must(m.WriteField("body", string(body)))
+		must(m.WriteField("confirmed", "true"))
+		f, e := m.CreateFormFile("files", name)
+		must(e)
+		_, e = f.Write([]byte(content))
+		must(e)
+		must(m.Close())
+		r := httptest.NewRequest("POST", "/v1/client-request", &b)
+		r.Header.Set("Authorization", "Bearer "+request.Token)
+		r.Header.Set("Content-Type", m.FormDataContentType())
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("reply with %s: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	// release clears the named file's scan and releases it, returning the work it started or reused.
+	release := func(name string, want int) string {
+		t.Helper()
+		var id string
+		must(db.QueryRow(`UPDATE client_attachments SET state='clean',scanned_digest=digest,scanned_at=now(),scan_version='synthetic' WHERE request_id=$1 AND name=$2 RETURNING id::text`, request.ID, name).Scan(&id))
+		call("POST", "/v1/closes/"+cid+"/attachments/"+id, token, map[string]any{"action": "release", "reason": "Reviewed the client's document", "confirmed": true}, want)
+		var job string
+		db.QueryRow(`SELECT i.job_id::text FROM client_attachments a JOIN preparation_intakes i ON i.source_id=a.source_id WHERE a.id=$1`, id).Scan(&job)
+		return job
+	}
+	open := func() bool {
+		t.Helper()
+		return bytes.Contains(call("GET", "/v1/client-request", request.Token, nil, 200), []byte(`"open":true`))
+	}
+	// The client sends X and promises Y; the firm releases X, binds its work to the account and finishes it.
+	reply([]clientAnswer{{1, "answered", "Invoice X attached"}, {2, "awaiting_document", ""}}, "x.txt", "Invoice X amount: 100.00", 200)
+	jobX := release("x.txt", 200)
+	bind("x", []string{jobX}, false)
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed' WHERE id=$1`, jobX)
+	must(err)
+	// The request's own progress leaves it open: Y is accepted and released on the same request.
+	reply([]clientAnswer{{2, "answered", "Invoice Y attached"}}, "y.txt", "Invoice Y amount: 200.00", 200)
+	jobY := release("y.txt", 200)
+	if !open() {
+		t.Fatal("the request closed on its own released work")
+	}
+	// Moving an account off the work it was approved with, or excluding one, still closes the request.
+	bind("z", []string{jobY}, false)
+	if open() {
+		t.Fatal("a binding that dropped approved work left the request open")
+	}
+	bind("z", []string{jobZ}, false)
+	bind("y", nil, true)
+	if open() {
+		t.Fatal("an exclusion left the request open")
+	}
+	bind("y", []string{jobY}, false)
+	if !open() {
+		t.Fatal("binding the request's released work did not reopen it")
+	}
+	bind("x", []string{jobX, jobZ}, false)
+	if open() {
+		t.Fatal("binding other work to an account left the request open")
+	}
+	bind("x", []string{jobX}, false)
+	// A client file identical to a document the close replaced is not released.
+	replaced := source("statement.txt", "Statement page 1")
+	_, err = db.Exec(`UPDATE evidence SET superseded_by=$2 WHERE id=$1`, replaced, source("statement-v2.txt", "Statement page 1 corrected"))
+	must(err)
+	reply([]clientAnswer{{3, "answered", "Statement attached"}}, "statement.txt", "Statement page 1", 200)
+	release("statement.txt", 409)
+	// A client file identical to approved work's document leads back to that work, which still closes the request.
+	reply([]clientAnswer{{3, "answered", "Invoice Z again"}}, "z-again.txt", "Invoice Z amount: 300.00", 200)
+	if job := release("z-again.txt", 200); job != jobZ {
+		t.Fatalf("the reused document did not lead to the approved work: %s", job)
+	}
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed' WHERE id=$1`, jobZ)
+	must(err)
+	if open() {
+		t.Fatal("finishing approved work reached through a client file left the request open")
+	}
+}

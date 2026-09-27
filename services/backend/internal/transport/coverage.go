@@ -364,7 +364,8 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Request context unavailable.")
 				return
 			}
-			scope, _ := json.Marshal(map[string]any{"snapshot_id": view.SnapshotID, "bindings": bindings})
+			// The work approved with the request, told apart later from work its released documents start.
+			scope, _ := json.Marshal(map[string]any{"snapshot_id": view.SnapshotID, "bindings": bindings, "jobs": append([]string{}, in.Jobs...)})
 			var draftID, rid string
 			err = tx.QueryRowContext(r.Context(), `INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,$2,'[]',$3,$4) RETURNING id::text`, closeID, in.Body, contextDigest, actor).Scan(&draftID)
 			if err == nil {
