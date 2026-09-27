@@ -24,13 +24,15 @@ type teammate struct {
 }
 
 type goalHandoff struct {
-	ID    string    `json:"id"`
-	JobID string    `json:"job_id"`
-	Name  string    `json:"name"`
-	Note  string    `json:"note"`
-	By    string    `json:"by"`
-	At    time.Time `json:"at"`
-	Mine  bool      `json:"mine"`
+	ID        string    `json:"id"`
+	JobID     string    `json:"job_id"`
+	AccountID string    `json:"account_id,omitempty"`
+	Name      string    `json:"name"`
+	Note      string    `json:"note"`
+	By        string    `json:"by"`
+	At        time.Time `json:"at"`
+	Mine      bool      `json:"mine"`
+	Handed    string    `json:"handed"`
 }
 
 // workosList reads every page of a WorkOS list, at most ten; a longer list is an error, never a partial one.
@@ -142,7 +144,7 @@ func teammates(ctx context.Context, db *sql.DB, r *http.Request, entity string) 
 
 // readHandoffs is the goal's open hand-offs, marking those handed to me.
 func readHandoffs(ctx context.Context, tx *sql.Tx, goalID, me string) ([]goalHandoff, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id::text,job_id::text,assignee_name,note,created_by,created_at,assignee=$2 FROM goal_handoffs WHERE goal_id=$1 AND closed_at IS NULL ORDER BY id`, goalID, me)
+	rows, err := tx.QueryContext(ctx, `SELECT id::text,COALESCE(job_id::text,''),COALESCE(account_id,''),assignee_name,note,created_by,created_at,assignee=$2,document FROM goal_handoffs WHERE goal_id=$1 AND closed_at IS NULL ORDER BY id`, goalID, me)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +152,7 @@ func readHandoffs(ctx context.Context, tx *sql.Tx, goalID, me string) ([]goalHan
 	out := []goalHandoff{}
 	for rows.Next() {
 		var h goalHandoff
-		if err = rows.Scan(&h.ID, &h.JobID, &h.Name, &h.Note, &h.By, &h.At, &h.Mine); err != nil {
+		if err = rows.Scan(&h.ID, &h.JobID, &h.AccountID, &h.Name, &h.Note, &h.By, &h.At, &h.Mine, &h.Handed); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -158,10 +160,11 @@ func readHandoffs(ctx context.Context, tx *sql.Tx, goalID, me string) ([]goalHan
 	return out, rows.Err()
 }
 
-// settleHandoffs closes the goal's open hand-offs whose document no longer needs a person to investigate it, or whose
-// teammate can no longer act for the client; once the close is signed off, every one. The goal's history says why.
-func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, items []goalItem, signed bool) error {
-	rows, err := tx.QueryContext(ctx, `SELECT h.id::text,h.job_id::text,h.document,h.assignee_name,
+// settleHandoffs closes the goal's open hand-offs whose document or account no longer needs a person, or whose teammate
+// can no longer act for the client; once the close is signed off, every one. An account's is closed only on coverage
+// read from its capture: a different capture ends it, and unread coverage leaves it open. The goal's history says why.
+func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress, signed bool) error {
+	rows, err := tx.QueryContext(ctx, `SELECT h.id::text,COALESCE(h.job_id::text,''),COALESCE(h.account_id,''),COALESCE(h.snapshot_id::text,''),h.document,h.assignee_name,
  EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=$1 AND m.subject=h.assignee AND m.granted)
  AND (NOT h.via_grant OR EXISTS(SELECT 1 FROM current_client_access a JOIN client_closes c ON lower(c.entity)=lower(a.client_entity) WHERE c.id=$3 AND a.organization_id=$1 AND a.subject=h.assignee AND a.granted))
  FROM goal_handoffs h WHERE h.goal_id=$2 AND h.closed_at IS NULL ORDER BY h.id`, g.org, g.id, g.close)
@@ -169,13 +172,13 @@ func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, items []goalItem
 		return err
 	}
 	type open struct {
-		id, job, document, name string
-		allowed                 bool
+		id, job, account, snapshot, document, name string
+		allowed                                    bool
 	}
 	handoffs := []open{}
 	for rows.Next() {
 		var h open
-		if err = rows.Scan(&h.id, &h.job, &h.document, &h.name, &h.allowed); err != nil {
+		if err = rows.Scan(&h.id, &h.job, &h.account, &h.snapshot, &h.document, &h.name, &h.allowed); err != nil {
 			rows.Close()
 			return err
 		}
@@ -186,16 +189,24 @@ func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, items []goalItem
 		return err
 	}
 	for _, h := range handoffs {
-		var text string
-		switch i := slices.IndexFunc(items, func(item goalItem) bool { return item.JobID == h.job }); {
+		text := h.document + " no longer needs anyone, so " + h.name + "'s hand-off is closed."
+		switch {
 		case signed:
 			text = "The close was signed off, so " + h.name + "'s hand-off of " + h.document + " is closed."
 		case !h.allowed:
 			text = h.name + " can no longer act for this client, so I took " + h.document + " back."
-		case i >= 0 && (items[i].Handable || items[i].Status == "working"):
+		case h.account != "" && p.accounts == nil:
 			continue
+		case h.account != "" && p.accounts.SnapshotID != h.snapshot:
+			text = "The ledger capture changed, so " + h.name + "'s hand-off of " + h.document + " is closed."
+		case h.account != "":
+			if i := slices.IndexFunc(p.accounts.Items, func(a coverageRequirement) bool { return a.AccountID == h.account }); i >= 0 && p.accounts.Items[i].State != "resolved" && p.accounts.Items[i].State != "excluded" {
+				continue
+			}
 		default:
-			text = h.document + " no longer needs anyone, so " + h.name + "'s hand-off is closed."
+			if i := slices.IndexFunc(p.Items, func(item goalItem) bool { return item.JobID == h.job }); i >= 0 && (p.Items[i].Handable || p.Items[i].Status == "working") {
+				continue
+			}
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE goal_handoffs SET closed_at=now(),closed_by='agent' WHERE id=$1`, h.id); err == nil {
 			err = goalEvent(ctx, tx, g.id, "agent", text)
@@ -230,11 +241,16 @@ func registerHandoffs(mux *http.ServeMux, db *sql.DB) {
 		}
 		actor := subject(r)
 		var in struct {
-			JobID    string `json:"job_id"`
-			Assignee string `json:"assignee"`
-			Note     string `json:"note"`
+			JobID     string `json:"job_id"`
+			AccountID string `json:"account_id"`
+			Assignee  string `json:"assignee"`
+			Note      string `json:"note"`
 		}
 		if !decode(w, r, &in) {
+			return
+		}
+		if (in.JobID == "") == (in.AccountID == "") {
+			problem(w, 422, "Hand over one document or one account.")
 			return
 		}
 		if in.Note = strings.TrimSpace(in.Note); len(in.Note) > 500 {
@@ -307,18 +323,33 @@ func registerHandoffs(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The agent's progress is unavailable.")
 			return
 		}
-		i := slices.IndexFunc(progress.Items, func(item goalItem) bool { return item.JobID == in.JobID })
-		if i < 0 || !progress.Items[i].Handable {
-			problem(w, 422, "Only a document that needs a person to look into it can be handed to a teammate.")
-			return
+		var document, snapshot string
+		if in.JobID != "" {
+			i := slices.IndexFunc(progress.Items, func(item goalItem) bool { return item.JobID == in.JobID })
+			if i < 0 || !progress.Items[i].Handable {
+				problem(w, 422, "Only a document that needs a person to look into it can be handed to a teammate.")
+				return
+			}
+			document = progress.Items[i].Name
+		} else {
+			// An account is handed on the capture it was read from, while its coverage still needs a decision; a stale
+			// capture's accounts are recaptured first.
+			i := -1
+			if progress.accounts != nil {
+				i = slices.IndexFunc(progress.accounts.Items, func(a coverageRequirement) bool { return a.AccountID == in.AccountID })
+			}
+			if i < 0 || !slices.Contains([]string{"missing_evidence", "awaiting_work", "needs_review"}, progress.accounts.Items[i].State) {
+				problem(w, 422, "Only an account whose coverage still needs a decision can be handed to a teammate; recapture first if the ledger capture is out of date.")
+				return
+			}
+			document, snapshot = "coverage for "+progress.accounts.Items[i].Name, progress.accounts.SnapshotID
 		}
-		document := progress.Items[i].Name
 		var id string
-		switch err = tx.QueryRowContext(r.Context(), `INSERT INTO goal_handoffs(goal_id,job_id,document,assignee,assignee_name,via_grant,note,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING id::text`, g.id, in.JobID, document, to.Subject, to.Name, to.viaGrant, in.Note, actor).Scan(&id); err {
+		switch err = tx.QueryRowContext(r.Context(), `INSERT INTO goal_handoffs(goal_id,job_id,account_id,snapshot_id,document,assignee,assignee_name,via_grant,note,created_by) VALUES($1,NULLIF($2,'')::bigint,NULLIF($3,''),NULLIF($4,'')::bigint,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, g.id, in.JobID, in.AccountID, snapshot, document, to.Subject, to.Name, to.viaGrant, in.Note, actor).Scan(&id); err {
 		case nil:
 		case sql.ErrNoRows:
 			var holder string
-			if tx.QueryRowContext(r.Context(), `SELECT assignee_name FROM goal_handoffs WHERE job_id=$1 AND closed_at IS NULL`, in.JobID).Scan(&holder) == nil {
+			if tx.QueryRowContext(r.Context(), `SELECT assignee_name FROM goal_handoffs WHERE closed_at IS NULL AND (job_id::text=$1 OR goal_id=$2 AND account_id=$3)`, in.JobID, g.id, in.AccountID).Scan(&holder) == nil {
 				problem(w, 409, holder+" already has "+document+". Take it back first.")
 				return
 			}

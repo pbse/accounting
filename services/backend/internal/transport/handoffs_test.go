@@ -242,3 +242,163 @@ func TestHandADocumentToATeammate(t *testing.T) {
 	t.Setenv("WORKOS_API_KEY", "")
 	call("user_a", partner, "GET", "/v1/closes/"+alpha+"/people", nil, 502)
 }
+
+func TestHandAnAccountToATeammate(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	ctx := context.Background()
+	org := "org_Acct" + rand.Text()
+	t.Setenv("WORKOS_API_KEY", "sk_test_synthetic")
+	original := http.DefaultTransport
+	http.DefaultTransport = workosPages{next: original, pages: map[string]string{
+		"/authorization/organizations/" + org + "/roles?after=": `{"data":[{"slug":"partner","permissions":["workpapers:review","clients:all"]}]}`,
+		"/user_management/organization_memberships?after=":      `{"data":[{"user_id":"user_a","status":"active","role":{"slug":"partner"}},{"user_id":"user_b","status":"active","role":{"slug":"partner"},"user":{"first_name":"Bea","last_name":"Brown"}}]}`,
+	}}
+	defer func() { http.DefaultTransport = original }()
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Account hand-off fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture'),($1,'user_b',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	defer func() {
+		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_connections WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	// A capture of three accounts; office supplies is excluded with a reason.
+	var alpha, ledger, conn string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt','account-ledger','Synthetic ledger','fixture') RETURNING id::text`, alpha).Scan(&ledger))
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, alpha, rand.Text()).Scan(&conn))
+	capture := func() string {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{
+			{"account_id": "a", "name": "Prepaid insurance", "kind": "prepaid", "question": "Provide the policy invoice."},
+			{"account_id": "b", "name": "Operating bank", "kind": "reconciliation", "question": "Provide the statement."},
+			{"account_id": "c", "name": "Office supplies", "kind": "accountant_review", "question": "Review activity."}}})
+		var snapshot string
+		must(db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,$4,now(),'fixture') RETURNING id::text`, alpha, conn, rand.Text(), string(payload)).Scan(&snapshot))
+		_, err := db.Exec(`INSERT INTO coverage_bindings(close_id,snapshot_id,account_id,job_ids,excluded,reason,actor) VALUES($1,$2,'c','[]',true,'Immaterial office supplies','user_a')`, alpha, snapshot)
+		must(err)
+		return snapshot
+	}
+	first := capture()
+	store := savedCloses(db, strings.Repeat("a", 32))
+	partner := []string{"workpapers:review", "clients:all"}
+	call := func(subject, method, path string, body any, want int) string {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: partner}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s %v: %d %s", method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	hand := func(account string, want int) string {
+		t.Helper()
+		return call("user_a", "POST", "/v1/closes/"+alpha+"/goal/handoffs", map[string]string{"account_id": account, "assignee": "user_b", "note": "Get the policy invoice"}, want)
+	}
+	var goal string
+	last := func() string {
+		t.Helper()
+		var text string
+		must(db.QueryRow(`SELECT events->-1->>'text' FROM close_goals WHERE id::text=$1`, goal).Scan(&text))
+		return text
+	}
+	open := func() int {
+		t.Helper()
+		var n int
+		must(db.QueryRow(`SELECT count(*) FROM goal_handoffs WHERE goal_id::text=$1 AND closed_at IS NULL`, goal).Scan(&n))
+		return n
+	}
+	call("user_a", "POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true}, 200)
+	must(db.QueryRow(`SELECT id::text FROM close_goals WHERE close_id::text=$1`, alpha).Scan(&goal))
+
+	// An account whose coverage still needs a decision goes to one teammate at a time; an excluded one, or a request
+	// naming both a document and an account, is refused.
+	hand("a", 200)
+	if body := hand("a", 409); !strings.Contains(body, "Bea Brown already has coverage for Prepaid insurance") {
+		t.Fatalf("an account is with one teammate at a time: %s", body)
+	}
+	hand("c", 422)
+	if body := call("user_a", "POST", "/v1/closes/"+alpha+"/goal/handoffs", map[string]string{"job_id": "1", "account_id": "a", "assignee": "user_b"}, 422); !strings.Contains(body, "one document or one account") {
+		t.Fatalf("a hand-off is one document or one account: %s", body)
+	}
+	var s struct {
+		Handoffs []goalHandoff `json:"handoffs"`
+	}
+	must(json.Unmarshal([]byte(call("user_b", "GET", "/v1/closes/"+alpha+"/goal", nil, 200)), &s))
+	if len(s.Handoffs) != 1 || s.Handoffs[0].AccountID != "a" || s.Handoffs[0].JobID != "" || !s.Handoffs[0].Mine {
+		t.Fatalf("the account's hand-off shows as the teammate's: %+v", s.Handoffs)
+	}
+	var inbox struct {
+		Groups []struct {
+			Events []struct {
+				Kind      string `json:"kind"`
+				Text      string `json:"text"`
+				AccountID string `json:"account_id"`
+			} `json:"events"`
+		} `json:"groups"`
+	}
+	must(json.Unmarshal([]byte(call("user_b", "GET", "/v1/closes/attention", nil, 200)), &inbox))
+	told := false
+	for _, g := range inbox.Groups {
+		for _, e := range g.Events {
+			told = told || e.Kind == "handoff" && e.AccountID == "a" && e.Text == "user_a handed you coverage for Prepaid insurance: Get the policy invoice"
+		}
+	}
+	if !told {
+		t.Fatalf("the teammate is told, with the account: %+v", inbox.Groups)
+	}
+
+	// Excluding the account ends the hand-off.
+	_, err = db.Exec(`INSERT INTO coverage_bindings(close_id,snapshot_id,account_id,job_ids,excluded,reason,actor) VALUES($1,$2,'a','[]',true,'Policy expensed','user_b')`, alpha, first)
+	must(err)
+	must(stepGoal(ctx, db, goal))
+	if text := last(); text != "coverage for Prepaid insurance no longer needs anyone, so Bea Brown's hand-off is closed." || open() != 0 {
+		t.Fatalf("a covered account ends its hand-off: %q", text)
+	}
+
+	// A new capture ends a hand-off made on the old one, even for the same account.
+	hand("b", 200)
+	capture()
+	must(stepGoal(ctx, db, goal))
+	if text := last(); text != "The ledger capture changed, so Bea Brown's hand-off of coverage for Operating bank is closed." || open() != 0 {
+		t.Fatalf("a hand-off belongs to its capture: %q", text)
+	}
+
+	// A stale capture is recaptured before its accounts are handed; unreadable coverage leaves a hand-off open.
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='disconnected' WHERE id::text=$1`, conn)
+	must(err)
+	hand("b", 422)
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='active' WHERE id::text=$1`, conn)
+	must(err)
+	hand("b", 200)
+	_, err = db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id::text=$1`, alpha)
+	must(err)
+	must(stepGoal(ctx, db, goal))
+	if open() != 1 {
+		t.Fatal("a hand-off stays open while its coverage cannot be read")
+	}
+}
