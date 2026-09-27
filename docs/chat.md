@@ -47,11 +47,11 @@ Closing the assistant does not stop the work: the jobs run as they would from th
 
 ## Search
 
-`GET /v1/closes/search?q=` (across your closes) and `GET /v1/closes/{id}/search?q=` (one close) find literal matches of every word you type (3–100 characters, up to six words; more are refused), up to 8 of each kind:
+`GET /v1/closes/search?q=` (across your closes) and `GET /v1/closes/{id}/search?q=` (one close) find literal matches of every word you type (3–100 characters, up to six words; more are refused), up to 8 of each kind (transactions: up to 8 from QuickBooks and 8 from Xero):
 
-- **Documents** by name or extracted text, current versions only; a client's reply is marked as a reply. Each links to the document on the close's Evidence tab.
+- **Documents** by name or extracted text, current versions only, including saved Stripe reports (each report is one document, not individual transactions); a client's reply is marked as a reply. Each links to the document on the close's Evidence tab.
 - **Drafts**, current versions only, linked to the draft.
-- **Transactions** in each close's latest QuickBooks transaction capture whose evidence is still current, shown with the captured amount and payee and linked to the QuickBooks ledger evidence on the Evidence tab; Xero records are not searched yet.
+- **Transactions**: the supported ledger rows of each close's latest QuickBooks transaction capture whose evidence is still current, and of its newest Xero capture for the month (migration 089; the rows the close's exceptions read, so refunds, other payment types and open items are not included). Each shows the captured amount and payee and links to the QuickBooks ledger or Xero evidence on the Evidence tab; a Xero result's title starts with "Xero". A Xero capture saved before this change is searched once the close is captured again.
 - **Procedures**: the current version of each enabled procedure for your clients or all clients.
 - **Review decisions**: decision, reviewer, date and note, linked to the draft.
 
