@@ -16,6 +16,7 @@ const kindLabels: Record<string, string> = {
   release: "Client files and emails to release",
   send: "Approved requests with no delivery",
   email: "Undelivered request emails",
+  goal: "Closes the agent has ready for review",
 };
 const views = { all: "All", mine: "Assigned to me", unread: "Unread", snoozed: "Snoozed" } as const;
 

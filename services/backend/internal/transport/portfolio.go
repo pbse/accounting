@@ -63,26 +63,11 @@ func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 				g.compare = c
 				i++
 			}
-			i++
-			day := today
-			switch d := next(i); {
-			case d == "today":
-			case d == "tomorrow":
-				day = today.AddDate(0, 0, 1)
-			case d == "this" && next(i+1) == "week":
-				day = today.AddDate(0, 0, (7-int(today.Weekday()))%7)
-				i++
-			default:
-				if wd, ok := weekdays[d]; ok {
-					day = today.AddDate(0, 0, (int(wd)-int(today.Weekday())+7)%7)
-					break
-				}
-				t, err := time.Parse("2006-01-02", d)
-				if err != nil {
-					return g, errPortfolioGoal
-				}
-				day = t
+			day, last, ok := parseDay(words, i+1, today)
+			if !ok {
+				return g, errPortfolioGoal
 			}
+			i = last
 			g.due = day.Format("2006-01-02")
 		case !slices.Contains(portfolioFiller, w):
 			return g, errPortfolioGoal
@@ -92,6 +77,40 @@ func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 }
 
 var weekdays = map[string]time.Weekday{"sunday": time.Sunday, "monday": time.Monday, "tuesday": time.Tuesday, "wednesday": time.Wednesday, "thursday": time.Thursday, "friday": time.Friday, "saturday": time.Saturday}
+
+// browserToday is the member's date as their browser sent it, trusted within a day of the server's, so day names
+// resolve in their own time zone.
+func browserToday(sent string) time.Time {
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	if t, err := time.Parse("2006-01-02", sent); err == nil && t.Sub(today).Abs() <= 24*time.Hour {
+		return t
+	}
+	return today
+}
+
+// parseDay reads the day named at words[i]: today, tomorrow, a weekday (today's or the next), "this week" (to Sunday)
+// or YYYY-MM-DD. It returns the day and the index of its last word.
+func parseDay(words []string, i int, today time.Time) (time.Time, int, bool) {
+	at := func(n int) string {
+		if n < len(words) {
+			return words[n]
+		}
+		return ""
+	}
+	switch d := at(i); {
+	case d == "today":
+		return today, i, true
+	case d == "tomorrow":
+		return today.AddDate(0, 0, 1), i, true
+	case d == "this" && at(i+1) == "week":
+		return today.AddDate(0, 0, (7-int(today.Weekday()))%7), i + 1, true
+	}
+	if wd, ok := weekdays[at(i)]; ok {
+		return today.AddDate(0, 0, (int(wd)-int(today.Weekday())+7)%7), i, true
+	}
+	day, err := time.Parse("2006-01-02", at(i))
+	return day, i, err == nil
+}
 
 // describe says in words which closes the goal selects, with its date resolved.
 func (g portfolioGoal) describe(view, client string) string {
@@ -176,12 +195,7 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		in.Text, in.Client = strings.TrimSpace(in.Text), strings.TrimSpace(in.Client)
-		// The browser's date resolves day names in the member's time zone, within a day of the server's.
-		today := time.Now().UTC().Truncate(24 * time.Hour)
-		if t, err := time.Parse("2006-01-02", in.Today); err == nil && t.Sub(today).Abs() <= 24*time.Hour {
-			today = t
-		}
-		goal, err := parsePortfolioGoal(in.Text, today)
+		goal, err := parsePortfolioGoal(in.Text, browserToday(in.Today))
 		if err != nil || len(in.Text) > 300 || len(in.Client) > 200 {
 			problem(w, 422, errPortfolioGoal.Error())
 			return

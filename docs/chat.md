@@ -24,6 +24,7 @@ Every answer comes from an existing read, made with your own permissions, and li
 | | whether the ledger capture is certified | the close brief's ledger line |
 | A close | find … (also search, look for, where is, show me) | search, in this close |
 | | prepare, recheck or stop its work | an action card ([below](#action-cards)) |
+| | get it ready for review (by a day) | a card handing the close to the agent ([close goals](close-coordinator.md#hand-the-close-to-the-agent)) |
 | A draft | this draft | its review state, blockers and questions |
 | Firm-wide | find … | search, across your closes |
 | | what needs you today | the morning brief |
@@ -67,6 +68,7 @@ Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type 
 | `/explain [account]` | Whether that account ties, or what blocks sign-off |
 | `/compare [account]` | What changed from last month, for that account or overall |
 | `/find <words>` | Searches, in this close or across your closes |
+| `/delegate [day]` | Asks for the card handing the close to the agent, ready for review by that day |
 | `/prepare`, `/stop` | Asks for the close's prepare or stop card |
 | `/request` | Opens the close's client requests |
 | `/review` | Opens the first draft in the review queue |
@@ -76,6 +78,6 @@ A command that needs a close uses the one you are on. Elsewhere the palette list
 
 ## Boundaries
 
-The assistant reads and explains. It never approves, sends, posts or signs off; the only work it starts is a card's action, after its author confirms the listed scope, through the close page's own route and checks. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
+The assistant reads and explains. It never approves, sends, posts or signs off; the only work it starts is a card's action, after its author confirms the listed scope, through the close page's own route and checks. A hand-over card starts a [close goal](close-coordinator.md#hand-the-close-to-the-agent) the same way; a firm-wide request that names a client is answered with a link to that close's card, shown once. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
 
 Checks: `go test ./internal/transport -run 'TestAssistant|TestChatAction'` with `TEST_DATABASE_URL`.
