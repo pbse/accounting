@@ -582,10 +582,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	post := func(w http.ResponseWriter, r *http.Request) {
 		// A written answer streams; once its first line is out, the reply keeps its status and ends with the conversation.
 		var streamed *streamWriter
-		var attempt *struct {
-			outcome string
-			latency sql.NullInt64
-		}
+		var attempted string
+		var latency sql.NullInt64
 		var in struct {
 			Action      string `json:"action"`
 			Text        string `json:"text"`
@@ -726,15 +724,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				case why != "":
 					reply.body += " " + why
 				}
-				if outcome != "" {
-					attempt = &struct {
-						outcome string
-						latency sql.NullInt64
-					}{outcome, sql.NullInt64{Int64: time.Since(began).Milliseconds(), Valid: outcome != "limit"}}
-					if outcome == "stopped" {
-						attempt.outcome = "failed"
-					}
-				}
+				attempted, latency = outcome, sql.NullInt64{Int64: time.Since(began).Milliseconds(), Valid: outcome != "limit"}
 			}
 		}
 		body := strings.Join(append([]string{reply.body}, reply.lines...), "\n")
@@ -758,8 +748,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "Your firm membership changed. Nothing was saved.")
 			return
 		}
-		if attempt != nil {
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5)`, org, author, closeID, attempt.outcome, attempt.latency)
+		if attempted != "" {
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5)`, org, author, closeID, attempted, latency)
 		}
 		for _, m := range []struct{ role, body, citations, action, due, finish string }{{"user", in.Text, "[]", "", "", ""}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish}} {
 			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''))`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish); err != nil {

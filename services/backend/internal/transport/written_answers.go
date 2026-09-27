@@ -36,7 +36,7 @@ const writtenNote = "Written by the model from this close's saved status, sign-o
 // sees them, when the firm turned written answers on. The answer's text goes to emit as the model writes it, once the
 // model has said the question is answerable; emit returning false stops the attempt. The answer is kept only if every
 // source it cites was sent whole and holds the quote it gives. outcome is "" when nothing was attempted, otherwise
-// kept, not_kept, unanswerable, failed, limit or stopped; why says, when it is not empty, why nothing was written.
+// kept, not_kept, unanswerable, failed or limit; why says, when it is not empty, why nothing was written.
 func writtenReply(ctx context.Context, db *sql.DB, org string, readRaw func(string) (string, bool), closeID, paperID, question string, emit func(string) bool) (reply chatReply, why, outcome string) {
 	var on bool
 	if db.QueryRowContext(ctx, `SELECT assistant_model_answers FROM organizations WHERE id=$1`, org).Scan(&on) != nil || !on {
@@ -142,7 +142,7 @@ func writtenReply(ctx context.Context, db *sql.DB, org string, readRaw func(stri
 					text = text[:len(text)-1]
 				}
 				if !emit(text[shown:]) {
-					return reply, "", "stopped"
+					return reply, "", "failed"
 				}
 				shown = len(text)
 			}
