@@ -90,20 +90,26 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			out[key] = json.RawMessage(raw)
 		}
 		var calls, alerts, email int
+		var written bool
 		var connected map[string]int
 		var raw []byte
 		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT sum(calls) FROM model_calls WHERE organization_id=$1 AND day>(now() AT TIME ZONE 'UTC')::date-30),0),
+ (SELECT assistant_model_answers FROM organizations WHERE id=$1),
  (SELECT count(*) FROM operations_alert_deliveries WHERE organization_id=$1 AND status='accepted' AND finished_at>now()-interval '30 days'),
  (SELECT count(*) FROM email_connections WHERE organization_id=$1 AND enabled),
- jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &alerts, &email, &raw)
+ jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &written, &alerts, &email, &raw)
 		if err != nil || json.Unmarshal(raw, &connected) != nil {
 			problem(w, 503, "Security center unavailable.")
 			return
 		}
 		set := func(key string) bool { return os.Getenv(key) != "" }
+		answers := "Written assistant answers are off."
+		if written {
+			answers = "Written assistant answers are on: a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions."
+		}
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.
 		out["providers"] = []map[string]any{
-			{"provider": "OpenAI", "receives": "Extracted text of the documents the agent reads (their names first, then up to 20 it selects), PDF statement text for row proposals, policy text for procedure drafts, and a Work command with the visible client names. Card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details are removed from document text first. Each request asks OpenAI not to store it.", "evidence": plural(calls, "model call", "model calls") + " reserved in the last 30 days (a budget count, not confirmed delivery)", "in_use": calls > 0},
+			{"provider": "OpenAI", "receives": "Extracted text of the documents the agent reads (their names first, then up to 20 it selects), PDF statement text for row proposals, policy text for procedure drafts, and a Work command with the visible client names. " + answers + " Card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details are removed from document text and those questions and reads first. Each request asks OpenAI not to store it.", "evidence": plural(calls, "model call", "model calls") + " reserved in the last 30 days (a budget count, not confirmed delivery)", "in_use": calls > 0},
 			{"provider": "Resend", "receives": "Approved client request emails: the recipient, the approved wording and the private reply link.", "evidence": map[bool]string{true: "An enabled sending connection", false: "No enabled sending connection"}[email > 0], "in_use": email > 0},
 			{"provider": "QuickBooks", "receives": "Read requests for the connected company's ledger; postings only under an approved grant.", "evidence": plural(connected["QuickBooks"], "active connection", "active connections"), "in_use": connected["QuickBooks"] > 0},
 			{"provider": "Xero", "receives": "Read requests for the connected organisation's ledger; corrections only under an approved grant.", "evidence": plural(connected["Xero"], "active connection", "active connections"), "in_use": connected["Xero"] > 0},

@@ -12,7 +12,7 @@ The **Assistant** button (bottom right of every signed-in workspace page) opens 
 
 ## What it answers
 
-Every answer comes from an existing read, made with your own permissions, and links to where the detail lives. No model is called: a question is matched to one of these by its words, and anything else gets a short list of what it can answer.
+Every answer comes from an existing read, made with your own permissions, and links to where the detail lives. A question is matched to one of these by its words without a model, and anything else gets a short list of what it can answer, unless the firm has turned on [written answers](#written-answers).
 
 | Where | Ask about | From |
 | --- | --- | --- |
@@ -76,8 +76,14 @@ Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type 
 
 A command that needs a close uses the one you are on. Elsewhere the palette lists your closes matching what you type after the command (for example `/prepare Acme`); picking one runs it there, and for `/explain` and `/compare` the chosen close becomes a chip and you then type the account. Typing such a command in the firm-wide assistant opens the palette to pick the close. The palette also finds commands by their descriptions, keeps focus inside it and returns it on close. In the assistant's box, Tab completes a command.
 
+## Written answers
+
+Written answers are off until a firm administrator (`org:manage`; anyone in local development) turns them on in Firm settings, with a reason that is kept in the firm's policy history (migration 087). While they are on, a question in a client close that none of the reads above matches (and that is not a card, hand-over or find request) is sent to OpenAI with that close's reads, made with your own permissions: the close brief, sign-off readiness (only its state, blockers and scope), the balance sheet tie-out, changes from last month, the ledger exceptions and, on a draft, the draft's kind, review state and content. Each read is sent whole or not at all: one over 24 KiB is named as omitted and one that failed as unavailable, so the model never takes part of a list for all of it. The question and the reads first have card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details removed; the request asks OpenAI not to store it, frames the reads as untrusted data, gives the model no tools and allows it only an answer and, for each read it relies on, a quote copied from that read. The answer is kept only if every read it cites was sent and holds its quote; otherwise, or if the model says it cannot answer, the help reply stays. A kept answer links the cited reads' pages (never a link the model wrote) and ends by saying it was written by the model. Each answer counts against the firm's daily model limit, and at the limit the help reply says so. The assistant's note says what is sent while written answers are on, and the [security center](operations.md#security-center) shows whether they are. Firm-wide questions are never sent, because their history keeps no client details. Answers are shown when complete, not streamed, so nothing unchecked appears.
+
+Checks: `go test ./internal/transport -run TestAssistantWritesAnswersOnlyWhenTheFirmAllows` with `TEST_DATABASE_URL`.
+
 ## Boundaries
 
-The assistant reads and explains. It never approves, sends, posts or signs off; the only work it starts is a card's action, after its author confirms the listed scope, through the close page's own route and checks. A hand-over card starts a [close goal](close-coordinator.md#hand-the-close-to-the-agent) the same way, and can set up a [monthly hand-over](close-coordinator.md#every-new-month); a firm-wide request that names a client is answered with a link to that close's card, shown once. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
+The assistant reads and explains, and a written answer is text only. It never approves, sends, posts or signs off; the only work it starts is a card's action, after its author confirms the listed scope, through the close page's own route and checks. A hand-over card starts a [close goal](close-coordinator.md#hand-the-close-to-the-agent) the same way, and can set up a [monthly hand-over](close-coordinator.md#every-new-month); a firm-wide request that names a client is answered with a link to that close's card, shown once. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
 
 Checks: `go test ./internal/transport -run 'TestAssistant|TestChatAction'` with `TEST_DATABASE_URL`.
