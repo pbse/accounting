@@ -3,7 +3,9 @@ import { Link } from "react-router";
 import { askAssistant } from "../dashboard/assistantStore";
 import { workspaceRequest } from "./workspace";
 
-type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[] };
+type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
+type Handoff = { id: string; job_id: string; name: string; note: string; by: string; at: string; mine: boolean };
+type Person = { subject: string; name: string };
 type Finish = "review" | "signoff";
 type Goal = { id: string; author: string; due_on: string; state: "active" | "reached" | "stopped"; finish: Finish; created_at: string; reached_at: string | null; ready_at: string | null; finished_at: string | null; events: { actor: string; text: string; at: string }[] };
 type Signoff = { state: "open" | "signed_off" | "reopen_required"; signer: string; needs: string[]; entries: { draft: string; text: string }[]; next_close: string };
@@ -16,6 +18,7 @@ type Status = {
   signed_off: boolean;
   routine: Routine | null;
   close: { entity: string; period: string };
+  handoffs: Handoff[];
 };
 
 const sections: [Item["status"], string][] = [
@@ -54,6 +57,77 @@ function monthName(period: string) {
 // dueRule says how a monthly hand-over dates each month.
 function dueRule(days: number | null) {
   return days ? `due ${days} day${days === 1 ? "" : "s"} after each month ends` : "with no due date";
+}
+
+// HandOff hands a document that needs a person to a teammate who can review the client's work, or says who has it.
+function HandOff({ closeId, item, handoff, refresh }: { closeId: string; item: Item; handoff?: Handoff; refresh: () => void }) {
+  const [people, setPeople] = useState<Person[]>();
+  const [to, setTo] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function send(path: string, body: object) {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(path, body);
+      setNote("");
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "That did not go through. Refresh and try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (handoff)
+    return (
+      <>
+        {" "}
+        · With {handoff.mine ? "you" : handoff.name} since {new Date(handoff.at).toLocaleDateString()}
+        {handoff.note && <> · “{handoff.note}”</>}{" "}
+        <button type="button" disabled={busy} onClick={() => void send(`/${closeId}/goal/handoffs/${handoff.id}/take-back`, {})}>
+          {handoff.mine ? "Hand it back" : "Take it back"}
+        </button>
+        {error && <span role="alert"> {error}</span>}
+      </>
+    );
+  if (!item.handable) return null;
+  function load(open: boolean) {
+    if (!open || people) return;
+    workspaceRequest(`/${closeId}/people`)
+      .then((data: { people: Person[] }) => setPeople(data.people))
+      .catch((e) => setError(e instanceof Error ? e.message : "Teammates are unavailable right now."));
+  }
+  return (
+    <details onToggle={(e) => load(e.currentTarget.open)}>
+      <summary>Hand to a teammate</summary>
+      {people?.length === 0 && <p className="assistant-note">Nobody else here can review this client's work.</p>}
+      {!!people?.length && (
+        <>
+          <label>
+            Teammate{" "}
+            <select value={to} onChange={(e) => setTo(e.target.value)}>
+              <option value="">Choose…</option>
+              {people.map((p) => (
+                <option key={p.subject} value={p.subject}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            What should they look into?
+            <textarea value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+          </label>
+          <button type="button" disabled={busy || !to} onClick={() => void send(`/${closeId}/goal/handoffs`, { job_id: item.job_id, assignee: to, note: note.trim() })}>
+            {busy ? "Handing over…" : "Hand it over"}
+          </button>
+          <p className="assistant-note">They'll find it in their attention list and act on it in Work. I'll close the hand-off once the document no longer needs anyone.</p>
+        </>
+      )}
+      {error && <p role="alert">{error}</p>}
+    </details>
+  );
 }
 
 // RoutineLine shows the client's monthly hand-over, why it is waiting, and a way to stop it.
@@ -163,7 +237,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
       setBusy(false);
     }
   }
-  const link = (item: Item) => (item.drafts[0] ? `/dashboard/closes/${closeId}/workpapers/${item.drafts[0]}` : `/dashboard/closes/${closeId}`);
+  const link = (item: Item) => (item.drafts[0] ? `/dashboard/closes/${closeId}/workpapers/${item.drafts[0]}` : `/dashboard/closes/${closeId}?job=${item.job_id}`);
   return (
     <>
       <p>
@@ -194,6 +268,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
                     {items.map((i) => (
                       <li key={i.job_id}>
                         <Link to={link(i)}>{i.name}</Link>: {i.text}
+                        <HandOff closeId={closeId} item={i} handoff={status.handoffs.find((h) => h.job_id === i.job_id)} refresh={refresh} />
                       </li>
                     ))}
                   </ul>

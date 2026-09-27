@@ -18,11 +18,12 @@ import (
 // off. It stops when a person stops it, when the close is signed off, or when its owner leaves the firm.
 
 type goalItem struct {
-	JobID  string   `json:"job_id"`
-	Name   string   `json:"name"`
-	Status string   `json:"status"`
-	Text   string   `json:"text"`
-	Drafts []string `json:"drafts"`
+	JobID    string   `json:"job_id"`
+	Name     string   `json:"name"`
+	Status   string   `json:"status"`
+	Text     string   `json:"text"`
+	Drafts   []string `json:"drafts"`
+	Handable bool     `json:"handable,omitempty"`
 }
 
 // goalProgress is where every current document of a close stands. Needs are close-wide things a person must do; notes
@@ -222,6 +223,9 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 		default:
 			open++
 		}
+		// A teammate can look into what the document itself needs with review permission; a client request's sending
+		// needs its own permission, and approving a draft is left to the firm's reviewers.
+		item.Handable = (item.Status == "needs_you" || item.Status == "unsupported") && state != "waiting_client"
 		// Before sign-off a person approves each draft, so an unapproved one is theirs to act on.
 		if finish == "signoff" && len(unapproved) > 0 {
 			item.Status, item.Text = "needs_you", "Review and approve draft "+strings.Join(unapproved, ", ")+"."
@@ -357,6 +361,9 @@ func stopGoal(ctx context.Context, tx *sql.Tx, id, actor, text string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE close_goals SET state='stopped',reached_at=NULL,finished_at=now(),checked_at=now() WHERE id=$1`, id); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE goal_handoffs SET closed_at=now(),closed_by=$2 WHERE goal_id=$1 AND closed_at IS NULL`, id, actor); err != nil {
+		return err
+	}
 	return goalEvent(ctx, tx, id, actor, text)
 }
 
@@ -400,6 +407,9 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			if _, err = tx.ExecContext(ctx, `UPDATE close_goals SET state='active',reached_at=NULL WHERE id=$1`, g.id); err == nil {
 				err = goalEvent(ctx, tx, g.id, "agent", "Something changed after the sign-off, so the close needs reopening before I continue.")
 			}
+		}
+		if err == nil {
+			err = settleHandoffs(ctx, tx, g, nil, true)
 		}
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now() WHERE id=$1`, g.id)
@@ -446,6 +456,9 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 	}
 	// Ready for review is the finish of a review goal and a milestone, kept in ready_at, of a sign-off goal.
 	progress, err := readGoalProgress(ctx, tx, g.close, "review")
+	if err == nil {
+		err = settleHandoffs(ctx, tx, g, progress.Items, false)
+	}
 	if err != nil {
 		return err
 	}
@@ -588,11 +601,15 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		if err == nil {
 			done, err = signedOff(r.Context(), tx, closeID)
 		}
+		handoffs := []goalHandoff{}
+		if err == nil && goal != nil {
+			handoffs, err = readHandoffs(r.Context(), tx, goal.ID, subject(r))
+		}
 		if err != nil {
 			problem(w, 503, "The agent's progress is unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"goal": goal, "progress": progress, "activity": history, "activity_total": total, "signed_off": done, "routine": routine, "close": closeInfo})
+		jsonReply(w, 200, map[string]any{"goal": goal, "progress": progress, "activity": history, "activity_total": total, "signed_off": done, "routine": routine, "close": closeInfo, "handoffs": handoffs})
 	})
 	mux.HandleFunc("POST /v1/closes/{id}/goal", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := reviewActor(w, r); !ok {
