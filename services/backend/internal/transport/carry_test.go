@@ -12,8 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
@@ -288,5 +290,85 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 	approve(august, asset, "approved")
 	if items := preview(august); len(items) != 1 || !items[0].Eligible {
 		t.Fatalf("the half month after the useful life must carry forward: %+v", items)
+	}
+}
+
+func TestCarryForwardKeepsTheFirmCloseLimit(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	org := "org_Carry" + rand.Text()
+	must := func(_ sql.Result, e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	defer func() {
+		for _, q := range []string{`DELETE FROM close_scopes WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	must(db.Exec(`INSERT INTO organizations(id,name,max_closes) VALUES($1,'Carry limit fixture',1)`, org))
+	must(db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`, org))
+	var origin string
+	if err = db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&origin); err != nil {
+		t.Fatal(err)
+	}
+	// An unreviewed draft is unresolved work to carry into October.
+	must(db.Exec(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'accrual','fixture','{}')`, origin))
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(method string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, "/v1/closes/"+origin+"/carry-forward", bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"clients:all", "workpapers:review"}}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s: %d %s", method, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	var preview struct {
+		Digest string `json:"unresolved_digest"`
+	}
+	if err = json.Unmarshal(call("GET", nil, 200), &preview); err != nil {
+		t.Fatal(err)
+	}
+	carry := map[string]any{"confirmed": true, "carry_unresolved": true, "unresolved_digest": preview.Digest}
+	october := func() string {
+		t.Helper()
+		var id string
+		if e := db.QueryRow(`SELECT id::text FROM client_closes WHERE organization_id=$1 AND period='2026-10'`, org).Scan(&id); e != nil && e != sql.ErrNoRows {
+			t.Fatal(e)
+		}
+		return id
+	}
+	if body := call("POST", carry, 429); !strings.Contains(string(body), "close limit") || october() != "" {
+		t.Fatalf("at the firm's close limit next month is not opened: %s", body)
+	}
+	must(db.Exec(`UPDATE organizations SET max_closes=2 WHERE id=$1`, org))
+	var opened struct {
+		CloseID string `json:"close_id"`
+	}
+	if err = json.Unmarshal(call("POST", carry, 200), &opened); err != nil || opened.CloseID == "" || opened.CloseID != october() {
+		t.Fatalf("with room next month is opened: %+v %v", opened, err)
+	}
+	// Next month's close already exists, so the limit does not apply to carrying into it again.
+	must(db.Exec(`UPDATE organizations SET max_closes=1 WHERE id=$1`, org))
+	var again struct {
+		CloseID string `json:"close_id"`
+	}
+	if err = json.Unmarshal(call("POST", carry, 200), &again); err != nil || again.CloseID != opened.CloseID {
+		t.Fatalf("an existing next close is used at the limit: %+v %v", again, err)
 	}
 }
