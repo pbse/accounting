@@ -812,3 +812,164 @@ func TestWorkListsEveryDelegatedClose(t *testing.T) {
 		t.Fatalf("Work's client filter narrows the list: %s", got)
 	}
 }
+
+func TestGoalCountsAccountCoverage(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	ctx := context.Background()
+	org := "org_Cover" + rand.Text()
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Coverage goal fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	defer func() {
+		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM coverage_bindings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_connections WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	// A ledger capture lists three accounts; the office supplies account is excluded with a reason.
+	var alpha, ledger, conn, snapshot, source string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt','coverage-ledger','Synthetic ledger','fixture') RETURNING id::text`, alpha).Scan(&ledger))
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, alpha, rand.Text()).Scan(&conn))
+	payload, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{
+		{"account_id": "a", "name": "Prepaid insurance", "kind": "prepaid", "question": "Provide the policy invoice."},
+		{"account_id": "b", "name": "Operating bank", "kind": "reconciliation", "question": "Provide the statement."},
+		{"account_id": "c", "name": "Office supplies", "kind": "accountant_review", "question": "Review activity."}}})
+	must(db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123','coverage-snapshot',$3,now(),'fixture') RETURNING id::text`, alpha, conn, string(payload)).Scan(&snapshot))
+	_, err = db.Exec(`INSERT INTO coverage_bindings(close_id,snapshot_id,account_id,job_ids,excluded,reason,actor) VALUES($1,$2,'c','[]',true,'Immaterial office supplies','user_a')`, alpha, snapshot)
+	must(err)
+	tx, err := db.BeginTx(ctx, nil)
+	must(err)
+	must(tx.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'invoice.txt','coverage-invoice','Invoice','fixture') RETURNING id::text`, alpha).Scan(&source))
+	job, err := preparation.StartIntake(ctx, tx, alpha, source, "fixture")
+	must(err)
+	must(tx.Commit())
+	for _, q := range []string{`UPDATE preparation_intakes SET proposal='{"kind":"prepaid","questions":["Which months does the policy cover?"],"facts":[]}' WHERE job_id::text=$1`,
+		`UPDATE preparation_jobs SET state='needs_confirmation' WHERE id::text=$1`} {
+		_, err = db.Exec(q, job)
+		must(err)
+	}
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(method, path string, body any) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"workpapers:review", "clients:all"}}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s %s %v: %d %s", method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	read := func() (string, goalProgress) {
+		t.Helper()
+		var s struct {
+			Goal struct {
+				ID string `json:"id"`
+			} `json:"goal"`
+			Progress goalProgress `json:"progress"`
+		}
+		must(json.Unmarshal(call("GET", "/v1/closes/"+alpha+"/goal", nil), &s))
+		return s.Goal.ID, s.Progress
+	}
+	summary := func() int {
+		t.Helper()
+		var needs int
+		must(db.QueryRow(`SELECT (summary->>'needs')::int FROM close_goals WHERE close_id::text=$1 AND state<>'stopped'`, alpha).Scan(&needs))
+		return needs
+	}
+
+	// A review goal says how many accounts are still open without waiting on them.
+	call("POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true})
+	if _, p := read(); p.Coverage == nil || *p.Coverage != (goalCoverage{Total: 3, Open: 2}) || p.Signoff != nil || summary() != 1 {
+		t.Fatalf("the review goal counts the open accounts apart from its needs: %+v %d", p.Coverage, summary())
+	}
+	call("POST", "/v1/closes/"+alpha+"/goal/stop", map[string]string{"reason": "Checking coverage"})
+
+	// A sign-off goal counts them as one decision, before its documents are ready and once they are, and sign-off's
+	// per-account blockers are not listed again.
+	call("POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true, "finish": "signoff"})
+	if summary() != 2 {
+		t.Fatalf("the open accounts are one need with the document: %d", summary())
+	}
+	var paper string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','coverage-paper','{}') RETURNING id::text`, alpha).Scan(&paper))
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed',workpaper_ids=jsonb_build_array($2::text),finished_at=now() WHERE id::text=$1`, job, paper)
+	must(err)
+	goal, _ := read()
+	must(stepGoal(ctx, db, goal))
+	_, p := read()
+	if p.Signoff == nil || p.Coverage == nil || *p.Coverage != (goalCoverage{Total: 3, Open: 2}) || slices.ContainsFunc(p.Signoff.Needs, func(n string) bool { return strings.HasPrefix(n, "Coverage for ") }) {
+		t.Fatalf("with its documents ready the sign-off goal keeps the accounts as one count: %+v %+v", p.Coverage, p.Signoff)
+	}
+	needs := len(p.Needs) + len(p.Signoff.Needs) + 1
+	for _, item := range p.Items {
+		if item.Status == "needs_you" || item.Status == "unsupported" {
+			needs++
+		}
+	}
+	if summary() != needs {
+		t.Fatalf("Work's summary counts what the card counts: %d, want %d", summary(), needs)
+	}
+
+	// A standing sign-off reaches the goal; past coverage's limit of 100 intake jobs it can no longer be checked, so the
+	// goal is back in progress and Work says what the card says.
+	_, err = db.Exec(`UPDATE close_goals SET state='reached',reached_at=now() WHERE id::text=$1`, goal)
+	must(err)
+	for range 100 {
+		tx, err := db.BeginTx(ctx, nil)
+		must(err)
+		var extra string
+		name := rand.Text()
+		must(tx.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$2,'Invoice','fixture') RETURNING id::text`, alpha, name).Scan(&extra))
+		_, err = preparation.StartIntake(ctx, tx, alpha, extra, "fixture")
+		must(err)
+		must(tx.Commit())
+	}
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, alpha)
+	must(err)
+	must(stepGoal(ctx, db, goal))
+	_, p = read()
+	var signoff string
+	must(db.QueryRow(`SELECT summary->>'signoff' FROM close_goals WHERE id::text=$1`, goal).Scan(&signoff))
+	needs = len(p.Needs)
+	for _, item := range p.Items {
+		if item.Status == "needs_you" || item.Status == "unsupported" {
+			needs++
+		}
+	}
+	var state, last string
+	var reached sql.NullTime
+	must(db.QueryRow(`SELECT state,reached_at,events->-1->>'text' FROM close_goals WHERE id::text=$1`, goal).Scan(&state, &reached, &last))
+	if !slices.Contains(p.Needs, "Account coverage and sign-off read at most 100 intake jobs, and this close has more, so it can't be signed off here.") || summary() != needs || signoff != "" {
+		t.Fatalf("a close past the limit says it cannot be checked, on the card and in Work: %v %d %q", p.Needs, summary(), signoff)
+	}
+	if state != "active" || reached.Valid || last != "The close has more intake jobs than sign-off can check, so I can't confirm its sign-off." {
+		t.Fatalf("a sign-off that cannot be checked no longer reaches the goal: %s %v %q", state, reached, last)
+	}
+}

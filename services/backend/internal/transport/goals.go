@@ -30,11 +30,18 @@ type goalItem struct {
 // say what a ready result does not cover. Ready means every current document has a draft ready for review; a goal
 // that finishes at sign-off also carries what sign-off needs.
 type goalProgress struct {
-	Items   []goalItem   `json:"items"`
-	Needs   []string     `json:"needs"`
-	Notes   []string     `json:"notes"`
-	Ready   bool         `json:"ready"`
-	Signoff *goalSignoff `json:"signoff,omitempty"`
+	Items    []goalItem    `json:"items"`
+	Needs    []string      `json:"needs"`
+	Notes    []string      `json:"notes"`
+	Ready    bool          `json:"ready"`
+	Signoff  *goalSignoff  `json:"signoff,omitempty"`
+	Coverage *goalCoverage `json:"coverage,omitempty"`
+}
+
+// goalCoverage counts the accounts of the close's ledger capture, and those not yet resolved or excluded.
+type goalCoverage struct {
+	Total int `json:"total"`
+	Open  int `json:"open"`
 }
 
 // goalSignoff is what signing the close off needs, from its readiness: its needs that are not about a listed document,
@@ -275,13 +282,42 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	}
 	p.Ready = prepared > 0 && open == 0 && len(p.Needs) == 0
 	// Sign-off comes after the documents; its readiness is read only once they are ready, or while a sign-off stands.
+	// Account coverage is read with it, or on its own while sign-off is not read.
 	signed, err := signedOff(ctx, tx, closeID)
-	if err != nil || finish != "signoff" || !p.Ready && !signed {
-		return p, err
-	}
-	ready, err := closeReadiness(ctx, tx, closeID)
 	if err != nil {
 		return p, err
+	}
+	readSignoff := finish == "signoff" && (p.Ready || signed)
+	var ready readiness
+	var accounts coverageView
+	switch {
+	case readSignoff:
+		ready, err = closeReadiness(ctx, tx, closeID)
+		accounts = ready.coverage
+	case ledger != nil:
+		accounts, err = currentCoverage(ctx, tx, closeID)
+	}
+	if errors.Is(err, errCoverageLimit) {
+		if finish == "signoff" {
+			p.Needs = append(p.Needs, "Account coverage and sign-off read at most 100 intake jobs, and this close has more, so it can't be signed off here.")
+		} else {
+			p.Notes = append(p.Notes, "This close has more than 100 intake jobs, more than account coverage reads, so its accounts are not shown.")
+		}
+		return p, nil
+	}
+	if err != nil {
+		return p, err
+	}
+	if accounts.SnapshotID != "" {
+		p.Coverage = &goalCoverage{Total: len(accounts.Items)}
+		for _, item := range accounts.Items {
+			if item.State != "resolved" && item.State != "excluded" {
+				p.Coverage.Open++
+			}
+		}
+	}
+	if !readSignoff {
+		return p, nil
 	}
 	s := &goalSignoff{State: ready.State, Needs: []string{}, Entries: []goalEntry{}}
 	listed := map[string]bool{}
@@ -292,10 +328,10 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 		}
 	}
 	for _, b := range ready.Blockers {
-		// Documents on the list, their drafts and client files are already shown.
+		// Documents on the list, their drafts, client files and accounts (counted in coverage) are already shown.
 		job, _, _ := strings.Cut(b, " is ")
 		draft, _, _ := strings.Cut(b, " requires ")
-		if listed[job] || listed[draft] || strings.Contains(b, "client attachments") {
+		if listed[job] || listed[draft] || strings.Contains(b, "client attachments") || strings.HasPrefix(b, "Coverage for ") {
 			continue
 		}
 		s.Needs = append(s.Needs, b)
@@ -422,6 +458,25 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 		// A sign-off goal is reached while the sign-off stands. A close that changed after its sign-off waits for a person
 		// to reopen it, and the agent prepares nothing meanwhile.
 		current, err := closeReadiness(ctx, tx, g.close)
+		if errors.Is(err, errCoverageLimit) {
+			// Past coverage's limit the sign-off cannot be checked: the goal is not reached, and Work says what the card says.
+			if g.state == "reached" {
+				if _, err = tx.ExecContext(ctx, `UPDATE close_goals SET state='active',reached_at=NULL WHERE id=$1`, g.id); err == nil {
+					err = goalEvent(ctx, tx, g.id, "agent", "The close has more intake jobs than sign-off can check, so I can't confirm its sign-off.")
+				}
+				if err != nil {
+					return err
+				}
+			}
+			progress, err := readGoalProgress(ctx, tx, g.close, g.finish)
+			if err == nil {
+				err = settleHandoffs(ctx, tx, g, nil, true)
+			}
+			if err == nil {
+				err = saveSummary(ctx, tx, g, progress)
+			}
+			return err
+		}
 		if err != nil {
 			return err
 		}
@@ -530,16 +585,24 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			return err
 		}
 	}
-	needs, signoff := len(progress.Needs), ""
-	for _, item := range progress.Items {
+	return saveSummary(ctx, tx, g, progress)
+}
+
+// saveSummary records what Work lists for the goal, counting what people owe as the goal card counts it.
+func saveSummary(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress) error {
+	needs, signoff := len(p.Needs), ""
+	for _, item := range p.Items {
 		if item.Status == "needs_you" || item.Status == "unsupported" {
 			needs++
 		}
 	}
-	if progress.Signoff != nil {
-		needs, signoff = needs+len(progress.Signoff.Needs), progress.Signoff.State
+	if p.Signoff != nil {
+		needs, signoff = needs+len(p.Signoff.Needs), p.Signoff.State
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now()) WHERE id=$1`, g.id, needs, progress.Ready, signoff)
+	if g.finish == "signoff" && p.Coverage != nil && p.Coverage.Open > 0 {
+		needs++
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now()) WHERE id=$1`, g.id, needs, p.Ready, signoff)
 	return err
 }
 
