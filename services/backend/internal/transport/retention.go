@@ -256,6 +256,13 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Deletion stopped without committing.")
 			return
 		}
+		// Ending the relationship or the client's request ends the client's monthly hand-over too.
+		if in.ReasonCode == "contract_termination" || in.ReasonCode == "client_request" {
+			if _, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND stopped_at IS NULL`, organization(r), entity, subject(r), "Stopped when "+entity+" "+period+" was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")."); err != nil {
+				problem(w, 503, "Deletion stopped without committing.")
+				return
+			}
+		}
 		var receipt string
 		identity := preparation.Digest([]byte(organization(r) + "\x00" + strings.ToLower(entity) + "\x00" + period))
 		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, organization(r), id, identity, period, productionCount, subject(r), in.ReasonCode).Scan(&receipt)

@@ -78,6 +78,6 @@ A command that needs a close uses the one you are on. Elsewhere the palette list
 
 ## Boundaries
 
-The assistant reads and explains. It never approves, sends, posts or signs off; the only work it starts is a card's action, after its author confirms the listed scope, through the close page's own route and checks. A hand-over card starts a [close goal](close-coordinator.md#hand-the-close-to-the-agent) the same way; a firm-wide request that names a client is answered with a link to that close's card, shown once. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
+The assistant reads and explains. It never approves, sends, posts or signs off; the only work it starts is a card's action, after its author confirms the listed scope, through the close page's own route and checks. A hand-over card starts a [close goal](close-coordinator.md#hand-the-close-to-the-agent) the same way, and can set up a [monthly hand-over](close-coordinator.md#every-new-month); a firm-wide request that names a client is answered with a link to that close's card, shown once. If a read fails it says so rather than guessing. What you type is stored as written in your own conversation.
 
 Checks: `go test ./internal/transport -run 'TestAssistant|TestChatAction'` with `TEST_DATABASE_URL`.

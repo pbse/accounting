@@ -7,12 +7,15 @@ type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "
 type Finish = "review" | "signoff";
 type Goal = { id: string; author: string; due_on: string; state: "active" | "reached" | "stopped"; finish: Finish; created_at: string; reached_at: string | null; ready_at: string | null; finished_at: string | null; events: { actor: string; text: string; at: string }[] };
 type Signoff = { state: "open" | "signed_off" | "reopen_required"; signer: string; needs: string[]; entries: { draft: string; text: string }[]; next_close: string };
+type Routine = { author: string; finish: Finish; due_days: number | null; next_period: string; waiting: string };
 type Status = {
   goal: Goal | null;
   progress: { items: Item[]; needs: string[]; notes: string[]; ready: boolean; signoff?: Signoff };
   activity: { at: string; actor: string; text: string }[];
   activity_total: number;
   signed_off: boolean;
+  routine: Routine | null;
+  close: { entity: string; period: string };
 };
 
 const sections: [Item["status"], string][] = [
@@ -42,6 +45,57 @@ function counts(items: Item[]) {
   const by = (s: Item["status"]) => items.filter((i) => i.status === s).length;
   const parts = [`${by("prepared")} ready for review`, `${by("needs_you") + by("unsupported")} need you`, `${by("client")} waiting on the client`, `${by("working")} in progress`].filter((p) => !p.startsWith("0 "));
   return `${items.length} document${items.length === 1 ? "" : "s"}: ${parts.join(", ")}.`;
+}
+
+function monthName(period: string) {
+  return new Date(`${period}-01T00:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+// dueRule says how a monthly hand-over dates each month.
+function dueRule(days: number | null) {
+  return days ? `due ${days} day${days === 1 ? "" : "s"} after each month ends` : "with no due date";
+}
+
+// RoutineLine shows the client's monthly hand-over, why it is waiting, and a way to stop it.
+function RoutineLine({ closeId, status, refresh }: { closeId: string; status: Status; refresh: () => void }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const routine = status.routine;
+  if (!routine) return null;
+  async function stop() {
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/routine/stop`, { reason: reason.trim() });
+      setReason("");
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The monthly hand-over could not be stopped.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div>
+      <p className="assistant-note">
+        Every new month of {status.close.entity} is handed to the agent, {finishes[routine.finish]} {dueRule(routine.due_days)}, set up by {routine.author}. Next: {monthName(routine.next_period)}, once it ends.
+      </p>
+      {routine.waiting && <p role="status">{routine.waiting}</p>}
+      <details>
+        <summary>Stop the monthly hand-over</summary>
+        <label>
+          Reason
+          <textarea value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+        </label>
+        <button type="button" disabled={busy || !reason.trim()} onClick={() => void stop()}>
+          {busy ? "Stopping…" : "Stop"}
+        </button>
+        <p className="assistant-note">Months already handed over keep their goals.</p>
+      </details>
+      {error && <p role="alert">{error}</p>}
+    </div>
+  );
 }
 
 // headline says, first, where the goal stands, from the live progress where the stored goal may lag a sweep behind.
@@ -186,6 +240,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
           ))}
         </>
       )}
+      <RoutineLine closeId={closeId} status={status} refresh={refresh} />
       {total > 0 && (
         <details>
           <summary>What happened · {total}</summary>
@@ -227,10 +282,18 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
   );
 }
 
-function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueOn: string; proposed: string; onConfirm: (body: { due_on: string; finish: Finish }) => Promise<void> }) {
+function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueOn: string; proposed: string; onConfirm: (body: { due_on: string; finish: Finish; every_month: boolean }) => Promise<void> }) {
   const [date, setDate] = useState(dueOn);
+  const [monthly, setMonthly] = useState(false);
   const [finish, setFinish] = useState<Finish>(proposed === "signoff" ? "signoff" : "review");
   const group = useId();
+  // A monthly hand-over keeps the due date's distance after this month's end; one inside the month has no date.
+  // It starts with the month after this close, or with the current month when this close's month ended earlier.
+  const [year, month] = status.close.period.split("-").map(Number);
+  const monthlyDays = date ? Math.round((Date.parse(date) - Date.UTC(year, month, 0)) / 86_400_000) : 0;
+  const after = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 7);
+  const current = new Date().toISOString().slice(0, 7);
+  const nextPeriod = after > current ? after : current;
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -238,7 +301,7 @@ function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueO
     setBusy(true);
     setError("");
     try {
-      await onConfirm({ due_on: date, finish });
+      await onConfirm({ due_on: date, finish, every_month: monthly });
     } catch (e) {
       setError(e instanceof Error ? e.message : "The close could not be handed over.");
       setAgreed(false);
@@ -269,10 +332,26 @@ function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueO
       <label>
         {finish === "signoff" ? "Signed off by" : "Ready for review by"} <input type="date" value={date} min={localDate()} onChange={(e) => setDate(e.target.value)} />
       </label>
+      {status.routine ? (
+        <p className="assistant-note">Every new month of {status.close.entity} is already handed over, set up by {status.routine.author}.</p>
+      ) : (
+        <>
+          <label>
+            <input type="checkbox" checked={monthly} onChange={(e) => setMonthly(e.target.checked)} /> Do this every month for {status.close.entity}
+          </label>
+          {monthly && (
+            <p className={monthlyDays > 60 ? undefined : "assistant-note"} role={monthlyDays > 60 ? "alert" : undefined}>
+              {monthlyDays > 60
+                ? "For a monthly hand-over, choose a due date at most 60 days after the month ends."
+                : `Starting with ${monthName(nextPeriod)}, when each month ends I'll open that month's close for ${status.close.entity} and hand it over the same way, ${finishes[finish]} ${dueRule(monthlyDays > 0 ? monthlyDays : null)}.`}
+            </p>
+          )}
+        </>
+      )}
       <label>
         <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} /> Let the agent work on this close until it's {finishes[finish]}.
       </label>
-      <button type="button" className="primary" disabled={busy || !agreed} onClick={() => void confirm()}>
+      <button type="button" className="primary" disabled={busy || !agreed || (monthly && monthlyDays > 60)} onClick={() => void confirm()}>
         {busy ? "Handing over…" : "Hand it over"}
       </button>
       <p className="assistant-note">Handing over needs the workpapers:review permission.</p>
@@ -282,7 +361,7 @@ function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueO
 }
 
 // GoalCard is the assistant's card for handing its close to the agent: the proposal, then the goal's live progress.
-export function GoalCard({ closeId, dueOn, finish, outcome, live, onConfirm }: { closeId: string; dueOn: string; finish: string; outcome?: { at: string } | null; live: boolean; onConfirm: (body: { due_on: string; finish: Finish }) => Promise<void> }) {
+export function GoalCard({ closeId, dueOn, finish, outcome, live, onConfirm }: { closeId: string; dueOn: string; finish: string; outcome?: { at: string } | null; live: boolean; onConfirm: (body: { due_on: string; finish: Finish; every_month: boolean }) => Promise<void> }) {
   const { status, error, refresh } = useGoal(closeId, live, 5000);
   const card = (body: ReactNode) => (
     <div className="assistant-card">
@@ -302,19 +381,24 @@ export function GoalCard({ closeId, dueOn, finish, outcome, live, onConfirm }: {
 export function GoalPanel({ closeId }: { closeId: string }) {
   const { status, error, refresh } = useGoal(closeId, true, 10000);
   if (!status) return error ? <p role="alert">{error}</p> : null;
-  if (!status.goal && status.signed_off) return null;
+  if (!status.goal && status.signed_off && !status.routine) return null;
   return (
     <section className="panel" aria-labelledby="goal-title">
-      <h2 id="goal-title">{status.goal && status.goal.state !== "stopped" ? "Handed to the agent" : "Hand this close to the agent"}</h2>
+      <h2 id="goal-title">{status.goal && status.goal.state !== "stopped" ? "Handed to the agent" : status.signed_off ? "Monthly hand-over" : "Hand this close to the agent"}</h2>
       {status.goal ? (
         <Progress closeId={closeId} status={status} refresh={refresh} />
       ) : (
-        <p>
-          The agent keeps preparation moving and tells you only what needs you.{" "}
-          <button type="button" onClick={() => askAssistant(handOver, closeId)}>
-            Hand it over
-          </button>
-        </p>
+        <>
+          {!status.signed_off && (
+            <p>
+              The agent keeps preparation moving and tells you only what needs you.{" "}
+              <button type="button" onClick={() => askAssistant(handOver, closeId)}>
+                Hand it over
+              </button>
+            </p>
+          )}
+          <RoutineLine closeId={closeId} status={status} refresh={refresh} />
+        </>
       )}
       {error && <p role="alert">{error}</p>}
     </section>

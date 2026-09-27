@@ -134,7 +134,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
     }
   }
   // A confirmation holds the composer, so no other answer can replace the card's result while it runs.
-  async function confirm(id: string, body: Record<string, string>) {
+  async function confirm(id: string, body: Record<string, string | boolean>) {
     if (busy) throw new Error("Wait for the current answer, then confirm.");
     const asked = ++generation.current;
     setBusy(true);
