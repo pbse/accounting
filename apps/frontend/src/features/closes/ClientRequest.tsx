@@ -11,6 +11,7 @@ type Request = {
   removed?: string[];
   questions?: Question[];
   open?: boolean;
+  rescan?: boolean;
 };
 const stateLabels: Record<string, string> = { answered: "Answered", awaiting_document: "Waiting for your document", "": "Not answered yet" };
 
@@ -214,7 +215,7 @@ export default function ClientRequest() {
               <button>{busy ? "Saving your reply…" : request.status === "received" ? "Send the update to the firm" : "Send to the firm"}</button>
             </fieldset>
           </form>
-          {request.status === "received" && (
+          {request.status === "received" && request.rescan && (
             <details>
               <summary>Retry attachment scanning</summary>
               <p>Select the same original files if scanning was interrupted or the firm needs a fresh scan. This cannot add new documents or change your reply.</p>

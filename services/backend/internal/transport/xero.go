@@ -253,6 +253,42 @@ func registerXero(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
+// xeroRowsInsert saves ledger rows ($2, xero.Ledger's rows as JSON) for snapshot $1.
+const xeroRowsInsert = `INSERT INTO xero_transaction_rows(snapshot_id,kind,provider_id,txn_date,currency,amount,record)
+ SELECT $1::bigint,r."Kind",r."ProviderID",r."Date"::date,NULLIF(r."Currency",''),NULLIF(r."Amount",''),r."Record" FROM jsonb_to_recordset($2::jsonb) AS r("Kind" text,"ProviderID" text,"Date" text,"Currency" text,"Amount" text,"Record" jsonb)
+ ON CONFLICT DO NOTHING`
+
+// BackfillXeroRows gives each close's newest Xero capture of its month that holds transactions but was saved before
+// ledger rows were, its rows for search. It runs once per worker start, one snapshot at a time.
+func BackfillXeroRows(ctx context.Context, db *sql.DB) {
+	after := "0"
+	for ctx.Err() == nil {
+		var id string
+		var payload []byte
+		err := db.QueryRowContext(ctx, `SELECT s.id::text,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period WHERE s.id>$1::bigint AND s.payload ? 'transactions'
+ AND NOT EXISTS(SELECT 1 FROM xero_snapshots n WHERE n.close_id=s.close_id AND n.period=s.period AND n.id>s.id)
+ AND NOT EXISTS(SELECT 1 FROM xero_transaction_rows t WHERE t.snapshot_id=s.id) ORDER BY s.id LIMIT 1`, after).Scan(&id, &payload)
+		if err == sql.ErrNoRows {
+			return
+		}
+		if err != nil {
+			log.Print("Xero search rows could not be backfilled: ", err)
+			return
+		}
+		after = id
+		rows, _, _, _, e := xero.Ledger(payload)
+		if e != nil {
+			log.Print("Xero search rows could not be read from snapshot ", id)
+			continue
+		}
+		if raw, _ := json.Marshal(rows); len(rows) > 0 {
+			if _, err = db.ExecContext(ctx, xeroRowsInsert, id, string(raw)); err != nil {
+				log.Print("Xero search rows could not be saved for snapshot ", id, ": ", err)
+			}
+		}
+	}
+}
+
 // captureXero saves a connected organisation's Trial Balance as at the close's month end.
 func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, actor string) error {
 	access, tenant, err := xeroAccess(ctx, db, org, id)
@@ -295,9 +331,7 @@ func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, acto
 	if err = tx.QueryRowContext(ctx, `INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,exceptions) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6,$7) RETURNING id::text`, closeID, id, tenant, period, string(payload), actor, findings).Scan(&snapshot); err != nil {
 		return failed
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO xero_transaction_rows(snapshot_id,kind,provider_id,txn_date,currency,amount,record)
- SELECT $1::bigint,r."Kind",r."ProviderID",r."Date"::date,NULLIF(r."Currency",''),NULLIF(r."Amount",''),r."Record" FROM jsonb_to_recordset($2::jsonb) AS r("Kind" text,"ProviderID" text,"Date" text,"Currency" text,"Amount" text,"Record" jsonb)
- ON CONFLICT DO NOTHING`, snapshot, ledger); err != nil {
+	if _, err = tx.ExecContext(ctx, xeroRowsInsert, snapshot, ledger); err != nil {
 		return failed
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM xero_transaction_rows t USING xero_snapshots s WHERE t.snapshot_id=s.id AND s.close_id::text=$1 AND s.id<$2::bigint`, closeID, snapshot); err != nil {
