@@ -47,7 +47,6 @@ export function RequestCard({ closeId, outcome, live, onConfirm }: { closeId: st
         No draft needs information from the client now. <Link to={requests}>Write a specific request in Requests →</Link>
       </p>,
     );
-  const current = shown;
   async function submit() {
     setBusy(true);
     setFailure("");
@@ -64,22 +63,22 @@ export function RequestCard({ closeId, outcome, live, onConfirm }: { closeId: st
   return card(
     <>
       <p>
-        It asks about {current.workpapers.length} draft{current.workpapers.length === 1 ? "" : "s"}:
+        It asks about {shown.workpapers.length} draft{shown.workpapers.length === 1 ? "" : "s"}:
       </p>
       <ul>
-        {current.workpapers.map((p) => (
+        {shown.workpapers.map((p) => (
           <li key={p.id}>
             {p.kind} · draft #{p.id} · {p.review_state.replaceAll("_", " ")}
           </li>
         ))}
       </ul>
-      {current.more > 0 && <p>And {current.more} more; select them in Requests.</p>}
+      {shown.more > 0 && <p>And {shown.more} more; select them in Requests.</p>}
       <p>The wording it would save:</p>
-      <blockquote style={{ whiteSpace: "pre-line" }}>{current.body}</blockquote>
+      <blockquote style={{ whiteSpace: "pre-line" }}>{shown.body}</blockquote>
       <label>
-        <input type="checkbox" checked={checked === current.digest} onChange={(e) => setChecked(e.target.checked ? current.digest : "")} /> Save this wording as a request draft. Nothing is approved or sent.
+        <input type="checkbox" checked={checked === shown.digest} onChange={(e) => setChecked(e.target.checked ? shown.digest : "")} /> Save this wording as a request draft. Nothing is approved or sent.
       </label>
-      <button type="button" className="primary" disabled={busy || checked !== current.digest} onClick={() => void submit()}>
+      <button type="button" className="primary" disabled={busy || checked !== shown.digest} onClick={() => void submit()}>
         {busy ? "Saving…" : "Save request draft"}
       </button>
     </>,
