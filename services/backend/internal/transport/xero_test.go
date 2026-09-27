@@ -122,6 +122,9 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 			if endpoint == "Invoices" && r.URL.Query().Get("Statuses") == "AUTHORISED" {
 				records = append(records, map[string]any{"Type": "ACCPAY", "InvoiceID": "b-1", "InvoiceNumber": "B-1", "Status": "AUTHORISED", "Date": "2026-08-01T00:00:00", "DueDate": "2026-09-01T00:00:00", "Contact": map[string]string{"ContactID": "c-1", "Name": "Harbor Insurance"}, "CurrencyCode": "NZD", "AmountDue": 80})
 			}
+			if endpoint == "Invoices" && r.URL.Query().Get("Statuses") == "AUTHORISED,PAID" {
+				records = append(records, map[string]any{"Type": "ACCPAY", "InvoiceID": "b-9", "InvoiceNumber": "B-9", "Status": "PAID", "Date": "2026-09-12T00:00:00", "Contact": map[string]string{"ContactID": "c-9", "Name": "Harbor Printing"}, "CurrencyCode": "NZD", "Total": 40})
+			}
 			return reply(200, map[string]any{endpoint: records, "pagination": map[string]int{"page": 1, "pageSize": 1000, "itemCount": len(records)}})
 		}
 		return reply(404, map[string]string{})
@@ -215,6 +218,19 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 		_, err = db.Exec(`UPDATE xero_connections SET access_expires_at=now()-interval '1 minute' WHERE id=$1`, id)
 		must(err)
 		call("user_accountant", september, map[string]any{"action": "snapshot", "connection_id": id, "confirmed": true}, 200)
+	}
+	// Each capture with transactions keeps its supported ledger rows for search, and only the newest capture's.
+	ledgerRows := func() (newest, older int) {
+		t.Helper()
+		must(db.QueryRow(`SELECT count(*) FILTER (WHERE t.snapshot_id=(SELECT max(id) FROM xero_snapshots WHERE close_id=$1)),count(*) FILTER (WHERE t.snapshot_id<>(SELECT max(id) FROM xero_snapshots WHERE close_id=$1)) FROM xero_transaction_rows t JOIN xero_snapshots s ON s.id=t.snapshot_id WHERE s.close_id=$1 AND t.record->'VendorRef'->>'name'='Harbor Printing' AND t.record->>'DocNumber'='B-9'`, september).Scan(&newest, &older))
+		return
+	}
+	if newest, older := ledgerRows(); newest != 1 || older != 0 {
+		t.Fatalf("the capture with transactions keeps its ledger rows: %d %d", newest, older)
+	}
+	call("user_accountant", september, map[string]any{"action": "snapshot", "connection_id": id, "confirmed": true}, 200)
+	if newest, older := ledgerRows(); newest != 1 || older != 0 {
+		t.Fatalf("a newer capture replaces the older capture's ledger rows: %d %d", newest, older)
 	}
 	var sealed []byte
 	must(db.QueryRow(`SELECT credential FROM xero_connections WHERE id=$1`, id).Scan(&sealed))

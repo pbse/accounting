@@ -31,7 +31,7 @@ func searchSnippet(text, word string) string {
 	return string(runes[start:min(start+200, len(runes))])
 }
 
-const searchScope = "documents, drafts, the latest QuickBooks transaction capture, procedures and review decisions, up to 8 of each; Xero records are not searched"
+const searchScope = "documents (including Stripe report documents), drafts, the supported ledger rows of the latest QuickBooks and Xero transaction captures, procedures and review decisions, up to 8 of each"
 
 // searchWork finds literal matches in the closes the caller can access (one close when closeID is set). It reads only,
 // under a statement timeout, and every snippet is redacted like a client reply.
@@ -66,6 +66,10 @@ func searchWork(ctx context.Context, db *sql.DB, r *http.Request, closeID, query
  COALESCE(t.record->'VendorRef'->>'name',t.record->'CustomerRef'->>'name',t.record->'EntityRef'->>'name',''),''
  FROM c JOIN LATERAL (SELECT z.id FROM quickbooks_entity_syncs z JOIN evidence v ON v.id=z.evidence_id AND v.close_id=z.close_id AND v.superseded_by IS NULL WHERE z.close_id=c.id AND z.state='completed' AND z.connection_id=COALESCE(` + quickbooks.ReadingConnection("c.id") + `,z.connection_id) ORDER BY z.id DESC LIMIT 1) s ON true
  JOIN quickbooks_transaction_rows t ON t.sync_id=s.id WHERE (t.kind||' '||t.provider_id||' '||t.record::text) ILIKE ALL($5::text[]) ORDER BY t.txn_date DESC,t.provider_id LIMIT 8`},
+		{"xero", closes + `SELECT c.id::text,c.entity||' · '||c.period,t.provider_id,'Xero '||t.kind||' '||COALESCE(NULLIF(t.record->>'DocNumber',''),t.provider_id)||' · '||t.txn_date::text||' · captured '||COALESCE(t.amount,'')||' '||COALESCE(t.currency,''),
+ COALESCE(t.record->'VendorRef'->>'name',t.record->'CustomerRef'->>'name',t.record->'EntityRef'->>'name',''),''
+ FROM c JOIN LATERAL (SELECT z.id FROM xero_snapshots z WHERE z.close_id=c.id AND z.period=c.period ORDER BY z.id DESC LIMIT 1) s ON true
+ JOIN xero_transaction_rows t ON t.snapshot_id=s.id WHERE ('xero '||t.kind||' '||t.provider_id||' '||t.record::text) ILIKE ALL($5::text[]) ORDER BY t.txn_date DESC,t.provider_id LIMIT 8`},
 		{"procedure", closes + `, p AS (SELECT DISTINCT ON (lower(client_entity),kind) id,client_entity,kind,instructions,enabled,created_at FROM procedure_versions WHERE organization_id=$1 ORDER BY lower(client_entity),kind,id DESC)
  SELECT (SELECT max(c.id)::text FROM c WHERE p.client_entity='' OR lower(c.entity)=lower(p.client_entity)),CASE WHEN p.client_entity='' THEN 'All clients' ELSE p.client_entity END,p.id::text,p.kind||' procedure',
  p.instructions,''
@@ -99,6 +103,8 @@ func searchWork(ctx context.Context, db *sql.DB, r *http.Request, closeID, query
 				hit.Title, hit.Href = title+" draft #"+id, base+"/workpapers/"+url.PathEscape(id)
 			case "transaction":
 				hit.Href = base + "?tab=evidence#quickbooks-ledger"
+			case "xero":
+				hit.Kind, hit.Href = "transaction", base+"?tab=evidence#xero"
 			case "procedure":
 				hit.Href = base + "?tab=settings"
 			case "decision":
