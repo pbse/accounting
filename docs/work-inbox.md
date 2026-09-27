@@ -184,6 +184,8 @@ The firm's Work page opens with a morning brief (`GET /v1/closes/morning`, MCP `
 - **In the past 24 hours:** month-end snapshots the schedule captured, new drafts prepared (a person's revisions and hand-saved drafts are not counted), and carried schedules approved under standing approvals (matched exactly to their grant and granter). It is a rolling day, not "since you last looked".
 - **Needs a person today:** each close's drafts to approve or fix, documents to confirm, failed documents to retry, a missing month-end snapshot for an ended month (QuickBooks or Xero), and Daily Books questions new since the close was last reviewed. Closes are ranked by how much is waiting and the top 20 are shown, with the total. The brief says how many other closes have none of these waiting; tie-out and changes stay on each close.
 
+Below it, **Handed to the agent** lists the delegated closes you can see and where each stands ([close goals](close-coordinator.md#hand-the-close-to-the-agent)).
+
 ## Attention inbox
 
 **Attention** in the sidebar (`GET /v1/closes/attention`) lists what needs the signed-in person across the unsigned closes they can access (all of the firm's with firm access, otherwise their assigned clients), grouped by close and newest first. Nothing is stored as a task: each item is read from current state and disappears when that state changes.

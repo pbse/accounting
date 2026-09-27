@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link } from "react-router";
 import { askAssistant } from "../dashboard/assistantStore";
+import { Avatar, Icon } from "../dashboard/Icon";
 import { workspaceRequest } from "./workspace";
 
 type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
@@ -432,6 +433,85 @@ function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueO
       <p className="assistant-note">Handing over needs the workpapers:review permission.</p>
       {error && <p role="alert">{error}</p>}
     </>
+  );
+}
+
+type Delegated = { id: string; close_id: string; entity: string; period: string; finish: Finish; due_on: string; state: Goal["state"]; author: string; handed: number; summary: { needs?: number; ready?: boolean; signoff?: string; as_of?: string } };
+
+// delegatedState words where a delegated close stands, from what the agent last found, as its card does.
+function delegatedState(g: Delegated): [string, string] {
+  const s = g.summary;
+  if (!s.as_of) return ["status info", "Updating…"];
+  if (s.signoff === "reopen_required") return ["status warn", "Needs reopening"];
+  if (s.signoff === "signed_off") return ["status ok", "Signed off"];
+  if (g.finish === "review" && g.state === "reached") return ["status ok", "Ready for review"];
+  if (s.needs) return ["status warn", `${s.needs} thing${s.needs === 1 ? " needs" : "s need"} a person`];
+  if (s.signoff === "open" && s.ready) return ["status warn", "Ready to sign off"];
+  return ["status info", "The agent is working"];
+}
+
+// DelegatedCloses is Work's list of every close handed to the agent that you can see, those needing a person first.
+export function DelegatedCloses({ refresh, client }: { refresh: number; client: string }) {
+  const [list, setList] = useState<{ goals: Delegated[]; more: boolean }>();
+  const [error, setError] = useState("");
+  // The agent updates each close about once a minute, so the list reads it again as often.
+  useEffect(() => {
+    let live = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = () =>
+      workspaceRequest(`/goals?client=${encodeURIComponent(client)}`)
+        .then((data: { goals: Delegated[]; more: boolean }) => {
+          if (!live) return;
+          setList(data);
+          setError("");
+        })
+        .catch((e) => live && setError(e instanceof Error ? e.message : "Delegated closes are unavailable."))
+        .finally(() => live && (timer = setTimeout(load, 60_000)));
+    void load();
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [refresh, client]);
+  if (error) return <p role="alert">{error}</p>;
+  if (!list?.goals.length) return null;
+  return (
+    <section aria-label="Handed to the agent">
+      <div className="section-title">
+        <h2>Handed to the agent</h2>
+        {list.more && <small>Showing {list.goals.length}. Filter by client or month to see the rest.</small>}
+      </div>
+      <div className="rows">
+        {list.goals.map((g) => {
+          const [tone, state] = delegatedState(g);
+          // Progress older than ten minutes says when the agent last looked, so it is not taken as current.
+          const asOf = g.summary.as_of ? new Date(g.summary.as_of) : undefined;
+          const stale = asOf && Date.now() - asOf.getTime() > 600_000 ? asOf : undefined;
+          return (
+            <Link className="row" key={g.id} to={`/dashboard/closes/${g.close_id}`}>
+              <span className="row-main">
+                <Avatar label={g.entity} />
+                <span>
+                  <strong>
+                    {g.entity} · {monthName(g.period)}
+                  </strong>
+                  <small>
+                    To get it {finishes[g.finish]}
+                    {g.due_on && ` by ${new Date(`${g.due_on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}`} · handed over by {g.author}
+                    {g.handed > 0 && ` · ${g.handed} with teammates`}
+                  </small>
+                </span>
+              </span>
+              <span className={tone}>
+                {state}
+                {stale && ` · as of ${stale.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}
+              </span>
+              <Icon name="arrow" size={16} />
+            </Link>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
