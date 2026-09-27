@@ -6,6 +6,7 @@ import { CreditApplications } from "./CreditApplications";
 import { Brief } from "./Brief";
 import { CarryForward } from "./CarryForward";
 import { Coordinator } from "./Coordinator";
+import { GoalPanel } from "./Goal";
 import { EmailReplies } from "./EmailReplies";
 import { Aging } from "./Aging";
 import { Matching } from "./Matching";
@@ -222,6 +223,7 @@ export default function ClientClose() {
       </nav>
       {tab === "overview" && (
         <div className="stack">
+          <GoalPanel key={`goal-${close.id}`} closeId={close.id} />
           <Brief key={`brief-${close.id}-${papers.map((paper) => paper.id + paper.review_state).join()}`} closeId={close.id} />
           <Coordinator key={`coordinator-${close.id}`} closeId={close.id} />
           <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />

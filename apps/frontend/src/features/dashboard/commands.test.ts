@@ -32,6 +32,8 @@ test("commands ask the assistant or open the screen that does the work", async (
   assert.equal((await run("/explain")).asked, "What blocks sign-off?");
   assert.equal((await run("/compare Rent")).asked, "What changed in Rent from last month?");
   assert.equal((await run("/prepare")).asked, "Prepare this close");
+  assert.equal((await run("/delegate")).asked, "Get this close ready for review");
+  assert.equal((await run("/delegate Friday")).asked, "Get this close ready for review by Friday");
   assert.equal((await run("/stop")).asked, "Stop this close's unresolved work");
   assert.equal((await run("/request")).navigated, "/dashboard/closes/7?tab=requests");
   assert.equal((await run("/rehearse")).navigated, "/dashboard/closes/7?tab=signoff");

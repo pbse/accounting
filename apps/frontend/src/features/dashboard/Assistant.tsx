@@ -2,14 +2,15 @@ import { useAuth } from "@workos-inc/authkit-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { authKitClientId } from "../auth/Auth";
+import { GoalCard, localDate } from "../closes/Goal";
 import { useUnlocked, workspaceRequest } from "../closes/workspace";
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
-import { nextReview, takePending, usePending } from "./assistantStore";
+import { askAssistant, nextReview, takePending, usePending } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
 import { Icon } from "./Icon";
 
-type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction; outcome?: Outcome | null };
+type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate"; due_on?: string; outcome?: Outcome | null };
 
 function readOpen() {
   try {
@@ -43,6 +44,16 @@ function Panel() {
   useEffect(() => {
     if (asked && !open) toggle(true);
   }, [asked]);
+  // A link such as /dashboard/closes/7?ask=… asks that close's assistant once.
+  const navigate = useNavigate();
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const question = params.get("ask");
+    if (!question || !closeId) return;
+    params.delete("ask");
+    navigate({ search: params.toString() }, { replace: true });
+    askAssistant(question, closeId);
+  }, [location.search, closeId]);
   const toggleButton = useRef<HTMLButtonElement>(null);
   const opened = useRef(open);
   useEffect(() => {
@@ -109,7 +120,8 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
     setBusy(true);
     setError("");
     try {
-      const data = await workspaceRequest(path, body);
+      // The member's own date resolves day names such as "by Friday".
+      const data = await workspaceRequest(path, { ...body, today: localDate() });
       if (asked !== generation.current) return;
       setMessages(data.messages);
       setLive(data.live ?? []);
@@ -122,7 +134,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
     }
   }
   // A confirmation holds the composer, so no other answer can replace the card's result while it runs.
-  async function confirm(id: string, body: { digest: string; reason: string }) {
+  async function confirm(id: string, body: Record<string, string>) {
     if (busy) throw new Error("Wait for the current answer, then confirm.");
     const asked = ++generation.current;
     setBusy(true);
@@ -177,14 +189,20 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
         {messages.length === 0 && (
           <li className="assistant-hint">
             {closeId
-              ? "Ask where this close stands, what blocks sign-off, which balances don't tie, what changed from last month or what exceptions the ledger shows, or ask it to prepare, recheck or stop this close's work."
-              : "Ask what needs you today, what is ready for review or what is blocked. Open a client close to ask about it."}
+              ? "Say “Get this close ready for review by Friday” to hand it to the agent, or ask where it stands, what blocks sign-off, which balances don't tie, what changed from last month or what exceptions the ledger shows."
+              : "Ask what needs you today, what is ready for review or what is blocked, or name a client to hand it to the agent (“Get Acme ready for review by Friday”)."}
           </li>
         )}
         {messages.map((m, i) => (
           <li key={m.id} className={m.role}>
             <p>{m.body}</p>
-            {m.action && closeId && <ActionCard closeId={closeId} action={m.action} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />}
+            {m.action &&
+              closeId &&
+              (m.action === "delegate" ? (
+                <GoalCard closeId={closeId} dueOn={m.due_on ?? ""} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+              ) : (
+                <ActionCard closeId={closeId} action={m.action} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+              ))}
             {m.role === "assistant" && i === messages.length - 1 && live.length > 0 && (
               <ul>
                 {live.map((line, n) => (

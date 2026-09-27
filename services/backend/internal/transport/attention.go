@@ -11,7 +11,10 @@ import (
 )
 
 // attentionKinds are the events that need a person; running, queued, waiting and finished work never is one.
-var attentionKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "release", "send", "email"}
+var attentionKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "release", "send", "email", "goal"}
+
+// undeliveredEmail is SQL for an email m, the latest for its request, that did not reach the client.
+const undeliveredEmail = `(m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))`
 
 // waitingRequest is SQL for a request q that is the latest one of work still waiting on the client and has no link reply.
 const waitingRequest = `EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client' AND NOT EXISTS(SELECT 1 FROM request_jobs n WHERE n.job_id=rj.job_id AND n.request_id>rj.request_id))
@@ -57,7 +60,12 @@ const attentionQuery = `WITH scope AS (
  UNION ALL
  SELECT 'email:'||m.id||':'||m.state||':'||COALESCE(m.delivery,''),'email',d.close_id,m.created_at,'The email for request #'||q.id||' was not delivered',''
   FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN LATERAL (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m ON true
-  WHERE d.close_id IN (SELECT id FROM scope) AND (m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>'')) AND ` + waitingRequest + `
+  WHERE d.close_id IN (SELECT id FROM scope) AND ` + undeliveredEmail + ` AND ` + waitingRequest + `
+ UNION ALL
+ SELECT 'goal:'||g.id||':'||CASE g.state WHEN 'reached' THEN floor(extract(epoch FROM g.reached_at))::text ELSE 'stopped' END,'goal',g.close_id,COALESCE(g.reached_at,g.finished_at),
+  CASE g.state WHEN 'reached' THEN 'Every uploaded document has a draft ready for review' ELSE g.events->-1->>'text' END,''
+  FROM close_goals g WHERE g.close_id IN (SELECT id FROM scope) AND g.author=$3
+  AND (g.state='reached' OR (g.state='stopped' AND g.events->-1->>'actor' NOT IN ($3,'agent') AND g.finished_at>now()-interval '14 days'))
 )
 SELECT v.key,v.kind,v.close_id::text,v.at,v.text,v.workpaper,s.entity,s.period,s.due_on,s.priority,s.owner,mk.read_at IS NOT NULL,mk.snoozed_until
 FROM events v JOIN scope s ON s.id=v.close_id LEFT JOIN attention_marks mk ON mk.organization_id=$1 AND mk.subject=$3 AND mk.key=v.key

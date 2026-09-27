@@ -154,6 +154,8 @@ Approved optional email setup and recovery: [Resend delivery](docs/email-deliver
 
 In-app assistant that answers from your scoped reads: [context, history and boundaries](docs/chat.md).
 
+Hand a close to the agent until it is ready for review: [close goals](docs/close-coordinator.md#hand-the-close-to-the-agent).
+
 Close-wide scope and recovery: [coordinator flow](docs/close-coordinator.md) · [operations and local restore rehearsal](docs/operations.md).
 
 QuickBooks per-client setup: [sandbox OAuth and account snapshots](docs/quickbooks-onboarding.md).

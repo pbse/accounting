@@ -6,6 +6,7 @@ export const commands: Command[] = [
   { name: "explain", description: "Explain a balance that doesn't tie, or what blocks sign-off", close: true, argument: "account" },
   { name: "compare", description: "Compare with last month, optionally for one account", close: true, argument: "account" },
   { name: "find", description: "Find documents, drafts, transactions, procedures or review decisions", argument: "words" },
+  { name: "delegate", description: "Hand a close to the agent until it's ready for review", close: true, argument: "day" },
   { name: "prepare", description: "Preview and start preparing a close", close: true },
   { name: "request", description: "Draft a consolidated client request", close: true },
   { name: "review", description: "Open the next draft ready for review" },
@@ -48,6 +49,9 @@ export async function runCommand(command: Command, argument: string, ctx: Comman
     case "find":
       if (!argument) return "Type what to find after /find.";
       ctx.ask(`Find ${argument}`, close);
+      return "";
+    case "delegate":
+      ctx.ask(`Get this close ready for review${argument ? ` by ${argument}` : ""}`, close);
       return "";
     case "prepare":
       ctx.ask("Prepare this close", close);
