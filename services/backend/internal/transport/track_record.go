@@ -94,7 +94,8 @@ func trackRecord(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now().UTC()
 		from := time.Date(now.Year(), now.Month()-11, 1, 0, 0, 0, 0, time.UTC).Format("2006-01")
-		scope := `c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND c.period>=$4`
+		access := `c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))`
+		scope := access + ` AND c.period>=$4`
 		shown := `WITH clients AS (SELECT DISTINCT lower(c.entity) AS client FROM client_closes c WHERE ` + scope + ` ORDER BY 1 LIMIT 201), shown AS (SELECT client FROM clients ORDER BY client LIMIT 200) `
 		var total, unlinked int
 		err := db.QueryRowContext(r.Context(), shown+`SELECT (SELECT count(*) FROM clients),(SELECT count(*) FROM workpapers w JOIN client_closes c ON c.id=w.close_id JOIN shown s ON s.client=lower(c.entity) WHERE `+scope+` AND w.created_by IS NOT NULL)`, organization(r), firmAccess(r), subject(r), from).Scan(&total, &unlinked)
@@ -188,7 +189,7 @@ func trackRecord(db *sql.DB) http.HandlerFunc {
 		// Written-answer attempts on closes this member can open, over 30 days; a limit hit has no time.
 		var asked, kept int
 		var median *float64
-		if err = db.QueryRowContext(r.Context(), `SELECT count(*),count(*) FILTER (WHERE a.outcome='kept'),percentile_cont(0.5) WITHIN GROUP (ORDER BY a.latency_ms) FILTER (WHERE a.latency_ms IS NOT NULL)/1000 FROM assistant_answers a JOIN client_closes c ON c.id=a.close_id WHERE `+scope+` AND a.created_at>now()-interval '30 days'`, organization(r), firmAccess(r), subject(r), from).Scan(&asked, &kept, &median); err != nil {
+		if err = db.QueryRowContext(r.Context(), `SELECT count(*),count(*) FILTER (WHERE a.outcome='kept'),percentile_cont(0.5) WITHIN GROUP (ORDER BY a.latency_ms) FILTER (WHERE a.latency_ms IS NOT NULL)/1000 FROM assistant_answers a JOIN client_closes c ON c.id=a.close_id WHERE `+access+` AND a.created_at>now()-interval '30 days'`, organization(r), firmAccess(r), subject(r)).Scan(&asked, &kept, &median); err != nil {
 			problem(w, 503, "Track record is unavailable.")
 			return
 		}

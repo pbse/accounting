@@ -744,6 +744,10 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR SHARE`, org).Scan(&enabled); err == nil && enabled {
 			err = tx.QueryRowContext(r.Context(), `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, org, author).Scan(&member)
 		}
+		// Access to the close is read again too, since a written answer can take seconds.
+		if err == nil && member && closeID != "" {
+			err = tx.QueryRowContext(r.Context(), closeAccess, closeID, org, firmAccess(r), author).Scan(&member)
+		}
 		if err != nil || !member {
 			problem(w, 403, "Your firm membership changed. Nothing was saved.")
 			return

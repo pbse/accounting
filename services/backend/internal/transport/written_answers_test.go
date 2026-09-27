@@ -40,7 +40,7 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	must(err)
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`, org)
 	must(err)
-	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2024-06') RETURNING id::text`, org).Scan(&alpha))
 	_, err = db.Exec(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Betamax Holdings','2026-09')`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO close_scopes(close_id,scope,actor) VALUES($1,'{"description":"Card statements for 4222 2222 2222 2 and the lease\\nBank login: owner, password: hunter2","required_papers":[],"external_steps":[]}','fixture')`, alpha)
@@ -66,9 +66,9 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 		Support    []support `json:"support"`
 	}
 	var respond func(reads map[string]string) modelAnswer
-	// events, when set, replaces the streamed events; revoke removes the member while the model is answering.
+	// events, when set, replaces the streamed events; revoke runs while the model is answering.
 	var events []string
-	revoke := false
+	revoke := ""
 	original := http.DefaultTransport
 	defer func() { http.DefaultTransport = original }()
 	http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
@@ -86,8 +86,8 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 		json.Unmarshal(raw, &sent)
 		json.Unmarshal([]byte(sent.Input[1].Content), &context)
 		readsSent = context.Reads
-		if revoke {
-			_, err := db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',false,'Left the firm','fixture')`, org)
+		if revoke != "" {
+			_, err := db.Exec(revoke, org)
 			must(err)
 		}
 		output, _ := json.Marshal(respond(context.Reads))
@@ -216,16 +216,21 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	// A member removed while the model is answering sees none of its text, and nothing is saved.
 	var before, after int
 	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1`, org).Scan(&before))
-	respond, revoke = func(reads map[string]string) modelAnswer { return answer("status", headline(reads)) }, true
+	respond, revoke = func(reads map[string]string) modelAnswer { return answer("status", headline(reads)) }, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',false,'Left the firm','fixture')`
 	if denied := string(call("user_a", nil, "/v1/closes/"+alpha+"/chat", map[string]string{"text": question}, 403)); strings.Contains(denied, "delta") {
 		t.Fatalf("a removed member gets no streamed text: %s", denied)
 	}
-	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1`, org).Scan(&after))
-	revoke = false
 	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Back','fixture')`, org)
 	must(err)
+	// Losing the client while an answer that never streams is written also saves nothing.
+	respond, revoke = func(map[string]string) modelAnswer { return modelAnswer{false, "", []support{}} }, `INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',false,'Moved','fixture')`
+	call("user_a", nil, "/v1/closes/"+alpha+"/chat", map[string]string{"text": question}, 403)
+	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1`, org).Scan(&after))
+	revoke = ""
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Back','fixture')`, org)
+	must(err)
 	if after != before {
-		t.Fatalf("nothing is saved for a removed member: %d %d", before, after)
+		t.Fatalf("nothing is saved for a member who lost access: %d %d", before, after)
 	}
 	spent := calls
 	if body, _, _ := ask("Where does this close stand?"); strings.HasPrefix(body, help) || calls != spent {
