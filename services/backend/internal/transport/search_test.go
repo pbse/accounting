@@ -124,7 +124,7 @@ func TestSearchFindsMatchesOnlyInAccessibleCloses(t *testing.T) {
 			t.Fatalf("nothing from a client the member cannot access: %+v", h)
 		}
 	}
-	if !strings.Contains(firm.Searched, "Xero records are not searched") {
+	if !strings.Contains(firm.Searched, "the supported ledger rows of the latest QuickBooks and Xero transaction captures") || !strings.Contains(firm.Searched, "Stripe report documents") {
 		t.Fatalf("the search states what it covered: %s", firm.Searched)
 	}
 	if hits := get("/v1/closes/search?q="+url.QueryEscape("50_off"), 200).Results; len(hits) != 1 {
@@ -173,5 +173,79 @@ func TestSearchFindsMatchesOnlyInAccessibleCloses(t *testing.T) {
 	firmChat := chat("/v1/closes/chat", "Search for Zurich")
 	if last := firmChat.Messages[len(firmChat.Messages)-1]; len(last.Citations) != 0 || strings.Contains(last.Body, "Zurich") || len(firmChat.LiveCitations) == 0 {
 		t.Fatalf("firm-wide matches are shown once and never stored: %+v %+v", last, firmChat.LiveCitations)
+	}
+}
+
+func TestSearchFindsTheNewestXeroCaptureRows(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_XeroSearch" + rand.Text()
+	var alpha, beta string
+	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Xero search fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`, org)
+	must(err)
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Beta','2026-09') RETURNING id::text`, org).Scan(&beta))
+	defer func() {
+		for _, q := range []string{`DELETE FROM xero_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM xero_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	capture := func(close, entity, payee string) string {
+		t.Helper()
+		var connection, snapshot string
+		if err := db.QueryRow(`SELECT id::text FROM xero_connections WHERE close_id=$1`, close).Scan(&connection); err == sql.ErrNoRows {
+			must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,$3,'fixture','active',$4,now(),'t') RETURNING id::text`, close, org, entity, rand.Text()).Scan(&connection))
+		}
+		must(db.QueryRow(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor) VALUES($1,$2,'t','2026-09',$3,'{}','fixture') RETURNING id::text`, close, connection, rand.Text()).Scan(&snapshot))
+		if payee != "" {
+			_, err := db.Exec(`INSERT INTO xero_transaction_rows(snapshot_id,kind,provider_id,txn_date,currency,amount,record) VALUES($1,'Bill','b-9','2026-09-12','NZD','40.00',jsonb_build_object('DocNumber','B-9','VendorRef',jsonb_build_object('name',$2::text)))`, snapshot, payee)
+			must(err)
+		}
+		return snapshot
+	}
+	capture(alpha, "Alpha", "Harbor Printing (older capture)")
+	capture(alpha, "Alpha", "Harbor Printing")
+	capture(beta, "Beta", "Harbor Printing")
+	store := savedCloses(db, strings.Repeat("a", 32))
+	search := func(q string) []searchHit {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/search?q="+url.QueryEscape(q), nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org}))
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		var out struct {
+			Results []searchHit `json:"results"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("search %q: %d %s", q, w.Code, w.Body.String())
+		}
+		return out.Results
+	}
+	hits := search("harbor printing")
+	if len(hits) != 1 || hits[0].Kind != "transaction" || hits[0].Title != "Xero Bill B-9 · 2026-09-12 · captured 40.00 NZD" || hits[0].Href != "/dashboard/closes/"+alpha+"?tab=evidence#xero" || hits[0].Close != "Alpha · 2026-09" || !strings.Contains(hits[0].Snippet, "Harbor Printing") || strings.Contains(hits[0].Snippet, "older") {
+		t.Fatalf("only the newest capture of an accessible client is found, linked to its Xero evidence: %+v", hits)
+	}
+	if hits := search("xero bill"); len(hits) != 1 {
+		t.Fatalf("a Xero row is found by the word Xero: %+v", hits)
+	}
+	capture(alpha, "Alpha", "")
+	if hits := search("harbor printing"); len(hits) != 0 {
+		t.Fatalf("a newer capture without transactions leaves no older rows in the results: %+v", hits)
 	}
 }

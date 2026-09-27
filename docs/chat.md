@@ -45,13 +45,17 @@ Confirming needs the checkbox, the `workpapers:review` permission, and a 1–500
 
 Closing the assistant does not stop the work: the jobs run as they would from the close page. Reopening shows each of the card's jobs with its current state, any error or changed source, and links to its drafts, read from Work narrowed to those jobs (`GET /v1/closes/{id}/work?jobs=`, up to 100 job numbers; a card that stopped more points to Work for the rest). Older cards show only what they started.
 
+### Request card
+
+A message that starts with **draft** and otherwise names only a client request ("Draft a client request", "draft the request") answers with a request card (migration 090); "Draft the close" does not. The card reads `GET /v1/closes/{id}/requests/candidates`: the close's current drafts (no later draft revises them) that a consolidated request would ask about, oldest first and at most 20 (the rest are counted and chosen in Requests), because they have no sources, a changed source, blockers, or a requested change with a reviewer's note; and the exact wording [Requests](client-request-links.md) would save for them. Its checkbox is tied to one digest over those drafts, that wording and the latest saved request draft. Confirming (author only, once) reads the candidates again, refuses a changed digest or an empty list, and saves that wording through the Requests route's own freshness check, which refuses it if the evidence or reviews changed meanwhile. The card then says the draft was saved, or that the latest draft already has this wording, and links to Requests to edit, approve and deliver it. Nothing is approved or sent from the card.
+
 ## Search
 
-`GET /v1/closes/search?q=` (across your closes) and `GET /v1/closes/{id}/search?q=` (one close) find literal matches of every word you type (3–100 characters, up to six words; more are refused), up to 8 of each kind:
+`GET /v1/closes/search?q=` (across your closes) and `GET /v1/closes/{id}/search?q=` (one close) find literal matches of every word you type (3–100 characters, up to six words; more are refused), up to 8 of each kind (transactions: up to 8 from QuickBooks and 8 from Xero):
 
-- **Documents** by name or extracted text, current versions only; a client's reply is marked as a reply. Each links to the document on the close's Evidence tab.
+- **Documents** by name or extracted text, current versions only, including saved Stripe reports (each report is one document, not individual transactions); a client's reply is marked as a reply. Each links to the document on the close's Evidence tab.
 - **Drafts**, current versions only, linked to the draft.
-- **Transactions** in each close's latest QuickBooks transaction capture whose evidence is still current, shown with the captured amount and payee and linked to the QuickBooks ledger evidence on the Evidence tab; Xero records are not searched yet.
+- **Transactions**: the supported ledger rows of each close's latest QuickBooks transaction capture whose evidence is still current, and of its newest Xero capture for the month (migration 089; the rows the close's exceptions read, so refunds, other payment types and open items are not included). Each shows the captured amount and payee and links to the QuickBooks ledger or Xero evidence on the Evidence tab; a Xero result's title starts with "Xero". A Xero capture saved before this change is searched once the close is captured again.
 - **Procedures**: the current version of each enabled procedure for your clients or all clients.
 - **Review decisions**: decision, reviewer, date and note, linked to the draft.
 
@@ -70,7 +74,7 @@ Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type 
 | `/find <words>` | Searches, in this close or across your closes |
 | `/delegate [day]` | Asks for the card handing the close to the agent, ready for review by that day |
 | `/prepare`, `/stop` | Asks for the close's prepare or stop card |
-| `/request` | Opens the close's client requests |
+| `/request` | Asks for the close's [request card](#request-card) |
 | `/review` | Opens the first draft in the review queue |
 | `/rehearse`, `/export` | Opens the close's sign-off tab: the saved-proposal rehearsal and the package downloads |
 

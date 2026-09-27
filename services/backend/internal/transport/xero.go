@@ -274,15 +274,37 @@ func captureXero(ctx context.Context, db *sql.DB, org, id, closeID, period, acto
 	}
 	// Findings are recorded with the snapshot, as each QuickBooks capture records its own, so Daily books can show what is new.
 	var findings sql.NullString
+	ledger := "[]"
 	if rows, open, _, _, e := xero.Ledger(payload); e == nil {
 		found := append(quickbooks.FindExceptions(rows), xeroWording(quickbooks.OpenItemExceptions(open, month.AddDate(0, 1, -1)))...)
 		raw, _ := json.Marshal(append([]quickbooks.Exception{}, found...))
 		findings = sql.NullString{String: string(raw), Valid: true}
+		raw, _ = json.Marshal(append([]quickbooks.TransactionRow{}, rows...))
+		ledger = string(raw)
 	}
+	failed := refusal{503, "The Trial Balance was read but could not be saved. Capture again."}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return failed
+	}
+	defer tx.Rollback()
 	// The insert's foreign key waits on the close lock Daily books' Mark reviewed takes, so a review never passes over it.
-	if _, err = db.ExecContext(ctx, `WITH s AS (INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,exceptions) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6,$9))
- UPDATE xero_connections SET home_currency=$7,fiscal_year_start=$8 WHERE id=$2`, closeID, id, tenant, period, string(payload), actor, currency, fiscalStart, findings); err != nil {
-		return refusal{503, "The Trial Balance was read but could not be saved. Capture again."}
+	// Search reads the newest capture's ledger rows; each capture removes only older captures' rows, so one committing
+	// late never removes a newer capture's.
+	var snapshot string
+	if err = tx.QueryRowContext(ctx, `INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,exceptions) VALUES($1,$2,$3,$4,encode(sha256(convert_to($5::jsonb::text,'UTF8')),'hex'),$5,$6,$7) RETURNING id::text`, closeID, id, tenant, period, string(payload), actor, findings).Scan(&snapshot); err != nil {
+		return failed
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO xero_transaction_rows(snapshot_id,kind,provider_id,txn_date,currency,amount,record)
+ SELECT $1::bigint,r."Kind",r."ProviderID",r."Date"::date,NULLIF(r."Currency",''),NULLIF(r."Amount",''),r."Record" FROM jsonb_to_recordset($2::jsonb) AS r("Kind" text,"ProviderID" text,"Date" text,"Currency" text,"Amount" text,"Record" jsonb)
+ ON CONFLICT DO NOTHING`, snapshot, ledger); err != nil {
+		return failed
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM xero_transaction_rows t USING xero_snapshots s WHERE t.snapshot_id=s.id AND s.close_id::text=$1 AND s.id<$2::bigint`, closeID, snapshot); err != nil {
+		return failed
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE xero_connections SET home_currency=$2,fiscal_year_start=$3 WHERE id::text=$1`, id, currency, fiscalStart); err != nil || tx.Commit() != nil {
+		return failed
 	}
 	return nil
 }
