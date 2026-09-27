@@ -79,6 +79,7 @@ export function SaveDraft({
       >
         {busy ? "Saving…" : saved ? "Saved" : "Save draft to close"}
       </button>
+      {(revises || work) && <p className="note">A revision or a job's draft is saved from linked evidence below, so its sources stay attached.</p>}
       </>}
       <h3>Prepare from linked evidence</h3>
       <p>

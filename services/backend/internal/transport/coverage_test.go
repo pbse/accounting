@@ -120,6 +120,9 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 	if bytes.Contains(response, []byte("job_ids")) || bytes.Contains(response, []byte("recipient")) {
 		t.Fatal("internal request scope exposed")
 	}
+	if !bytes.Contains(response, []byte(`"rescan":false`)) {
+		t.Fatal("no scan retry is offered before any attachment")
+	}
 	// Unknown fields cannot redirect a scoped request to another close.
 	call("POST", "/v1/client-request", approved.Token, map[string]any{"body": "answer", "confirmed": true, "close_id": "other"}, 400)
 	submit := func(want int) {
@@ -150,6 +153,9 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 	must(db.QueryRow(`SELECT count(*) FROM client_attachments WHERE request_id=$1`, approved.ID).Scan(&count))
 	if count != 2 {
 		t.Fatal("attachment replay duplicated bytes")
+	}
+	if !bytes.Contains(call("GET", "/v1/client-request", approved.Token, nil, 200), []byte(`"rescan":true`)) {
+		t.Fatal("a scan retry is offered while an attachment waits for its scan")
 	}
 	for _, job := range jobs {
 		var state string

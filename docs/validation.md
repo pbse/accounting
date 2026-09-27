@@ -2124,3 +2124,9 @@ Code review: GPT-6 Sol found one low issue. Under React's StrictMode in developm
 A delta review confirmed the fix closes the finding. A second link to the same document cannot reach a mounted panel, because the links are on the Overview tab and returning to Workpapers mounts the panel afresh. After a failed load, the next load applies the pending link.
 
 Not verified: previewing and applying, which need a hosted firm session and the QuickBooks sandbox; they are unchanged.
+
+## Small fixes from the browser pass (2026-09-27)
+
+Request: fix the smaller issues the browser pass noted. The command palette now runs a command without an argument on one Enter (a close-scoped one outside a close still asks for the close first). A revision's or a job's disabled **Save draft to close** says the draft is saved from linked evidence below. Each proposed statement row shows its quoted line under the description, not only as a hover title. The client page offers **Retry attachment scanning** only while one of the request's attachments is still queued, scanning or failed (the client read now returns `rescan`). An earlier request that was never delivered reads "Replaced by request #N · never sent" instead of "Approved · not sent". On a screen at least 1,100 px wide the open assistant sits beside the page instead of covering its right edge.
+
+Tests: `TestCoverageRequestsQuarantineAndResolution` checks that no scan retry is offered before any attachment and one is while an attachment waits for its scan (a flag that is always false fails it). Browser (headless Chrome, local stack): `/prepare` ran from the palette on one Enter; the page kept 400 px beside the open assistant and none once it closed; statement rows showed their quoted lines; the revision note appeared; the replaced request read as replaced.

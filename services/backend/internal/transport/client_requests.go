@@ -315,8 +315,13 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Request unavailable.")
 			return
 		}
+		var rescan bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_attachments WHERE request_id::text=$1 AND state IN ('queued','scanning','failed'))`, requestID).Scan(&rescan); err != nil {
+			problem(w, 503, "Request unavailable.")
+			return
+		}
 		reply := func(status string) {
-			jsonReply(w, 200, map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed})
+			jsonReply(w, 200, map[string]any{"status": status, "entity": entity, "period": period, "body": body, "expires_at": expires, "questions": questions, "open": active, "removed": removed, "rescan": rescan})
 		}
 		if r.Method == "GET" {
 			switch {

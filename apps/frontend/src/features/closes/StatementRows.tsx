@@ -112,7 +112,7 @@ export function StatementRows({ closeId, evidenceId, onConfirmed }: { closeId: s
                 <tr key={n} className={r.issue ? "warn" : undefined} title={r.quote}>
                   <td><input type="number" min={1} max={pageCount} value={r.page} onChange={(e) => set(n, { page: Number(e.target.value) })} /></td>
                   <td><input type="date" value={r.date} onChange={(e) => set(n, { date: e.target.value })} /></td>
-                  <td><input value={r.description} maxLength={300} onChange={(e) => set(n, { description: e.target.value })} /></td>
+                  <td><input value={r.description} maxLength={300} onChange={(e) => set(n, { description: e.target.value })} />{r.quote && <small className="note">“{r.quote}”</small>}</td>
                   <td><input value={r.amount} inputMode="decimal" onChange={(e) => set(n, { amount: e.target.value })} />{r.issue && <small role="alert"> {r.issue}</small>}</td>
                   <td><input type="checkbox" aria-label={`Row ${n + 1} checked against the original`} checked={r.checked} onChange={(e) => set(n, { checked: e.target.checked })} /></td>
                   <td>
