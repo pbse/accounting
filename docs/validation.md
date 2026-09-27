@@ -1973,3 +1973,11 @@ Tests, each seen failing without its fix and passing with it:
 `go vet ./...`, gofmt and `go test ./internal/documents ./internal/preparation ./internal/transport` pass. The shared local test database was brought up to migration 085 first.
 
 Not verified: live model behaviour on redacted text.
+
+## Captures after reconnecting (2026-09-27)
+
+Request: after a reconnect, resume the work the lapsed connection held up (roadmap review, step 3). Tracing it showed QuickBooks already does: reconnecting (disconnect, connect, confirm) inserts a new connection row, the scheduler's 24-hour window is per connection, so this and last month's open closes are queued on the next five-minute pass, and each new capture sends the agent's openai proposals waiting for confirmation back for a fresh reading. Xero did not: its daily window is the close's own `xero_refresh_at`, which a scheduled attempt stopped by the lapsed token had just set, so after reconnecting the client's closes waited up to a day for their next Trial Balance. Confirming a Xero organisation now sets the connection's `changed_at`, the existing change hint, so the next sweep captures those closes once 30 minutes have passed since their last attempt. The reconnect description in onboarding now says what actually resumes; posting grants stay bound to the old connection by design.
+
+Tests: `TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance`: a current-month close whose last scheduled attempt was an hour ago is not due before the organisation is confirmed and is due after; without the change it stays not due. The other Xero tests pass unchanged.
+
+Not changed: a Xero capture does not send waiting proposals back for a fresh reading as a QuickBooks capture does.

@@ -165,10 +165,30 @@ func TestXeroConnectsOneOrganisationAndCapturesTheTrialBalance(t *testing.T) {
 	}
 	call("user_accountant", september, map[string]any{"action": "callback", "connection_id": id, "code": "c1", "state": state, "confirmed": true}, 409)
 	call("user_accountant", september, map[string]any{"action": "confirm", "connection_id": id, "tenant_id": "t-old", "confirmed": true}, 409)
+	// A scheduled attempt an hour ago (as when a lapsed token stopped it) does not hold the next capture back
+	// once the organisation is confirmed again.
+	if err = db.QueryRow(`SELECT id::text FROM client_closes WHERE organization_id=$1 AND entity='Xero client' AND period=$2`, org, time.Now().UTC().Format("2006-01")).Scan(&due); err == sql.ErrNoRows {
+		must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Xero client',$2) RETURNING id::text`, org, time.Now().UTC().Format("2006-01")).Scan(&due))
+	}
+	_, err = db.Exec(`UPDATE client_closes SET xero_refresh_at=now()-interval '1 hour' WHERE id::text=$1`, due)
+	must(err)
+	isDue := func() (ok bool) {
+		t.Helper()
+		must(db.QueryRow(`SELECT EXISTS(SELECT 1 FROM client_closes c WHERE c.id::text=$1 AND `+xeroDue+`)`, due).Scan(&ok))
+		return ok
+	}
+	if isDue() {
+		t.Fatal("nothing is due before the organisation is confirmed")
+	}
 	status = call("user_accountant", september, map[string]any{"action": "confirm", "connection_id": id, "tenant_id": "t-b", "confirmed": true}, 200)
 	if connection = status["connection"].(map[string]any); connection["state"] != "active" || connection["tenant_name"] != "Harbor Holdings Ltd" {
 		t.Fatalf("the chosen organisation is connected: %v", connection)
 	}
+	if !isDue() {
+		t.Fatal("confirming the organisation makes the client's open close due for a fresh capture")
+	}
+	_, err = db.Exec(`UPDATE client_closes SET xero_refresh_at=NULL WHERE id::text=$1`, due)
+	must(err)
 	status = call("user_accountant", september, map[string]any{"action": "snapshot", "connection_id": id, "confirmed": true}, 200)
 	latest, _ := json.Marshal(status["latest"])
 	if len(dates) != 1 || dates[0] != "2026-09-30" || tenantHeaders[0] != "t-b" || !strings.Contains(string(latest), `"currency":"NZD"`) || !strings.Contains(string(latest), `"ytd_debit":"1250.00"`) {
