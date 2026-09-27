@@ -38,13 +38,15 @@ func TestPortfolioGoalsReadDaysAndModifiers(t *testing.T) {
 		"Show my clients due Friday":                               {action: "show", mine: true, due: "2026-10-02", compare: "by"},
 		"show me failed work":                                      {action: "show", state: "failed"},
 		"list closes waiting on the client":                        {action: "show", state: "waiting_client"},
+		"show closes waiting on statements":                        {action: "show", state: "waiting_statements"},
+		"list my clients waiting for bank statements":              {action: "show", mine: true, state: "waiting_statements"},
 	} {
 		if got, err := parsePortfolioGoal(text, monday); err != nil || got != want {
 			t.Errorf("%q: %+v %v, want %+v", text, got, err, want)
 		}
 	}
 	// A hand-over's instructions are whole phrases; anything else, or two finish lines, is refused rather than dropped.
-	for _, text := range []string{"show Acme", "prepare Acme", "prepare due someday", "stop waiting on statements",
+	for _, text := range []string{"show Acme", "prepare Acme", "prepare due someday", "stop waiting on statements", "prepare closes waiting on statements", "show closes waiting on bank", "stop work waiting on statements and waiting on the client",
 		"hand over my clients and sign", "hand over my clients for sign", "hand over my clients for review for sign-off", "hand over my clients to the client",
 		"hand over my clients and email them", "delegate over my clients", "hand over my clients ready", "hand over my clients signed review", "prepare my clients for review"} {
 		if g, err := parsePortfolioGoal(text, monday); err == nil {
@@ -305,5 +307,90 @@ func TestPortfolioHandsClosesToTheAgent(t *testing.T) {
 	must(json.Unmarshal(w.Body.Bytes(), &unseen))
 	if len(unseen.Operations) != 1 || !slices.ContainsFunc(unseen.Operations[0].Items, func(i portfolioItem) bool { return i.State == "pending" }) || slices.ContainsFunc(unseen.Operations[0].Items, func(i portfolioItem) bool { return i.DueOn != "" || i.CloseID != "" }) {
 		t.Fatalf("a close the member cannot see shows neither its name nor its deadline: %+v", unseen.Operations)
+	}
+}
+
+func TestPortfolioListsClosesWaitingOnStatements(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_Statements" + rand.Text()
+	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Statement wait fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`, org)
+	must(err)
+	defer func() {
+		for _, q := range []string{`DELETE FROM client_request_links WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`, `DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM coverage_bindings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	closeFor := func(entity string) (id string) {
+		t.Helper()
+		must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,$2,'2026-09') RETURNING id::text`, org, entity).Scan(&id))
+		return
+	}
+	waitingJob := func(close, kind string) {
+		t.Helper()
+		var source, job string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'doc.txt',$2,'x','fixture') RETURNING id::text`, close, rand.Text()).Scan(&source))
+		must(db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','waiting_client','fixture') RETURNING id::text`, close, rand.Text()).Scan(&job))
+		_, err := db.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal) VALUES($1,$2,jsonb_build_object('kind',$3::text))`, job, source, kind)
+		must(err)
+	}
+	// request binds the close's bank account in a capture; latest adds a newer capture afterwards when false.
+	request := func(close string, used, current bool) {
+		t.Helper()
+		var connection, snapshot, draft, requestID string
+		must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'1' FROM client_closes WHERE id=$1 RETURNING id::text`, close, rand.Text()).Scan(&connection))
+		var ledger, binding string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.json',$2,'{}','fixture') RETURNING id::text`, close, rand.Text()).Scan(&ledger))
+		coverage := `{"period":"2026-09","source_id":"` + ledger + `","coverage":[{"account_id":"35","name":"Checking","kind":"reconciliation"},{"account_id":"41","name":"Prepaid insurance","kind":"prepaid"}]}`
+		must(db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'1',$3,$4,now(),'fixture') RETURNING id::text`, close, connection, rand.Text(), coverage).Scan(&snapshot))
+		must(db.QueryRow(`INSERT INTO coverage_bindings(close_id,snapshot_id,account_id,job_ids,reason,actor) VALUES($1,$2,'35','[]','Synthetic','fixture') RETURNING id::text`, close, snapshot).Scan(&binding))
+		must(db.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the September bank statement.','[]','d','fixture') RETURNING id::text`, close).Scan(&draft))
+		must(db.QueryRow(`INSERT INTO work_requests(draft_id,revision,recipient,approved_by,coverage_scope) VALUES($1,0,'client@example.test','fixture',jsonb_build_object('snapshot_id',$2::text,'bindings',jsonb_build_array(jsonb_build_object('account_id','35','id',$3::text)))) RETURNING id::text`, draft, snapshot, binding).Scan(&requestID))
+		_, err := db.Exec(`INSERT INTO client_request_links(digest,request_id,issued_by,expires_at,used_at) VALUES($1,$2,'fixture',now()+interval '7 days',CASE WHEN $3 THEN now() END)`, rand.Text(), requestID, used)
+		must(err)
+		if !current {
+			_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'1',$3,$4,now(),'fixture')`, close, connection, rand.Text(), coverage)
+			must(err)
+		}
+	}
+	statementJob, prepaidJob, openRequest, staleRequest, answered := closeFor("Statement job"), closeFor("Prepaid job"), closeFor("Open request"), closeFor("Stale request"), closeFor("Answered request")
+	waitingJob(statementJob, "reconciliation")
+	waitingJob(prepaidJob, "prepaid")
+	request(openRequest, false, true)
+	request(staleRequest, false, false)
+	request(answered, true, true)
+	rebound := closeFor("Changed binding")
+	request(rebound, false, true)
+	_, err = db.Exec(`UPDATE work_requests q SET coverage_scope=jsonb_set(q.coverage_scope,'{bindings,0,id}','"0"') FROM request_drafts d WHERE d.id=q.draft_id AND d.close_id::text=$1`, rebound)
+	must(err)
+	store := savedCloses(db, strings.Repeat("a", 32))
+	raw, _ := json.Marshal(map[string]string{"text": "Show closes waiting on statements"})
+	r := httptest.NewRequest("POST", "/v1/closes/portfolio", bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"clients:all"}}))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	store.ServeHTTP(w, r)
+	var op portfolioOperation
+	must(json.Unmarshal(w.Body.Bytes(), &op))
+	listed := []string{}
+	for _, i := range op.Items {
+		listed = append(listed, i.CloseID)
+	}
+	if w.Code != 200 || len(listed) != 2 || !slices.Contains(listed, statementJob) || !slices.Contains(listed, openRequest) || !strings.Contains(op.Scope, "statement reconciliation work waiting on the client") {
+		t.Fatalf("only statement reconciliation work waiting on the client and a current, open request for a bank account are listed: %d %v %s", w.Code, listed, op.Scope)
 	}
 }
