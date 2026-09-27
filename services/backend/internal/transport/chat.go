@@ -634,8 +634,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if closeID != "" && delegate {
 			extra = unknown
 		}
-		if _, err := parsePortfolioGoal(in.Text, time.Now().UTC()); closeID == "" && err == nil {
-			reply = chatReply{body: "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts.", citations: []chatCitation{{"Open this goal in Work", "/dashboard?goal=" + url.QueryEscape(in.Text)}}}
+		if goal, err := parsePortfolioGoal(in.Text, time.Now().UTC()); closeID == "" && err == nil {
+			body := "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts."
+			if goal.action == "show" {
+				body = "Work lists exactly which of your closes this selects."
+			}
+			reply = chatReply{body: body, citations: []chatCitation{{"Open this goal in Work", "/dashboard?goal=" + url.QueryEscape(in.Text)}}}
 		} else if len(targets) == 1 {
 			// Only a generic reply is kept; the close itself is linked once, like any firm-wide answer.
 			reply, linked = chatReply{body: "I found the close you mean. Open it to see my plan and hand it over."}, targets

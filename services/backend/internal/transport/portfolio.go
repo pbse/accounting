@@ -23,7 +23,7 @@ type portfolioGoal struct {
 	mine, visible                       bool
 }
 
-var errPortfolioGoal = errors.New("Try a goal such as “prepare my clients due Friday”, “hand over my clients due Friday”, “recheck failed work”, “stop work waiting on the client” or “prepare all visible”. A goal selects closes by: my clients, due on, before or by a day or date, work waiting on the client, failed work, or the inbox's current view.")
+var errPortfolioGoal = errors.New("Try a goal such as “prepare my clients due Friday”, “show my clients due Friday”, “hand over my clients due Friday”, “recheck failed work”, “stop work waiting on the client” or “prepare all visible”. A goal selects closes by: my clients, due on, before or by a day or date, work waiting on the client, failed work, or the inbox's current view.")
 
 var portfolioFiller = strings.Fields("all the closes close clients client work everything jobs that are is with and of in")
 
@@ -49,6 +49,12 @@ func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 		}
 	case slices.Contains([]string{"prepare", "recheck", "stop"}, words[0]):
 		g.action = words[0]
+	case words[0] == "show" || words[0] == "list":
+		// A listing selects closes the same way and saves nothing.
+		g.action = "show"
+		if next(1) == "me" {
+			start = 2
+		}
 	default:
 		return g, errPortfolioGoal
 	}
@@ -308,6 +314,18 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 		}
 		more := len(closes) > 100
 		closes = closes[:min(len(closes), 100)]
+		if goal.action == "show" {
+			items := []portfolioItem{}
+			for _, c := range closes {
+				result := "no due date"
+				if day, e := time.Parse("2006-01-02", c.due); e == nil {
+					result = "due " + day.Format("Mon 2 Jan 2006")
+				}
+				items = append(items, portfolioItem{CloseID: c.id, Label: c.label, State: "listed", Result: result, DueOn: c.due})
+			}
+			jsonReply(w, 200, portfolioOperation{Action: "show", Goal: in.Text, Scope: goal.describe(in.View, in.Client), HasMore: more, Items: items})
+			return
+		}
 		var opID string
 		if err = tx.QueryRowContext(r.Context(), `INSERT INTO portfolio_operations(organization_id,author,action,goal,scope,has_more,finish) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')) RETURNING id::text`, organization(r), subject(r), goal.action, in.Text, goal.describe(in.View, in.Client), more, goal.finish).Scan(&opID); err != nil {
 			problem(w, 503, "Could not save this goal.")
