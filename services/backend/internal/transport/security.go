@@ -90,14 +90,15 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			out[key] = json.RawMessage(raw)
 		}
 		var calls, alerts, email int
-		var written bool
+		var written, firmWritten bool
 		var connected map[string]int
 		var raw []byte
 		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT sum(calls) FROM model_calls WHERE organization_id=$1 AND day>(now() AT TIME ZONE 'UTC')::date-30),0),
  (SELECT assistant_model_answers FROM organizations WHERE id=$1),
+ (SELECT assistant_firm_answers FROM organizations WHERE id=$1),
  (SELECT count(*) FROM operations_alert_deliveries WHERE organization_id=$1 AND status='accepted' AND finished_at>now()-interval '30 days'),
  (SELECT count(*) FROM email_connections WHERE organization_id=$1 AND enabled),
- jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &written, &alerts, &email, &raw)
+ jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &written, &firmWritten, &alerts, &email, &raw)
 		if err != nil || json.Unmarshal(raw, &connected) != nil {
 			problem(w, 503, "Security center unavailable.")
 			return
@@ -106,6 +107,9 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		answers := "Written assistant answers are off."
 		if written {
 			answers = "Written assistant answers are on: a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions, and an open draft."
+		}
+		if firmWritten {
+			answers += " Firm-wide written answers are on: a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue and blocked work."
 		}
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.
 		out["providers"] = []map[string]any{
