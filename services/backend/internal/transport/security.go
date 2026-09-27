@@ -105,7 +105,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		set := func(key string) bool { return os.Getenv(key) != "" }
 		answers := "Written assistant answers are off."
 		if written {
-			answers = "Written assistant answers are on: a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions."
+			answers = "Written assistant answers are on: a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions, and an open draft."
 		}
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.
 		out["providers"] = []map[string]any{

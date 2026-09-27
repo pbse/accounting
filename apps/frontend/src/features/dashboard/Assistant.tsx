@@ -87,20 +87,12 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
-  const [written, setWritten] = useState(false);
   const generation = useRef(0);
   const list = useRef<HTMLOListElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   const waiting = usePending();
   const path = closeId ? `/${closeId}/chat` : "/chat";
-  useEffect(() => {
-    if (closeId)
-      workspaceRequest("/organization/policy").then(
-        (policy: { model_answers?: boolean }) => setWritten(!!policy.model_answers),
-        () => setWritten(false),
-      );
-  }, [closeId]);
   // A question from the palette is asked once the history has loaded, so its answer is the last thing shown.
   useEffect(() => {
     if (!loaded || busy) return;
@@ -266,7 +258,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
       </form>
       <p className="assistant-note">
         Answers come from saved work you can access. A card's action runs only after you confirm it, through the same checks as the close page; the assistant never approves, sends or posts anything.
-        {written && " Your firm lets it write an answer when none of its fixed reads matches: your question and this close's saved status, sign-off blockers, tie-out, changes and exceptions go to OpenAI, and the answer says it was written by the model."}
+        {" "}If your firm turns on written answers, a question in a client close that none of its fixed reads matches goes to OpenAI with this close's saved status, sign-off blockers, tie-out, changes, exceptions and any open draft, and the answer says it was written by the model.
       </p>
     </aside>
   );

@@ -43,7 +43,7 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
 	_, err = db.Exec(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Betamax Holdings','2026-09')`, org)
 	must(err)
-	_, err = db.Exec(`INSERT INTO close_scopes(close_id,scope,actor) VALUES($1,'{"description":"Card statements for 4222 2222 2222 2 and the lease","required_papers":[],"external_steps":[]}','fixture')`, alpha)
+	_, err = db.Exec(`INSERT INTO close_scopes(close_id,scope,actor) VALUES($1,'{"description":"Card statements for 4222 2222 2222 2 and the lease\\nBank login: owner, password: hunter2","required_papers":[],"external_steps":[]}','fixture')`, alpha)
 	must(err)
 	defer func() {
 		for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1`, `DELETE FROM close_scopes WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organization_policy_changes WHERE organization_id=$1`, `DELETE FROM model_calls WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
@@ -54,6 +54,7 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	t.Setenv("OPENAI_MODEL", "mock-only-model")
 	calls := 0
 	var payload string
+	var readsSent map[string]string
 	var respond func(reads map[string]string) map[string]any
 	original := http.DefaultTransport
 	defer func() { http.DefaultTransport = original }()
@@ -71,6 +72,7 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 		}
 		json.Unmarshal(raw, &sent)
 		json.Unmarshal([]byte(sent.Input[1].Content), &context)
+		readsSent = context.Reads
 		output, _ := json.Marshal(respond(context.Reads))
 		body, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}, nil
@@ -138,6 +140,10 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	}
 	if !strings.Contains(payload, `"store":false`) || !strings.Contains(payload, "untrusted data") || !strings.Contains(payload, "card number ending 1111 removed") || strings.Contains(payload, "4111 1111 1111 1111") || strings.Contains(payload, "Betamax") || strings.Contains(payload, "4222 2222 2222 2") || !strings.Contains(payload, "card number ending 2222 removed") || strings.Contains(payload, org) || strings.Contains(payload, "coverage_resolution") {
 		t.Fatalf("the model gets the redacted question and only this close's reads, unstored: %s", payload)
+	}
+	var readiness map[string]any
+	if json.Unmarshal([]byte(readsSent["blockers"]), &readiness) != nil || readiness["state"] == nil || strings.Contains(payload, "hunter2") {
+		t.Fatalf("a sign-in detail is removed from its own value and the rest of the read still arrives whole: %s", readsSent["blockers"])
 	}
 	for name, bad := range map[string]func(map[string]string) map[string]any{
 		"a quote the read does not hold": func(map[string]string) map[string]any { return answer("status", "Everything was approved and posted") },

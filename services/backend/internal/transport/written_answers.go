@@ -44,21 +44,26 @@ func writtenReply(ctx context.Context, db *sql.DB, org string, readRaw func(stri
 	if paperID != "" {
 		sources = append(sources, writtenSource{"draft", "/workpapers/" + url.PathEscape(paperID) + "?record=1", "Draft #" + paperID, base + "/workpapers/" + url.PathEscape(paperID), []string{"kind", "review_state", "paper"}})
 	}
-	// A read is sent whole or not at all, so the model never takes part of a list for all of it.
+	// A read is sent whole or not at all, so the model never takes part of a list for all of it. Each string in it is
+	// redacted on its own, so a removal never runs past the end of its value.
 	reads, sent := map[string]string{}, []string{}
 	for _, s := range sources {
 		raw, read := readRaw(s.path)
-		if all := map[string]json.RawMessage{}; read && len(s.keep) > 0 && json.Unmarshal([]byte(raw), &all) == nil {
-			kept := map[string]json.RawMessage{}
+		var value any
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.UseNumber()
+		read = read && decoder.Decode(&value) == nil
+		if all, isObject := value.(map[string]any); read && len(s.keep) > 0 {
+			kept := map[string]any{}
 			for _, k := range s.keep {
 				if v, found := all[k]; found {
 					kept[k] = v
 				}
 			}
-			b, _ := json.Marshal(kept)
-			raw = string(b)
+			value, read = kept, isObject
 		}
-		text, _ := documents.Redact(raw)
+		redacted, _ := json.Marshal(redactValues(value))
+		text := string(redacted)
 		switch {
 		case !read:
 			reads[s.name] = "unavailable: this read could not be made"
@@ -151,4 +156,22 @@ func writtenReply(ctx context.Context, db *sql.DB, org string, readRaw func(stri
 		}
 	}
 	return reply, "", true
+}
+
+// redactValues removes sensitive details from every string in a decoded JSON value.
+func redactValues(v any) any {
+	switch t := v.(type) {
+	case string:
+		clean, _ := documents.Redact(t)
+		return clean
+	case []any:
+		for i := range t {
+			t[i] = redactValues(t[i])
+		}
+	case map[string]any:
+		for k := range t {
+			t[k] = redactValues(t[k])
+		}
+	}
+	return v
 }
