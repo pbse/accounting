@@ -115,7 +115,7 @@ type TrackRow = {
 const share = (part: number, whole: number) => (whole === 0 ? "—" : `${part} of ${whole} (${Math.round((100 * part) / whole)}%)`);
 
 function TrackRecord() {
-  const [data, setData] = useState<{ window_from: string; clients: TrackRow[]; unlinked_human_drafts: number; has_more: boolean }>();
+  const [data, setData] = useState<{ window_from: string; clients: TrackRow[]; unlinked_human_drafts: number; has_more: boolean; assistant?: { asked: number; kept: number; median_seconds: number | null } }>();
   const [error, setError] = useState("");
   useEffect(() => {
     let live = true;
@@ -137,6 +137,12 @@ function TrackRecord() {
         confirmed every value the model gave. Drafts count once a person has judged them, by a recorded review decision or a revision. Rule-based readings,
         carried-forward and recurring work, and {data.unlinked_human_drafts} drafts people saved directly are not counted.
       </p>
+      {data.assistant && data.assistant.asked > 0 && (
+        <p>
+          Written assistant answers in the last 30 days, on closes you can open: {data.assistant.asked} asked, {data.assistant.kept} kept
+          {data.assistant.median_seconds !== null && `, typically ${data.assistant.median_seconds.toFixed(1)} s to write`}.
+        </p>
+      )}
       <div className="rows">
         <div className="rows-head">
           <span>Client</span>

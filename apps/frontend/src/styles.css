@@ -1487,6 +1487,16 @@ aside.assistant {
   margin-top: 0.3rem;
   font-size: 0.85rem;
 }
+.assistant-pending {
+  border: 1px dashed #b7791f;
+  border-radius: 10px;
+  padding: 0.6rem 0.8rem;
+  background: #fffaf0;
+}
+.assistant-pending p {
+  margin: 0.3rem 0 0;
+  white-space: pre-line;
+}
 .assistant-hint {
   color: var(--muted, #6b6b65);
 }
