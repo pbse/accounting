@@ -225,7 +225,23 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 			}
 		}
 		var target, targetEntity string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity`, entity, next, organization(r)).Scan(&target, &targetEntity)
+		// Opening next month counts against the firm's close limit, as when a person opens a close; one opened meanwhile
+		// is simply used.
+		err = tx.QueryRowContext(r.Context(), `SELECT id::text,entity FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3 FOR UPDATE`, organization(r), entity, next).Scan(&target, &targetEntity)
+		if err == sql.ErrNoRows {
+			var limit, count int
+			var opened bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT max_closes FROM organizations WHERE id=$1 AND enabled FOR UPDATE`, organization(r)).Scan(&limit); err == nil {
+				err = tx.QueryRowContext(r.Context(), `SELECT count(*),COALESCE(bool_or(lower(entity)=lower($2) AND period=$3),false) FROM client_closes WHERE organization_id=$1`, organization(r), entity, next).Scan(&count, &opened)
+			}
+			if err == nil && !opened && count >= limit {
+				problem(w, 429, "This firm has reached its close limit. Archive or retain existing work according to policy before opening another period.")
+				return
+			}
+			if err == nil {
+				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity`, entity, next, organization(r)).Scan(&target, &targetEntity)
+			}
+		}
 		if err != nil {
 			problem(w, 503, "Could not create the next close.")
 			return

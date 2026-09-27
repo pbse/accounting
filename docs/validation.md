@@ -1877,3 +1877,15 @@ Tests: `TestEndedMonthCountsFromTheFirstOfTheMonth`; `TestMonthlyHandOverOpensAn
 Local end to end (API and worker built from this branch, over HTTP): “Get this close ready for review” on Routine Co's September close became a card; confirming it with `every_month` handed September over and read back the routine (next month 2026-10, no due date). With the routine rewound two months in the database, the worker opened and handed over July at one sweep and August at the next, each goal marked as the routine's; August's close showed the routine's next month (2026-09) and what it needs; a blank stop reason was refused and a reason stopped the routine.
 
 Not verified: the card in a real browser; two workers sweeping the same routine at once (the lock order and unique indexes are the guard).
+
+## Carry-forward keeps the firm's close limit (2026-09-27)
+
+Request: the firm's close limit (docs/operations.md: "Close creation returns HTTP 429 when full") held for opening a close by hand and for the monthly hand-over, but carry-forward, including sign-off's automatic start of next month, created next month's close without it (found by the GPT-6 Sol code review of the monthly hand-over and routed to its own change). Carry-forward now locks next month's close if it exists; otherwise it locks the firm row, counts the firm's closes and refuses at the limit with the same 429 message, writing nothing. A close opened in the meantime is used rather than refused. The firm row is already taken later in the same transaction by the job-limit trigger, so the lock order stays close, then firm.
+
+Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `claude/carry-limit @ 3c03286`); both judged it real, undone work. Adopted: a close opened while carry-forward waited for the firm lock is not refused; only a missing close enters the limit check, and other lookup errors are reported; the firm lookup requires an enabled firm; the test also carries into an existing next close at the limit. The Gemini run also wrote an unrequested implementation into the worktree; it was saved aside and discarded, and this change was written independently.
+
+Code review: GPT-6 Sol (reasoning high) found no blocker or required finding; Gemini (agy-review, told it may not write, and the tree was checked unchanged afterwards) suggested a concurrent test of a close opened during the wait, left out because it needs goroutines and lock-wait polling for a one-condition guard, and a reshaped branch that saves no lines.
+
+Tests: `TestCarryForwardKeepsTheFirmCloseLimit` (its own firm, so no other package's tests share its close count): at the limit, carrying unresolved work into next month is refused with the close-limit message and opens nothing; with room it opens next month; back at the limit, carrying into that existing close still succeeds with the same close. Two mutations (the limit not enforced; an existing close not recognised) each fail it. `TestCarryForwardRoundingLineageAndFreshReview` still passes.
+
+Not verified: two requests opening the same next close at once (the recount after the firm lock is the guard).
