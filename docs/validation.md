@@ -2228,3 +2228,29 @@ Tests:
 - `TestScopedClientReplyResumesJob`: a draft saved with a trailing newline is approved from Work with the same wording.
 - `TestAssistantRequestCardSavesTheWordingItShowed` still passes.
 - Five mutations each fail a test: dropping the exclusion, or either creator from it; restoring the newline; comparing untrimmed.
+
+## Xero delegated closes and the firm-wide blocked count (2026-09-27)
+
+Request: two findings from a GPT-6 Sol review of the chat and close-goal experience, verified in the code before fixing:
+- A delegated close's card said "No ledger capture is linked, so this covers the uploaded documents only" for a Xero close with a Xero capture, because the goal reads account coverage from QuickBooks captures only.
+- The firm-wide "What's blocked?" answer counted the listed items, which Work caps at 100, instead of Work's own total. With 140 blocked items it said 100.
+
+A third claim was checked and found not to be a bug: written answers read exceptions from `/quickbooks/exceptions`, but despite its name that endpoint returns the Xero capture's exceptions whenever Xero is newest.
+
+What changed:
+- A close without a QuickBooks capture but with a Xero one now says account coverage is read from QuickBooks captures, so for this Xero close the card covers the uploaded documents only.
+- The blocked answer takes the number from Work's counts, and still lists five.
+- The assistant's prepare card and the Overview's preparation proposal, which said "No period ledger is linked", now say no QuickBooks account coverage is linked, which is also true of a Xero close.
+- Search answers say "Showing N matches", since search lists at most eight of each kind.
+
+Review: small and understood from the code, so the plan and diff went to GPT-6 Sol (reasoning high) together. It confirmed both fixes and the exceptions finding, and found three more wording issues on the same paths, all fixed:
+- two frontend messages still told a Xero close no ledger was linked;
+- search answers presented a capped list as a match count;
+- the new note read awkwardly.
+
+A delta review confirmed the fixes.
+
+Tests:
+- `TestFirmBlockedAnswerCountsEveryBlockedItem`, a unit test with a faked read returning 100 listed items and a total of 140: the answer says 140 and lists five.
+- `TestGoalNamesWhyAXeroCloseHasNoAccountCoverage`: a close with no capture still reads "No ledger capture is linked", and one with a Xero capture reads the Xero note.
+- Three mutations each fail a test.

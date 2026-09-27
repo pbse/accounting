@@ -127,7 +127,7 @@ export function ActionCard({ closeId, action, outcome, live, onConfirm }: { clos
               </li>
             ))}
           </ul>
-          {action === "prepare" && !status.coverage && <p>No period ledger is linked, so this covers the uploaded documents only.</p>}
+          {action === "prepare" && !status.coverage && <p>No QuickBooks account coverage is linked, so this covers the uploaded documents only.</p>}
           {action === "prepare" && status.coverage?.stale && <p role="alert">The ledger capture is stale. Recapture it before relying on account suggestions.</p>}
           {action === "stop" && (
             <label>

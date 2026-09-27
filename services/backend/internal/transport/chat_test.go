@@ -410,3 +410,14 @@ func TestAssistantCardsRunTheClosePagesOwnRoutes(t *testing.T) {
 		t.Fatalf("a phrase that is not a goal gets the firm-wide help, not a goal link: %+v", firm.Messages[len(firm.Messages)-1])
 	}
 }
+
+func TestFirmBlockedAnswerCountsEveryBlockedItem(t *testing.T) {
+	// Work lists at most 100 items, so the answer takes the number from its counts.
+	read := func(path string, out any) bool {
+		items := strings.Repeat(`{"entity":"Acme","period":"2026-09","source_name":"invoice.pdf"},`, 100)
+		return json.Unmarshal([]byte(`{"items":[`+strings.TrimSuffix(items, ",")+`],"counts":{"blocked":140}}`), out) == nil
+	}
+	if _, lines, _ := firmAnswer(read, "blocked", "What's blocked?"); len(lines) != 6 || lines[0] != "140 items are blocked." {
+		t.Fatalf("the blocked answer undercounts: %v", lines)
+	}
+}

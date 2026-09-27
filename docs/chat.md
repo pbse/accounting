@@ -29,7 +29,7 @@ Every answer comes from an existing read, made with your own permissions, and li
 | Firm-wide | find … | search, across your closes |
 | | what needs you today | the morning brief |
 | | the review queue | drafts ready for review |
-| | blocked work | Work's blocked view |
+| | blocked work | Work's blocked view (the count is Work's whole total; five are listed) |
 
 A follow-up that refers back ("that", "it", "same") and names no account keeps the account of your previous question in the same close conversation, when that question was the same kind (a tie-out after a tie-out, a change after a change); otherwise nothing carries over. A question that refers back without naming what to read ("and that one?") asks the previous question's read again.
 

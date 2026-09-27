@@ -277,9 +277,18 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	if err = json.Unmarshal(coverage, &ledger); err != nil {
 		return p, err
 	}
+	var xero bool
 	if ledger == nil {
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM xero_snapshots WHERE close_id=$1)`, closeID).Scan(&xero); err != nil {
+			return p, err
+		}
+	}
+	switch {
+	case ledger == nil && xero:
+		p.Notes = append(p.Notes, "Account coverage comes from QuickBooks captures, so for this Xero close only the uploaded documents are covered.")
+	case ledger == nil:
 		p.Notes = append(p.Notes, "No ledger capture is linked, so this covers the uploaded documents only.")
-	} else if ledger.Stale {
+	case ledger.Stale:
 		p.Notes = append(p.Notes, "The ledger capture is out of date. Capture it again before relying on its account suggestions.")
 	}
 	p.Ready = prepared > 0 && open == 0 && len(p.Needs) == 0
