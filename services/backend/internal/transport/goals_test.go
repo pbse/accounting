@@ -31,8 +31,20 @@ func TestChatDelegateIsOnlyAnAskToHandOverTheClose(t *testing.T) {
 		"Make the Acme Services books ready for review due this week":  "2026-09-27",
 		"Get this close ready for review by Friday, please, thank you": "2026-10-02",
 	} {
-		if due, extra, ok := chatDelegate(text, sunday, "Acme Services", "2026-09"); !ok || len(extra) > 0 || due != want {
-			t.Errorf("%q: got %q %v %v, want %q", text, due, extra, ok, want)
+		if finish, due, extra, ok := chatDelegate(text, sunday, "Acme Services", "2026-09"); !ok || len(extra) > 0 || due != want || finish != "review" {
+			t.Errorf("%q: got %q %q %v %v, want %q", text, finish, due, extra, ok, want)
+		}
+	}
+	// A request to get the close signed off finishes at sign-off; "the 10th" is the next 10th.
+	for text, want := range map[string]string{
+		"Get this close signed off by the 10th":              "2026-10-10",
+		"Close the books by Friday":                          "2026-10-02",
+		"Have Acme's September close signed-off by the 30th": "2026-09-30",
+		"Please hand this close to the agent to sign off":    "",
+		"Close this month by 2026-10-09":                     "2026-10-09",
+	} {
+		if finish, due, extra, ok := chatDelegate(text, sunday, "Acme Services", "2026-09"); !ok || len(extra) > 0 || due != want || finish != "signoff" {
+			t.Errorf("%q: got %q %q %v %v, want signoff %q", text, finish, due, extra, ok, want)
 		}
 	}
 	// A request with words the agent would not act on keeps them, so the reply can name them instead of dropping them.
@@ -43,9 +55,24 @@ func TestChatDelegateIsOnlyAnAskToHandOverTheClose(t *testing.T) {
 		"Get this close ready for review by Friday by Monday":                                 "by monday",
 		"Hand me the report": "me report",
 	} {
-		if _, extra, ok := chatDelegate(text, sunday, "Acme Services", "2026-09"); !ok || strings.Join(extra, " ") != want {
+		if _, _, extra, ok := chatDelegate(text, sunday, "Acme Services", "2026-09"); !ok || strings.Join(extra, " ") != want {
 			t.Errorf("%q: got %v %v, want the extra words %q", text, extra, ok, want)
 		}
+	}
+	// "Closed" describes a month, and "off" signs off only after "sign"; a review stays a review.
+	for text, want := range map[string]string{
+		"Get the closed month ready for review":              "review",
+		"Hand this close off to the agent":                   "review",
+		"Close the review by Friday":                         "review",
+		"Get this close sign-off ready by 2026-10-09 please": "signoff",
+	} {
+		if finish, _, extra, ok := chatDelegate(text, sunday, "Acme Services", "2026-09"); !ok || len(extra) > 0 || finish != want {
+			t.Errorf("%q: got %q %v %v, want %q", text, finish, extra, ok, want)
+		}
+	}
+	// On January 31, "the 30th" is March 30: February has none.
+	if day, _, ok := parseDay([]string{"the", "30th"}, 0, time.Date(2027, 1, 31, 0, 0, 0, 0, time.UTC)); !ok || day.Format("2006-01-02") != "2027-03-30" {
+		t.Errorf("the next 30th: %v %v", day, ok)
 	}
 	for _, text := range []string{
 		"Is this close ready for review?",
@@ -53,7 +80,7 @@ func TestChatDelegateIsOnlyAnAskToHandOverTheClose(t *testing.T) {
 		"Get this close ready for review by someday",
 		"Prepare this close",
 	} {
-		if due, extra, ok := chatDelegate(text, sunday, "Acme Services", "2026-09"); ok {
+		if _, due, extra, ok := chatDelegate(text, sunday, "Acme Services", "2026-09"); ok {
 			t.Errorf("%q is not a request to hand over the close (due %q, extra %v)", text, due, extra)
 		}
 	}
@@ -198,10 +225,10 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	s := read(alpha)
 	var actor string
 	must(db.QueryRow(`SELECT actor FROM close_preparations WHERE close_id::text=$1`, alpha).Scan(&actor))
-	if s.Goal == nil || s.Goal.State != "active" || s.Goal.DueOn != "2026-10-02" || s.Goal.Events[0].Text != "Handed over by user_a, to be ready for review by Fri 2 Oct 2026" || !strings.HasPrefix(lastEvent(s), "I brought 1 document into preparation as run #") || actor != "close goal #"+s.Goal.ID+" for user_a" {
+	if s.Goal == nil || s.Goal.State != "active" || s.Goal.DueOn != "2026-10-02" || s.Goal.Events[0].Text != "Handed over by user_a, to get it ready for review by Fri 2 Oct 2026" || !strings.HasPrefix(lastEvent(s), "I brought 1 document into preparation as run #") || actor != "close goal #"+s.Goal.ID+" for user_a" {
 		t.Fatalf("handing over records the goal and brings the documents into preparation as the agent: %+v %q", s.Goal, actor)
 	}
-	if len(s.Progress.Items) != 1 || s.Progress.Items[0].Status != "working" || s.Progress.Reached || len(s.Activity) != 2 || s.Activity[1].Text != s.Goal.Events[0].Text {
+	if len(s.Progress.Items) != 1 || s.Progress.Items[0].Status != "working" || s.Progress.Ready || len(s.Activity) != 2 || s.Activity[1].Text != s.Goal.Events[0].Text {
 		t.Fatalf("the unread document is in progress and the history shows both events, newest first: %+v %+v", s.Progress, s.Activity)
 	}
 	call("user_a", reviewer, "POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true}, 409)
@@ -227,7 +254,7 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	complete(job1, blocked)
 	complete(job2, draft(alpha, `{}`))
 	sweepCloseGoals(ctx, db)
-	if s = read(alpha); s.Goal.State != "active" || s.Progress.Reached || s.Progress.Items[0].Text != "Draft #"+blocked+" is blocked: Confirm the service period." {
+	if s = read(alpha); s.Goal.State != "active" || s.Progress.Ready || s.Progress.Items[0].Text != "Draft #"+blocked+" is blocked: Confirm the service period." {
 		t.Fatalf("a blocked draft is not ready for review: %+v", s.Progress.Items)
 	}
 	draft(alpha, `{"revises":"`+blocked+`"}`)
@@ -408,10 +435,229 @@ func TestFirmWideRequestLinksTheCloseItNames(t *testing.T) {
 	if _, links = ask("user_a", "Get Alpha Labs' August close ready for review"); len(links) != 0 {
 		t.Fatalf("another month is not this close: %+v", links)
 	}
+	if _, links = ask("user_a", "Get Alpha Labs signed off by Friday"); len(links) != 1 || links[0].Href != "/dashboard/closes/"+alpha+"?ask="+url.QueryEscape("Get this close signed off by 2026-10-02") {
+		t.Fatalf("a firm-wide link keeps the finish line: %+v", links)
+	}
 	if body, links = ask("user_a", "Get Alpha's September close ready for review by Friday. Use our approved procedures."); len(links) != 0 || !strings.Contains(body, "I don't act on other instructions, such as “use approved procedures”") {
 		t.Fatalf("an instruction the agent would not follow is named, not dropped: %q %+v", body, links)
 	}
 	if _, links = ask("user_b", "Get Alpha Labs ready for review"); len(links) != 0 {
 		t.Fatalf("a close the member cannot access is never linked: %+v", links)
+	}
+}
+
+func TestSignOffGoalCarriesTheCloseThroughSignOff(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	ctx := context.Background()
+	org := "org_Sign" + rand.Text()
+	var alpha string
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Sign-off fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`,
+		`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	defer func() {
+		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_scopes WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM sandbox_postings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT w.id FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1)`,
+			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	document := func(name string) string {
+		t.Helper()
+		tx, err := db.BeginTx(ctx, nil)
+		must(err)
+		defer tx.Rollback()
+		var source string
+		must(tx.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,'fixture') RETURNING id::text`, alpha, name, preparation.Digest([]byte(name)), "Invoice "+name).Scan(&source))
+		job, err := preparation.StartIntake(ctx, tx, alpha, source, "fixture")
+		must(err)
+		must(tx.Commit())
+		return job
+	}
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(method, path string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"workpapers:review"}}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s %v: %d %s", method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	type status struct {
+		Goal *struct {
+			State   string  `json:"state"`
+			Finish  string  `json:"finish"`
+			ReadyAt *string `json:"ready_at"`
+			Events  []struct {
+				Text string `json:"text"`
+			} `json:"events"`
+		} `json:"goal"`
+		Progress goalProgress `json:"progress"`
+		Activity []struct {
+			Text string `json:"text"`
+		} `json:"activity"`
+	}
+	read := func() status {
+		t.Helper()
+		var s status
+		must(json.Unmarshal(call("GET", "/v1/closes/"+alpha+"/goal", nil, 200), &s))
+		return s
+	}
+	last := func(s status) string { return s.Goal.Events[len(s.Goal.Events)-1].Text }
+	runs := func() int {
+		t.Helper()
+		var n int
+		must(db.QueryRow(`SELECT count(*) FROM close_preparations WHERE close_id::text=$1`, alpha).Scan(&n))
+		return n
+	}
+
+	job := document("insurance.pdf")
+	call("POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true, "finish": "sometime"}, 422)
+	var chat struct {
+		Messages []struct {
+			ID     string `json:"id"`
+			Action string `json:"action"`
+			DueOn  string `json:"due_on"`
+			Finish string `json:"finish"`
+		}
+	}
+	must(json.Unmarshal(call("POST", "/v1/closes/"+alpha+"/chat", map[string]string{"text": "Get this close signed off by the 10th", "today": "2026-09-27"}, 200), &chat))
+	card := chat.Messages[len(chat.Messages)-1]
+	if card.Action != "delegate" || card.Finish != "signoff" || card.DueOn != "2026-10-10" {
+		t.Fatalf("the card proposes sign-off by the 10th: %+v", card)
+	}
+	call("POST", "/v1/closes/"+alpha+"/chat/"+card.ID+"/confirm", map[string]string{"due_on": card.DueOn, "finish": card.Finish}, 200)
+	if s := read(); s.Goal.Finish != "signoff" || s.Goal.Events[0].Text != "Handed over by user_a, to get it signed off by Sat 10 Oct 2026" || s.Progress.Signoff != nil {
+		t.Fatalf("a sign-off goal carries its finish line, and sign-off waits for the documents: %+v %+v", s.Goal, s.Progress.Signoff)
+	}
+
+	// Drafts ready for review are a milestone, recorded once; approving them is the person's.
+	var paper string
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','sign-draft','{"proposal":{"lines":[]}}') RETURNING id::text`, alpha).Scan(&paper))
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='completed',workpaper_ids=jsonb_build_array($2::text),finished_at=now() WHERE id::text=$1`, job, paper)
+	must(err)
+	sweepCloseGoals(ctx, db)
+	sweepCloseGoals(ctx, db)
+	s := read()
+	milestones := 0
+	for _, e := range s.Goal.Events {
+		if strings.HasSuffix(e.Text, "Next: approvals and sign-off.") {
+			milestones++
+		}
+	}
+	if s.Goal.State != "active" || s.Goal.ReadyAt == nil || milestones != 1 || s.Progress.Items[0].Text != "Review and approve draft #"+paper+"." || !slices.Contains(s.Progress.Signoff.Needs, "Define the supported scope and required work before sign-off.") {
+		t.Fatalf("the milestone is recorded once and the goal lists approval and scope: %+v %+v", s.Goal, s.Progress)
+	}
+	// Work on a replaced document is not on the list, so sign-off still names it.
+	stale := document("stale.pdf")
+	var replacement string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'stale v2.pdf','sign-stale-v2','Replacement','fixture') RETURNING id::text`, alpha).Scan(&replacement))
+	_, err = db.Exec(`UPDATE evidence SET superseded_by=$2::bigint WHERE id=(SELECT source_id FROM preparation_intakes WHERE job_id::text=$1)`, stale, replacement)
+	must(err)
+	if s = read(); !slices.Contains(s.Progress.Signoff.Needs, "Work #"+stale+" is waiting evidence.") {
+		t.Fatalf("unfinished work on a replaced document still blocks sign-off: %+v", s.Progress.Signoff)
+	}
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='cancelled' WHERE id::text=$1`, stale)
+	must(err)
+	_, err = db.Exec(`INSERT INTO close_scopes(close_id,scope,actor) VALUES($1,jsonb_build_object('description','Prepaids','required_papers',jsonb_build_array($2::text),'external_steps','[]'::jsonb),'fixture')`, alpha, paper)
+	must(err)
+	if s = read(); len(s.Progress.Signoff.Needs) != 0 || s.Progress.Items[0].Status != "needs_you" {
+		t.Fatalf("a required draft still to approve is listed once, as its document: %+v", s.Progress)
+	}
+	_, err = db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,decision,note,actor,paper_digest) SELECT id,'approved','Checked','fixture',digest FROM workpapers WHERE id::text=$1`, paper)
+	must(err)
+	if s = read(); s.Progress.Items[0].Status != "prepared" || len(s.Progress.Signoff.Entries) != 1 || s.Progress.Signoff.Entries[0].Text != "Not posted in the app. Post it from the draft, or book it in the ledger yourself." {
+		t.Fatalf("an approved draft's entry shows it is not posted: %+v", s.Progress)
+	}
+	_, err = db.Exec(`INSERT INTO sandbox_postings(close_id,workpaper_id,source_key,realm,digest,journal,state,attempted_by,attempted_at,external_id,verified_at) VALUES($1,$2,'fixture','realm','fixture','{}','verified','fixture',now(),'J-7',now())`, alpha, paper)
+	must(err)
+	if s = read(); s.Progress.Signoff.Entries[0].Text != "Posted to the QuickBooks sandbox and confirmed by its readback (J-7)." {
+		t.Fatalf("a verified posting names its readback: %+v", s.Progress.Signoff.Entries)
+	}
+
+	// Sign-off reaches the goal only while it stands; a later change waits for a person to reopen the close.
+	tx, err := db.BeginTx(ctx, nil)
+	must(err)
+	ready, err := closeReadiness(ctx, tx, alpha)
+	must(err)
+	tx.Rollback()
+	if len(ready.Blockers) != 0 || len(read().Progress.Signoff.Needs) != 0 {
+		t.Fatalf("with scope defined and the draft approved, nothing blocks sign-off: %v", ready.Blockers)
+	}
+	decide := func(decision, note string) {
+		t.Helper()
+		tx, err := db.BeginTx(ctx, nil)
+		must(err)
+		ready, err := closeReadiness(ctx, tx, alpha)
+		must(err)
+		tx.Rollback()
+		_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,$2,$3,$4,$5,'user_a')`, alpha, decision, ready.Digest, string(ready.Snapshot), note)
+		must(err)
+	}
+	decide("signed_off", "Done")
+	sweepCloseGoals(ctx, db)
+	if s = read(); s.Goal.State != "reached" || last(s) != "Signed off by user_a." || s.Progress.Signoff.State != "signed_off" || s.Progress.Signoff.Signer != "user_a" {
+		t.Fatalf("a standing sign-off reaches the goal: %+v %+v", s.Goal, s.Progress.Signoff)
+	}
+	var next string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-10') RETURNING id::text`, org).Scan(&next))
+	if s = read(); s.Progress.Signoff.NextClose != next {
+		t.Fatalf("next month's close is linked once it exists: %+v", s.Progress.Signoff)
+	}
+	decide("reopened", "Checking a rate")
+	sweepCloseGoals(ctx, db)
+	if s = read(); s.Goal.State != "active" || last(s) != "The close was reopened, so I'm back on it." {
+		t.Fatalf("a reopened close puts the agent back to work: %+v", s.Goal)
+	}
+	decide("signed_off", "Done again")
+	sweepCloseGoals(ctx, db)
+	before := runs()
+	document("late.pdf")
+	sweepCloseGoals(ctx, db)
+	sweepCloseGoals(ctx, db)
+	if s = read(); s.Goal.State != "active" || last(s) != "Something changed after the sign-off, so the close needs reopening before I continue." || s.Progress.Signoff.State != "reopen_required" || runs() != before {
+		t.Fatalf("a change after sign-off waits for a reopen and prepares nothing: %+v %d/%d", s.Goal, runs(), before)
+	}
+	decide("reopened", "New invoice")
+	sweepCloseGoals(ctx, db)
+	if s = read(); s.Goal.State != "active" || runs() != before+1 || last(s) != "New work arrived after the drafts were ready, so I'm back on it." {
+		t.Fatalf("after the reopen the agent brings the change into preparation: %+v %d/%d", s.Goal.Events, runs(), before)
+	}
+	history := []string{}
+	for _, a := range read().Activity {
+		history = append(history, a.Text)
+	}
+	for _, want := range []string{"user_a signed off the close: Done", "fixture set what sign-off covers: Prepaids", "fixture posted the entry for draft #" + paper + " to the QuickBooks sandbox", "the QuickBooks sandbox confirmed the entry for draft #" + paper + " (J-7)", "user_a reopened the close: New invoice"} {
+		if !slices.Contains(history, want) {
+			t.Fatalf("the history has %q: %q", want, history)
+		}
 	}
 }

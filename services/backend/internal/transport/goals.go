@@ -26,15 +26,35 @@ type goalItem struct {
 }
 
 // goalProgress is where every current document of a close stands. Needs are close-wide things a person must do; notes
-// say what a ready result does not cover.
+// say what a ready result does not cover. Ready means every current document has a draft ready for review; a goal
+// that finishes at sign-off also carries what sign-off needs.
 type goalProgress struct {
-	Items   []goalItem `json:"items"`
-	Needs   []string   `json:"needs"`
-	Notes   []string   `json:"notes"`
-	Reached bool       `json:"reached"`
+	Items   []goalItem   `json:"items"`
+	Needs   []string     `json:"needs"`
+	Notes   []string     `json:"notes"`
+	Ready   bool         `json:"ready"`
+	Signoff *goalSignoff `json:"signoff,omitempty"`
 }
 
-type goalRow struct{ id, close, org, author, state, scope string }
+// goalSignoff is what signing the close off needs, from its readiness: its needs that are not about a listed document,
+// each approved draft's proposed entry and where it stands, who signed off, and next month's close once one exists.
+type goalSignoff struct {
+	State     string      `json:"state"`
+	Signer    string      `json:"signer"`
+	Needs     []string    `json:"needs"`
+	Entries   []goalEntry `json:"entries"`
+	NextClose string      `json:"next_close"`
+}
+
+type goalEntry struct {
+	Draft string `json:"draft"`
+	Text  string `json:"text"`
+}
+
+type goalRow struct {
+	id, close, org, author, state, scope, finish string
+	ready                                        bool
+}
 
 var goalForms = map[string]string{"deferred_revenue": "Deferred revenue", "depreciation": "Depreciation", "loan": "Loan schedule", "owner": "Owner items", "settlement": "Settlement"}
 
@@ -50,8 +70,9 @@ const goalJobs = `SELECT j.id::text,e.name,j.state,j.error,e.extraction_state,CO
  FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id
  WHERE j.close_id=$1 AND e.superseded_by IS NULL ORDER BY j.id`
 
-// readGoalProgress classifies every current document of the close by what it waits on, from saved state.
-func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID string) (goalProgress, error) {
+// readGoalProgress classifies every current document of the close by what it waits on, from saved state; with finish
+// "signoff" it adds what sign-off needs.
+func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (goalProgress, error) {
 	p := goalProgress{Items: []goalItem{}, Needs: []string{}, Notes: []string{}}
 	type draft struct {
 		state    string
@@ -103,7 +124,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID string) (goalProg
 		if err = rows.Scan(&item.JobID, &item.Name, &state, &failure, &extraction, &kind, &summary, &questionsRaw, &papersRaw, &requestRaw); err != nil {
 			return p, err
 		}
-		var questions, papers []string
+		var questions, papers, unapproved []string
 		var request *struct {
 			ID          string `json:"id"`
 			Partial     bool   `json:"partial"`
@@ -189,6 +210,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID string) (goalProg
 				if len(approved) > 0 {
 					item.Text += " Already approved: draft " + strings.Join(approved, ", ") + "."
 				}
+				unapproved = ready
 			}
 		default:
 			item.Text = "In an unexpected state: " + strings.ReplaceAll(state, "_", " ") + ". Check it in Work."
@@ -199,6 +221,10 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID string) (goalProg
 		case "stopped":
 		default:
 			open++
+		}
+		// Before sign-off a person approves each draft, so an unapproved one is theirs to act on.
+		if finish == "signoff" && len(unapproved) > 0 {
+			item.Status, item.Text = "needs_you", "Review and approve draft "+strings.Join(unapproved, ", ")+"."
 		}
 		p.Items = append(p.Items, item)
 	}
@@ -241,8 +267,77 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID string) (goalProg
 	} else if ledger.Stale {
 		p.Notes = append(p.Notes, "The ledger capture is out of date. Capture it again before relying on its account suggestions.")
 	}
-	p.Reached = prepared > 0 && open == 0 && len(p.Needs) == 0
-	return p, nil
+	p.Ready = prepared > 0 && open == 0 && len(p.Needs) == 0
+	// Sign-off comes after the documents; its readiness is read only once they are ready, or while a sign-off stands.
+	signed, err := signedOff(ctx, tx, closeID)
+	if err != nil || finish != "signoff" || !p.Ready && !signed {
+		return p, err
+	}
+	ready, err := closeReadiness(ctx, tx, closeID)
+	if err != nil {
+		return p, err
+	}
+	s := &goalSignoff{State: ready.State, Needs: []string{}, Entries: []goalEntry{}}
+	listed := map[string]bool{}
+	for _, item := range p.Items {
+		listed["Work #"+item.JobID] = true
+		for _, d := range item.Drafts {
+			listed["Draft #"+d] = true
+		}
+	}
+	for _, b := range ready.Blockers {
+		// Documents on the list, their drafts and client files are already shown.
+		job, _, _ := strings.Cut(b, " is ")
+		draft, _, _ := strings.Cut(b, " requires ")
+		if listed[job] || listed[draft] || strings.Contains(b, "client attachments") {
+			continue
+		}
+		s.Needs = append(s.Needs, b)
+	}
+	// Each posting record is shown on its own: one per provider, whose ids and order are not comparable.
+	entries, err := tx.QueryContext(ctx, `SELECT w.id::text,COALESCE(p.state,''),COALESCE(p.approval_expires_at<now(),false),COALESCE(p.external_id,''),COALESCE(p.target,'')
+ FROM workpaper_review_state w LEFT JOIN (
+  SELECT workpaper_id,state,approval_expires_at,external_id,'QuickBooks' AS target FROM production_postings WHERE close_id=$1
+  UNION ALL SELECT workpaper_id,state,approval_expires_at,external_id,'Xero' FROM xero_postings WHERE close_id=$1
+  UNION ALL SELECT workpaper_id,state,approval_expires_at,external_id,'the QuickBooks sandbox' FROM sandbox_postings WHERE close_id=$1) p ON p.workpaper_id=w.id
+ WHERE w.close_id=$1 AND w.review_state='approved' AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)
+ AND (COALESCE(w.paper->'proposal','null'::jsonb)<>'null'::jsonb OR jsonb_array_length(COALESCE(w.paper->'proposals','[]'::jsonb))>0) ORDER BY w.id,p.target`, closeID)
+	if err != nil {
+		return p, err
+	}
+	defer entries.Close()
+	for entries.Next() {
+		var e goalEntry
+		var state, external, target string
+		var expired bool
+		if err = entries.Scan(&e.Draft, &state, &expired, &external, &target); err != nil {
+			return p, err
+		}
+		switch {
+		case state == "verified":
+			e.Text = "Posted to " + target + " and confirmed by its readback" + map[bool]string{true: " (" + external + ")"}[external != ""] + "."
+		case state == "executing" || state == "unknown":
+			e.Text = "Its posting to " + target + " has an unknown outcome. Check it on the draft before anything else."
+		case state == "approved" && expired:
+			e.Text = "Its approval to post expired. Approve and post it again from the draft, or book it in the ledger yourself."
+		case state == "approved":
+			e.Text = "Approved to post to " + target + ". Post it from the draft."
+		default:
+			e.Text = "Not posted in the app. Post it from the draft, or book it in the ledger yourself."
+		}
+		s.Entries = append(s.Entries, e)
+	}
+	if err = entries.Err(); err != nil {
+		return p, err
+	}
+	if ready.State == "signed_off" {
+		if err = tx.QueryRowContext(ctx, `SELECT actor FROM close_signoffs WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&s.Signer); err != nil {
+			return p, err
+		}
+	}
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT n.id::text FROM client_closes c JOIN client_closes n ON n.organization_id=c.organization_id AND lower(n.entity)=lower(c.entity) AND n.period=to_char(to_date(c.period,'YYYY-MM')+interval '1 month','YYYY-MM') WHERE c.id=$1),'')`, closeID).Scan(&s.NextClose)
+	p.Signoff = s
+	return p, err
 }
 
 // signedOff reports whether the close's latest sign-off decision is a sign-off, as Work and Attention read it; a close
@@ -279,11 +374,45 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 	if !member {
 		return stopGoal(ctx, tx, g.id, "agent", "I stopped because "+g.author+" is no longer a member of the firm.")
 	}
-	if done, err := signedOff(ctx, tx, g.close); err != nil || done {
+	signed, err := signedOff(ctx, tx, g.close)
+	switch {
+	case err != nil:
+		return err
+	case signed && g.finish == "review":
+		return stopGoal(ctx, tx, g.id, "agent", "The close was signed off, so there is nothing left for me to prepare.")
+	case signed:
+		// A sign-off goal is reached while the sign-off stands. A close that changed after its sign-off waits for a person
+		// to reopen it, and the agent prepares nothing meanwhile.
+		current, err := closeReadiness(ctx, tx, g.close)
 		if err != nil {
 			return err
 		}
-		return stopGoal(ctx, tx, g.id, "agent", "The close was signed off, so there is nothing left for me to prepare.")
+		var signer string
+		if err = tx.QueryRowContext(ctx, `SELECT actor FROM close_signoffs WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, g.close).Scan(&signer); err != nil {
+			return err
+		}
+		switch {
+		case current.State == "signed_off" && g.state != "reached":
+			if _, err = tx.ExecContext(ctx, `UPDATE close_goals SET state='reached',reached_at=now() WHERE id=$1`, g.id); err == nil {
+				err = goalEvent(ctx, tx, g.id, "agent", "Signed off by "+signer+".")
+			}
+		case current.State != "signed_off" && g.state == "reached":
+			if _, err = tx.ExecContext(ctx, `UPDATE close_goals SET state='active',reached_at=NULL WHERE id=$1`, g.id); err == nil {
+				err = goalEvent(ctx, tx, g.id, "agent", "Something changed after the sign-off, so the close needs reopening before I continue.")
+			}
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now() WHERE id=$1`, g.id)
+		}
+		return err
+	case g.finish == "signoff" && g.state == "reached":
+		if _, err = tx.ExecContext(ctx, `UPDATE close_goals SET state='active',reached_at=NULL WHERE id=$1`, g.id); err == nil {
+			err = goalEvent(ctx, tx, g.id, "agent", "The close was reopened, so I'm back on it.")
+		}
+		if err != nil {
+			return err
+		}
+		g.state = "active"
 	}
 	inventory, err := preparationInventory(ctx, tx, g.close)
 	if err != nil {
@@ -315,12 +444,17 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 			return err
 		}
 	}
-	progress, err := readGoalProgress(ctx, tx, g.close)
+	// Ready for review is the finish of a review goal and a milestone, kept in ready_at, of a sign-off goal.
+	progress, err := readGoalProgress(ctx, tx, g.close, "review")
 	if err != nil {
 		return err
 	}
+	was, mark := g.ready, `UPDATE close_goals SET ready_at=CASE WHEN $2 THEN now() END WHERE id=$1`
+	if g.finish == "review" {
+		was, mark = g.state == "reached", `UPDATE close_goals SET state=CASE WHEN $2 THEN 'reached' ELSE 'active' END,reached_at=CASE WHEN $2 THEN now() END WHERE id=$1`
+	}
 	switch {
-	case progress.Reached && g.state == "active":
+	case progress.Ready && !was:
 		drafts, documents := 0, 0
 		for _, item := range progress.Items {
 			if item.Status == "prepared" {
@@ -332,11 +466,14 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 		if stopped := len(progress.Items) - documents; stopped > 0 {
 			text += " " + plural(stopped, "stopped document is", "stopped documents are") + " left out."
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE close_goals SET state='reached',reached_at=now() WHERE id=$1`, g.id); err == nil {
+		if g.finish == "signoff" {
+			text += " Next: approvals and sign-off."
+		}
+		if _, err = tx.ExecContext(ctx, mark, g.id, true); err == nil {
 			err = goalEvent(ctx, tx, g.id, "agent", text)
 		}
-	case !progress.Reached && g.state == "reached":
-		if _, err = tx.ExecContext(ctx, `UPDATE close_goals SET state='active',reached_at=NULL WHERE id=$1`, g.id); err == nil {
+	case !progress.Ready && was:
+		if _, err = tx.ExecContext(ctx, mark, g.id, false); err == nil {
 			err = goalEvent(ctx, tx, g.id, "agent", "New work arrived after the drafts were ready, so I'm back on it.")
 		}
 	}
@@ -348,7 +485,11 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow) error {
 
 // goalActivity is what happened on the close since its goal started, newest first: the goal's own events (in the order
 // they were recorded) and the steps people and the client took, with how many there are in all.
-const goalActivity = `SELECT at,actor,text,count(*) OVER () FROM (
+const goalActivity = `WITH postings AS (
+ SELECT workpaper_id,attempted_at,attempted_by,verified_at,external_id,'QuickBooks' AS target FROM production_postings WHERE close_id=$1
+ UNION ALL SELECT workpaper_id,attempted_at,attempted_by,verified_at,external_id,'Xero' FROM xero_postings WHERE close_id=$1
+ UNION ALL SELECT workpaper_id,attempted_at,attempted_by,verified_at,external_id,'the QuickBooks sandbox' FROM sandbox_postings WHERE close_id=$1)
+SELECT at,actor,text,count(*) OVER () FROM (
  SELECT (e->>'at')::timestamptz AS at,e->>'actor' AS actor,e->>'text' AS text,n FROM close_goals g CROSS JOIN LATERAL jsonb_array_elements(g.events) WITH ORDINALITY x(e,n) WHERE g.id=$2
  UNION ALL SELECT i.confirmed_at,i.confirmed_by,i.confirmed_by||' confirmed the facts read from '||e.name,0 FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND i.confirmed_at IS NOT NULL
  UNION ALL SELECT a.created_at,a.created_by,a.created_by||' answered a question on '||e.name,0 FROM preparation_answers a JOIN preparation_intakes i ON i.job_id=a.job_id JOIN preparation_jobs j ON j.id=a.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1
@@ -361,6 +502,10 @@ const goalActivity = `SELECT at,actor,text,count(*) OVER () FROM (
  UNION ALL SELECT i.decided_at,i.decided_by,i.decided_by||' '||i.state||' an email reply to request #'||i.request_id,0 FROM inbound_replies i WHERE i.close_id=$1 AND i.decided_at IS NOT NULL
  UNION ALL SELECT r.created_at,r.actor,r.actor||CASE r.decision WHEN 'approved' THEN ' approved draft #' ELSE ' asked for changes to draft #' END||r.workpaper_id,0 FROM workpaper_reviews r JOIN workpapers w ON w.id=r.workpaper_id WHERE w.close_id=$1
  UNION ALL SELECT x.created_at,x.actor,x.actor||' rechecked '||e.name,0 FROM recovery_actions x JOIN preparation_intakes i ON i.job_id=x.job_id JOIN evidence e ON e.id=i.source_id WHERE x.close_id=$1
+ UNION ALL SELECT s.created_at,s.actor,s.actor||' set what sign-off covers: '||(s.scope->>'description'),0 FROM close_scopes s WHERE s.close_id=$1
+ UNION ALL SELECT s.created_at,s.actor,s.actor||CASE s.decision WHEN 'signed_off' THEN ' signed off the close: ' ELSE ' reopened the close: ' END||s.note,0 FROM close_signoffs s WHERE s.close_id=$1
+ UNION ALL SELECT p.attempted_at,p.attempted_by,p.attempted_by||' posted the entry for draft #'||p.workpaper_id||' to '||p.target,0 FROM postings p WHERE p.attempted_at IS NOT NULL
+ UNION ALL SELECT p.verified_at,'ledger',p.target||' confirmed the entry for draft #'||p.workpaper_id||COALESCE(' ('||NULLIF(p.external_id,'')||')',''),0 FROM postings p WHERE p.verified_at IS NOT NULL
 ) a WHERE at>=$3 ORDER BY at DESC,n DESC LIMIT $4`
 
 func registerGoals(mux *http.ServeMux, db *sql.DB) {
@@ -380,11 +525,13 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			CreatedAt  time.Time       `json:"created_at"`
 			ReachedAt  *time.Time      `json:"reached_at"`
 			FinishedAt *time.Time      `json:"finished_at"`
+			Finish     string          `json:"finish"`
+			ReadyAt    *time.Time      `json:"ready_at"`
 			Events     json.RawMessage `json:"events"`
 		}
 		var goal *view
 		g := &view{}
-		err = tx.QueryRowContext(r.Context(), `SELECT id::text,author,COALESCE(due_on::text,''),state,created_at,reached_at,finished_at,events FROM close_goals WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&g.ID, &g.Author, &g.DueOn, &g.State, &g.CreatedAt, &g.ReachedAt, &g.FinishedAt, &g.Events)
+		err = tx.QueryRowContext(r.Context(), `SELECT id::text,author,COALESCE(due_on::text,''),state,created_at,reached_at,finished_at,finish,ready_at,events FROM close_goals WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&g.ID, &g.Author, &g.DueOn, &g.State, &g.CreatedAt, &g.ReachedAt, &g.FinishedAt, &g.Finish, &g.ReadyAt, &g.Events)
 		switch err {
 		case nil:
 			goal = g
@@ -421,7 +568,11 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		var progress goalProgress
 		var done bool
 		if err == nil {
-			progress, err = readGoalProgress(r.Context(), tx, closeID)
+			finish := "review"
+			if goal != nil && goal.State != "stopped" {
+				finish = goal.Finish
+			}
+			progress, err = readGoalProgress(r.Context(), tx, closeID, finish)
 		}
 		if err == nil {
 			done, err = signedOff(r.Context(), tx, closeID)
@@ -440,16 +591,22 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		var in struct {
 			Confirmed bool   `json:"confirmed"`
 			DueOn     string `json:"due_on"`
+			Finish    string `json:"finish"`
 		}
 		if !decode(w, r, &in) {
 			return
 		}
-		if !in.Confirmed {
-			problem(w, 422, "Confirm that the agent may work on this close until its documents are ready for review.")
+		if in.Finish == "" {
+			in.Finish = "review"
+		}
+		if !in.Confirmed || (in.Finish != "review" && in.Finish != "signoff") {
+			problem(w, 422, "Confirm that the agent may work on this close until it is ready for review or signed off.")
 			return
 		}
-		text := "Handed over by " + actor
-		if in.DueOn != "" {
+		text, finish := "Handed over by "+actor, map[string]string{"review": "ready for review", "signoff": "signed off"}[in.Finish]
+		if in.DueOn == "" {
+			text += ", to get it " + finish
+		} else {
 			// The browser's date may be a day behind the server's.
 			today := time.Now().UTC().Truncate(24 * time.Hour)
 			due, err := time.Parse("2006-01-02", in.DueOn)
@@ -457,7 +614,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Choose a due date from today to a year ahead.")
 				return
 			}
-			text += ", to be ready for review by " + due.Format("Mon 2 Jan 2006")
+			text += ", to get it " + finish + " by " + due.Format("Mon 2 Jan 2006")
 		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
@@ -465,7 +622,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		g := goalRow{author: actor, state: "active"}
+		g := goalRow{author: actor, state: "active", finish: in.Finish}
 		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,organization_id FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&g.close, &g.org); err != nil {
 			problem(w, 404, "Close not found.")
 			return
@@ -490,7 +647,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The agent is unavailable.")
 			return
 		}
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_goals(close_id,author,due_on,events) VALUES($1,$2,NULLIF($3,'')::date,jsonb_build_array(jsonb_build_object('actor',$2::text,'text',$4::text,'at',now()))) RETURNING id::text`, g.close, actor, in.DueOn, text).Scan(&g.id)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_goals(close_id,author,due_on,finish,events) VALUES($1,$2,NULLIF($3,'')::date,$5,jsonb_build_array(jsonb_build_object('actor',$2::text,'text',$4::text,'at',now()))) RETURNING id::text`, g.close, actor, in.DueOn, text, in.Finish).Scan(&g.id)
 		if err == nil {
 			err = advanceGoal(r.Context(), tx, g)
 		}
@@ -591,7 +748,7 @@ func stepGoal(ctx context.Context, db *sql.DB, id string) error {
 	var g goalRow
 	err = tx.QueryRowContext(ctx, `SELECT c.id::text,c.organization_id FROM client_closes c JOIN close_goals g ON g.close_id=c.id WHERE g.id=$1 AND g.state<>'stopped' FOR UPDATE OF c SKIP LOCKED`, id).Scan(&g.close, &g.org)
 	if err == nil {
-		err = tx.QueryRowContext(ctx, `SELECT id::text,author,state,scope_digest FROM close_goals WHERE id=$1 AND state<>'stopped' FOR UPDATE`, id).Scan(&g.id, &g.author, &g.state, &g.scope)
+		err = tx.QueryRowContext(ctx, `SELECT id::text,author,state,scope_digest,finish,ready_at IS NOT NULL FROM close_goals WHERE id=$1 AND state<>'stopped' FOR UPDATE`, id).Scan(&g.id, &g.author, &g.state, &g.scope, &g.finish, &g.ready)
 	}
 	if err == sql.ErrNoRows {
 		return nil

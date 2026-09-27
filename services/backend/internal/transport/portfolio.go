@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,14 +89,29 @@ func browserToday(sent string) time.Time {
 	return today
 }
 
-// parseDay reads the day named at words[i]: today, tomorrow, a weekday (today's or the next), "this week" (to Sunday)
-// or YYYY-MM-DD. It returns the day and the index of its last word.
+// parseDay reads the day named at words[i]: today, tomorrow, a weekday (today's or the next), "this week" (to Sunday),
+// "the 10th" (the next date with that day of the month) or YYYY-MM-DD. It returns the day and the index of its last word.
 func parseDay(words []string, i int, today time.Time) (time.Time, int, bool) {
 	at := func(n int) string {
 		if n < len(words) {
 			return words[n]
 		}
 		return ""
+	}
+	if at(i) == "the" {
+		i++
+	}
+	for _, suffix := range []string{"st", "nd", "rd", "th"} {
+		if !strings.HasSuffix(at(i), suffix) {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimSuffix(at(i), suffix)); err == nil && n >= 1 && n <= 31 {
+			for month := today.Month(); month < today.Month()+12; month++ {
+				if day := time.Date(today.Year(), month, n, 0, 0, 0, 0, time.UTC); day.Day() == n && !day.Before(today) {
+					return day, i, true
+				}
+			}
+		}
 	}
 	switch d := at(i); {
 	case d == "today":

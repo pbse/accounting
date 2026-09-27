@@ -24,7 +24,7 @@ Every answer comes from an existing read, made with your own permissions, and li
 | | whether the ledger capture is certified | the close brief's ledger line |
 | A close | find … (also search, look for, where is, show me) | search, in this close |
 | | prepare, recheck or stop its work | an action card ([below](#action-cards)) |
-| | get it ready for review (by a day) | a card handing the close to the agent ([close goals](close-coordinator.md#hand-the-close-to-the-agent)) |
+| | get it ready for review, or signed off (by a day) | a card handing the close to the agent ([close goals](close-coordinator.md#hand-the-close-to-the-agent)) |
 | A draft | this draft | its review state, blockers and questions |
 | Firm-wide | find … | search, across your closes |
 | | what needs you today | the morning brief |

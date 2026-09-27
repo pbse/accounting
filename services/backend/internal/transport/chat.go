@@ -35,6 +35,7 @@ type chatReply struct {
 	citations []chatCitation
 	action    string
 	due       string
+	finish    string
 }
 
 type chatMessage struct {
@@ -45,6 +46,7 @@ type chatMessage struct {
 	Citations   json.RawMessage `json:"citations"`
 	Action      string          `json:"action,omitempty"`
 	DueOn       string          `json:"due_on,omitempty"`
+	Finish      string          `json:"finish,omitempty"`
 	Outcome     json.RawMessage `json:"outcome"`
 	CreatedAt   time.Time       `json:"created_at"`
 }
@@ -103,28 +105,42 @@ func chatWords(text string) []string {
 
 var chatPolite = strings.Fields("please can could would will you thanks thank")
 
-var chatDelegateWords = strings.Fields("this the a my our close books work month it now to over agent for ready review get have make hand delegate")
+var chatDelegateWords = strings.Fields("this the a my our close books work month it now to over agent for ready review get have make hand delegate signed sign off signoff sign-off signed-off closed")
 
 // chatDelegate reads a request to hand the close (entity, period) to the agent, such as "Get this close ready for
-// review by Friday": ok says the text has that shape, due is its deadline ("" for none) and extra lists the words it
-// would not act on. A request with extra words is not handed over, so an instruction is never silently dropped.
-func chatDelegate(text string, today time.Time, entity, period string) (due string, extra []string, ok bool) {
+// review by Friday" or "Close the books by the 10th": ok says the text has that shape, finish is where it ends (review or
+// signoff), due is its deadline ("" for none) and extra lists the words it would not act on. A request with extra
+// words is not handed over, so an instruction is never silently dropped.
+func chatDelegate(text string, today time.Time, entity, period string) (finish, due string, extra []string, ok bool) {
 	words := chatWords(text)
 	for len(words) > 0 && slices.Contains(chatPolite, words[0]) {
 		words = words[1:]
 	}
 	month, err := time.Parse("2006-01", period)
 	if len(words) == 0 || err != nil {
-		return "", nil, false
+		return "", "", nil, false
 	}
-	switch words[0] {
+	signoff := slices.ContainsFunc(words, func(w string) bool { return w == "signoff" || w == "sign-off" || w == "signed-off" })
+	for i := 1; i < len(words); i++ {
+		signoff = signoff || words[i] == "off" && (words[i-1] == "sign" || words[i-1] == "signed")
+	}
+	switch finish = "review"; words[0] {
 	case "get", "have", "make":
-		if !slices.Contains(words, "ready") || !slices.Contains(words, "review") {
-			return "", nil, false
+		if signoff {
+			finish = "signoff"
+		} else if !slices.Contains(words, "ready") || !slices.Contains(words, "review") {
+			return "", "", nil, false
+		}
+	case "close":
+		if !slices.Contains(words, "review") {
+			finish = "signoff"
 		}
 	case "hand", "delegate":
+		if signoff {
+			finish = "signoff"
+		}
 	default:
-		return "", nil, false
+		return "", "", nil, false
 	}
 	name := strings.ToLower(month.Month().String())
 	known := append(chatWords(entity), period, name, name[:3], strconv.Itoa(month.Year()))
@@ -136,7 +152,7 @@ func chatDelegate(text string, today time.Time, entity, period string) (due stri
 			}
 			day, last, found := parseDay(words, i+1, today)
 			if !found {
-				return "", nil, false
+				return "", "", nil, false
 			}
 			if w == "before" {
 				day = day.AddDate(0, 0, -1)
@@ -146,7 +162,7 @@ func chatDelegate(text string, today time.Time, entity, period string) (due stri
 			extra = append(extra, w)
 		}
 	}
-	return due, extra, true
+	return finish, due, extra, true
 }
 
 // delegateTargets links to each open close a firm-wide request to hand a close to the agent names, by any distinctive
@@ -154,7 +170,7 @@ func chatDelegate(text string, today time.Time, entity, period string) (due stri
 // extra is what such a request would not act on, for the named close it fits best, when none can be linked.
 func delegateTargets(r *http.Request, db *sql.DB, text string, today time.Time) ([]chatCitation, []string, error) {
 	// Any word may name a client here, so this only checks that the text has a request's shape.
-	if _, _, ok := chatDelegate(text, today, text, "2000-01"); !ok {
+	if _, _, _, ok := chatDelegate(text, today, text, "2000-01"); !ok {
 		return nil, nil, nil
 	}
 	rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period FROM client_closes c WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
@@ -173,7 +189,7 @@ func delegateTargets(r *http.Request, db *sql.DB, text string, today time.Time) 
 		named := slices.ContainsFunc(chatWords(entity), func(w string) bool {
 			return slices.Contains(words, w) && !slices.Contains(chatDelegateWords, w) && !slices.Contains(chatPolite, w)
 		})
-		due, unknown, ok := chatDelegate(text, today, entity, period)
+		finish, due, unknown, ok := chatDelegate(text, today, entity, period)
 		switch {
 		case !named || !ok:
 		case len(unknown) > 0:
@@ -181,7 +197,7 @@ func delegateTargets(r *http.Request, db *sql.DB, text string, today time.Time) 
 				extra = unknown
 			}
 		default:
-			ask := "Get this close ready for review"
+			ask := map[string]string{"review": "Get this close ready for review", "signoff": "Get this close signed off"}[finish]
 			if due != "" {
 				ask += " by " + due
 			}
@@ -513,7 +529,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	// scope binds every query to the firm, the signed-in author and one conversation.
 	const scope = `organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint`
 	history := func(w http.ResponseWriter, r *http.Request, extra map[string]any) {
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(outcome,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),COALESCE(outcome,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Conversation unavailable.")
 			return
@@ -522,7 +538,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		messages := []chatMessage{}
 		for rows.Next() {
 			var m chatMessage
-			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.DueOn, &m.Outcome, &m.CreatedAt) != nil {
+			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.DueOn, &m.Finish, &m.Outcome, &m.CreatedAt) != nil {
 				problem(w, 503, "Conversation unavailable.")
 				return
 			}
@@ -602,7 +618,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		due, unknown, delegate := chatDelegate(in.Text, today, entity, period)
+		finish, due, unknown, delegate := chatDelegate(in.Text, today, entity, period)
 		if closeID != "" && delegate {
 			extra = unknown
 		}
@@ -622,7 +638,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		} else if closeID == "" {
 			reply, live, linked = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, chatIntent(in.Text, false, false), in.Text)
 		} else if delegate {
-			reply = chatReply{body: "I can take this close from here. Check my plan and hand it over.", action: "delegate", due: due}
+			reply = chatReply{body: "I can take this close from here. Check my plan and hand it over.", action: "delegate", due: due, finish: finish}
 		} else if action := chatAction(in.Text); action != "" {
 			reply = chatReply{body: chatActionReply[action], citations: []chatCitation{{"Close preparation", "/dashboard/closes/" + closeID + "?tab=overview"}}, action: action}
 		} else {
@@ -660,8 +676,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "Your firm membership changed. Nothing was saved.")
 			return
 		}
-		for _, m := range []struct{ role, body, citations, action, due string }{{"user", in.Text, "[]", "", ""}, {"assistant", body, string(citations), reply.action, reply.due}} {
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date)`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due); err != nil {
+		for _, m := range []struct{ role, body, citations, action, due, finish string }{{"user", in.Text, "[]", "", "", ""}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish}} {
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''))`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish); err != nil {
 				break
 			}
 		}
@@ -682,6 +698,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			Digest string `json:"digest"`
 			Reason string `json:"reason"`
 			DueOn  string `json:"due_on"`
+			Finish string `json:"finish"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -721,7 +738,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		if action == "delegate" {
 			// Handing over binds no digest: the goal follows the close's documents as they change.
-			rec := replay(r, "POST", base+"/goal", map[string]any{"confirmed": true, "due_on": in.DueOn})
+			rec := replay(r, "POST", base+"/goal", map[string]any{"confirmed": true, "due_on": in.DueOn, "finish": in.Finish})
 			if rec.Code != 200 {
 				relay(rec)
 				return

@@ -1,13 +1,15 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { Link } from "react-router";
 import { askAssistant } from "../dashboard/assistantStore";
 import { workspaceRequest } from "./workspace";
 
 type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[] };
-type Goal = { id: string; author: string; due_on: string; state: "active" | "reached" | "stopped"; created_at: string; reached_at: string | null; finished_at: string | null; events: { actor: string; text: string; at: string }[] };
+type Finish = "review" | "signoff";
+type Goal = { id: string; author: string; due_on: string; state: "active" | "reached" | "stopped"; finish: Finish; created_at: string; reached_at: string | null; ready_at: string | null; finished_at: string | null; events: { actor: string; text: string; at: string }[] };
+type Signoff = { state: "open" | "signed_off" | "reopen_required"; signer: string; needs: string[]; entries: { draft: string; text: string }[]; next_close: string };
 type Status = {
   goal: Goal | null;
-  progress: { items: Item[]; needs: string[]; notes: string[]; reached: boolean };
+  progress: { items: Item[]; needs: string[]; notes: string[]; ready: boolean; signoff?: Signoff };
   activity: { at: string; actor: string; text: string }[];
   activity_total: number;
   signed_off: boolean;
@@ -22,6 +24,7 @@ const sections: [Item["status"], string][] = [
   ["stopped", "Left out"],
 ];
 const handOver = "Get this close ready for review";
+const finishes: Record<Finish, string> = { review: "ready for review", signoff: "signed off" };
 
 export function localDate(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -39,6 +42,18 @@ function counts(items: Item[]) {
   const by = (s: Item["status"]) => items.filter((i) => i.status === s).length;
   const parts = [`${by("prepared")} ready for review`, `${by("needs_you") + by("unsupported")} need you`, `${by("client")} waiting on the client`, `${by("working")} in progress`].filter((p) => !p.startsWith("0 "));
   return `${items.length} document${items.length === 1 ? "" : "s"}: ${parts.join(", ")}.`;
+}
+
+// headline says, first, where the goal stands, from the live progress where the stored goal may lag a sweep behind.
+function headline(goal: Goal, progress: Status["progress"], needs: number) {
+  const signoff = progress.signoff;
+  if (goal.state === "stopped") return goal.events[goal.events.length - 1]?.text;
+  if (signoff?.state === "reopen_required") return "Something changed after the sign-off. Reopen the close on its sign-off tab to continue.";
+  if (signoff?.state === "signed_off") return `Signed off by ${signoff.signer}.`;
+  if (goal.finish === "review" && goal.state === "reached") return "Every uploaded document has a draft ready for your review.";
+  if (needs) return `${needs} thing${needs === 1 ? " needs" : "s need"} you before this is ${finishes[goal.finish]}.`;
+  if (signoff?.state === "open" && progress.ready) return "Ready to sign off.";
+  return `I'm getting this close ${finishes[goal.finish]}.`;
 }
 
 // useGoal reads the close's goal and live progress, polling while shown.
@@ -78,7 +93,9 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
   // The whole history is read on request and shown only while it is still the whole, so the newest steps always show.
   const full = all?.goal === goal.id && all.activity.length === total ? all.activity : undefined;
   const stopped = goal.state === "stopped";
-  const needs = progress.items.filter((i) => i.status === "needs_you" || i.status === "unsupported").length + progress.needs.length;
+  const signoff = goal.finish === "signoff" ? progress.signoff : undefined;
+  const needs = progress.items.filter((i) => i.status === "needs_you" || i.status === "unsupported").length + progress.needs.length + (signoff?.needs.length ?? 0);
+  const signoffTab = `/dashboard/closes/${closeId}?tab=signoff`;
   async function stop() {
     setBusy(true);
     setError("");
@@ -96,15 +113,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
   return (
     <>
       <p>
-        <strong>
-          {stopped
-            ? goal.events[goal.events.length - 1]?.text
-            : goal.state === "reached"
-              ? "Every uploaded document has a draft ready for your review."
-              : needs
-                ? `${needs} thing${needs === 1 ? " needs" : "s need"} you before this is ready for review.`
-                : "I'm getting this close ready for review."}
-        </strong>
+        <strong>{headline(goal, progress, needs)}</strong>
       </p>
       <p className="assistant-note">
         Handed over by {goal.author} · {new Date(goal.created_at).toLocaleDateString()}
@@ -138,6 +147,38 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
               )
             );
           })}
+          {signoff && (
+            <div>
+              <strong>Sign-off</strong>
+              <ul>
+                {signoff.needs.map((n) => (
+                  <li key={n}>
+                    {n} <Link to={signoffTab}>Open sign-off →</Link>
+                  </li>
+                ))}
+                {signoff.entries.map((e, n) => (
+                  <li key={n}>
+                    <Link to={`/dashboard/closes/${closeId}/workpapers/${e.draft}`}>Entry for draft #{e.draft}</Link>: {e.text}
+                  </li>
+                ))}
+                {signoff.state === "signed_off" && (
+                  <li>
+                    <Link to={signoffTab}>Download the signed binder →</Link>
+                  </li>
+                )}
+                {!needs && signoff.state === "open" && progress.ready && (
+                  <li>
+                    <Link to={signoffTab}>Sign off the close →</Link> (needs close:signoff)
+                  </li>
+                )}
+                {signoff.next_close && (
+                  <li>
+                    <Link to={`/dashboard/closes/${signoff.next_close}`}>Next month's close →</Link>
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
           {progress.notes.map((n) => (
             <p key={n} className="assistant-note">
               {n}
@@ -186,8 +227,10 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
   );
 }
 
-function Proposal({ status, dueOn, onConfirm }: { status: Status; dueOn: string; onConfirm: (body: { due_on: string }) => Promise<void> }) {
+function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueOn: string; proposed: string; onConfirm: (body: { due_on: string; finish: Finish }) => Promise<void> }) {
   const [date, setDate] = useState(dueOn);
+  const [finish, setFinish] = useState<Finish>(proposed === "signoff" ? "signoff" : "review");
+  const group = useId();
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -195,7 +238,7 @@ function Proposal({ status, dueOn, onConfirm }: { status: Status; dueOn: string;
     setBusy(true);
     setError("");
     try {
-      await onConfirm({ due_on: date });
+      await onConfirm({ due_on: date, finish });
     } catch (e) {
       setError(e instanceof Error ? e.message : "The close could not be handed over.");
       setAgreed(false);
@@ -205,19 +248,29 @@ function Proposal({ status, dueOn, onConfirm }: { status: Status; dueOn: string;
   }
   return (
     <>
-      <p>I'll keep this close moving until every uploaded document has a draft ready for your review:</p>
+      <fieldset>
+        <legend>Finish line</legend>
+        <label>
+          <input type="radio" name={group} checked={finish === "review"} onChange={() => setFinish("review")} /> Every document has a draft ready for review
+        </label>
+        <label>
+          <input type="radio" name={group} checked={finish === "signoff"} onChange={() => setFinish("signoff")} /> The close is signed off
+        </label>
+      </fieldset>
+      <p>I'll keep this close moving until it is {finishes[finish]}:</p>
       <ul>
         <li>I bring new documents and client replies into preparation as they arrive.</li>
+        {finish === "signoff" && <li>I line up what sign-off needs: approvals, its scope and each entry to post.</li>}
         <li>I tell you exactly what I need from you, and why.</li>
-        <li>I let you know as soon as it's ready for review.</li>
+        <li>I let you know as soon as it's {finish === "signoff" ? "ready to sign off" : "ready for review"}.</li>
       </ul>
       <p>I never approve, send, post or sign off anything, and you can stop me at any time.</p>
       <p>Now: {counts(status.progress.items)}</p>
       <label>
-        Ready for review by <input type="date" value={date} min={localDate()} onChange={(e) => setDate(e.target.value)} />
+        {finish === "signoff" ? "Signed off by" : "Ready for review by"} <input type="date" value={date} min={localDate()} onChange={(e) => setDate(e.target.value)} />
       </label>
       <label>
-        <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} /> Let the agent work on this close until it's ready for review.
+        <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} /> Let the agent work on this close until it's {finishes[finish]}.
       </label>
       <button type="button" className="primary" disabled={busy || !agreed} onClick={() => void confirm()}>
         {busy ? "Handing over…" : "Hand it over"}
@@ -229,7 +282,7 @@ function Proposal({ status, dueOn, onConfirm }: { status: Status; dueOn: string;
 }
 
 // GoalCard is the assistant's card for handing its close to the agent: the proposal, then the goal's live progress.
-export function GoalCard({ closeId, dueOn, outcome, live, onConfirm }: { closeId: string; dueOn: string; outcome?: { at: string } | null; live: boolean; onConfirm: (body: { due_on: string }) => Promise<void> }) {
+export function GoalCard({ closeId, dueOn, finish, outcome, live, onConfirm }: { closeId: string; dueOn: string; finish: string; outcome?: { at: string } | null; live: boolean; onConfirm: (body: { due_on: string; finish: Finish }) => Promise<void> }) {
   const { status, error, refresh } = useGoal(closeId, live, 5000);
   const card = (body: ReactNode) => (
     <div className="assistant-card">
@@ -242,7 +295,7 @@ export function GoalCard({ closeId, dueOn, outcome, live, onConfirm }: { closeId
   if (!status) return card(!error && <p role="status">Loading the close…</p>);
   if (outcome || (status.goal && status.goal.state !== "stopped")) return card(<Progress closeId={closeId} status={status} refresh={refresh} />);
   if (status.signed_off) return card(<p>This close is signed off, so there is nothing left for me to prepare.</p>);
-  return card(<Proposal status={status} dueOn={dueOn} onConfirm={onConfirm} />);
+  return card(<Proposal status={status} dueOn={dueOn} proposed={finish} onConfirm={onConfirm} />);
 }
 
 // GoalPanel shows the close's goal at the top of its Overview, or offers to hand the close to the agent.

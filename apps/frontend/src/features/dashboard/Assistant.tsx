@@ -10,7 +10,7 @@ import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
 import { Icon } from "./Icon";
 
-type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate"; due_on?: string; outcome?: Outcome | null };
+type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate"; due_on?: string; finish?: string; outcome?: Outcome | null };
 
 function readOpen() {
   try {
@@ -199,7 +199,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
             {m.action &&
               closeId &&
               (m.action === "delegate" ? (
-                <GoalCard closeId={closeId} dueOn={m.due_on ?? ""} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+                <GoalCard closeId={closeId} dueOn={m.due_on ?? ""} finish={m.finish ?? ""} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ) : (
                 <ActionCard closeId={closeId} action={m.action} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ))}
