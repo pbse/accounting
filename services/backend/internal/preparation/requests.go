@@ -152,19 +152,47 @@ func FreshClientRequest(ctx context.Context, tx *sql.Tx, closeID, requestID stri
 	return nil
 }
 
+// requestCapture is SQL over work_requests q and request_drafts d: a consolidated request's ledger capture is still the
+// close's latest, with a current source and an active connection.
+const requestCapture = `q.coverage_scope->>'snapshot_id'=(SELECT id::text FROM quickbooks_snapshots WHERE close_id=d.close_id AND payload ? 'period' ORDER BY quickbooks_snapshots.id DESC LIMIT 1)
+ AND EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')`
+
+// requestBindings is each binding b a consolidated request q approved, with its account's newest binding cur.
+const requestBindings = `jsonb_array_elements(q.coverage_scope->'bindings') b LEFT JOIN LATERAL (SELECT c.id::text AS id,c.excluded,c.job_ids FROM coverage_bindings c WHERE c.close_id=d.close_id AND c.snapshot_id::text=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1) cur ON true`
+
 // RequestCoverageIsCurrent is SQL over work_requests q and request_drafts d: a consolidated request is still on its
 // close's latest ledger capture, with a current source and active connection, and every binding is the current one.
-const RequestCoverageIsCurrent = `(q.coverage_scope IS NULL OR (
- q.coverage_scope->>'snapshot_id'=(SELECT id::text FROM quickbooks_snapshots WHERE close_id=d.close_id AND payload ? 'period' ORDER BY quickbooks_snapshots.id DESC LIMIT 1)
- AND EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')
- AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(q.coverage_scope->'bindings') b WHERE b->>'id' IS DISTINCT FROM COALESCE((SELECT id::text FROM coverage_bindings c WHERE c.close_id=d.close_id AND c.snapshot_id::text=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1),''))
- ))`
+const RequestCoverageIsCurrent = `(q.coverage_scope IS NULL OR (` + requestCapture + `
+ AND NOT EXISTS(SELECT 1 FROM ` + requestBindings + ` WHERE COALESCE(cur.id,'') IS DISTINCT FROM b->>'id')))`
+
+// RequestReleased is SQL over request_jobs rj of work_requests q: work the request came to cover after its approval,
+// from documents the client sent. The approval's own work never is, and a consolidated request approved before it
+// recorded that work has none.
+const RequestReleased = `(rj.job_id IS DISTINCT FROM q.job_id AND (q.coverage_scope IS NULL OR (q.coverage_scope ? 'jobs' AND NOT (q.coverage_scope->'jobs') ? rj.job_id::text)))`
+
+// requestCoverageFollows is RequestCoverageIsCurrent once a request has a reply: an account's binding may also have
+// moved to add the request's released work, keeping every job it had when the request was approved.
+const requestCoverageFollows = `(q.coverage_scope IS NULL OR (` + requestCapture + `
+ AND NOT EXISTS(SELECT 1 FROM ` + requestBindings + ` CROSS JOIN LATERAL (SELECT COALESCE((SELECT a.job_ids FROM coverage_bindings a WHERE a.id=NULLIF(b->>'id','')::bigint),'[]'::jsonb) AS jobs) approved
+  WHERE COALESCE(cur.id,'') IS DISTINCT FROM b->>'id' AND (cur.id IS NULL OR cur.excluded OR NOT cur.job_ids @> approved.jobs
+   OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(cur.job_ids) added WHERE NOT approved.jobs ? added
+    AND NOT EXISTS(SELECT 1 FROM request_jobs rj WHERE rj.request_id=q.id AND rj.job_id::text=added AND ` + RequestReleased + `))))))`
 
 // Consolidated requests bind their exact jobs/revisions and ledger capture.
 // Legacy single-job requests keep their existing route-level state fences.
 func RequestCoverageCurrent(ctx context.Context, tx *sql.Tx, closeID, requestID string) error {
+	return requestCoverage(ctx, tx, closeID, requestID, RequestCoverageIsCurrent)
+}
+
+// RequestCoverageFollows is RequestCoverageCurrent for a request that has a reply, letting it take the rest of the
+// client's answers and documents while the firm works on the first ones.
+func RequestCoverageFollows(ctx context.Context, tx *sql.Tx, closeID, requestID string) error {
+	return requestCoverage(ctx, tx, closeID, requestID, requestCoverageFollows)
+}
+
+func requestCoverage(ctx context.Context, tx *sql.Tx, closeID, requestID, rule string) error {
 	var valid bool
-	err := tx.QueryRowContext(ctx, `SELECT d.close_id::text=$2 AND `+RequestCoverageIsCurrent+` FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id=$1`, requestID, closeID).Scan(&valid)
+	err := tx.QueryRowContext(ctx, `SELECT d.close_id::text=$2 AND `+rule+` FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE q.id=$1`, requestID, closeID).Scan(&valid)
 	if err != nil || !valid {
 		return fmt.Errorf("Request coverage changed. Review and issue a fresh request.")
 	}

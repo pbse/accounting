@@ -2228,3 +2228,32 @@ Tests:
 - `TestScopedClientReplyResumesJob`: a draft saved with a trailing newline is approved from Work with the same wording.
 - `TestAssistantRequestCardSavesTheWordingItShowed` still passes.
 - Five mutations each fail a test: dropping the exclusion, or either creator from it; restoring the newline; comparing untrimmed.
+
+## Client requests take the rest while the firm works (2026-09-27)
+
+Request: a multi-document request closed once the firm acted on part of the reply. The client sent invoice X and ticked "I'll send the document later" for Y. The firm released X, bound the work it started to account X, and that work finished. The client could then not send Y, and the firm could not have released it.
+
+What changed:
+- A consolidated request now records the work it was approved with (`coverage_scope.jobs`). A request's released work is whatever it covers beyond that: for a per-job request, anything beyond its job. Released work is what documents from the client started or were matched to. A consolidated request approved before this recorded nothing, so none of its work counts as released.
+- After a reply, released work finishing or being cancelled no longer closes the request (`requestOpen`), and no longer blocks releasing the next document. Work the request was approved for keeps today's rules, and a replaced source or a newer request still counts for all work.
+- For follow-ups and releases, an account's binding may also have moved, as long as it keeps every job approved with it and adds only released work. An exclusion, dropping approved work, adding other work or a recapture still closes the request. The first reply, emails, link issuance before a reply and the statement-waits portfolio view keep the strict rule, now built from the same shared capture and binding parts.
+- Release refuses a file identical to a document the close replaced, instead of reusing the replaced document.
+- The client page tells a client sending a document they promised to untick "I'll send the document later" on its question, because uploading a file does not change a question's answer.
+
+Plan review: GPT-6 Sol (reasoning high) judged it real work and the exception necessary, and all five points were adopted:
+- Released work is told apart by the approval's own record, not by matching released files. A reused document can lead back to approved work, which must keep its rules.
+- A changed binding must keep every approved job and add only released work.
+- Only finishing is exempted, never a replaced source or a newer request, and a reused replaced document is refused.
+- The shared strict expression stays strict for its other users.
+- The page explains how to mark a promised document sent.
+
+Tests:
+- `TestRequestTakesTheRestAfterTheFirmActs`, a three-account request with approved work on one account:
+  - X-then-Y works: the firm releases X, binds its work and finishes it, and the client's Y reply is then accepted and released;
+  - binding approved work away, excluding an account, or binding other work closes the request, and binding released work reopens it;
+  - a client file identical to a replaced document is not released;
+  - a client file identical to approved work's document leads back to that work, whose finishing still closes the request.
+- Ten mutations of these conditions each fail it.
+- The transport, preparation and delivery packages pass, as do build and `npm test`.
+
+Code review: GPT-6 Sol found no correctness or security defect in the edge cases it checked (a missing binding, an unbound account, legacy requests, per-job requests, resuming work after a release). It found two small issues, both fixed and confirmed by a delta review: the approved-binding lookup compared ids as text, which the key index cannot serve on Coverage's 5-second poll; and the client-link guide still said every covered job must stay unfinished.
