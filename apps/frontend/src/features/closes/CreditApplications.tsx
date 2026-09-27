@@ -1,13 +1,16 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router";
 import { workspaceRequest } from "./workspace";
 
 type Doc = { id: string; date: string; open: string; party_id: string; party: string };
-type Suggestion = { kind: "payment" | "vendor_credit"; source_id: string; target_id: string; amount: string; basis: string };
-type Application = { id: string; kind: "payment" | "vendor_credit"; source_id: string; target_id: string; amount: string; txn_date?: string; rule_reference: string; digest: string; state: string; approved_by: string; external_id: string; error: string };
+type Kind = "payment" | "vendor_credit";
+type Suggestion = { kind: Kind; source_id: string; target_id: string; amount: string; basis: string };
+type Application = { id: string; kind: Kind; source_id: string; target_id: string; amount: string; txn_date?: string; rule_reference: string; digest: string; state: string; approved_by: string; external_id: string; error: string };
 const labels = {
   payment: { title: "Apply a customer payment to an invoice", source: "Payment", target: "Invoice", sourceKey: "Payment", targetKey: "Invoice" },
   vendor_credit: { title: "Apply a vendor credit to a bill", source: "Vendor credit", target: "Bill", sourceKey: "VendorCredit", targetKey: "Bill" },
 } as const;
+const blank = { source_id: "", target_id: "", amount: "", txn_date: "", bank_account_id: "", reason: "", rule_reference: "" };
 
 // An unapplied payment or unused vendor credit applied to an open document of the same party, under the accountant's rule.
 export function CreditApplications({ closeId }: { closeId: string }) {
@@ -15,19 +18,43 @@ export function CreditApplications({ closeId }: { closeId: string }) {
   const [applications, setApplications] = useState<Application[]>([]);
   const [suggestions, setSuggestions] = useState<{ items: Suggestion[]; capture: string }>({ items: [], capture: "" });
   const [fromCapture, setFromCapture] = useState("");
-  const [kind, setKind] = useState<"payment" | "vendor_credit">("payment");
-  const [form, setForm] = useState({ source_id: "", target_id: "", amount: "", txn_date: "", bank_account_id: "", reason: "", rule_reference: "" });
+  const [kind, setKind] = useState<Kind>("payment");
+  const [form, setForm] = useState(blank);
   const [confirmed, setConfirmed] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [found, setFound] = useState<Record<string, string>>({});
   const l = labels[kind];
+  // An exception's link names a document; the panel's next load fills in the agent's suggestion for it, or chooses it.
+  const linked = useRef<{ kind: Kind; id: string }>(undefined);
+  const panel = useRef<HTMLDetailsElement>(null);
+  const { hash } = useLocation();
+  useEffect(() => {
+    const [, kind, id] = /^#apply-(payment|vendor_credit)-([0-9]+)$/.exec(hash) ?? [];
+    if (!id || !panel.current || (linked.current?.kind === kind && linked.current.id === id)) return;
+    linked.current = { kind: kind as Kind, id };
+    panel.current.scrollIntoView({ block: "start" });
+    if (panel.current.open) void load();
+    else panel.current.open = true;
+  }, [hash]);
   async function load() {
     try {
       const result = await workspaceRequest(`/${closeId}/quickbooks/applications`);
       setCandidates(result.candidates ?? {});
       setApplications(result.applications ?? []);
       setSuggestions({ items: result.suggestions ?? [], capture: result.capture_id ?? "" });
+      const asked = linked.current;
+      linked.current = undefined;
+      if (!asked) return;
+      const s = (result.suggestions ?? []).find((s: Suggestion) => s.kind === asked.kind && s.source_id === asked.id);
+      if (s) return use(s, result.capture_id ?? "");
+      const a = labels[asked.kind];
+      const open = (result.candidates?.[a.sourceKey] ?? []).some((d: Doc) => d.id === asked.id);
+      setKind(asked.kind);
+      setForm({ ...blank, source_id: open ? asked.id : "" });
+      setFromCapture("");
+      setConfirmed(false);
+      setMessage(open ? `The agent has no unambiguous suggestion for ${a.source.toLowerCase()} #${asked.id}. Choose the ${a.target.toLowerCase()}, and check the applications below.` : `${a.source} #${asked.id} is not open in the latest transaction capture.`);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Applications unavailable.");
     }
@@ -51,14 +78,15 @@ export function CreditApplications({ closeId }: { closeId: string }) {
   const party = sources.find((d) => d.id === form.source_id)?.party_id;
   const targets = (candidates[l.targetKey] ?? []).filter((d) => d.party_id === party);
   const set = (key: keyof typeof form, value: string) => setForm((f) => ({ ...f, [key]: value }));
-  function use(s: Suggestion) {
+  function use(s: Suggestion, capture = suggestions.capture) {
     setKind(s.kind);
-    setForm((f) => ({ ...f, source_id: s.source_id, target_id: s.target_id, amount: s.amount, reason: s.basis, rule_reference: "" }));
-    setFromCapture(suggestions.capture);
+    setForm({ ...blank, source_id: s.source_id, target_id: s.target_id, amount: s.amount, reason: s.basis });
+    setFromCapture(capture);
     setConfirmed(false);
+    setMessage("");
   }
   return (
-    <details onToggle={(e) => e.currentTarget.open && void load()}>
+    <details ref={panel} onToggle={(e) => e.currentTarget.open && void load()}>
       <summary>Apply a payment or vendor credit</summary>
       <p>
         From the latest transaction capture's open items, under the accountant's cited rule. A customer payment's unapplied amount is linked to an open invoice of the same customer; a vendor credit is applied to an open bill of the same vendor by a bill payment that moves no money. Both documents are read back. It writes to the client's production QuickBooks company under a grant that covers the kind, or to the configured sandbox company. No automatic retry follows an uncertain write.

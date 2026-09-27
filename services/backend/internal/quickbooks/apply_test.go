@@ -140,7 +140,7 @@ func TestApplicationsAreSuggestedOnlyWithoutAmbiguity(t *testing.T) {
 	if s := got["71"]; s.TargetID != "92" || s.Amount != "80.00" || !strings.Contains(s.Basis, "reference names") {
 		t.Fatalf("a remittance naming one invoice is suggested for what is open on both: %+v", s)
 	}
-	if s := got["80"]; s.Kind != "vendor_credit" || s.TargetID != "41" || s.Amount != "60.00" {
+	if s := got["80"]; s.Kind != "vendor_credit" || s.TargetID != "41" || s.Amount != "60.00" || s.Basis != "Same party; the vendor credit's reference names it (bill #41)." {
 		t.Fatalf("a vendor credit naming one bill of the vendor is suggested: %+v", s)
 	}
 	if s := got["75"]; s.TargetID != "99" || s.Amount != "100.00" {

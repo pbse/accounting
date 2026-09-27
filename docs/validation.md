@@ -2086,3 +2086,31 @@ Code review: GPT-6 Sol found three issues, all fixed:
 A delta review confirmed that each fix closes its finding.
 
 Not verified: sending the email, and the queued state that follows it. Both need a hosted session and a verified sender.
+
+## Exceptions link to the agent's proposed applications (2026-09-27)
+
+Request: corrections proposed from open items (backlog EXC-01). The agent already proposed payment and credit applications from the open items (commit a431df7): an unambiguous pair, which **Use** fills in. But the proposals sat in a collapsed panel on the Workpapers tab, while **Exceptions the agent found** on the Overview reported the same unapplied payments and unused supplier credits only as client questions. Now each such QuickBooks exception links to its correction, **Prepare a correction for #id**, the way holding-account and coding exceptions already did. The link opens **Apply a payment or vendor credit**, loads it once, and fills in the agent's suggestion for that document, bound to its capture as **Use** binds it. With no unambiguous suggestion, it chooses the document and says so; when the document is no longer open, it says that instead. The rule stays empty and confirmation off. Xero captures and customer credit memos get no link, since neither can be applied here. The suggestion's basis now says "vendor credit" rather than "vendorcredit"; it becomes the saved reason when the person keeps it. The backlog line that still called proposing pending is corrected.
+
+Plan review: GPT-6 Sol (reasoning high) judged it real work: proposing existed, but no path led from the reported exception to it. Adopted:
+- A missing suggestion is described as "no unambiguous suggestion", not "no match", because ambiguity or an existing application also leave none.
+- The deep link uses a single load, and a failed load is never reported as "not open".
+- Choosing a proposal resets every field, including a vendor credit's date and bank account, which **Use** used to keep.
+
+Not adopted: carrying the capture in the link. The exception row never shows a pair; the pair filled in comes from the latest capture and stays bound to it, so a preview is refused if transactions were captured again.
+
+Tests: `TestApplicationsAreSuggestedOnlyWithoutAmbiguity` now checks a vendor credit's basis wording exactly, and fails without the fix. The QuickBooks package and the transport's credit-application and exception tests pass, as do tsc, build and `npm test`.
+
+Browser check: headless Chrome 154 against this branch's API and Vite, on local PostgreSQL. The data was a QuickBooks capture with payment 501 (500.00 unapplied) and invoice 601 of the same customer, payment 502 with no equal invoice, a recorded exception for payment 503 that is not open, and vendor credit 701 with bill 801.
+- From the Overview, "Prepare a correction for #501" opened the panel with Payment #501 → Invoice #601, 500.00 and the agent's basis, the rule empty and confirmation off.
+- #502 chose the payment and said the agent has no unambiguous suggestion.
+- #503 said the payment is not open in the latest transaction capture.
+- #701 filled Vendor credit #701 → Bill #801, 120.00, with the date and bank account left to the person.
+- Filling a credit's date and bank account, then using another suggestion and coming back, left them empty.
+- The link also works on a full page load.
+- No console errors.
+
+Code review: GPT-6 Sol found one low issue. Under React's StrictMode in development, a full-page link loaded the applications twice: the effect runs twice, and the second run saw the panel open and loaded as well as its toggle. The effect now skips a link that is already pending. Counting network requests on a full-page link then showed exactly one load.
+
+A delta review confirmed the fix closes the finding. A second link to the same document cannot reach a mounted panel, because the links are on the Overview tab and returning to Workpapers mounts the panel afresh. After a failed load, the next load applies the pending link.
+
+Not verified: previewing and applying, which need a hosted firm session and the QuickBooks sandbox; they are unchanged.
