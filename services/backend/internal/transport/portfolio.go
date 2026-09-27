@@ -23,9 +23,19 @@ type portfolioGoal struct {
 	mine, visible                       bool
 }
 
-var errPortfolioGoal = errors.New("Try a goal such as “prepare my clients due Friday”, “show my clients due Friday”, “hand over my clients due Friday”, “recheck failed work”, “stop work waiting on the client” or “prepare all visible”. A goal selects closes by: my clients, due on, before or by a day or date, work waiting on the client, failed work, or the inbox's current view.")
+var errPortfolioGoal = errors.New("Try a goal such as “prepare my clients due Friday”, “show my clients due Friday”, “hand over my clients due Friday”, “recheck failed work”, “stop work waiting on the client”, “show closes waiting on statements” or “prepare all visible”. A goal selects closes by: my clients, due on, before or by a day or date, work waiting on the client, failed work, or the inbox's current view; a list (show) can also select work waiting on statements.")
 
 var portfolioFiller = strings.Fields("all the closes close clients client work everything jobs that are is with and of in")
+
+// waitingStatements is SQL: close c has statement reconciliation work waiting on the client, or a current request
+// (on the close's latest QuickBooks capture) with an open, unused link for a bank or card account's coverage.
+const waitingStatements = `(EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=c.id AND j.state='waiting_client' AND i.proposal->>'kind'='reconciliation')
+ OR EXISTS(SELECT 1 FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id
+  CROSS JOIN LATERAL (SELECT s.id,s.payload->'coverage' AS coverage FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1) snap
+  WHERE d.close_id=c.id AND q.coverage_scope->>'snapshot_id'=snap.id::text
+  AND EXISTS(SELECT 1 FROM client_request_links l WHERE l.request_id=q.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now())
+  AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(q.coverage_scope->'bindings')='array' THEN q.coverage_scope->'bindings' ELSE '[]' END) b
+   WHERE snap.coverage @> jsonb_build_array(jsonb_build_object('account_id',b->>'account_id','kind','reconciliation')))))`
 
 // parsePortfolioGoal reads a goal such as "prepare my clients due Friday" without a model; today resolves day names.
 func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
@@ -100,10 +110,17 @@ func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 			if next(i) == "the" {
 				i++
 			}
-			if !slices.Contains([]string{"client", "clients", "replies"}, next(i)) {
+			if slices.Contains([]string{"client", "clients", "replies"}, next(i)) {
+				g.state = "waiting_client"
+				break
+			}
+			if next(i) == "bank" || next(i) == "card" {
+				i++
+			}
+			if next(i) != "statement" && next(i) != "statements" {
 				return g, errPortfolioGoal
 			}
-			g.state = "waiting_client"
+			g.state = "waiting_statements"
 		case w == "due":
 			g.compare = "by"
 			if c := next(i + 1); c == "on" || c == "before" || c == "by" {
@@ -119,6 +136,10 @@ func parsePortfolioGoal(text string, today time.Time) (portfolioGoal, error) {
 		case !slices.Contains(portfolioFiller, w):
 			return g, errPortfolioGoal
 		}
+	}
+	// Acting on a close acts on all its work, so a statement wait only selects closes to list.
+	if g.state == "waiting_statements" && g.action != "show" {
+		return g, errPortfolioGoal
 	}
 	if g.action == "delegate" && g.finish == "" {
 		g.finish = "review"
@@ -189,6 +210,8 @@ func (g portfolioGoal) describe(view, client string) string {
 	}
 	if g.state == "waiting_client" {
 		parts = append(parts, "with work waiting on the client")
+	} else if g.state == "waiting_statements" {
+		parts = append(parts, "with statement reconciliation work waiting on the client, or an open request for a bank or card account")
 	} else if g.state == "failed" {
 		parts = append(parts, "with failed work")
 	}
@@ -292,7 +315,7 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
  AND ($3='' OR ($6='on' AND c.due_on=$3::date) OR ($6='before' AND c.due_on<$3::date) OR ($6='by' AND c.due_on<=$3::date))
  AND (NOT $4 OR (c.owner<>'' AND c.owner=$5))
- AND ($7='' OR EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id AND j.state=$7))
+ AND ($7='' OR ($7<>'waiting_statements' AND EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id AND j.state=$7)) OR ($7='waiting_statements' AND `+waitingStatements+`))
  AND ($8='' OR c.entity ILIKE '%'||$8||'%' OR c.period=$8)
  AND `+view+` ORDER BY c.due_on NULLS LAST,c.id LIMIT 101`, organization(r), firmAccess(r), goal.due, goal.mine, subject(r), goal.compare, goal.state, in.Client)
 		if err != nil {
