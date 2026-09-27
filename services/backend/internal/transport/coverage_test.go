@@ -125,7 +125,7 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 	}
 	// Unknown fields cannot redirect a scoped request to another close.
 	call("POST", "/v1/client-request", approved.Token, map[string]any{"body": "answer", "confirmed": true, "close_id": "other"}, 400)
-	submit := func(want int) {
+	submit := func(want int) string {
 		t.Helper()
 		var b bytes.Buffer
 		m := multipart.NewWriter(&b)
@@ -146,8 +146,11 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 		if w.Code != want {
 			t.Fatalf("submit %d: %s", w.Code, w.Body.String())
 		}
+		return w.Body.String()
 	}
-	submit(200)
+	if first := submit(200); !strings.Contains(first, `"rescan":true`) {
+		t.Fatalf("the reply that saves files already offers a scan retry for them: %s", first)
+	}
 	submit(200)
 	var count int
 	must(db.QueryRow(`SELECT count(*) FROM client_attachments WHERE request_id=$1`, approved.ID).Scan(&count))

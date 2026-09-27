@@ -456,6 +456,10 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 				_, err = tx.ExecContext(r.Context(), `INSERT INTO client_attachments(request_id,close_id,name,digest,body) VALUES($1,$2,$3,$4,$5) ON CONFLICT (request_id,digest) DO NOTHING`, requestID, closeID, file.Name, file.Digest, file.Body)
 			}
 		}
+		// The reply offers a scan retry for the files just saved too, in case the page's scan of them fails.
+		if err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_attachments WHERE request_id::text=$1 AND state IN ('queued','scanning','failed'))`, requestID).Scan(&rescan)
+		}
 		// Work resumes on its own only once every question is answered; a partial reply waits for the firm.
 		if err == nil && complete {
 			if jobID != "" {
