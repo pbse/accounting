@@ -21,7 +21,7 @@ function readOpen() {
 }
 
 // The panel shows only in a signed-in (or unlocked) workspace.
-function useSignedIn() {
+export function useSignedIn() {
   return authKitClientId ? !!useAuth().user : useUnlocked();
 }
 

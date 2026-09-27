@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useRef } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { SidebarAccount } from "./Access";
-import { Assistant } from "./Assistant";
+import { Assistant, useSignedIn } from "./Assistant";
 import { AttentionBadge } from "../closes/Attention";
 import { Icon, type IconName } from "./Icon";
 
@@ -45,6 +45,7 @@ const groups: { label: string; items: { to: string; label: string; icon: IconNam
 export default function WorkspaceLayout() {
   const search = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const signedIn = useSignedIn();
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
@@ -90,7 +91,7 @@ export default function WorkspaceLayout() {
                 <NavLink className="nav-item" end={item.end} to={item.to} key={item.to}>
                   <Icon name={item.icon} />
                   {item.label}
-                  {item.to === "/dashboard/attention" && <AttentionBadge />}
+                  {item.to === "/dashboard/attention" && signedIn && <AttentionBadge />}
                 </NavLink>
               ))}
             </div>
