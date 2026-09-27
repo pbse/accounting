@@ -690,7 +690,9 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
 function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem[];view:string;client:string;onFilter:(view:string)=>void;onChange:()=>void}) {
   const [mode,setMode] = useState<"prepare"|"stop"|"recheck">("prepare");
   const [params] = useSearchParams();
-  const [command,setCommand] = useState(params.get("goal") ?? "");
+  const goalParam = params.get("goal");
+  const [command,setCommand] = useState(goalParam ?? "");
+  useEffect(() => { if (goalParam) setCommand(goalParam); }, [goalParam]);
   const [goals,setGoals] = useState<Goal[]>([]);
   useEffect(() => {
     let live = true;
@@ -886,7 +888,7 @@ function WorkDetails({
       [
         ...questions,
         ...facts.filter((f) => f.question).map((f) => f.question),
-      ].join("\n") ||
+      ].map((q, i) => `${i + 1}. ${q}`).join("\n") ||
       "Please clarify the following specific missing information:"
     }`,
   );

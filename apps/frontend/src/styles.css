@@ -1418,7 +1418,7 @@ a.row:hover {
 .assistant-toggle:hover:not(:disabled) {
   background: #25594c;
 }
-.assistant {
+aside.assistant {
   position: fixed;
   top: 0;
   right: 0;

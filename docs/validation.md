@@ -1918,6 +1918,24 @@ Local end to end (API and worker built from this branch): before the worker's fi
 
 Not verified: the list in a real browser.
 
+## Browser pass of the chat roadmap (2026-09-27)
+
+Request: check the chat roadmap's pages in a real browser. Headless Chrome 154 (its own throwaway profile) drove the Vite frontend, API and worker built from `origin/main` against a fresh, fully migrated local PostgreSQL database, unlocked with a workspace token generated for the run. No model key was configured, so model steps were checked only as far as their refusal, and one synthetic statement reading was written to the local database to exercise the statement review table.
+
+Walked through: Get started; creating a close; the assistant in a close, on a draft and firm-wide (context chips, history after reload, find, tie-out and change answers); the command palette and `/` menu (filtering, Tab completion, `/prepare`); evidence upload (two PDFs, one CSV); Statement rows (the no-model message, the review table with a flagged row, confirming into `rows.csv`); a prepare card confirmed into run #1 with live job states; confirming facts in Work into a prepared draft; the review canvas (inline PDF at the cited page, a line comment blocking approval until resolved, approval, a revision listing the fields changed since the review, comments carried to the revision); Attention; client memory; Security (the local refusal, and a fixture response for its sections); portfolio goals previewed from Work and from the firm-wide assistant; a client request answered in two parts on a 390 px phone viewport, with Work showing the partial reply and **Resume now**; the hand-over card.
+
+Fixed:
+- The assistant was unusable once it held an answer: each answer's list item carried the class `assistant`, which the panel's own `.assistant` rule turned into a full-height fixed panel over the header and composer. The rule now applies to `aside.assistant` only.
+- The Attention badge polled while the workspace was locked (two 401s per load) and first showed up to a minute after unlocking. It now renders only in a signed-in or unlocked workspace, like the assistant.
+- Following the assistant's goal link while already on Work left the goal empty, because Work read `?goal=` only when it first rendered. It now fills the goal whenever the link changes.
+- The request Work drafts for a job listed its questions unnumbered, so the client page treated them as one question and partial answers were impossible. The questions are now numbered, as consolidated drafts already were.
+
+Noted, not changed: the palette takes two Enters for a command without an argument; a revision's **Save draft to close** is disabled without saying revisions go through linked evidence; the statement table does not show each row's quoted line; **Retry attachment scanning** shows on the client page after a reply without attachments; withdrawn requests still read "Approved · not sent" in Work's history; the open assistant covers the right edge of the page.
+
+Checks: `npm run check`, `npm test`, `npm run build`. Each fix was confirmed in the browser after the change.
+
+Not verified: Security with a real WorkOS administrator (the local workspace has none), model-backed interpretation and statement reading, and browser notifications (headless Chrome grants no notification permission).
+
 ## Close goals: hand many closes to the agent in one request (2026-09-27)
 
 Request: step 3 of the close-orchestration plan (portfolio): one request should delegate the closes it names, after which Work's list of delegated closes shows where each stands. Portfolio goals gain **hand over** (or delegate): “hand over my clients due Friday”, optionally “to the agent” and one finish line (“for review”, “for sign-off”, “ready for …”, “signed off”). Migration 086 adds `delegate` to the operations' actions with its finish, and each item's deadline. The preview skips a close already with the agent (saying who handed it over) and gives each other close the agent's deadline: its own due date when the close page would accept it (from yesterday to a year ahead), otherwise none. The run hands each pending close over as the member through `handOver`, the core now shared with the close page's hand-over (refusing a signed-off or already delegated close), and records "Handed to the agent as goal #N." Ask Work sends hand-over requests straight to the preview, as firm-wide chat already does for any portfolio goal.
