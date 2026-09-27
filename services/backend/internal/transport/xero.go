@@ -265,7 +265,7 @@ func BackfillXeroRows(ctx context.Context, db *sql.DB) {
 	for ctx.Err() == nil {
 		var id string
 		var payload []byte
-		err := db.QueryRowContext(ctx, `SELECT s.id::text,s.payload FROM xero_snapshots s WHERE s.id>$1::bigint AND s.payload ? 'transactions'
+		err := db.QueryRowContext(ctx, `SELECT s.id::text,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period WHERE s.id>$1::bigint AND s.payload ? 'transactions'
  AND NOT EXISTS(SELECT 1 FROM xero_snapshots n WHERE n.close_id=s.close_id AND n.period=s.period AND n.id>s.id)
  AND NOT EXISTS(SELECT 1 FROM xero_transaction_rows t WHERE t.snapshot_id=s.id) ORDER BY s.id LIMIT 1`, after).Scan(&id, &payload)
 		if err == sql.ErrNoRows {
@@ -276,8 +276,12 @@ func BackfillXeroRows(ctx context.Context, db *sql.DB) {
 			return
 		}
 		after = id
-		if rows, _, _, _, e := xero.Ledger(payload); e == nil && len(rows) > 0 {
-			raw, _ := json.Marshal(rows)
+		rows, _, _, _, e := xero.Ledger(payload)
+		if e != nil {
+			log.Print("Xero search rows could not be read from snapshot ", id)
+			continue
+		}
+		if raw, _ := json.Marshal(rows); len(rows) > 0 {
 			if _, err = db.ExecContext(ctx, xeroRowsInsert, id, string(raw)); err != nil {
 				log.Print("Xero search rows could not be saved for snapshot ", id, ": ", err)
 			}
