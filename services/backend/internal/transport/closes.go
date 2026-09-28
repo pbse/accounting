@@ -550,6 +550,9 @@ func idempotent(db *sql.DB, next http.Handler) http.Handler {
 }
 
 func ConfiguredAPI() (http.Handler, func(), error) {
+	if _, err := serverSessions(); err != nil {
+		return nil, nil, err
+	}
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
 		return API(), func() {}, nil
@@ -560,9 +563,6 @@ func ConfiguredAPI() (http.Handler, func(), error) {
 		}
 	} else if len(os.Getenv("WORKSPACE_TOKEN")) < 32 {
 		return nil, nil, fmt.Errorf("WORKSPACE_TOKEN must contain at least 32 characters when DATABASE_URL is set")
-	}
-	if _, err := serverSessions(); err != nil {
-		return nil, nil, err
 	}
 	db, err := OpenTenantDB(url, "")
 	if err != nil {

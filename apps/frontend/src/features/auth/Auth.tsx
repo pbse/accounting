@@ -8,7 +8,7 @@ export const authKitClientId = import.meta.env.VITE_WORKOS_CLIENT_ID as
 // browser session, which needs a custom WorkOS authentication domain (VITE_WORKOS_API_HOSTNAME) in production.
 const serverSession = import.meta.env.VITE_AUTH_SESSION === "server";
 
-type Session = { user: { email: string } | null; isLoading: boolean; signIn: () => Promise<void> | void; signOut: () => Promise<void> | void };
+type Session = { user: { email: string } | null; isLoading: boolean; unavailable?: boolean; signIn: () => Promise<void> | void; signOut: () => Promise<void> | void };
 
 let accessToken: (() => Promise<string>) | undefined;
 export async function authenticationHeaders(): Promise<Record<string, string>> {
@@ -33,8 +33,8 @@ function startServerSignIn() {
 }
 async function endServerSession() {
   const response = await fetch(`${apiBaseUrl}/v1/auth/logout`, { method: "POST" });
-  const { logout_url } = response.ok ? await response.json() : { logout_url: "/" };
-  window.location.assign(logout_url);
+  if (!response.ok) throw new Error("Sign-out could not finish.");
+  window.location.assign((await response.json()).logout_url);
 }
 const signedOut: Session = { user: null, isLoading: false, signIn: startServerSignIn, signOut: endServerSession };
 const ServerSessionContext = createContext<Session>({ ...signedOut, isLoading: true });
@@ -42,10 +42,11 @@ function ServerSession({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session>({ ...signedOut, isLoading: true });
   useEffect(() => {
     let live = true;
+    // Only a 401 means signed out; any other failure is shown as unavailable, not as a prompt to sign in.
     fetch(`${apiBaseUrl}/v1/auth/session`)
-      .then(async (response) => (response.ok ? (await response.json()).user : null))
-      .catch(() => null)
-      .then((user) => live && setSession({ ...signedOut, user }));
+      .then(async (response) => (response.ok ? { user: (await response.json()).user } : response.status === 401 ? { user: null } : { user: null, unavailable: true }))
+      .catch(() => ({ user: null, unavailable: true }))
+      .then((state) => live && setSession({ ...signedOut, ...state }));
     return () => {
       live = false;
     };
@@ -87,9 +88,10 @@ export function Authentication({ children }: { children: ReactNode }) {
   );
 }
 export function AccountAccess() {
-  const { user, isLoading, signIn, signOut } = useSession();
+  const { user, isLoading, unavailable, signIn, signOut } = useSession();
   const [error, setError] = useState("");
   if (isLoading) return <p role="status">Checking your session…</p>;
+  if (unavailable) return <p role="alert">Your session could not be checked. Reload the page to try again.</p>;
   return (
     <>
       <p>

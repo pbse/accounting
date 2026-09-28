@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -70,8 +71,11 @@ func hashToken(raw string) string {
 // dashboardPath admits only a workspace path on this site as the place to return to after sign-in.
 func dashboardPath(p string) bool {
 	u, err := url.Parse(p)
-	return err == nil && u.Scheme == "" && u.Host == "" && u.User == nil && !strings.HasPrefix(p, "//") && !strings.ContainsAny(p, "\\\r\n\t") &&
-		(u.Path == "/dashboard" || strings.HasPrefix(u.Path, "/dashboard/"))
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\\r\n\t") {
+		return false
+	}
+	clean := path.Clean(u.Path)
+	return clean == u.Path && (clean == "/dashboard" || strings.HasPrefix(clean, "/dashboard/"))
 }
 
 func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
@@ -88,7 +92,8 @@ type workosTokens struct {
 }
 
 // authenticate exchanges a code or refresh token with WorkOS. refused is true only when WorkOS answered and declined
-// (a 4xx); a network error or 5xx is temporary, so a session is never ended because WorkOS was briefly unreachable.
+// (a 4xx other than rate limiting); a network error, 429 or 5xx is temporary, so a session never ends because WorkOS
+// was briefly unreachable or busy.
 func (c *sessionConfig) authenticate(ctx context.Context, fields map[string]string) (tokens workosTokens, refused bool, err error) {
 	fields["client_id"], fields["client_secret"] = c.clientID, c.secret
 	body, _ := json.Marshal(fields)
@@ -104,7 +109,7 @@ func (c *sessionConfig) authenticate(ctx context.Context, fields map[string]stri
 		return tokens, false, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode >= 400 && response.StatusCode < 500 {
+	if response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests {
 		return tokens, true, errors.New("WorkOS declined the sign-in")
 	}
 	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&tokens) != nil || tokens.AccessToken == "" || tokens.RefreshToken == "" {
@@ -182,6 +187,9 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			err = db.QueryRowContext(systemContext(r.Context()), `SELECT subject,email,organization_id FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(cookie.Value)).Scan(&subject, &email, &org)
 		}
 		if err == sql.ErrNoRows || errors.Is(err, http.ErrNoCookie) {
+			if err == sql.ErrNoRows {
+				setCookie(w, sessionCookie, "", -1)
+			}
 			problem(w, 401, "Sign in to open your firm's workspace.")
 			return
 		}
@@ -296,13 +304,23 @@ func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, verifier *a
 	if err != nil {
 		return "", 503
 	}
+	newRefresh, err := secrets.Seal("auth-session:refresh", []byte(tokens.RefreshToken))
+	if err != nil {
+		return "", 503
+	}
 	claims, err := verifier.Verify(ctx, tokens.AccessToken)
-	if err != nil || claims.Subject != subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil {
+	if err != nil {
+		// WorkOS's keys could not be checked: keep its rotated refresh token and try again on the next request.
+		if _, err = tx.ExecContext(ctx, `UPDATE auth_sessions SET refresh_token=$2,access_expires_at=now() WHERE id_hash=$1`, hashToken(raw), newRefresh); err != nil || tx.Commit() != nil {
+			return "", 503
+		}
+		return "", 503
+	}
+	if claims.Subject != subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil {
 		return end()
 	}
-	newRefresh, err := secrets.Seal("auth-session:refresh", []byte(tokens.RefreshToken))
-	newAccess, accessErr := secrets.Seal("auth-session:access", []byte(tokens.AccessToken))
-	if err != nil || accessErr != nil {
+	newAccess, err := secrets.Seal("auth-session:access", []byte(tokens.AccessToken))
+	if err != nil {
 		return "", 503
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE auth_sessions SET refresh_token=$2,access_token=$3,access_expires_at=$4 WHERE id_hash=$1`, hashToken(raw), newRefresh, newAccess, claims.ExpiresAt.Time); err != nil || tx.Commit() != nil {

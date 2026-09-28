@@ -59,9 +59,10 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	must(err)
+	kid := "fixture"
 	mint := func(session string) string {
 		token := jwt.NewWithClaims(jwt.SigningMethodRS256, auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a", Issuer: "https://auth.example", IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute))}, Organization: org, Session: session, Permissions: []string{"workpapers:review"}})
-		token.Header["kid"] = "fixture"
+		token.Header["kid"] = kid
 		signed, e := token.SignedString(key)
 		must(e)
 		return signed
@@ -176,7 +177,7 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	if idHash == cookie || idHash != hashToken(cookie) || email != "a@firm.test" || bytes.Contains(refreshSealed, []byte("refresh-1")) {
 		t.Fatalf("the row keeps a hash of the cookie and sealed tokens, never either in the clear: %s %s", idHash, email)
 	}
-	for _, elsewhere := range []string{"//evil.example/dashboard", "https://evil.example/dashboard", "/dashboard\\evil.example", "/v1/closes"} {
+	for _, elsewhere := range []string{"//evil.example/dashboard", "https://evil.example/dashboard", "/dashboard\\evil.example", "/v1/closes", "/dashboard/../v1/closes"} {
 		if done, _ := signIn(elsewhere, "session_x", "refresh-x"); done.Header().Get("Location") != "/dashboard" {
 			t.Fatalf("sign-in never returns to another site: %s -> %s", elsewhere, done.Header().Get("Location"))
 		}
@@ -235,13 +236,36 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	if revoked {
 		t.Fatal("a temporary WorkOS failure does not end the session")
 	}
-	respond = func(map[string]string) (int, any) { return 400, map[string]string{"error": "invalid_grant"} }
+	respond = func(map[string]string) (int, any) { return 429, map[string]string{"error": "rate_limited"} }
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 503 {
+		t.Fatalf("WorkOS rate limiting is temporary: %d", w.Code)
+	}
+	// A refreshed token whose signing key cannot be checked yet keeps the session and WorkOS's rotated refresh token.
+	kid = "rotated"
+	respond = func(map[string]string) (int, any) { return tokens("session_1", "refresh-3") }
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 503 {
+		t.Fatalf("an unverifiable refreshed token is temporary: %d", w.Code)
+	}
+	must(raw.QueryRow(`SELECT revoked_at IS NOT NULL FROM auth_sessions WHERE id_hash=$1`, hashToken(cookie)).Scan(&revoked))
+	if revoked {
+		t.Fatal("a key that cannot be checked yet does not end the session")
+	}
+	kid = "fixture"
+	respond = func(body map[string]string) (int, any) {
+		if body["refresh_token"] != "refresh-3" {
+			t.Errorf("the refresh token WorkOS rotated while its key was unchecked is used next: %v", body)
+		}
+		return 400, map[string]string{"error": "invalid_grant"}
+	}
 	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 401 || cookieOf(w, sessionCookie) == nil || cookieOf(w, sessionCookie).MaxAge >= 0 {
 		t.Fatalf("a refused refresh ends the session and clears the cookie: %d", w.Code)
 	}
 	must(raw.QueryRow(`SELECT revoked_at IS NOT NULL FROM auth_sessions WHERE id_hash=$1`, hashToken(cookie)).Scan(&revoked))
 	if !revoked {
 		t.Fatal("a refused refresh revokes the session")
+	}
+	if w := send(handler, "GET", "/v1/auth/session", cookie, ""); w.Code != 401 || cookieOf(w, sessionCookie) == nil || cookieOf(w, sessionCookie).MaxAge >= 0 {
+		t.Fatalf("the session check clears a dead cookie: %d", w.Code)
 	}
 
 	// A refreshed token for another WorkOS session ends this one.
@@ -295,5 +319,9 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		if _, err := serverSessions(); err == nil {
 			t.Fatalf("AUTH_SESSION=%s without %q must stop the API", mode, missing)
 		}
+	}
+	t.Setenv("DATABASE_URL", "")
+	if _, _, err := ConfiguredAPI(); err == nil {
+		t.Fatal("an unknown mode stops the API even without a database")
 	}
 }
