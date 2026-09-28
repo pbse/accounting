@@ -298,29 +298,39 @@ func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	outcome := map[string]any{}
 	err = adminAct(ctx, db, adminAction{Action: "sessions.revoke_workos", TargetType: "user", TargetID: user, Reason: reason, Request: outcome},
 		func(ctx context.Context, _ *sql.Tx) error {
-			// Every page of sessions, so "all" means all; a list WorkOS cannot finish is a failure, not a partial success.
-			sessions, err := workosList[workosSession](ctx, "/user_management/users/"+url.PathEscape(user)+"/sessions", url.Values{"limit": {"100"}})
-			if err != nil {
-				return fmt.Errorf("%w: WorkOS did not list their sessions", errWorkOS)
+			// Every page of sessions, revoking the active ones as each page arrives, so "all" means all however long the
+			// history; a page WorkOS cannot give is a failure, reported with what ended before it.
+			failed := func() error {
+				outcome["ended"] = ended
+				return fmt.Errorf("%w: WorkOS ended %d active session(s), then failed", errWorkOS, ended)
 			}
-			active := 0
-			for _, s := range sessions {
-				if s.Status == "active" {
-					active++
+			query := url.Values{"limit": {"100"}}
+			for range 10000 { // at most a million sessions: a longer history is refused, not ended in part
+				var page struct {
+					Data         []workosSession `json:"data"`
+					ListMetadata struct {
+						After string `json:"after"`
+					} `json:"list_metadata"`
 				}
-			}
-			for _, s := range sessions {
-				if s.Status != "active" {
-					continue
+				if workos(ctx, "GET", "/user_management/users/"+url.PathEscape(user)+"/sessions?"+query.Encode(), nil, &page) != nil {
+					return failed()
 				}
-				if err = workos(ctx, "POST", "/user_management/sessions/revoke", map[string]string{"session_id": s.ID}, nil); err != nil {
+				for _, s := range page.Data {
+					if s.Status != "active" {
+						continue
+					}
+					if workos(ctx, "POST", "/user_management/sessions/revoke", map[string]string{"session_id": s.ID}, nil) != nil {
+						return failed()
+					}
+					ended++
+				}
+				if page.ListMetadata.After == "" {
 					outcome["ended"] = ended
-					return fmt.Errorf("%w: WorkOS ended %d of their %d active sessions, then failed", errWorkOS, ended, active)
+					return nil
 				}
-				ended++
+				query.Set("after", page.ListMetadata.After)
 			}
-			outcome["ended"] = ended
-			return nil
+			return failed()
 		})
 	if err != nil {
 		problem(w, 502, fmt.Sprintf("The app's own sessions for this person ended (%d). %s; end sessions again to finish.", app, strings.TrimPrefix(err.Error(), errWorkOS.Error()+": ")))
@@ -351,26 +361,34 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	err := adminAct(context.WithoutCancel(r.Context()), db, adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason)},
 		func(ctx context.Context, tx *sql.Tx) error {
 			var workosID string
-			var stored time.Time
-			err := tx.QueryRowContext(ctx, `SELECT workos_id,expires_at FROM member_invitations WHERE id::text=$1 AND organization_id=$2 AND state='pending' AND workos_id IS NOT NULL AND expires_at>now() FOR UPDATE`, invitation, firm).Scan(&workosID, &stored)
+			err := tx.QueryRowContext(ctx, `SELECT workos_id FROM member_invitations WHERE id::text=$1 AND organization_id=$2 AND state='pending' AND workos_id IS NOT NULL AND expires_at>now() FOR UPDATE`, invitation, firm).Scan(&workosID)
 			if errors.Is(err, sql.ErrNoRows) {
 				return errInvitationNotPending
 			}
 			if err != nil {
 				return err
 			}
-			var sent workosInvitation
-			if err = workos(ctx, "POST", "/user_management/invitations/"+url.PathEscape(workosID)+"/resend", map[string]any{}, &sent); err != nil {
-				// A refusal (4xx) sent nothing. Any other failure may have lost the answer after sending: WorkOS's copy says
-				// whether it sent (a later expiry), and when that cannot be read either, the outcome is unknown, not "unsent".
+			// WorkOS's own copy, just before this attempt: what a lost answer is judged against.
+			var before, sent workosInvitation
+			path := "/user_management/invitations/" + url.PathEscape(workosID)
+			if workos(ctx, "GET", path, nil, &before) != nil {
+				return fmt.Errorf("%w: WorkOS did not answer", errWorkOS)
+			}
+			if before.State != "pending" {
+				return errInvitationNotPending
+			}
+			if err = workos(ctx, "POST", path+"/resend", map[string]any{}, &sent); err != nil {
+				// A refusal (4xx) sent nothing. Any other failure may have lost the answer after sending: WorkOS's copy
+				// says whether this attempt sent (an expiry later than just before it), and when that cannot be read,
+				// the outcome is unknown, not "unsent".
 				var status statusError
 				if errors.As(err, &status) && status.code >= 400 && status.code < 500 {
 					return fmt.Errorf("%w: WorkOS refused to resend it", errWorkOS)
 				}
-				if workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(workosID), nil, &sent) != nil {
+				if workos(ctx, "GET", path, nil, &sent) != nil {
 					return errResendUnconfirmed
 				}
-				if !sent.ExpiresAt.After(stored) {
+				if !sent.ExpiresAt.After(before.ExpiresAt) {
 					return fmt.Errorf("%w: the invitation was not resent", errWorkOS)
 				}
 			}
