@@ -14,7 +14,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	}
 	proposal := Proposal{Kind: "prepaid", Engine: "openai", Sources: []Source{{ID: "1", Digest: "d", Name: "insurance.pdf", Role: "invoice"}},
 		Facts: []Fact{fact("amount", "1200.00"), fact("service_start", "2026-09-01"), fact("service_end", "2027-08-31"), fact("currency", "USD"), {Field: "expense_account", Label: "expense account"}, {Field: "prepaid_account", Label: "prepaid account"}, {Field: "booked_balance", Label: "booked balance", Optional: true}}}
-	invoice := "Acme Insurance Co\nInvoice INV-778\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027"
+	invoice := "Acme Insurance Co\nInvoice INV-778\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027\n\nPay online with Stripe"
 	procedure := Procedure{ID: "7", Kind: "prepaid", Method: prepaids.Method, ExpenseAccount: "Insurance", PrepaidAccount: "Prepaid Expenses", Enabled: true}
 	row := func(kind, id, date, vendor, number, account, amount string) LedgerRow {
 		detail := "AccountBasedExpenseLineDetail"
@@ -54,25 +54,31 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "51", "2026-09-03", "Acme Insurance Co", "", "Insurance", "1200"))); reason != "" {
 		t.Fatal("purchase from the vendor not accepted", reason)
 	}
+	if _, reason = StraightThrough(proposal, invoice, procedure, "", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+		t.Fatal("prepared without a detected home currency")
+	}
 	for name, c := range map[string]struct {
 		change func(*Proposal, *Procedure)
 		ledger *Ledger
 		unread bool
 	}{
-		"unread evidence":           {func(*Proposal, *Procedure) {}, ledger(bill), true},
-		"partial prepaid line":      {func(*Proposal, *Procedure) {}, ledger(split), false},
-		"foreign journal":           {func(*Proposal, *Procedure) {}, ledger(bill, foreign), false},
-		"unnamed account":           {func(*Proposal, *Procedure) {}, ledger(bill, row("JournalEntry", "66", "2026-09-30", "", "", "", "10")), false},
-		"no capture":                {func(*Proposal, *Procedure) {}, nil, false},
-		"no bill":                   {func(*Proposal, *Procedure) {}, ledger(), false},
-		"other vendor, same amount": {func(*Proposal, *Procedure) {}, ledger(row("Bill", "41", "2026-09-03", "Other Vendor", "77", "Insurance", "1200")), false},
-		"bill outside month":        {func(*Proposal, *Procedure) {}, ledger(row("Bill", "41", "2026-08-31", "Acme Insurance Co", "", "Insurance", "1200")), false},
-		"two bills":                 {func(*Proposal, *Procedure) {}, ledger(bill, row("Bill", "43", "2026-09-05", "Acme Insurance Co", "", "Insurance", "1200")), false},
-		"booked to prepaid":         {func(*Proposal, *Procedure) {}, ledger(row("Bill", "41", "2026-09-03", "Acme Insurance Co", "", "Prepaid Expenses", "1200")), false},
-		"journal moves it":          {func(*Proposal, *Procedure) {}, ledger(bill, row("JournalEntry", "60", "2026-09-30", "", "", "Prepaid Expenses", "1200")), false},
-		"open question":             {func(p *Proposal, _ *Procedure) { p.Questions = []string{"Which policy?"} }, ledger(bill), false},
-		"unselected evidence":       {func(p *Proposal, _ *Procedure) { p.Unselected = []Source{{ID: "2", Name: "credit-note.pdf"}} }, ledger(bill), false},
-		"currency not quoted":       {func(p *Proposal, _ *Procedure) { p.Facts[3].Candidates[0].Quote = "Annual premium 1,200.00" }, ledger(bill), false},
+		"processor named in the body": {func(*Proposal, *Procedure) {}, ledger(row("Bill", "70", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
+		"line-less vendor credit":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "71", Date: "2026-09-10", Record: json.RawMessage(`{"VendorRef":{"Name":"Acme Insurance Co"}}`)}), false},
+		"line-less journal":           {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "72", Date: "2026-09-10", Record: json.RawMessage(`{}`)}), false},
+		"unread evidence":             {func(*Proposal, *Procedure) {}, ledger(bill), true},
+		"partial prepaid line":        {func(*Proposal, *Procedure) {}, ledger(split), false},
+		"foreign journal":             {func(*Proposal, *Procedure) {}, ledger(bill, foreign), false},
+		"unnamed account":             {func(*Proposal, *Procedure) {}, ledger(bill, row("JournalEntry", "66", "2026-09-30", "", "", "", "10")), false},
+		"no capture":                  {func(*Proposal, *Procedure) {}, nil, false},
+		"no bill":                     {func(*Proposal, *Procedure) {}, ledger(), false},
+		"other vendor, same amount":   {func(*Proposal, *Procedure) {}, ledger(row("Bill", "41", "2026-09-03", "Other Vendor", "77", "Insurance", "1200")), false},
+		"bill outside month":          {func(*Proposal, *Procedure) {}, ledger(row("Bill", "41", "2026-08-31", "Acme Insurance Co", "", "Insurance", "1200")), false},
+		"two bills":                   {func(*Proposal, *Procedure) {}, ledger(bill, row("Bill", "43", "2026-09-05", "Acme Insurance Co", "", "Insurance", "1200")), false},
+		"booked to prepaid":           {func(*Proposal, *Procedure) {}, ledger(row("Bill", "41", "2026-09-03", "Acme Insurance Co", "", "Prepaid Expenses", "1200")), false},
+		"journal moves it":            {func(*Proposal, *Procedure) {}, ledger(bill, row("JournalEntry", "60", "2026-09-30", "", "", "Prepaid Expenses", "1200")), false},
+		"open question":               {func(p *Proposal, _ *Procedure) { p.Questions = []string{"Which policy?"} }, ledger(bill), false},
+		"unselected evidence":         {func(p *Proposal, _ *Procedure) { p.Unselected = []Source{{ID: "2", Name: "credit-note.pdf"}} }, ledger(bill), false},
+		"currency not quoted":         {func(p *Proposal, _ *Procedure) { p.Facts[3].Candidates[0].Quote = "Annual premium 1,200.00" }, ledger(bill), false},
 		"account not quoted": {func(p *Proposal, _ *Procedure) {
 			p.Facts[4].Value = "Insurance"
 			p.Facts[4].Candidates = []Candidate{{Value: "Insurance", Quote: "Coverage"}}

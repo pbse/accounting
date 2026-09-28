@@ -44,6 +44,9 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 	if unread {
 		return Plan{}, "evidence in the close is not extracted yet, or failed extraction"
 	}
+	if currency == "" {
+		return Plan{}, "the client's home currency is not detected from a connected ledger"
+	}
 	if !procedure.Enabled || procedure.Kind != "prepaid" || procedure.Method != prepaids.Method || procedure.ExpenseAccount == "" || procedure.PrepaidAccount == "" {
 		return Plan{}, "no enabled prepaid procedure names equal full months and both accounts for this client"
 	}
@@ -105,11 +108,23 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 }
 
 // expensedLine finds the one bill or purchase line in the close month that books the invoice amount to the expense
-// account and belongs to the invoice: its vendor's name or its document number is printed in the invoice. Any prepaid
+// account and belongs to the invoice: its vendor's name heads the invoice or its document number is printed in it. Any prepaid
 // line on that bill, a second match, any journal on either account in the month, a vendor credit from the vendor or on
 // either account, or a line whose account is not named is a question for a person, whatever its currency.
 func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, prepaid string) (booking, reason string) {
 	text := strings.ToLower(invoice)
+	// ponytail: the invoice's own vendor is taken to be a name in its first three lines (the letterhead); a name printed
+	// anywhere else, such as a payment processor's, only counts against it. A parsed vendor fact would replace this.
+	head := []string{}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) != "" {
+			head = append(head, line)
+		}
+		if len(head) == 3 {
+			break
+		}
+	}
+	letterhead := strings.Join(head, "\n")
 	matches := 0
 	for _, row := range rows {
 		if !strings.HasPrefix(row.Date, period+"-") {
@@ -128,7 +143,11 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 		if json.Unmarshal(row.Record, &record) != nil {
 			continue
 		}
-		mine := printed(text, record.VendorRef.Name) || printed(text, record.EntityRef.Name) || printed(text, record.DocNumber)
+		mentioned := printed(text, record.VendorRef.Name) || printed(text, record.EntityRef.Name) || printed(text, record.DocNumber)
+		mine := printed(letterhead, record.VendorRef.Name) || printed(letterhead, record.EntityRef.Name) || printed(text, record.DocNumber)
+		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || (row.Kind == "VendorCredit" && mentioned) || mine) {
+			return "", "a captured " + row.Kind + " in the close month has no readable lines"
+		}
 		for _, line := range record.Line {
 			name := ""
 			if line.AccountBasedExpenseLineDetail != nil {
@@ -137,13 +156,13 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 				name = line.JournalEntryLineDetail.AccountRef.Name
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
-			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || mine) {
+			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || mentioned) {
 				return "", "a captured " + row.Kind + " in the close month has a line whose account is not named"
 			}
 			if row.Kind == "JournalEntry" && (onExpense || onPrepaid) {
 				return "", "a journal in the close month posts to the expense or prepaid account"
 			}
-			if row.Kind == "VendorCredit" && (mine || onExpense || onPrepaid) {
+			if row.Kind == "VendorCredit" && (mentioned || onExpense || onPrepaid) {
 				return "", "a vendor credit in the close month may change what this invoice expensed"
 			}
 			if (row.Kind != "Bill" && row.Kind != "Purchase") || !mine {
