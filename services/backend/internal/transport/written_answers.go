@@ -32,7 +32,7 @@ type writtenSource struct {
 
 const writtenNote = "Written by the model from this close's saved status, sign-off blockers, tie-out, changes and exceptions; check the linked pages before relying on it."
 
-const firmWrittenNote = "Written by the model from your firm's work lists (what needs a person today, the review queue and blocked work); check Work before relying on it."
+const firmWrittenNote = "Written by the model from your firm's work lists (what needs a person today, the review queue, blocked work and the closes handed to the agent); check Work before relying on it."
 
 // writtenReply asks the model to answer a close question that no fixed read matches, from those reads as the member
 // sees them, when the firm turned written answers on; with no close, it answers from the firm's work lists when the
@@ -58,7 +58,7 @@ func writtenReply(ctx context.Context, db *sql.DB, org string, readRaw func(stri
 	sources := []writtenSource{{"status", "/brief", "Close overview", base, nil}, {"blockers", "/readiness", "Close & sign-off", base + "?tab=signoff", []string{"state", "blockers", "scope"}}, {"tieout", "/tie-out", "Balance sheet tie-out", base, nil}, {"changes", "/flux", "Changes from last month", base, nil}, {"exceptions", "/quickbooks/exceptions", "Exceptions", base, nil}}
 	if closeID == "" {
 		about, capped, note = "Answer an accountant's question about the work across the client closes they can open", " A list may be capped: when a read's count, needing or has_more shows more items than it lists, never answer as if the list were complete.", firmWrittenNote
-		sources = []writtenSource{{"today", "/morning", "Needs a person today", "/dashboard", nil}, {"review", "/review-queue", "Review queue", "/dashboard", nil}, {"blocked", "/work?view=blocked", "Blocked work", "/dashboard", nil}}
+		sources = []writtenSource{{"today", "/morning", "Needs a person today", "/dashboard", nil}, {"review", "/review-queue", "Review queue", "/dashboard", nil}, {"blocked", "/work?view=blocked", "Blocked work", "/dashboard", nil}, {"delegated", "/goals", "Handed to the agent", "/dashboard", nil}}
 	}
 	if paperID != "" {
 		sources = append(sources, writtenSource{"draft", "/workpapers/" + url.PathEscape(paperID) + "?record=1", "Draft #" + paperID, base + "/workpapers/" + url.PathEscape(paperID), []string{"kind", "review_state", "paper"}})

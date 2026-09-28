@@ -2414,3 +2414,47 @@ Its code review found three more, all fixed:
 - The follow-ups say "at least", since an item keeps its words.
 
 Each fix fails a test without it. Delta reviews closed the stale-request and wording findings in the first round and the due-date cutoff in the second.
+
+## Cross-client reports in chat, and monthly hand-overs asked for there (2026-09-27)
+
+Request: the product review's fourth item, second half. The assistant "cannot yet produce… a cross-client, cross-system report from a natural-language request", and "users cannot describe a new event-based routine in chat". Verified in the code:
+- A firm-wide "show …" goal only linked to Work, and no answer covered delegated closes.
+- The model-backed firm answers read only today's list, the review queue and blocked work.
+- `chatDelegate` refused "every month" as an instruction it does not act on.
+
+What changed:
+- **Show goals in chat.** A firm-wide "show/list" goal ("show my clients due Friday") is answered in the chat from Work's own selection for the member (replaying the portfolio preview, which saves nothing). It says how many match ("more than 100" when capped) and gives the first ten with due dates and links, shown once.
+- **Delegated closes.** "How are my delegated closes doing?" or "What is the agent working on?" lists the closes handed to the agent in Work's words, those needing a person first, noting when the agent last looked once that is over ten minutes ago. Only a question in listing words takes this route, and it is checked before a search, so "show me delegated closes" lists them rather than searching; a more specific question goes to written answers.
+- **Model reads.** The firm's opt-in written answers now also read the closes handed to the agent. With that setting on, a new natural-language question across clients ("which delegated closes are due this week and still waiting on the client?") can be answered under the existing redaction, whole-or-omitted, quote and daily-limit rules.
+- **Every month.** "Every month", "each month" or "monthly" in a hand-over request makes a card with the monthly hand-over ticked, stored with the message (migration 095, `chat_messages.every_month`, checked by `/readyz`). A firm-wide hand-over link carries it to the close's ask, and confirming the card sets up the routine. "Every week" is still refused.
+- **Not built.** New event-triggered routines are left to the planned workflow engine (`docs/workflow-engine.md`), whose events, triggers and agent-proposed plans are where they belong. A document or reply arriving is already acted on by a goal without any routine.
+
+Tests (local PostgreSQL):
+- `TestAssistantAnswersFromTheMembersOwnScopedReads` now also covers:
+  - an "every month" card is stored, and confirming it sets up the routine;
+  - a firm-wide listing lists only the member's closes, with its due date, and history keeps no client name;
+  - the delegated closes report;
+  - a firm-wide hand-over link keeps "every month".
+- `TestFirmReportsAndMonthlyRequests`: the accepted phrases and "every week" refused; routing ("show me delegated closes", "what is the agent working on", "find agent emails"); a capped listing's wording and ten links; Work's words.
+- `TestAssistantWritesAnswersOnlyWhenTheFirmAllows`: the firm-wide model reads now include delegated closes.
+- Nine mutations each fail a test.
+- In a local browser (seeded close, headless Chrome), asking the close's assistant "Get this close ready for review every month" showed the card with **Do this every month** ticked and its explanation.
+
+Review: GPT-6 Sol (reasoning high) reviewed the plan (relevant; revise). It judged two listings and "every month" a narrower step than the finding. In response:
+- the delegated closes read was added to the model-backed firm answers, for genuinely new questions;
+- new event routines are recorded as left to the workflow engine;
+- capped counts say "more than 100";
+- the delegated route comes before search;
+- the flag travels to the card and is checked in a browser.
+
+Its code review found four more, all fixed:
+- A filtered question was listed unfiltered. The route now takes listing words only, and a test sends a more specific question to written answers.
+- A client named "Monthly …" would tick the monthly box. Client-name words are excluded.
+- Stale progress now says when the agent last looked.
+- A hidden monthly tick could still be submitted after a routine appeared elsewhere. The card now submits it only while no routine exists.
+
+Each backend fix fails a test without it. A first delta review closed the last two and reopened the first two:
+- "Which delegated closes are blocked?" fell to the general blocked-work list. Any question about delegated closes that is not a plain listing now goes to written answers.
+- "Get Monthly Analytics ready for review monthly" lost its "monthly". Only the words where the client's name first appears are ignored.
+
+Both have tests that fail without the fix. A second delta review closed both.

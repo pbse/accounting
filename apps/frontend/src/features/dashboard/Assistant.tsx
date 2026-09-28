@@ -11,7 +11,7 @@ import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
 import { Icon } from "./Icon";
 
-type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request"; due_on?: string; finish?: string; outcome?: Outcome | null };
+type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null };
 
 function readOpen() {
   try {
@@ -210,7 +210,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
             {m.action &&
               closeId &&
               (m.action === "delegate" ? (
-                <GoalCard closeId={closeId} dueOn={m.due_on ?? ""} finish={m.finish ?? ""} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+                <GoalCard closeId={closeId} dueOn={m.due_on ?? ""} finish={m.finish ?? ""} everyMonth={!!m.every_month} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ) : m.action === "request" ? (
                 <RequestCard closeId={closeId} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ) : (
