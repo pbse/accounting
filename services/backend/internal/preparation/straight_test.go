@@ -143,6 +143,12 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if _, reason = StraightThrough(proposal, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, bare); reason == "" {
 		t.Fatal("prepared without a chart evidence entry")
 	}
+	withRule := proposal
+	withRule.Sources = append([]Source{}, proposal.Sources...)
+	withRule.Sources = append(withRule.Sources, Source{ID: "3", Digest: "rule", Name: rule.Name, Role: "support"})
+	if _, reason = StraightThrough(withRule, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+		t.Fatal("the procedure's own evidence copy as support refused", reason)
+	}
 	idOnly := bill
 	idOnly.Record = json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)
 	if _, reason = StraightThrough(proposal, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(idOnly)); reason != "" {
@@ -171,6 +177,9 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"account inside a longer name": {func(p *Proposal, _ *Procedure) {
 			p.Facts[4].Value = "Insurance"
 			p.Facts[4].Candidates = []Candidate{{Value: "Insurance", SourceID: "1", Quote: "Expense account: Prepaid Insurance"}}
+		}, ledger(bill), false},
+		"support document selected": {func(p *Proposal, _ *Procedure) {
+			p.Sources = append(p.Sources, Source{ID: "2", Digest: "x", Name: "credit-note.pdf", Role: "support"})
 		}, ledger(bill), false},
 		"undecodable capture row":      {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "95", Date: "2026-09-20", Record: json.RawMessage(`{"Line":{"Amount":1}}`)}), false},
 		"deposit with no counterparty": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "94", Date: "2026-09-20", Record: json.RawMessage(`{"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Bank"}}}]}`)}), false},

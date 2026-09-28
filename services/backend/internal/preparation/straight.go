@@ -66,6 +66,13 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if ledger.ChartSource.ID == "" {
 		return Plan{}, "the close's chart of accounts capture has no current evidence entry"
 	}
+	// Every fact comes from the invoice, so any other selected document (a credit note, a reply) is something only a
+	// person can weigh; the procedure's own evidence copy is the one exception.
+	for _, s := range p.Sources {
+		if s.Role != "invoice" && s.ID != procedureSource.ID {
+			return Plan{}, "supporting evidence (" + s.Name + ") was selected; a person reviews it"
+		}
+	}
 	primary := ""
 	for _, s := range p.Sources {
 		if s.Role == "invoice" {
@@ -603,14 +610,14 @@ func ProcedureEvidence(ctx context.Context, tx *sql.Tx, closeID, procedureID str
 	return s, err
 }
 
-// CloseLedger is the newest completed capture of the close month on the close's reading connection, with its
+// CloseLedger is the newest completed capture of the close month on the close's active reading connection, with its
 // current evidence entry and its bill, purchase, journal, vendor credit and deposit rows (a newer sync that found the books
 // unchanged reuses them); nil when a newer capture is still pending or failed,
 // or there is none.
 func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, error) {
 	var l Ledger
 	var connection string
-	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name,s.connection_id::text FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
+	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name,s.connection_id::text FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
  WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name, &connection)
 	if err == sql.ErrNoRows {
 		return nil, nil
