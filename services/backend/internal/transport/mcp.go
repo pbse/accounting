@@ -189,11 +189,11 @@ func mcpPackage(archive []byte, closeID string) *mcp.CallToolResult {
 			}
 			continue
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-			if line == "" {
+		for _, line := range strings.Split(string(raw), "\n") {
+			if line = strings.TrimSuffix(line, "\r"); line == "" {
 				continue
 			}
-			sum, name, ok := strings.Cut(strings.TrimRight(line, "\r"), "  ")
+			sum, name, ok := strings.Cut(line, "  ")
 			if _, err := hex.DecodeString(sum); !ok || len(sum) != 64 || err != nil || name == "" {
 				return toolProblem("UNAVAILABLE", "The close package's checksums could not be read.")
 			}

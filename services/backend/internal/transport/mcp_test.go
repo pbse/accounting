@@ -247,6 +247,7 @@ func TestMCPPackageRefusesAnUnreadablePackage(t *testing.T) {
 	for name, files := range map[string]map[string]string{
 		"a manifest that is not an object": {"manifest.json": `"oops"`, "checksums.sha256": sum + "  manifest.json\n"},
 		"a truncated checksum line":        {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": sum + "  manifest.json\n" + sum[:20]},
+		"a whitespace-only checksum line":  {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": "   \n" + sum + "  manifest.json\n"},
 		"not a ZIP":                        nil,
 	} {
 		archive := []byte("not a zip")
