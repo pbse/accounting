@@ -9,6 +9,7 @@ import { Workflows } from "./pages/Workflows";
 import { Runs } from "./pages/Runs";
 import { Run } from "./pages/Run";
 import { StartRun } from "./pages/StartRun";
+import { Connections, Jobs } from "./pages/Operations";
 
 type Me = { subject: string; permissions: string[]; mode: string };
 
@@ -27,6 +28,8 @@ export function App() {
           <Route path="runs" element={<Runs />} />
           <Route path="runs/new" element={<StartRun />} />
           <Route path="runs/:id" element={<Run />} />
+          <Route path="jobs" element={<Jobs />} />
+          <Route path="connections" element={<Connections />} />
           <Route path="*" element={<p>This page does not exist. <Link to="/">Back to the overview</Link></p>} />
         </Route>
       </Routes>
@@ -58,6 +61,11 @@ function Layout() {
             <div className="nav-label">Workflows</div>
             <NavLink className="nav-item" to="/workflows">Catalog</NavLink>
             <NavLink className="nav-item" end to="/runs">Runs</NavLink>
+          </div>
+          <div className="nav-group">
+            <div className="nav-label">Operations</div>
+            <NavLink className="nav-item" to="/jobs">Stuck work</NavLink>
+            <NavLink className="nav-item" to="/connections">Connections</NavLink>
           </div>
         </nav>
         <div className="sidebar-footer">

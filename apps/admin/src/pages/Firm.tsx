@@ -103,7 +103,9 @@ function Overview({ detail, reload }: { detail: Detail; reload: () => void }) {
             </tbody>
           </table>
         )}
-        <p><Link to={`/runs?firm=${encodeURIComponent(f.id)}`}>All runs for this firm</Link></p>
+        <p>
+          <Link to={`/runs?firm=${encodeURIComponent(f.id)}`}>All runs for this firm</Link> · <Link to={`/jobs?firm=${encodeURIComponent(f.id)}`}>Stuck work</Link> · <Link to={`/connections?firm=${encodeURIComponent(f.id)}`}>Connections</Link>
+        </p>
       </section>
       <Suspension firm={f} onDone={reload} />
     </>
