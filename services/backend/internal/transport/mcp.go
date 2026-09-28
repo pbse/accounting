@@ -190,7 +190,7 @@ func mcpPackage(archive []byte, closeID string) *mcp.CallToolResult {
 			continue
 		}
 		for _, line := range strings.Split(string(raw), "\n") {
-			if line = strings.TrimSuffix(line, "\r"); line == "" {
+			if line == "" {
 				continue
 			}
 			sum, name, ok := strings.Cut(line, "  ")

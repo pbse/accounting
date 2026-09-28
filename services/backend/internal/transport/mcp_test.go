@@ -245,10 +245,11 @@ func TestMCPPackageRefusesAnUnreadablePackage(t *testing.T) {
 		t.Fatalf("a complete package is read: %v", good.StructuredContent)
 	}
 	for name, files := range map[string]map[string]string{
-		"a manifest that is not an object": {"manifest.json": `"oops"`, "checksums.sha256": sum + "  manifest.json\n"},
-		"a truncated checksum line":        {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": sum + "  manifest.json\n" + sum[:20]},
-		"a whitespace-only checksum line":  {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": "   \n" + sum + "  manifest.json\n"},
-		"not a ZIP":                        nil,
+		"a manifest that is not an object":     {"manifest.json": `"oops"`, "checksums.sha256": sum + "  manifest.json\n"},
+		"a truncated checksum line":            {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": sum + "  manifest.json\n" + sum[:20]},
+		"a whitespace-only checksum line":      {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": "   \n" + sum + "  manifest.json\n"},
+		"a carriage-return-only checksum line": {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": "\r\n" + sum + "  manifest.json\n"},
+		"not a ZIP":                            nil,
 	} {
 		archive := []byte("not a zip")
 		if files != nil {
