@@ -530,9 +530,14 @@ func CreatePlan(ctx context.Context, db *sql.DB, d PlanDraft) (int64, error) {
 	var id int64
 	err = inTx(ctx, db, func(tx *sql.Tx) error {
 		if d.Source == "agent" {
-			// Counting and saving under the firm's row lock keeps concurrent proposals within the limit.
+			// Lock the firm first, then count in a new statement, whose snapshot includes a concurrent
+			// proposal that committed while this one waited: concurrent proposals stay within the limit.
+			var firm string
+			if err := tx.QueryRowContext(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, d.Organization).Scan(&firm); err != nil {
+				return err
+			}
 			var today int
-			if err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM workflow_plans WHERE organization_id=$1 AND source='agent' AND created_at>now()-interval '1 day') FROM organizations WHERE id=$1 FOR UPDATE`, d.Organization).Scan(&today); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM workflow_plans WHERE organization_id=$1 AND source='agent' AND created_at>now()-interval '1 day'`, d.Organization).Scan(&today); err != nil {
 				return err
 			}
 			if today >= maxAgentPlansPerDay {

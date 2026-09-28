@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 
 	_ "close.local/backend/activities/close_summary"
 	_ "close.local/backend/activities/plan_signal"
+	"close.local/backend/internal/auth"
+	"close.local/backend/internal/transport"
 	"close.local/backend/internal/wf"
 	_ "close.local/backend/workflows/plan"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -186,6 +189,44 @@ func TestApprovalWithoutPermissionsChecksThemAnyway(t *testing.T) {
 	}
 	if _, err = wf.ApprovePlan(ctx, db, id, digest, "staff:lead@example.com", []string{"requests:send"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A firm copies a shared template through its own row-level-secured session.
+func TestFirmsCanCopySharedTemplatesButNotReadOtherFirmsPlans(t *testing.T) {
+	ctx, db, org, closeID := setup(t)
+	if _, err := db.Exec(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='close_plan_probe') THEN CREATE ROLE close_plan_probe LOGIN PASSWORD 'probe-only' NOSUPERUSER NOBYPASSRLS; END IF; END $$;
+		GRANT USAGE ON SCHEMA public TO close_plan_probe; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO close_plan_probe; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO close_plan_probe`); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := wf.CreatePlan(ctx, db, wf.PlanDraft{Plan: look(closeID), Source: "staff", CreatedBy: "staff:ops@example.com", IsTemplate: true})
+	must(t, err)
+	defer db.Exec(`DELETE FROM workflow_plans WHERE template_id=$1 OR id=$1`, shared)
+	other := "org_planOther" + rand.Text()
+	must(t, exec(db, `INSERT INTO organizations(id,name) VALUES($1,'Other firm')`, other))
+	defer db.Exec(`DELETE FROM organizations WHERE id=$1`, other)
+	theirs, err := wf.CreatePlan(ctx, db, wf.PlanDraft{Organization: other, Plan: look(closeID), Source: "staff", CreatedBy: "staff:ops@example.com", IsTemplate: true})
+	must(t, err)
+	defer db.Exec(`DELETE FROM workflow_plans WHERE id=$1`, theirs)
+
+	probe, err := url.Parse(os.Getenv("TEST_DATABASE_URL"))
+	must(t, err)
+	probe.User = url.UserPassword("close_plan_probe", "probe-only")
+	runtime, err := transport.OpenTenantDB(probe.String(), "")
+	must(t, err)
+	defer runtime.Close()
+	firm := auth.WithActor(ctx, &auth.Claims{Organization: org})
+	copyID, err := wf.InstantiateTemplate(firm, runtime, shared, org, "user_member")
+	if err != nil {
+		t.Fatalf("a firm copies a shared template under row-level security: %v", err)
+	}
+	var owner string
+	must(t, db.QueryRow(`SELECT organization_id FROM workflow_plans WHERE id=$1`, copyID).Scan(&owner))
+	if owner != org {
+		t.Fatalf("the copy belongs to %q", owner)
+	}
+	if _, err = wf.InstantiateTemplate(firm, runtime, theirs, org, "user_member"); !errors.Is(err, wf.ErrNotAllowed) {
+		t.Fatalf("another firm's template must stay out of reach: %v", err)
 	}
 }
 
