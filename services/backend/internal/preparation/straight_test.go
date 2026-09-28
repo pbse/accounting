@@ -10,7 +10,7 @@ import (
 
 func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t *testing.T) {
 	fact := func(field, value string) Fact {
-		return Fact{Field: field, Label: strings.ReplaceAll(field, "_", " "), Value: value, Candidates: []Candidate{{Value: value, SourceID: "1", Location: "line 1", Quote: value}}}
+		return Fact{Field: field, Label: strings.ReplaceAll(field, "_", " "), Value: value, Candidates: []Candidate{{Value: value, SourceID: "1", Location: "line 1", Quote: "Annual premium " + value}}}
 	}
 	proposal := Proposal{Kind: "prepaid", Engine: "openai", Sources: []Source{{ID: "1", Digest: "d", Name: "insurance.pdf", Role: "invoice"}},
 		Facts: []Fact{fact("amount", "1200.00"), fact("service_start", "2026-09-01"), fact("service_end", "2027-08-31"), fact("currency", "USD"), {Field: "expense_account", Label: "expense account"}, {Field: "prepaid_account", Label: "prepaid account"}, {Field: "booked_balance", Label: "booked balance", Optional: true}}}
@@ -44,6 +44,9 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", ledger(row("Purchase", "50", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
 		t.Fatal("purchase bearing the invoice number not accepted", reason)
 	}
+	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", ledger(bill, row("Bill", "52", "2026-09-09", "Other Vendor", "", "Prepaid Expenses", "1200"))); reason != "" {
+		t.Fatal("another vendor's prepaid bill blocked this invoice", reason)
+	}
 	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", ledger(row("Purchase", "51", "2026-09-03", "Acme Insurance Co", "", "Insurance", "1200"))); reason != "" {
 		t.Fatal("purchase from the vendor not accepted", reason)
 	}
@@ -59,6 +62,13 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"booked to prepaid":         {func(*Proposal, *Procedure) {}, ledger(row("Bill", "41", "2026-09-03", "Acme Insurance Co", "", "Prepaid Expenses", "1200"))},
 		"journal moves it":          {func(*Proposal, *Procedure) {}, ledger(bill, row("JournalEntry", "60", "2026-09-30", "", "", "Prepaid Expenses", "1200"))},
 		"open question":             {func(p *Proposal, _ *Procedure) { p.Questions = []string{"Which policy?"} }, ledger(bill)},
+		"unselected evidence":       {func(p *Proposal, _ *Procedure) { p.Unselected = []Source{{ID: "2", Name: "credit-note.pdf"}} }, ledger(bill)},
+		"currency not quoted":       {func(p *Proposal, _ *Procedure) { p.Facts[3].Candidates[0].Quote = "Annual premium 1,200.00" }, ledger(bill)},
+		"account not quoted": {func(p *Proposal, _ *Procedure) {
+			p.Facts[4].Value = "Insurance"
+			p.Facts[4].Candidates = []Candidate{{Value: "Insurance", Quote: "Coverage"}}
+		}, ledger(bill)},
+		"journal on expense": {func(*Proposal, *Procedure) {}, ledger(bill, row("JournalEntry", "64", "2026-09-30", "", "", "Insurance", "1200"))},
 		"conflicting amount": {func(p *Proposal, _ *Procedure) {
 			p.Facts[0].Value = ""
 			p.Facts[0].Candidates = append(p.Facts[0].Candidates, Candidate{Value: "1300.00"})
