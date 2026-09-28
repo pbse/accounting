@@ -41,7 +41,7 @@ export function Workflows() {
                 <tr key={w.name}>
                   <td><strong>{w.title}</strong> <small>{w.name}</small><br /><small>{w.description}</small></td>
                   <td>{w.triggers.map(trigger).join(", ")}</td>
-                  <td><Link to={`/runs?workflow=${w.name}&state=waiting`}>{w.active_runs}</Link></td>
+                  <td><Link to={`/runs?workflow=${w.name}&view=active`}>{w.active_runs}</Link></td>
                   <td>{w.completed_7d}</td>
                   <td>{w.failed_7d ? <Link to={`/runs?workflow=${w.name}&state=failed`}>{w.failed_7d}</Link> : 0}</td>
                   <td><Link to={`/runs/new?workflow=${w.name}`}>Start</Link></td>

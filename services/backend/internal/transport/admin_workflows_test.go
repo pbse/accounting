@@ -30,6 +30,10 @@ var _ = wf.Define(wf.Spec[adminFlowInput, map[string]string]{
 		case "fail":
 			_, err = wf.Step(ctx, "boom", func(context.Context) (int, error) { return 0, wf.Permanent(errors.New("boom")) })
 			return nil, err
+		case "approval":
+			if _, err = wf.WaitForApproval(ctx, "sign", wf.Approval{Permission: "closes:signoff", Subject: in.Secret, Prompt: "Approve " + in.Secret, Timeout: time.Hour}); err != nil {
+				return nil, err
+			}
 		case "effect":
 			if _, err = wf.Effect(ctx, "post", func(context.Context) (string, error) { return "", errors.New("provider timed out") }); err != nil {
 				return nil, err
@@ -73,6 +77,7 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 		db.Exec(`DELETE FROM workflow_steps WHERE organization_id=$1`, firm)
 		db.Exec(`DELETE FROM workflow_runs WHERE organization_id=$1`, firm)
 		db.Exec(`DELETE FROM workflow_events WHERE organization_id=$1`, firm)
+		db.Exec(`DELETE FROM workflow_plans WHERE organization_id=$1`, firm)
 	})
 	h := apiWithStore(db, token)
 	engine := &wf.Engine{DB: db, OnlyOrganization: firm}
@@ -119,8 +124,38 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 	adminJSON(t, h, token, "POST", "/v1/admin/workflows/events", `{"organization":"`+firm+`","key":"admin.reply:main","payload":{"text":"received"},"reason":"the client replied by phone"}`, 200)
 	adminJSON(t, h, token, "POST", "/v1/admin/workflows/events", `{"organization":"`+firm+`","key":"wf.approval:1:x","payload":{},"reason":"forge"}`, 422)
 	drain()
-	if state := adminJSON(t, h, token, "GET", runPath, "", 200)["run"].(map[string]any)["state"]; state != "completed" {
+	done := adminJSON(t, h, token, "GET", runPath, "", 200)
+	if state := done["run"].(map[string]any)["state"]; state != "completed" {
 		t.Fatalf("the event must complete the run: %v", state)
+	}
+	// Output the workflow derived from the secret is masked too, though no output field is tagged.
+	if text := mustString(done); strings.Contains(text, "123-45-6789") {
+		t.Fatalf("derived client content must be masked: %s", text)
+	}
+
+	// An approval shows who may decide, not the subject or prompt it carries.
+	approval := start("approval")
+	drain()
+	if text := mustString(adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs/"+jsonNumber(approval), "", 200)); strings.Contains(text, "123-45-6789") || !strings.Contains(text, `"permission":"closes:signoff"`) {
+		t.Fatalf("approval text must be masked: %s", text)
+	}
+
+	// A plan run's nodes come without their inputs unless revealed.
+	var plan, planRun int64
+	if err := db.QueryRow(`INSERT INTO workflow_plans(organization_id,title,plan,digest,source,created_by) VALUES($1,'Chase',
+ '{"version":1,"title":"Chase","nodes":[{"id":"tell","activity":"plan_signal","input":{"name":"n","payload":{"ssn":"123-45-6789"}}},{"id":"ok","after":["tell"],"approval":{"permission":"closes:signoff","subject":"SSN 123-45-6789"}}]}',
+ 'd','staff','staff:test') RETURNING id`, firm).Scan(&plan); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,input,plan_id,state,finished_at) VALUES($1,'plan',$2,'test','{}',$3,'completed',now()) RETURNING id`, firm, rand.Text(), plan).Scan(&planRun); err != nil {
+		t.Fatal(err)
+	}
+	planPath := "/v1/admin/workflows/runs/" + jsonNumber(float64(planRun))
+	if text := mustString(adminJSON(t, h, token, "GET", planPath, "", 200)["plan"]); strings.Contains(text, "123-45-6789") || !strings.Contains(text, `"activity":"plan_signal"`) {
+		t.Fatalf("plan node inputs must be masked: %s", text)
+	}
+	if text := mustString(adminJSON(t, h, token, "GET", planPath+"?reveal=1", "", 200, "X-Access-Reason", "checking the plan")["plan"]); !strings.Contains(text, "123-45-6789") {
+		t.Fatalf("a reveal shows the plan's inputs: %s", text)
 	}
 
 	// Cancel needs a reason.

@@ -22,6 +22,7 @@ export const stateTone: Record<string, string> = { completed: "ok", failed: "dan
 
 const views: [string, string][] = [
   ["", "All runs"],
+  ["active", "Active (queued, running or waiting)"],
   ["stuck", "Stuck (runnable but not picked up)"],
   ["waiting_on_client", "Waiting on a client for over 7 days"],
   ["unknown_effects", "Provider writes to reconcile"],

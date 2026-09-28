@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { post, useResource } from "../api";
 import { SchemaForm } from "../components/SchemaForm";
+import { usePermissions } from "../App";
 
 type Definition = { name: string; title: string; input_schema: Record<string, unknown> };
 
@@ -18,6 +19,7 @@ export function StartRun() {
   // One key per visit to this form: pressing Start twice starts one run.
   const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
   const chosen = definitions.data?.workflows.find((w) => w.name === workflow);
+  const allowed = usePermissions().includes("platform:operate");
   return (
     <>
       <div className="page-title"><div><div><h1>Start a run</h1><p>Runs as the firm you name, recorded with your reason.</p></div></div></div>
@@ -50,7 +52,8 @@ export function StartRun() {
             <input required value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} />
           </label>
           {error && <p role="alert">{error}</p>}
-          <button className="primary" disabled={busy || !workflow || !input.valid || !reason.trim()}>Start run</button>
+          {!allowed && <p className="muted">Starting runs needs platform:operate, which your role does not have.</p>}
+          <button className="primary" disabled={!allowed || busy || !workflow || !input.valid || !reason.trim()}>Start run</button>
         </form>
       </section>
     </>

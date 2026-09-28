@@ -106,6 +106,7 @@ func adminDefinitions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 
 // Saved views of the runs list.
 var runViews = map[string]string{
+	"active": `r.state IN ('queued','running','waiting')`,
 	// Runnable but not picked up: queued for an hour, a lease nobody renewed, or a wake time long past.
 	"stuck":             `((r.state='queued' AND r.created_at<now()-interval '1 hour') OR (r.state='running' AND r.claimed_at<now()-interval '10 minutes') OR (r.state='waiting' AND r.wake_at>'-infinity' AND r.wake_at<now()-interval '10 minutes'))`,
 	"waiting_on_client": `(r.state='waiting' AND r.waiting_on LIKE 'client\_request.replied:%' AND r.updated_at<now()-interval '7 days')`,
@@ -206,7 +207,8 @@ type adminStep struct {
 }
 
 // adminRun is one run for the flow view: the run, its steps in the order reached, its children and
-// parent, and, for a plan run, the approved plan so unreached nodes can be drawn too.
+// parent, and, for a plan run, the approved plan so unreached nodes can be drawn too. Unless revealed,
+// the plan comes without its nodes' inputs and approval text, which can hold client content.
 func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -243,7 +245,9 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		}
 		return tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'parent_step',parent_step) ORDER BY id) FROM workflow_runs WHERE parent_run_id=$1),'[]'::jsonb),
- COALESCE((SELECT jsonb_build_object('id',p.id,'title',p.title,'state',p.state,'source',p.source,'plan',p.plan) FROM workflow_plans p WHERE p.id=$2),'null'::jsonb)`, id, run.PlanID).Scan(&children, &plan)
+ COALESCE((SELECT jsonb_build_object('id',p.id,'title',p.title,'state',p.state,'source',p.source,'plan',CASE WHEN $3 THEN p.plan
+   ELSE jsonb_set(p.plan,'{nodes}',(SELECT COALESCE(jsonb_agg(n-'input' #- '{approval,subject}' #- '{approval,prompt}' ORDER BY i),'[]'::jsonb) FROM jsonb_array_elements(p.plan->'nodes') WITH ORDINALITY AS e(n,i))) END)
+ FROM workflow_plans p WHERE p.id=$2),'null'::jsonb)`, id, run.PlanID, reveal).Scan(&children, &plan)
 	})
 	if err != nil {
 		adminWorkflowProblem(w, err, "run")
@@ -280,8 +284,12 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		s := &steps[i]
 		switch {
 		case reveal:
-		case s.Kind == "value", s.Kind == "sleep", s.Kind == "approval", s.Kind == "step" && string(s.Output) == `"skipped"`:
-			// Generated values, sleeps, decisions and a plan's skipped-node marker carry no client content.
+		case s.Kind == "value", s.Kind == "sleep", s.Kind == "step" && string(s.Output) == `"skipped"`:
+			// Generated values, sleeps and a plan's skipped-node marker carry no client content.
+		case s.Kind == "approval":
+			// Who may decide and what was decided show; the subject, prompt and note are the firm's words.
+			s.Input, s.Output = only(s.Input, "permission"), only(s.Output, "approved", "by")
+			s.Note = maskText(s.Note)
 		case s.Activity != "":
 			if a, ok := activities[s.Activity]; ok {
 				s.Input = maskActivityInput(s.Input, a.Input)
@@ -329,7 +337,31 @@ func hidden(raw []byte) json.RawMessage {
 	return out
 }
 
-// mask replaces fields marked sensitive in schema; with no schema the whole value is hidden.
+// only keeps the named fields of a recorded object and masks the others.
+func only(raw []byte, keep ...string) json.RawMessage {
+	var fields map[string]any
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return hidden(raw)
+	}
+	for k, v := range fields {
+		if !slices.Contains(keep, k) {
+			fields[k] = maskText(v)
+		}
+	}
+	out, _ := json.Marshal(fields)
+	return out
+}
+
+// maskText masks a non-empty text; other values pass through.
+func maskText[T any](v T) T {
+	if text, ok := any(v).(string); ok && text != "" {
+		return any("••••").(T)
+	}
+	return v
+}
+
+// mask shows what cannot carry client content and masks the rest (see maskValue); with no schema
+// the whole value is hidden.
 func mask(raw []byte, schema map[string]any) json.RawMessage {
 	if len(raw) == 0 || string(raw) == "null" {
 		return json.RawMessage(nonNull(raw))
@@ -356,26 +388,34 @@ func maskActivityInput(raw []byte, schema map[string]any) json.RawMessage {
 	return out
 }
 
+// maskValue masks by default: numbers, booleans and the names of fields the schema declares show;
+// text, fields tagged wf:"sensitive" and anything the schema does not describe (free-form maps, raw
+// JSON) are masked, since a workflow may copy client content anywhere.
 func maskValue(v any, schema map[string]any) any {
-	if sensitive, _ := schema["sensitive"].(bool); sensitive {
+	if sensitive, _ := schema["sensitive"].(bool); sensitive && v != nil {
 		return "••••"
 	}
+	if _, described := schema["type"]; !described && v != nil {
+		raw, _ := json.Marshal(v)
+		return hidden(raw)
+	}
 	switch value := v.(type) {
+	case string:
+		return maskText(value)
 	case map[string]any:
 		properties, _ := schema["properties"].(map[string]any)
-		extra, _ := schema["additionalProperties"].(map[string]any)
 		for k, item := range value {
-			if property, ok := properties[k].(map[string]any); ok {
-				value[k] = maskValue(item, property)
-			} else if extra != nil {
-				value[k] = maskValue(item, extra)
+			property, ok := properties[k].(map[string]any)
+			if !ok {
+				raw, _ := json.Marshal(value)
+				return hidden(raw)
 			}
+			value[k] = maskValue(item, property)
 		}
 	case []any:
-		if items, ok := schema["items"].(map[string]any); ok {
-			for i, item := range value {
-				value[i] = maskValue(item, items)
-			}
+		items, _ := schema["items"].(map[string]any)
+		for i, item := range value {
+			value[i] = maskValue(item, items)
 		}
 	}
 	return v
