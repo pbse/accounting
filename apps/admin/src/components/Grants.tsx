@@ -18,17 +18,24 @@ export function GrantsProvider({ enabled, children }: { enabled: boolean; childr
     if (grants.data) setKnown(grants.data.grants);
     else if (!enabled) setKnown([]);
   }, [grants.data, enabled]);
-  const [, tick] = useState(0);
-  // Re-read every minute, so an expired grant stops revealing without a reload.
+  const [now, setNow] = useState(Date.now());
+  // Re-read every minute, so a grant ended elsewhere stops revealing without a reload.
   useEffect(() => {
     if (!enabled) return;
     const timer = setInterval(() => {
-      tick((n) => n + 1);
+      setNow(Date.now());
       grants.reload();
     }, 60_000);
     return () => clearInterval(timer);
   }, [enabled, grants.reload]);
-  const live = known.filter((g) => new Date(g.expires_at).getTime() > Date.now());
+  // And look again the moment the next grant expires, so what it showed goes then, not up to a minute later.
+  useEffect(() => {
+    const next = Math.min(...known.map((g) => Date.parse(g.expires_at)).filter((t) => t > now));
+    if (!Number.isFinite(next)) return;
+    const timer = setTimeout(() => setNow(Date.now()), next - Date.now());
+    return () => clearTimeout(timer);
+  }, [known, now]);
+  const live = known.filter((g) => Date.parse(g.expires_at) > Date.now());
   return <GrantsContext.Provider value={{ grants: live, reload: grants.reload }}>{children}</GrantsContext.Provider>;
 }
 

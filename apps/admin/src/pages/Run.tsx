@@ -38,7 +38,8 @@ export function Run() {
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState("");
   // A reveal belongs to the run it was asked for, so following a link never reveals another run.
-  const [revealed, setReveal] = useState<{ id: string; reason: string }>();
+  // An empty reason reveals under the content grant numbered grant.
+  const [revealed, setReveal] = useState<{ id: string; reason: string; grant?: number }>();
   const reveal = revealed?.id === id ? revealed.reason : undefined;
   const [params, setParams] = useSearchParams();
   const selected = params.get("step") ?? undefined;
@@ -97,17 +98,17 @@ export function Run() {
     if (grant && grant.id !== triedWith && hidOn !== id && reveal === undefined && current && !current.revealed) {
       setTriedWith(grant.id);
       setGrantLapsed(false);
-      setReveal({ id, reason: "" });
+      setReveal({ id, reason: "", grant: grant.id });
     }
   }, [grant, triedWith, hidOn, id, reveal, current]);
-  // A grant that ended or expired takes back what it showed.
+  // A grant that ended, expired or was replaced takes back what it showed (a replacement then reveals anew).
   useEffect(() => {
-    if (!grant && reveal === "") {
+    if (reveal === "" && revealed?.grant !== grant?.id) {
       latest.current++;
       setDetail(undefined);
       setReveal(undefined);
     }
-  }, [grant, reveal]);
+  }, [grant, reveal, revealed]);
   // Follow an active run every 3 seconds; a reveal is audited, so it is read once, not polled.
   const running = detail && active.includes(detail.run.state);
   useEffect(() => {
