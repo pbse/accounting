@@ -397,16 +397,17 @@ func adminRevealOf(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, tar
 
 // adminRevealAcross records one reveal per firm ("" for platform level) in a single transaction, for a read that shows
 // several firms' content at once; request says what was shown. When it refuses, it has answered and returns false.
-func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, firms []string, targetType, targetID string, request any) bool {
+// scope is the one firm the request itself is limited to (a firm filter), or "" when it can span firms: only a request
+// limited to one firm may stand on the staff member's grant for it.
+func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, scope string, firms []string, targetType, targetID string, request any) bool {
 	member := staffOf(r.Context())
 	if !slices.Contains(member.Permissions, platformContent) {
 		problem(w, 403, "Revealing client content needs platform:content.")
 		return false
 	}
 	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
-	if reason == "" && len(firms) == 1 && firms[0] != "" {
-		// A read of one firm's content may stand on the staff member's grant for it.
-		reason = activeGrantReason(r.Context(), db, member.Subject, firms[0])
+	if reason == "" && scope != "" {
+		reason = activeGrantReason(r.Context(), db, member.Subject, scope)
 	}
 	if reason == "" {
 		problem(w, 422, errReasonRequired.Error())

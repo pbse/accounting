@@ -71,7 +71,7 @@ export function Audit() {
         <button>Search</button>
       </form>
       {exported && <p className="note" role="status">{exported}</p>}
-      <Reveal reveal={audit.reveal} />
+      <Reveal reveal={audit.reveal} firm={params.get("firm") && params.get("firm") !== "platform" ? params.get("firm") : undefined} />
       {audit.error && <p role="alert">{audit.error}</p>}
       {!audit.data && !audit.error && <p role="status">Loading the audit…</p>}
       {audit.data && (

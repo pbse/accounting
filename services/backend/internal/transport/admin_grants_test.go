@@ -45,6 +45,11 @@ func TestContentGrantsStandInForAReasonOnOneFirmForAWhile(t *testing.T) {
 	// The firm's audit tab stands on the grant too; a cross-firm search does not.
 	adminJSON(t, h, token, "GET", "/v1/admin/firms/"+firm+"/audit?reveal=1", "", 200)
 	adminJSON(t, h, token, "GET", "/v1/admin/audit?reveal=1", "", 422)
+	// Only a request limited to the firm stands on its grant, whatever one page of a wider search holds.
+	adminJSON(t, h, token, "GET", "/v1/admin/audit?firm="+firm+"&reveal=1", "", 200)
+	adminJSON(t, h, token, "GET", "/v1/admin/audit?staff=local-development&action=content.grant&reveal=1", "", 422)
+	adminJSON(t, h, token, "GET", "/v1/admin/plans?firm="+firm+"&reveal=1", "", 200)
+	adminJSON(t, h, token, "GET", "/v1/admin/plans?reveal=1", "", 422)
 	if mine := mustString(adminJSON(t, h, token, "GET", "/v1/admin/grants", "", 200)["grants"]); !strings.Contains(mine, `"firm_name":"Granted firm"`) || strings.Contains(mine, "Their own work") {
 		t.Fatalf("my open grants: %s", mine)
 	}

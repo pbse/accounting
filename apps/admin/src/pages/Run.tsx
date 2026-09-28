@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { usePermissions } from "../App";
-import { get, post, when } from "../api";
+import { ApiError, get, post, when } from "../api";
 import { ActionForm } from "../components/ActionForm";
 import { OpenGrant, useGrantFor, useGrants } from "../components/Grants";
 import { FlowGraph, type PlanNode, type Step } from "../components/Flow";
@@ -68,7 +68,7 @@ export function Run() {
       setError("");
     } catch (e) {
       if (request !== latest.current) return;
-      if (reveal === "") {
+      if (reveal === "" && e instanceof ApiError && e.status === 422) {
         // A grant that no longer holds (ended or expired elsewhere): show the run masked, not an error.
         setGrantLapsed(true);
         setHidOn(id);

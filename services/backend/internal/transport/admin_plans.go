@@ -154,7 +154,7 @@ func adminPlans(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			}
 			ids = append(ids, p.ID)
 		}
-		if !adminRevealAcross(w, r, db, firms, "plans", "list", map[string]any{"plans": ids}) {
+		if !adminRevealAcross(w, r, db, filters[2].(string), firms, "plans", "list", map[string]any{"plans": ids}) {
 			return
 		}
 	}

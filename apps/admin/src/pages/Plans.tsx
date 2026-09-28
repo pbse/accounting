@@ -80,7 +80,7 @@ export function Plans() {
         <label>Firm ID<input name="firm" key={`f${params.get("firm")}`} defaultValue={params.get("firm") ?? ""} placeholder="Any" /></label>
         <button>Filter</button>
       </form>
-      <Reveal reveal={plans.reveal} />
+      <Reveal reveal={plans.reveal} firm={params.get("firm")} />
       {plans.error && <p role="alert">{plans.error}</p>}
       {!plans.data && !plans.error && <p role="status">Loading plans…</p>}
       {plans.data && (
