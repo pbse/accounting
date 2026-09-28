@@ -4,10 +4,12 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"close.local/backend/internal/auth"
 	"github.com/golang-jwt/jwt/v5"
@@ -33,7 +35,7 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Security fixture')`, org)
 	must(err)
 	defer func() {
-		for _, q := range []string{`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM model_calls WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM production_postings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM bill_corrections WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_entity_syncs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM model_calls WHERE organization_id=$1`,
 			`DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM xero_posting_grants WHERE organization_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM xero_connections WHERE organization_id=$1`,
 			`DELETE FROM email_connections WHERE organization_id=$1`, `DELETE FROM agent_access WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`,
 			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
@@ -68,11 +70,41 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	must(err)
 	_, err = db.Exec(`INSERT INTO xero_posting_grants(organization_id,client_entity,connection_id,tenant_id,account_ids,kinds,max_amount,expires_at,reason,granted_by,revoked_by,revoked_at) VALUES($1,'Alpha',$2,'tenant-1','{"200","400"}','{"line_recode"}',100,now()+interval '30 days','Recodes','user_admin','user_admin',now())`, org, xero)
 	must(err)
-	_, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by,agent) VALUES($1,'invoice.txt','security-agent','Invoice','user_a','claude-code')`, alpha)
+	var evidenceID, captureID, paperID string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,agent) VALUES($1,'invoice.txt','security-agent','Invoice','user_a','claude-code') RETURNING id::text`, alpha).Scan(&evidenceID))
+	// Operation evidence: a read of Alpha's live books, a sandbox Bill recode, a verified live accrual journal, and another
+	// firm's live loan journal, which must not count here.
+	must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at) VALUES($1,$2,'2026-09','fixture','completed',now()-interval '1 hour') RETURNING id::text`, alpha, qbo).Scan(&captureID))
+	_, err = db.Exec(`INSERT INTO bill_corrections(close_id,capture_id,evidence_id,realm,bill_id,treatment,reason,target_account_id,target_account_name,target_line_id,before_bill,digest,state,proposed_by,verified_at) VALUES($1,$2,$3,'realm-sandbox','bill-1','inconsistent_coding','Coding rule','7','Supplies','1','{}','d','verified','user_a',now()-interval '3 days')`, alpha, captureID, evidenceID)
+	must(err)
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'accrual','capability-accrual','{}') RETURNING id::text`, alpha).Scan(&paperID))
+	_, err = db.Exec(`INSERT INTO production_postings(close_id,workpaper_id,source_key,grant_id,connection_id,realm,digest,journal,ledger_before,state,verified_at) SELECT $1,$2,'source-1',id,$3,'realm-1','d','{}','{}','verified',now()-interval '2 hours' FROM production_posting_grants WHERE organization_id=$4 AND client_entity='Alpha'`, alpha, paperID, qbo, org)
+	must(err)
+	other := "org_SecurityOther" + rand.Text()
+	var otherClose, otherBooks, otherPaper string
+	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Other firm')`, other)
+	must(err)
+	defer func() {
+		for _, q := range []string{`DELETE FROM production_postings WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM production_posting_grants WHERE organization_id=$1`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, other)
+		}
+	}()
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Gamma','2026-09') RETURNING id::text`, other).Scan(&otherClose))
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,company_name,environment,realm) VALUES($1,$2,'Gamma','user_o','active','o',now(),'Gamma','production','realm-o') RETURNING id::text`, otherClose, other).Scan(&otherBooks))
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'loan','capability-loan','{}') RETURNING id::text`, otherClose).Scan(&otherPaper))
+	_, err = db.Exec(`INSERT INTO production_posting_grants(organization_id,client_entity,connection_id,realm,max_amount,expires_at,reason,granted_by,account_ids,kinds) VALUES($1,'Gamma',$2,'realm-o',500,now()+interval '30 days','Loans','user_o','{"1","2"}','{"loan"}')`, other, otherBooks)
+	must(err)
+	_, err = db.Exec(`INSERT INTO production_postings(close_id,workpaper_id,source_key,grant_id,connection_id,realm,digest,journal,ledger_before,state,verified_at) SELECT $1,$2,'source-o',id,$3,'realm-o','d','{}','{}','verified',now() FROM production_posting_grants WHERE organization_id=$4`, otherClose, otherPaper, otherBooks, other)
 	must(err)
 	_, err = db.Exec(`INSERT INTO model_calls(organization_id,day,calls) VALUES($1,(now() AT TIME ZONE 'UTC')::date,3)`, org)
 	must(err)
 
+	t.Setenv("PRODUCTION_POSTING_KINDS", "prepaid,accrual")
+	t.Setenv("XERO_POSTING_KINDS", "accrual")
+	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
+	t.Setenv("QBO_PRODUCTION_CLIENT_ID", "client")
+	t.Setenv("QBO_PRODUCTION_CLIENT_SECRET", "secret")
+	t.Setenv("QBO_PRODUCTION_REDIRECT_URI", "https://app.example.test/v1/quickbooks/callback")
 	store := savedCloses(db, strings.Repeat("a", 32))
 	call := func(subject string, permissions []string, want int) string {
 		t.Helper()
@@ -120,9 +152,41 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 			Provider, Evidence string
 			InUse              bool `json:"in_use"`
 		}
-		Clients []string
+		Clients    []string
+		Operations []struct {
+			Provider, Operation, Status, Owner string
+			Clients                            []string
+			SandboxAt                          *time.Time `json:"sandbox_verified_at"`
+			LiveAt                             *time.Time `json:"live_verified_at"`
+			SandboxRecorded                    bool       `json:"sandbox_recorded"`
+		}
 	}
 	must(json.Unmarshal([]byte(body), &got))
+	// Each operation says how far it is proven and enabled: a kind the server allows and a grant in force covers is
+	// enabled for that client, one the server allows without a grant is production approved, a verified sandbox record
+	// makes it sandbox tested, and anything else is only documented.
+	operations := map[string]string{}
+	for _, o := range got.Operations {
+		key := o.Provider + " " + o.Operation
+		operations[key] = o.Status + " " + strings.Join(o.Clients, ",") + fmt.Sprintf(" sandbox=%v live=%v recorded=%v", o.SandboxAt != nil, o.LiveAt != nil, o.SandboxRecorded)
+	}
+	for op, want := range map[string]string{
+		"QuickBooks Journal: accrual":                           "enabled Alpha sandbox=false live=true recorded=false",
+		"QuickBooks Journal: prepaid adjustment":                "production approved  sandbox=false live=false recorded=true",
+		"QuickBooks Journal: loan interest and current portion": "documented  sandbox=false live=false recorded=false",
+		"QuickBooks Bill line recode":                           "sandbox tested  sandbox=true live=false recorded=true",
+		"QuickBooks Reports and transactions":                   "enabled Alpha,Beta sandbox=false live=true recorded=true",
+		"Xero Bill line recode":                                 "documented  sandbox=false live=false recorded=false",
+		"Xero Manual journal: accrual":                          "production approved  sandbox=false live=false recorded=false",
+		"Stripe Payout and balance reports":                     "production approved  sandbox=false live=false recorded=true",
+	} {
+		if operations[op] != want {
+			t.Fatalf("%s: %q, want %q\n%v", op, operations[op], want, operations)
+		}
+	}
+	if len(got.Operations) != 20 {
+		t.Fatalf("every write kind and each provider's reads are listed: %d", len(got.Operations))
+	}
 	people := map[string]int{}
 	for i, p := range got.People {
 		people[p.Subject] = i
@@ -160,6 +224,15 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	}
 	if got.OrganizationID != org || strings.Join(got.Clients, ",") != "Alpha,Beta" {
 		t.Fatalf("the firm and every client, for the controls: %s %v", got.OrganizationID, got.Clients)
+	}
+	// A grant never enables a kind the server has not approved.
+	t.Setenv("PRODUCTION_POSTING_KINDS", "")
+	got.Operations = nil
+	must(json.Unmarshal([]byte(call("user_admin", []string{"clients:all", "members:manage"}, 200)), &got))
+	for _, o := range got.Operations {
+		if o.Provider == "QuickBooks" && o.Operation == "Journal: accrual" && (o.Status != "documented" || len(o.Clients) != 0) {
+			t.Fatalf("an accrual the server does not allow is not enabled by its grant: %+v", o)
+		}
 	}
 	_, err = db.Exec(`UPDATE quickbooks_connections SET state='reconnect_required' WHERE id=$1`, qbo)
 	must(err)
