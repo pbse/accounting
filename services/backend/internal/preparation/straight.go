@@ -563,8 +563,8 @@ func dateLineSays(quote, value, other string, any, none, against []string) bool 
 	return false
 }
 
-// issuerLine reports whether the quoted line ending with the vendor's name is a bare letterhead line or one that
-// labels the name as the issuer, and not one naming a processor, payee, recipient or contact.
+// issuerLine reports whether the quoted line ending with the vendor's name is a bare letterhead line or one whose whole
+// label names the issuer, and not one naming a payment, processor, payee, recipient or contact.
 func issuerLine(quote, value string) bool {
 	want := documents.NormalizeEntity(value)
 	for _, line := range strings.Split(quote, "\n") {
@@ -576,11 +576,13 @@ func issuerLine(quote, value string) bool {
 		if negated(label) {
 			continue
 		}
+		// The label is the whole of what precedes the name: an issuer label, or nothing at all (a letterhead line).
+		// "Payment from" is not "invoice from".
 		ok := label == ""
-		for _, word := range []string{"from", "issued by", "vendor", "supplier", "seller", "provider", "issuer"} {
-			ok = ok || strings.Contains(label, word)
+		for _, l := range []string{"invoice from", "bill from", "issued by", "billed by", "invoiced by", "vendor", "vendor name", "supplier", "supplier name", "seller", "provider", "issuer", "remit to"} {
+			ok = ok || label == l
 		}
-		for _, word := range []string{"processor", "pay to", "payable", "remit", "bill to", "billed to", "sold to", "ship", "customer", "client", "contact", "agent", "broker", "via", "online", "care of", "attn"} {
+		for _, word := range []string{"payment", "processor", "pay to", "payable", "bill to", "billed to", "sold to", "ship", "customer", "client", "contact", "agent", "broker", "via", "online", "care of", "attn"} {
 			ok = ok && !strings.Contains(label, word)
 		}
 		if ok {

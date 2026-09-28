@@ -110,7 +110,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	issued := proposal
 	issued.Facts = append([]Fact(nil), proposal.Facts...)
 	issued.Facts[7] = optionalFact("vendor", "Acme Insurance Co")
-	issued.Facts[7].Candidates[0].Quote = "From: Acme Insurance Co"
+	issued.Facts[7].Candidates[0].Quote = "Invoice from: Acme Insurance Co"
 	if _, reason = StraightThrough(issued, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("issuer-labelled vendor line not accepted", reason)
 	}
@@ -241,6 +241,8 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"order date beside a service word": {func(p *Proposal, _ *Procedure) {
 			p.Facts[1].Candidates[0].Quote = "Service: hosting\nOrder placed: 2026-09-01"
 		}, ledger(bill), false},
+		"payment-from cited as vendor": {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates[0].Quote = "Payment from: Acme Insurance Co" }, ledger(bill), false},
+		"bare from cited as vendor":    {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates[0].Quote = "From: Acme Insurance Co" }, ledger(bill), false},
 		"processor cited as vendor": {func(p *Proposal, _ *Procedure) {
 			p.Facts[7].Value = "Stripe"
 			p.Facts[7].Candidates[0].Value = "Stripe"
