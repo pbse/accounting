@@ -233,7 +233,8 @@ func TestMonthlyHandOversTakeTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	// Fifty routines of a firm at its close limit wait on every sweep; another firm's waiting routine still gets its turn.
+	// Fifty routines of a firm at its close limit wait; another firm's waiting routine still gets its turn in the same pass,
+	// and the pass ends once each has been tried.
 	busy, free := "org_Busy"+rand.Text(), "org_Free"+rand.Text()
 	asFirm(t, map[string]string{"user_a": "partner"}, busy, free)
 	defer func() {
@@ -255,8 +256,9 @@ func TestMonthlyHandOversTakeTurns(t *testing.T) {
 	must(db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period,waiting) SELECT $1,'Client '||n,'user_a',false,'review','2026-09','Earlier' FROM generate_series(1,50) n`, busy))
 	must(db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period,waiting) VALUES($1,'Alpha','user_a',false,'review','2026-09','Earlier')`, free))
 	november := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	sweepCloseRoutines(t.Context(), db, november)
-	sweepCloseRoutines(t.Context(), db, november)
+	if handed, err := handOverMonths(t.Context(), db, november); err != nil || handed < 1 {
+		t.Fatalf("one pass reaches past the waiting routines: %d %v", handed, err)
+	}
 	var opened bool
 	if err = db.QueryRow(`SELECT EXISTS(SELECT 1 FROM client_closes WHERE organization_id=$1 AND entity='Alpha' AND period='2026-10')`, free).Scan(&opened); err != nil || !opened {
 		t.Fatalf("the other firm's routine gets its turn: %v %v", opened, err)

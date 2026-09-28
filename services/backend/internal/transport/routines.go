@@ -99,28 +99,37 @@ func registerRoutines(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// handOverMonths hands every due month over, a sweep at a time, until a sweep hands none over; a month that cannot be
-// handed over yet is tried again by the next hour's pass. It returns how many months it handed over.
+// handOverMonths hands every due month over, a sweep at a time, and returns how many months it handed over. It goes on
+// while a sweep hands a month over (a routine behind by several months moves one a sweep) and until every routine due
+// at the start has been tried: one that cannot move, such as at its firm's limit, goes to the back, so the next sweep
+// reaches the rest, and it is tried again by the next hour's pass.
 func handOverMonths(ctx context.Context, db *sql.DB, now time.Time) (int, error) {
-	total := 0
-	for range 100 {
-		n, err := sweepCloseRoutines(ctx, db, now)
-		total += n
-		if err != nil || n == 0 {
+	var due int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM close_routines r JOIN organizations o ON o.id=r.organization_id WHERE r.stopped_at IS NULL AND o.enabled AND r.last_period<$1`, endedMonth(now)).Scan(&due); err != nil {
+		return 0, err
+	}
+	total, triedAll := 0, 0
+	for range 1000 {
+		handed, tried, err := sweepCloseRoutines(ctx, db, now)
+		total, triedAll = total+handed, triedAll+tried
+		if err != nil || tried == 0 || (handed == 0 && triedAll >= due) {
 			return total, err
 		}
 	}
 	return total, nil
 }
 
+// routineSweep is how many due routines one sweep tries.
+const routineSweep = 50
+
 // sweepCloseRoutines hands the next ended month to the agent for up to 50 routines of enabled firms, the least
-// recently tried first, one month per routine per sweep so no month is skipped, and returns how many it handed over. A
-// routine whose step fails, or whose firm's roles cannot be read, is logged and marked waiting, so it cannot hold up the
-// others.
-func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) (int, error) {
-	rows, err := db.QueryContext(ctx, `SELECT r.id::text,r.last_period,r.organization_id FROM close_routines r JOIN organizations o ON o.id=r.organization_id WHERE r.stopped_at IS NULL AND o.enabled AND r.last_period<$1 ORDER BY r.checked_at NULLS FIRST,r.id LIMIT 50`, endedMonth(now))
+// recently tried first, one month per routine per sweep so no month is skipped, and returns how many it handed over and
+// how many it tried. A routine whose step fails, or whose firm's roles cannot be read, is logged and marked waiting, so
+// it cannot hold up the others.
+func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) (handed, tried int, err error) {
+	rows, err := db.QueryContext(ctx, `SELECT r.id::text,r.last_period,r.organization_id FROM close_routines r JOIN organizations o ON o.id=r.organization_id WHERE r.stopped_at IS NULL AND o.enabled AND r.last_period<$1 ORDER BY r.checked_at NULLS FIRST,r.id LIMIT $2`, endedMonth(now), routineSweep)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	due := [][3]string{}
 	for rows.Next() {
@@ -131,9 +140,9 @@ func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) (int, er
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	roles, handed := sweepRoles{}, 0
+	roles := sweepRoles{}
 	for _, step := range due {
 		id, period := step[0], step[1]
 		members, err := roles.of(ctx, step[2])
@@ -149,7 +158,7 @@ func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) (int, er
 			db.ExecContext(ctx, `UPDATE close_routines SET waiting=$2,checked_at=now() WHERE id=$1 AND stopped_at IS NULL AND last_period<$3`, id, "I couldn't hand over "+period+" yet. I'll try again.", period)
 		}
 	}
-	return handed, ctx.Err()
+	return handed, len(due), ctx.Err()
 }
 
 // stepRoutine opens the client's close for period, the month after the routine's last, if needed and hands it to

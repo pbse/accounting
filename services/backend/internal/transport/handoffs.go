@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // A document of a delegated close handed to a teammate to investigate. The teammate acts through Work with their own
@@ -172,10 +174,11 @@ type cachedRoles struct {
 
 type rolesCache struct {
 	sync.Mutex
-	read map[string]cachedRoles
+	read   map[string]cachedRoles
+	flight singleflight.Group // goals looking at once share the firm's read in flight
 }
 
-// of is sweepRoles.of, remembered for a minute.
+// of is sweepRoles.of, remembered for a minute. A read its caller cut short is not remembered.
 func (c *rolesCache) of(ctx context.Context, org string) (map[string]reviewer, error) {
 	c.Lock()
 	read, ok := c.read[org]
@@ -183,11 +186,17 @@ func (c *rolesCache) of(ctx context.Context, org string) (map[string]reviewer, e
 	if ok && time.Since(read.at) < time.Minute {
 		return read.members, read.err
 	}
-	read.members, read.err = sweepRoles{}.of(ctx, org)
-	read.at = time.Now()
-	c.Lock()
-	c.read[org] = read
-	c.Unlock()
+	shared, _, _ := c.flight.Do(org, func() (any, error) {
+		read := cachedRoles{at: time.Now()}
+		read.members, read.err = sweepRoles{}.of(ctx, org)
+		if read.err == nil || ctx.Err() == nil {
+			c.Lock()
+			c.read[org] = read
+			c.Unlock()
+		}
+		return read, nil
+	})
+	read = shared.(cachedRoles)
 	return read.members, read.err
 }
 
