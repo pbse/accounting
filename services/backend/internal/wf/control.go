@@ -125,13 +125,19 @@ func Cancel(ctx context.Context, db *sql.DB, runID int64, by, reason string) err
 		return err
 	})
 	if err == nil && wake {
-		// Best effort, after commit, never holding this run's row while taking its parent's (see
-		// Engine.wakeParent); the sweep wakes the parent if this fails. The cancel itself stands.
-		if _, werr := db.ExecContext(ctx, wakeParent, runID); werr != nil {
-			log.Printf("Workflow run %d was cancelled but could not wake its parent yet: %v", runID, werr)
-		}
+		WakeParent(ctx, db, runID)
 	}
 	return err
+}
+
+// WakeParent wakes the parent of a run that ended, once the transaction that ended it committed
+// (CancelTx reports whether it did). It runs after commit, so no transaction holds a child's row
+// while taking its parent's (cancelTree takes them the other way round). Best effort: the engine's
+// sweep wakes the parent if this fails or is lost.
+func WakeParent(ctx context.Context, db *sql.DB, runID int64) {
+	if _, err := db.ExecContext(ctx, wakeParent, runID); err != nil {
+		log.Printf("Workflow run %d ended but could not wake its parent yet: %v", runID, err)
+	}
 }
 
 // CancelTx is Cancel inside the caller's transaction, so the caller can record its own reasons with

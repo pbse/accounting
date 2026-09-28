@@ -35,6 +35,10 @@ var _ = wf.Define(wf.Spec[adminFlowInput, map[string]string]{
 		case "fail":
 			_, err = wf.Step(ctx, "boom", func(context.Context) (int, error) { return 0, wf.Permanent(errors.New("boom")) })
 			return nil, err
+		case "parent":
+			if _, err = wf.Child[map[string]string](ctx, "kid", "test_admin_flow", adminFlowInput{ID: "kid"}); err != nil {
+				return nil, err
+			}
 		case "approval":
 			if _, err = wf.WaitForApproval(ctx, "sign", wf.Approval{Permission: "closes:signoff", Subject: in.Secret, Prompt: "Approve " + in.Secret, Timeout: time.Hour}); err != nil {
 				return nil, err
@@ -204,6 +208,26 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 	}
 	if stuck := mustString(adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs?firm="+firm+"&view=stuck", "", 200)["runs"]); !strings.Contains(stuck, `"id":`+jsonNumber(float64(woken))+`,`) {
 		t.Fatalf("a woken, unclaimed run must be stuck: %s", stuck)
+	}
+
+	// Cancelling a waiting child wakes its parent at once, not at the next sweep.
+	parent := start("parent")
+	drain()
+	var kid int64
+	if err := db.QueryRow(`SELECT id FROM workflow_runs WHERE parent_run_id=$1`, int64(parent)).Scan(&kid); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(float64(kid))+"/cancel", `{"reason":"not needed"}`, 200)
+	var woken2 bool
+	if err := db.QueryRow(`SELECT wake_at='-infinity' FROM workflow_runs WHERE id=$1`, int64(parent)).Scan(&woken2); err != nil || !woken2 {
+		t.Fatalf("the parent must be woken: %v %v", woken2, err)
+	}
+
+	// The event's audit names it by ID; its key can hold client content.
+	var eventAudit string
+	if err := db.QueryRow(`SELECT target_id||' '||request::text FROM platform_audit WHERE organization_id=$1 AND action='workflow.event' AND result='ok'`, firm).Scan(&eventAudit); err != nil || strings.Contains(eventAudit, "admin.reply") || !strings.Contains(eventAudit, `"event_id"`) {
+		t.Fatalf("event audit %q %v", eventAudit, err)
 	}
 
 	var actions []string

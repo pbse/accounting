@@ -334,16 +334,7 @@ func (e *Engine) ended(ctx context.Context, runID int64, cancelled bool) {
 			log.Printf("Workflow run %d was cancelled but its children could not be yet: %v", runID, err)
 		}
 	}
-	e.wakeParent(ctx, runID)
-}
-
-// wakeParent wakes the parent of a run that ended. It runs after the run's own transaction commits,
-// so no transaction holds a child's row while taking its parent's (Cancel takes them the other way
-// round); the sweep catches a wake-up lost in between.
-func (e *Engine) wakeParent(ctx context.Context, runID int64) {
-	if _, err := e.DB.ExecContext(ctx, wakeParent, runID); err != nil {
-		log.Printf("Workflow run %d could not wake its parent: %v", runID, err)
-	}
+	WakeParent(ctx, e.DB, runID)
 }
 
 // park releases the claim until the run's wake time (nil: until a person or event wakes it). An

@@ -558,11 +558,12 @@ func adminRunAction(w http.ResponseWriter, r *http.Request, db *sql.DB, action s
 	if action == "resolve" {
 		request["applied"] = in.Applied
 	}
+	var ended bool
 	err = adminAct(r.Context(), db, adminAction{Firm: firm, Action: "workflow." + action, TargetType: "workflow_run", TargetID: strconv.FormatInt(id, 10), Reason: in.Reason, Request: request},
-		func(ctx context.Context, tx *sql.Tx) error {
+		func(ctx context.Context, tx *sql.Tx) (err error) {
 			switch action {
 			case "cancel":
-				_, err := wf.CancelTx(ctx, tx, id, by, in.Reason)
+				ended, err = wf.CancelTx(ctx, tx, id, by, in.Reason)
 				return err
 			case "retry":
 				return wf.RetryStepTx(ctx, tx, id, in.Key, by, in.Reason)
@@ -573,6 +574,9 @@ func adminRunAction(w http.ResponseWriter, r *http.Request, db *sql.DB, action s
 	if err != nil {
 		adminWorkflowProblem(w, err, action)
 		return
+	}
+	if ended {
+		wf.WakeParent(context.WithValue(r.Context(), systemKey{}, true), db, id)
 	}
 	jsonReply(w, 200, map[string]any{"ok": true})
 }
@@ -593,7 +597,9 @@ func adminEmit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	var id int64
-	err := adminAct(r.Context(), db, adminAction{Firm: in.Organization, Action: "workflow.event", TargetType: "event", TargetID: in.Key, Reason: in.Reason, Request: map[string]string{"key": in.Key}},
+	// The audit names the event by its ID, not its key, which can hold client content (see maskKey).
+	request := map[string]any{}
+	err := adminAct(r.Context(), db, adminAction{Firm: in.Organization, Action: "workflow.event", TargetType: "event", Reason: in.Reason, Request: request},
 		func(ctx context.Context, tx *sql.Tx) error {
 			var payload any = in.Payload
 			if len(in.Payload) == 0 {
@@ -601,6 +607,7 @@ func adminEmit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			}
 			var err error
 			id, err = wf.Emit(ctx, tx, in.Organization, in.Key, payload, "staff:"+staffOf(r.Context()).Subject)
+			request["event_id"] = id
 			return err
 		})
 	if err != nil {
