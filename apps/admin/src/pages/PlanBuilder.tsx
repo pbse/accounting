@@ -104,7 +104,7 @@ function fromPlan(nodes: StoredNode[], inputs: Record<string, string> = {}): Ste
 function toPlan(title: string, steps: Step[]): { text?: string; preview?: StoredNode[]; error?: string } {
   const idOf = (key: string) => steps.find((s) => s.key === key)?.id ?? "";
   const nodes: StoredNode[] = [];
-  const inputs: string[] = [];
+  const texts: string[] = [];
   for (const s of steps) {
     const n: StoredNode = { id: s.id };
     if (s.after.length) n.after = s.after.map(idOf);
@@ -112,23 +112,24 @@ function toPlan(title: string, steps: Step[]): { text?: string; preview?: Stored
     if (s.kind === "activity" || s.kind === "workflow") {
       if (s.kind === "activity") n.activity = s.activity;
       else n.workflow = s.workflow;
+      const raw = (s.input || "{}").trim();
       try {
-        JSON.parse(s.input || "{}");
+        n.input = JSON.parse(raw); // for the preview only
       } catch {
         return { error: `Step “${s.id}”: the input is not valid JSON.` };
       }
-      n.input = `@@plan-input-${inputs.length}@@`;
-      inputs.push((s.input || "{}").trim());
-    } else if (s.kind === "event") n.wait = { event: s.event, timeout: s.timeout };
-    else if (s.kind === "sleep") n.wait = { duration: s.duration };
-    else n.approval = { permission: s.permission, ...(s.subject && { subject: s.subject }), ...(s.prompt && { prompt: s.prompt }), timeout: s.timeout };
+      // The node without its input, then the input appended as written.
+      const { input: _, ...rest } = n;
+      texts.push(JSON.stringify(rest).replace(/}$/, `,"input":${raw}}`));
+    } else {
+      if (s.kind === "event") n.wait = { event: s.event, timeout: s.timeout };
+      else if (s.kind === "sleep") n.wait = { duration: s.duration };
+      else n.approval = { permission: s.permission, ...(s.subject && { subject: s.subject }), ...(s.prompt && { prompt: s.prompt }), timeout: s.timeout };
+      texts.push(JSON.stringify(n));
+    }
     nodes.push(n);
   }
-  let text = JSON.stringify({ version: 1, title, nodes });
-  inputs.forEach((raw, i) => {
-    text = text.replace(`"@@plan-input-${i}@@"`, () => raw);
-  });
-  return { text, preview: nodes };
+  return { text: `{"version":1,"title":${JSON.stringify(title)},"nodes":[${texts.join(",")}]}`, preview: nodes };
 }
 
 // withPlan is a request body: the fields, and the plan's JSON text as it is.
