@@ -2632,3 +2632,27 @@ Checks (local PostgreSQL):
 - `TestTieOutComparesBalancesWithLatestSupport`: readiness names the differing Accrued audit fees, but not the tied Prepaid insurance or the posting-unknown Accrued rent.
 - `TestProductionPostingSingleDurableAttempt`: an attempt set back to `executing` refuses the found ID (409) while fresh, then verifies it once eleven minutes old, with no second write.
 - The full transport suite passes, except the export PDF test, which needs `pdftotext` (not installed on this machine; CI has it).
+
+## Month-end snapshots stay current; throttled ledger reads are asked again (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- **Snapshot timing.** The scheduled QuickBooks period snapshot used to be taken once, at 00:00 UTC on the 1st, which is still the afternoon of the last day in the US, and never again. It now waits until the month has ended everywhere (UTC-12), then reads again at most once every 20 hours after its last snapshot. It saves a new snapshot only when the accounts or reports differ, ignoring each report's generation time and the accounts' current balances and sync tokens. Later entries, even ones that offset within an account, therefore reach the snapshot, the tie-out and, through it, sign-off.
+- **Snapshot limits.** A person's capture stops the schedule. Six scheduled period snapshots at most are kept, and the schedule never takes a close's last free snapshot of the 20. Once the schedule stops refreshing a close whose newest snapshot is its own (six taken, only the last free snapshot left, or the close is past the months the schedule reads and has no active goal), or when the latest capture's month-end read failed (now recorded on that capture), sign-off waits for a successful read or a person's capture (`quickbooks.RefreshStopped`), since later entries may be missing. A fresh read is compared with its own connection's newest snapshot, so a new reading connection always gets one. Only the first scheduled snapshot resumes waiting model intakes, as before. A refresh neither supersedes earlier evidence nor resets approvals, but new ledger pages can be selected only from the month's newest snapshot. A large snapshot's evidence index now carries a digest of the accounts and of each report, so two captures of equal sizes no longer collide on the evidence digest.
+- **Throttled reads.** `ledger.DoThrottled` sends a QuickBooks or Xero GET again when it is refused with 429, after Retry-After in seconds or as a date (at most 30 seconds; 2, then 4, without one), three tries in all. It covers QuickBooks reads and readbacks and Xero reads. Writes and token exchanges are never repeated.
+
+Checks:
+- `TestPeriodContentChangesOnlyWithTheMonth`: a re-read with only report times and current balances changed compares equal; a changed balance or an added ledger row does not; an unreadable one never compares equal.
+- `TestQuickBooksScopedOAuthRefreshAndSnapshots`: after a newer capture of the month, selecting a ledger page from the older one is refused (409).
+- `TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures` (local PostgreSQL) tests the gate query:
+  - due with no snapshot;
+  - not due an hour after a scheduled one, but due 21 hours after;
+  - not due at six scheduled snapshots;
+  - never due after a person's capture;
+  - reported for sign-off after a failed month-end read (until a read succeeds), at six scheduled snapshots, at 19 snapshots in all (the schedule leaves the last one for that capture) and for a close past the schedule's months, but not at 20, where no capture is possible, nor once a person captures. The test derives its months from today.
+- `TestDoThrottledRepeatsOnlyThrottledReads`: a read throttled twice (once with a Retry-After date) succeeds on the third try; one throttled throughout stops at three; a throttled PUT is sent once.
+
+- `TestTheEndedMonthSnapshotIsCapturedAndRefreshedWhenItChanges` (mocked QuickBooks, local PostgreSQL): a snapshot under 20 hours old is not read again; a day-old one is read again and nothing is saved while the reports are unchanged; a changed balance saves a second snapshot. A person's capture during the read still wins, and signed-off, current-month and renamed-company closes are still left alone.
+
+Not verified: the capture against a live QuickBooks company.

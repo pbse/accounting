@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/prepaids"
 )
 
@@ -138,7 +139,8 @@ func (s Sandbox) request(ctx context.Context, method, path string, body any, res
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	response, err := client.Do(req)
+	// A throttled read is asked again; a write never is.
+	response, err := ledger.DoThrottled(client, req)
 	if err != nil {
 		return errors.New("QuickBooks request outcome could not be confirmed")
 	}

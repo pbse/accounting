@@ -367,6 +367,15 @@ func TestQuickBooksScopedOAuthRefreshAndSnapshots(t *testing.T) {
 	if replay.SourceID != selected.SourceID {
 		t.Fatal("ledger page replay duplicated evidence")
 	}
+	// A newer capture of the month, such as a scheduled refresh, which supersedes nothing, closes the older one to selections.
+	var newer string
+	if e = db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor,captured_at) SELECT close_id,connection_id,realm,digest||'-newer',payload,started_at,'scheduled-quickbooks-refresh',now()+interval '1 minute' FROM quickbooks_snapshots WHERE id::text=$1 RETURNING id::text`, result.ID).Scan(&newer); e != nil {
+		t.Fatal(e)
+	}
+	call("POST", ledgerPath, map[string]bool{"confirmed": true}, 409)
+	if _, e = db.Exec(`DELETE FROM quickbooks_snapshots WHERE id::text=$1`, newer); e != nil {
+		t.Fatal(e)
+	}
 	before := call("GET", "/v1/closes/"+closeID+"/prepare-close", nil, 200)
 	var scope struct {
 		Digest string `json:"inventory_digest"`

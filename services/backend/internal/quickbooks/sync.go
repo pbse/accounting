@@ -1,6 +1,7 @@
 package quickbooks
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -268,6 +269,14 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 			reports, done := context.WithTimeout(ctx, 3*time.Minute)
 			if e := captureFirstPeriod(reports, db, job, environment, realm, token); e != nil {
 				log.Printf("Month-end snapshot for close %s was not captured; the next scheduled sync retries: %v", job.closeID, e)
+				// Kept on the finished capture, where RefreshStopped reads it: until a read succeeds, sign-off needs a person's capture.
+				message := "Month-end snapshot not refreshed: " + e.Error()
+				if len(message) > 400 {
+					message = message[:400]
+				}
+				if _, saveErr := db.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET error=$2 WHERE id=$1`, job.id, message); saveErr != nil && ctx.Err() == nil {
+					log.Printf("Month-end snapshot failure for close %s could not be recorded: %v", job.closeID, saveErr)
+				}
 			}
 			done()
 		}
@@ -287,16 +296,65 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 	return true, nil
 }
 
-// firstPeriod binds an ended, unsigned month with no period snapshot to the connection its transactions came from.
+// firstPeriod binds an ended, unsigned month to the connection its transactions came from while its period snapshot
+// is the scheduler's own: none yet, or a scheduled one at least 20 hours old. The month has ended everywhere
+// (UTC-12) before the first one, so a US afternoon on the last day is never taken for the month's end.
 var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_closes c
  JOIN organizations o ON o.id=c.organization_id AND o.enabled
  JOIN quickbooks_connections x ON x.id=$2 AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.id=` + ReadingConnection("c.id") + `
- WHERE c.id=$1 AND c.period=$3 AND c.period<to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
+ WHERE c.id=$1 AND c.period=$3 AND c.period<to_char((now() AT TIME ZONE 'UTC')-interval '12 hours','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
- AND NOT EXISTS (SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period')
- AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id)<20`
+ AND NOT EXISTS (SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND (s.actor<>'scheduled-quickbooks-refresh' OR s.captured_at>now()-interval '20 hours'))
+ -- Six scheduled ones at most, and never the close's last free snapshot, so a person can always take the capture
+ -- that RefreshStopped then asks for.
+ AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id)<19
+ AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.actor='scheduled-quickbooks-refresh' AND s.payload ? 'period')<6`
 
-// captureFirstPeriod saves an ended month's first period snapshot; a person's capture or refresh is never replaced.
+// RefreshStopped is a SQL condition: the close's newest period snapshot on its reading connection is the scheduler's,
+// and the scheduler no longer refreshes it: six are taken, only the close's last free snapshot is left, it is past the
+// months scheduleSync reads, or the connection's latest finished capture failed or could not refresh the month-end.
+// Later entries may then be missing, so sign-off waits for a successful read or a person's capture. A close already
+// at its twenty snapshots cannot be captured again, so it is not asked to be.
+func RefreshStopped(close string) string {
+	return `COALESCE((SELECT s.actor='scheduled-quickbooks-refresh' AND ((SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id AND z.actor='scheduled-quickbooks-refresh' AND z.payload ? 'period')>=6
+ OR (SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id)=19
+ OR COALESCE((SELECT y.error<>'' FROM quickbooks_entity_syncs y WHERE y.close_id=s.close_id AND y.connection_id=s.connection_id AND y.period=sc.period AND y.state IN ('completed','unchanged','failed') ORDER BY y.id DESC LIMIT 1),false)
+ OR sc.period<to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=sc.id AND g.state='active'))
+ FROM quickbooks_snapshots s JOIN client_closes sc ON sc.id=s.close_id WHERE s.close_id=` + close + ` AND s.payload ? 'period' AND s.connection_id=` + ReadingConnection(close) + `
+ ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),false)`
+}
+
+// periodContent digests a period snapshot's accounts and reports, leaving out what changes on every read (a report's
+// generation time) or with activity after the month (current balances, sync tokens); "" when it cannot be read.
+func periodContent(payload []byte) string {
+	var p struct {
+		Accounts []map[string]any          `json:"accounts"`
+		Reports  map[string]map[string]any `json:"reports"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if decoder.Decode(&p) != nil || len(p.Reports) == 0 {
+		return ""
+	}
+	for _, account := range p.Accounts {
+		for _, volatile := range []string{"CurrentBalance", "CurrentBalanceWithSubAccounts", "MetaData", "SyncToken"} {
+			delete(account, volatile)
+		}
+	}
+	for _, report := range p.Reports {
+		if header, ok := report["Header"].(map[string]any); ok {
+			delete(header, "Time")
+		}
+	}
+	normalized, err := json.Marshal(p)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(normalized))
+}
+
+// captureFirstPeriod saves an ended month's period snapshot and, while the scheduler's snapshot is the newest, a fresh
+// one when its accounts or reports have changed, so later entries reach the tie-out. A person's capture or refresh is never replaced.
 func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environment, realm, token string) error {
 	var org, entity, company string
 	err := db.QueryRowContext(ctx, firstPeriod, job.closeID, job.connectionID, job.period).Scan(&org, &entity, &company)
@@ -333,6 +391,21 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	if err != nil {
 		return err
 	}
+	// Compared with this connection's own newest, so a new reading connection always gets its first snapshot.
+	var previous []byte
+	var first bool
+	if err = tx.QueryRowContext(ctx, `SELECT (SELECT payload FROM quickbooks_snapshots WHERE close_id=$1 AND connection_id=$2 AND payload ? 'period' ORDER BY captured_at DESC,id DESC LIMIT 1),NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE close_id=$1 AND payload ? 'period')`, job.closeID, job.connectionID).Scan(&previous, &first); err != nil {
+		return err
+	}
+	if previous != nil {
+		fresh, err := json.Marshal(snapshot)
+		if err != nil {
+			return err
+		}
+		if unchanged := periodContent(previous); unchanged != "" && unchanged == periodContent(fresh) {
+			return nil
+		}
+	}
 	var count, size int
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, job.closeID).Scan(&count, &size); err != nil {
 		return err
@@ -351,6 +424,9 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,$3,encode(sha256(convert_to($4::jsonb::text,'UTF8')),'hex'),$4,$5,'scheduled-quickbooks-refresh')`, job.closeID, job.connectionID, realm, string(payload), started); err != nil {
 		return err
+	}
+	if !first {
+		return tx.Commit()
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai'`, job.closeID); err != nil {
 		return err
