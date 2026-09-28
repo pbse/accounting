@@ -20,6 +20,12 @@ func TestAmountIn(t *testing.T) {
 		{"2026-09-02 Deposit", "2026.00", false},
 		{"9/2/26 Deposit 45.00", "26", false},
 		{"Refund 120.00-", "-120.00", true},
+		{"Coverage starts Sep 2, 2026", "2.00", false},
+		{"Coverage starts Sep 2, 2026", "2026", false},
+		{"From 2nd January 2026", "2", false},
+		{"Invoice for March 2026: 1,200.00", "1200", true},
+		{"Paid 2 Jan 2026, fee 2.00", "2.00", true},
+		{"Rent may 5.00 rise", "5.00", true},
 	} {
 		if AmountIn(c.text, c.amount) != c.want {
 			t.Errorf("AmountIn(%q, %q) = %v", c.text, c.amount, !c.want)

@@ -10,6 +10,15 @@ import (
 // A number as printed: thousands groups of three, or plain digits, with optional decimals.
 var printedNumber = regexp.MustCompile(`\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?`)
 
+// Dates written with a month name, whose day and year are not amounts: Sep 2, 2026; 2nd January 2026; March 2026.
+const monthName = `(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?`
+
+var writtenDates = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b` + monthName + `[ -]\d{1,2}(?:st|nd|rd|th)?\b(?:,?[ -]\d{2,4}\b)?`),
+	regexp.MustCompile(`(?i)\b\d{1,2}(?:st|nd|rd|th)?[ -]` + monthName + `(?:,?[ -]\d{2,4}\b)?`),
+	regexp.MustCompile(`(?i)\b` + monthName + `,?[ -]\d{4}\b`),
+}
+
 // AmountIn reports whether text prints the amount, ignoring its sign, currency signs and
 // thousands separators. A printed 1,200.00 shows 1200 or 1200.00, never 12000.00 or 1200.99.
 func AmountIn(text, amount string) bool {
@@ -18,6 +27,18 @@ func AmountIn(text, amount string) bool {
 		return false
 	}
 	digitAt := func(i int) bool { return i >= 0 && i < len(text) && isDigit(text[i]) }
+	inDate := make([]bool, len(text))
+	for _, pattern := range writtenDates {
+		for _, at := range pattern.FindAllStringIndex(text, -1) {
+			// "May 5.00" is a word and an amount, not a date.
+			if at[1] < len(text) && text[at[1]] == '.' && digitAt(at[1]+1) {
+				continue
+			}
+			for i := at[0]; i < at[1]; i++ {
+				inDate[i] = true
+			}
+		}
+	}
 	for _, at := range printedNumber.FindAllStringIndex(text, -1) {
 		token, before, after := text[at[0]:at[1]], byte(0), byte(0)
 		if at[0] > 0 {
@@ -28,7 +49,7 @@ func AmountIn(text, amount string) bool {
 		}
 		switch {
 		// The tail of a longer number, or a part of a date such as 2026-09-02, 9/2/26 or 02.01.2026.
-		case isDigit(before) || before == '.',
+		case isDigit(before) || before == '.' || inDate[at[0]],
 			(before == '-' || before == '/') && digitAt(at[0]-2),
 			(after == '-' || after == '/' || after == '.') && digitAt(at[1]+1),
 			// 09 is a day or month, not an amount.
