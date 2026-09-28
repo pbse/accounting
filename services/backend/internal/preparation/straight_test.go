@@ -195,6 +195,12 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"credit with no counterparty":  {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "91", Date: "2026-09-20", Record: json.RawMessage(`{"Credit":true,"Line":[{"Amount":100,"AccountBasedExpenseLineDetail":{"AccountRef":{"name":"Travel"}}}]}`)}), false},
 		"currency on another line":     {func(p *Proposal, _ *Procedure) { p.Facts[3].Candidates[0].Quote = "Payments accepted in USD" }, ledger(bill), false},
 		"subtotal cited":               {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Subtotal USD 1,200.00" }, ledger(bill), false},
+		"billed-to after another word": {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Bill to: Other Example" }, ledger(bill), false},
+		"service began earlier": {func(p *Proposal, _ *Procedure) {
+			p.Facts[1].Value = "2026-08-01"
+			p.Facts[1].Candidates[0].Value = "2026-08-01"
+			p.Facts[1].Candidates[0].Quote = "Coverage period 2026-08-01"
+		}, ledger(bill), false},
 		"not billed to":                {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Not billed to: Example" }, ledger(bill), false},
 		"trailing minus":               {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Adjustment USD 1,200.00-" }, ledger(bill), false},
 		"trailing CR":                  {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Adjustment USD 1,200.00 CR" }, ledger(bill), false},

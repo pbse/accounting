@@ -137,7 +137,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		if f.Field == "vendor" && !issuerLine(f.Candidates[0].Quote, f.Value) {
 			return Plan{}, "the cited line does not name the vendor as the invoice's issuer"
 		}
-		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}) {
+		if f.Field == "billed_to" && !labelledLine(f.Candidates[0].Quote, f.Value, []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}) {
 			return Plan{}, "the cited line does not say the invoice is billed to that name"
 		}
 		facts[f.Field] = f.Value
@@ -153,6 +153,10 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	}
 	if facts["currency"] != currency {
 		return Plan{}, "the invoice is not in the client's home currency"
+	}
+	// The capture proves this month's booking only; a service that began earlier may already carry prepaid entries.
+	if !strings.HasPrefix(facts["service_start"], period+"-") {
+		return Plan{}, "the service began before the close month; earlier entries need a person"
 	}
 	amount, err := prepaids.Amount(facts["amount"])
 	if err != nil || amount <= 0 {
@@ -510,6 +514,34 @@ func issuerLine(quote, value string) bool {
 			ok = ok || strings.Contains(label, word)
 		}
 		for _, word := range []string{"processor", "pay to", "payable", "remit", "bill to", "billed to", "sold to", "ship", "customer", "client", "contact", "agent", "broker", "via", "online", "care of", "attn"} {
+			ok = ok && !strings.Contains(label, word)
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// labelledLine reports whether the quoted line is one of the labels followed directly by the whole name, with no word
+// between them and no word that denies or redirects the label: "Bill to: Example" names Example; "Bill to: Other
+// Example" and "Bill from: Example" do not.
+func labelledLine(quote, value string, labels, none []string) bool {
+	want := documents.NormalizeEntity(value)
+	for _, line := range strings.Split(quote, "\n") {
+		normal := documents.NormalizeEntity(line)
+		if !endsWithName(normal, want) {
+			continue
+		}
+		label := strings.TrimSpace(strings.TrimSuffix(normal, want))
+		if negated(label) {
+			continue
+		}
+		ok := false
+		for _, l := range labels {
+			ok = ok || label == l || strings.HasSuffix(label, " "+l)
+		}
+		for _, word := range none {
 			ok = ok && !strings.Contains(label, word)
 		}
 		if ok {
