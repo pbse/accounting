@@ -44,7 +44,7 @@ Firms can require independent review (Firm settings, `org:manage`, hosted firms 
 
 ## Enabling accrual, loan, owner and Stripe fee posting
 
-Set `PRODUCTION_POSTING_KINDS` as a GitHub environment variable for a hosted deploy (the workflows pass it to the API container) or in your shell for Compose; `XERO_POSTING_KINDS` works the same way.
+The Security center's **Connector operations** shows each kind's status, last verified sandbox and live dates, and the clients it is enabled for. Set `PRODUCTION_POSTING_KINDS` as a GitHub environment variable for a hosted deploy (the workflows pass it to the API container) or in your shell for Compose; `XERO_POSTING_KINDS` works the same way.
 
 These kinds stay off until `PRODUCTION_POSTING_KINDS` lists them (default `prepaid`), for example `prepaid,accrual,loan,owner,settlement`. Turn a kind on only after observing QuickBooks behavior in the sandbox company:
 
