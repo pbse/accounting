@@ -7,7 +7,7 @@ on:
     paths-ignore: ['docs/**', '**/*.md']
 permissions:
   contents: read
-  # To find the merged pull request, its CI run and the last successful deploy.
+  # To find the merged pull request and its CI run.
   actions: read
   pull-requests: read
 concurrency:
@@ -72,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # History back to the last successful deploy, to see whether the text scanner changed.
+          # Full history: the merge's parents, and the commit the text scanner was last deployed from.
           fetch-depth: 0
       - name: The merged pull request passed CI
         # CI is not repeated here. A push is deployed only when the pull request it merged passed CI; the image and app
@@ -144,28 +144,28 @@ jobs:
           DATABASE_URL="$MIGRATION_DATABASE_URL" infra/postgres/migrate.sh
       - name: Stamp the workflow code version
         run: echo "$GITHUB_SHA" > services/backend/internal/wf/version.txt
-      # Each scanner deploy saves its key's fingerprint (a hash prefix, not the key) as a new cache entry; the newest
-      # entry is the key the scanner has now. A different key, as after a rotation, redeploys the scanner with it.
+      # Each scanner deploy saves the commit it deployed and its key's fingerprint (a hash prefix, not the key) as a new
+      # cache entry, so the newest entry describes the scanner now, even when the rest of that run failed.
       - name: Fingerprint the scanner key
         id: key
         run: echo "fingerprint=$(printf %s "$UPLOAD_SCAN_KEY" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-      - name: The key the scanner last received
+      - name: What the scanner last received
         uses: actions/cache/restore@v4
         with:
-          path: .scanner-key
+          path: .scanner-deployed
           # Never saved under this name: the prefix restores the newest entry.
-          key: production-scanner-key-newest
-          restore-keys: production-scanner-key-
-      - name: Did the text scanner or its key change since the last successful deploy?
+          key: production-scanner-newest
+          restore-keys: production-scanner-
+      - name: Did the scanner's code or key change since it was last deployed?
         id: scanner
         env:
-          GH_TOKEN: ${{ github.token }}
           FINGERPRINT: ${{ steps.key.outputs.fingerprint }}
-        # Its image holds only cmd/scanner and internal/scanning, which CI checks. A hand run always deploys it.
+        # Its image holds only cmd/scanner and internal/scanning, which CI checks. A hand run always deploys it, and so
+        # does a missing or unreadable record.
         run: |
-          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy-production.yml --branch main --status success --limit 1 --json headSha -q '.[0].headSha' || true)
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$(cat .scanner-key/fingerprint 2>/dev/null)" = "$FINGERPRINT" ] && [ -n "$last" ] && git diff --quiet "$last" HEAD -- services/scanner workers/scanner services/backend/cmd/scanner services/backend/internal/scanning services/backend/go.mod services/backend/go.sum package-lock.json .github/workflows/deploy-production.yml; then
-            echo "Unchanged since $last, with the same key; not redeployed."
+          deployed=$(cat .scanner-deployed/sha 2>/dev/null || true)
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$(cat .scanner-deployed/fingerprint 2>/dev/null)" = "$FINGERPRINT" ] && [ -n "$deployed" ] && git diff --quiet "$deployed" HEAD -- services/scanner workers/scanner services/backend/cmd/scanner services/backend/internal/scanning services/backend/go.mod services/backend/go.sum package-lock.json .github/workflows/deploy-production.yml; then
+            echo "Unchanged since $deployed, with the same key; not redeployed."
           else
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           fi
@@ -179,13 +179,13 @@ jobs:
           writeFileSync(process.env.CLOSE_SCANNER_SECRET_FILE, JSON.stringify({UPLOAD_SCAN_KEY: process.env.UPLOAD_SCAN_KEY}), {mode: 0o600});
           JS
           npx wrangler deploy -c workers/scanner/wrangler.jsonc --env production --secrets-file "$CLOSE_SCANNER_SECRET_FILE"
-          mkdir -p .scanner-key && echo "${{ steps.key.outputs.fingerprint }}" > .scanner-key/fingerprint
-      - name: Record the key the scanner has now
+          mkdir -p .scanner-deployed && echo "$GITHUB_SHA" > .scanner-deployed/sha && echo "${{ steps.key.outputs.fingerprint }}" > .scanner-deployed/fingerprint
+      - name: Record what the scanner has now
         if: steps.scanner.outputs.deploy == 'true'
         uses: actions/cache/save@v4
         with:
-          path: .scanner-key
-          key: production-scanner-key-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .scanner-deployed
+          key: production-scanner-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Deploy code and server secrets together
         run: |
           export CLOSE_DEPLOY_SECRET_FILE="$(mktemp)"
