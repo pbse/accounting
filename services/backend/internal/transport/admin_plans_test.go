@@ -48,7 +48,11 @@ func TestStaffReviewApproveAndCopyPlans(t *testing.T) {
 	proposal := create(wf.PlanDraft{Organization: firm, Plan: signal("Agent idea"), Source: "agent", CreatedBy: "agent:planner", Agent: "planner", Rationale: "Acme Secret has not replied"})
 	guarded := create(wf.PlanDraft{Organization: firm, Plan: json.RawMessage(`{"version":1,"title":"Sign off","nodes":[{"id":"sign","activity":"test_admin_guarded","input":{}}]}`), Source: "staff", CreatedBy: "staff:builder"})
 	template := create(wf.PlanDraft{Plan: signal("Template Secret"), Source: "staff", CreatedBy: "staff:builder", IsTemplate: true})
-	t.Cleanup(func() { db.Exec(`DELETE FROM workflow_plans WHERE id=$1`, template) })
+	t.Cleanup(func() {
+		// Copies point at their template, so they go first.
+		db.Exec(`DELETE FROM workflow_plans WHERE template_id=$1`, template)
+		db.Exec(`DELETE FROM workflow_plans WHERE id=$1`, template)
+	})
 	h := apiWithStore(db, token)
 	path := func(id int64, rest string) string { return "/v1/admin/plans/" + strconv.FormatInt(id, 10) + rest }
 	digest := func(id int64) string {

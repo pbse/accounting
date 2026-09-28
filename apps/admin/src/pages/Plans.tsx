@@ -158,7 +158,14 @@ function PlanDetail({ id }: { id: string }) {
                   {n.workflow && <>workflow {n.workflow}</>}
                   {n.wait?.event && <>wait for {shown(n.wait.event)} (up to {n.wait.timeout})</>}
                   {n.wait?.duration && <>wait {n.wait.duration}</>}
-                  {n.approval && <>approval by someone holding {n.approval.permission}{n.approval.subject && `: ${n.approval.subject}`}</>}
+                  {n.approval && (
+                    <>
+                      approval by someone holding {n.approval.permission}, within {n.approval.timeout}
+                      {revealed ? (
+                        <>{n.approval.subject && <><br />Subject: {n.approval.subject}</>}{n.approval.prompt && <><br />They are asked: {n.approval.prompt}</>}</>
+                      ) : <small> (subject and prompt hidden)</small>}
+                    </>
+                  )}
                 </td>
                 <td>{n.after?.join(", ") || "—"}</td>
                 <td>{n.when || "—"}</td>
