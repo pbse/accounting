@@ -12,7 +12,10 @@ type Detail = {
   input: unknown;
   output: unknown;
   steps: Step[];
+  steps_total: number;
+  earlier_steps: boolean;
   children: { id: number; workflow: string; state: string; parent_step: string }[];
+  children_total: number;
   plan: { id: number; title: string; state: string; source: string; plan: { nodes: PlanNode[] } } | null;
   registered: boolean;
   revealed: boolean;
@@ -52,11 +55,14 @@ export function Run() {
   // The grant this run was revealed under, or tried: one attempt per grant, and a new grant tries again.
   const [triedWith, setTriedWith] = useState<number>();
   const { reload: reloadGrants } = useGrants();
+  // A long run's steps come a page at a time, latest first: each entry is the seq an earlier page ends before.
+  const [pages, setPages] = useState<number[]>([]);
   useEffect(() => {
     setDetail(undefined);
     setReveal(undefined);
     setGrantLapsed(false);
     setTriedWith(undefined);
+    setPages([]);
   }, [id]);
   // Only the latest request may update the page, so a slow revealed answer cannot reappear after
   // Hide or on another run.
@@ -65,7 +71,10 @@ export function Run() {
     const request = ++latest.current;
     try {
       // An empty reason reveals under the staff member's content grant for the run's firm.
-      const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${reveal !== undefined ? "?reveal=1" : ""}`;
+      const query = new URLSearchParams();
+      if (reveal !== undefined) query.set("reveal", "1");
+      if (pages.length) query.set("steps_before", String(pages[pages.length - 1]));
+      const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${query.size ? `?${query}` : ""}`;
       const next = await get<Detail>(path, reveal !== undefined ? { "X-Access-Reason": reveal } : {});
       if (request !== latest.current) return;
       setDetail(next);
@@ -83,7 +92,7 @@ export function Run() {
       setDetail(undefined);
       setReveal(undefined);
     }
-  }, [id, reveal, reloadGrants]);
+  }, [id, reveal, pages, reloadGrants]);
   useEffect(() => {
     load();
     return () => {
@@ -149,6 +158,14 @@ export function Run() {
           <h2>Flow</h2>
           <FlowGraph steps={detail.steps} plan={detail.plan?.plan.nodes} selected={selected} onSelect={setSelected} />
           <h3>Steps in order</h3>
+          {detail.steps_total > detail.steps.length && (
+            <p className="note">
+              Showing {detail.steps.length} of the run's {detail.steps_total} steps{pages.length === 0 ? ", the latest" : ""}.{" "}
+              {detail.earlier_steps && detail.steps.length > 0 && <button className="link" onClick={() => setPages([...pages, detail.steps[0].seq])}>Earlier steps</button>}{" "}
+              {pages.length > 0 && <button className="link" onClick={() => setPages(pages.slice(0, -1))}>Later steps</button>}{" "}
+              {pages.length > 1 && <button className="link" onClick={() => setPages([])}>Latest steps</button>}
+            </p>
+          )}
           <ol className="steps">
             {detail.steps.map((s) => (
               <li key={s.key}>
@@ -187,7 +204,7 @@ export function Run() {
               {step.kind === "effect" && step.state === "unknown" && <ResolveForm allowed={operate} onSubmit={(applied, output, reason) => act("resolve", { key: step.key, applied, output, reason })} />}
             </>
           ) : (
-            <p>Select a step in the flow or the list to see its details.</p>
+            <p>{selected ? `Step ${selected} is not among the steps shown: page through the steps to find it.` : "Select a step in the flow or the list to see its details."}</p>
           )}
         </aside>
       </div>
@@ -219,6 +236,7 @@ export function Run() {
       {detail.children.length > 0 && (
         <section>
           <h2>Child runs</h2>
+          {detail.children_total > detail.children.length && <p className="note">Showing the newest {detail.children.length} of {detail.children_total}. <Link to={`/runs?parent=${run.id}`}>All child runs</Link></p>}
           <ul>{detail.children.map((c) => <li key={c.id}><Link to={`/runs/${c.id}`}>#{c.id} {c.workflow}</Link> from step {c.parent_step} · {c.state}</li>)}</ul>
         </section>
       )}
