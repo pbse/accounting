@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations) and A1 (workflows) implemented** (2026-09-28); later phases are proposals. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations), A1 (workflows) and the first half of A2 (firm people, activity, audit, suspension) implemented** (2026-09-28); the rest are proposals. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -170,10 +170,10 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 
 | Route | Permission |
 |---|---|
-| `GET /overview`, `GET /firms`, `GET /firms/{id}`, `GET /firms/{id}/activity` | `platform:read` |
-| `POST /firms/{id}/suspend`, `POST /firms/{id}/resume` | `platform:operate` |
+| `GET /overview`, `GET /firms`, `GET /firms/{id}`, `GET /firms/{id}/people`, `GET /firms/{id}/activity`, `GET /firms/{id}/audit` | `platform:read` |
+| `POST /firms/{id}/suspend`, `POST /firms/{id}/resume` (typed firm ID), `POST /firms/{id}/members/{userId}/revoke`, `POST /firms/{id}/invitations/{id}/revoke` | `platform:operate` |
 | `GET /people?query=`, `GET /people/{userId}` | `platform:read` |
-| `POST /people/{userId}/memberships/{firm}/revoke`, `POST /invitations/{id}/resend`, `POST /invitations/{id}/revoke`, `POST /people/{userId}/sessions/revoke` | `platform:operate` |
+| `POST /invitations/{id}/resend`, `POST /people/{userId}/sessions/revoke` | `platform:operate` |
 | `GET /workflows/definitions`, `GET /workflows/activities`, `GET /workflows/runs`, `GET /workflows/runs/{id}` | `platform:read` |
 | `POST /workflows/runs`, `POST /workflows/runs/{id}/cancel`, `…/retry` and `…/resolve` (step `key` in the body), `POST /workflows/events` | `platform:operate` |
 | `GET /workflows/plans`, `POST /workflows/plans`, `…/propose`, `…/approve`, `…/reject`, `…/instantiate` | `platform:plans` |
@@ -186,7 +186,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 |---|---|---|---|
 | **A0. Foundations** (implemented) | none | Staff organization, roles and permissions in WorkOS (staging and production); `PLATFORM_ORGANIZATION_ID` wired through every place settings are listed; staff middleware and the `adminRead`/`adminAct` helpers; admin migration (098); `apps/admin` shell with staff sign-in; `/admin` edge routing; read-only Overview (heartbeats), Firms and firm detail. | `internal/transport/admin_test.go`: a firm token gets 401 on `/v1/admin/*` (even claiming a platform permission); a staff token gets 403 on firm routes; `adminRead` refuses writes; `adminAct` runs as the firm and audits success and refusal; the edge serves admin pages (`routes.test.ts`). |
 | **A1. Workflows** (implemented) | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
-| **A2. Firm management** | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
+| **A2. Firm management** (first half implemented) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
 | **A3. Plans** | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
 | **A4. Hardening** | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
 
@@ -215,6 +215,14 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 - **Live updates.** The run page polls every 3 seconds while the run is active. The engine itself checks for work every 10 seconds when idle, so a change can take that long to show.
 - **Not yet.** Loops are not collapsed and child runs are links rather than nested groups; both wait for a workflow that needs them.
 - **Local check.** `npm run dev:admin` against a local API and worker; the run page was exercised on a staff-approved plan waiting for an event, and sending that event from the inspector completed the run.
+
+## As built (A2, first half)
+
+- **Firm page tabs.** Overview (counts, last health check, recent runs, suspend or resume), People (members with their decision, client-assignment count and agent access; invitations), Activity (paged, filterable by kind) and Staff audit (paged `platform_audit` for the firm, refusals and reveals included).
+- **Shared domain functions.** The firm's own screens and the console call the same code: `setOrganizationEnabled` (suspend and, new, resume), `decideMemberAccess` (a membership decision, removing a revoked member's assistant history, portfolio goals and attention marks), `closeInvitation` and `revokeInWorkOS`. Staff actions run through `adminAct` as the firm, need a reason of 10–2,000 characters like the firm's own screens, and are audited. Suspending or resuming needs the firm's ID typed to confirm. Revoking a member needs the decision staff saw (`previous_id`), so a change made meanwhile is not overwritten.
+- **Masking.** People shows user IDs, decisions, invited email addresses and assignment counts. Member reasons and the names of assigned clients are masked until revealed. Activity comes from the Security center's derivation (`activityEvents` in `security.go`, now with a kind per row), plus workflow runs and the last suspension. The firm's own records are masked until revealed; workflow rows show. The firm page shows when and by whom a firm was last suspended; the reason is in its activity. The staff audit shows who did which action to what and whether it went through; reasons, the request's details and a refusal's error are masked until revealed. Reveals use the same `platform:content` gate as the run page, via `adminReveal`, and are audited per firm.
+- **Firm detail.** Moved members to People (masked) and dropped run errors from the recent-runs list; the run page masks them.
+- **Next (A2, second half).** Jobs health across firms, connections, global people search with WorkOS memberships and sessions, invitation resend, audit search and export.
 
 ## Later ideas (not planned)
 

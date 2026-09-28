@@ -143,6 +143,16 @@ func invitationEnrollment(ctx context.Context, db *sql.DB, org, sub string) bool
 // settleInvitations resolves sends WorkOS did not confirm, and sends revoked before they were confirmed, from WorkOS's
 // own list. Only an invitation that matches the send's firm, address, role and inviter, created around the send, is
 // taken as it; anything absent or ambiguous stays unsettled.
+// reconcileInvitations brings the firm's invitations up to date before they are listed: pending ones past their expiry
+// expire, and, with a WorkOS key, sends WorkOS completed but the app did not record are settled.
+func reconcileInvitations(ctx context.Context, db *sql.DB, org string) error {
+	_, err := db.ExecContext(ctx, `UPDATE member_invitations SET state='expired',decided_at=now() WHERE organization_id=$1 AND state='pending' AND expires_at<=now()`, org)
+	if err == nil && os.Getenv("WORKOS_API_KEY") != "" {
+		err = settleInvitations(ctx, db, org)
+	}
+	return err
+}
+
 func settleInvitations(ctx context.Context, db *sql.DB, org string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -221,10 +231,7 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		org := organization(r)
-		_, err := db.ExecContext(r.Context(), `UPDATE member_invitations SET state='expired',decided_at=now() WHERE organization_id=$1 AND state='pending' AND expires_at<=now()`, org)
-		if err == nil && os.Getenv("WORKOS_API_KEY") != "" {
-			err = settleInvitations(r.Context(), db, org)
-		}
+		err := reconcileInvitations(r.Context(), db, org)
 		var raw []byte
 		if err == nil {
 			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(i) - 'organization_id' - 'workos_id' ORDER BY i.state NOT IN ('sending','pending'),i.id::bigint DESC),'[]'::jsonb) FROM (SELECT member_invitations.id::text AS id,organization_id,email,role_name,workos_id,state,invited_by,reason,subject,expires_at,created_at,decided_at FROM member_invitations WHERE organization_id=$1 ORDER BY member_invitations.id DESC LIMIT 50) i`, org).Scan(&raw)
@@ -262,20 +269,12 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if in.Action == "revoke" {
-			// The app's authority goes first, so a failed WorkOS revoke can never leave it ready to enroll. A send still
-			// unconfirmed is revoked in WorkOS when it completes or is settled.
-			var workosID sql.NullString
-			if err := db.QueryRowContext(r.Context(), `UPDATE member_invitations SET state='revoked',decided_at=now() WHERE id::text=$1 AND organization_id=$2 AND state IN ('sending','pending') RETURNING workos_id`, in.ID, org).Scan(&workosID); err != nil {
+			workosID, err := closeInvitation(r.Context(), db, org, in.ID)
+			if err != nil {
 				problem(w, 409, "Only an open invitation can be revoked. Refresh the list.")
 				return
 			}
-			message := "Invitation revoked."
-			if !workosID.Valid {
-				message = "Invitation revoked. It was still being sent; the app revokes it in WorkOS once WorkOS confirms it."
-			} else if workos(r.Context(), "POST", "/user_management/invitations/"+url.PathEscape(workosID.String)+"/revoke", map[string]any{}, nil) != nil {
-				message = "The app will not enroll this invitation, but WorkOS did not confirm revoking it. Check the firm's invitations in WorkOS."
-			}
-			jsonReply(w, 200, map[string]string{"message": message})
+			jsonReply(w, 200, map[string]string{"message": revokeInWorkOS(r.Context(), workosID)})
 			return
 		}
 		address, err := mail.ParseAddress(strings.TrimSpace(in.Email))
@@ -354,4 +353,29 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]string{"id": id, "message": "Invitation sent to " + email + "."})
 	})
+}
+
+// closeInvitation revokes an open invitation in the app, returning its WorkOS ID (null while it is still being sent). The
+// app's authority goes first, so a failed WorkOS revoke can never leave it ready to enroll; see revokeInWorkOS.
+func closeInvitation(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, org, id string) (sql.NullString, error) {
+	var workosID sql.NullString
+	err := q.QueryRowContext(ctx, `UPDATE member_invitations SET state='revoked',decided_at=now() WHERE id::text=$1 AND organization_id=$2 AND state IN ('sending','pending') RETURNING workos_id`, id, org).Scan(&workosID)
+	return workosID, err
+}
+
+// revokeInWorkOS revokes an invitation closeInvitation closed, after that change committed, and says what happened. A send
+// still unconfirmed is revoked in WorkOS when it completes or is settled.
+func revokeInWorkOS(ctx context.Context, workosID sql.NullString) string {
+	if !workosID.Valid {
+		return "Invitation revoked. It was still being sent; the app revokes it in WorkOS once WorkOS confirms it."
+	}
+	if os.Getenv("WORKOS_API_KEY") == "" {
+		return "The app will not enroll this invitation. The server has no WorkOS key, so revoke it in WorkOS too."
+	}
+	if workos(ctx, "POST", "/user_management/invitations/"+url.PathEscape(workosID.String)+"/revoke", map[string]any{}, nil) != nil {
+		return "The app will not enroll this invitation, but WorkOS did not confirm revoking it. Check the firm's invitations in WorkOS."
+	}
+	return "Invitation revoked."
 }

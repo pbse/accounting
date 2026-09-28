@@ -10,7 +10,7 @@ import (
 // securityPeople is each member's latest decision, their recorded client assignments, their latest agent access decision and,
 // separately, the agent scope in force (a later request or decline never changes an approval already in force).
 // Assignments take effect only while the membership is granted; firm-wide access comes from the WorkOS role.
-const securityPeople = `SELECT COALESCE(jsonb_agg(jsonb_build_object('subject',m.subject,'granted',m.granted,'decided_by',m.actor,'decided_at',m.created_at,'reason',m.reason,
+const securityPeople = `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',m.id::text,'subject',m.subject,'granted',m.granted,'decided_by',m.actor,'decided_at',m.created_at,'reason',m.reason,
  'assignments',COALESCE((SELECT jsonb_agg(g.client_entity ORDER BY lower(g.client_entity)) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),'[]'::jsonb),
  'agent',(SELECT jsonb_build_object('state',a.state,'scope',a.scope,'decided_by',a.actor,'decided_at',a.created_at) FROM current_agent_access a WHERE a.organization_id=m.organization_id AND a.subject=m.subject),
  'agent_scope_in_force',(SELECT e.scope FROM effective_agent_access e WHERE e.organization_id=m.organization_id AND e.subject=m.subject)) ORDER BY m.granted DESC,m.subject),'[]'::jsonb)
@@ -40,29 +40,33 @@ const securityGrants = `SELECT COALESCE(jsonb_agg(x ORDER BY x.granted_at DESC),
   WHERE g.organization_id=$1 AND g.revoked_at IS NULL AND g.expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=g.organization_id AND m.subject=g.granted_by AND m.granted)
 ) x`
 
-// securityActivity is the newest recorded access decisions, connection and grant changes, and records agents made for members.
-// It is derived from those durable histories; it is not a complete audit trail.
-const securityActivity = `SELECT COALESCE(jsonb_agg(x ORDER BY x.at DESC),'[]'::jsonb) FROM (SELECT * FROM (
- SELECT created_at AS at,actor,CASE WHEN granted THEN 'Enrolled ' ELSE 'Revoked ' END||subject||': '||reason AS text FROM organization_member_access WHERE organization_id=$1
- UNION ALL SELECT created_at,actor,CASE WHEN granted THEN 'Assigned ' ELSE 'Unassigned ' END||subject||' to '||client_entity||': '||reason FROM client_access WHERE organization_id=$1
- UNION ALL SELECT created_at,actor,'Agent access '||state||' ('||scope||') for '||subject||': '||reason FROM agent_access WHERE organization_id=$1
- UNION ALL SELECT created_at,invited_by,'Invited '||email||' as '||role_name FROM member_invitations WHERE organization_id=$1
- UNION ALL SELECT decided_at,COALESCE(subject,''),'Invitation for '||email||' '||state FROM member_invitations WHERE organization_id=$1 AND decided_at IS NOT NULL
- UNION ALL SELECT created_at,actor,'Connected QuickBooks ('||environment||') for '||client_entity FROM quickbooks_connections WHERE organization_id=$1
- UNION ALL SELECT confirmed_at,confirmed_by,'Confirmed QuickBooks for '||client_entity FROM quickbooks_connections WHERE organization_id=$1 AND confirmed_at IS NOT NULL
- UNION ALL SELECT created_at,actor,'Connected Xero for '||client_entity FROM xero_connections WHERE organization_id=$1
- UNION ALL SELECT confirmed_at,confirmed_by,'Confirmed Xero for '||client_entity FROM xero_connections WHERE organization_id=$1 AND confirmed_at IS NOT NULL
- UNION ALL SELECT created_at,actor,'Connected Stripe ('||CASE WHEN livemode THEN 'live' ELSE 'test' END||') for '||client_entity FROM stripe_connections WHERE organization_id=$1
- UNION ALL SELECT created_at,actor,'Set email sending from '||sender FROM email_connections WHERE organization_id=$1
- UNION ALL SELECT granted_at,granted_by,'Granted QuickBooks posting for '||client_entity||': '||reason FROM production_posting_grants WHERE organization_id=$1
- UNION ALL SELECT revoked_at,revoked_by,'Revoked QuickBooks posting for '||client_entity FROM production_posting_grants WHERE organization_id=$1 AND revoked_at IS NOT NULL
- UNION ALL SELECT granted_at,granted_by,'Granted Xero posting for '||client_entity||': '||reason FROM xero_posting_grants WHERE organization_id=$1
- UNION ALL SELECT revoked_at,revoked_by,'Revoked Xero posting for '||client_entity FROM xero_posting_grants WHERE organization_id=$1 AND revoked_at IS NOT NULL
- UNION ALL SELECT e.created_at,e.created_by,'Agent '||e.agent||' added evidence '||e.name||' to '||c.entity||' '||c.period FROM evidence e JOIN client_closes c ON c.id=e.close_id WHERE c.organization_id=$1 AND e.agent IS NOT NULL
- UNION ALL SELECT j.created_at,j.created_by,'Agent '||j.agent||' started preparation #'||j.id||' in '||c.entity||' '||c.period FROM preparation_jobs j JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=$1 AND j.agent IS NOT NULL
- UNION ALL SELECT p.created_at,p.actor,'Agent '||p.agent||' prepared '||c.entity||' '||c.period FROM close_preparations p JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.agent IS NOT NULL
- UNION ALL SELECT d.created_at,d.created_by,'Agent '||d.agent||' drafted a client request in '||c.entity||' '||c.period FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1 AND d.agent IS NOT NULL
- UNION ALL SELECT a.created_at,a.requested_by,'Agent '||a.agent||' asked for approval of draft #'||a.workpaper_id||' in '||c.entity||' '||c.period FROM approval_requests a JOIN client_closes c ON c.id=a.close_id WHERE c.organization_id=$1 AND a.agent IS NOT NULL
+// activityEvents is the firm's ($1) recorded access decisions, connection and grant changes, and records agents made for
+// members, as (at, actor, kind, text). It is derived from those durable histories; it is not a complete audit trail. The text
+// names clients and quotes reasons, so the staff console masks it until revealed.
+const activityEvents = `
+ SELECT created_at AS at,actor,CASE WHEN granted THEN 'member.enrolled' ELSE 'member.revoked' END AS kind,CASE WHEN granted THEN 'Enrolled ' ELSE 'Revoked ' END||subject||': '||reason AS text FROM organization_member_access WHERE organization_id=$1
+ UNION ALL SELECT created_at,actor,CASE WHEN granted THEN 'client.assigned' ELSE 'client.unassigned' END,CASE WHEN granted THEN 'Assigned ' ELSE 'Unassigned ' END||subject||' to '||client_entity||': '||reason FROM client_access WHERE organization_id=$1
+ UNION ALL SELECT created_at,actor,'agent_access.'||state,'Agent access '||state||' ('||scope||') for '||subject||': '||reason FROM agent_access WHERE organization_id=$1
+ UNION ALL SELECT created_at,invited_by,'invitation.sent','Invited '||email||' as '||role_name FROM member_invitations WHERE organization_id=$1
+ UNION ALL SELECT decided_at,COALESCE(subject,''),'invitation.'||state,'Invitation for '||email||' '||state FROM member_invitations WHERE organization_id=$1 AND decided_at IS NOT NULL
+ UNION ALL SELECT created_at,actor,'quickbooks.connected','Connected QuickBooks ('||environment||') for '||client_entity FROM quickbooks_connections WHERE organization_id=$1
+ UNION ALL SELECT confirmed_at,confirmed_by,'quickbooks.confirmed','Confirmed QuickBooks for '||client_entity FROM quickbooks_connections WHERE organization_id=$1 AND confirmed_at IS NOT NULL
+ UNION ALL SELECT created_at,actor,'xero.connected','Connected Xero for '||client_entity FROM xero_connections WHERE organization_id=$1
+ UNION ALL SELECT confirmed_at,confirmed_by,'xero.confirmed','Confirmed Xero for '||client_entity FROM xero_connections WHERE organization_id=$1 AND confirmed_at IS NOT NULL
+ UNION ALL SELECT created_at,actor,'stripe.connected','Connected Stripe ('||CASE WHEN livemode THEN 'live' ELSE 'test' END||') for '||client_entity FROM stripe_connections WHERE organization_id=$1
+ UNION ALL SELECT created_at,actor,'email.sender','Set email sending from '||sender FROM email_connections WHERE organization_id=$1
+ UNION ALL SELECT granted_at,granted_by,'posting.quickbooks_granted','Granted QuickBooks posting for '||client_entity||': '||reason FROM production_posting_grants WHERE organization_id=$1
+ UNION ALL SELECT revoked_at,revoked_by,'posting.quickbooks_revoked','Revoked QuickBooks posting for '||client_entity FROM production_posting_grants WHERE organization_id=$1 AND revoked_at IS NOT NULL
+ UNION ALL SELECT granted_at,granted_by,'posting.xero_granted','Granted Xero posting for '||client_entity||': '||reason FROM xero_posting_grants WHERE organization_id=$1
+ UNION ALL SELECT revoked_at,revoked_by,'posting.xero_revoked','Revoked Xero posting for '||client_entity FROM xero_posting_grants WHERE organization_id=$1 AND revoked_at IS NOT NULL
+ UNION ALL SELECT e.created_at,e.created_by,'agent.evidence','Agent '||e.agent||' added evidence '||e.name||' to '||c.entity||' '||c.period FROM evidence e JOIN client_closes c ON c.id=e.close_id WHERE c.organization_id=$1 AND e.agent IS NOT NULL
+ UNION ALL SELECT j.created_at,j.created_by,'agent.preparation','Agent '||j.agent||' started preparation #'||j.id||' in '||c.entity||' '||c.period FROM preparation_jobs j JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=$1 AND j.agent IS NOT NULL
+ UNION ALL SELECT p.created_at,p.actor,'agent.prepared','Agent '||p.agent||' prepared '||c.entity||' '||c.period FROM close_preparations p JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.agent IS NOT NULL
+ UNION ALL SELECT d.created_at,d.created_by,'agent.request_draft','Agent '||d.agent||' drafted a client request in '||c.entity||' '||c.period FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1 AND d.agent IS NOT NULL
+ UNION ALL SELECT a.created_at,a.requested_by,'agent.approval_request','Agent '||a.agent||' asked for approval of draft #'||a.workpaper_id||' in '||c.entity||' '||c.period FROM approval_requests a JOIN client_closes c ON c.id=a.close_id WHERE c.organization_id=$1 AND a.agent IS NOT NULL`
+
+// securityActivity is the newest hundred activityEvents for the Security center.
+const securityActivity = `SELECT COALESCE(jsonb_agg(x ORDER BY x.at DESC),'[]'::jsonb) FROM (SELECT at,actor,text FROM (` + activityEvents + `
 ) events ORDER BY at DESC LIMIT 100) x`
 
 func registerSecurity(mux *http.ServeMux, db *sql.DB) {
