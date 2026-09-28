@@ -583,10 +583,15 @@ func TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures(t *testing.T) {
 	if stopped() {
 		t.Fatal("a successful read still asks for a capture")
 	}
-	// A close holding its twenty snapshots is no longer refreshed.
-	db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) SELECT $1,$2,'123',md5(random()::text),'{}',now(),'person@example.test' FROM generate_series(1,17)`, closeID, connection)
-	if !stopped() {
-		t.Fatal("a close at its snapshot limit was not reported for sign-off")
+	// With one free snapshot left the schedule stops and asks for a person's capture, which that snapshot allows;
+	// at twenty nothing more can be captured, so nothing is asked.
+	db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) SELECT $1,$2,'123',md5(random()::text),'{}',now(),'person@example.test' FROM generate_series(1,16)`, closeID, connection)
+	if due() || !stopped() {
+		t.Fatal("the schedule took the last free snapshot, or its stop was not reported for sign-off")
+	}
+	db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',md5(random()::text),'{}',now(),'person@example.test')`, closeID, connection)
+	if stopped() {
+		t.Fatal("a close that cannot be captured again was asked for a capture")
 	}
 	db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1 AND NOT payload ? 'period'`, closeID)
 	// A close past the months the scheduler reads is no longer refreshed either.
