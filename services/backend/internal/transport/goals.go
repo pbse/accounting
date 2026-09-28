@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -970,8 +971,12 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 // stopped (or gone), and otherwise the goal's next step. An error, including a firm whose roles cannot be read, is left
 // for the next look; the run records it.
 func lookAtGoal(ctx context.Context, db *sql.DB, goalID string, roles func(context.Context, string) (map[string]reviewer, error)) (bool, error) {
+	id, err := strconv.ParseInt(goalID, 10, 64)
+	if err != nil {
+		return true, nil // no such goal: nothing to watch
+	}
 	var org string
-	err := db.QueryRowContext(ctx, `SELECT c.organization_id FROM close_goals g JOIN client_closes c ON c.id=g.close_id WHERE g.id::text=$1 AND g.state<>'stopped'`, goalID).Scan(&org)
+	err = db.QueryRowContext(ctx, `SELECT c.organization_id FROM close_goals g JOIN client_closes c ON c.id=g.close_id WHERE g.id=$1 AND g.state<>'stopped'`, id).Scan(&org)
 	if errors.Is(err, sql.ErrNoRows) {
 		return true, nil
 	}
@@ -986,45 +991,57 @@ func lookAtGoal(ctx context.Context, db *sql.DB, goalID string, roles func(conte
 		return false, err
 	}
 	var open bool
-	err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM close_goals WHERE id::text=$1 AND state<>'stopped')`, goalID).Scan(&open)
+	err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM close_goals WHERE id=$1 AND state<>'stopped')`, id).Scan(&open)
 	return !open, err
 }
 
-// watchGoals starts a close_goal run for each open goal of an enabled firm that no active run watches, and returns how
-// many it started.
+// watchGoals starts a close_goal run for each open goal of an enabled firm that no active run watches, a thousand at a
+// time until none is left, and returns how many it started.
 func watchGoals(ctx context.Context, db *sql.DB) (int, error) {
+	started := 0
+	for range 1000 {
+		n, more, err := watchSomeGoals(ctx, db, 1000)
+		started += n
+		if err != nil || !more {
+			return started, err
+		}
+	}
+	return started, nil
+}
+
+// watchSomeGoals starts runs for up to limit unwatched goals; more says it found limit of them.
+func watchSomeGoals(ctx context.Context, db *sql.DB, limit int) (started int, more bool, err error) {
 	rows, err := db.QueryContext(ctx, `SELECT g.id::text,c.organization_id FROM close_goals g JOIN client_closes c ON c.id=g.close_id JOIN organizations o ON o.id=c.organization_id
  WHERE g.state<>'stopped' AND o.enabled AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE COALESCE(r.organization_id,'')=c.organization_id AND r.concurrency_key='close_goal:'||g.id AND r.state IN ('queued','running','waiting'))
- ORDER BY g.id LIMIT 1000`)
+ ORDER BY g.id LIMIT $1`, limit)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	goals := []goalRow{}
 	for rows.Next() {
 		var g goalRow
 		if err = rows.Scan(&g.id, &g.org); err != nil {
 			rows.Close()
-			return 0, err
+			return 0, false, err
 		}
 		goals = append(goals, g)
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	started := 0
 	for _, g := range goals {
 		// A key of its own for this pass: the goal's earlier runs keep theirs. The concurrency key keeps it to one run.
 		_, existing, err := wf.Start(ctx, db, wf.StartRequest{Workflow: "close_goal", Organization: g.org, Input: close_goal.Input{GoalID: g.id}, IdempotencyKey: "goal:" + g.id + "/" + wf.CurrentStepID(ctx), StartedBy: "workflow:close_goal_upkeep"})
 		switch {
 		case errors.Is(err, wf.ErrBusy):
 		case err != nil:
-			return started, err
+			return started, false, err
 		case !existing:
 			started++
 		}
 	}
-	return started, nil
+	return started, len(goals) == limit, nil
 }
 
 func stepGoal(ctx context.Context, db *sql.DB, id string, roles map[string]reviewer) error {

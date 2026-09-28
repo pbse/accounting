@@ -187,7 +187,14 @@ func (c *rolesCache) of(ctx context.Context, org string) (map[string]reviewer, e
 		return read.members, read.err
 	}
 	shared, _, _ := c.flight.Do(org, func() (any, error) {
-		read := cachedRoles{at: time.Now()}
+		// A read that finished while this caller waited to start one is recent enough.
+		c.Lock()
+		read, ok := c.read[org]
+		c.Unlock()
+		if ok && time.Since(read.at) < time.Minute {
+			return read, nil
+		}
+		read = cachedRoles{at: time.Now()}
 		read.members, read.err = sweepRoles{}.of(ctx, org)
 		if read.err == nil || ctx.Err() == nil {
 			c.Lock()
