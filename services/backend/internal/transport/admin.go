@@ -198,6 +198,7 @@ func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("GET /v1/admin/firms/{id}", read(func(w http.ResponseWriter, r *http.Request) { adminFirm(w, r, db) }))
 	registerAdminWorkflows(mux, db, token)
 	registerAdminFirms(mux, db, token)
+	registerAdminOperations(mux, db, token)
 }
 
 // adminOverview is the platform's health at a glance.
