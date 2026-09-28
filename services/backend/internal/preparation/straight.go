@@ -95,7 +95,8 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 
 // expensedLine finds the one bill or purchase line in the close month that books the invoice amount to the expense
 // account and belongs to the invoice: its vendor's name or its document number is printed in the invoice. A line on
-// the prepaid account, a second match, or a journal moving the amount on either account is a question for a person.
+// the prepaid account, a second match, any journal on the prepaid account in the month, or a vendor credit from the
+// vendor or on either account is a question for a person.
 func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, prepaid string) (booking, reason string) {
 	text := strings.ToLower(invoice)
 	matches := 0
@@ -104,10 +105,10 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 			continue
 		}
 		var record struct {
-			Credit    bool
-			DocNumber string
-			VendorRef struct{ Name string }
-			Line      []struct {
+			Credit               bool
+			DocNumber            string
+			VendorRef, EntityRef struct{ Name string }
+			Line                 []struct {
 				Amount                        json.Number
 				AccountBasedExpenseLineDetail *struct{ AccountRef struct{ Name string } }
 				JournalEntryLineDetail        *struct{ AccountRef struct{ Name string } }
@@ -116,30 +117,29 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 		if json.Unmarshal(row.Record, &record) != nil {
 			continue
 		}
+		mine := printed(text, record.VendorRef.Name) || printed(text, record.EntityRef.Name) || printed(text, record.DocNumber)
 		for _, line := range record.Line {
-			value, err := prepaids.Amount(line.Amount.String())
-			if err != nil || prepaids.Money(value) != amount {
-				continue
-			}
 			name := ""
 			if line.AccountBasedExpenseLineDetail != nil {
 				name = line.AccountBasedExpenseLineDetail.AccountRef.Name
 			} else if line.JournalEntryLineDetail != nil {
 				name = line.JournalEntryLineDetail.AccountRef.Name
 			}
-			if !strings.EqualFold(name, expense) && !strings.EqualFold(name, prepaid) {
+			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
+			if row.Kind == "JournalEntry" && onPrepaid {
+				return "", "a journal in the close month posts to the prepaid account"
+			}
+			if row.Kind == "VendorCredit" && (mine || onExpense || onPrepaid) {
+				return "", "a vendor credit in the close month may change what this invoice expensed"
+			}
+			value, err := prepaids.Amount(line.Amount.String())
+			if (row.Kind != "Bill" && row.Kind != "Purchase") || record.Credit || err != nil || prepaids.Money(value) != amount || !(onExpense || onPrepaid) {
 				continue
 			}
-			if row.Kind == "JournalEntry" {
-				return "", "a journal in the close month moves this amount on the procedure's accounts"
-			}
-			if (row.Kind != "Bill" && row.Kind != "Purchase") || record.Credit {
-				continue
-			}
-			if strings.EqualFold(name, prepaid) {
+			if onPrepaid {
 				return "", "a captured " + row.Kind + " books this amount to the prepaid account; its balance needs a person"
 			}
-			if !printed(text, record.VendorRef.Name) && !printed(text, record.DocNumber) {
+			if !mine {
 				continue
 			}
 			matches++
@@ -165,19 +165,20 @@ func printed(text, term string) bool {
 }
 
 // CloseLedger is the newest completed capture of the close month on the close's reading connection, with its
-// current evidence entry and its bill, purchase and journal rows; nil when a newer capture is still pending or failed,
+// current evidence entry and its bill, purchase, journal and vendor credit rows (a newer sync that found the books
+// unchanged reuses them); nil when a newer capture is still pending or failed,
 // or there is none.
 func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, error) {
 	var l Ledger
 	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id)`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name)
+ WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT t.kind,t.provider_id,t.txn_date::text,COALESCE(t.currency,''),t.record FROM quickbooks_transaction_rows t JOIN quickbooks_entity_syncs s ON s.id=t.sync_id WHERE s.evidence_id::text=$1 AND t.kind IN ('Bill','Purchase','JournalEntry')`, l.Source.ID)
+	rows, err := tx.QueryContext(ctx, `SELECT t.kind,t.provider_id,t.txn_date::text,COALESCE(t.currency,''),t.record FROM quickbooks_transaction_rows t JOIN quickbooks_entity_syncs s ON s.id=t.sync_id WHERE s.evidence_id::text=$1 AND t.kind IN ('Bill','Purchase','JournalEntry','VendorCredit')`, l.Source.ID)
 	if err != nil {
 		return nil, err
 	}

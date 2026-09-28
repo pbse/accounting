@@ -21,7 +21,11 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		if kind == "JournalEntry" {
 			detail = "JournalEntryLineDetail"
 		}
-		record, _ := json.Marshal(map[string]any{"DocNumber": number, "VendorRef": map[string]string{"Name": vendor}, "Line": []map[string]any{{"Amount": json.Number(amount), detail: map[string]any{"AccountRef": map[string]string{"Name": account}}}}})
+		who := "VendorRef"
+		if kind == "Purchase" {
+			who = "EntityRef"
+		}
+		record, _ := json.Marshal(map[string]any{"DocNumber": number, who: map[string]string{"Name": vendor}, "Line": []map[string]any{{"Amount": json.Number(amount), detail: map[string]any{"AccountRef": map[string]string{"Name": account}}}}})
 		return LedgerRow{Kind: kind, ProviderID: id, Date: date, Currency: "USD", Record: record}
 	}
 	bill := row("Bill", "41", "2026-09-03", "Acme Insurance Co", "", "Insurance", "1200")
@@ -39,6 +43,9 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	}
 	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", ledger(row("Purchase", "50", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
 		t.Fatal("purchase bearing the invoice number not accepted", reason)
+	}
+	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", ledger(row("Purchase", "51", "2026-09-03", "Acme Insurance Co", "", "Insurance", "1200"))); reason != "" {
+		t.Fatal("purchase from the vendor not accepted", reason)
 	}
 	for name, c := range map[string]struct {
 		change func(*Proposal, *Procedure)
