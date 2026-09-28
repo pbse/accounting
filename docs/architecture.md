@@ -21,7 +21,7 @@ flowchart TD
 
 This is the implemented path, not the original target diagram. Go owns accounting and authorization. PostgreSQL owns durable state and currently stores original evidence bytes and extracted text. The connected accounting provider remains the ledger of record. There is no deployed R2 bucket, Cloudflare Queue subscription or Workflow. Their directories are boundaries for possible later adapters, not required infrastructure for today's preparation jobs.
 
-`cmd/api` serves capabilities; `cmd/worker` runs preparation/extraction, approved email delivery, forwarded intake, QuickBooks sync, Xero refresh, Stripe reports, alerts, standing approvals, schedule comparisons, replays and [workflow runs](workflow-engine.md). A cron wakes the worker container once a minute; its internal loops poll PostgreSQL. This normally keeps the worker and database active. Leases, checkpoints and receipts survive container loss; a running process alone is not evidence of completion.
+`cmd/api` serves capabilities. `cmd/worker` runs the durable queues as loops of their own (preparation/extraction, approved email delivery, forwarded intake, QuickBooks sync), the platform alerts, and the [workflow engine](workflow-engine.md). The engine runs everything else: close goals, monthly hand-overs, and the periodic jobs (Xero captures, Stripe reports, operations alerts, standing approvals, schedule comparisons, model replays, assistant message expiry). A cron wakes the worker container once a minute; its loops poll PostgreSQL. This normally keeps the worker and database active. Leases, checkpoints and receipts survive container loss; a running process alone is not evidence of completion.
 
 ## Repository ownership
 

@@ -2813,3 +2813,28 @@ Checks (local PostgreSQL):
 - `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead` covers the two new staff routes. The existing MCP, plan and admin tests pass. The admin app typechecks and builds.
 
 Not verified: the planner against the real OpenAI API, and `propose_plan` from a hosted MCP client under OAuth agent access.
+
+## The worker's periodic jobs run on the workflow engine (W5) (2026-09-28)
+
+Request: finish W5 of the [workflow engine plan](workflow-engine.md#the-periodic-jobs) after close goals.
+
+What changed:
+- **`wf.Periodic`.** It defines a platform workflow that runs a pass about every interval all day. A run scheduled at midnight UTC watches until the next midnight, so it is one run and one step a day; it can also be started by hand, and its concurrency key keeps it to one run.
+- **The migrated sweeps.** Seven are now periodic workflows, and their worker loops are deleted:
+  - standing approvals, schedule comparisons, Stripe reports and operations alerts (every minute);
+  - Xero captures (every 10 minutes, now also giving older captures their search rows, which the one-off `xero_backfill` loop did at startup);
+  - model replays and assistant message expiry (hourly).
+  Each pass is set in `transport/periodic.go`.
+- **What stays a worker loop:** the durable queues that drain back to back (preparation, email delivery, forwarded email, QuickBooks sync) and the platform alerts, which watch the engine. The plan says why.
+
+Checks (local PostgreSQL):
+- `TestAPeriodicJobLooksAllDayAndEndsAtMidnight` (engine, fake clock): a run started two minutes before midnight looks at 23:58, records a failed look at 23:59 and goes on, then ends at midnight without another look. The watch is one step.
+- `TestPeriodicSweepsRunOnTheEngine`:
+  - all seven workflows have their pass;
+  - staff starting a periodic job for a firm get 422 (it runs across the platform);
+  - a day's `chat_expiry` run, executed by the engine, removes the expired firm-wide message and keeps the recent one, then waits for its next look.
+- Codex found, and this fixes: a Xero pass could outlast the default five-minute step, and a claimed capture might then wait a day, so periodic passes get an hour; and a periodic job started by hand for one firm could run beside the platform's own run. In a second round: the Xero pass now captures due closes before backfilling search rows (at most 20 older captures a pass, resuming where it stopped), and reports failed captures and backfills on the job's watch instead of only logging them.
+- The chat and search tests call the passes directly (`expireChat`, `backfillXeroRows`). The workflow registry check covers the seven new directories.
+- `TestSearchFindsMatchesOnlyInAccessibleCloses` failed once on a fresh database when run with the chat, standing, comparison, replay, Xero, Stripe and alert tests, and passed when run again. It does the same on `main`, so it is an existing ordering problem between tests, not this change.
+
+Not verified: the day's runs on a deployed worker. The first scheduled pass after the deploy starts each job at once.

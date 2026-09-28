@@ -5,8 +5,15 @@ package workflows
 import (
 	_ "close.local/backend/activities/close_summary"
 	_ "close.local/backend/activities/plan_signal"
+	_ "close.local/backend/workflows/chat_expiry"
 	_ "close.local/backend/workflows/close_goal"
 	_ "close.local/backend/workflows/close_goal_upkeep"
 	_ "close.local/backend/workflows/firm_health_check"
+	_ "close.local/backend/workflows/model_replays"
+	_ "close.local/backend/workflows/operations_alerts"
 	_ "close.local/backend/workflows/plan"
+	_ "close.local/backend/workflows/schedule_comparisons"
+	_ "close.local/backend/workflows/standing_approvals"
+	_ "close.local/backend/workflows/stripe_reports"
+	_ "close.local/backend/workflows/xero_refresh"
 )

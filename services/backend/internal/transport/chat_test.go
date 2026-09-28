@@ -184,9 +184,7 @@ func TestAssistantAnswersFromTheMembersOwnScopedReads(t *testing.T) {
 	}
 	_, err = db.Exec(`INSERT INTO chat_messages(organization_id,author,role,body,created_at) VALUES($1,'user_b','user','old',now()-interval '31 days')`, org)
 	must(err)
-	sweep, stop := context.WithCancel(t.Context())
-	go func() { time.Sleep(300 * time.Millisecond); stop() }()
-	RunChatExpiry(sweep, db)
+	must(expireChat(t.Context(), db))
 	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1 AND body='old'`, org).Scan(&old))
 	if old != 0 {
 		t.Fatal("the worker removes expired firm-wide messages of members who never return")

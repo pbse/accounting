@@ -48,6 +48,10 @@ func Manual() Trigger { return Trigger{Kind: "manual"} }
 // ManualForFirm is Manual for a workflow that works on one firm: staff starting it must name one.
 func ManualForFirm() Trigger { return Trigger{Kind: "manual", Value: "firm"} }
 
+// ManualForPlatform is Manual for platform-wide work: staff starting it name no firm, so it cannot run beside the
+// platform's own run for one firm's rows.
+func ManualForPlatform() Trigger { return Trigger{Kind: "manual", Value: "platform"} }
+
 // OnApproval marks a workflow that starts only when a person approves something, such as a plan;
 // nobody starts it by hand.
 func OnApproval() Trigger { return Trigger{Kind: "approval"} }
@@ -61,6 +65,20 @@ func (d Definition) StartsByHand() (allowed, firmOnly bool) {
 		}
 	}
 	return allowed, allowed && firmOnly
+}
+
+// PlatformOnly says whether a person may start the workflow only for the platform, naming no firm.
+func (d Definition) PlatformOnly() bool {
+	platform := false
+	for _, t := range d.Triggers {
+		if t.Kind == "manual" {
+			if t.Value != "platform" {
+				return false
+			}
+			platform = true
+		}
+	}
+	return platform
 }
 
 // Schedule starts one platform run (no firm) at each slot of a five-field cron expression, in UTC.
@@ -84,8 +102,8 @@ var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month 
 func (t Trigger) check(input func(json.RawMessage) error) error {
 	switch t.Kind {
 	case "manual":
-		if t.Value != "" && t.Value != "firm" {
-			return fmt.Errorf("manual trigger %q: use Manual or ManualForFirm", t.Value)
+		if t.Value != "" && t.Value != "firm" && t.Value != "platform" {
+			return fmt.Errorf("manual trigger %q: use Manual, ManualForFirm or ManualForPlatform", t.Value)
 		}
 		return nil
 	case "approval":

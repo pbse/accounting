@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -211,20 +210,4 @@ func sweepReplays(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	return nil
-}
-
-// RunReplays checks each firm against the current model once an hour; a changed OPENAI_MODEL makes every firm due again.
-func RunReplays(ctx context.Context, db *sql.DB) {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-	for {
-		if err := sweepReplays(ctx, db); err != nil && ctx.Err() == nil {
-			log.Print("Scheduled replay could not run: ", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }

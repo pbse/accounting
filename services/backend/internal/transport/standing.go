@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -219,23 +218,4 @@ func standingApprove(ctx context.Context, db *sql.DB, closeID, paperID string) (
 		return false, nil
 	}
 	return true, tx.Commit()
-}
-
-// RunStandingApprovals sweeps carried schedules once a minute, moving a cursor so refused drafts cannot starve later ones.
-func RunStandingApprovals(ctx context.Context, db *sql.DB) {
-	cursor := "0"
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		next, _, err := sweepStandingApprovals(ctx, db, cursor)
-		if err != nil && ctx.Err() == nil {
-			log.Print("Standing approvals could not run: ", err)
-		}
-		cursor = next
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }

@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1151,18 +1150,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /v1/closes/{id}/chat", post)
 }
 
-// RunChatExpiry removes firm-wide assistant messages older than 30 days, whether or not their author returns.
-func RunChatExpiry(ctx context.Context, db *sql.DB) {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-	for {
-		if _, err := db.ExecContext(ctx, `DELETE FROM chat_messages WHERE close_id IS NULL AND created_at<now()-interval '30 days'`); err != nil && ctx.Err() == nil {
-			log.Print("Expired assistant messages could not be removed: ", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+// expireChat removes firm-wide assistant messages older than 30 days, whether or not their author returns.
+func expireChat(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM chat_messages WHERE close_id IS NULL AND created_at<now()-interval '30 days'`)
+	return err
 }

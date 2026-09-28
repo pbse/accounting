@@ -1,6 +1,6 @@
 # Workflow engine plan
 
-**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core), W2 (composition) and W3 (activities and plans) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`; **W4 (agent planner) implemented** ([below](#agent-proposed-plans)); **W5 is under way: close goals run on the engine** ([below](#w5-close-goals-on-the-engine)). The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
+**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core), W2 (composition) and W3 (activities and plans) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`; **W4 (agent planner) implemented** ([below](#agent-proposed-plans)); **W5 (existing loops onto the engine) implemented**: close goals, monthly hand-overs and the periodic jobs run on the engine ([below](#w5-close-goals-on-the-engine)). The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
 
 ## Goals
 
@@ -96,6 +96,7 @@ var _ = wf.Define(wf.Spec[Input, Output]{
 | `wf.Effect(ctx, key, fn)` | For external writes (ledger, email, provider calls). Records an attempt before calling `fn`. If the worker dies mid-call, the step becomes `unknown` and the run waits for a person; it is **never** called again automatically. Mirrors [production posting](production-posting.md). |
 | `wf.Call(ctx, key, activity, input)` (W3) | Runs an activity as a step (or an effect, per the activity's class). |
 | `wf.Sleep(ctx, key, d)` / `wf.SleepUntil` | Parks the run until a time. |
+| `wf.Periodic(name, title, description, every, &fn)` | Defines a platform workflow that calls `fn` about every interval all day: a run scheduled at midnight UTC watches until the next midnight, so a periodic job is one run and one step a day. A pass may take up to an hour. Staff can also start it by hand, for the platform only (`wf.ManualForPlatform`: a run for one firm could overlap the platform's own); its concurrency key keeps it to one run. The job's code sets `fn`, so the workflow's directory need not import it. |
 | `wf.Watch(ctx, key, every, fn)` | Calls `fn` about every interval until it reports done, as **one** step however many calls that takes (its attempts count them). For watching something that changes in its own time, without a row per look. An error is recorded on the step and cleared by the next call that works; a watch never fails its run. It ends when `fn` reports done or the run is cancelled. `fn` must be safe to repeat. |
 | `wf.WaitForEvent[T](ctx, key, eventKey, timeout)` | Parks until a matching event (see [events](#events)) or the timeout (`wf.ErrTimeout`). |
 | `wf.WaitForApproval(ctx, key, approval)` | A wait decided by `wf.Approve`, which requires the approver to hold the named permission in the run's firm and takes one decision. A rejection is a `Decision` with `Approved` false. |
@@ -299,7 +300,7 @@ These proofs, which [`workers/workflows`](../workers/workflows/README.md) alread
 | **W2. Composition** (implemented) | `Child`, `WaitForApproval` and `Approve`, schedule and event triggers, `wf.EmitForClose` for client replies and sign-offs, `DB`/`Organization` for steps, and the first real workflow, `firm_health_check` (daily per firm, read-only). `month_kickoff` was dropped: sign-off already carries reviewed schedules into the next month and close routines create next month's closes, so a second path would duplicate them. Compensation hooks wait until a workflow needs one. | Proofs for each primitive in `internal/wf/engine_test.go`; reply and sign-off events in the transport tests; the health check counts only its firm's problems. |
 | **W3. Activities and plans** (implemented) | The activities directory, `wf.DefineActivity`/`Call`/`CallActivity`, the catalog with built-in JSON Schemas, the plan format and validator, the `plan` workflow, the plan lifecycle and templates, and the agent pieces (proposal only, reason required, no edits, rate limit, database check). First activities: `close_summary` and `plan_signal`. | `internal/wf/plans_test.go` covers validation rules and plan runs; `workflows/plan/workflow_test.go` covers the lifecycle, agent proposals and templates. |
 | **W4. Agent planner** (implemented) | Model-backed proposals over the catalog; MCP `propose_plan`. | Proposals appear in the admin approval queue with their reason. |
-| **W5. Migrate existing loops** (close goals implemented) | Close goals first (already step-shaped, with an events log), then others where it simplifies. | Each migrated loop is deleted; its UI reads engine runs. |
+| **W5. Migrate existing loops** (implemented) | Close goals first (already step-shaped, with an events log), then others where it simplifies. | Each migrated loop is deleted; its UI reads engine runs. |
 
 ## W5: close goals on the engine
 
@@ -313,7 +314,29 @@ The worker's `close_goals` loop is gone. It used to step up to 50 open goals a m
 - **Firm roles.** A firm's WorkOS roles are read at most once a minute per worker, shared by that firm's goals, as the old sweep read them once per pass.
 - **Deploys.** During a rolling deploy the old loop and the new runs may both step a goal. A step is idempotent and locks the close (`SKIP LOCKED`), so the second finds nothing to do.
 
-Next candidates are loops shaped the same way, such as standing approvals and schedule comparisons: a pass over open items each minute.
+### The periodic jobs
+
+The worker's sweeps are periodic workflows (`wf.Periodic`), each in its own directory, with its pass set by the code it sweeps (`transport/periodic.go`):
+
+| Workflow | Every | Was the loop |
+|---|---|---|
+| `standing_approvals` | minute | `standing_approvals` |
+| `schedule_comparisons` | minute | `comparisons` |
+| `stripe_reports` | minute | `stripe_reports` |
+| `operations_alerts` | minute (only with the operations webhook) | `alerts` |
+| `xero_refresh` | 10 minutes: due captures first, then up to 20 older captures get their search rows | `xero_refresh`, `xero_backfill` |
+| `model_replays` | hour | `replays` |
+| `chat_expiry` | hour | `chat_expiry` |
+
+- **What changes.** Each loop ran in every worker process. Now each job is one run at a time, visible in the admin panel with its looks and its last error. A failed look is logged and tried again at the next interval, as before. A panic in a look is recorded on the step rather than restarting a loop.
+- **Cursors.** Standing approvals and comparisons keep their cursor in the worker running the day's run; another worker starts again from the beginning, which the sweeps already allow.
+- **Pausing.** Cancelling a job's run in the admin panel pauses it until the next midnight UTC, or until someone starts it by hand (naming no firm).
+- **Time.** A pass may take up to an hour (a Xero pass captures up to ten closes at up to three minutes each); a watch's other steps keep the five-minute default.
+
+**What stays a worker loop, and why:**
+- **Durable queues that drain back to back:** preparation and extraction, email delivery, forwarded email and QuickBooks sync. Each already claims its own jobs under a lease and works through them as fast as they arrive. The engine polls every few seconds, so it would add latency without making them simpler.
+- **Platform alerts.** They watch the engine itself (stuck runs, its heartbeat), so they cannot run on it.
+- **The heartbeat and the engine.**
 
 ## W0 result: DBOS Transact for Go
 
