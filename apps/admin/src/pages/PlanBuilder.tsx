@@ -227,8 +227,9 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
                       {(Object.keys(kindLabel) as Kind[]).map((k) => <option key={k} value={k}>{kindLabel[k]}</option>)}
                     </select>
                   </label>
-                  <button type="button" disabled={i === 0} onClick={() => move(i, -1)}>Up</button>
-                  <button type="button" disabled={i === steps.length - 1} onClick={() => move(i, 1)}>Down</button>
+                  {/* A step never moves across a step it waits for, or that waits for it: that would drop the dependency. */}
+                  <button type="button" disabled={i === 0 || s.after.includes(steps[i - 1].key)} title={i > 0 && s.after.includes(steps[i - 1].key) ? `Comes after ${steps[i - 1].id}: untick that first` : undefined} onClick={() => move(i, -1)}>Up</button>
+                  <button type="button" disabled={i === steps.length - 1 || steps[i + 1].after.includes(s.key)} title={i < steps.length - 1 && steps[i + 1].after.includes(s.key) ? `${steps[i + 1].id} comes after this: untick that first` : undefined} onClick={() => move(i, 1)}>Down</button>
                   <button type="button" disabled={steps.length === 1} onClick={() => setSteps(prune(steps.filter((_, j) => j !== i)))}>Remove</button>
                 </div>
                 {s.kind === "activity" && (
