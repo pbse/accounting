@@ -96,6 +96,15 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if _, reason = StraightThrough(issued, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("issuer-labelled vendor line not accepted", reason)
 	}
+	ranged := proposal
+	ranged.Facts = append([]Fact(nil), proposal.Facts...)
+	ranged.Facts[1] = fact("service_start", "2026-09-01")
+	ranged.Facts[2] = fact("service_end", "2027-08-31")
+	ranged.Facts[1].Candidates[0].Quote = "Coverage from 2026-09-01 through 2027-08-31"
+	ranged.Facts[2].Candidates[0].Quote = "Coverage from 2026-09-01 through 2027-08-31"
+	if _, reason = StraightThrough(ranged, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+		t.Fatal("range line not accepted for both dates", reason)
+	}
 	idOnly := bill
 	idOnly.Record = json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)
 	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(idOnly)); reason != "" {
@@ -109,17 +118,20 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		ledger *Ledger
 		unread bool
 	}{
-		"processor heads the invoice": {func(*Proposal, *Procedure) {}, ledger(row("Bill", "79", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
-		"vendor not read":             {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates = nil; p.Facts[7].Value = "" }, ledger(bill), false},
-		"billed-to not read":          {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates = nil; p.Facts[8].Value = "" }, ledger(bill), false},
-		"processor named in the body": {func(*Proposal, *Procedure) {}, ledger(row("Bill", "70", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
-		"line-less vendor credit":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "71", Date: "2026-09-10", Record: json.RawMessage(`{"VendorRef":{"Name":"Acme Insurance Co"}}`)}), false},
-		"line-less journal":           {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "72", Date: "2026-09-10", Record: json.RawMessage(`{}`)}), false},
-		"card refund":                 {func(*Proposal, *Procedure) {}, ledger(bill, refund), false},
-		"unnamed account on a credit": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
-		"amount cited from support":   {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
-		"line-less card credit":       {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
-		"bill with ID-only vendor":    {func(*Proposal, *Procedure) {}, ledger(LedgerRow{Kind: "Bill", ProviderID: "87", Date: "2026-09-03", Record: json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"value":"7"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"name":"Insurance"}}}]}`)}), false},
+		"processor heads the invoice":  {func(*Proposal, *Procedure) {}, ledger(row("Bill", "79", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
+		"vendor not read":              {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates = nil; p.Facts[7].Value = "" }, ledger(bill), false},
+		"billed-to not read":           {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates = nil; p.Facts[8].Value = "" }, ledger(bill), false},
+		"processor named in the body":  {func(*Proposal, *Procedure) {}, ledger(row("Bill", "70", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
+		"line-less vendor credit":      {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "71", Date: "2026-09-10", Record: json.RawMessage(`{"VendorRef":{"Name":"Acme Insurance Co"}}`)}), false},
+		"line-less journal":            {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "72", Date: "2026-09-10", Record: json.RawMessage(`{}`)}), false},
+		"card refund":                  {func(*Proposal, *Procedure) {}, ledger(bill, refund), false},
+		"unnamed account on a credit":  {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
+		"amount cited from support":    {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
+		"line-less card credit":        {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"bill-from cited as billed-to": {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Bill from: Example" }, ledger(bill), false},
+		"end line cited as start":      {func(p *Proposal, _ *Procedure) { p.Facts[1].Candidates[0].Quote = "Coverage ends 2026-09-01" }, ledger(bill), false},
+		"renamed account":              {func(*Proposal, *Procedure) {}, ledger(LedgerRow{Kind: "Bill", ProviderID: "89", Date: "2026-09-03", Record: json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"13","name":"Insurance"}}}]}`)}), false},
+		"bill with ID-only vendor":     {func(*Proposal, *Procedure) {}, ledger(LedgerRow{Kind: "Bill", ProviderID: "87", Date: "2026-09-03", Record: json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"value":"7"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"name":"Insurance"}}}]}`)}), false},
 		"order date beside a service word": {func(p *Proposal, _ *Procedure) {
 			p.Facts[1].Candidates[0].Quote = "Service: hosting\nOrder placed: 2026-09-01"
 		}, ledger(bill), false},

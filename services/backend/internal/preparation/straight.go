@@ -95,14 +95,26 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			return Plan{}, "the cited line does not name the number as the invoice number"
 		}
 		// A date is the service period's only when its quote speaks of the service, coverage or term, not the invoice, issue or due date.
-		if strings.HasPrefix(f.Field, "service_") && !dateLineSays(f.Candidates[0].Quote, f.Value, []string{"service", "coverage", "cover", "period", "term", "effective", "start", "begin", "end", "expir", "through", "policy", "subscription", "from"}, []string{"invoice date", "date of invoice", "issued", "issue date", "due", "payment", "paid", "order"}) {
-			return Plan{}, "the cited line does not give the " + f.Label + " as a service-period date"
+		if strings.HasPrefix(f.Field, "service_") {
+			// A line printing both dates is a range and serves either; otherwise a start line may not speak of an end, nor an end line of a start.
+			other, against := "", []string{"end", "expir", "until", "through"}
+			if f.Field == "service_end" {
+				against = []string{"start", "begin", "effective", "commenc", "from"}
+			}
+			for _, g := range p.Facts {
+				if strings.HasPrefix(g.Field, "service_") && g.Field != f.Field && len(g.Candidates) == 1 {
+					other = g.Candidates[0].Value
+				}
+			}
+			if !dateLineSays(f.Candidates[0].Quote, f.Value, other, []string{"service", "coverage", "cover", "period", "term", "effective", "start", "begin", "end", "expir", "through", "policy", "subscription", "from"}, []string{"invoice date", "date of invoice", "issued", "issue date", "due", "payment", "paid", "order"}, against) {
+				return Plan{}, "the cited line does not give the " + f.Label + " as a service-period date"
+			}
 		}
 		// The vendor is the issuer: a bare letterhead line, or one labelled as the issuer, never a processor, payee or recipient line.
 		if f.Field == "vendor" && !issuerLine(f.Candidates[0].Quote, f.Value) {
 			return Plan{}, "the cited line does not name the vendor as the invoice's issuer"
 		}
-		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill", "invoice to", "sold to"}, []string{"ship", "deliver", "service", "support", "contact"}) {
+		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}) {
 			return Plan{}, "the cited line does not say the invoice is billed to that name"
 		}
 		facts[f.Field] = f.Value
@@ -207,9 +219,13 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			} else if line.DepositLineDetail != nil {
 				account = line.DepositLineDetail.AccountRef
 			}
+			// The current chart names an account by its ID; a printed name that disagrees means a rename since capture.
 			name := account.Name
-			if name == "" {
-				name = ledger.Accounts[account.Value]
+			if current, known := ledger.Accounts[account.Value]; known && account.Value != "" {
+				if name != "" && !strings.EqualFold(name, current) {
+					return "", "a captured " + row.Kind + " in the close month names an account differently from the current chart of accounts"
+				}
+				name = current
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
 			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || row.Kind == "VendorCredit" || record.Credit || mentioned || fromVendor) {
@@ -296,8 +312,9 @@ func negativeFigure(quote string, cents int64) bool {
 }
 
 // dateLineSays reports whether the line of the quote that prints the date contains one of the words that make it
-// a service-period date and none of the words that make it another date.
-func dateLineSays(quote, value string, any, none []string) bool {
+// a service-period date, none of the words that make it another date, and, unless the line also prints the other
+// end of the period, none of the words that point the other way.
+func dateLineSays(quote, value, other string, any, none, against []string) bool {
 	for _, line := range strings.Split(quote, "\n") {
 		if !documents.DateIn(line, value, false) {
 			continue
@@ -309,6 +326,11 @@ func dateLineSays(quote, value string, any, none []string) bool {
 		}
 		for _, word := range none {
 			ok = ok && !strings.Contains(normal, word)
+		}
+		if other == "" || !documents.DateIn(line, other, false) {
+			for _, word := range against {
+				ok = ok && !strings.Contains(normal, word)
+			}
 		}
 		if ok {
 			return true
