@@ -1,6 +1,6 @@
 # Workflow engine plan
 
-**Status:** proposed (2026-09-27). Nothing here is implemented yet. It supersedes the Cloudflare Workflows boundary reserved in [`workers/workflows`](../workers/workflows/README.md); update or remove that README when phase W1 lands. The staff UI for this engine is planned in [admin panel](admin-panel.md).
+**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`. Later phases are proposals. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
 
 ## Goals
 
@@ -38,7 +38,7 @@ services/backend/activities/<name>/  one directory per activity (package with a 
 services/backend/internal/wf/gen/    `go generate` tool that writes the registry imports
 ```
 
-Go only runs a package's registration if something imports it. `go generate ./internal/wf/...` scans `workflows/*/` and `activities/*/` and writes `internal/wf/registry_gen.go` with one blank import per directory. CI runs the generator and fails on any diff (`git diff --exit-code`), and the Dockerfile runs it before `go build`. So adding a directory is the whole registration step. Directory names must be unique and match the definition's `Name`, which the generator checks.
+Go only runs a package's registration if something imports it. `go generate ./workflows` (the generator is `internal/wf/gen`) scans `workflows/*/` and `activities/*/` and writes `workflows/registry_gen.go` with one blank import per directory; `cmd/worker` imports the `workflows` package. The generated file is committed, and CI regenerates it and fails on any difference. The file lives in `workflows`, not `internal/wf`, because workflows import the engine. `workflows/registry_test.go` fails unless every directory registers exactly the workflow named after it. So adding a directory, then running `go generate ./workflows`, is the whole registration step.
 
 ## Authoring a workflow
 
@@ -90,13 +90,13 @@ var _ = wf.Define(wf.Spec[Input, Output]{
 
 | Primitive | Behaviour |
 |---|---|
-| `wf.Step(ctx, key, fn)` | Runs `fn` once and saves its JSON result under `key`. Retries per the step's policy. At-least-once: `fn` must be safe to repeat. |
+| `wf.Step(ctx, key, fn, options…)` | Runs `fn` once and saves its JSON result under `key`. Retries per the step's policy. At-least-once: `fn` must be safe to repeat. |
 | `wf.Effect(ctx, key, fn)` | For external writes (ledger, email, provider calls). Records an attempt before calling `fn`. If the worker dies mid-call, the step becomes `unknown` and the run waits for a person; it is **never** called again automatically. Mirrors [production posting](production-posting.md). |
-| `wf.Call(ctx, key, activity, input)` | Runs an activity as a step (or an effect, per the activity's class). |
+| `wf.Call(ctx, key, activity, input)` (W3) | Runs an activity as a step (or an effect, per the activity's class). |
 | `wf.Sleep(ctx, key, d)` / `wf.SleepUntil` | Parks the run until a time. |
 | `wf.WaitForEvent[T](ctx, key, eventKey, timeout)` | Parks until a matching event (see [events](#events)) or the timeout (`wf.ErrTimeout`). |
-| `wf.WaitForApproval(ctx, key, approval)` | A wait whose event must come from a person holding the named permission in the run's firm. |
-| `wf.Child(ctx, key, workflow, input)` | Starts a child run and waits for its result. |
+| `wf.WaitForApproval(ctx, key, approval)` (W2) | A wait whose event must come from a person holding the named permission in the run's firm. |
+| `wf.Child(ctx, key, workflow, input)` (W2) | Starts a child run and waits for its result. |
 | `wf.Now(ctx)` / `wf.Random(ctx)` | Saved values, so the run replays identically. |
 | `wf.Permanent(err)` | Marks an error as not retryable. |
 
@@ -145,12 +145,14 @@ One migration creates the engine's tables. After it, adding workflows or activit
 - **Retries.** Per-step policy: attempts, exponential backoff and timeout. Default: 3 attempts, 30 seconds doubling. When attempts are exhausted the run fails, and the failed step stays visible and retryable from the admin panel.
 - **Cancellation.** Sets `cancel_requested_at`. The engine checks it between steps and cancels the running step's context. The run ends `cancelled`; child runs are cancelled too. Optional compensation hooks come in W2.
 - **Wake-up latency.** The loop polls every 2 seconds while there is work and every 10 seconds when idle. Events and starts set `wake_at = now()`. `LISTEN/NOTIFY` on the direct endpoint can replace polling later without changing the model.
-- **Versions.** The Dockerfile receives the git SHA as a build argument and stamps `code_version` on each run. A run keeps replaying on newer code under the step-key rule above. Retiring a workflow means removing its triggers first and deleting the directory once no run is active; the admin panel shows active runs per workflow.
+- **Versions.** The deploy workflows write the git commit to `internal/wf/version.txt` before building (it reads `dev` otherwise), and `Start` stamps it on each run as `code_version`. A run keeps replaying on newer code under the step-key rule above. Retiring a workflow means removing its triggers first and deleting the directory once no run is active; the admin panel shows active runs per workflow.
 
 ## Events
 
 - `wf.Emit` inside domain transactions for facts other flows care about: `client_request.replied:<id>`, `close.signed_off:<close>`, `evidence.released:<id>`, `approval.granted:<run>/<step>`.
 - A wait is satisfied by the earliest matching event recorded **after the run started** that no earlier wait in the same run consumed. This covers late signals, where the reply arrives before the run reaches the wait. A step can ask for "after this step" instead.
+- An event recorded after a wait's deadline does not satisfy it. An event whose payload does not fit the wait's type is passed over and listed on the step (`input.skipped`), so a malformed signal neither fails the run nor keeps waking it.
+- **Cancelling wins.** Whenever the engine parks, releases or finishes a run, it applies a pending cancel request in the same statement, so a cancel sent while a run executes always ends it (completed steps keep their results; an unknown effect stays unknown).
 - **Event triggers** start runs from `wf.OnEvent(pattern)`. Each start's idempotency key is the event ID, so replaying an event never starts two runs.
 - **Schedules** (`wf.Schedule(cron)`) are evaluated by the engine loop. Each slot has the idempotency key `<workflow>@<slot>`, so a restarted worker cannot double-start one. Schedules can be firm-scoped (for each enabled firm) or platform-wide.
 
@@ -220,7 +222,7 @@ Deferred (W4, low priority):
 
 ## API
 
-Staff routes live under `/v1/admin/workflows/*` (see [admin panel](admin-panel.md)). Firm-facing routes under `/v1/workflows/*`, scoped to the signed-in firm by row-level security, come later with the firm UI.
+W1 provides these as Go functions (`wf.Start`, `wf.Cancel`, `wf.Emit`, `wf.RetryStep`, `wf.Resolve`); their HTTP routes arrive with the admin panel's staff authentication (phases A0 and A1). Staff routes live under `/v1/admin/workflows/*` (see [admin panel](admin-panel.md)). Firm-facing routes under `/v1/workflows/*`, scoped to the signed-in firm by row-level security, come later with the firm UI.
 
 | Operation | Route |
 |---|---|
@@ -257,11 +259,26 @@ These proofs, which [`workers/workflows`](../workers/workflows/README.md) alread
 | Phase | Scope | Exit criteria |
 |---|---|---|
 | **W0. Spike (1–2 days)** | Try DBOS Transact for Go (open-source durable workflows on PostgreSQL) against this plan: per-connection tenant context with row-level security, a non-superuser runtime role, the proof list. | Go/no-go recorded here. **Go:** the engine wraps DBOS behind the `wf` API. **No-go:** build W1 as specified. |
-| **W1. Engine core** | Migration; `internal/wf` (`Define`, `Step`, `Effect`, `Sleep`, `WaitForEvent`, `Now`, `Permanent`); registry generator and CI check; claim loop in `cmd/worker`; start, cancel, event and read APIs (staff only); version stamping; one real workflow. | Proofs 1–8 pass in CI; a run survives a container restart in staging. |
-| **W2. Composition** | `Child`, `WaitForApproval`, concurrency keys, schedule and event triggers, `wf.Emit` from the first domain transactions (client reply, sign-off), compensation hooks. | `month_kickoff` runs end to end on a synthetic close in staging. |
+| **W1. Engine core** (implemented) | Migration 094; `internal/wf` (`Define`, `Step`, `Effect`, `Sleep`, `SleepUntil`, `WaitForEvent`, `Now`, `Random`, `Permanent`, `NotApplied`); `Start`, `Cancel`, `Emit`, `RetryStep`, `Resolve` as Go functions; concurrency keys; registry generator and CI check; claim loop in `cmd/worker`; version stamping. The first real workflow moved to W2, which brings the event triggers and approvals it needs. | Proofs 1–8 pass in CI (`internal/wf/engine_test.go`); a run survives a container restart in staging. |
+| **W2. Composition** | `Child`, `WaitForApproval`, schedule and event triggers, the first real workflow (`month_kickoff`), `wf.Emit` from the first domain transactions (client reply, sign-off), compensation hooks. | `month_kickoff` runs end to end on a synthetic close in staging. |
 | **W3. Activities and plans** | Activities directory and generator, catalog API, plan format and validator, `plan` workflow, plan lifecycle and templates, agent bones (`proposed` only, attribution, rate limit). | Staff build, approve and run a plan from the admin panel; an agent-sourced plan can't run without approval (tested). |
 | **W4. Agent planner (low priority)** | Model-backed proposals over the catalog; MCP `propose_plan`. | Proposals appear in the admin approval queue with rationale. |
 | **W5. Migrate existing loops** | Close goals first (already step-shaped, with an events log), then others where it simplifies. | Each migrated loop is deleted; its UI reads engine runs. |
+
+## W0 result: DBOS Transact for Go
+
+**No-go (2026-09-27).** Checked against the source of `github.com/dbos-inc/dbos-transact-golang` v1.4.0 (MIT, pgx v5, Go 1.25+):
+
+- **Its own schema and migrations.** At launch it creates its own schema and applies over a hundred embedded migrations. That is a second migration history beside `infra/postgres/migrations`, and it needs privileges the runtime role deliberately lacks.
+- **Recovery is per executor.** A process recovers the pending workflows of its own executor ID (default `local`). Taking over a dead container's workflows across several instances is what DBOS Conductor, a hosted service, provides; our leases do it in Postgres.
+- **Runs are pinned to an application version.** By default that is a hash of the binary, so after a deploy, in-flight runs are not recovered unless the version is pinned or patching is enabled. We deploy often and want runs to replay on newer code under the step-key rule.
+- **What we need most would still be ours to build:** firm-scoped execution under row-level security, `unknown` effects that never repeat, event matching after run start, plans, and the admin panel's step history.
+
+## Operations
+
+- Apply migration 094 before deploying a build that includes the engine. The deploy workflows check for the workflow tables and stop otherwise.
+- `WF_CONCURRENCY` sets how many runs a worker executes at once (default 4).
+- A run for a workflow the running build does not register (for example during a rolling deploy) is handed back every minute, with that reason in its error, until a build that knows it picks it up.
 
 ## Risks and open questions
 

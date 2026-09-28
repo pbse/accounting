@@ -100,3 +100,5 @@ Fresh Compose volumes run every migration automatically. Existing Compose volume
 `071_agent_attribution.sql` records which MCP client made evidence, intake jobs, close preparations, request drafts and approval requests through a member's approved agent access, beside the member who remains their author. Apply after 070 with API/worker stopped; `/readyz` checks it.
 
 `072_chat_messages.sql` stores each member's assistant conversation for one close or firm-wide, read only by its author, with row-level security like 047. Apply after 071 with API/worker stopped; `/readyz` checks it.
+
+`094_workflow_engine.sql` creates the workflow engine's tables: runs, steps, events and plans, each with row-level security by firm (a `NULL` firm is platform work, visible to system work only). It is the only migration the engine needs; new workflows are directories, not schema. Apply it before deploying a build whose worker runs the engine; the deploy workflows check for it. See [workflow engine](../../../docs/workflow-engine.md).
