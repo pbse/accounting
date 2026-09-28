@@ -55,6 +55,11 @@ jobs:
       QBO_SANDBOX_PREPAID_ACCOUNT_ID: ${{ vars.QBO_SANDBOX_PREPAID_ACCOUNT_ID }}
       QBO_SANDBOX_EXPENSE_ACCOUNT_ID: ${{ vars.QBO_SANDBOX_EXPENSE_ACCOUNT_ID }}
       QBO_SANDBOX_ACCESS_TOKEN: ${{ secrets.QBO_SANDBOX_ACCESS_TOKEN }}
+      WORKOS_AUTHKIT_DOMAIN: ${{ vars.WORKOS_AUTHKIT_DOMAIN }}
+      MCP_RESOURCE_URL: ${{ vars.MCP_RESOURCE_URL }}
+      MCP_ALLOWED_ORIGINS: ${{ vars.MCP_ALLOWED_ORIGINS }}
+      PRODUCTION_POSTING_KINDS: ${{ vars.PRODUCTION_POSTING_KINDS }}
+      XERO_POSTING_KINDS: ${{ vars.XERO_POSTING_KINDS }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -82,6 +87,13 @@ jobs:
             if (!valid) throw new Error('Operations alert webhook must be a valid HTTPS URL without embedded credentials or fragment');
           }
           if (process.env.SECRETS_KEY && !/^[0-9a-fA-F]{64}$/.test(process.env.SECRETS_KEY)) throw new Error('SECRETS_KEY must be 32 hex-encoded random bytes');
+          if (!!process.env.WORKOS_AUTHKIT_DOMAIN !== !!process.env.MCP_RESOURCE_URL) throw new Error('Set WORKOS_AUTHKIT_DOMAIN and MCP_RESOURCE_URL together or neither');
+          if (process.env.WORKOS_AUTHKIT_DOMAIN) {
+            const authkit = new URL(process.env.WORKOS_AUTHKIT_DOMAIN);
+            if (authkit.protocol !== 'https:' || authkit.username || authkit.password || authkit.search || authkit.hash || !['', '/'].includes(authkit.pathname)) throw new Error('WORKOS_AUTHKIT_DOMAIN must be an HTTPS origin with no path, query or credentials');
+            const mcp = `${new URL(process.env.VITE_API_BASE_URL || process.env.PRODUCTION_URL).origin}/mcp`;
+            if (process.env.MCP_RESOURCE_URL !== mcp) throw new Error(`MCP_RESOURCE_URL must be ${mcp}`);
+          }
           if (!!process.env.EMAIL_INTAKE_ADDRESS !== !!process.env.EMAIL_INTAKE_KEY || (process.env.EMAIL_INTAKE_KEY && process.env.EMAIL_INTAKE_KEY.length < 32) || (process.env.EMAIL_INTAKE_ADDRESS && !/^[a-z0-9._-]+@[a-z0-9.-]+$/i.test(process.env.EMAIL_INTAKE_ADDRESS))) throw new Error('Email intake requires a valid routing address and a separate 32-character secret');
           for (const name of ['PRODUCTION_URL','WORKOS_ISSUER','TEXT_SCANNER_URL']) {
             if (new URL(process.env[name]).protocol !== 'https:') throw new Error(`${name} must use HTTPS`);
@@ -106,7 +118,7 @@ jobs:
           trap 'rm -f "$CLOSE_DEPLOY_SECRET_FILE"' EXIT
           node --input-type=module <<'JS'
           import { writeFileSync } from 'node:fs';
-          const names = ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','UPLOAD_SCAN_KEY','EMAIL_INTAKE_ADDRESS','EMAIL_INTAKE_KEY','QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI','XERO_CLIENT_ID','XERO_CLIENT_SECRET','XERO_REDIRECT_URI','XERO_WEBHOOK_KEY','SECRETS_KEY','PUBLIC_APP_URL','DATABASE_URL','WORKOS_CLIENT_ID','WORKOS_ORGANIZATION_ID','WORKOS_ISSUER','FRONTEND_ORIGIN','OPENAI_API_KEY','OPENAI_MODEL','QBO_SANDBOX_REALM_ID','QBO_SANDBOX_ENTITY','QBO_SANDBOX_PREPAID_ACCOUNT_ID','QBO_SANDBOX_EXPENSE_ACCOUNT_ID','QBO_SANDBOX_ACCESS_TOKEN'];
+          const names = ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','UPLOAD_SCAN_KEY','EMAIL_INTAKE_ADDRESS','EMAIL_INTAKE_KEY','QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI','XERO_CLIENT_ID','XERO_CLIENT_SECRET','XERO_REDIRECT_URI','XERO_WEBHOOK_KEY','SECRETS_KEY','PUBLIC_APP_URL','DATABASE_URL','WORKOS_CLIENT_ID','WORKOS_ORGANIZATION_ID','WORKOS_ISSUER','FRONTEND_ORIGIN','OPENAI_API_KEY','OPENAI_MODEL','QBO_SANDBOX_REALM_ID','QBO_SANDBOX_ENTITY','QBO_SANDBOX_PREPAID_ACCOUNT_ID','QBO_SANDBOX_EXPENSE_ACCOUNT_ID','QBO_SANDBOX_ACCESS_TOKEN','WORKOS_AUTHKIT_DOMAIN','MCP_RESOURCE_URL','MCP_ALLOWED_ORIGINS','PRODUCTION_POSTING_KINDS','XERO_POSTING_KINDS'];
           writeFileSync(process.env.CLOSE_DEPLOY_SECRET_FILE, JSON.stringify(Object.fromEntries(names.map(name => [name, process.env[name] || '']))), {mode: 0o600});
           JS
           npm run deploy:production -- --secrets-file "$CLOSE_DEPLOY_SECRET_FILE" ${UPLOAD_SCAN_HOST:+--route "${UPLOAD_SCAN_HOST}/*"}

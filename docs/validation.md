@@ -2361,6 +2361,18 @@ Review: GPT-6 Sol (reasoning high) reviewed the plan, judged the work real and u
 - "What's the plan?" dropped each step's details.
 Two related cases were fixed at the same time: a QuickBooks capture on another connection keeps the scheduled first capture away, so the month is a person's to capture; and the database test now covers that case and an active Xero connection's precedence over a reconnection. A delta review confirmed that all four findings are closed.
 
+## Hosted MCP and posting kinds reach the API (2026-09-27)
+
+Request: the first remaining PRD item, wiring the Cloudflare edge so hosted MCP and posting kinds beyond prepaid can work. The edge returned 404 for `/mcp`, sent OAuth discovery to the single-page app, and neither it, Compose nor the deploy workflows passed `WORKOS_AUTHKIT_DOMAIN`, `MCP_RESOURCE_URL`, `MCP_ALLOWED_ORIGINS`, `PRODUCTION_POSTING_KINDS` or `XERO_POSTING_KINDS` to the API. The edge now forwards `/mcp`, `/.well-known/oauth-protected-resource` and paths under it through the same path as `/v1` (the hosted sign-in check, which now covers everything forwarded except `/healthz` and the public reference, and the stripping of a caller's upload-scan key); `/internal/*` stays private. The five settings reach the API container from the edge, Compose and both workflows; the background worker reads none of them.
+
+Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `claude/edge-mcp-wiring @ d7df2b8`); both judged it real, undone work. Adopted: `MCP_RESOURCE_URL` must be exactly `/mcp` on the API origin (`VITE_API_BASE_URL`, else the environment URL), since the API may be on its own host; `WORKOS_AUTHKIT_DOMAIN` must be a bare HTTPS origin, because Go appends `/oauth2/jwks`; the sign-in check exempts only `/healthz` and the reference instead of listing guarded paths; the route rule lives in its own module so a Node test can import it; both discovery patterns in `run_worker_first`; the settings table lists the new variables.
+
+Tests: `workers/edge/src/routes.test.ts` checks that `/mcp` and both discovery forms reach the API and that `/internal/*`, the workspace, `/mcp/extra`, other `.well-known` paths and a look-alike prefix do not; it fails on the old rule. The workflows' configuration check was run with 9 settings combinations each: unset and a correct pair pass, a separate API origin passes, and one setting alone, a domain with a path, an HTTP domain, a resource on another host or with a query fail. `npm run check` (including the edge's `tsc`) and `npm test` pass; the workflow and Compose YAML parse.
+
+Code review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `claude/edge-mcp-wiring @ 05fbb31`) both approved; Gemini's one note, committing the corrected sentence in onboarding.md about hosted MCP and posting kinds, is applied.
+
+Not verified: a Cloudflare deploy, WorkOS Connect configuration and a hosted MCP sign-in.
+
 ## Governed follow-through on delegated closes (2026-09-27)
 
 Request: the product review's fourth item, first half: "Teammate handoffs are tracked in the app; the agent does not actively follow up… add governed follow-through", with the agent owning "getting work to those decisions and resuming afterward" while people keep approval. Verified in the code:

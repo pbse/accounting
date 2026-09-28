@@ -4,7 +4,7 @@ Any MCP client can use close preparation at `POST /mcp`: Claude, ChatGPT, Cursor
 
 ## Deployment boundary
 
-The Go API implements this transport. The current Cloudflare edge explicitly returns 404 for `/mcp`, does not route OAuth discovery, and does not forward `WORKOS_AUTHKIT_DOMAIN`, `MCP_RESOURCE_URL` or `MCP_ALLOWED_ORIGINS`. Native API testing is available now; hosted MCP needs those deployment changes before the setup below can work through Cloudflare. Adding secrets alone does not enable it. See [deployment](deployment.md#production-and-remaining-deployment-work).
+The Go API implements this transport. The Cloudflare edge forwards `/mcp` and OAuth discovery (`/.well-known/oauth-protected-resource` and paths under it) to the API, behind the same check as `/v1` that hosted sign-in is configured; `/internal/*` stays private. The deploy workflows pass `WORKOS_AUTHKIT_DOMAIN`, `MCP_RESOURCE_URL` and `MCP_ALLOWED_ORIGINS` to the API container as GitHub environment variables, and refuse a deploy unless the first two are set together, the AuthKit domain is a bare HTTPS origin, and `MCP_RESOURCE_URL` is exactly `/mcp` on the API origin (`VITE_API_BASE_URL`, else the environment URL). Hosted MCP still needs the WorkOS setup below and a deploy; see [deployment](deployment.md#github-environment-settings).
 
 ## Connect
 
