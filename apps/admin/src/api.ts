@@ -55,7 +55,8 @@ export async function download(path: string, filename: string, headers: Record<s
   const url = URL.createObjectURL(await response.blob());
   const link = Object.assign(document.createElement("a"), { href: url, download: filename });
   link.click();
-  URL.revokeObjectURL(url);
+  // Some browsers read the URL after click returns: release it only once the download has had time to start.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
   return response.headers;
 }
 
