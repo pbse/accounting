@@ -403,6 +403,16 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 			return err
 		}
 		if unchanged := periodContent(previous); unchanged != "" && unchanged == periodContent(fresh) {
+			// The chart is unchanged, but a supersession deferred while a posting was unsettled is due once it settles.
+			var last struct {
+				SourceID string `json:"source_id"`
+			}
+			if json.Unmarshal(previous, &last) == nil && last.SourceID != "" {
+				if err = SupersedeCitedChart(ctx, tx, job.closeID, last.SourceID, job.connectionID, job.period, "scheduled-quickbooks-refresh"); err != nil {
+					return err
+				}
+				return tx.Commit()
+			}
 			return nil
 		}
 	}

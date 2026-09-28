@@ -191,8 +191,11 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"support document selected": {func(p *Proposal, _ *Procedure) {
 			p.Sources = append(p.Sources, Source{ID: "2", Digest: "x", Name: "credit-note.pdf", Role: "support"})
 		}, ledger(bill), false},
-		"undecodable capture row":      {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "95", Date: "2026-09-20", Record: json.RawMessage(`{"Line":{"Amount":1}}`)}), false},
-		"deposit with no counterparty": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "94", Date: "2026-09-20", Record: json.RawMessage(`{"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Bank"}}}]}`)}), false},
+		"undecodable capture row":        {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "95", Date: "2026-09-20", Record: json.RawMessage(`{"Line":{"Amount":1}}`)}), false},
+		"deposit-to account unnamed":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "98", Date: "2026-09-20", Record: json.RawMessage(`{"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Income"},"Entity":{"Name":"Someone"}}}]}`)}), false},
+		"deposit to the prepaid account": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "96", Date: "2026-09-20", Record: json.RawMessage(`{"DepositToAccountRef":{"name":"Prepaid Expenses"},"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Income"},"Entity":{"Name":"Someone"}}}]}`)}), false},
+		"cash back to expense":           {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "97", Date: "2026-09-20", Record: json.RawMessage(`{"DepositToAccountRef":{"name":"Bank"},"CashBack":{"AccountRef":{"value":"12"}},"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Income"},"Entity":{"Name":"Someone"}}}]}`)}), false},
+		"deposit with no counterparty":   {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "94", Date: "2026-09-20", Record: json.RawMessage(`{"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Bank"}}}]}`)}), false},
 		"dollar sign beside another code": {func(p *Proposal, _ *Procedure) {
 			p.Facts[0].Candidates[0].Quote = "Total CAD $1,200.00 (USD accepted)"
 			p.Facts[3].Candidates[0].Quote = "Total CAD $1,200.00 (USD accepted)"

@@ -232,6 +232,8 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			DocNumber            string
 			TotalAmt             json.Number
 			VendorRef, EntityRef accountRef
+			DepositToAccountRef  accountRef
+			CashBack             *struct{ AccountRef accountRef }
 			Line                 []struct {
 				Amount                        json.Number
 				AccountBasedExpenseLineDetail *struct{ AccountRef accountRef }
@@ -262,6 +264,27 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		mine := fromVendor && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number))
 		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || row.Kind == "VendorCredit" || record.Credit || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
+		}
+		// A deposit also moves money through the account it is deposited to and any cash back; both count as its accounts.
+		if row.Kind == "Deposit" {
+			heads := []accountRef{record.DepositToAccountRef}
+			if record.CashBack != nil {
+				heads = append(heads, record.CashBack.AccountRef)
+			}
+			for i, head := range heads {
+				name := head.Name
+				if current, known := ledger.Accounts[head.Value]; known && head.Value != "" {
+					name = current
+				} else if head.Value != "" {
+					return "", "a captured Deposit in the close month is deposited to an account the current chart of accounts does not list"
+				}
+				if name == "" && head.Value == "" && i == 0 {
+					return "", "a captured Deposit in the close month does not name the account it is deposited to"
+				}
+				if strings.EqualFold(name, expense) || strings.EqualFold(name, prepaid) {
+					return "", "a deposit in the close month is deposited to the expense or prepaid account"
+				}
+			}
 		}
 		// The invoice's own bill must book the whole amount to the expense account and nothing else anywhere.
 		var expensed int64
