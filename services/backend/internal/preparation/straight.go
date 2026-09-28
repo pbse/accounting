@@ -85,8 +85,11 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			return Plan{}, "the " + f.Label + " is cited from a supporting document, not the invoice"
 		}
 		// Amounts and dates were checked against their quotes when the proposal was validated; names are checked here.
-		if (f.Field == "currency" || strings.HasSuffix(f.Field, "_account")) && !strings.Contains(strings.ToLower(f.Candidates[0].Quote), strings.ToLower(f.Value)) {
+		if f.Field == "currency" && !strings.Contains(strings.ToLower(f.Candidates[0].Quote), strings.ToLower(f.Value)) {
 			return Plan{}, "the cited text does not show the " + f.Label
+		}
+		if strings.HasSuffix(f.Field, "_account") && !accountLine(f.Candidates[0].Quote, f.Value) {
+			return Plan{}, "the cited text does not show the " + f.Label + " as a whole account name"
 		}
 		// A name or number must be the whole of what its quoted line ends with: "Example" is not what "Bill to: Example Holdings" names.
 		if identity && !endsLine(f.Candidates[0].Quote, f.Value) {
@@ -379,8 +382,12 @@ func totalDisagrees(invoice string, cents int64) string {
 		if !strings.Contains(normal, "total") || strings.Contains(normal, "subtotal") || strings.Contains(normal, "sub total") {
 			continue
 		}
-		if figures := moneyFigures(line); figures > 0 && (figures != 1 || largestFigure(line) != cents) {
-			return "a total line of the invoice prints a figure other than the cited amount"
+		// On a total line every number counts, cents or not: "Total 1,300" is a total.
+		plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "").Replace(line)
+		for _, figure := range regexp.MustCompile(`\d+(\.\d{1,2})?`).FindAllString(plain, -1) {
+			if value, err := prepaids.Amount(figure); err != nil || value != cents {
+				return "a total line of the invoice prints a figure other than the cited amount"
+			}
 		}
 	}
 	return ""
@@ -506,6 +513,27 @@ func lineSays(quote, value string, any, none []string) bool {
 func negated(label string) bool {
 	for _, word := range strings.Fields(label) {
 		if word == "not" || word == "no" || word == "never" || word == "except" || word == "formerly" || word == "previously" {
+			return true
+		}
+	}
+	return false
+}
+
+// accountLine reports whether a quoted line names the account as the whole of what follows an account label:
+// "Expense account: Insurance" names Insurance; "Expense account: Prepaid Insurance" does not.
+func accountLine(quote, value string) bool {
+	want := documents.NormalizeEntity(value)
+	for _, line := range strings.Split(quote, "\n") {
+		normal := documents.NormalizeEntity(line)
+		if !endsWithName(normal, want) {
+			continue
+		}
+		words := strings.Fields(strings.TrimSuffix(normal, want))
+		if len(words) == 0 {
+			return true
+		}
+		switch words[len(words)-1] {
+		case "account", "acct", "to", "code", "gl", "ledger":
 			return true
 		}
 	}
