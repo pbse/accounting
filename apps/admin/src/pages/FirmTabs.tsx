@@ -116,7 +116,8 @@ export function FirmActivity({ firm }: { firm: string }) {
   const query = new URLSearchParams();
   if (kind) query.set("kind", kind);
   if (offset) query.set("offset", String(offset));
-  const activity = useRevealable<{ events: Event[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/activity${query.size ? `?${query}` : ""}`);
+  // A reveal covers this firm's activity of this kind: paging keeps it.
+  const activity = useRevealable<{ events: Event[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/activity${query.size ? `?${query}` : ""}`, `${firm} ${kind}`);
   return (
     <>
       <p>The firm's recorded access decisions, connections, posting grants, work agents did, and workflow runs, newest first.</p>
@@ -158,7 +159,8 @@ type Entry = { id: number; staff_user: string; action: string; target_type: stri
 
 export function FirmAudit({ firm }: { firm: string }) {
   const [before, setBefore] = useState(0);
-  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${before ? `?before=${before}` : ""}`);
+  // A reveal covers this firm's audit: paging keeps it.
+  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${before ? `?before=${before}` : ""}`, firm);
   return (
     <>
       <p>Everything staff did to this firm, including actions that were refused and every reveal of client content. Reasons and why a refused action failed are hidden until revealed.</p>
