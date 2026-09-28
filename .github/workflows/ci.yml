@@ -45,10 +45,11 @@ jobs:
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/scanner/wrangler.jsonc
         env:
           WRANGLER_SEND_METRICS: "false"
-      - run: |
-          for migration in infra/postgres/migrations/*.sql; do
-            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
-          done
+      - name: Apply migrations with the migration runner, twice (the second must apply nothing)
+        run: |
+          DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh
+          again=$(DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh)
+          test -z "$again"
       - run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng
       - run: npm run check:go
       - run: test -z "$(gofmt -l services/backend)"
