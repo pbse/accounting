@@ -425,6 +425,9 @@ func totalDisagrees(invoice string, cents int64) string {
 		if !strings.Contains(normal, "total") || strings.Contains(normal, "subtotal") || strings.Contains(normal, "sub total") {
 			continue
 		}
+		if negativeFigure(line, cents) {
+			return "a total line of the invoice prints the amount as a credit"
+		}
 		// On a total line every number counts, cents or not: "Total 1,300" is a total.
 		plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "").Replace(line)
 		for _, figure := range regexp.MustCompile(`\d+(\.\d{1,2})?`).FindAllString(plain, -1) {
