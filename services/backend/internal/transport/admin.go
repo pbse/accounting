@@ -79,9 +79,13 @@ func staffOnly(token, permission string, next http.HandlerFunc) http.HandlerFunc
 			}
 			member = staffMember{Subject: "local-development", Permissions: platformPermissions, Mode: "local-development"}
 		}
-		if !slices.Contains(member.Permissions, permission) {
-			problem(w, 403, "Your staff role does not include "+permission+".")
-			return
+		// platform:read is every staff role's baseline: the console cannot be used without it (who you are, the
+		// catalogs a builder chooses from), so a route's own permission comes on top of it.
+		for _, needed := range []string{platformRead, permission} {
+			if !slices.Contains(member.Permissions, needed) {
+				problem(w, 403, "Your staff role does not include "+needed+".")
+				return
+			}
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), staffKey{}, &member)))
 	}
@@ -131,17 +135,8 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 	if a.Firm != "" {
 		acting = auth.WithAgent(auth.WithActor(ctx, &auth.Claims{Organization: a.Firm, RegisteredClaims: jwt.RegisteredClaims{Subject: "staff:" + member.Subject}}), "staff:"+member.Subject)
 	}
-	record := func(ctx context.Context, q interface {
-		ExecContext(context.Context, string, ...any) (sql.Result, error)
-	}, result, failure string) error {
-		// Marshalled when recorded, so fn can add what it learned, such as a new row's ID.
-		request, err := json.Marshal(a.Request)
-		if err != nil || string(request) == "null" {
-			request = []byte("{}")
-		}
-		_, err = q.ExecContext(ctx, `INSERT INTO platform_audit(staff_user,action,organization_id,target_type,target_id,reason,request,result,error) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9)`,
-			member.Subject, a.Action, a.Firm, a.TargetType, a.TargetID, a.Reason, string(request), result, failure)
-		return err
+	record := func(ctx context.Context, q execer, result, failure string) error {
+		return adminAudit(ctx, q, member, a, result, failure)
 	}
 	tx, err := db.BeginTx(acting, nil)
 	if err == nil {
@@ -161,6 +156,33 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 		}
 	}
 	return err
+}
+
+type execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// adminAudit inserts a platform_audit row for a staff action.
+func adminAudit(ctx context.Context, q execer, member *staffMember, a adminAction, result, failure string) error {
+	// Marshalled when recorded, so an action can add what it learned, such as a new row's ID.
+	request, err := json.Marshal(a.Request)
+	if err != nil || string(request) == "null" {
+		request = []byte("{}")
+	}
+	_, err = q.ExecContext(ctx, `INSERT INTO platform_audit(staff_user,action,organization_id,target_type,target_id,reason,request,result,error) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9)`,
+		member.Subject, a.Action, a.Firm, a.TargetType, a.TargetID, a.Reason, string(request), result, failure)
+	return err
+}
+
+// adminStart records, and commits, that a staff action with an effect outside the database (WorkOS) is starting, before
+// the effect: the audit shows the attempt even when its outcome cannot be recorded after it. The outcome (adminAct)
+// follows as its own entry.
+func adminStart(ctx context.Context, db *sql.DB, a adminAction) error {
+	member := staffOf(ctx)
+	if member == nil || strings.TrimSpace(a.Reason) == "" {
+		return errReasonRequired
+	}
+	return adminAudit(context.WithValue(ctx, systemKey{}, true), db, member, a, "started", "")
 }
 
 // adminGuard lets through staff holding permission, once a database is configured.
@@ -199,11 +221,15 @@ func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
 	registerAdminWorkflows(mux, db, token)
 	registerAdminFirms(mux, db, token)
 	registerAdminOperations(mux, db, token)
+	registerAdminPeople(mux, db, token)
+	registerAdminPlans(mux, db, token)
+	registerAdminAudit(mux, db, token)
+	registerAdminGrants(mux, db, token)
 }
 
 // adminOverview is the platform's health at a glance.
 func adminOverview(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	var heartbeats, runs []byte
+	var heartbeats, runs, alerts []byte
 	var oldestQueued sql.NullTime
 	var unknownEffects, firms, suspended, reconnect, failedPreparation int
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
@@ -215,8 +241,10 @@ func adminOverview(w http.ResponseWriter, r *http.Request, db *sql.DB) {
  (SELECT count(*) FROM organizations WHERE id<>'local-development'),
  (SELECT count(*) FROM organizations WHERE id<>'local-development' AND NOT enabled),
  (SELECT count(*) FROM quickbooks_connections WHERE state='reconnect_required')+(SELECT count(*) FROM xero_connections WHERE state='reconnect_required'),
- (SELECT count(*) FROM preparation_jobs WHERE state='failed' AND state_changed_at>now()-interval '24 hours')`).Scan(
-			&heartbeats, &runs, &oldestQueued, &unknownEffects, &firms, &suspended, &reconnect, &failedPreparation)
+ (SELECT count(*) FROM preparation_jobs WHERE state='failed' AND state_changed_at>now()-interval '24 hours'),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('kind',p.kind,'item_id',p.item_id,'detail',p.detail,'since',a.created_at,'delivery',a.status) ORDER BY p.kind,p.item_id)
+  FROM (`+platformAlertQuery+`) p(kind,item_id,detail) LEFT JOIN platform_alerts a ON a.kind=p.kind AND a.item_id=p.item_id AND a.resolved_at IS NULL),'[]'::jsonb)`).Scan(
+			&heartbeats, &runs, &oldestQueued, &unknownEffects, &firms, &suspended, &reconnect, &failedPreparation, &alerts)
 	})
 	if err != nil {
 		log.Printf("Admin overview could not be read: %v", err)
@@ -230,7 +258,7 @@ func adminOverview(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{
 		"heartbeats": json.RawMessage(heartbeats), "runs": json.RawMessage(runs), "oldest_queued_at": oldest,
 		"unknown_effects": unknownEffects, "firms": firms, "suspended_firms": suspended,
-		"reconnect_required": reconnect, "failed_preparation_24h": failedPreparation,
+		"reconnect_required": reconnect, "failed_preparation_24h": failedPreparation, "platform_problems": json.RawMessage(alerts),
 	})
 }
 
@@ -282,9 +310,10 @@ func adminFirms(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	firms := []adminFirmRow{}
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT `+adminFirmColumns+` FROM organizations o
- WHERE o.id<>'local-development' AND ($1='' OR position(lower($1) in lower(o.name))>0 OR position(lower($1) in lower(o.id))>0)
- ORDER BY o.created_at DESC,o.id LIMIT $2 OFFSET $3`, search, adminPage+1, offset)
+		// The page's firms first, then their counts: counting in the outer query would count every firm the offset skips.
+		rows, err := tx.QueryContext(ctx, `SELECT `+adminFirmColumns+` FROM (SELECT id FROM organizations
+ WHERE id<>'local-development' AND ($1='' OR position(lower($1) in lower(name))>0 OR position(lower($1) in lower(id))>0)
+ ORDER BY created_at DESC,id LIMIT $2 OFFSET $3) page JOIN organizations o ON o.id=page.id ORDER BY o.created_at DESC,o.id`, search, adminPage+1, offset)
 		if err != nil {
 			return err
 		}
@@ -357,16 +386,90 @@ func RunHeartbeat(ctx context.Context, db *sql.DB, loop string) {
 // adminReveal lets a staff member see client content: it needs platform:content and a reason in the X-Access-Reason header,
 // and records the read as content.reveal on the firm. When it refuses, it has answered the request and returns false.
 func adminReveal(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, targetType, targetID string) bool {
+	return adminRevealOf(w, r, db, firm, targetType, targetID, nil)
+}
+
+// accessReason is a reveal's X-Access-Reason; one too long to record (a reveal across firms copies it to each) answers
+// 422 and returns false.
+func accessReason(w http.ResponseWriter, r *http.Request) (string, bool) {
+	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	if len(reason) > 2000 { // as adminReason
+		problem(w, 422, "Keep the reason under 2,000 characters.")
+		return "", false
+	}
+	return reason, true
+}
+
+// adminRevealOf is adminReveal recording what exactly was shown (request), such as a plan's digest.
+func adminRevealOf(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, targetType, targetID string, request any) bool {
 	if !slices.Contains(staffOf(r.Context()).Permissions, platformContent) {
 		problem(w, 403, "Revealing client content needs platform:content.")
 		return false
 	}
-	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
-	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.reveal", TargetType: targetType, TargetID: targetID, Reason: reason},
+	reason, ok := accessReason(w, r)
+	if !ok {
+		return false
+	}
+	if reason == "" && firm != "" {
+		// Without a reason, a content grant the staff member holds for this firm stands in for one.
+		reason = activeGrantReason(r.Context(), db, staffOf(r.Context()).Subject, firm)
+	}
+	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.reveal", TargetType: targetType, TargetID: targetID, Reason: reason, Request: request},
 		func(context.Context, *sql.Tx) error { return nil })
 	if errors.Is(err, errReasonRequired) {
 		problem(w, 422, err.Error())
 		return false
+	}
+	if err != nil {
+		log.Printf("Content reveal could not be recorded: %v", err)
+		problem(w, 503, "The reveal could not be recorded, so nothing was shown.")
+		return false
+	}
+	return true
+}
+
+// adminRevealAcross records one reveal per firm ("" for platform level) in a single transaction, for a read that shows
+// several firms' content at once; request says what was shown. When it refuses, it has answered and returns false.
+// scope is the one firm the request itself is limited to (a firm filter), or "" when it can span firms: only a request
+// limited to one firm may stand on the staff member's grant for it.
+func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, scope string, firms []string, targetType, targetID string, request any) bool {
+	member := staffOf(r.Context())
+	if !slices.Contains(member.Permissions, platformContent) {
+		problem(w, 403, "Revealing client content needs platform:content.")
+		return false
+	}
+	reason, ok := accessReason(w, r)
+	if !ok {
+		return false
+	}
+	if reason == "" && scope != "" {
+		reason = activeGrantReason(r.Context(), db, member.Subject, scope)
+	}
+	if reason == "" {
+		problem(w, 422, errReasonRequired.Error())
+		return false
+	}
+	raw, _ := json.Marshal(request)
+	if string(raw) == "null" {
+		raw = []byte("{}")
+	}
+	if len(firms) == 0 {
+		firms = []string{""} // a reveal that showed nothing is still recorded, at platform level
+	}
+	system := context.WithValue(r.Context(), systemKey{}, true)
+	tx, err := db.BeginTx(system, nil)
+	if err == nil {
+		for _, firm := range firms {
+			if _, err = tx.ExecContext(system, `INSERT INTO platform_audit(staff_user,action,organization_id,target_type,target_id,reason,request,result,error) VALUES($1,'content.reveal',NULLIF($2,''),$3,$4,$5,$6,'ok','')`,
+				member.Subject, firm, targetType, targetID, reason, string(raw)); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			tx.Rollback()
+		}
 	}
 	if err != nil {
 		log.Printf("Content reveal could not be recorded: %v", err)

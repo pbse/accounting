@@ -2657,6 +2657,75 @@ Checks:
 
 Not verified: the capture against a live QuickBooks company.
 
+## Staff console security review (2026-09-28)
+
+Request: the A4 exit criterion of the [admin panel plan](admin-panel.md#phases): a security review of the staff console, recorded here.
+
+How: a read of the console end to end, and an independent review by GPT-6 Sol (reasoning high) of the same scope, asked for concrete, exploitable problems and for what it found sound. The scope covered:
+- routes and their guards;
+- staff sign-in and server sessions;
+- tenant context;
+- masking, reveals and content grants;
+- the audit log;
+- the admin app;
+- the edge Worker.
+
+Found sound:
+- **Guards.** Every `/v1/admin/*` route requires staff sign-in with `platform:read` plus the route's own permission. A firm's token fails the verifier's pinned staff organization, and a staff token is refused on firm routes. The local-development unlock works only when WorkOS is not configured, and the edge Worker refuses API traffic until it is.
+- **Server sessions.** Staff and firm cookies are separate, each session check rejects the other kind's row, and every request other than GET or HEAD must carry the site's own `Origin`.
+- **Writes.** Staff writes run under the target firm's tenant context and are audited in the same transaction. Refusals are audited too, and `platform_audit` is append-only by trigger.
+- **Client content.** It is masked unless revealed, deny by default. A reveal needs `platform:content` and either a reason or the holder's own grant for the request's single firm, and it is audited before anything is sent. Plan approval is bound to a digest the approver revealed.
+- **Export and app.** The CSV export neutralizes spreadsheet formulas. The admin app renders no raw HTML and holds no secrets.
+
+Fixed:
+1. **Framing and script policy.** `/admin` pages and files were served with no headers at all. The edge Worker now sends:
+   - `Content-Security-Policy: script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'` (the built page has no inline scripts);
+   - `X-Frame-Options: DENY`;
+   - `X-Content-Type-Options: nosniff`;
+   - `Referrer-Policy: no-referrer`.
+2. **Cross-site staff reads.** With `AUTH_SESSION=server`, the staff cookie (SameSite=Lax) went along with a link from another site. Under a content grant, or for an export, a GET alone reveals and records. A request carrying the staff cookie whose `Sec-Fetch-Site` is `cross-site` or `same-site` is now refused with 403; the console's own requests (`same-origin`) and typed addresses (`none`) pass. The other site could never read the answer; this stops forced, audited reveals and downloads in a staff member's name.
+3. **Reveal reasons had no size limit** (GPT-6 Sol, P2). A reveal across firms copies its reason to every firm shown, from up to 5,000 entries. A reason over 2,000 bytes is now refused with 422, as action reasons already were. Audit reads also stop at 32 MiB however large their entries: a page goes on from there (`next_before`), and an export is marked truncated and says how many entries it holds (`X-Entries`). An entry too large on its own is shown without its free text.
+4. **WorkOS effects could come before their audit** (P2). Invitation resend and session revoke recorded their audit entry after WorkOS acted, in the same transaction, so a failed commit left a real effect audited as refused, or not at all. Both now commit a `started` entry (migration 102) before calling WorkOS, and the outcome follows as its own entry. A resend whose new expiry cannot be saved records that WorkOS sent it.
+5. **Session revoke held a database connection** (P2). The WorkOS loop (up to 10,000 pages) ran inside the audit transaction, holding one of the API's few database connections even after the caller left. It now runs with no transaction held, between its start and outcome entries.
+
+Checks (local PostgreSQL; each fails with its fix removed):
+- `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead` reads every `/v1/admin` route from the handlers' source (39 today). It checks that no token and a firm's session both get 401, and staff without `platform:read` get 403. It also fails if the `platform:read` baseline is removed.
+- `TestServerSessionKeepsWorkOSTokensOnTheServer`: a staff-cookie read from `cross-site` or `same-site` gets 403; from `same-origin` or `none` it gets 200.
+- The edge route test checks the admin headers, and that the page's type and body are unchanged.
+- `TestStaffFindAPersonAcrossFirmsAndEndTheirSessions`: WorkOS is reached only after the action's start is committed, as seen from another connection. The audit reads started, refused, started, ok.
+- `TestStaffSearchAndExportTheAuditAcrossFirms`: a 2,001-byte reason gets 422. At its byte limit, a read pages on, an entry too large on its own is shown without its text, and an export is marked truncated with its count.
+- `TestContentGrantsStandInForAReasonOnOneFirmForAWhile`: a 2,001-byte reason gets 422 on a firm's screen.
+- A fresh database migrated twice. The full Go suite passes, except the two tests that need poppler (`pdfinfo`, `pdftotext`), which is not installed here. The admin app typechecks and builds, and the JS tests pass. In the browser, the audit page filters `started` entries and marks them as started.
+
+Accepted or still open:
+- **Own hostname behind Cloudflare Access** (the A4 network item) waits for a domain. It is defence in depth only: authorization stays in Go.
+- **MFA** for the staff organization is configured in WorkOS and is still an open question in the plan.
+- **No rate limit on staff routes.** Staff are few and signed in; every write and reveal is audited.
+- **The CSP leaves `connect-src` and `style-src` open.** Client-side AuthKit talks to WorkOS, and React Flow sets inline styles.
+
+## The staff console is served only to signed-in staff (2026-09-28)
+
+Request: every admin page under `/admin`, gated so only internal employees can load it. This replaces the plan for a separate hostname behind Cloudflare Access.
+
+What changed:
+- **The gate.** The edge Worker now serves nothing under `/admin` (pages, scripts, styles) until the API accepts the request's staff session. It asks `GET /v1/admin/me` with the request's cookies alone, which needs a session in the platform staff organization with `platform:read`.
+- **Refusals.** A signed-out visitor to a page is sent to staff sign-in (`/v1/auth/login?staff=1`) and returns to that page afterwards. A file is refused with 401, and a staff member without the console's role gets 403.
+- **Failing closed.** A check that fails or cannot answer gets 503. Without `AUTH_SESSION=server`, whose cookie is the only session the edge can see, `/admin` answers 503 and the API is not asked.
+- **Caching.** What the console serves is marked `private, no-cache`, so no shared cache keeps it; refusals are `no-store`.
+- **Authorization.** The staff API's own checks are unchanged.
+
+Checks:
+- `workers/edge/src/routes.test.ts` covers the gate:
+  - a staff member the API accepts gets through, and the API is asked only about the cookies (not the caller's `Sec-Fetch-Site`);
+  - signed out, a page redirects to staff sign-in with its path and query to return to, and a file gets 401 with none of the console;
+  - 403 and 503 from the API, and an unreachable API, serve nothing;
+  - in `client` mode or with no mode, nothing is served and the API is not asked;
+  - served files are private, and refusals are not cached.
+- The edge typechecks, the JS tests pass, and the admin app builds.
+- The API side (`/v1/admin/me` accepting only a staff cookie in the staff organization, and requiring `platform:read`) is covered by `TestServerSessionKeepsWorkOSTokensOnTheServer` and `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead`.
+
+Not verified: the gate on a deployed Worker, which needs `AUTH_SESSION=server` in that environment and a real WorkOS staff sign-in (see [sign-in session](auth-sandbox-staging.md#sign-in-session)).
+
 ## About six Actions minutes per merged change (2026-09-28)
 
 Request: bring a merged pull request's Actions minutes from about 20 down to about 6. Before this, each merge was billed for three jobs: CI on the pull request (5.5 min, billed 6), CI again inside Deploy production (5.3 min, billed 6) and the deploy itself (3.3 min, billed 4). GitHub bills each job rounded up to a whole minute.

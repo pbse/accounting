@@ -109,4 +109,12 @@ Fresh Compose volumes run every migration automatically, without the ledger; to 
 
 `097_shared_plan_templates.sql` lets every firm read a plan template that belongs to no firm, so a firm can copy a shared template into a draft of its own. It adds reading only.
 
+`101_content_grants.sql` adds `content_grants`: a staff member's time-boxed access to one firm's client content in the admin panel (visible to system work and the firm). See [admin panel](../../../docs/admin-panel.md).
+
+`103_workflow_run_indexes.sql` indexes workflow runs for admin reads that would otherwise grow with a firm's runs: by parent run (a run's children), by firm and state (active and recently failed runs) and by firm and last update (latest activity). It builds the indexes in the migration's transaction, blocking run writes while it does; the table is small today.
+
+`102_audit_started.sql` lets a staff audit entry be `started`: an action with an effect outside the database (a WorkOS session revoke or invitation resend) records that before the effect, and its outcome after. Apply it before deploying a build that records one.
+
+`100_platform_alerts.sql` adds `platform_alerts` (system work only): the platform's own problems, one open alert per kind and item, delivered to the operations webhook. See [operations](../../../docs/operations.md).
+
 `098_admin.sql` adds the staff audit log (`platform_audit`, append-only: a trigger refuses updates, deletes and truncation for every role; visible to system work and the affected firm) and `worker_heartbeats` (system work only) for the admin panel. See [admin panel](../../../docs/admin-panel.md).

@@ -116,6 +116,8 @@ export function FlowGraph({ steps, plan, selected, onSelect }: { steps: Step[]; 
   return (
     <div className="flow" aria-hidden="true">
       <ReactFlow
+        // A new layout is fitted into view again, so an added or moved step never falls outside it.
+        key={nodes.map((n) => `${n.id}@${n.position.x},${n.position.y}`).join(" ")}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}

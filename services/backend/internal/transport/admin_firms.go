@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 )
 
@@ -46,6 +45,10 @@ func adminFirmProblem(w http.ResponseWriter, err error, what string) {
 		problem(w, 409, "This person's access changed since you loaded it. Refresh and decide again.")
 	case errors.Is(err, errInvitationClosed):
 		problem(w, 409, "Only an open invitation can be revoked. Refresh the list.")
+	case errors.Is(err, errInvitationNotPending):
+		problem(w, 409, "Only a pending invitation that has not expired can be resent. Send a new one instead.")
+	case errors.Is(err, errWorkOS):
+		problem(w, 502, err.Error()+". Nothing changed; try again.")
 	case errors.Is(err, errNotAMember):
 		problem(w, 409, "This person is not a member of the firm. Refresh the list.")
 	default:
@@ -163,69 +166,17 @@ func adminFirmActivity(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{"events": events, "has_more": more, "next_offset": offset + len(events), "revealed": reveal})
 }
 
-type adminAuditRow struct {
-	ID         int64           `json:"id"`
-	StaffUser  string          `json:"staff_user"`
-	Action     string          `json:"action"`
-	TargetType string          `json:"target_type"`
-	TargetID   string          `json:"target_id"`
-	Reason     string          `json:"reason"`
-	Request    json.RawMessage `json:"request"`
-	Result     string          `json:"result"`
-	Error      string          `json:"error"`
-	CreatedAt  string          `json:"created_at"`
-}
-
-// adminFirmAudit is what staff did to the firm, newest first: who, which action, on what, and whether it went through.
-// Reasons, the request's details and a refusal's error are free text that can name a client, so they are masked until
-// revealed.
+// adminFirmAudit is what staff did to the firm (readAudit), newest first.
 func adminFirmAudit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	firm, reveal := r.PathValue("id"), r.URL.Query().Get("reveal") == "1"
-	// Paged by ID, not offset: a revealed read adds its own row, which would shift an offset.
-	var before int64
-	if raw := r.URL.Query().Get("before"); raw != "" {
-		var err error
-		if before, err = strconv.ParseInt(raw, 10, 64); err != nil || before < 1 {
-			problem(w, 422, "before is an audit entry's ID.")
-			return
-		}
-	}
-	entries := []adminAuditRow{}
-	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
-		if err := adminFirmExists(ctx, tx, firm); err != nil {
-			return err
-		}
-		rows, err := tx.QueryContext(ctx, `SELECT id,staff_user,action,target_type,target_id,reason,request,result,error,created_at::text
- FROM platform_audit WHERE organization_id=$1 AND ($2=0 OR id<$2) ORDER BY id DESC LIMIT $3`, firm, before, adminPage+1)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var e adminAuditRow
-			if err = rows.Scan(&e.ID, &e.StaffUser, &e.Action, &e.TargetType, &e.TargetID, &e.Reason, &e.Request, &e.Result, &e.Error, &e.CreatedAt); err != nil {
-				return err
-			}
-			if !reveal {
-				e.Reason, e.Request, e.Error = maskText(e.Reason), only(e.Request), maskText(e.Error)
-			}
-			entries = append(entries, e)
-		}
-		return rows.Err()
-	})
-	if err != nil {
+	firm := r.PathValue("id")
+	if err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error { return adminFirmExists(ctx, tx, firm) }); err != nil {
 		adminFirmProblem(w, err, "audit read")
 		return
 	}
-	if reveal && !adminReveal(w, r, db, firm, "firm_audit", firm) {
-		return
+	if q, ok := auditFilters(w, r); ok {
+		q.firm = firm
+		adminAuditPage(w, r, db, q)
 	}
-	next := any(nil)
-	if len(entries) > adminPage {
-		entries = entries[:adminPage]
-		next = entries[len(entries)-1].ID
-	}
-	jsonReply(w, 200, map[string]any{"entries": entries, "next_before": next, "revealed": reveal})
 }
 
 // adminReason reads a staff action's body into in and checks the reason every firm-level change needs: 10–2,000

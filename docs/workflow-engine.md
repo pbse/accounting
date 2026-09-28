@@ -230,7 +230,7 @@ Activities that write domain records need those operations extracted from the HT
 
 ### Lifecycle
 
-Go functions; HTTP arrives with the admin panel.
+Go functions, each with a `…Tx` form that runs in the caller's transaction; the staff console calls those (see [admin panel](admin-panel.md)), so each decision commits with its audit row.
 - `CreatePlan` saves a staff or member plan as a `draft`.
 - `UpdatePlan` edits a draft or rejected plan, which returns it to `draft`.
 - `ProposePlan` asks for approval; `RejectPlan` turns a plan down.
@@ -261,10 +261,10 @@ W1 provides these as Go functions (`wf.Start`, `wf.Cancel`, `wf.Emit`, `wf.Retry
 | List and filter runs | `GET …/runs?firm=&workflow=&state=&started_by=&since=` |
 | Run detail: run, steps, events, children | `GET …/runs/{id}` |
 | Cancel with a reason | `POST …/runs/{id}/cancel` |
-| Retry a failed step | `POST …/runs/{id}/steps/{key}/retry` |
-| Resolve an `unknown` effect after reconciliation (records who and the evidence reference; never re-calls) | `POST …/runs/{id}/steps/{key}/resolve` |
+| Retry a failed step (`key` in the body) | `POST …/runs/{id}/retry` |
+| Resolve an `unknown` effect after reconciliation (`key` in the body; records who and the evidence reference; never re-calls) | `POST …/runs/{id}/resolve` |
 | Send an event or approval | `POST …/events` |
-| Plans: create, edit, propose, approve, reject, instantiate a template | `…/plans…` |
+| Plans: list, read, create, edit, check, propose, approve, reject, instantiate a template | `/v1/admin/plans…` |
 
 ## Testing
 

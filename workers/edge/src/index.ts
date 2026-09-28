@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import { adminPage, forwardsToAPI } from "./routes";
+import { adminPage, adminPath, forwardsToAPI, secureAdmin, staffGate } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
 
 export class CapabilityAPI extends Container<Env> {
@@ -132,9 +132,12 @@ export default {
     if (path.startsWith("/internal/")) {
       return new Response("Not found", { status: 404 });
     }
-    // The staff admin panel is its own single-page app: its pages load /admin/index.html.
-    if (adminPage(path)) {
-      return env.ASSETS.fetch(new Request(new URL("/admin/index.html", request.url), request));
+    // The staff admin panel, only for signed-in platform staff, is its own single-page app: its pages load
+    // /admin/index.html.
+    if (adminPath(path)) {
+      const refused = await staffGate(request, env.AUTH_SESSION, (check) => env.API.getByName("reference-api").fetch(check));
+      if (refused) return secureAdmin(refused);
+      return secureAdmin(await env.ASSETS.fetch(adminPage(path) ? new Request(new URL("/admin/index.html", request.url), request) : request));
     }
     return env.ASSETS.fetch(request);
   },

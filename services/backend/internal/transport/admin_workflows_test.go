@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -288,3 +289,80 @@ func TestEventKeysShowOnlyTheirTopic(t *testing.T) {
 func mustString(v any) string { raw, _ := json.Marshal(v); return string(raw) }
 
 func jsonNumber(f float64) string { raw, _ := json.Marshal(int64(f)); return string(raw) }
+
+// A long run shows its steps a page at a time, latest first, and its newest child runs; every step and child stays
+// reachable, by paging back and through the runs list.
+func TestALongRunShowsItsLatestStepsAndChildren(t *testing.T) {
+	db := adminDB(t)
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	token := strings.Repeat("l", 32)
+	firm := "org_Long" + rand.Text()
+	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Long runs')`, firm); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM workflow_steps WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1 AND parent_run_id IS NOT NULL`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			if _, err := db.Exec(q, firm); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	var run int64
+	if err := db.QueryRow(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,state,input,finished_at) VALUES($1,'test_admin_flow','long','seed','completed','{}',now()) RETURNING id`, firm).Scan(&run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO workflow_steps(run_id,key,organization_id,seq,kind,state) SELECT $1,'step'||g,$2,g,'step','completed' FROM generate_series(1,450) g`, run, firm); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,state,input,finished_at,parent_run_id,parent_step) SELECT $1,'test_admin_flow','child'||g,'seed','completed','{}',now(),$2,'step1' FROM generate_series(1,250) g`, firm, run); err != nil {
+		t.Fatal(err)
+	}
+	h := apiWithStore(db, token)
+	path := "/v1/admin/workflows/runs/" + strconv.FormatInt(run, 10)
+	type page struct {
+		Steps         []adminStep `json:"steps"`
+		StepsTotal    int         `json:"steps_total"`
+		EarlierSteps  bool        `json:"earlier_steps"`
+		Children      []struct{ ID int64 }
+		ChildrenTotal int `json:"children_total"`
+	}
+	read := func(query string) page {
+		t.Helper()
+		var p page
+		json.Unmarshal(adminCall(t, h, token, "GET", path+query, 200), &p)
+		return p
+	}
+	span := func(p page) string {
+		return strconv.Itoa(len(p.Steps)) + ":" + strconv.Itoa(p.Steps[0].Seq) + "-" + strconv.Itoa(p.Steps[len(p.Steps)-1].Seq)
+	}
+	latest := read("")
+	if span(latest) != "200:251-450" || latest.StepsTotal != 450 || !latest.EarlierSteps {
+		t.Fatalf("the latest 200 of 450 steps, in order, with earlier ones: %s of %d %v", span(latest), latest.StepsTotal, latest.EarlierSteps)
+	}
+	if back := read("?steps_before=251"); span(back) != "200:51-250" || !back.EarlierSteps {
+		t.Fatalf("the page before: %s %v", span(back), back.EarlierSteps)
+	}
+	if first := read("?steps_before=51"); span(first) != "50:1-50" || first.EarlierSteps {
+		t.Fatalf("the first page: %s %v", span(first), first.EarlierSteps)
+	}
+	var newest int64
+	db.QueryRow(`SELECT max(id) FROM workflow_runs WHERE parent_run_id=$1`, run).Scan(&newest)
+	if len(latest.Children) != 200 || latest.ChildrenTotal != 250 || latest.Children[199].ID != newest || latest.Children[0].ID != newest-199 {
+		t.Fatalf("the newest 200 of 250 child runs, in order: %d of %d", len(latest.Children), latest.ChildrenTotal)
+	}
+	// Every child is in the runs list, a page at a time.
+	children := 0
+	for offset := 0; ; {
+		list := adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs?parent="+strconv.FormatInt(run, 10)+"&offset="+strconv.Itoa(offset), "", 200)
+		children += len(list["runs"].([]any))
+		if list["has_more"] != true {
+			break
+		}
+		offset = int(list["next_offset"].(float64))
+	}
+	if children != 250 {
+		t.Fatalf("the runs list holds every child: %d", children)
+	}
+	adminCall(t, h, token, "GET", path+"?steps_before=0", 422)
+	adminCall(t, h, token, "GET", "/v1/admin/workflows/runs?parent=first", 422)
+}

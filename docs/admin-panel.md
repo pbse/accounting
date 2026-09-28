@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations), A1 (workflows) and most of A2 (firm people, activity, audit, suspension; stuck work and connections) implemented** (2026-09-28); the rest are proposals. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations), A1 (workflows), A2 (firm management), A3 (plans) and A4 (hardening) implemented** (2026-09-28). Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -37,6 +37,7 @@ The firm-facing **Security center** stays as it is. It is a firm administrator's
   - `platform:operate`: start, cancel and retry runs, signal and approve, suspend or resume a firm, manage invitations.
   - `platform:content`: view client content, with a reason.
   - `platform:plans`: build and approve plans. Approving still requires the plan validator's per-activity permission check.
+  - `platform:read` is every role's baseline: the API requires it on every staff route, on top of the route's own permission, since the console cannot be used without it.
 - **Roles:**
   - Support: `platform:read`.
   - Operator: adds `platform:operate`.
@@ -52,7 +53,13 @@ The firm-facing **Security center** stays as it is. It is a firm administrator's
 - **Local development:** when WorkOS isn't configured, the existing `WORKSPACE_TOKEN` also grants every platform permission, mirroring today's local-only development access. A configured WorkOS client disables that.
 
 ### Network (phase A4)
-Move the console to its own hostname (for example `admin.<domain>`) behind Cloudflare Access, or any identity-aware proxy. This limits who can even load it, but it is defence in depth only: authorization stays in Go.
+Every page of the console lives under `/admin` on the app's own hostname, and only internal staff can load any of it.
+- **The check.** The edge Worker serves nothing under `/admin` (pages, scripts, styles) until the API accepts the request's staff session. It asks `GET /v1/admin/me` with the request's cookies, which needs a session in the platform staff organization with `platform:read`.
+- **Refusals.** A signed-out visitor to a page goes to staff sign-in and comes back to that page. A file is refused with 401, and a staff member without the console's role gets 403.
+- **Sign-in mode.** This needs `AUTH_SESSION=server`, whose cookie the edge can see (see [sign-in session](auth-sandbox-staging.md#sign-in-session)). In any other mode the Worker serves nothing under `/admin`.
+- **Authorization.** The gate is defence in depth: every staff API call is still authorized in Go.
+
+A separate hostname behind Cloudflare Access is no longer planned.
 
 ## Architecture
 
@@ -66,6 +73,7 @@ services/backend/internal/transport/admin.go   /v1/admin/* routes, staff middlew
 ### Edge Worker
 - `/v1/admin/*` is already forwarded to the API container because it's under `/v1/`.
 - Add `/admin/*` to `run_worker_first`, serving the asset if it exists and `/admin/index.html` otherwise. The current single-page-app fallback returns the firm app's `index.html`, which is wrong for admin deep links.
+- Before serving anything under `/admin`, check the staff session (see [network](#network-phase-a4)).
 
 ### New setting
 `PLATFORM_ORGANIZATION_ID` must be added everywhere settings are listed:
@@ -172,12 +180,13 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 |---|---|
 | `GET /overview`, `GET /firms`, `GET /firms/{id}`, `GET /firms/{id}/people`, `GET /firms/{id}/activity`, `GET /firms/{id}/audit` | `platform:read` |
 | `POST /firms/{id}/suspend`, `POST /firms/{id}/resume` (typed firm ID), `POST /firms/{id}/members/{userId}/revoke`, `POST /firms/{id}/invitations/{id}/revoke` | `platform:operate` |
-| `GET /people?query=`, `GET /people/{userId}` | `platform:read` |
-| `POST /invitations/{id}/resend`, `POST /people/{userId}/sessions/revoke` | `platform:operate` |
+| `GET /people?q=` (a WorkOS user ID or an email address) | `platform:read` |
+| `POST /firms/{id}/invitations/{id}/resend`, `POST /people/{userId}/sessions/revoke` | `platform:operate` |
 | `GET /workflows/definitions`, `GET /workflows/activities`, `GET /workflows/runs`, `GET /workflows/runs/{id}` | `platform:read` |
 | `POST /workflows/runs`, `POST /workflows/runs/{id}/cancel`, `…/retry` and `…/resolve` (step `key` in the body), `POST /workflows/events` | `platform:operate` |
-| `GET /workflows/plans`, `POST /workflows/plans`, `…/propose`, `…/approve`, `…/reject`, `…/instantiate` | `platform:plans` |
-| `GET /jobs`, `GET /connections`, `GET /audit` | `platform:read` |
+| `GET /plans`, `GET /plans/{id}`, `POST /plans` (a draft or template), `POST /plans/{id}` (edit a draft), `POST /plans/validate`, `POST /plans/{id}/propose`, `…/reject`, `…/instantiate` (templates) | `platform:plans` |
+| `POST /plans/{id}/approve` (the reviewed digest) | `platform:plans` and `platform:content` |
+| `GET /jobs`, `GET /connections`, `GET /audit`, `GET /audit/export` (CSV) | `platform:read` |
 | Any response field marked content, when revealed | `platform:content` plus the `X-Access-Reason` header |
 
 ## Phases
@@ -186,9 +195,9 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 |---|---|---|---|
 | **A0. Foundations** (implemented) | none | Staff organization, roles and permissions in WorkOS (staging and production); `PLATFORM_ORGANIZATION_ID` wired through every place settings are listed; staff middleware and the `adminRead`/`adminAct` helpers; admin migration (098); `apps/admin` shell with staff sign-in; `/admin` edge routing; read-only Overview (heartbeats), Firms and firm detail. | `internal/transport/admin_test.go`: a firm token gets 401 on `/v1/admin/*` (even claiming a platform permission); a staff token gets 403 on firm routes; `adminRead` refuses writes; `adminAct` runs as the firm and audits success and refusal; the edge serves admin pages (`routes.test.ts`). |
 | **A1. Workflows** (implemented) | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
-| **A2. Firm management** (implemented except global people and WorkOS) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
-| **A3. Plans** | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
-| **A4. Hardening** | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
+| **A2. Firm management** (implemented) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
+| **A3. Plans** (implemented) | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
+| **A4. Hardening** (implemented) | A0–A3 | `/admin` served only to signed-in platform staff (in place of an own hostname behind Cloudflare Access); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
 
 **Suggested order across both plans:**
 1. Engine W0/W1 alongside admin A0.
@@ -216,7 +225,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 - **Not yet.** Loops are not collapsed and child runs are links rather than nested groups; both wait for a workflow that needs them.
 - **Local check.** `npm run dev:admin` against a local API and worker; the run page was exercised on a staff-approved plan waiting for an event, and sending that event from the inspector completed the run.
 
-## As built (A2, first half)
+## As built (A2)
 
 - **Firm page tabs.** Overview (counts, last health check, recent runs, suspend or resume), People (members with their decision, client-assignment count and agent access; invitations), Activity (paged, filterable by kind) and Staff audit (paged `platform_audit` for the firm, refusals and reveals included).
 - **Shared domain functions.** The firm's own screens and the console call the same code: `setOrganizationEnabled` (suspend and, new, resume), `decideMemberAccess` (a membership decision, removing a revoked member's assistant history, portfolio goals and attention marks), `closeInvitation` and `revokeInWorkOS`. Staff actions run through `adminAct` as the firm, need a reason of 10–2,000 characters like the firm's own screens, and are audited. Suspending or resuming needs the firm's ID typed to confirm. Revoking a member needs the decision staff saw (`previous_id`), so a change made meanwhile is not overwritten.
@@ -224,7 +233,34 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 - **Firm detail.** Moved members to People (masked) and dropped run errors from the recent-runs list; the run page masks them.
 - **Stuck work.** `GET /v1/admin/jobs` lists what each firm's operations screen shows, across firms: counts by kind (items, firms, oldest), then items oldest first, filtered by kind and firm. It shares `operationsAlerts` (`operations.go`) with the firm screen and the alert worker; one firm or all firms, by the same query. Read-only: firms act on their items from their own screen, and no generic requeue exists.
 - **Connections.** `GET /v1/admin/connections` lists QuickBooks, Xero, Stripe and the enabled email sender across firms. Each row has its state, mode, when it was connected and changed, and when it last brought data in (a snapshot, a saved Stripe report, an accepted email). Counts by provider and state come first, and connections needing a reconnect lead the list. Client, company and account names are never selected. Reconnecting stays a firm action.
-- **Next (A2, last part).** Global people search with WorkOS memberships and sessions, and invitation resend. Audit search and export belong to A4.
+- **People.** `GET /v1/admin/people?q=` finds one person by WorkOS user ID or email address. It returns their WorkOS account, organization memberships and sessions (state, organization, sign-in method, times; never IP address or browser), and the app's membership decisions and invitations for them in every firm, with no reasons or client names. Without a WorkOS key, or when WorkOS does not answer, the app's records still show and the page says why the rest is missing. Staff can sign a person out everywhere, in two platform-level audit entries that outlive the request. `sessions.revoke` ends the app's own sessions (`auth_sessions`, `AUTH_SESSION=server`) and commits first. `sessions.revoke_workos` then revokes every active WorkOS session on every page of the list, so none can be renewed; it is refused, with what ended, when WorkOS fails part way, and ending again finishes the job. With `AUTH_SESSION=client`, the API checks access tokens locally, so a token a browser already holds keeps working until it expires (minutes); rejecting such tokens at once would need a revocation check on every request. When WorkOS cannot answer an email search, the IDs the app itself recorded for that address (accepted invitations, its sessions) stand in, so memberships still show; the page warns they may include earlier owners of the address. A resend whose answer is lost is judged against WorkOS's copy of the invitation read just before it. When that copy cannot be read either, the outcome is reported as unknown and audited as refused with that reason. The invitation is then kept open at least as long as a resend would, so a stale date cannot expire an invitation WorkOS renewed. They can also resend a pending invitation that has not expired, keeping WorkOS's new expiry. Revoking a membership stays on the firm's People tab, where the decision being replaced shows.
+- **Not in A2.** Audit search and export belong to A4.
+
+## As built (A3)
+
+- **Screens.** Plans lists plans newest first, filtered by state, source and firm, or the templates. The proposed queue is state `proposed`, and agent proposals show their agent. A plan's page draws it with the run page's graph (every node not yet reached), lists its steps, and offers the decisions its state allows: propose a draft, reject a draft or proposal, approve and start, or, for a template, copy it into a draft for a firm. An approved plan links to its run, and the run page links back to its plan.
+- **Masking.** A plan is client content: its title, node inputs, approval subject and prompt, event keys and an agent's rationale are masked until revealed, like a run's. One function, `maskPlan`, now masks plans on both the plans screens and the run page. What a plan does (node IDs, activities, workflows, order, conditions, durations) always shows, as does its digest. Validation problems quote the plan, so only their number shows until revealed.
+- **Approval.** Approving means reading the plan, so it needs `platform:content` as well as `platform:plans`. The server accepts an approval only when that staff member revealed that exact version (the reveal's audit row records its digest) within the last day. The page offers it only once the plan is revealed, and a changed plan is refused. Templates are copied, never proposed, rejected or approved; the engine refuses them. The approval and the run it starts commit with the audit row, as the plan's firm (`wf.ApprovePlanTx`, alongside `ProposePlanTx`, `RejectPlanTx` and `InstantiateTemplateTx`).
+- **Staff approve with no firm permissions.** A plan whose activities need a firm permission (`ActivitySpec.Permission`) is not approvable by staff, and the page says which permission it needs. Such a plan waits for the firm to approve it, which comes with the firm-facing plan screens. External activities still need an approval node in the plan, which a firm member decides when the plan reaches it.
+- **Builder.** `/admin/plans/new` writes a new draft for a firm, or a template for one firm or for every firm. `/admin/plans/{id}/edit` rewrites a draft or rejected plan staff wrote (never an agent's), and `/admin/plans/new?from={id}` starts from a copy of any plan, which is how staff take up an agent's proposal. Editing or copying reads the plan, so it is revealed first. The form edits steps (activity or workflow with JSON input prefilled from its schema, event wait, timed wait, approval), their order, what each comes after and on which outcome. A live graph preview and the validator's problems update as the plan is written (`POST /plans/validate`, which also says whether staff could approve it). A saved plan must be valid. Steps refer to each other by a key that never changes, so renaming a step never rewires what waits for what. Inputs stay as the JSON text written, and a revealed plan returns each step's input exactly as stored, so integers beyond 2^53 survive editing and copying. Each save needs a reason and is audited (`plan.create` with the new plan's ID, `plan.update`), as the firm, through `wf.CreatePlanTx` and `wf.UpdatePlanTx`. Drag-and-drop editing on the graph stays a later improvement.
+
+## As built (A4, so far)
+
+- **Staff audit.** `/admin/audit` searches every staff action and reveal across firms: by firm (`platform` for entries on no firm), staff member, action or its start (`plan.`, `content.reveal`) and result, newest first, paged by entry ID. The firm page's Staff audit tab uses the same search, and `GET /audit/export` returns it as CSV (at most 5,000 entries; `X-Truncated` says when there are more). Who did which action to what, and whether it went through, always show. Reasons, request details and refusal errors are masked until revealed, in the page and the export. A reveal is recorded, in one transaction, against every firm whose entries it shows, and entries on no firm at platform level, with the search and the entry IDs it covered. In the console a reveal belongs to its search (and a plans list's reveal to its filters): paging keeps it, and other filters are masked until revealed anew. CSV values that start like a formula (`=`, `+`, `-`, `@`, also after leading whitespace), or with whitespace or a control character, are prefixed with an apostrophe, so a spreadsheet never runs a staff member's text.
+
+- **Platform alerts.** A worker loop of its own (`platform_alerts`, supervised like the others, so a backlog of firm alerts never delays it) watches the platform itself every minute: a heartbeat stopped for 5 minutes (the worker process and the workflow engine report one; the other job loops' stalls show as their stuck items, under Stuck work and in the firms' alerts), workflow runs stuck (the stuck view's rule, shared as `stuckRuns`), and provider writes of unknown outcome. Each opens one alert in `platform_alerts` (migration 100), sent once to the operations webhook and resolved when the problem clears (see [operations](operations.md)). A send the worker stopped before the webhook answered becomes unconfirmed, not stuck sending. The Overview lists the problems now, live, with when each was alerted and whether the webhook took it. A worker that is down cannot report itself, so an uptime monitor on the API, or someone watching the Overview, remains the check for that.
+
+- **Content grants.** A staff member with `platform:content` can open a grant for one firm, for 15 minutes to 8 hours, with a reason (`POST /firms/{id}/grant`, audited as `content.grant`; migration 101). Opening another grant for the same firm replaces it. While a grant lasts, that firm's screens (its tabs, its runs, its plans, including editing or copying one, and the audit search or plans list filtered to that firm) reveal without asking. Each reveal is still recorded, with the reason `Under content grant #N: <reason>`. A request that can span firms (an unfiltered search, people) still asks every time; whether a grant applies depends on the request's scope, never on which firms one page of results holds. The sidebar lists open grants, each with a way to end it early (`content.grant_end`). A grant that ends or expires takes back what it showed (the plan builder closes, unsaved changes included, and warns of this while open), and hiding content while holding a grant keeps it hidden on that screen until shown again. The API honours a grant only for its holder and its firm, and only until it expires.
+
+- **Security review.** Recorded in [validation](validation.md#staff-console-security-review-2026-09-28). The edge Worker serves `/admin` with a script-only-from-self, never-framed policy. A request carrying the staff cookie from another site is refused. Reveal reasons are capped at 2,000 bytes, and audit reads at 32 MiB. A WorkOS session revoke or invitation resend records a `started` entry (migration 102) before calling WorkOS, and its outcome after, and holds no transaction while WorkOS works. `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead` covers every staff route as it is added.
+
+- **Large firms.** Measured against a local firm with 208,000 runs, 605,000 steps, 300,000 evidence files and 300,000 audit entries, plus 3,000 small firms. Every staff read answers in under 100 ms. To get there:
+  - **Run page.** It shows a long run's steps 200 at a time, latest first, with how many there are in all. Earlier and Later page through the rest (`?steps_before`, a step's seq). It also shows the newest 200 child runs, with a link to all of them in the runs list, which now filters by parent run (`?parent`). A run with 5,000 of each went from 1.8 MB to 71 KB.
+  - **Firms list.** It picks its page before counting. Counting in the same query had counted every firm the offset skipped, so page 30 took 330 ms; it now takes 45.
+  - **Indexes** (migration 103). Workflow runs are indexed by parent run, by firm and state, and by firm and last update. A firm's run counts and latest activity no longer read all its runs (the big firm's row: 132 ms to 10 ms), and a run's children no longer need a scan of every run on each refresh.
+  - **Other lists.** Firms, runs, plans, activity and audit all page with a next link, and each page reads at most 100 rows.
+
+- **Staff-only `/admin`.** The edge Worker serves the console's pages and files only after the API accepts the staff session (`GET /v1/admin/me`); signed-out visitors go to staff sign-in. It needs `AUTH_SESSION=server`. See [network](#network-phase-a4).
 
 ## Later ideas (not planned)
 

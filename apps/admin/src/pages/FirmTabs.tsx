@@ -1,45 +1,11 @@
-import { useEffect, useState } from "react";
-import { post, useResource, when } from "../api";
+import { useState } from "react";
+import { post, when } from "../api";
 import { usePermissions } from "../App";
+import { Link } from "react-router";
 import { ActionForm } from "../components/ActionForm";
-
-// What the server sends in place of client text until it is revealed.
-const masked = "••••";
-const shown = (value: string) => (value === masked ? <span className="muted">hidden</span> : value);
-
-// useRevealable loads path, masked until someone reveals it with a reason. A reveal the server
-// refuses is dropped, with its error, so the masked view and the form come back.
-function useRevealable<T extends { revealed?: boolean }>(path: string) {
-  const [reason, setReason] = useState<string>();
-  const [failure, setFailure] = useState("");
-  const resource = useResource<T>(path, reason);
-  useEffect(() => {
-    if (reason !== undefined && resource.error) {
-      setFailure(resource.error);
-      setReason(undefined);
-    }
-  }, [reason, resource.error]);
-  return {
-    ...resource,
-    reveal: { pending: reason !== undefined && !resource.data?.revealed, shown: !!resource.data?.revealed, failure, show: (r: string) => { setFailure(""); setReason(r); }, hide: () => setReason(undefined) },
-  };
-}
-
-// Reveal asks why before showing client content; each reveal is recorded in the audit log.
-function Reveal({ reveal }: { reveal: ReturnType<typeof useRevealable>["reveal"] }) {
-  const allowed = usePermissions().includes("platform:content");
-  if (reveal.shown) return <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={reveal.hide}>Hide it</button></p>;
-  if (reveal.pending) return <p role="status">Revealing…</p>;
-  return (
-    <>
-      {reveal.failure && <p role="alert">The content was not revealed: {reveal.failure}</p>}
-      <details>
-        <summary>Reveal client content</summary>
-        <ActionForm label="Reveal client content" allowed={allowed} onSubmit={async (reason) => reveal.show(reason)} />
-      </details>
-    </>
-  );
-}
+import { masked, Reveal, shown, useRevealable } from "../components/Reveal";
+import { InvitationActions } from "./People";
+import { details } from "./Audit";
 
 function Pager({ offset, more, next, onPage }: { offset: number; more: boolean; next: number; onPage: (offset: number) => void }) {
   if (!offset && !more) return null;
@@ -66,13 +32,13 @@ type Invitation = { id: string; email: string; role: string; state: string; invi
 
 export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () => void }) {
   const people = useRevealable<{ people: Person[]; invitations: Invitation[]; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/people`);
-  // What the last invitation revoke said: it tells staff when WorkOS still needs revoking by hand.
+  // What the last invitation action said: a revoke tells staff when WorkOS still needs revoking by hand.
   const [revoked, setRevoked] = useState("");
   const operate = usePermissions().includes("platform:operate");
   const base = `/v1/admin/firms/${encodeURIComponent(firm)}`;
   return (
     <>
-      <Reveal reveal={people.reveal} />
+      <Reveal reveal={people.reveal} firm={firm} />
       {people.error && <p role="alert">{people.error}</p>}
       {!people.data && !people.error && <p role="status">Loading people…</p>}
       {people.data && (
@@ -86,7 +52,7 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
                 <tbody>
                   {people.data.people.map((p) => (
                     <tr key={p.subject}>
-                      <td>{p.subject}</td>
+                      <td><Link to={`/people?q=${encodeURIComponent(p.subject)}`}>{p.subject}</Link></td>
                       <td><span className={`status ${p.granted ? "ok" : "danger"}`}>{p.granted ? "Granted" : "Revoked"}</span></td>
                       <td>{p.assignments.length}{p.assignments.some((a) => a !== masked) && <small> {p.assignments.join(", ")}</small>}</td>
                       <td>{p.agent_scope_in_force ?? p.agent?.state ?? "—"}</td>
@@ -127,16 +93,7 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
                       <td>{when(i.created_at)}</td>
                       <td>{when(i.expires_at)}</td>
                       <td>
-                        {(i.state === "sending" || i.state === "pending") && (
-                          <details>
-                            <summary>Revoke</summary>
-                            <ActionForm label="Revoke invitation" danger allowed={operate} minLength={10} onSubmit={async (reason) => {
-                              const answer = await post<{ message: string }>(`${base}/invitations/${encodeURIComponent(i.id)}/revoke`, { reason });
-                              setRevoked(answer.message);
-                              people.reload();
-                            }} />
-                          </details>
-                        )}
+                        <InvitationActions firm={firm} invitation={i} allowed={operate} onDone={(message) => { setRevoked(message); people.reload(); }} />
                       </td>
                     </tr>
                   ))}
@@ -159,11 +116,12 @@ export function FirmActivity({ firm }: { firm: string }) {
   const query = new URLSearchParams();
   if (kind) query.set("kind", kind);
   if (offset) query.set("offset", String(offset));
-  const activity = useRevealable<{ events: Event[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/activity${query.size ? `?${query}` : ""}`);
+  // A reveal covers this firm's activity of this kind: paging keeps it.
+  const activity = useRevealable<{ events: Event[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/activity${query.size ? `?${query}` : ""}`, `${firm} ${kind}`);
   return (
     <>
       <p>The firm's recorded access decisions, connections, posting grants, work agents did, and workflow runs, newest first.</p>
-      <Reveal reveal={activity.reveal} />
+      <Reveal reveal={activity.reveal} firm={firm} />
       <div className="filters">
         <label>Kind
           <select value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); }}>
@@ -197,22 +155,23 @@ export function FirmActivity({ firm }: { firm: string }) {
   );
 }
 
-type Entry = { id: number; staff_user: string; action: string; target_type: string; target_id: string; reason: string; result: string; error: string; created_at: string };
+type Entry = { id: number; staff_user: string; action: string; target_type: string; target_id: string; reason: string; request: Record<string, unknown>; result: string; error: string; created_at: string };
 
 export function FirmAudit({ firm }: { firm: string }) {
   const [before, setBefore] = useState(0);
-  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${before ? `?before=${before}` : ""}`);
+  // A reveal covers this firm's audit: paging keeps it.
+  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${before ? `?before=${before}` : ""}`, firm);
   return (
     <>
       <p>Everything staff did to this firm, including actions that were refused and every reveal of client content. Reasons and why a refused action failed are hidden until revealed.</p>
-      <Reveal reveal={audit.reveal} />
+      <Reveal reveal={audit.reveal} firm={firm} />
       {audit.error && <p role="alert">{audit.error}</p>}
       {!audit.data && !audit.error && <p role="status">Loading the audit…</p>}
       {audit.data && (
         <section>
           {audit.data.entries.length === 0 ? <p>Staff have not acted on this firm.</p> : (
             <table>
-              <thead><tr><th>When</th><th>Staff</th><th>Action</th><th>Target</th><th>Reason</th><th>Result</th></tr></thead>
+              <thead><tr><th>When</th><th>Staff</th><th>Action</th><th>Target</th><th>Details</th><th>Reason</th><th>Result</th></tr></thead>
               <tbody>
                 {audit.data.entries.map((e) => (
                   <tr key={e.id}>
@@ -220,8 +179,9 @@ export function FirmAudit({ firm }: { firm: string }) {
                     <td>{e.staff_user}</td>
                     <td>{e.action}</td>
                     <td>{e.target_type} {e.target_id}</td>
+                    <td>{details(e.request)}</td>
                     <td>{shown(e.reason)}</td>
-                    <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
+                    <td><span className={`status ${e.result === "ok" ? "ok" : e.result === "started" ? "info" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
                   </tr>
                 ))}
               </tbody>

@@ -100,12 +100,14 @@ func adminDefinitions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 }
 
 // Saved views of the runs list.
+// stuckRuns is a run (r) that is runnable but not picked up: queued for an hour, a lease nobody renewed, a wake time long
+// past, or woken (by an event, retry or resolution, which set updated_at) and left unclaimed. Platform alerts use it too.
+const stuckRuns = `((r.state='queued' AND r.created_at<now()-interval '1 hour') OR (r.state='running' AND r.claimed_at<now()-interval '10 minutes')
+ OR (r.state='waiting' AND ((r.wake_at>'-infinity' AND r.wake_at<now()-interval '10 minutes') OR (r.wake_at='-infinity' AND r.updated_at<now()-interval '10 minutes'))))`
+
 var runViews = map[string]string{
-	"active": `r.state IN ('queued','running','waiting')`,
-	// Runnable but not picked up: queued for an hour, a lease nobody renewed, a wake time long past, or
-	// woken (by an event, retry or resolution, which set updated_at) and left unclaimed.
-	"stuck": `((r.state='queued' AND r.created_at<now()-interval '1 hour') OR (r.state='running' AND r.claimed_at<now()-interval '10 minutes')
- OR (r.state='waiting' AND ((r.wake_at>'-infinity' AND r.wake_at<now()-interval '10 minutes') OR (r.wake_at='-infinity' AND r.updated_at<now()-interval '10 minutes'))))`,
+	"active":            `r.state IN ('queued','running','waiting')`,
+	"stuck":             stuckRuns,
 	"waiting_on_client": `(r.state='waiting' AND r.waiting_on LIKE 'client\_request.replied:%' AND r.updated_at<now()-interval '7 days')`,
 	"unknown_effects":   `EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=r.id AND s.state='unknown')`,
 	"failed_today":      `(r.state='failed' AND r.finished_at>now()-interval '24 hours')`,
@@ -167,11 +169,20 @@ func adminRuns(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if !ok {
 		return
 	}
+	// A parent run's children, every one of them: its own page shows only the newest.
+	parent := int64(0)
+	if raw := q.Get("parent"); raw != "" {
+		var err error
+		if parent, err = strconv.ParseInt(raw, 10, 64); err != nil || parent < 1 {
+			problem(w, 422, "parent is a run's ID.")
+			return
+		}
+	}
 	runs := []adminRunRow{}
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT `+adminRunColumns+` FROM workflow_runs r LEFT JOIN organizations o ON o.id=r.organization_id
- WHERE ($1='' OR r.organization_id=$1) AND ($2='' OR r.workflow=$2) AND ($3='' OR r.state=$3) AND `+condition+`
- ORDER BY r.id DESC LIMIT $4 OFFSET $5`, q.Get("firm"), q.Get("workflow"), q.Get("state"), adminPage+1, offset)
+ WHERE ($1='' OR r.organization_id=$1) AND ($2='' OR r.workflow=$2) AND ($3='' OR r.state=$3) AND ($6=0 OR r.parent_run_id=$6) AND `+condition+`
+ ORDER BY r.id DESC LIMIT $4 OFFSET $5`, q.Get("firm"), q.Get("workflow"), q.Get("state"), adminPage+1, offset, parent)
 		if err != nil {
 			return err
 		}
@@ -221,24 +232,37 @@ type adminStep struct {
 // parent, and, for a plan run, the approved plan so unreached nodes can be drawn too. Unless revealed,
 // free text is masked: payloads, errors, notes, and a plan's title, inputs, event keys and approval
 // text. Names of workflows and steps, states and times show.
+// A long run shows its steps a page of adminRunSteps at a time, latest first (?steps_before, a step's seq, pages back),
+// and its newest adminRunSteps child runs; the runs list (?parent) has every child. Totals say how many there are.
+const adminRunSteps = 200
+
 func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		problem(w, 404, "Run not found.")
 		return
 	}
+	before := 0
+	if raw := r.URL.Query().Get("steps_before"); raw != "" {
+		if before, err = strconv.Atoi(raw); err != nil || before < 1 {
+			problem(w, 422, "steps_before is a step's seq.")
+			return
+		}
+	}
 	reveal := r.URL.Query().Get("reveal") == "1"
 	var run adminRunRow
 	var input, output []byte
 	steps := []adminStep{}
 	var children, plan []byte
+	var stepsTotal, childrenTotal int
+	var earlier bool
 	err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		row := tx.QueryRowContext(ctx, `SELECT `+adminRunColumns+`,r.input,r.output FROM workflow_runs r LEFT JOIN organizations o ON o.id=r.organization_id WHERE r.id=$1`, id)
 		if err := row.Scan(&run.ID, &run.Organization, &run.FirmName, &run.Workflow, &run.State, &run.WaitingOn, &run.StartedBy, &run.Error, &run.CreatedAt, &run.UpdatedAt, &run.FinishedAt, &run.ParentRunID, &run.PlanID, &input, &output); err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT key,seq,kind,state,attempts,retry_at::text,wake_at::text,waiting_on,error,actor,note,started_at::text,finished_at::text,child_run_id,COALESCE(input->>'activity',''),input,output
- FROM workflow_steps WHERE run_id=$1 ORDER BY seq`, id)
+		rows, err := tx.QueryContext(ctx, `SELECT * FROM (SELECT key,seq,kind,state,attempts,retry_at::text,wake_at::text,waiting_on,error,actor,note,started_at::text,finished_at::text,child_run_id,COALESCE(input->>'activity',''),input,output
+ FROM workflow_steps WHERE run_id=$1 AND ($2=0 OR seq<$2) ORDER BY seq DESC LIMIT $3) s ORDER BY seq`, id, before, adminRunSteps+1)
 		if err != nil {
 			return err
 		}
@@ -255,12 +279,14 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		if err = rows.Err(); err != nil {
 			return err
 		}
+		if earlier = len(steps) > adminRunSteps; earlier {
+			steps = steps[1:]
+		}
 		return tx.QueryRowContext(ctx, `SELECT
- COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'parent_step',parent_step) ORDER BY id) FROM workflow_runs WHERE parent_run_id=$1),'[]'::jsonb),
- COALESCE((SELECT jsonb_build_object('id',p.id,'title',CASE WHEN $3 THEN p.title ELSE '••••' END,'state',p.state,'source',p.source,'plan',CASE WHEN $3 THEN p.plan
-   ELSE jsonb_set(p.plan-'title','{nodes}',(SELECT COALESCE(jsonb_agg(CASE WHEN n->'wait' ? 'event' THEN jsonb_set(n,'{wait,event}','"••••"') ELSE n END-'input' #- '{approval,subject}' #- '{approval,prompt}' ORDER BY i),'[]'::jsonb)
-   FROM jsonb_array_elements(p.plan->'nodes') WITH ORDINALITY AS e(n,i))) END)
- FROM workflow_plans p WHERE p.id=$2),'null'::jsonb)`, id, run.PlanID, reveal).Scan(&children, &plan)
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'parent_step',parent_step) ORDER BY id)
+  FROM (SELECT id,workflow,state,parent_step FROM workflow_runs WHERE parent_run_id=$1 ORDER BY id DESC LIMIT $3) c),'[]'::jsonb),
+ COALESCE((SELECT jsonb_build_object('id',p.id,'title',p.title,'state',p.state,'source',p.source,'plan',p.plan) FROM workflow_plans p WHERE p.id=$2),'null'::jsonb),
+ (SELECT count(*) FROM workflow_steps WHERE run_id=$1),(SELECT count(*) FROM workflow_runs WHERE parent_run_id=$1)`, id, run.PlanID, adminRunSteps).Scan(&children, &plan, &stepsTotal, &childrenTotal)
 	})
 	if err != nil {
 		adminWorkflowProblem(w, err, "run")
@@ -284,6 +310,12 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	if !reveal {
 		run.maskText()
+		if string(plan) != "null" {
+			var summary map[string]json.RawMessage
+			json.Unmarshal(plan, &summary)
+			summary["title"], summary["plan"] = json.RawMessage(`"••••"`), maskPlan(summary["plan"])
+			plan, _ = json.Marshal(summary)
+		}
 	}
 	for i := range steps {
 		s := &steps[i]
@@ -324,7 +356,7 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		registered = true
 	}
 	jsonReply(w, 200, map[string]any{"run": run, "input": json.RawMessage(nonNull(input)), "output": json.RawMessage(nonNull(output)), "steps": steps,
-		"children": json.RawMessage(children), "plan": json.RawMessage(plan), "registered": registered, "revealed": reveal})
+		"steps_total": stepsTotal, "earlier_steps": earlier, "children": json.RawMessage(children), "children_total": childrenTotal, "plan": json.RawMessage(plan), "registered": registered, "revealed": reveal})
 }
 
 func lookupDefinition(name string) *wf.Definition {

@@ -216,3 +216,16 @@ pre.json {
 td details summary {
   font-weight: 400;
 }
+
+/* Open content grants, in the sidebar. */
+.grants {
+  margin-bottom: 0.8rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #d9b26b;
+  border-radius: 8px;
+  background: #fbf5e8;
+  font-size: 0.8rem;
+}
+.grants p {
+  margin: 0.3rem 0 0;
+}
