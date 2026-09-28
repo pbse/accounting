@@ -98,7 +98,7 @@ One admin migration. Both tables enable row-level security so `/readyz` keeps pa
 - `id`, `staff_user`, `staff_email`, `action`, `organization_id` (the affected firm, nullable), `target_type`, `target_id`, `reason`.
 - `request`: redacted JSON of the parameters. `result`: `ok` or `refused`, plus the error.
 - `created_at`, `request_id`.
-- Append-only: the runtime role gets no `UPDATE` or `DELETE` grant.
+- Append-only: a trigger refuses updates, deletes and truncation for every role, whatever table grants a migration run hands out.
 - Policy: `IN ('*', organization_id)`, so a later firm-facing "staff actions on your firm" view is possible.
 
 **`worker_heartbeats`**
