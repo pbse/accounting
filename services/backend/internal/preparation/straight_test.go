@@ -196,6 +196,8 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"currency on another line":     {func(p *Proposal, _ *Procedure) { p.Facts[3].Candidates[0].Quote = "Payments accepted in USD" }, ledger(bill), false},
 		"subtotal cited":               {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Subtotal USD 1,200.00" }, ledger(bill), false},
 		"not billed to":                {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Not billed to: Example" }, ledger(bill), false},
+		"trailing minus":               {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Adjustment USD 1,200.00-" }, ledger(bill), false},
+		"trailing CR":                  {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Adjustment USD 1,200.00 CR" }, ledger(bill), false},
 		"unicode minus":                {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Credit note total \u22121,200.00" }, ledger(bill), false},
 		"two accounts share the name":  {func(*Proposal, *Procedure) {}, &Ledger{Source: Source{ID: "9", Digest: "cap"}, Rows: []LedgerRow{bill}, Accounts: map[string]string{"12": "Insurance", "14": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12", "14"}, "prepaid expenses": {"13"}}}, false},
 		"line ID is another account":   {func(*Proposal, *Procedure) {}, ledger(LedgerRow{Kind: "Bill", ProviderID: "90", Date: "2026-09-03", Record: json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"14"}}}]}`)}), false},

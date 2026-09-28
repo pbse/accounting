@@ -459,7 +459,9 @@ func largestFigure(invoice string) int64 {
 func negativeFigure(quote string, cents int64) bool {
 	plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "", "−", "-", "–", "-", "—", "-", "‐", "-").Replace(strings.ToLower(quote))
 	digits := fmt.Sprintf(`%d(\.%02d)?`, cents/100, cents%100)
-	return regexp.MustCompile(`[-(]\s*(usd|eur|gbp|cad|aud)?\s*` + digits + `([^0-9]|$)`).MatchString(plain)
+	// A leading minus or bracket, or a trailing minus or "CR" in the accounting style, both mark a credit.
+	return regexp.MustCompile(`[-(]\s*(usd|eur|gbp|cad|aud)?\s*`+digits+`([^0-9]|$)`).MatchString(plain) ||
+		regexp.MustCompile(`(^|[^0-9.])`+digits+`\s*(-|cr)([^a-z0-9]|$)`).MatchString(plain)
 }
 
 // dateLineSays reports whether the line of the quote that prints the date contains one of the words that make it
