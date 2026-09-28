@@ -425,6 +425,9 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	if _, err = tx.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,$3,encode(sha256(convert_to($4::jsonb::text,'UTF8')),'hex'),$4,$5,'scheduled-quickbooks-refresh')`, job.closeID, job.connectionID, realm, string(payload), started); err != nil {
 		return err
 	}
+	if err = SupersedeCitedChart(ctx, tx, job.closeID, sourceID, job.connectionID, "scheduled-quickbooks-refresh"); err != nil {
+		return err
+	}
 	if !first {
 		return tx.Commit()
 	}
@@ -432,6 +435,14 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 		return err
 	}
 	return tx.Commit()
+}
+
+// SupersedeCitedChart marks the earlier period-snapshot evidence of a close's connection superseded by a new one where a
+// draft prepared without confirmation cites it as its chart, so the existing source-change review reopens that draft.
+// Other citations of period evidence are untouched.
+func SupersedeCitedChart(ctx context.Context, tx *sql.Tx, closeID, sourceID, connectionID, actor string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE evidence e SET superseded_by=$2::bigint,replacement_reason='New QuickBooks chart of accounts capture',replaced_by=$4,replaced_at=now() WHERE e.close_id::text=$1 AND e.id<>$2::bigint AND e.superseded_by IS NULL AND e.id::text IN (SELECT s.payload->>'source_id' FROM quickbooks_snapshots s WHERE s.close_id::text=$1 AND s.connection_id::text=$3 AND s.payload ? 'period') AND EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id::text=$1 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text,'role','chart')))`, closeID, sourceID, connectionID, actor)
+	return err
 }
 
 func RunSync(ctx context.Context, db *sql.DB) {
