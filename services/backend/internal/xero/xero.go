@@ -442,7 +442,7 @@ func SameJournal(want, got ManualJournal) bool {
 
 func read(req *http.Request, limit int64) ([]byte, error) {
 	req.Header.Set("Accept", "application/json")
-	response, err := (&http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	response, err := ledger.DoThrottled(&http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, req)
 	if err != nil {
 		return nil, errors.New("Xero response not received; retry or reconnect")
 	}

@@ -2608,3 +2608,23 @@ Checks (local PostgreSQL):
 - `TestTieOutComparesBalancesWithLatestSupport`: readiness names the differing Accrued audit fees, but not the tied Prepaid insurance or the posting-unknown Accrued rent.
 - `TestProductionPostingSingleDurableAttempt`: an attempt set back to `executing` refuses the found ID (409) while fresh, then verifies it once eleven minutes old, with no second write.
 - The full transport suite passes, except the export PDF test, which needs `pdftotext` (not installed on this machine; CI has it).
+
+## Month-end snapshots stay current; throttled ledger reads are asked again (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- **Snapshot timing.** The scheduled QuickBooks period snapshot used to be taken once, at 00:00 UTC on the 1st, which is still the afternoon of the last day in the US, and never again. It now waits until the month has ended everywhere (UTC-12), then reads again at most once every 20 hours after its last snapshot. It saves a new snapshot only when the Trial Balance differs (same currency and every account's net), so later entries reach the tie-out and, through it, sign-off.
+- **Snapshot limits.** A person's capture stops the schedule. Six scheduled period snapshots at most are kept, leaving the rest of the 20 for people. Only the first scheduled snapshot resumes waiting model intakes, as before. A refresh neither supersedes earlier evidence nor resets approvals.
+- **Throttled reads.** `ledger.DoThrottled` sends a QuickBooks or Xero GET again when it is refused with 429, after Retry-After (at most 30 seconds; 2, then 4, without one), three tries in all. It covers QuickBooks reads and readbacks and Xero reads. Writes and token exchanges are never repeated.
+
+Checks:
+- `TestPeriodBalancesChangeOnlyWithTheTrialBalance`: a re-read with only report times changed compares equal; a changed balance does not; an unreadable one never compares equal.
+- `TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures` (local PostgreSQL) tests the gate query:
+  - due with no snapshot;
+  - not due an hour after a scheduled one, but due 21 hours after;
+  - not due at six scheduled snapshots;
+  - never due after a person's capture.
+- `TestDoThrottledRepeatsOnlyThrottledReads`: a read throttled twice succeeds on the third try; one throttled throughout stops at three; a throttled PUT is sent once.
+
+Not verified: the capture against a live QuickBooks company. The comparison of a fresh read with the last snapshot is covered by the unit test, not by a mocked provider run.

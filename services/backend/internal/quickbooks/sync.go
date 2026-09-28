@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
+	"strings"
 	"time"
 
 	"close.local/backend/internal/secrets"
@@ -287,16 +289,44 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 	return true, nil
 }
 
-// firstPeriod binds an ended, unsigned month with no period snapshot to the connection its transactions came from.
+// firstPeriod binds an ended, unsigned month to the connection its transactions came from while its period snapshot
+// is the scheduler's own: none yet, or a scheduled one at least 20 hours old, six at most. The month has ended everywhere
+// (UTC-12) before the first one, so a US afternoon on the last day is never taken for the month's end.
 var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_closes c
  JOIN organizations o ON o.id=c.organization_id AND o.enabled
  JOIN quickbooks_connections x ON x.id=$2 AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state='active' AND x.id=` + ReadingConnection("c.id") + `
- WHERE c.id=$1 AND c.period=$3 AND c.period<to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
+ WHERE c.id=$1 AND c.period=$3 AND c.period<to_char((now() AT TIME ZONE 'UTC')-interval '12 hours','YYYY-MM')
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
- AND NOT EXISTS (SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period')
- AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id)<20`
+ AND NOT EXISTS (SELECT 1 FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND (s.actor<>'scheduled-quickbooks-refresh' OR s.captured_at>now()-interval '20 hours'))
+ AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id)<20
+ -- Six scheduled ones at most, leaving the rest of the close's twenty for people.
+ AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.actor='scheduled-quickbooks-refresh' AND s.payload ? 'period')<6`
 
-// captureFirstPeriod saves an ended month's first period snapshot; a person's capture or refresh is never replaced.
+// periodBalances is a period snapshot's Trial Balance as comparable text, or "" when it cannot be read.
+func periodBalances(payload []byte) string {
+	var p struct {
+		Accounts json.RawMessage `json:"accounts"`
+		Reports  struct {
+			TrialBalance json.RawMessage
+		} `json:"reports"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return ""
+	}
+	currency, balances, err := TrialBalance(p.Accounts, p.Reports.TrialBalance)
+	if err != nil {
+		return ""
+	}
+	lines := []string{}
+	for _, b := range balances {
+		lines = append(lines, b.ID+"="+b.Net.RatString())
+	}
+	slices.Sort(lines)
+	return currency + "\n" + strings.Join(lines, "\n")
+}
+
+// captureFirstPeriod saves an ended month's period snapshot and, while the scheduler's snapshot is the newest, a fresh
+// one when the Trial Balance has changed, so later entries reach the tie-out. A person's capture or refresh is never replaced.
 func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environment, realm, token string) error {
 	var org, entity, company string
 	err := db.QueryRowContext(ctx, firstPeriod, job.closeID, job.connectionID, job.period).Scan(&org, &entity, &company)
@@ -333,6 +363,21 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	if err != nil {
 		return err
 	}
+	var previous []byte
+	err = tx.QueryRowContext(ctx, `SELECT payload FROM quickbooks_snapshots WHERE close_id=$1 AND payload ? 'period' ORDER BY captured_at DESC,id DESC LIMIT 1`, job.closeID).Scan(&previous)
+	first := err == sql.ErrNoRows
+	if err != nil && !first {
+		return err
+	}
+	if !first {
+		fresh, err := json.Marshal(snapshot)
+		if err != nil {
+			return err
+		}
+		if unchanged := periodBalances(previous); unchanged != "" && unchanged == periodBalances(fresh) {
+			return nil
+		}
+	}
 	var count, size int
 	if err = tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),COALESCE(sum(COALESCE(octet_length(original),octet_length(content))) FILTER (WHERE NOT (created_by='quickbooks-sync' AND superseded_by IS NOT NULL)),0) FROM evidence WHERE close_id=$1`, job.closeID).Scan(&count, &size); err != nil {
 		return err
@@ -351,6 +396,9 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,$3,encode(sha256(convert_to($4::jsonb::text,'UTF8')),'hex'),$4,$5,'scheduled-quickbooks-refresh')`, job.closeID, job.connectionID, realm, string(payload), started); err != nil {
 		return err
+	}
+	if !first {
+		return tx.Commit()
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai'`, job.closeID); err != nil {
 		return err

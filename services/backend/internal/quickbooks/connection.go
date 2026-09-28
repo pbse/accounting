@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/ledger"
 )
 
 type Credentials struct {
@@ -88,7 +90,7 @@ func RefreshFor(ctx context.Context, environment, token string) (Credentials, er
 }
 func readResponse(req *http.Request, limit int64) ([]byte, error) {
 	req.Header.Set("Accept", "application/json")
-	response, err := (&http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	response, err := ledger.DoThrottled(&http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, req)
 	if err != nil {
 		return nil, errors.New("QuickBooks response not received; reconnect if token exchange was in progress")
 	}
