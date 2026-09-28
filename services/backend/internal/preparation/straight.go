@@ -29,6 +29,7 @@ type Ledger struct {
 	Rows        []LedgerRow
 	Accounts    map[string]string   // account ID → name
 	IDs         map[string][]string // lower-cased name or fully qualified name → account IDs
+	Machine     map[string]bool     // every capture or period-snapshot evidence entry of the close, current or older
 }
 
 // StraightThrough turns an agent proposal into a prepaid plan without a person confirming each field, when every
@@ -67,6 +68,9 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	// Every fact comes from the invoice, so any other document in the close (a credit note, a reply), selected or not, is
 	// something only a person can weigh. The capture, the chart and the procedure's evidence copy are checked here instead.
 	machine := map[string]bool{procedureSource.ID: true, ledger.Source.ID: true, ledger.ChartSource.ID: true}
+	for id := range ledger.Machine {
+		machine[id] = true
+	}
 	for _, s := range p.Sources {
 		if s.Role != "invoice" && !machine[s.ID] {
 			return Plan{}, "supporting evidence (" + s.Name + ") was selected; a person reviews it"
@@ -768,6 +772,22 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	var catalog []byte
 	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload->'accounts',COALESCE(e.id::text,''),COALESCE(e.digest,''),COALESCE(e.name,'') FROM quickbooks_snapshots s LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id::text=$1 AND s.connection_id::text=$2 AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1`, closeID, connection).Scan(&l.Chart, &catalog, &l.ChartSource.ID, &l.ChartSource.Digest, &l.ChartSource.Name)
 	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	machine, err := tx.QueryContext(ctx, `SELECT payload->>'source_id' FROM quickbooks_snapshots WHERE close_id::text=$1 AND payload ? 'source_id' UNION SELECT evidence_id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND evidence_id IS NOT NULL`, closeID)
+	if err != nil {
+		return nil, err
+	}
+	defer machine.Close()
+	l.Machine = map[string]bool{}
+	for machine.Next() {
+		var id string
+		if err := machine.Scan(&id); err != nil {
+			return nil, err
+		}
+		l.Machine[id] = true
+	}
+	if err := machine.Err(); err != nil {
 		return nil, err
 	}
 	var accounts []struct{ ID, Name, FullyQualifiedName string }
