@@ -104,7 +104,7 @@ const adminActivity = `SELECT at::text,actor,kind,text,content FROM (
  ) s
  UNION ALL SELECT created_at,started_by,'workflow.started','Started '||workflow||' (run '||id||')',false FROM workflow_runs WHERE organization_id=$1
  UNION ALL SELECT finished_at,'','workflow.'||state,workflow||' (run '||id||') '||state,false FROM workflow_runs WHERE organization_id=$1 AND finished_at IS NOT NULL
- UNION ALL SELECT disabled_at,disabled_by,'firm.suspended','Suspended: '||disabled_reason,true FROM organizations WHERE id=$1 AND disabled_at IS NOT NULL
+ UNION ALL SELECT disabled_at,COALESCE(disabled_by,''),'firm.suspended','Suspended: '||COALESCE(disabled_reason,''),true FROM organizations WHERE id=$1 AND disabled_at IS NOT NULL
 ) e WHERE at IS NOT NULL AND ($2='' OR starts_with(kind,$2)) ORDER BY at DESC,kind,text LIMIT $3 OFFSET $4`
 
 type adminActivityRow struct {

@@ -77,6 +77,9 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 	if db.QueryRow(`SELECT enabled FROM organizations WHERE id=$1`, firm).Scan(&enabled); !enabled {
 		t.Fatal("the firm must be active again")
 	}
+	// A suspension recorded without who or why still lists.
+	must(`UPDATE organizations SET disabled_by=NULL,disabled_reason=NULL WHERE id=$1`, firm)
+	adminJSON(t, h, token, "GET", base+"/activity?kind=firm", "", 200)
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/org_Missing/suspend", `{"confirm":"org_Missing","reason":"Chargeback on the account"}`, 404)
 
 	// Revoking a member needs the decision staff saw; a stale one is refused.
