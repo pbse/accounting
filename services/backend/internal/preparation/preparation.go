@@ -334,7 +334,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		state = "failed"
 		// A straight-through plan the worker refuses prepared nothing; the agent's confirmation is withdrawn with it.
 		if slices.ContainsFunc(plans, func(p Plan) bool { return p.Procedure != "" }) {
-			if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by=NULL,confirmed_at=NULL WHERE job_id=$1 AND confirmed_by='agent'`, id); err != nil {
+			if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by=NULL,confirmed_at=NULL,agent_checkpoint=jsonb_set(COALESCE(agent_checkpoint,'{}'::jsonb),'{straight_through}',to_jsonb($2::text)) WHERE job_id=$1 AND confirmed_by='agent'`, id, "Waiting for a person: "+failure); err != nil {
 				return false, err
 			}
 		}

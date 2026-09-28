@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"close.local/backend/internal/documents"
 	"close.local/backend/internal/prepaids"
@@ -754,8 +755,9 @@ func ProcedureEvidence(ctx context.Context, tx *sql.Tx, closeID, procedureID str
 func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, error) {
 	var l Ledger
 	var connection string
-	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name,s.connection_id::text FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
- WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name, &connection)
+	var captured time.Time
+	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name,s.connection_id::text,COALESCE(s.started_at,s.finished_at,now()) FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_connections x ON x.id=s.connection_id AND x.state='active'
+ WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name, &connection, &captured)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -778,7 +780,9 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 		return nil, err
 	}
 	var catalog []byte
-	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload->'accounts',COALESCE(e.id::text,''),COALESCE(e.digest,''),COALESCE(e.name,'') FROM quickbooks_snapshots s LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id::text=$1 AND s.connection_id::text=$2 AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1`, closeID, connection).Scan(&l.Chart, &catalog, &l.ChartSource.ID, &l.ChartSource.Digest, &l.ChartSource.Name)
+	// The chart must be at least as current as the transaction capture it is read beside; a chart refresh that failed
+	// after a successful capture leaves no chart to trust.
+	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload->'accounts',COALESCE(e.id::text,''),COALESCE(e.digest,''),COALESCE(e.name,'') FROM quickbooks_snapshots s LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id::text=$1 AND s.connection_id::text=$2 AND s.payload ? 'period' AND COALESCE(s.captured_at,s.started_at)>=$3 ORDER BY s.id DESC LIMIT 1`, closeID, connection, captured).Scan(&l.Chart, &catalog, &l.ChartSource.ID, &l.ChartSource.Digest, &l.ChartSource.Name)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
