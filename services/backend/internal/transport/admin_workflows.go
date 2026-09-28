@@ -142,12 +142,23 @@ func scanRun(row interface{ Scan(...any) error }) (adminRunRow, error) {
 }
 
 // maskText hides the free text of a run until content is revealed: its error, which can quote client
-// data, and, for a plan run, the event it waits for, which a plan can build from client data.
+// data, and what it waits for (see maskKey).
 func (run *adminRunRow) maskText() {
 	run.Error = maskText(run.Error)
+	run.WaitingOn = run.maskKey(run.WaitingOn)
+}
+
+// maskKey masks an event key. A code workflow names the key's topic, the part before the first ":",
+// and often builds the rest from its input, so only the topic shows. A plan writes the whole key,
+// possibly from client data, so none of it shows.
+func (run *adminRunRow) maskKey(key string) string {
 	if run.PlanID != nil {
-		run.WaitingOn = maskText(run.WaitingOn)
+		return maskText(key)
 	}
+	if topic, rest, ok := strings.Cut(key, ":"); ok && rest != "" {
+		return topic + ":••••"
+	}
+	return key
 }
 
 func adminRuns(w http.ResponseWriter, r *http.Request, db *sql.DB) {
@@ -301,10 +312,7 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	for i := range steps {
 		s := &steps[i]
 		if !reveal {
-			s.Error, s.Note = maskText(s.Error), maskText(s.Note)
-			if run.PlanID != nil {
-				s.WaitingOn = maskText(s.WaitingOn)
-			}
+			s.Error, s.Note, s.WaitingOn = maskText(s.Error), maskText(s.Note), run.maskKey(s.WaitingOn)
 		}
 		switch {
 		case reveal:
@@ -313,8 +321,14 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		case s.Kind == "approval":
 			// Who may decide and what was decided show; the subject, prompt and note are the firm's words.
 			s.Input, s.Output = only(s.Input, "permission"), only(s.Output, "approved", "by")
-		case s.Kind == "event" && run.PlanID != nil:
-			s.Input, s.Output = only(s.Input), hidden(s.Output)
+		case s.Kind == "event":
+			var in map[string]string
+			if json.Unmarshal(s.Input, &in) == nil && in != nil {
+				s.Input, _ = json.Marshal(map[string]string{"event": run.maskKey(in["event"])})
+			} else {
+				s.Input = hidden(s.Input)
+			}
+			s.Output = hidden(s.Output)
 		case s.Activity != "":
 			if a, ok := activities[s.Activity]; ok {
 				s.Input = maskActivityInput(s.Input, a.Input)

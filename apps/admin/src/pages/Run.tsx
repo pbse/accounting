@@ -21,6 +21,7 @@ const active = ["queued", "running", "waiting"];
 // Free text the server masked until client content is revealed.
 const masked = "••••";
 const text = (value: string) => (value === masked ? "Hidden until client content is revealed." : value);
+const isMasked = (value: string) => value.includes(masked);
 
 // An action staff take on a run: it always asks why, and the answer goes to the audit log.
 function ActionForm({ label, danger, allowed = true, onSubmit, children }: { label: string; danger?: boolean; allowed?: boolean; onSubmit: (reason: string) => Promise<void>; children?: ReactNode }) {
@@ -62,7 +63,9 @@ export function Run() {
   const { id = "" } = useParams();
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState("");
-  const [reveal, setReveal] = useState<string>();
+  // A reveal belongs to the run it was asked for, so following a link never reveals another run.
+  const [revealed, setReveal] = useState<{ id: string; reason: string }>();
+  const reveal = revealed?.id === id ? revealed.reason : undefined;
   const [params, setParams] = useSearchParams();
   const selected = params.get("step") ?? undefined;
   const setSelected = (key: string) => setParams({ step: key }, { replace: true });
@@ -167,8 +170,8 @@ export function Run() {
               {(step.state === "failed" || (step.state === "waiting" && step.retry_at)) && ["failed", "waiting"].includes(run.state) && (
                 <ActionForm label={step.kind === "child" ? "Start a fresh child" : "Retry this step now"} allowed={operate} onSubmit={(reason) => act("retry", { key: step.key, reason })} />
               )}
-              {step.kind === "event" && step.state === "waiting" && step.waiting_on === masked && <p className="note">Reveal client content to see this plan's event key and send it.</p>}
-              {step.kind === "event" && step.state === "waiting" && step.waiting_on && step.waiting_on !== masked && run.organization && (
+              {step.kind === "event" && step.state === "waiting" && isMasked(step.waiting_on) && <p className="note">Reveal client content to see the full event key and send it.</p>}
+              {step.kind === "event" && step.state === "waiting" && step.waiting_on && !isMasked(step.waiting_on) && run.organization && (
                 <SendEventForm allowed={operate} onSubmit={(payload, reason) => post("/v1/admin/workflows/events", { organization: run.organization, key: step.waiting_on, payload, reason }).then(load)} />
               )}
               {step.kind === "effect" && step.state === "unknown" && <ResolveForm allowed={operate} onSubmit={(applied, output, reason) => act("resolve", { key: step.key, applied, output, reason })} />}
@@ -190,7 +193,7 @@ export function Run() {
         {detail.revealed ? (
           <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={() => { latest.current++; setDetail(undefined); setReveal(undefined); }}>Hide it</button></p>
         ) : (
-          <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal(reason)} />
+          <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal({ id, reason })} />
         )}
         <h3>Input</h3><Json value={detail.input} />
         <h3>Output</h3><Json value={detail.output} />

@@ -115,17 +115,17 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 	runPath := "/v1/admin/workflows/runs/" + jsonNumber(id)
 	detail := adminJSON(t, h, token, "GET", runPath, "", 200)
 	text := mustString(detail)
-	if strings.Contains(text, "123-45-6789") || !strings.Contains(text, `"secret":"••••"`) || !strings.Contains(text, `"hidden":true`) {
+	if strings.Contains(text, "123-45-6789") || strings.Contains(text, "admin.reply:main") || !strings.Contains(text, `"secret":"••••"`) || !strings.Contains(text, `"hidden":true`) || !strings.Contains(text, `"waiting_on":"admin.reply:••••"`) {
 		t.Fatalf("client content must be masked by default: %s", text)
 	}
 	adminJSON(t, h, token, "GET", runPath+"?reveal=1", "", 422)
 	revealed := adminJSON(t, h, token, "GET", runPath+"?reveal=1", "", 200, "X-Access-Reason", "the firm asked us to check the reply")
-	if !strings.Contains(mustString(revealed), "123-45-6789") {
+	if !strings.Contains(mustString(revealed), "123-45-6789") || !strings.Contains(mustString(revealed), `"waiting_on":"admin.reply:main"`) {
 		t.Fatalf("a reveal with a reason shows the content: %s", mustString(revealed))
 	}
 	listed := adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs?firm="+firm+"&state=waiting", "", 200)
-	if runs := listed["runs"].([]any); len(runs) != 1 {
-		t.Fatalf("runs %v", runs)
+	if runs := listed["runs"].([]any); len(runs) != 1 || strings.Contains(mustString(runs), "admin.reply:main") {
+		t.Fatalf("one run, its event key masked: %v", runs)
 	}
 
 	// An event sent by staff wakes the run; engine events cannot be sent.
