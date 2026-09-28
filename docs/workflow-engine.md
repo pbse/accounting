@@ -1,6 +1,6 @@
 # Workflow engine plan
 
-**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core), W2 (composition) and W3 (activities and plans) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`; **W5 is under way: close goals run on the engine** ([below](#w5-close-goals-on-the-engine)). W4 is a proposal. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
+**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core), W2 (composition) and W3 (activities and plans) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`; **W4 (agent planner) implemented** ([below](#agent-proposed-plans)); **W5 is under way: close goals run on the engine** ([below](#w5-close-goals-on-the-engine)). The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
 
 ## Goals
 
@@ -238,7 +238,7 @@ Go functions, each with a `…Tx` form that runs in the caller's transaction; th
 - `ApprovePlan(id, digest, approver, permissions)` approves exactly the version the approver saw: a different digest is refused. It re-validates, marks the plan `approved`, and starts the built-in `plan` workflow (`workflows/plan`) with `{plan_id, digest}`, linking the run and the plan. The workflow saves the approved plan as its first step, so later edits never change a running plan, and runs each node as a step keyed `node:<id>`. A plan run therefore has the same history, retries and flow view as a code workflow.
 - Templates (`is_template`, firm-specific or shared by all firms) never run themselves: `InstantiateTemplate` copies one into a new draft for a firm.
 
-### Agent-proposed plans: the pieces are there, the planner comes later
+### Agent-proposed plans
 
 In place now:
 - **Creation.** `CreatePlan` with `Source: "agent"` requires a firm and a `Rationale`, and creates the plan as `proposed`. The database also refuses an agent plan in `draft`. **Nothing runs an agent plan until a person approves it**, under the same validation as any plan.
@@ -246,10 +246,14 @@ In place now:
 - **Rate limit.** At most 20 agent proposals per firm per day.
 - **Model-ready catalog.** `wf.Activities()` gives descriptions plus JSON Schemas.
 
-Deferred (W4, low priority):
-- The planner itself: a prompt over the catalog and the close's state, using the existing OpenAI integration and its budget accounting.
-- A `propose_plan` tool on the [MCP server](mcp.md).
-- Evaluation of proposal quality.
+The agents (W4):
+- **A connected agent** reads `plan_catalog` and proposes with `propose_plan` on the [MCP server](mcp.md), under the member's approved agent access with `workpapers:review` (`POST /v1/closes/plans/proposals`). The proposal is attributed to the agent and the member, needs a reason of 10–2,000 characters, and is refused with the validator's problems when it does not validate. `list_plan_proposals` shows the agent what became of its proposals. A person using the app directly does not propose here: staff build plans in the admin panel.
+- **The planner.** In the admin panel, staff describe what a firm needs (optionally for one close), and the firm's model drafts a plan from the catalog (`POST /v1/admin/plans/draft`).
+  - It is told the catalog and format, the instruction (redacted as the assistant's questions are) and, for a close, its client, month, sign-off and preparation work by state.
+  - The model answers in a fixed shape that the planner turns into a plan. A draft that does not validate gets one more attempt, told what was wrong.
+  - It is saved as the agent's proposal (`planner (<model>)`), waiting in the queue like any other.
+  - It writes only for a firm that turned model-written answers on, and each attempt counts against the firm's daily model calls.
+- **Evaluation.** Every planner draft is audited as `plan.draft_with_model`: ok with its plan, or refused with what was wrong. The Plans page's **Agents' proposals** shows, for 30 days and by agent, how many were proposed, are waiting, were approved and were rejected, and how many planner drafts were still invalid after the second try or got no answer (`GET /v1/admin/plans/agents`).
 
 ## API
 
@@ -293,7 +297,7 @@ These proofs, which [`workers/workflows`](../workers/workflows/README.md) alread
 | **W1. Engine core** (implemented) | Migration 094; `internal/wf` (`Define`, `Step`, `Effect`, `Sleep`, `SleepUntil`, `WaitForEvent`, `Now`, `Random`, `Permanent`, `NotApplied`); `Start`, `Cancel`, `Emit`, `RetryStep`, `Resolve` as Go functions; concurrency keys; registry generator and CI check; claim loop in `cmd/worker`; version stamping. The first real workflow moved to W2, which brings the event triggers and approvals it needs. | Proofs 1–8 pass in CI (`internal/wf/engine_test.go`); a run survives a container restart in staging. |
 | **W2. Composition** (implemented) | `Child`, `WaitForApproval` and `Approve`, schedule and event triggers, `wf.EmitForClose` for client replies and sign-offs, `DB`/`Organization` for steps, and the first real workflow, `firm_health_check` (daily per firm, read-only). `month_kickoff` was dropped: sign-off already carries reviewed schedules into the next month and close routines create next month's closes, so a second path would duplicate them. Compensation hooks wait until a workflow needs one. | Proofs for each primitive in `internal/wf/engine_test.go`; reply and sign-off events in the transport tests; the health check counts only its firm's problems. |
 | **W3. Activities and plans** (implemented) | The activities directory, `wf.DefineActivity`/`Call`/`CallActivity`, the catalog with built-in JSON Schemas, the plan format and validator, the `plan` workflow, the plan lifecycle and templates, and the agent pieces (proposal only, reason required, no edits, rate limit, database check). First activities: `close_summary` and `plan_signal`. | `internal/wf/plans_test.go` covers validation rules and plan runs; `workflows/plan/workflow_test.go` covers the lifecycle, agent proposals and templates. |
-| **W4. Agent planner (low priority)** (deferred) | Model-backed proposals over the catalog; MCP `propose_plan`. Deferred as agreed: W3 provides every piece it plugs into. | Proposals appear in the admin approval queue with their reason. |
+| **W4. Agent planner** (implemented) | Model-backed proposals over the catalog; MCP `propose_plan`. | Proposals appear in the admin approval queue with their reason. |
 | **W5. Migrate existing loops** (close goals implemented) | Close goals first (already step-shaped, with an events log), then others where it simplifies. | Each migrated loop is deleted; its UI reads engine runs. |
 
 ## W5: close goals on the engine

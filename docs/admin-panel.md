@@ -260,6 +260,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
   - **Indexes** (migration 103). Workflow runs are indexed by parent run, by firm and state, and by firm and last update. A firm's run counts and latest activity no longer read all its runs (the big firm's row: 132 ms to 10 ms), and a run's children no longer need a scan of every run on each refresh.
   - **Other lists.** Firms, runs, plans, activity and audit all page with a next link, and each page reads at most 100 rows.
 
+- **Agent proposals** (engine W4). The Plans page can **Ask the planner**: staff describe what a firm needs, and the firm's model drafts a plan from the catalog, saved as the agent's proposal in the queue (for firms that turned model-written answers on; each attempt counts against the firm's model calls; audited as `plan.draft_with_model`). Connected agents propose through MCP (`propose_plan`). **Agents' proposals** shows each agent's 30-day record: proposed, waiting, approved, rejected, and the planner's drafts that were invalid or unanswered.
 - **Staff-only `/admin`.** The edge Worker serves the console's pages and files only after the API accepts the staff session (`GET /v1/admin/me`); signed-out visitors go to staff sign-in. It needs `AUTH_SESSION=server`. See [network](#network-phase-a4).
 
 ## Later ideas (not planned)
