@@ -184,6 +184,10 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if reason := totalDisagrees(invoice, amount); reason != "" {
 		return Plan{}, reason
 	}
+	// Terms the schedule cannot carry, cited or not: a credit, cancellation, refund, adjustment or proration in the text.
+	if mentionsAny(strings.ReplaceAll(strings.ToLower(invoice), "credit card", ""), []string{"credit", "cancel", "refund", "adjust", "pro rata", "prorat", "terminat", "rebate", "write off", "reversal"}) {
+		return Plan{}, "the invoice speaks of a credit, cancellation, refund, adjustment or proration; a person weighs it"
+	}
 	// An invoice printing other money figures (a tax, a fee) must say which is payable: a total line printing the amount.
 	if moneyFigures(invoice) > 1 && !totalLineShows(invoice, amount) {
 		return Plan{}, "the invoice prints several money figures and no total line printing the cited amount"
@@ -437,15 +441,17 @@ func ProcedurePinned(p Plan, current Procedure) error {
 	return nil
 }
 
-// totalDisagrees reports why the invoice's own total lines do not support the cited amount: a discount anywhere, or a
-// total line (not a subtotal) printing a different figure.
+// totalDisagrees reports why the invoice's own total, due or payable lines do not support the cited amount: a discount
+// anywhere, or such a line printing a different or negative figure.
 func totalDisagrees(invoice string, cents int64) string {
 	for _, line := range strings.Split(invoice, "\n") {
 		normal := documents.NormalizeEntity(line)
 		if strings.Contains(normal, "discount") {
 			return "the invoice prints a discount; the payable total needs a person"
 		}
-		if !strings.Contains(normal, "total") || strings.Contains(normal, "subtotal") || strings.Contains(normal, "sub total") {
+		// A total, due or payable line states what is owed; a subtotal does not.
+		payable := (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total")) || strings.Contains(normal, " due") || strings.HasPrefix(normal, "due") || strings.Contains(normal, "payable")
+		if !payable {
 			continue
 		}
 		if negativeFigure(line, cents) {
@@ -481,7 +487,7 @@ func distinctFigures(invoice string) map[int64]bool {
 func totalLineShows(invoice string, cents int64) bool {
 	for _, line := range strings.Split(invoice, "\n") {
 		normal := documents.NormalizeEntity(line)
-		if strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total") && distinctFigures(line)[cents] {
+		if (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total") || strings.Contains(normal, " due") || strings.Contains(normal, "payable")) && distinctFigures(line)[cents] {
 			return true
 		}
 	}
