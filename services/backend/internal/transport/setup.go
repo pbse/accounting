@@ -161,7 +161,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		case paper != "":
 			detail := "Draft #" + paper + " is ready for review."
 			if first != "" {
-				came := "was prepared without an earlier document"
+				came := "was prepared without an earlier work document"
 				if elapsed.Valid {
 					came = fmt.Sprintf("came %.0f minutes after the first document there", elapsed.Float64)
 				}

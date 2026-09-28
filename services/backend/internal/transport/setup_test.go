@@ -125,7 +125,7 @@ func TestSetupFollowsTheFirmsOwnRecords(t *testing.T) {
 		t.Fatalf("the close's first draft says how long after the first document it came and the human time before it: %+v %q", s.FirstDraft, s.Steps[5].Detail)
 	}
 	exec(`UPDATE evidence SET created_at=now() WHERE close_id=$1 AND purpose='work'`, alpha)
-	if s, _ := read(); s.FirstDraft == nil || s.FirstDraft.Elapsed != nil || !strings.Contains(s.Steps[5].Detail, "was prepared without an earlier document") {
+	if s, _ := read(); s.FirstDraft == nil || s.FirstDraft.Elapsed != nil || !strings.Contains(s.Steps[5].Detail, "was prepared without an earlier work document") {
 		t.Fatalf("a draft no document preceded has no elapsed time: %+v %q", s.FirstDraft, s.Steps[5].Detail)
 	}
 	if len(s.Reconnect) != 1 || s.Reconnect[0].Client != "Alpha" || s.Reconnect[0].Href != "/dashboard/closes/"+alpha+"?tab=settings#quickbooks-production" || !strings.Contains(s.Reconnect[0].Error, "Token refresh") || s.CanReconnect {
