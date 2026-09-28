@@ -2,6 +2,7 @@ package transport
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -78,6 +79,18 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 				err = nil
 			}
 		}
+		// The checklist close's first draft: minutes from the first document there (not a procedure) and human minutes
+		// tracked or recorded on the close before the draft. Recorded time is dated when entered, so both are estimates.
+		var first, firstClose string
+		var elapsed sql.NullFloat64
+		var human float64
+		if err == nil && closeID != "" {
+			if err = tx.QueryRowContext(r.Context(), `SELECT w.id::text,w.close_id::text,EXTRACT(EPOCH FROM w.created_at-(SELECT min(e.created_at) FROM evidence e WHERE e.close_id=w.close_id AND e.purpose='work' AND e.procedure_id IS NULL AND e.created_at<=w.created_at))/60,
+ COALESCE((SELECT sum(seconds) FROM close_effort f WHERE f.close_id=w.close_id AND f.minute<w.created_at),0)/60.0+COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=w.close_id AND x.created_at<w.created_at),0)
+ FROM workpapers w WHERE w.close_id=$1::bigint ORDER BY w.id LIMIT 1`, closeID).Scan(&first, &firstClose, &elapsed, &human); err == sql.ErrNoRows {
+				err = nil
+			}
+		}
 		rules := []string{}
 		for _, kind := range []string{"prepaid", "accrual", "reconciliation", "loan", "basis", "owner"} {
 			if closeID == "" || err != nil {
@@ -146,7 +159,15 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		}
 		switch {
 		case paper != "":
-			steps = append(steps, setupStep{"prepared", "Receive the first prepared draft", true, "Draft #" + paper + " is ready for review.", "/dashboard/closes/" + paperClose + "/workpapers/" + paper})
+			detail := "Draft #" + paper + " is ready for review."
+			if first != "" {
+				came := "was prepared without an earlier document"
+				if elapsed.Valid {
+					came = fmt.Sprintf("came %.0f minutes after the first document there", elapsed.Float64)
+				}
+				detail += fmt.Sprintf(" %s's first draft (#%s) %s, with %.0f minutes of tracked or recorded human time before it: an upload-to-draft estimate, not the time from full access; our team's assistance is recorded outside the product.", label, first, came, human)
+			}
+			steps = append(steps, setupStep{"prepared", "Receive the first prepared draft", true, detail, "/dashboard/closes/" + paperClose + "/workpapers/" + paper})
 		case closeID != "":
 			steps = append(steps, setupStep{"prepared", "Receive the first prepared draft", false, "Upload evidence to " + label + ", then confirm the proposed facts in Work.", base + "?tab=evidence"})
 		default:
@@ -164,6 +185,14 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 				you = append(you, "See only the clients assigned to you")
 			}
 		}
-		jsonReply(w, 200, map[string]any{"steps": steps, "permissions": you, "reconnect": reconnect, "can_reconnect": slices.Contains(granted, "integrations:manage")})
+		out := map[string]any{"steps": steps, "permissions": you, "reconnect": reconnect, "can_reconnect": slices.Contains(granted, "integrations:manage")}
+		if first != "" {
+			draft := map[string]any{"workpaper_id": first, "close_id": firstClose, "elapsed_minutes": nil, "human_minutes": human}
+			if elapsed.Valid {
+				draft["elapsed_minutes"] = elapsed.Float64
+			}
+			out["first_draft"] = draft
+		}
+		jsonReply(w, 200, out)
 	})
 }

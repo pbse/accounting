@@ -41,7 +41,7 @@ Work opens with **Get started**, the first-client journey: enroll the firm, add 
 - **Client:** closes you can open. The next steps are about your newest such close.
 - **Books:** that client has an active Xero connection, or its QuickBooks captures read an active connection (production is read before sandbox, so an active sandbox company does not count while the production one needs reconnecting). When neither provider is configured on the server, the step says to upload ledger reports instead.
 - **Period and rules:** the close's month, and whether an enabled approved procedure applies to its client for any kind, including the accounting basis (a client override wins, and a disabled one blocks the firm's).
-- **First draft:** any draft in a close you can open; until then the step points to that close's Evidence tab.
+- **First draft:** any draft in a close you can open; until then the step points to that close's Evidence tab. Once the checklist's close has a draft, the step also says how many minutes its first draft came after the first document added there (a procedure document does not count, nor one added later), and how many minutes of tracked or recorded human time the close had before it; `GET /v1/closes/setup` returns both as `first_draft`. This is an upload-to-draft estimate, not the PRD's time from full access and usable evidence, and it excludes our own team's assistance; record those in the pilot record.
 
 Each open step links to the control that completes it. A member who is not enrolled sees **Enroll a new firm** instead, even while the rest of Work cannot load. **What you can do here** lists your permissions in plain words, and "only the clients assigned to you" when you lack `clients:all`.
 

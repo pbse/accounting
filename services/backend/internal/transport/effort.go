@@ -12,6 +12,13 @@ var effortActivities = []string{"prepare", "review", "evidence", "requests", "si
 
 // Tracked activity is capped at 60 seconds per person per close per minute; it
 // measures visible, interactive workspace time, not every minute worked.
+// closeReviews counts a close's recorded review decisions; reviewsAfterApproval counts those on a draft some earlier
+// version of which was approved, following each revision's link to the draft it replaces within the close.
+const closeReviews = `(SELECT count(*) FROM workpaper_reviews v JOIN workpapers d ON d.id=v.workpaper_id WHERE d.close_id=c.id)`
+const reviewsAfterApproval = `(SELECT count(*) FROM workpaper_reviews v JOIN workpapers d ON d.id=v.workpaper_id WHERE d.close_id=c.id AND EXISTS(
+ WITH RECURSIVE earlier(id) AS (SELECT d.paper->>'revises' UNION SELECT p.paper->>'revises' FROM workpapers p JOIN earlier ON p.id::text=earlier.id WHERE p.close_id=c.id)
+ SELECT 1 FROM earlier JOIN workpapers a ON a.id::text=earlier.id AND a.close_id=c.id JOIN workpaper_reviews x ON x.workpaper_id=a.id AND x.decision='approved'))`
+
 func registerEffort(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /v1/closes/{id}/effort", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -134,7 +141,8 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0),COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id),0),(SELECT count(*) FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved') FROM client_closes c WHERE `+scope+` AND c.period=$4 ORDER BY c.entity LIMIT 201`, organization(r), firmAccess(r), subject(r), period)
+		rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0),COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id),0),(SELECT count(*) FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'),`+closeReviews+`,`+reviewsAfterApproval+`,
+ COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id AND e.activity='review'),0)/60.0+COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id AND x.activity='review'),0) FROM client_closes c WHERE `+scope+` AND c.period=$4 ORDER BY c.entity LIMIT 201`, organization(r), firmAccess(r), subject(r), period)
 		if err != nil {
 			problem(w, 503, "Effort is unavailable.")
 			return
@@ -149,12 +157,14 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 			}
 			var id, entity string
 			var tracked, recorded int64
-			var approved int
-			if err := rows.Scan(&id, &entity, &tracked, &recorded, &approved); err != nil {
+			var approved, reviews, afterApproval int
+			var reviewMinutes float64
+			if err := rows.Scan(&id, &entity, &tracked, &recorded, &approved, &reviews, &afterApproval, &reviewMinutes); err != nil {
 				problem(w, 503, "Effort is unavailable.")
 				return
 			}
-			item := map[string]any{"close_id": id, "entity": entity, "tracked_seconds": tracked, "recorded_minutes": recorded, "approved_drafts": approved, "measured": tracked > 0 || recorded > 0}
+			item := map[string]any{"close_id": id, "entity": entity, "tracked_seconds": tracked, "recorded_minutes": recorded, "approved_drafts": approved, "measured": tracked > 0 || recorded > 0,
+				"reviews": reviews, "reviews_after_approval": afterApproval, "review_minutes": reviewMinutes}
 			if tracked > 0 || recorded > 0 {
 				item["total_minutes"] = float64(tracked)/60 + float64(recorded)
 			}
@@ -171,7 +181,13 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Effort is unavailable.")
 			return
 		}
-		out := map[string]any{"period": period, "items": items, "measured": measured, "has_more": more}
+		// Review counts cover every accessible close in the month, measured or not.
+		var reviews, afterApproval int
+		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(sum(r),0),COALESCE(sum(a),0) FROM (SELECT `+closeReviews+` AS r,`+reviewsAfterApproval+` AS a FROM client_closes c WHERE `+scope+` AND c.period=$4) counts`, organization(r), firmAccess(r), subject(r), period).Scan(&reviews, &afterApproval); err != nil {
+			problem(w, 503, "Effort is unavailable.")
+			return
+		}
+		out := map[string]any{"period": period, "items": items, "measured": measured, "has_more": more, "reviews": reviews, "reviews_after_approval": afterApproval}
 		if median.Valid {
 			out["median_minutes"] = median.Float64
 		}

@@ -44,6 +44,8 @@ func TestEffortCapsCreditAndSeparatesWaiting(t *testing.T) {
 			db.Exec(`DELETE FROM close_effort WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM close_effort_entries WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM evidence WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, id)
+			db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM client_closes WHERE id=$1`, id)
 		}
 		db.Exec(`DELETE FROM organizations WHERE id=$1`, foreignOrg)
@@ -115,16 +117,63 @@ func TestEffortCapsCreditAndSeparatesWaiting(t *testing.T) {
 	if largest > 60 || summary.Tracked != min(90, 60*rows) || summary.Recorded != 15 || summary.Open != 1 || summary.Answered < 7190 || summary.Answered > 7210 {
 		t.Fatalf("credit must cap at 60s per person-minute and waiting must count only answered requests: %+v", summary)
 	}
+	// Reviews after approval: #a approved, #b revises it unreviewed, #c revises #b and is reviewed; #d was only sent back
+	// and #e revises it. Of four decisions, only #c's follows an approved earlier version. The quiet close's approved
+	// draft and its reviewed revision count in the month's totals.
+	draftIn := func(closeID, revises string) string {
+		t.Helper()
+		var id string
+		paper := `{}`
+		if revises != "" {
+			paper = `{"revises":"` + revises + `"}`
+		}
+		if err := db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3) RETURNING id::text`, closeID, rand.Text(), paper).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	review := func(id, decision string) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) VALUES($1,'d',$2,'Reviewed','fixture')`, id, decision); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := draftIn(measured, "")
+	review(a, "approved")
+	c := draftIn(measured, draftIn(measured, a))
+	review(c, "approved")
+	d := draftIn(measured, "")
+	review(d, "changes_requested")
+	review(draftIn(measured, d), "approved")
+	q := draftIn(quiet, "")
+	review(q, "approved")
+	review(draftIn(quiet, q), "changes_requested")
+	// Half a minute of tracked preparation, earlier in the day, is not review time.
+	if _, err = db.Exec(`INSERT INTO close_effort(close_id,actor,minute,activity,seconds) VALUES($1,'fixture',date_trunc('minute',now())-interval '3 hours','prepare',30)`, measured); err != nil {
+		t.Fatal(err)
+	}
+	var trackedReview int64
+	if err = db.QueryRow(`SELECT COALESCE(sum(seconds),0) FROM close_effort WHERE close_id=$1 AND activity='review'`, measured).Scan(&trackedReview); err != nil {
+		t.Fatal(err)
+	}
 	var report struct {
-		Items    []map[string]any `json:"items"`
-		Measured int              `json:"measured"`
-		Median   *float64         `json:"median_minutes"`
+		Items         []map[string]any `json:"items"`
+		Measured      int              `json:"measured"`
+		Median        *float64         `json:"median_minutes"`
+		Reviews       int              `json:"reviews"`
+		AfterApproval int              `json:"reviews_after_approval"`
 	}
 	json.Unmarshal(call("GET", "/v1/closes/effort?period="+period, nil, 200), &report)
-	if len(report.Items) != 2 || report.Measured != 1 || report.Median == nil || *report.Median < 15.9 || *report.Median > 16.6 {
+	if len(report.Items) != 2 || report.Measured != 1 || report.Median == nil || *report.Median < 16.4 || *report.Median > 17.1 {
 		t.Fatalf("median must use measured closes only and never count the quiet close as zero: %+v", report)
 	}
+	if report.Reviews != 6 || report.AfterApproval != 2 {
+		t.Fatalf("the month counts every accessible close's reviews and those after an approved earlier version: %+v", report)
+	}
 	for _, item := range report.Items {
+		if item["close_id"] == measured && (item["reviews"] != 4.0 || item["reviews_after_approval"] != 1.0 || item["review_minutes"] != float64(trackedReview)/60) {
+			t.Fatalf("a close counts its reviews, those after approval through an unreviewed revision, and only review time: %+v", item)
+		}
 		if item["close_id"] == foreign {
 			t.Fatal("another firm's close leaked into the effort report")
 		}
