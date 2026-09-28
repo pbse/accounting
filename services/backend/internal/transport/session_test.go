@@ -340,6 +340,17 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	if w := send(handler, "GET", "/v1/admin/me", "", "", staffCookieOf(staff)); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &me) != nil || me.Subject != "user_a" || me.Mode != "workos" {
 		t.Fatalf("the staff cookie opens the staff console: %d %s", w.Code, w.Body.String())
 	}
+	// Another site's link does not open a staff read, not even a GET; the console's own requests and a typed address do.
+	for site, want := range map[string]int{"cross-site": 403, "same-site": 403, "same-origin": 200, "none": 200} {
+		r := httptest.NewRequest("GET", "https://app.example.test/v1/admin/me", nil)
+		r.AddCookie(staffCookieOf(staff))
+		r.Header.Set("Sec-Fetch-Site", site)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("a staff read from %s: %d, want %d", site, w.Code, want)
+		}
+	}
 	if w := send(handler, "GET", "/v1/admin/me", firm, ""); w.Code != 401 {
 		t.Fatalf("the firm cookie does not open the staff console: %d", w.Code)
 	}

@@ -42,6 +42,7 @@ func TestContentGrantsStandInForAReasonOnOneFirmForAWhile(t *testing.T) {
 		t.Fatalf("the reveal names the grant: %q %v", recorded, err)
 	}
 	adminJSON(t, h, token, "GET", people(other), "", 422)
+	adminJSON(t, h, token, "GET", people(firm), "", 422, "X-Access-Reason", strings.Repeat("r", 2001))
 	// The firm's audit tab stands on the grant too; a cross-firm search does not.
 	adminJSON(t, h, token, "GET", "/v1/admin/firms/"+firm+"/audit?reveal=1", "", 200)
 	adminJSON(t, h, token, "GET", "/v1/admin/audit?reveal=1", "", 422)

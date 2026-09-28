@@ -42,6 +42,14 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 
 	revoked, resent := []string{}, 0
 	failRevoke, workosDown, resendLost, copyLost, loseCopyOnResend := false, false, false, false, false
+	// A WorkOS effect is only ever attempted with its start already recorded and committed: seen from another connection,
+	// the action has one more start than outcomes.
+	startedFirst := func(action, target string) {
+		var ahead bool
+		if err := db.QueryRow(`SELECT count(*) FILTER (WHERE result='started') = count(*) FILTER (WHERE result<>'started')+1 FROM platform_audit WHERE action=$1 AND target_id=$2`, action, target).Scan(&ahead); err != nil || !ahead {
+			t.Errorf("%s reached WorkOS without its start recorded first (%v)", action, err)
+		}
+	}
 	original := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = original })
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
@@ -71,6 +79,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		case p == "/user_management/users/"+person+"/sessions":
 			body = `{"data":[{"id":"session_1","status":"active","auth_method":"password","ip_address":"203.0.113.9","user_agent":"Secret Browser"},{"id":"session_2","status":"revoked"}],"list_metadata":{"after":"session_2"}}`
 		case p == "/user_management/sessions/revoke" && r.Method == "POST":
+			startedFirst("sessions.revoke_workos", person)
 			var in map[string]string
 			raw, _ := io.ReadAll(r.Body)
 			json.Unmarshal(raw, &in)
@@ -80,6 +89,9 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 				revoked = append(revoked, in["session_id"])
 			}
 		case p == "/user_management/invitations/"+workosID+"/resend" && r.Method == "POST":
+			var invitation string
+			db.QueryRow(`SELECT id::text FROM member_invitations WHERE workos_id=$1`, workosID).Scan(&invitation)
+			startedFirst("invitation.resend", invitation)
 			resent++
 			body = copyOf()
 			if resendLost {
@@ -174,7 +186,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	}
 	var sessionAudits string
 	if err := db.QueryRow(`SELECT string_agg(action||':'||result||':'||COALESCE(organization_id,'platform'),',' ORDER BY id) FROM platform_audit WHERE action LIKE 'sessions.%' AND target_id=$1 AND reason<>'short'`, person).Scan(&sessionAudits); err != nil ||
-		sessionAudits != "sessions.revoke:ok:platform,sessions.revoke_workos:refused:platform,sessions.revoke:ok:platform,sessions.revoke_workos:ok:platform" {
+		sessionAudits != "sessions.revoke:ok:platform,sessions.revoke_workos:started:platform,sessions.revoke_workos:refused:platform,sessions.revoke:ok:platform,sessions.revoke_workos:started:platform,sessions.revoke_workos:ok:platform" {
 		t.Fatalf("session audits %q %v", sessionAudits, err)
 	}
 

@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import { adminPage, forwardsToAPI } from "./routes";
+import { adminPage, forwardsToAPI, secureAdmin } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
 
 export class CapabilityAPI extends Container<Env> {
@@ -134,7 +134,10 @@ export default {
     }
     // The staff admin panel is its own single-page app: its pages load /admin/index.html.
     if (adminPage(path)) {
-      return env.ASSETS.fetch(new Request(new URL("/admin/index.html", request.url), request));
+      return secureAdmin(await env.ASSETS.fetch(new Request(new URL("/admin/index.html", request.url), request)));
+    }
+    if (path.startsWith("/admin/")) {
+      return secureAdmin(await env.ASSETS.fetch(request));
     }
     return env.ASSETS.fetch(request);
   },

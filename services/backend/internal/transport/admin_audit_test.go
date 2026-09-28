@@ -124,4 +124,16 @@ func TestStaffSearchAndExportTheAuditAcrossFirms(t *testing.T) {
 	if err := db.QueryRow(`SELECT request::text FROM platform_audit WHERE organization_id IS NULL AND action='content.reveal' AND target_type='audit' AND request->>'staff'=$1`, nobody).Scan(&empty); err != nil || !strings.Contains(empty, `"entries": 0`) {
 		t.Fatalf("empty reveal %q %v", empty, err)
 	}
+	// A reason too long to record (a reveal across firms copies it to each) is refused.
+	adminJSON(t, h, token, "GET", "/v1/admin/audit?staff="+staff+"&reveal=1", "", 422, "X-Access-Reason", strings.Repeat("r", 2001))
+
+	// However large its entries, a read stops at auditBytes and pages on from there.
+	defer func(was int) { auditBytes = was }(auditBytes)
+	auditBytes = 1
+	if page := adminJSON(t, h, token, "GET", "/v1/admin/audit?staff="+staff, "", 200); len(page["entries"].([]any)) != 1 || page["next_before"] == nil {
+		t.Fatalf("a read at its byte limit pages on: %v", page)
+	}
+	if w, rows = export(""); w.Header().Get("X-Truncated") != "true" || w.Header().Get("X-Next-Before") == "" || len(rows) != 2 {
+		t.Fatalf("an export at its byte limit says it was truncated: %v %v", w.Header(), rows)
+	}
 }

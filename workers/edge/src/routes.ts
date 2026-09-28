@@ -8,3 +8,13 @@ export function forwardsToAPI(path: string): boolean {
 export function adminPage(path: string): boolean {
   return /^\/admin(\/[^.]*)?$/.test(path);
 }
+
+// The staff console runs only its own scripts and is never framed (so never clickjacked) or sniffed.
+export function secureAdmin(response: Response): Response {
+  const secured = new Response(response.body, response);
+  secured.headers.set("Content-Security-Policy", "script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+  secured.headers.set("X-Frame-Options", "DENY");
+  secured.headers.set("X-Content-Type-Options", "nosniff");
+  secured.headers.set("Referrer-Policy", "no-referrer");
+  return secured;
+}

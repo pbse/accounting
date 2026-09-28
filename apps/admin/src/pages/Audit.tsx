@@ -67,6 +67,7 @@ export function Audit() {
             <option value="">Any</option>
             <option value="ok">ok</option>
             <option value="refused">refused</option>
+            <option value="started">started (outcome follows)</option>
           </select>
         </label>
         <button>Search</button>
@@ -90,7 +91,7 @@ export function Audit() {
                     <td>{e.target_type} {e.target_id}</td>
                     <td>{details(e.request)}</td>
                     <td>{shown(e.reason)}</td>
-                    <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
+                    <td><span className={`status ${e.result === "ok" ? "ok" : e.result === "started" ? "info" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
                   </tr>
                 ))}
               </tbody>
