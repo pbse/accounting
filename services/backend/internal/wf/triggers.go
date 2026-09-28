@@ -103,12 +103,25 @@ func (e *Engine) onEvents(ctx context.Context, w *workflow, t Trigger) error {
 	if strings.HasSuffix(t.Value, "*") {
 		like += "%"
 	}
+	// Page by event ID, so events held back by a busy concurrency key never hide later ones.
+	var after int64
+	for page := 0; page < 20; page++ {
+		n, last, err := e.onEventsPage(ctx, w, like, after)
+		if err != nil || n < 100 {
+			return err
+		}
+		after = last
+	}
+	return nil
+}
+
+func (e *Engine) onEventsPage(ctx context.Context, w *workflow, like string, after int64) (int, int64, error) {
 	rows, err := e.DB.QueryContext(ctx, `SELECT e.id,COALESCE(e.organization_id,''),e.payload FROM workflow_events e LEFT JOIN organizations o ON o.id=e.organization_id
- WHERE e.created_at>now()-interval '3 days' AND e.key LIKE $1 ESCAPE '\' AND e.key NOT LIKE 'wf.%' AND (e.organization_id IS NULL OR o.enabled) AND ($3='' OR e.organization_id=$3)
+ WHERE e.id>$4 AND e.created_at>now()-interval '3 days' AND e.key LIKE $1 ESCAPE '\' AND e.key NOT LIKE 'wf.%' AND (e.organization_id IS NULL OR o.enabled) AND ($3='' OR e.organization_id=$3)
  AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE r.workflow=$2 AND coalesce(r.organization_id,'')=coalesce(e.organization_id,'') AND r.idempotency_key='event:'||e.id)
- ORDER BY e.id LIMIT 100`, like, w.Name, e.OnlyOrganization)
+ ORDER BY e.id LIMIT 100`, like, w.Name, e.OnlyOrganization, after)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	type event struct {
 		id      int64
@@ -120,15 +133,17 @@ func (e *Engine) onEvents(ctx context.Context, w *workflow, t Trigger) error {
 		var ev event
 		if err = rows.Scan(&ev.id, &ev.firm, &ev.payload); err != nil {
 			rows.Close()
-			return err
+			return 0, 0, err
 		}
 		events = append(events, ev)
 	}
 	rows.Close()
 	if err = rows.Err(); err != nil {
-		return err
+		return 0, 0, err
 	}
+	var last int64
 	for _, ev := range events {
+		last = ev.id
 		key := fmt.Sprintf("event:%d", ev.id)
 		_, _, err = start(ctx, e.DB, StartRequest{Workflow: w.Name, Organization: ev.firm, Input: json.RawMessage(ev.payload), IdempotencyKey: key, StartedBy: key}, 0, "")
 		switch {
@@ -140,8 +155,8 @@ func (e *Engine) onEvents(ctx context.Context, w *workflow, t Trigger) error {
 			err = nil // tried again on a later pass
 		}
 		if err != nil {
-			return err
+			return 0, 0, err
 		}
 	}
-	return nil
+	return len(events), last, nil
 }

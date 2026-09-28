@@ -561,6 +561,9 @@ func (x *execution) child(key, workflow string, input any) (json.RawMessage, err
 	if err := x.enter(key, false); err != nil {
 		return nil, err
 	}
+	if len(key) > 150 {
+		return nil, x.stop(fmt.Errorf("child step key %q is longer than 150 characters", key))
+	}
 	s := x.steps[key]
 	if s == nil {
 		if err := x.checkpoint(); err != nil {
@@ -586,24 +589,26 @@ func (x *execution) child(key, workflow string, input any) (json.RawMessage, err
 		if s.retryAt != nil && s.retryAt.After(x.engine.now()) {
 			return nil, x.parkUntil("", s.retryAt)
 		}
-		// Starting again after a crash returns the child already started under this key.
-		id, _, err := start(x.sys, x.engine.DB, StartRequest{Workflow: workflow, Organization: x.run.org, Input: input,
-			IdempotencyKey: fmt.Sprintf("child:%d:%s", x.run.id, key), StartedBy: fmt.Sprintf("workflow:%s#%d", x.run.workflow, x.run.id), Agent: x.run.agent}, x.run.id, key)
+		if err := x.crash("before-child-start", key); err != nil {
+			return nil, err
+		}
+		id, err := x.startChild(key, workflow, input, s.generation)
 		switch {
+		case errors.Is(err, errCancelled), errors.Is(err, errAbandoned):
+			return nil, x.stop(err)
 		case errors.Is(err, ErrBusy):
 			retry := x.engine.now().Add(time.Minute)
 			if err = x.mark(key, "running", "Another run holds the child's concurrency key; trying again in a minute.", &retry); err != nil {
 				return nil, err
 			}
 			return nil, x.parkUntil("", &retry)
-		case err != nil:
+		case errors.Is(err, ErrUnknownWorkflow), errors.Is(err, ErrInvalidInput):
 			if e := x.mark(key, "failed", err.Error(), nil); e != nil {
 				return nil, e
 			}
 			return nil, &StepError{Key: key, Message: err.Error()}
-		}
-		if err = x.write(`UPDATE workflow_steps SET state='waiting',child_run_id=$4,retry_at=NULL,error='' WHERE run_id=$1 AND key=$3`+fence, x.run.id, x.run.claim, key, id); err != nil {
-			return nil, err
+		case err != nil:
+			return nil, x.stop(errAbandoned) // a database error: hand the run back and try again
 		}
 		s.state, s.childRunID, s.retryAt, s.errMsg = "waiting", id, nil, ""
 	}
@@ -626,4 +631,44 @@ func (x *execution) child(key, workflow string, input any) (json.RawMessage, err
 		return nil, &StepError{Key: key, Message: message}
 	}
 	return nil, x.parkUntil("", nil) // the child's end wakes this run
+}
+
+// startChild starts (or, after a crash, finds) the child and links it to the step in one
+// transaction that first locks this run's row and checks for a cancel request. Cancel locks the
+// parent first too, so either the child exists when Cancel looks for descendants, or the cancel is
+// seen here and no child starts.
+func (x *execution) startChild(key, workflow string, input any, generation int) (int64, error) {
+	tx, err := x.engine.DB.BeginTx(x.sys, nil)
+	if err != nil {
+		return 0, errAbandoned
+	}
+	defer tx.Rollback()
+	var cancelled bool
+	err = tx.QueryRowContext(x.sys, `SELECT cancel_requested_at IS NOT NULL FROM workflow_runs WHERE id=$1 AND claim=$2 FOR UPDATE`, x.run.id, x.run.claim).Scan(&cancelled)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		x.lost.Store(true)
+		return 0, errAbandoned
+	case err != nil:
+		return 0, errAbandoned
+	case cancelled:
+		return 0, errCancelled
+	}
+	idempotency := fmt.Sprintf("child:%d:%s", x.run.id, key)
+	if generation > 0 {
+		idempotency += fmt.Sprintf(":%d", generation)
+	}
+	// Starting again after a crash returns the child already started under this key.
+	id, _, err := start(x.sys, tx, StartRequest{Workflow: workflow, Organization: x.run.org, Input: input,
+		IdempotencyKey: idempotency, StartedBy: fmt.Sprintf("workflow:%s#%d", x.run.workflow, x.run.id), Agent: x.run.agent}, x.run.id, key)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = tx.ExecContext(x.sys, `UPDATE workflow_steps SET state='waiting',child_run_id=$3,retry_at=NULL,error='' WHERE run_id=$1 AND key=$2`, x.run.id, key, id); err != nil {
+		return 0, errAbandoned
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, errAbandoned
+	}
+	return id, nil
 }

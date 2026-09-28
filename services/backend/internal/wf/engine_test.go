@@ -795,14 +795,14 @@ func TestReleasingAnUnregisteredRunAppliesAPendingCancel(t *testing.T) {
 
 // Composition (W2).
 
-var _ = wf.Define(wf.Spec[ref, map[string]any]{
+var _ = wf.Define(wf.Spec[ref, json.RawMessage]{
 	Name: "test_parent", Title: "Wait on a child",
-	Run: func(ctx wf.Context, in ref) (map[string]any, error) {
+	Run: func(ctx wf.Context, in ref) (json.RawMessage, error) {
 		child := "test_wait"
-		if in.Failures < 0 {
+		if in.Failures != 0 {
 			child = "test_flaky"
 		}
-		return wf.Child[map[string]any](ctx, "kid", child, ref{ID: in.ID, Failures: in.Failures})
+		return wf.Child[json.RawMessage](ctx, "kid", child, ref{ID: in.ID, Failures: in.Failures})
 	},
 })
 
@@ -1013,5 +1013,87 @@ func TestEmitForCloseUsesTheClosesFirm(t *testing.T) {
 	h.db.QueryRow(`SELECT organization_id FROM workflow_events WHERE id=$1`, id).Scan(&org)
 	if org != h.org {
 		t.Fatalf("event firm %q", org)
+	}
+}
+
+var _ = wf.Define(wf.Spec[ping, int]{
+	Name: "test_busy_event", Title: "Held back by a busy key",
+	Triggers: []wf.Trigger{wf.OnEvent("test.busy:*")},
+	Concurrency: func(in ping) string {
+		if in.N < 1000 {
+			return "busy"
+		}
+		return ""
+	},
+	Run: func(ctx wf.Context, in ping) (int, error) { return in.N, nil },
+})
+
+func TestCancelJustBeforeAChildStartsLeavesNoChild(t *testing.T) {
+	h := setup(t)
+	parent := h.start("test_parent", ref{ID: rand.Text()})
+	wf.Hook(h.engine, func(point, key string) {
+		if point == "before-child-start" {
+			if err := wf.Cancel(h.ctx, h.db, parent, "test", "stop before the child"); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	h.drain()
+	h.expect(parent, "cancelled")
+	var children int
+	h.db.QueryRow(`SELECT count(*) FROM workflow_runs WHERE parent_run_id=$1`, parent).Scan(&children)
+	if children != 0 {
+		t.Fatalf("a child started under a cancelled parent (%d)", children)
+	}
+}
+
+func TestApprovalAfterItsDeadlineIsRefused(t *testing.T) {
+	h := setup(t)
+	h.clock.Add(-3 * time.Hour) // the approval's deadline is already behind the database's clock
+	id := h.start("test_approve", ref{ID: rand.Text()})
+	h.drain()
+	if err := wf.Approve(h.ctx, h.db, id, "go-ahead", wf.Decision{Approved: true, By: "user_b"}, []string{"requests:send"}); !errors.Is(err, wf.ErrNotAllowed) {
+		t.Fatalf("a late approval must be refused, not silently ignored: %v", err)
+	}
+}
+
+func TestBusyEventsDoNotHideLaterOnes(t *testing.T) {
+	h := setup(t)
+	for n := 0; n < 102; n++ {
+		if _, err := wf.Emit(h.ctx, h.db, h.org, fmt.Sprintf("test.busy:%d", n), ping{N: 1}, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	free, err := wf.Emit(h.ctx, h.db, h.org, "test.busy:free", ping{N: 1000}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf.Triggers(h.ctx, h.engine)
+	var started int
+	h.db.QueryRow(`SELECT count(*) FROM workflow_runs WHERE organization_id=$1 AND workflow='test_busy_event' AND idempotency_key=$2`, h.org, fmt.Sprintf("event:%d", free)).Scan(&started)
+	if started != 1 {
+		t.Fatal("an event with a free concurrency key waited behind busy ones")
+	}
+}
+
+func TestRetryingAFailedChildStepStartsAFreshChild(t *testing.T) {
+	h := setup(t)
+	in := ref{ID: rand.Text(), Failures: 2}
+	parent := h.start("test_parent", in)
+	h.drain()
+	h.clock.Add(time.Second)
+	h.drain()
+	if v := h.expect(parent, "failed"); v.steps["kid"] != "failed" {
+		t.Fatalf("%+v", v)
+	}
+	if err := wf.RetryStep(h.ctx, h.db, parent, "kid", "test", "the provider recovered"); err != nil {
+		t.Fatal(err)
+	}
+	h.drain()
+	h.expect(parent, "completed")
+	var children int
+	h.db.QueryRow(`SELECT count(*) FROM workflow_runs WHERE parent_run_id=$1`, parent).Scan(&children)
+	if children != 2 {
+		t.Fatalf("the failed child stays as history and a fresh one ran: %d children", children)
 	}
 }

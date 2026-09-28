@@ -187,7 +187,7 @@ func (e *Engine) execute(ctx context.Context, run *claimedRun) {
 }
 
 func (e *Engine) loadSteps(ctx context.Context, runID int64) (map[string]*stepRow, int, error) {
-	rows, err := e.DB.QueryContext(ctx, `SELECT key,kind,state,attempts,retry_at,wake_at,output,error,seq,COALESCE(input->'skipped','[]'::jsonb),COALESCE(child_run_id,0) FROM workflow_steps WHERE run_id=$1`, runID)
+	rows, err := e.DB.QueryContext(ctx, `SELECT key,kind,state,attempts,retry_at,wake_at,output,error,seq,COALESCE(input->'skipped','[]'::jsonb),COALESCE(child_run_id,0),COALESCE((input->>'generation')::int,0) FROM workflow_steps WHERE run_id=$1`, runID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -198,7 +198,7 @@ func (e *Engine) loadSteps(ctx context.Context, runID int64) (map[string]*stepRo
 		var retry, wake sql.NullTime
 		var output, skipped []byte
 		var seq int
-		if err = rows.Scan(&s.key, &s.kind, &s.state, &s.attempts, &retry, &wake, &output, &s.errMsg, &seq, &skipped, &s.childRunID); err != nil {
+		if err = rows.Scan(&s.key, &s.kind, &s.state, &s.attempts, &retry, &wake, &output, &s.errMsg, &seq, &skipped, &s.childRunID, &s.generation); err != nil {
 			return nil, 0, err
 		}
 		if err = json.Unmarshal(skipped, &s.skipped); err != nil {
@@ -302,13 +302,21 @@ func (e *Engine) finish(x *execution, state string, out json.RawMessage, message
 		_, err = tx.ExecContext(x.sys, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=$1 AND state IN ('running','waiting')`, x.run.id)
 	}
 	if err == nil {
-		_, err = tx.ExecContext(x.sys, wakeParent, x.run.id)
-	}
-	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
 		log.Printf("Workflow run %d could not be marked %s: %v", x.run.id, state, err)
+		return
+	}
+	e.wakeParent(x.sys, x.run.id)
+}
+
+// wakeParent wakes the parent of a run that ended. It runs after the run's own transaction commits,
+// so no transaction holds a child's row while taking its parent's (Cancel takes them the other way
+// round); the sweep catches a wake-up lost in between.
+func (e *Engine) wakeParent(ctx context.Context, runID int64) {
+	if _, err := e.DB.ExecContext(ctx, wakeParent, runID); err != nil {
+		log.Printf("Workflow run %d could not wake its parent: %v", runID, err)
 	}
 }
 
@@ -342,15 +350,16 @@ func (e *Engine) park(x *execution) {
 	if err == nil && state == "cancelled" {
 		// An unknown effect stays unknown for reconciliation.
 		_, err = tx.ExecContext(x.sys, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=$1 AND state IN ('running','waiting')`, x.run.id)
-		if err == nil {
-			_, err = tx.ExecContext(x.sys, wakeParent, x.run.id)
-		}
 	}
 	if err == nil || errors.Is(err, sql.ErrNoRows) {
 		err = tx.Commit()
 	}
 	if err != nil {
 		log.Printf("Workflow run %d could not be parked: %v", x.run.id, err)
+		return
+	}
+	if state == "cancelled" {
+		e.wakeParent(x.sys, x.run.id)
 	}
 }
 
@@ -377,15 +386,16 @@ func (e *Engine) release(ctx context.Context, run *claimedRun, wake time.Time, m
  WHERE id=$1 AND claim=$2 RETURNING state`, run.id, run.claim, at, truncate(message)).Scan(&state)
 	if err == nil && state == "cancelled" {
 		_, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=$1 AND state IN ('running','waiting')`, run.id)
-		if err == nil {
-			_, err = tx.ExecContext(ctx, wakeParent, run.id)
-		}
 	}
 	if err == nil || errors.Is(err, sql.ErrNoRows) {
 		err = tx.Commit()
 	}
 	if err != nil {
 		log.Printf("Workflow run %d could not be released: %v", run.id, err)
+		return
+	}
+	if state == "cancelled" {
+		e.wakeParent(ctx, run.id)
 	}
 }
 
@@ -444,6 +454,7 @@ type stepRow struct {
 	errMsg           string
 	skipped          []int64 // events a wait passed over because their payload did not fit
 	childRunID       int64
+	generation       int // a child step retried by a person starts a new child under a new key
 }
 
 type execution struct {

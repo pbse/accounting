@@ -118,7 +118,8 @@ func Cancel(ctx context.Context, db *sql.DB, runID int64, by, reason string) err
 	if strings.TrimSpace(by) == "" || strings.TrimSpace(reason) == "" {
 		return errors.New("cancelling a run needs who and why")
 	}
-	return inTx(ctx, db, func(tx *sql.Tx) error {
+	var wake bool
+	err := inTx(ctx, db, func(tx *sql.Tx) error {
 		var state string
 		if err := tx.QueryRowContext(ctx, `SELECT state FROM workflow_runs WHERE id=$1 FOR UPDATE`, runID).Scan(&state); err != nil {
 			return notFound(err, runID)
@@ -157,11 +158,14 @@ func Cancel(ctx context.Context, db *sql.DB, runID int64, by, reason string) err
 		if _, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=ANY($1) AND state IN ('running','waiting')`, ended); err != nil {
 			return err
 		}
-		if state != "running" {
-			_, err = tx.ExecContext(ctx, wakeParent, runID)
-		}
-		return err
+		wake = state != "running"
+		return nil
 	})
+	if err == nil && wake {
+		// After commit, never holding this run's row while taking its parent's (see Engine.wakeParent).
+		_, err = db.ExecContext(ctx, wakeParent, runID)
+	}
+	return err
 }
 
 // wakeParent wakes the parent of run $1, if it has one waiting or still running, after the run ended.
@@ -185,13 +189,17 @@ func Approve(ctx context.Context, db *sql.DB, runID int64, key string, d Decisio
 	return inTx(ctx, db, func(tx *sql.Tx) error {
 		var org sql.NullString
 		var runState, stepState, kind, permission string
-		var decided bool
-		if err := tx.QueryRowContext(ctx, `SELECT r.organization_id,r.state,s.state,s.kind,COALESCE(s.input->>'permission',''),EXISTS(SELECT 1 FROM workflow_events WHERE key=$3)
- FROM workflow_runs r JOIN workflow_steps s ON s.run_id=r.id AND s.key=$2 WHERE r.id=$1 FOR UPDATE OF r,s`, runID, key, approvalKey(runID, key)).Scan(&org, &runState, &stepState, &kind, &permission, &decided); err != nil {
+		var decided, expired bool
+		if err := tx.QueryRowContext(ctx, `SELECT r.organization_id,r.state,s.state,s.kind,COALESCE(s.input->>'permission',''),EXISTS(SELECT 1 FROM workflow_events WHERE key=$3),s.wake_at IS NOT NULL AND s.wake_at<=now()
+ FROM workflow_runs r JOIN workflow_steps s ON s.run_id=r.id AND s.key=$2 WHERE r.id=$1 FOR UPDATE OF r,s`, runID, key, approvalKey(runID, key)).Scan(&org, &runState, &stepState, &kind, &permission, &decided, &expired); err != nil {
 			return notFound(err, runID)
 		}
 		if kind != "approval" || stepState != "waiting" || decided || (runState != "waiting" && runState != "running") {
 			return ErrNotAllowed
+		}
+		if expired {
+			// The wait would not count a decision recorded after its deadline; say so now.
+			return fmt.Errorf("%w: the approval's deadline has passed", ErrNotAllowed)
 		}
 		if permission == "" || !slices.Contains(permissions, permission) {
 			return fmt.Errorf("%w: approving needs the %s permission", ErrNotAllowed, permission)
@@ -207,7 +215,8 @@ func Approve(ctx context.Context, db *sql.DB, runID int64, key string, d Decisio
 func approvalKey(runID int64, key string) string { return fmt.Sprintf("wf.approval:%d:%s", runID, key) }
 
 // RetryStep runs a failed step (or one waiting to retry) again at once, with a fresh set of
-// attempts, reopening its run if the failure ended it. An unknown effect is settled with Resolve.
+// attempts, reopening its run if the failure ended it. A failed child step starts a new child run
+// (the failed one stays as history). An unknown effect is settled with Resolve.
 func RetryStep(ctx context.Context, db *sql.DB, runID int64, key, by, note string) error {
 	if strings.TrimSpace(by) == "" || strings.TrimSpace(note) == "" {
 		return errors.New("retrying a step needs who and why")
@@ -220,7 +229,9 @@ func RetryStep(ctx context.Context, db *sql.DB, runID int64, key, by, note strin
 		if !(stepState == "failed" && (runState == "failed" || runState == "waiting")) && !(stepState == "waiting" && runState == "waiting") {
 			return ErrNotAllowed
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE workflow_steps SET state='waiting',retry_at=NULL,attempts=0,error='',actor=$3,note=$4,finished_at=NULL WHERE run_id=$1 AND key=$2`, runID, key, by, truncate(note)); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE workflow_steps SET state='waiting',retry_at=NULL,attempts=0,error='',actor=$3,note=$4,finished_at=NULL,
+ child_run_id=NULL,input=CASE WHEN kind='child' THEN jsonb_set(COALESCE(input,'{}'::jsonb),'{generation}',to_jsonb(COALESCE((input->>'generation')::int,0)+1)) ELSE input END
+ WHERE run_id=$1 AND key=$2`, runID, key, by, truncate(note)); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET state='waiting',wake_at='-infinity',finished_at=NULL,error='',output=NULL,updated_at=now() WHERE id=$1`, runID)
