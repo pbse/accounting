@@ -2492,3 +2492,16 @@ Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, on a separate co
 Tests: `TestMCPToolsUseTheSignedInPersonsAccess` lists both tools; `export_close_package` returns manifest version `close_package_v2`, the attached ZIP whose `manifest.json` has the listed SHA-256, and at least two files, while another firm's close stays `NOT_FOUND`; with a failed proposal on a ready document, `recheck_close` with a stale digest is a `CONFLICT` and with the preview's digest queues one job. `TestAgentsActOnlyUnderAnApprovedMemberGrant` checks that a read grant offers the export but not recheck. Returning the ZIP as text, or flipping either tool's read-only flag, fails them.
 
 Code review: GPT-6 Sol (reasoning high) found that a malformed checksum line was skipped, so a truncated list could return success, and that a manifest that is valid JSON but not an object was accepted; both are now tool errors, and `TestMCPPackageRefusesAnUnreadablePackage` builds such packages in memory (it fails on the earlier parsing). Two delta reviews then found whitespace-only and carriage-return-only lines still skipped; every line except the final empty one must now be a checksum line. The third point was fixed as the reviewer described, without a third review round, which the review rules cap at two. Gemini (agy-review, on a separate copy) approved.
+
+## Deploy gates know migrations 091–095 (2026-09-28)
+
+Request: before the next production deploy, check the path. Production runs #140, and migrations 091–095 have landed since. Found: both deploy workflows' "Verify migrations are already applied" gate checked 094 (the workflow engine) but not 091, 092, 093 or 095. So a deploy onto a database missing them would pass the gate and fail only at the final readiness check, after the new code was already live.
+
+What changed: both gates also require `work_requests.approved_papers` (091), `assistant_answers` (092), `organizations.assistant_firm_answers` (093) and `chat_messages.every_month` (095).
+
+Checks, on a throwaway local database (since dropped):
+- With all 95 migrations applied, both the old and new gates pass.
+- With 095's column removed, the new gate fails and the old one passes.
+- Removing 091's column, 093's column or 092's table each fails the new gate.
+
+Review: GPT-6 Sol (reasoning high) approved with no findings. It noted older `/readyz` checks the gate still lacks (`xero_transaction_rows`, the `chat_messages` action constraint). Production already has those migrations, since #140 passed its readiness check, so they are left as they are.
