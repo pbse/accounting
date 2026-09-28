@@ -71,6 +71,10 @@ func TestStaffReviewApproveAndCopyPlans(t *testing.T) {
 	if revealed := mustString(adminJSON(t, h, token, "GET", "/v1/admin/plans?firm="+firm+"&reveal=1", "", 200, "X-Access-Reason", "reviewing the queue")); !strings.Contains(revealed, "Chase Acme Secret") || !strings.Contains(revealed, "Acme Secret has not replied") {
 		t.Fatalf("revealed list: %s", revealed)
 	}
+	var listReveals int
+	if db.QueryRow(`SELECT count(*) FROM platform_audit WHERE organization_id=$1 AND action='content.reveal' AND target_type='plans'`, firm).Scan(&listReveals); listReveals != 1 {
+		t.Fatalf("a revealed list is in the firm's audit: %d", listReveals)
+	}
 	if templates := mustString(adminJSON(t, h, token, "GET", "/v1/admin/plans?templates=1", "", 200)); !strings.Contains(templates, `"id":`+strconv.FormatInt(template, 10)+`,`) {
 		t.Fatalf("templates: %s", templates)
 	}
