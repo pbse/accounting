@@ -91,8 +91,12 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			return Plan{}, "the cited text does not show the " + f.Label + " as a whole"
 		}
 		// An order or reference number is not the invoice number, and a ship-to name is not who is billed; the line must say which.
-		if f.Field == "invoice_number" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"invoice"}, []string{"order", "reference", "date", "due"}) {
+		if f.Field == "invoice_number" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"invoice"}, []string{"order", "reference", "date", "due", "previous", "prior", "original", "related", "earlier", "last", "replaces", "credit"}) {
 			return Plan{}, "the cited line does not name the number as the invoice number"
+		}
+		// A date is the service period's only when its quote speaks of the service, coverage or term, not the invoice, issue or due date.
+		if strings.HasPrefix(f.Field, "service_") && !quoteSays(f.Candidates[0].Quote, []string{"service", "coverage", "cover", "period", "term", "effective", "start", "begin", "end", "expir", "through", "policy", "subscription", "from"}, []string{"invoice date", "date of invoice", "issued", "issue date", "due", "payment", "paid", "order date"}) {
+			return Plan{}, "the cited text does not give the " + f.Label + " as a service-period date"
 		}
 		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill", "invoice to", "sold to"}, []string{"ship", "deliver", "service", "support", "contact"}) {
 			return Plan{}, "the cited line does not say the invoice is billed to that name"
@@ -274,6 +278,20 @@ func negativeFigure(quote string, cents int64) bool {
 	plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "").Replace(strings.ToLower(quote))
 	digits := fmt.Sprintf(`%d(\.%02d)?`, cents/100, cents%100)
 	return regexp.MustCompile(`[-(]\s*(usd|eur|gbp|cad|aud)?\s*` + digits + `([^0-9]|$)`).MatchString(plain)
+}
+
+// quoteSays reports whether the whole quote, compared as text, contains one of the words that give a date its
+// meaning and none of the words that give it another.
+func quoteSays(quote string, any, none []string) bool {
+	normal := documents.NormalizeEntity(quote)
+	ok := false
+	for _, word := range any {
+		ok = ok || strings.Contains(normal, word)
+	}
+	for _, word := range none {
+		ok = ok && !strings.Contains(normal, word)
+	}
+	return ok
 }
 
 // lineSays reports whether the quoted line ending with the value contains one of the words that give it its meaning
