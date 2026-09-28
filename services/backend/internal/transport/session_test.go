@@ -276,6 +276,14 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	if w := send(handler, "GET", "/v1/closes", other, ""); w.Code != 401 {
 		t.Fatalf("a refreshed token must match the session: %d", w.Code)
 	}
+	// A refreshed token the verifier rejects for its claims (here, no WorkOS session) also ends the session.
+	_, invalid := signIn(back, "session_5", "refresh-7")
+	_, err = raw.Exec(`UPDATE auth_sessions SET access_expires_at=now() WHERE id_hash=$1`, hashToken(invalid))
+	must(err)
+	respond = func(map[string]string) (int, any) { return tokens("", "refresh-8") }
+	if w := send(handler, "GET", "/v1/closes", invalid, ""); w.Code != 401 {
+		t.Fatalf("a refreshed token with invalid claims ends the session: %d", w.Code)
+	}
 
 	// Sign-out ends the session here and at WorkOS; MCP never accepts the cookie.
 	_, last := signIn(back, "session_3", "refresh-5")

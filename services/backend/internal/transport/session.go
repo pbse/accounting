@@ -309,14 +309,14 @@ func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, verifier *a
 		return "", 503
 	}
 	claims, err := verifier.Verify(ctx, tokens.AccessToken)
-	if err != nil {
+	if errors.Is(err, auth.ErrSigningKeys) {
 		// WorkOS's keys could not be checked: keep its rotated refresh token and try again on the next request.
 		if _, err = tx.ExecContext(ctx, `UPDATE auth_sessions SET refresh_token=$2,access_expires_at=now() WHERE id_hash=$1`, hashToken(raw), newRefresh); err != nil || tx.Commit() != nil {
 			return "", 503
 		}
 		return "", 503
 	}
-	if claims.Subject != subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil {
+	if err != nil || claims.Subject != subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil {
 		return end()
 	}
 	newAccess, err := secrets.Seal("auth-session:access", []byte(tokens.AccessToken))
