@@ -53,6 +53,12 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 	if ledger == nil {
 		return Plan{}, "the close has no current QuickBooks capture"
 	}
+	primary := ""
+	for _, s := range p.Sources {
+		if s.Role == "invoice" {
+			primary = s.ID
+		}
+	}
 	facts := map[string]string{}
 	for _, f := range p.Facts {
 		if len(f.Candidates) == 0 {
@@ -66,6 +72,10 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 		}
 		if f.Value == "" || len(f.Candidates) != 1 {
 			return Plan{}, "the " + f.Label + " has more than one candidate"
+		}
+		// A value only a supporting document gives may contradict what the invoice prints; the invoice itself must cite it.
+		if f.Candidates[0].SourceID != primary {
+			return Plan{}, "the " + f.Label + " is cited from a supporting document, not the invoice"
 		}
 		// Amounts and dates were checked against their quotes when the proposal was validated; names are checked here.
 		if (f.Field == "currency" || strings.HasSuffix(f.Field, "_account")) && !strings.Contains(strings.ToLower(f.Candidates[0].Quote), strings.ToLower(f.Value)) {
@@ -88,12 +98,6 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 	booking, reason := expensedLine(ledger.Rows, invoice, prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
 	if reason != "" {
 		return Plan{}, reason
-	}
-	primary := ""
-	for _, s := range p.Sources {
-		if s.Role == "invoice" {
-			primary = s.ID
-		}
 	}
 	input := prepaids.Input{Entity: entity, ClosePeriod: period, SourceReference: "Evidence #" + primary + " · work #" + jobID, Currency: currency, Amount: prepaids.Money(amount), ServiceStart: facts["service_start"], ServiceEnd: facts["service_end"],
 		ExpenseAccount: procedure.ExpenseAccount, PrepaidAccount: procedure.PrepaidAccount, Basis: "accrual", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true}
@@ -145,7 +149,7 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 		}
 		mentioned := printed(text, record.VendorRef.Name) || printed(text, record.EntityRef.Name) || printed(text, record.DocNumber)
 		mine := printed(letterhead, record.VendorRef.Name) || printed(letterhead, record.EntityRef.Name) || (numberLike(record.DocNumber) && printedWhole(text, record.DocNumber))
-		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || (row.Kind == "VendorCredit" && mentioned) || mine) {
+		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || ((row.Kind == "VendorCredit" || record.Credit) && mentioned) || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
 		for _, line := range record.Line {
