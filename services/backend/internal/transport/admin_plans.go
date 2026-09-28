@@ -26,6 +26,8 @@ func registerAdminPlans(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("GET /v1/admin/plans", route(adminPlans))
 	mux.HandleFunc("POST /v1/admin/plans", route(adminCreatePlan))
 	mux.HandleFunc("POST /v1/admin/plans/validate", route(adminValidatePlan))
+	mux.HandleFunc("POST /v1/admin/plans/draft", route(adminDraftPlan))
+	mux.HandleFunc("GET /v1/admin/plans/agents", route(adminAgentPlans))
 	mux.HandleFunc("POST /v1/admin/plans/{id}", route(adminUpdatePlan))
 	mux.HandleFunc("GET /v1/admin/plans/{id}", route(adminPlan))
 	mux.HandleFunc("POST /v1/admin/plans/{id}/propose", route(func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminPlanDecision(w, r, db, "propose") }))
