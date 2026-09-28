@@ -383,6 +383,14 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		t.Fatalf("uncertain attempt was not preserved once: state=%s writes=%d err=%v", state, writes, err)
 	}
 	call(path, map[string]string{"action": "verify", "external_id": "999"}, 422)
+	// A request that ended mid-post leaves the attempt executing: in-app resolution waits ten minutes, then takes the found ID.
+	if _, err = db.Exec(`UPDATE production_postings SET state='executing',attempted_at=now() WHERE workpaper_id=$1`, paperID); err != nil {
+		t.Fatal(err)
+	}
+	call(path, map[string]string{"action": "verify", "external_id": "789"}, 409)
+	if _, err = db.Exec(`UPDATE production_postings SET attempted_at=now()-interval '11 minutes' WHERE workpaper_id=$1`, paperID); err != nil {
+		t.Fatal(err)
+	}
 	json.Unmarshal(call(path, map[string]string{"action": "verify", "external_id": "789"}, 200), &posted)
 	if posted.State != "verified" || posted.ExternalID != "789" || writes != 2 {
 		t.Fatalf("manual readback did not resolve saved attempt: %+v writes=%d", posted, writes)

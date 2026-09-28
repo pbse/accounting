@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -189,6 +190,15 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 		if rows[name].Status != want {
 			t.Errorf("%s is %q, want %q: %+v", name, rows[name].Status, want, rows[name])
 		}
+	}
+	// A balance that differs from its support blocks sign-off; one that ties does not.
+	readTx, err := db.Begin()
+	must(err)
+	ready, err := closeReadiness(context.Background(), readTx, closeID)
+	readTx.Rollback()
+	must(err)
+	if blocked := strings.Join(ready.Blockers, " | "); !strings.Contains(blocked, "Tie-out: Accrued audit fees is ") || strings.Contains(blocked, "Tie-out: Prepaid insurance") || strings.Contains(blocked, "Tie-out: Accrued rent") {
+		t.Errorf("only differing balances block sign-off: %s", blocked)
 	}
 	if clearing := rows["Stripe clearing"].Entries; len(clearing) != 1 || clearing[0].Posting != "proposed" {
 		t.Errorf("a posted fee entry is in the balance, but the settlement's refund draft is still proposed: %+v", rows["Stripe clearing"])

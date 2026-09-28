@@ -112,8 +112,15 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
+		// The scheduled refresh locks the close before saving a newer snapshot, so this check and the selection see it or precede it.
+		if _, err = tx.ExecContext(r.Context(), `SELECT 1 FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")); err != nil {
+			problem(w, 503, "Could not verify the ledger capture.")
+			return
+		}
 		var current bool
-		err = tx.QueryRowContext(r.Context(), `SELECT e.superseded_by IS NULL AND e.extraction_state='ready' AND x.state='active' FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=$1 AND s.close_id::text=$2 FOR UPDATE OF e`, snapshot.ID, r.PathValue("id")).Scan(&current)
+		err = tx.QueryRowContext(r.Context(), `SELECT e.superseded_by IS NULL AND e.extraction_state='ready' AND x.state='active' FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=$1 AND s.close_id::text=$2
+ -- Only the month's newest capture: a scheduled refresh keeps older evidence without superseding it.
+ AND NOT EXISTS(SELECT 1 FROM quickbooks_snapshots n WHERE n.close_id=s.close_id AND n.payload->>'period'=s.payload->>'period' AND (n.captured_at,n.id)>(s.captured_at,s.id)) FOR UPDATE OF e`, snapshot.ID, r.PathValue("id")).Scan(&current)
 		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Could not verify the ledger capture.")
 			return

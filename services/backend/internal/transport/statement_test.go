@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"close.local/backend/internal/documents"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -153,7 +154,7 @@ func TestStatementRowsNeedEveryPageRowAndBalanceChecked(t *testing.T) {
 }
 
 func TestStatementCitationsReadWholeAmountsAndRealPages(t *testing.T) {
-	if amountIn("2026-09-02 Deposit 120.00", "20.00") || !amountIn("2026-09-02 Deposit $1,120.00", "1120.00") || !amountIn("Fee -5.00", "-5.00") {
+	if documents.AmountIn("2026-09-02 Deposit 120.00", "20.00") || !documents.AmountIn("2026-09-02 Deposit $1,120.00", "1120.00") || !documents.AmountIn("Fee -5.00", "-5.00") {
 		t.Fatal("an amount must appear whole in its line")
 	}
 	if !dateIn("Sep 2, 2026 Deposit", "2026-09-02") || dateIn("2026-09-03 Deposit", "2026-09-02") {

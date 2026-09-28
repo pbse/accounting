@@ -85,25 +85,8 @@ func cents(amount string) (int64, bool) {
 	return v, err == nil
 }
 
-// amountIn reports whether a line shows the amount as a whole number, ignoring thousands separators and currency signs.
-func amountIn(line, amount string) bool {
-	plain := strings.NewReplacer(",", "", "$", "", "£", "", "€", "").Replace(line)
-	return regexp.MustCompile(`(^|[^0-9.])` + regexp.QuoteMeta(strings.TrimPrefix(amount, "-")) + `([^0-9]|$)`).MatchString(plain)
-}
-
-// dateIn reports whether a line shows the date in a common statement form.
-func dateIn(line, date string) bool {
-	d, err := time.Parse("2006-01-02", date)
-	if err != nil {
-		return false
-	}
-	for _, layout := range []string{"2006-01-02", "01/02/2006", "1/2/2006", "02/01/2006", "2/1/2006", "Jan 2, 2006", "January 2, 2006", "Jan 02, 2006", "2 Jan 2006", "2 January 2006", "02 Jan 2006", "01/02", "02/01", "Jan 2", "2 Jan"} {
-		if strings.Contains(line, d.Format(layout)) {
-			return true
-		}
-	}
-	return false
-}
+// dateIn reports whether a statement line shows the date, with or without its year.
+func dateIn(line, date string) bool { return documents.DateIn(line, date, true) }
 
 // rowIssue is why a proposed row needs a person's check against the original, or "" when its citation holds.
 func rowIssue(row statementRow, pages map[int]string) string {
@@ -115,7 +98,7 @@ func rowIssue(row statementRow, pages map[int]string) string {
 		return fmt.Sprintf("Not found as one line on page %d; compare with the original.", row.Page)
 	case !statementAmount.MatchString(row.Amount):
 		return "Amount unreadable."
-	case !amountIn(row.Quote, row.Amount):
+	case !documents.AmountIn(row.Quote, row.Amount):
 		return "The amount does not appear in the line."
 	case !dateIn(row.Quote, row.Date):
 		return "The date does not appear in the line."
@@ -142,8 +125,8 @@ func validateStatement(p *statementProposal, pages map[int]string, content strin
 		{"account", &p.Account, &p.AccountQuote, func(line, v string) bool { return v != "" && strings.Contains(line, v) }},
 		{"period start", &p.PeriodStart, &p.PeriodQuote, dateIn},
 		{"period end", &p.PeriodEnd, &p.PeriodQuote, dateIn},
-		{"opening balance", &p.Opening, &p.OpeningQuote, func(line, v string) bool { return statementAmount.MatchString(v) && amountIn(line, v) }},
-		{"closing balance", &p.Closing, &p.ClosingQuote, func(line, v string) bool { return statementAmount.MatchString(v) && amountIn(line, v) }},
+		{"opening balance", &p.Opening, &p.OpeningQuote, func(line, v string) bool { return statementAmount.MatchString(v) && documents.AmountIn(line, v) }},
+		{"closing balance", &p.Closing, &p.ClosingQuote, func(line, v string) bool { return statementAmount.MatchString(v) && documents.AmountIn(line, v) }},
 	} {
 		if *f.quote == "" || strings.ContainsAny(*f.quote, "\r\n") || !strings.Contains(content, *f.quote) || !f.shows(*f.quote, *f.value) {
 			p.Issues = append(p.Issues, "The "+f.label+" was not found in the text; enter it from the original.")

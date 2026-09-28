@@ -2594,3 +2594,65 @@ Checks:
 - `TestOpenTenantDBRefusesPooler`: a Neon `-pooler` URL, or a direct host with a `-pooler` fallback, is refused; direct hosts open.
 
 Not verified: whether production's `DATABASE_URL` is direct. The next production deploy's configuration check will fail if it is pooled; replace the secret with the direct endpoint in that case.
+
+## Staff console on the backend-held session (2026-09-28)
+
+Request: bring the staff console (`/admin`) onto `AUTH_SESSION=server` too, so no part of the app needs WorkOS's custom authentication domain. The staff console now signs in through `/v1/auth/login?staff=1`, which asks WorkOS for the staff organization, and holds the session in its own `__Host-close_staff` cookie. The staff cookie opens only `/v1/admin/*`, verified against the staff organization; the firm cookie opens only the other `/v1` routes. `AUTH_SESSION` unset or `client` changes nothing.
+
+Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, on a separate copy); both judged it real, undone work. Adopted: a failed staff sign-out stays on the page and says so; each session check rejects the other kind's row (staff requires the staff organization, firms refuse it); the `/admin/` sign-out redirect is in the activation steps; return paths may end in a slash (the console's home is `/admin/`); staff sign-in without `PLATFORM_ORGANIZATION_ID` is refused; the local-development unlock stays.
+
+Tests: `TestServerSessionKeepsWorkOSTokensOnTheServer` now also signs in a firm member and then the same person as staff. It checks that staff sign-in asks WorkOS for the staff organization and the workspace's does not; that each callback sets only its own cookie; that staff sign-in returns only to `/admin` pages (`/dashboard`, `/admin/../dashboard` and `/administrator` land on `/admin/`, and a trailing slash is kept); that the staff cookie opens `/v1/admin/me` and not the workspace, and the firm cookie the reverse; that each session check rejects the other kind and clears the cookie; that staff sign-out returns WorkOS's logout for the staff session with `/admin/` as its destination, leaves the firm cookie alone, and the firm session still works; and that without `PLATFORM_ORGANIZATION_ID` staff sign-in answers 503 and a staff callback sets no cookie. Removing the route split, the `?staff=1` switch, the trailing-slash rule, either organization rule, the organization check in the session check or the callback, the staff sign-out destination, the staff organization on sign-in, or the per-kind cookie each fails it. The admin tests pass, and the admin app typechecks and builds.
+
+Code review: GPT-6 Sol (reasoning high) found that turning a cookie into a token did not check the row's kind, so a staff session's value placed in the firm cookie (or the reverse) became a token on the other kind's routes; it is now refused with 401 and the cookie cleared, and the test covers both directions (each fails without the fix). Its point that a cross-placed cookie lets sign-out revoke the other kind's row was not adopted: revoking needs the cookie's secret, so a person can only sign themselves out. Comments were shortened. Gemini (agy-review, on a separate copy) approved; its optional nit, clearing a sign-out error when retrying, was not adopted, since a successful sign-out leaves the page and a failed one replaces the message.
+
+Not verified: a real WorkOS staff sign-in on the deployed site, which needs the activation steps in [sign-in session](auth-sandbox-staging.md#sign-in-session).
+
+## Citations must show their values; bad links are refused unread (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- The model's extracted amounts and dates must be printed in their own quote (`documents.AmountIn`, `documents.DateIn`), not just cite a quote found once in the source. A value of 12000.00 beside a quote reading "1,200.00" no longer shows as a cited candidate; it becomes a question naming the source, field and value. Amounts compare as exact decimals, ignoring sign, currency signs and thousands separators; dates match common written forms with their year. Text fields (accounts, references, names) are not checked. Statement rows use the same helpers, which now also refuse 1200 against a printed 1,200.99 and a date running into a longer number.
+- `linkPasscode`, which both public link routes call first, now refuses an unknown, expired or revoked link, or one whose firm is suspended, before the reply or file is read. Before, an unknown 26-character token let the reply route buffer an upload of up to 21 MiB before the lookup failed.
+
+Checks:
+- `TestAmountIn`, `TestDateIn`: the examples above; a year or day inside a date is never taken for an amount; ordinal, Sept, day-first and unpadded two-digit-year dates.
+- `TestInterpretationContractAndCitationBoundary`: a 12000.00 value on the 1,200.00 quote leaves no candidate and asks about it.
+- `TestUnknownOrRevokedLinkIsRefusedBeforeItsUpload` (local PostgreSQL): an unknown and a revoked link each get 404 on both routes without the body being read.
+
+## Tie-out differences block sign-off; a stalled journal can be resolved in-app (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- Close readiness now computes the tie-out in its own transaction (`closeTieOut`, extracted from the tie-out route unchanged) and adds a blocker for each account that **differs**, with its Trial Balance balance, supported balance and difference. Ties, ties after proposed entries, within materiality and unsupported accounts do not block; an unknown posting was already a blocker. A signed-off close whose tie-out comes to differ shows reopen required, like any new blocker. An unreadable Trial Balance does not block, as with no snapshot; the board still shows its error.
+- A QuickBooks production attempt left `executing` (its request ended before the outcome was recorded) takes a journal ID a person found once it is ten minutes old (`stalled` in the posting read). Verification is the same exact readback as for `unknown`. A younger attempt refuses the ID with 409 because its request may still be running. The posting panel shows the ID field for a stalled attempt. Xero already accepted either state.
+
+Checks (local PostgreSQL):
+- `TestTieOutComparesBalancesWithLatestSupport`: readiness names the differing Accrued audit fees, but not the tied Prepaid insurance or the posting-unknown Accrued rent.
+- `TestProductionPostingSingleDurableAttempt`: an attempt set back to `executing` refuses the found ID (409) while fresh, then verifies it once eleven minutes old, with no second write.
+- The full transport suite passes, except the export PDF test, which needs `pdftotext` (not installed on this machine; CI has it).
+
+## Month-end snapshots stay current; throttled ledger reads are asked again (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- **Snapshot timing.** The scheduled QuickBooks period snapshot used to be taken once, at 00:00 UTC on the 1st, which is still the afternoon of the last day in the US, and never again. It now waits until the month has ended everywhere (UTC-12), then reads again at most once every 20 hours after its last snapshot. It saves a new snapshot only when the accounts or reports differ, ignoring each report's generation time and the accounts' current balances and sync tokens. Later entries, even ones that offset within an account, therefore reach the snapshot, the tie-out and, through it, sign-off.
+- **Snapshot limits.** A person's capture stops the schedule. Six scheduled period snapshots at most are kept, and the schedule never takes a close's last free snapshot of the 20. Once the schedule stops refreshing a close whose newest snapshot is its own (six taken, only the last free snapshot left, or the close is past the months the schedule reads and has no active goal), or when the latest capture's month-end read failed (now recorded on that capture), sign-off waits for a successful read or a person's capture (`quickbooks.RefreshStopped`), since later entries may be missing. A fresh read is compared with its own connection's newest snapshot, so a new reading connection always gets one. Only the first scheduled snapshot resumes waiting model intakes, as before. A refresh neither supersedes earlier evidence nor resets approvals, but new ledger pages can be selected only from the month's newest snapshot. A large snapshot's evidence index now carries a digest of the accounts and of each report, so two captures of equal sizes no longer collide on the evidence digest.
+- **Throttled reads.** `ledger.DoThrottled` sends a QuickBooks or Xero GET again when it is refused with 429, after Retry-After in seconds or as a date (at most 30 seconds; 2, then 4, without one), three tries in all. It covers QuickBooks reads and readbacks and Xero reads. Writes and token exchanges are never repeated.
+
+Checks:
+- `TestPeriodContentChangesOnlyWithTheMonth`: a re-read with only report times and current balances changed compares equal; a changed balance or an added ledger row does not; an unreadable one never compares equal.
+- `TestQuickBooksScopedOAuthRefreshAndSnapshots`: after a newer capture of the month, selecting a ledger page from the older one is refused (409).
+- `TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures` (local PostgreSQL) tests the gate query:
+  - due with no snapshot;
+  - not due an hour after a scheduled one, but due 21 hours after;
+  - not due at six scheduled snapshots;
+  - never due after a person's capture;
+  - reported for sign-off after a failed month-end read (until a read succeeds), at six scheduled snapshots, at 19 snapshots in all (the schedule leaves the last one for that capture) and for a close past the schedule's months, but not at 20, where no capture is possible, nor once a person captures. The test derives its months from today.
+- `TestDoThrottledRepeatsOnlyThrottledReads`: a read throttled twice (once with a Retry-After date) succeeds on the third try; one throttled throughout stops at three; a throttled PUT is sent once.
+
+- `TestTheEndedMonthSnapshotIsCapturedAndRefreshedWhenItChanges` (mocked QuickBooks, local PostgreSQL): a snapshot under 20 hours old is not read again; a day-old one is read again and nothing is saved while the reports are unchanged; a changed balance saves a second snapshot. A person's capture during the read still wins, and signed-off, current-month and renamed-company closes are still left alone.
+
+Not verified: the capture against a live QuickBooks company.

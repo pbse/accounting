@@ -42,7 +42,7 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	org := "org_Session" + rand.Text()
+	org, platform := "org_Session"+rand.Text(), "org_Platform"+rand.Text()
 	var alpha string
 	_, err = raw.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Session fixture')`, org)
 	must(err)
@@ -52,6 +52,7 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	must(err)
 	must(raw.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
 	defer func() {
+		raw.Exec(`DELETE FROM auth_sessions WHERE organization_id=$1`, platform)
 		for _, q := range []string{`DELETE FROM auth_sessions WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			raw.Exec(q, org)
 		}
@@ -59,9 +60,9 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	must(err)
-	kid := "fixture"
+	kid, as, permissions := "fixture", org, []string{"workpapers:review"}
 	mint := func(session string) string {
-		token := jwt.NewWithClaims(jwt.SigningMethodRS256, auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a", Issuer: "https://auth.example", IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute))}, Organization: org, Session: session, Permissions: []string{"workpapers:review"}})
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a", Issuer: "https://auth.example", IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute))}, Organization: as, Session: session, Permissions: permissions})
 		token.Header["kid"] = kid
 		signed, e := token.SignedString(key)
 		must(e)
@@ -90,7 +91,7 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		return nil, nil
 	})
 	tokens := func(session, refresh string) (int, any) {
-		return 200, map[string]any{"access_token": mint(session), "refresh_token": refresh, "user": map[string]string{"id": "user_a", "email": "a@firm.test"}, "organization_id": org}
+		return 200, map[string]any{"access_token": mint(session), "refresh_token": refresh, "user": map[string]string{"id": "user_a", "email": "a@firm.test"}, "organization_id": as}
 	}
 	t.Setenv("WORKOS_CLIENT_ID", "client_fixture")
 	t.Setenv("WORKOS_ISSUER", "https://auth.example")
@@ -100,14 +101,18 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
 	t.Setenv("AUTH_SESSION", "server")
 	t.Setenv("FRONTEND_ORIGIN", "https://app.example.test")
+	t.Setenv("PLATFORM_ORGANIZATION_ID", platform)
 	handler := apiWithStore(db, "")
 
-	send := func(h http.Handler, method, target string, cookie string, origin string) *httptest.ResponseRecorder {
+	send := func(h http.Handler, method, target string, cookie string, origin string, more ...*http.Cookie) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, "https://app.example.test"+target, strings.NewReader(`{"entity":"Alpha","period":"2026-10"}`))
 		r.Header.Set("Content-Type", "application/json")
 		if cookie != "" {
 			r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+		}
+		for _, c := range more {
+			r.AddCookie(c)
 		}
 		if origin != "" {
 			r.Header.Set("Origin", origin)
@@ -124,13 +129,17 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		}
 		return nil
 	}
-	// signIn runs the whole WorkOS round trip and returns the session cookie.
-	signIn := func(back, session, refresh string) (*httptest.ResponseRecorder, string) {
+	// signInTo runs the whole WorkOS round trip for a firm or staff session and returns its cookie.
+	signInTo := func(kind sessionKind, back, session, refresh string) (*httptest.ResponseRecorder, string) {
 		t.Helper()
-		login := send(handler, "GET", "/v1/auth/login?return="+url.QueryEscape(back), "", "")
+		start, organization := "/v1/auth/login?return=", ""
+		if kind.staff {
+			start, organization = "/v1/auth/login?staff=1&return=", platform
+		}
+		login := send(handler, "GET", start+url.QueryEscape(back), "", "")
 		location, _ := url.Parse(login.Header().Get("Location"))
 		state := location.Query().Get("state")
-		if login.Code != 302 || location.Host != "api.workos.com" || location.Path != "/user_management/authorize" || location.Query().Get("client_id") != "client_fixture" || location.Query().Get("redirect_uri") != "https://app.example.test/v1/auth/callback" || state == "" {
+		if login.Code != 302 || location.Host != "api.workos.com" || location.Path != "/user_management/authorize" || location.Query().Get("client_id") != "client_fixture" || location.Query().Get("redirect_uri") != "https://app.example.test/v1/auth/callback" || location.Query().Get("organization_id") != organization || state == "" {
 			t.Fatalf("sign-in starts at WorkOS with this client and callback: %d %s", login.Code, location)
 		}
 		started := cookieOf(login, loginCookie)
@@ -142,11 +151,15 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		r.AddCookie(started)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, r)
-		issued := cookieOf(w, sessionCookie)
-		if w.Code != 302 || issued == nil {
-			t.Fatalf("the callback signs the person in: %d %s", w.Code, w.Body.String())
+		issued := cookieOf(w, kind.cookie)
+		if w.Code != 302 || issued == nil || len(w.Result().Cookies()) != 2 {
+			t.Fatalf("the callback sets only this kind's session cookie (and clears the sign-in state): %d %s %v", w.Code, w.Body.String(), w.Result().Cookies())
 		}
 		return w, issued.Value
+	}
+	signIn := func(back, session, refresh string) (*httptest.ResponseRecorder, string) {
+		t.Helper()
+		return signInTo(firmSession, back, session, refresh)
 	}
 
 	// A callback that did not start here, or has the wrong state, is refused before WorkOS is asked.
@@ -308,6 +321,72 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	if w := send(handler, "GET", "/v1/closes", last, ""); w.Code != 401 {
 		t.Fatalf("a signed-out cookie no longer works: %d", w.Code)
 	}
+
+	// Staff hold their own session in their own cookie. It opens only the staff console, and signing in or out as
+	// staff leaves the firm session alone.
+	_, firm := signIn(back, "session_6", "refresh-9")
+	as, permissions = platform, []string{platformRead}
+	done, staff := signInTo(staffSession, "/admin/firms/"+org, "staff_1", "staff-refresh-1")
+	if done.Header().Get("Location") != "/admin/firms/"+org {
+		t.Fatalf("staff sign-in returns to the console: %s", done.Header().Get("Location"))
+	}
+	for elsewhere, lands := range map[string]string{"/dashboard": "/admin/", "/admin/../dashboard": "/admin/", "/administrator": "/admin/", "/admin/firms/": "/admin/firms/"} {
+		if done, _ := signInTo(staffSession, elsewhere, "staff_x", "staff-refresh-x"); done.Header().Get("Location") != lands {
+			t.Fatalf("staff sign-in returns only to the console: %s -> %s", elsewhere, done.Header().Get("Location"))
+		}
+	}
+	staffCookieOf := func(value string) *http.Cookie { return &http.Cookie{Name: staffCookie, Value: value} }
+	var me staffMember
+	if w := send(handler, "GET", "/v1/admin/me", "", "", staffCookieOf(staff)); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &me) != nil || me.Subject != "user_a" || me.Mode != "workos" {
+		t.Fatalf("the staff cookie opens the staff console: %d %s", w.Code, w.Body.String())
+	}
+	if w := send(handler, "GET", "/v1/admin/me", firm, ""); w.Code != 401 {
+		t.Fatalf("the firm cookie does not open the staff console: %d", w.Code)
+	}
+	if w := send(handler, "GET", "/v1/closes", "", "", staffCookieOf(staff)); w.Code != 401 {
+		t.Fatalf("the staff cookie does not open the workspace: %d", w.Code)
+	}
+	// A session value moved to the other kind's cookie is refused (and that cookie cleared), not turned into a token.
+	if w := send(handler, "GET", "/v1/closes", staff, ""); w.Code != 401 || cookieOf(w, sessionCookie) == nil || cookieOf(w, sessionCookie).MaxAge >= 0 {
+		t.Fatalf("a staff session under the firm cookie is refused: %d", w.Code)
+	}
+	if w := send(handler, "GET", "/v1/admin/me", "", "", staffCookieOf(firm)); w.Code != 401 || cookieOf(w, staffCookie) == nil || cookieOf(w, staffCookie).MaxAge >= 0 {
+		t.Fatalf("a firm session under the staff cookie is refused: %d", w.Code)
+	}
+	if w := send(handler, "GET", "/v1/auth/session?staff=1", "", "", staffCookieOf(staff)); w.Code != 200 {
+		t.Fatalf("the console learns staff are signed in: %d", w.Code)
+	}
+	if w := send(handler, "GET", "/v1/auth/session?staff=1", "", "", staffCookieOf(firm)); w.Code != 401 || cookieOf(w, staffCookie) == nil || cookieOf(w, staffCookie).MaxAge >= 0 {
+		t.Fatalf("a firm session is not a staff session: %d", w.Code)
+	}
+	if w := send(handler, "GET", "/v1/auth/session", staff, ""); w.Code != 401 {
+		t.Fatalf("a staff session is not a firm session: %d", w.Code)
+	}
+	w = send(handler, "POST", "/v1/auth/logout?staff=1", firm, "https://app.example.test", staffCookieOf(staff))
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || out.LogoutURL != "https://api.workos.com/user_management/sessions/logout?return_to=https%3A%2F%2Fapp.example.test%2Fadmin%2F&session_id=staff_1" || cookieOf(w, sessionCookie) != nil {
+		t.Fatalf("staff sign-out ends only the staff session and returns to the console: %d %s", w.Code, w.Body.String())
+	}
+	if w := send(handler, "GET", "/v1/admin/me", "", "", staffCookieOf(staff)); w.Code != 401 {
+		t.Fatalf("a signed-out staff cookie no longer works: %d", w.Code)
+	}
+	if w := send(handler, "GET", "/v1/closes", firm, ""); w.Code != 200 {
+		t.Fatalf("the firm session outlives the staff session: %d", w.Code)
+	}
+	// Without the staff organization, staff sign-in is refused rather than admitting any organization.
+	login = send(handler, "GET", "/v1/auth/login?staff=1", "", "")
+	t.Setenv("PLATFORM_ORGANIZATION_ID", "")
+	if w := send(handler, "GET", "/v1/auth/login?staff=1", "", ""); w.Code != 503 {
+		t.Fatalf("staff sign-in needs the staff organization: %d", w.Code)
+	}
+	location, _ := url.Parse(login.Header().Get("Location"))
+	r = httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code=code-1&state="+url.QueryEscape(location.Query().Get("state")), nil)
+	r.AddCookie(cookieOf(login, loginCookie))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code == 302 || cookieOf(w, staffCookie) != nil {
+		t.Fatalf("a staff callback needs the staff organization: %d", w.Code)
+	}
+	as, permissions = org, []string{"workpapers:review"}
 
 	// Client mode, the default, has no session routes and ignores the cookie.
 	_, live := signIn(back, "session_4", "refresh-6")

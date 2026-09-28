@@ -2,6 +2,7 @@ package quickbooks
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -478,9 +479,12 @@ func ReadSnapshot(ctx context.Context, env, realm, token, company, period string
 	if len(full) <= 96*1024 {
 		return snapshot, full, nil
 	}
-	index := map[string]any{"environment": env, "realm": realm, "company_name": company, "period": period, "basis": "Accrual", "coverage_item_count": len(coverage), "report_sizes": map[string]int{}, "scope": "Full reports are stored in the immutable snapshot, not this index. Account-scoped ledger pages must be selected separately; no complete ledger or balance is certified."}
+	// Report and account digests tie the index to this read, so two captures of equal sizes stay distinct evidence.
+	directory, _ := json.Marshal(accounts)
+	index := map[string]any{"accounts_digest": fmt.Sprintf("%x", sha256.Sum256(directory)), "environment": env, "realm": realm, "company_name": company, "period": period, "basis": "Accrual", "coverage_item_count": len(coverage), "report_sizes": map[string]int{}, "report_digests": map[string]string{}, "scope": "Full reports are stored in the immutable snapshot, not this index. Account-scoped ledger pages must be selected separately; no complete ledger or balance is certified."}
 	for name, report := range reports {
 		index["report_sizes"].(map[string]int)[name] = len(report)
+		index["report_digests"].(map[string]string)[name] = fmt.Sprintf("%x", sha256.Sum256(report))
 	}
 	evidence, err := json.Marshal(index)
 	if err != nil {

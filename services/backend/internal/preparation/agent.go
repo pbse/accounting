@@ -266,6 +266,20 @@ var agentFields = map[string][]string{
 	"owner":            {"transaction_reference", "transaction_date", "payee", "amount", "ledger_reference", "stated_purpose", "client_confirmation_reference"},
 }
 
+// Amounts and dates must be what their quote prints; a misread value becomes a question, not a cited candidate.
+var quotedAmounts = []string{"amount", "booked_balance", "salvage_value", "credit_amount", "estimate_amount", "annual_rate", "opening_principal", "closing_principal", "book_balance", "principal_due_next_12_months", "statement_opening", "statement_closing", "ledger_opening", "ledger_closing"}
+var quotedDates = []string{"service_start", "service_end", "transaction_date", "interest_paid_through", "credit_period", "cancellation_period"}
+
+func valueShown(field, value, quote string) bool {
+	switch {
+	case slices.Contains(quotedAmounts, field):
+		return documents.AmountIn(quote, value)
+	case slices.Contains(quotedDates, field):
+		return documents.DateIn(quote, value, false)
+	}
+	return true
+}
+
 var agentMissingRole = map[string]string{
 	"loan/support":             "Upload the loan note or agreement; the schedule checks the lender's interest against its rate and day-count.",
 	"loan/ledger":              "Upload the loan account's ledger page for the close month; the schedule compares it with the lender's balance.",
@@ -484,6 +498,10 @@ func validateInterpretation(result agentResult, primary string, sources []Intake
 		values := map[string]bool{}
 		for _, candidate := range result.Facts {
 			if candidate.Field == f.Field {
+				if !valueShown(candidate.Field, candidate.Value, candidate.Quote) {
+					p.Questions = append(p.Questions, fmt.Sprintf("Check the %s in source #%s: the cited text does not show %s.", f.Label, candidate.SourceID, candidate.Value))
+					continue
+				}
 				location, _ := documents.QuoteLocation(available[candidate.SourceID].Name, available[candidate.SourceID].Content, candidate.Quote)
 				f.Candidates = append(f.Candidates, Candidate{candidate.Value, candidate.SourceID, location, candidate.Quote})
 				values[candidate.Value] = true
