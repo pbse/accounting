@@ -228,3 +228,33 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 		t.Fatalf("an untrusted browser origin must be refused: %d", foreign.StatusCode)
 	}
 }
+
+func TestMCPPackageRefusesAnUnreadablePackage(t *testing.T) {
+	pack := func(files map[string]string) []byte {
+		var buffer bytes.Buffer
+		archive := zip.NewWriter(&buffer)
+		for name, body := range files {
+			w, _ := archive.Create(name)
+			w.Write([]byte(body))
+		}
+		archive.Close()
+		return buffer.Bytes()
+	}
+	sum := strings.Repeat("a", 64)
+	if good := mcpPackage(pack(map[string]string{"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": sum + "  manifest.json\n"}), "1"); good.IsError {
+		t.Fatalf("a complete package is read: %v", good.StructuredContent)
+	}
+	for name, files := range map[string]map[string]string{
+		"a manifest that is not an object": {"manifest.json": `"oops"`, "checksums.sha256": sum + "  manifest.json\n"},
+		"a truncated checksum line":        {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": sum + "  manifest.json\n" + sum[:20]},
+		"not a ZIP":                        nil,
+	} {
+		archive := []byte("not a zip")
+		if files != nil {
+			archive = pack(files)
+		}
+		if result := mcpPackage(archive, "1"); !result.IsError {
+			t.Fatalf("%s is a tool error: %v", name, result.StructuredContent)
+		}
+	}
+}

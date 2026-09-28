@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -167,7 +168,7 @@ func mcpPackage(archive []byte, closeID string) *mcp.CallToolResult {
 	if err != nil {
 		return toolProblem("UNAVAILABLE", "The close package could not be read.")
 	}
-	var manifest any
+	var manifest map[string]any
 	sums := []map[string]string{}
 	for _, f := range files.File {
 		if f.Name != "manifest.json" && f.Name != "checksums.sha256" {
@@ -183,13 +184,20 @@ func mcpPackage(archive []byte, closeID string) *mcp.CallToolResult {
 			return toolProblem("UNAVAILABLE", "The close package could not be read.")
 		}
 		if f.Name == "manifest.json" {
-			json.Unmarshal(raw, &manifest)
+			if json.Unmarshal(raw, &manifest) != nil {
+				return toolProblem("UNAVAILABLE", "The close package has no readable manifest.")
+			}
 			continue
 		}
 		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-			if sum, name, ok := strings.Cut(strings.TrimRight(line, "\r"), "  "); ok && sum != "" && name != "" {
-				sums = append(sums, map[string]string{"name": name, "sha256": sum})
+			if line == "" {
+				continue
 			}
+			sum, name, ok := strings.Cut(strings.TrimRight(line, "\r"), "  ")
+			if _, err := hex.DecodeString(sum); !ok || len(sum) != 64 || err != nil || name == "" {
+				return toolProblem("UNAVAILABLE", "The close package's checksums could not be read.")
+			}
+			sums = append(sums, map[string]string{"name": name, "sha256": sum})
 		}
 	}
 	if manifest == nil {
