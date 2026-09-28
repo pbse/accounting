@@ -51,9 +51,9 @@ type IntakeSource struct {
 // ponytail: local proposals recognize exact key:value labels only; semantic
 // invoice/reply interpretation belongs to the explicitly configured AI provider.
 // Nothing in a document can confirm policy, identity, or authorize execution.
-// IdentityFacts name who issued a prepaid invoice and who it bills, as printed. They are not calculator inputs: the
+// IdentityFacts name who issued a prepaid invoice, who it bills and its number, as printed. They are not calculator inputs: the
 // straight-through check compares them with the client and the captured bill, and the confirmation form leaves them out.
-var IdentityFacts = []string{"vendor", "billed_to"}
+var IdentityFacts = []string{"vendor", "billed_to", "invoice_number"}
 
 func Propose(sources []IntakeSource) Proposal {
 	p := Proposal{Kind: "prepaid", Engine: "local", Facts: []Fact{}, Sources: []Source{}}

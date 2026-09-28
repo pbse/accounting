@@ -83,8 +83,12 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			return Plan{}, "the " + f.Label + " is cited from a supporting document, not the invoice"
 		}
 		// Amounts and dates were checked against their quotes when the proposal was validated; names are checked here.
-		if (f.Field == "currency" || strings.HasSuffix(f.Field, "_account") || identity) && !strings.Contains(strings.ToLower(f.Candidates[0].Quote), strings.ToLower(f.Value)) {
+		if (f.Field == "currency" || strings.HasSuffix(f.Field, "_account")) && !strings.Contains(strings.ToLower(f.Candidates[0].Quote), strings.ToLower(f.Value)) {
 			return Plan{}, "the cited text does not show the " + f.Label
+		}
+		// A name or number must be the whole of what its quoted line ends with: "Example" is not what "Bill to: Example Holdings" names.
+		if identity && !endsLine(f.Candidates[0].Quote, f.Value) {
+			return Plan{}, "the cited text does not show the " + f.Label + " as a whole"
 		}
 		facts[f.Field] = f.Value
 	}
@@ -105,7 +109,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if err != nil || amount <= 0 {
 		return Plan{}, "the amount is not a positive money value"
 	}
-	booking, reason := expensedLine(ledger, invoice, facts["vendor"], prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
+	booking, reason := expensedLine(ledger, invoice, facts["vendor"], facts["invoice_number"], prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
 	if reason != "" {
 		return Plan{}, reason
 	}
@@ -122,10 +126,10 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 }
 
 // expensedLine finds the one bill or purchase line in the close month that books the invoice amount to the expense
-// account and belongs to the invoice: its vendor is the invoice's cited vendor. Any prepaid line on that bill, a second match, any journal on either account in the month, a vendor or
+// account and belongs to the invoice: its vendor and document number are the invoice's cited vendor and number. Any prepaid line on that bill, a second match, any journal on either account in the month, a vendor or
 // card credit from the vendor or on either account, or a line of a journal, credit or that vendor's record whose
 // account cannot be named is a question for a person, whatever its currency.
-func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, expense, prepaid string) (booking, reason string) {
+func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, period, expense, prepaid string) (booking, reason string) {
 	text := strings.ToLower(invoice)
 	matches := 0
 	for _, row := range ledger.Rows {
@@ -134,6 +138,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, exp
 		}
 		var record struct {
 			Credit               bool
+			DocNumber            string
 			VendorRef, EntityRef struct{ Name string }
 			Line                 []struct {
 				Amount                        json.Number
@@ -149,8 +154,9 @@ func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, exp
 			party = record.EntityRef.Name
 		}
 		mentioned := printed(text, party)
-		mine := party != "" && strings.EqualFold(party, vendor)
-		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || ((row.Kind == "VendorCredit" || record.Credit) && mentioned) || mine) {
+		fromVendor := party != "" && strings.EqualFold(party, vendor)
+		mine := fromVendor && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number))
+		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || ((row.Kind == "VendorCredit" || record.Credit) && (mentioned || fromVendor)) || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
 		for _, line := range record.Line {
@@ -165,16 +171,16 @@ func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, exp
 				name = ledger.Accounts[account.Value]
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
-			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || record.Credit || mentioned || mine) {
+			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || record.Credit || mentioned || fromVendor) {
 				return "", "a captured " + row.Kind + " in the close month has a line whose account cannot be named"
 			}
 			if row.Kind == "JournalEntry" && (onExpense || onPrepaid) {
 				return "", "a journal in the close month posts to the expense or prepaid account"
 			}
-			if row.Kind == "VendorCredit" && (mentioned || mine || onExpense || onPrepaid) {
+			if row.Kind == "VendorCredit" && (mentioned || fromVendor || onExpense || onPrepaid) {
 				return "", "a vendor credit in the close month may change what this invoice expensed"
 			}
-			if row.Kind == "Purchase" && record.Credit && (mentioned || mine || onExpense || onPrepaid) {
+			if row.Kind == "Purchase" && record.Credit && (mentioned || fromVendor || onExpense || onPrepaid) {
 				return "", "a card credit in the close month may change what this invoice expensed"
 			}
 			if (row.Kind != "Bill" && row.Kind != "Purchase") || !mine {
@@ -203,6 +209,20 @@ func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, exp
 type accountRef struct {
 	Value string `json:"value"`
 	Name  string `json:"name"`
+}
+
+// endsLine reports whether some line of the quote, compared as an entity name, ends with the whole value.
+func endsLine(quote, value string) bool {
+	want := documents.NormalizeEntity(value)
+	if want == "" {
+		return false
+	}
+	for _, line := range strings.Split(quote, "\n") {
+		if strings.HasSuffix(documents.NormalizeEntity(line), want) {
+			return true
+		}
+	}
+	return false
 }
 
 // printed reports whether the invoice prints the term as a whole word: "77" is not printed in "INV-778".
