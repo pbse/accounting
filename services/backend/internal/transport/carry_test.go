@@ -123,6 +123,10 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 	if signed.Carried != 1 || preview(origin)[0].JobID == "" {
 		t.Fatalf("sign-off must carry the reviewed schedule: %+v", signed)
 	}
+	var signedOff int
+	if err = db.QueryRow(`SELECT count(*) FROM workflow_events e JOIN client_closes c ON c.id::text=$2 AND e.organization_id IS NOT DISTINCT FROM c.organization_id WHERE e.key=$1`, "close.signed_off:"+origin, origin).Scan(&signedOff); err != nil || signedOff != 1 {
+		t.Fatalf("a sign-off emits close.signed_off for the close's firm: %d %v", signedOff, err)
+	}
 	apply := func(closeID string, items []carryItem) (string, string) {
 		t.Helper()
 		var result struct {

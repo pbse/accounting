@@ -11,6 +11,7 @@ import (
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/wf"
 )
 
 type closeScope struct {
@@ -350,6 +351,10 @@ func registerReadiness(mux *http.ServeMux, db *sql.DB) {
 				decision = "reopened"
 			}
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,$2,$3,$4,$5,$6)`, r.PathValue("id"), decision, current.Digest, string(current.Snapshot), in.Note, actor)
+			if err == nil {
+				// "close.signed_off:<id>" or "close.reopened:<id>" for workflows (docs/workflow-engine.md).
+				_, err = wf.EmitForClose(r.Context(), tx, r.PathValue("id"), "close."+decision+":"+r.PathValue("id"), map[string]string{"close_id": r.PathValue("id"), "decision": decision}, actor)
+			}
 		default:
 			problem(w, 404, "Unknown close action.")
 			return

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
@@ -207,7 +208,7 @@ func setup(t *testing.T) *harness {
 	h := &harness{t: t, ctx: context.Background(), db: db, org: "org_wf" + rand.Text(), clock: &clock{at: time.Now().UTC().Truncate(time.Microsecond)}}
 	h.exec(`INSERT INTO organizations(id,name) VALUES($1,'Workflow fixture')`, h.org)
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM workflow_events WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM workflow_steps WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM workflow_events WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			if _, err := db.Exec(q, h.org); err != nil {
 				t.Error(err)
 			}
@@ -789,5 +790,228 @@ func TestReleasingAnUnregisteredRunAppliesAPendingCancel(t *testing.T) {
 	h.expect(id, "cancelled")
 	if h.drain() != 0 {
 		t.Fatal("a cancelled run was claimed again")
+	}
+}
+
+// Composition (W2).
+
+var _ = wf.Define(wf.Spec[ref, map[string]any]{
+	Name: "test_parent", Title: "Wait on a child",
+	Run: func(ctx wf.Context, in ref) (map[string]any, error) {
+		child := "test_wait"
+		if in.Failures < 0 {
+			child = "test_flaky"
+		}
+		return wf.Child[map[string]any](ctx, "kid", child, ref{ID: in.ID, Failures: in.Failures})
+	},
+})
+
+var _ = wf.Define(wf.Spec[ref, map[string]any]{
+	Name: "test_approve", Title: "Ask for approval",
+	Run: func(ctx wf.Context, in ref) (map[string]any, error) {
+		d, err := wf.WaitForApproval(ctx, "go-ahead", wf.Approval{Permission: "requests:send", Subject: "Send request " + in.ID, Timeout: time.Hour})
+		if errors.Is(err, wf.ErrTimeout) {
+			return map[string]any{"timed_out": true}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"approved": d.Approved, "by": d.By}, nil
+	},
+})
+
+type nothing struct{}
+
+var _ = wf.Define(wf.Spec[nothing, string]{
+	Name: "test_scheduled", Title: "Every five minutes",
+	Triggers: []wf.Trigger{wf.Manual(), wf.ScheduleEachFirm("*/5 * * * *")},
+	Run: func(ctx wf.Context, _ nothing) (string, error) {
+		return wf.Step(ctx, "tick", func(c context.Context) (string, error) { return wf.Organization(c), nil })
+	},
+})
+
+type ping struct {
+	N int `json:"n"`
+}
+
+var _ = wf.Define(wf.Spec[ping, int]{
+	Name: "test_on_event", Title: "Double a ping",
+	Triggers: []wf.Trigger{wf.OnEvent("test.ping:*")},
+	Run: func(ctx wf.Context, in ping) (int, error) {
+		return wf.Step(ctx, "double", func(context.Context) (int, error) { return in.N * 2, nil })
+	},
+})
+
+func (h *harness) childOf(parent int64) int64 {
+	h.t.Helper()
+	var child int64
+	if err := h.db.QueryRow(`SELECT id FROM workflow_runs WHERE parent_run_id=$1`, parent).Scan(&child); err != nil {
+		h.t.Fatal(err)
+	}
+	return child
+}
+
+func TestChildRunWakesItsParentWithItsResult(t *testing.T) {
+	h := setup(t)
+	in := ref{ID: rand.Text()}
+	parent := h.start("test_parent", in)
+	h.drain()
+	child := h.childOf(parent)
+	h.expect(parent, "waiting")
+	h.expect(child, "waiting")
+	h.emit("reply:"+in.ID, "from the child")
+	h.drain()
+	h.expect(child, "completed")
+	if v := h.expect(parent, "completed"); !strings.Contains(v.output, "from the child") {
+		t.Fatalf("output %s", v.output)
+	}
+}
+
+func TestFailedChildFailsItsParentsStep(t *testing.T) {
+	h := setup(t)
+	parent := h.start("test_parent", ref{ID: rand.Text(), Failures: -1})
+	h.drain()
+	if v := h.expect(parent, "failed"); v.steps["kid"] != "failed" || !strings.Contains(v.err, "Child run") {
+		t.Fatalf("%+v", v)
+	}
+}
+
+func TestCancellingParentsAndChildren(t *testing.T) {
+	h := setup(t)
+	parent := h.start("test_parent", ref{ID: rand.Text()})
+	h.drain()
+	child := h.childOf(parent)
+	if err := wf.Cancel(h.ctx, h.db, parent, "test", "client left"); err != nil {
+		t.Fatal(err)
+	}
+	h.expect(parent, "cancelled")
+	h.expect(child, "cancelled")
+
+	// Cancelling only the child wakes the parent, whose step then fails.
+	parent = h.start("test_parent", ref{ID: rand.Text()})
+	h.drain()
+	if err := wf.Cancel(h.ctx, h.db, h.childOf(parent), "test", "not needed"); err != nil {
+		t.Fatal(err)
+	}
+	h.drain()
+	if v := h.expect(parent, "failed"); v.steps["kid"] != "failed" {
+		t.Fatalf("%+v", v)
+	}
+}
+
+func TestApprovalsNeedThePermissionAndTakeOneDecision(t *testing.T) {
+	h := setup(t)
+	id := h.start("test_approve", ref{ID: rand.Text()})
+	h.drain()
+	h.expect(id, "waiting")
+	if err := wf.Approve(h.ctx, h.db, id, "go-ahead", wf.Decision{Approved: true, By: "user_a"}, []string{"workpapers:review"}); !errors.Is(err, wf.ErrNotAllowed) {
+		t.Fatalf("approving without the permission: %v", err)
+	}
+	if err := wf.Approve(h.ctx, h.db, id, "go-ahead", wf.Decision{Approved: true, By: "user_b", Note: "looks right"}, []string{"requests:send"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wf.Approve(h.ctx, h.db, id, "go-ahead", wf.Decision{Approved: false, By: "user_c"}, []string{"requests:send"}); !errors.Is(err, wf.ErrNotAllowed) {
+		t.Fatalf("a second decision: %v", err)
+	}
+	h.drain()
+	if v := h.expect(id, "completed"); !strings.Contains(v.output, `"approved": true`) || !strings.Contains(v.output, "user_b") {
+		t.Fatalf("output %s", v.output)
+	}
+
+	rejected := h.start("test_approve", ref{ID: rand.Text()})
+	h.drain()
+	if err := wf.Approve(h.ctx, h.db, rejected, "go-ahead", wf.Decision{Approved: false, By: "user_b"}, []string{"requests:send"}); err != nil {
+		t.Fatal(err)
+	}
+	h.drain()
+	if v := h.expect(rejected, "completed"); !strings.Contains(v.output, `"approved": false`) {
+		t.Fatalf("output %s", v.output)
+	}
+
+	unanswered := h.start("test_approve", ref{ID: rand.Text()})
+	h.drain()
+	h.clock.Add(2 * time.Hour)
+	h.drain()
+	if v := h.expect(unanswered, "completed"); !strings.Contains(v.output, "timed_out") {
+		t.Fatalf("output %s", v.output)
+	}
+	if _, err := wf.Emit(h.ctx, h.db, h.org, fmt.Sprintf("wf.approval:%d:go-ahead", unanswered), wf.Decision{Approved: true, By: "forger"}, "test"); err == nil {
+		t.Fatal("anyone emitting an engine event could forge an approval")
+	}
+}
+
+func TestSchedulesStartOneRunPerSlotPerFirm(t *testing.T) {
+	h := setup(t)
+	count := func() int {
+		var n int
+		h.db.QueryRow(`SELECT count(*) FROM workflow_runs WHERE organization_id=$1 AND workflow='test_scheduled'`, h.org).Scan(&n)
+		return n
+	}
+	wf.Triggers(h.ctx, h.engine)
+	wf.Triggers(h.ctx, h.engine)
+	if n := count(); n != 1 {
+		t.Fatalf("one slot must start one run, got %d", n)
+	}
+	h.drain()
+	h.clock.Add(5 * time.Minute)
+	wf.Triggers(h.ctx, h.engine)
+	if n := count(); n != 2 {
+		t.Fatalf("the next slot must start one more run, got %d", n)
+	}
+	h.drain()
+	var output string
+	h.db.QueryRow(`SELECT output::text FROM workflow_runs WHERE organization_id=$1 AND workflow='test_scheduled' ORDER BY id LIMIT 1`, h.org).Scan(&output)
+	if output != `"`+h.org+`"` {
+		t.Fatalf("a firm's scheduled run must run as that firm: %s", output)
+	}
+}
+
+func TestEventTriggersStartOneRunPerEventAndRecordMisfits(t *testing.T) {
+	h := setup(t)
+	good, err := wf.Emit(h.ctx, h.db, h.org, "test.ping:1", ping{N: 21}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad, err := wf.Emit(h.ctx, h.db, h.org, "test.ping:2", map[string]string{"n": "twenty"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf.Triggers(h.ctx, h.engine)
+	wf.Triggers(h.ctx, h.engine)
+	h.drain()
+	runOf := func(event int64) (state, output, message string) {
+		var out sql.NullString
+		if err := h.db.QueryRow(`SELECT state,output::text,error FROM workflow_runs WHERE organization_id=$1 AND workflow='test_on_event' AND idempotency_key=$2`, h.org, fmt.Sprintf("event:%d", event)).Scan(&state, &out, &message); err != nil {
+			t.Fatal(err)
+		}
+		return state, out.String, message
+	}
+	if state, output, _ := runOf(good); state != "completed" || output != "42" {
+		t.Fatalf("%s %s", state, output)
+	}
+	if state, _, message := runOf(bad); state != "failed" || !strings.Contains(message, "does not fit") {
+		t.Fatalf("a misfit payload must be recorded once as a failed run: %s %s", state, message)
+	}
+	var runs int
+	h.db.QueryRow(`SELECT count(*) FROM workflow_runs WHERE organization_id=$1 AND workflow='test_on_event'`, h.org).Scan(&runs)
+	if runs != 2 {
+		t.Fatalf("runs %d", runs)
+	}
+}
+
+func TestEmitForCloseUsesTheClosesFirm(t *testing.T) {
+	h := setup(t)
+	var closeID string
+	if err := h.db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Emitting client','2026-09') RETURNING id::text`, h.org).Scan(&closeID); err != nil {
+		t.Fatal(err)
+	}
+	id, err := wf.EmitForClose(h.ctx, h.db, closeID, "close.signed_off:"+closeID, map[string]string{"close_id": closeID}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var org string
+	h.db.QueryRow(`SELECT organization_id FROM workflow_events WHERE id=$1`, id).Scan(&org)
+	if org != h.org {
+		t.Fatalf("event firm %q", org)
 	}
 }

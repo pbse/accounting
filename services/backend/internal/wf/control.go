@@ -29,10 +29,17 @@ type StartRequest struct {
 	Agent          string
 }
 
+// ErrInvalidInput means a run's input does not fit its workflow.
+var ErrInvalidInput = errors.New("input does not fit the workflow")
+
 // Start queues a run, or returns the existing run (existing=true) for the same firm, workflow and
 // idempotency key, whatever its input was. ErrBusy means another active run holds the workflow's
 // concurrency key; inside a transaction that error aborts the transaction.
 func Start(ctx context.Context, q Querier, req StartRequest) (id int64, existing bool, err error) {
+	return start(ctx, q, req, 0, "")
+}
+
+func start(ctx context.Context, q Querier, req StartRequest, parent int64, parentStep string) (id int64, existing bool, err error) {
 	w := lookup(req.Workflow)
 	if w == nil {
 		return 0, false, fmt.Errorf("%w: %s", ErrUnknownWorkflow, req.Workflow)
@@ -45,19 +52,19 @@ func Start(ctx context.Context, q Querier, req StartRequest) (id int64, existing
 		return 0, false, err
 	}
 	if err = w.validate(raw); err != nil {
-		return 0, false, err
+		return 0, false, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	concurrency, err := w.concurrency(raw)
 	if err != nil {
-		return 0, false, err
+		return 0, false, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	if len(concurrency) > 200 {
 		return 0, false, errors.New("concurrency key is longer than 200 characters")
 	}
-	err = q.QueryRowContext(ctx, `INSERT INTO workflow_runs(organization_id,workflow,code_version,idempotency_key,concurrency_key,input,started_by,agent,wake_at)
- VALUES(NULLIF($1,''),$2,$3,$4,NULLIF($5,''),$6,$7,$8,'-infinity')
+	err = q.QueryRowContext(ctx, `INSERT INTO workflow_runs(organization_id,workflow,code_version,idempotency_key,concurrency_key,input,started_by,agent,wake_at,parent_run_id,parent_step)
+ VALUES(NULLIF($1,''),$2,$3,$4,NULLIF($5,''),$6,$7,$8,'-infinity',NULLIF($9,0),NULLIF($10,''))
  ON CONFLICT (coalesce(organization_id,''),workflow,idempotency_key) DO NOTHING RETURNING id`,
-		req.Organization, req.Workflow, CodeVersion, req.IdempotencyKey, concurrency, string(raw), req.StartedBy, req.Agent).Scan(&id)
+		req.Organization, req.Workflow, CodeVersion, req.IdempotencyKey, concurrency, string(raw), req.StartedBy, req.Agent, parent, parentStep).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		err = q.QueryRowContext(ctx, `SELECT id FROM workflow_runs WHERE coalesce(organization_id,'')=$1 AND workflow=$2 AND idempotency_key=$3`, req.Organization, req.Workflow, req.IdempotencyKey).Scan(&id)
@@ -69,8 +76,25 @@ func Start(ctx context.Context, q Querier, req StartRequest) (id int64, existing
 }
 
 // Emit records an event and wakes the firm's runs waiting for it. Call it inside the transaction
-// that caused the event, so the event exists exactly when the change does.
+// that caused the event, so the event exists exactly when the change does. Keys starting with "wf."
+// are the engine's own (approvals) and are refused here.
 func Emit(ctx context.Context, q Querier, org, key string, payload any, actor string) (int64, error) {
+	if strings.HasPrefix(key, "wf.") {
+		return 0, errors.New("event keys starting with wf. are reserved for the workflow engine")
+	}
+	return emit(ctx, q, org, key, payload, actor)
+}
+
+// EmitForClose is Emit for the firm that owns the close, inside the transaction that changed it.
+func EmitForClose(ctx context.Context, q Querier, closeID, key string, payload any, actor string) (int64, error) {
+	var org sql.NullString
+	if err := q.QueryRowContext(ctx, `SELECT organization_id FROM client_closes WHERE id::text=$1`, closeID).Scan(&org); err != nil {
+		return 0, err
+	}
+	return Emit(ctx, q, org.String, key, payload, actor)
+}
+
+func emit(ctx context.Context, q Querier, org, key string, payload any, actor string) (int64, error) {
 	if key == "" || len(key) > 200 {
 		return 0, errors.New("an event key needs 1-200 characters")
 	}
@@ -102,19 +126,85 @@ func Cancel(ctx context.Context, db *sql.DB, runID int64, by, reason string) err
 		if slices.Contains([]string{"completed", "failed", "cancelled"}, state) {
 			return ErrNotAllowed
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET cancel_requested_at=COALESCE(cancel_requested_at,now()),cancel_reason=$2,cancelled_by=$3,updated_at=now() WHERE id=$1`, runID, truncate(reason), by); err != nil {
+		// The run and every active descendant: a running one ends at its next step, the rest at once.
+		rows, err := tx.QueryContext(ctx, `WITH RECURSIVE tree(id) AS (SELECT $1::bigint UNION SELECT r.id FROM workflow_runs r JOIN tree t ON r.parent_run_id=t.id)
+ UPDATE workflow_runs SET cancel_requested_at=COALESCE(cancel_requested_at,now()),cancelled_by=$3,updated_at=now(),
+  cancel_reason=CASE WHEN id=$1 THEN $2 ELSE 'Parent run cancelled: '||$2 END,
+  state=CASE WHEN state='running' THEN state ELSE 'cancelled' END,
+  finished_at=CASE WHEN state='running' THEN finished_at ELSE now() END,
+  wake_at=CASE WHEN state='running' THEN wake_at END,
+  waiting_on=CASE WHEN state='running' THEN waiting_on ELSE '' END
+ WHERE id IN (SELECT id FROM tree) AND state IN ('queued','running','waiting') RETURNING id,state`, runID, truncate(reason), by)
+		if err != nil {
 			return err
 		}
-		if state == "running" {
-			return nil
+		var ended []int64
+		for rows.Next() {
+			var id int64
+			var after string
+			if err = rows.Scan(&id, &after); err != nil {
+				rows.Close()
+				return err
+			}
+			if after == "cancelled" {
+				ended = append(ended, id)
+			}
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE workflow_runs SET state='cancelled',finished_at=now(),wake_at=NULL,waiting_on='' WHERE id=$1`, runID); err != nil {
+		rows.Close()
+		if err = rows.Err(); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=$1 AND state IN ('running','waiting')`, runID)
+		if _, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=ANY($1) AND state IN ('running','waiting')`, ended); err != nil {
+			return err
+		}
+		if state != "running" {
+			_, err = tx.ExecContext(ctx, wakeParent, runID)
+		}
 		return err
 	})
 }
+
+// wakeParent wakes the parent of run $1, if it has one waiting or still running, after the run ended.
+const wakeParent = `UPDATE workflow_runs SET wake_at='-infinity',updated_at=now() WHERE id=(SELECT parent_run_id FROM workflow_runs WHERE id=$1) AND state IN ('waiting','running')`
+
+// Decision is a person's answer to an approval step.
+type Decision struct {
+	Approved bool   `json:"approved"`
+	By       string `json:"by"`
+	Note     string `json:"note,omitempty"`
+}
+
+// Approve records a person's decision on a run's waiting approval step and wakes the run. The
+// caller passes the approver's permissions in the run's firm, from their verified session, and is
+// responsible for the approver belonging to that firm; the approver must hold the permission the
+// step asks for. A step takes one decision.
+func Approve(ctx context.Context, db *sql.DB, runID int64, key string, d Decision, permissions []string) error {
+	if strings.TrimSpace(d.By) == "" {
+		return errors.New("an approval needs who decided")
+	}
+	return inTx(ctx, db, func(tx *sql.Tx) error {
+		var org sql.NullString
+		var runState, stepState, kind, permission string
+		var decided bool
+		if err := tx.QueryRowContext(ctx, `SELECT r.organization_id,r.state,s.state,s.kind,COALESCE(s.input->>'permission',''),EXISTS(SELECT 1 FROM workflow_events WHERE key=$3)
+ FROM workflow_runs r JOIN workflow_steps s ON s.run_id=r.id AND s.key=$2 WHERE r.id=$1 FOR UPDATE OF r,s`, runID, key, approvalKey(runID, key)).Scan(&org, &runState, &stepState, &kind, &permission, &decided); err != nil {
+			return notFound(err, runID)
+		}
+		if kind != "approval" || stepState != "waiting" || decided || (runState != "waiting" && runState != "running") {
+			return ErrNotAllowed
+		}
+		if permission == "" || !slices.Contains(permissions, permission) {
+			return fmt.Errorf("%w: approving needs the %s permission", ErrNotAllowed, permission)
+		}
+		if _, err := emit(ctx, tx, org.String, approvalKey(runID, key), d, d.By); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE workflow_steps SET actor=$3,note=$4 WHERE run_id=$1 AND key=$2`, runID, key, d.By, truncate(d.Note))
+		return err
+	})
+}
+
+func approvalKey(runID int64, key string) string { return fmt.Sprintf("wf.approval:%d:%s", runID, key) }
 
 // RetryStep runs a failed step (or one waiting to retry) again at once, with a fresh set of
 // attempts, reopening its run if the failure ended it. An unknown effect is settled with Resolve.

@@ -16,6 +16,7 @@ import (
 
 	"close.local/backend/internal/documents"
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/wf"
 )
 
 // issueLink stores a new private reply link. When the firm requires passcodes it also returns an 8-digit
@@ -108,7 +109,12 @@ func recordReply(ctx context.Context, tx *sql.Tx, closeID, jobID, requestID, bod
 		if requestID == "" {
 			_, err = tx.ExecContext(ctx, `INSERT INTO preparation_answers(job_id,source_id,created_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, jobID, source, actor)
 		} else {
-			_, err = tx.ExecContext(ctx, `INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, requestID, source, actor, from)
+			var saved sql.Result
+			saved, err = tx.ExecContext(ctx, `INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, requestID, source, actor, from)
+			if n, _ := rowsAffected(saved, err); n > 0 {
+				// Workflows waiting on this request's reply (docs/workflow-engine.md) wake with it.
+				_, err = wf.EmitForClose(ctx, tx, closeID, "client_request.replied:"+requestID, map[string]string{"request_id": requestID, "close_id": closeID, "source_id": source}, actor)
+			}
 		}
 	}
 	if err != nil {
@@ -491,4 +497,12 @@ func clientRequest(db *sql.DB) http.HandlerFunc {
 		used = true
 		reply("received")
 	}
+}
+
+// rowsAffected is how many rows a statement changed; zero when it failed.
+func rowsAffected(result sql.Result, err error) (int64, error) {
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

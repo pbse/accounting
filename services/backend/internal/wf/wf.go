@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
 var (
@@ -37,11 +39,51 @@ type Context interface {
 	exec() *execution
 }
 
-// Trigger says what may start a workflow. Schedules and events arrive in phase W2.
+// Trigger says what may start a workflow.
 type Trigger struct{ Kind, Value string }
 
 // Manual lets a person or the API start the workflow.
 func Manual() Trigger { return Trigger{Kind: "manual"} }
+
+// Schedule starts one platform run (no firm) at each slot of a five-field cron expression, in UTC.
+// A slot missed while no worker ran is started late if it is less than a day old; only the latest
+// missed slot runs. The workflow's input must accept {}.
+func Schedule(expression string) Trigger { return Trigger{Kind: "schedule", Value: expression} }
+
+// ScheduleEachFirm is Schedule with one run per enabled firm at each slot.
+func ScheduleEachFirm(expression string) Trigger {
+	return Trigger{Kind: "schedule_each_firm", Value: expression}
+}
+
+// OnEvent starts a run for each recorded event whose key equals pattern, or starts with it when the
+// pattern ends in "*" ("close.signed_off:*"). The run belongs to the event's firm and its input is
+// the event's payload. Matching happens in the engine, after the event commits, never inside the
+// transaction that emitted it: a payload that does not fit the input is recorded as a failed run.
+func OnEvent(pattern string) Trigger { return Trigger{Kind: "event", Value: pattern} }
+
+var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
+func (t Trigger) check(input func(json.RawMessage) error) error {
+	switch t.Kind {
+	case "manual":
+		return nil
+	case "schedule", "schedule_each_firm":
+		if _, err := cronParser.Parse(t.Value); err != nil {
+			return fmt.Errorf("schedule %q: %w", t.Value, err)
+		}
+		if err := input(json.RawMessage("{}")); err != nil {
+			return fmt.Errorf("a scheduled workflow's input must accept {}: %w", err)
+		}
+		return nil
+	case "event":
+		prefix := strings.TrimSuffix(t.Value, "*")
+		if prefix == "" || strings.Contains(prefix, "*") || strings.HasPrefix(t.Value, "wf.") || len(t.Value) > 200 {
+			return fmt.Errorf("event pattern %q must be a key, or a prefix ending in *, not starting with wf.", t.Value)
+		}
+		return nil
+	}
+	return fmt.Errorf("unknown trigger kind %q", t.Kind)
+}
 
 // Spec declares a workflow. Name must equal the workflow's directory name.
 type Spec[I, O any] struct {
@@ -98,6 +140,11 @@ func Define[I, O any](s Spec[I, O]) Definition {
 	}
 	w := &workflow{Definition: d}
 	w.validate = func(raw json.RawMessage) error { _, err := decode(raw, true); return err }
+	for _, trigger := range d.Triggers {
+		if err := trigger.check(w.validate); err != nil {
+			panic(fmt.Sprintf("wf: workflow %q: %v", s.Name, err))
+		}
+	}
 	w.concurrency = func(raw json.RawMessage) (string, error) {
 		if s.Concurrency == nil {
 			return "", nil

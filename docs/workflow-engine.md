@@ -1,6 +1,6 @@
 # Workflow engine plan
 
-**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core) implemented** in `services/backend/internal/wf`, migration 092 and `services/backend/workflows`. Later phases are proposals. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
+**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core) and W2 (composition) implemented** in `services/backend/internal/wf`, migration 092 and `services/backend/workflows`. Later phases are proposals. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
 
 ## Goals
 
@@ -41,6 +41,8 @@ services/backend/internal/wf/gen/    `go generate` tool that writes the registry
 Go only runs a package's registration if something imports it. `go generate ./workflows` (the generator is `internal/wf/gen`) scans `workflows/*/` and `activities/*/` and writes `workflows/registry_gen.go` with one blank import per directory; `cmd/worker` imports the `workflows` package. The generated file is committed, and CI regenerates it and fails on any difference. The file lives in `workflows`, not `internal/wf`, because workflows import the engine. `workflows/registry_test.go` fails unless every directory registers exactly the workflow named after it. So adding a directory, then running `go generate ./workflows`, is the whole registration step.
 
 ## Authoring a workflow
+
+The example below is illustrative; `wf.Call` and activities arrive in W3. `workflows/firm_health_check` is a real, running workflow.
 
 ```go
 // services/backend/workflows/month_kickoff/workflow.go
@@ -95,8 +97,9 @@ var _ = wf.Define(wf.Spec[Input, Output]{
 | `wf.Call(ctx, key, activity, input)` (W3) | Runs an activity as a step (or an effect, per the activity's class). |
 | `wf.Sleep(ctx, key, d)` / `wf.SleepUntil` | Parks the run until a time. |
 | `wf.WaitForEvent[T](ctx, key, eventKey, timeout)` | Parks until a matching event (see [events](#events)) or the timeout (`wf.ErrTimeout`). |
-| `wf.WaitForApproval(ctx, key, approval)` (W2) | A wait whose event must come from a person holding the named permission in the run's firm. |
-| `wf.Child(ctx, key, workflow, input)` (W2) | Starts a child run and waits for its result. |
+| `wf.WaitForApproval(ctx, key, approval)` | A wait decided by `wf.Approve`, which requires the approver to hold the named permission in the run's firm and takes one decision. A rejection is a `Decision` with `Approved` false. |
+| `wf.Child(ctx, key, workflow, input)` | Starts a child run for the same firm (once: its idempotency key is the parent run and key) and waits for its result. A failed or cancelled child fails the step; cancelling the parent cancels its children. |
+| `wf.DB(ctx)` / `wf.Organization(ctx)` | The engine's database and the run's firm, for use inside steps; queries with the step's context run as the firm. |
 | `wf.Now(ctx)` / `wf.Random(ctx)` | Saved values, so the run replays identically. |
 | `wf.Permanent(err)` | Marks an error as not retryable. |
 
@@ -149,12 +152,13 @@ One migration creates the engine's tables. After it, adding workflows or activit
 
 ## Events
 
+- Recorded today, inside the transactions that cause them: `client_request.replied:<request>` when a client reply (text or released attachment) is first saved, `close.signed_off:<close>` and `close.reopened:<close>` on a sign-off decision. `wf.EmitForClose` takes the firm from the close. Keys starting with `wf.` are the engine's own (approvals) and `wf.Emit` refuses them.
 - `wf.Emit` inside domain transactions for facts other flows care about: `client_request.replied:<id>`, `close.signed_off:<close>`, `evidence.released:<id>`, `approval.granted:<run>/<step>`.
 - A wait is satisfied by the earliest matching event recorded **after the run started** that no earlier wait in the same run consumed. This covers late signals, where the reply arrives before the run reaches the wait. A step can ask for "after this step" instead.
 - An event recorded after a wait's deadline does not satisfy it. An event whose payload does not fit the wait's type is passed over and listed on the step (`input.skipped`), so a malformed signal neither fails the run nor keeps waking it.
 - **Cancelling wins.** Whenever the engine parks, releases or finishes a run, it applies a pending cancel request in the same statement, so a cancel sent while a run executes always ends it (completed steps keep their results; an unknown effect stays unknown).
-- **Event triggers** start runs from `wf.OnEvent(pattern)`. Each start's idempotency key is the event ID, so replaying an event never starts two runs.
-- **Schedules** (`wf.Schedule(cron)`) are evaluated by the engine loop. Each slot has the idempotency key `<workflow>@<slot>`, so a restarted worker cannot double-start one. Schedules can be firm-scoped (for each enabled firm) or platform-wide.
+- **Event triggers** start runs from `wf.OnEvent(pattern)` (a key, or a prefix ending in `*`). The engine matches them after the event commits, looking back three days, never inside the emitting transaction, so a workflow can never roll back a reply or a sign-off. Each start's idempotency key is the event ID, so an event never starts two runs; a payload that does not fit the input is recorded once as a failed run.
+- **Schedules** (`wf.Schedule(cron)` for the platform, `wf.ScheduleEachFirm(cron)` for every enabled firm; five-field cron, UTC) are evaluated by the engine loop every 30 seconds. A slot missed while no worker ran starts late if it is under a day old; only the latest missed slot runs. The workflow's input must accept `{}`. Each slot has the idempotency key `<workflow>@<slot>`, so a restarted worker cannot double-start one. Schedules can be firm-scoped (for each enabled firm) or platform-wide.
 
 ## Plans: staff-built and agent-proposed
 
@@ -260,7 +264,7 @@ These proofs, which [`workers/workflows`](../workers/workflows/README.md) alread
 |---|---|---|
 | **W0. Spike (1–2 days)** | Try DBOS Transact for Go (open-source durable workflows on PostgreSQL) against this plan: per-connection tenant context with row-level security, a non-superuser runtime role, the proof list. | Go/no-go recorded here. **Go:** the engine wraps DBOS behind the `wf` API. **No-go:** build W1 as specified. |
 | **W1. Engine core** (implemented) | Migration 092; `internal/wf` (`Define`, `Step`, `Effect`, `Sleep`, `SleepUntil`, `WaitForEvent`, `Now`, `Random`, `Permanent`, `NotApplied`); `Start`, `Cancel`, `Emit`, `RetryStep`, `Resolve` as Go functions; concurrency keys; registry generator and CI check; claim loop in `cmd/worker`; version stamping. The first real workflow moved to W2, which brings the event triggers and approvals it needs. | Proofs 1–8 pass in CI (`internal/wf/engine_test.go`); a run survives a container restart in staging. |
-| **W2. Composition** | `Child`, `WaitForApproval`, schedule and event triggers, the first real workflow (`month_kickoff`), `wf.Emit` from the first domain transactions (client reply, sign-off), compensation hooks. | `month_kickoff` runs end to end on a synthetic close in staging. |
+| **W2. Composition** (implemented) | `Child`, `WaitForApproval` and `Approve`, schedule and event triggers, `wf.EmitForClose` for client replies and sign-offs, `DB`/`Organization` for steps, and the first real workflow, `firm_health_check` (daily per firm, read-only). `month_kickoff` was dropped: sign-off already carries reviewed schedules into the next month and close routines create next month's closes, so a second path would duplicate them. Compensation hooks wait until a workflow needs one. | Proofs for each primitive in `internal/wf/engine_test.go`; reply and sign-off events in the transport tests; the health check counts only its firm's problems. |
 | **W3. Activities and plans** | Activities directory and generator, catalog API, plan format and validator, `plan` workflow, plan lifecycle and templates, agent bones (`proposed` only, attribution, rate limit). | Staff build, approve and run a plan from the admin panel; an agent-sourced plan can't run without approval (tested). |
 | **W4. Agent planner (low priority)** | Model-backed proposals over the catalog; MCP `propose_plan`. | Proposals appear in the admin approval queue with rationale. |
 | **W5. Migrate existing loops** | Close goals first (already step-shaped, with an events log), then others where it simplifies. | Each migrated loop is deleted; its UI reads engine runs. |
