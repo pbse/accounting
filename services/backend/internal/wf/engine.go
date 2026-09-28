@@ -180,7 +180,7 @@ func (e *Engine) execute(ctx context.Context, run *claimedRun) {
 }
 
 func (e *Engine) loadSteps(ctx context.Context, runID int64) (map[string]*stepRow, int, error) {
-	rows, err := e.DB.QueryContext(ctx, `SELECT key,kind,state,attempts,retry_at,wake_at,output,error,seq FROM workflow_steps WHERE run_id=$1`, runID)
+	rows, err := e.DB.QueryContext(ctx, `SELECT key,kind,state,attempts,retry_at,wake_at,output,error,seq,COALESCE(input->'skipped','[]'::jsonb) FROM workflow_steps WHERE run_id=$1`, runID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -189,9 +189,12 @@ func (e *Engine) loadSteps(ctx context.Context, runID int64) (map[string]*stepRo
 	for rows.Next() {
 		var s stepRow
 		var retry, wake sql.NullTime
-		var output []byte
+		var output, skipped []byte
 		var seq int
-		if err = rows.Scan(&s.key, &s.kind, &s.state, &s.attempts, &retry, &wake, &output, &s.errMsg, &seq); err != nil {
+		if err = rows.Scan(&s.key, &s.kind, &s.state, &s.attempts, &retry, &wake, &output, &s.errMsg, &seq, &skipped); err != nil {
+			return nil, 0, err
+		}
+		if err = json.Unmarshal(skipped, &s.skipped); err != nil {
 			return nil, 0, err
 		}
 		if retry.Valid {
@@ -338,23 +341,46 @@ func (e *Engine) park(x *execution) {
 	}
 }
 
-// release hands a claimed run back without recording a result; a zero wake means at once.
+// release hands a claimed run back without recording a result; a zero wake means at once. A cancel
+// requested meanwhile is applied instead, as in park.
 func (e *Engine) release(ctx context.Context, run *claimedRun, wake time.Time, message string) {
 	var at any
 	if !wake.IsZero() {
 		at = wake
 	}
-	if _, err := e.DB.ExecContext(ctx, `UPDATE workflow_runs SET state='waiting',claim=NULL,updated_at=now(),wake_at=COALESCE($3::timestamptz,'-infinity'::timestamptz),error=CASE WHEN $4='' THEN error ELSE $4 END WHERE id=$1 AND claim=$2`, run.id, run.claim, at, truncate(message)); err != nil {
+	tx, err := e.DB.BeginTx(ctx, nil)
+	if err != nil {
+		log.Printf("Workflow run %d could not be released: %v", run.id, err)
+		return
+	}
+	defer tx.Rollback()
+	var state string
+	err = tx.QueryRowContext(ctx, `UPDATE workflow_runs SET claim=NULL,updated_at=now(),
+ state=CASE WHEN cancel_requested_at IS NOT NULL THEN 'cancelled' ELSE 'waiting' END,
+ finished_at=CASE WHEN cancel_requested_at IS NOT NULL THEN now() END,
+ waiting_on=CASE WHEN cancel_requested_at IS NOT NULL THEN '' ELSE waiting_on END,
+ wake_at=CASE WHEN cancel_requested_at IS NOT NULL THEN NULL ELSE COALESCE($3::timestamptz,'-infinity'::timestamptz) END,
+ error=CASE WHEN cancel_requested_at IS NOT NULL OR $4='' THEN error ELSE $4 END
+ WHERE id=$1 AND claim=$2 RETURNING state`, run.id, run.claim, at, truncate(message)).Scan(&state)
+	if err == nil && state == "cancelled" {
+		_, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=$1 AND state IN ('running','waiting')`, run.id)
+	}
+	if err == nil || errors.Is(err, sql.ErrNoRows) {
+		err = tx.Commit()
+	}
+	if err != nil {
 		log.Printf("Workflow run %d could not be released: %v", run.id, err)
 	}
 }
 
-// unconsumed matches an event with the given key for run r that the run has not consumed yet, that
-// was recorded after the run started and, when the wait has a deadline, no later than the deadline.
+// unconsumed matches an event with the given key for run r that the run has neither consumed nor
+// passed over as malformed, that was recorded after the run started and, when the wait has a
+// deadline, no later than the deadline.
 func unconsumed(key, deadline string) string {
 	return `SELECT 1 FROM workflow_events e WHERE e.key=` + key + ` AND e.organization_id IS NOT DISTINCT FROM r.organization_id AND e.created_at>=r.created_at
  AND (` + deadline + ` IS NULL OR e.created_at<=` + deadline + `)
- AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=r.id AND s.kind='event' AND s.state='completed' AND (s.output->>'event_id')::bigint=e.id)`
+ AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=r.id AND s.kind='event' AND s.state='completed' AND (s.output->>'event_id')::bigint=e.id)
+ AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=r.id AND s.input->'skipped' @> to_jsonb(e.id))`
 }
 
 // sweep wakes waiting runs whose event arrived in the moment between their check and their parking.
@@ -395,6 +421,7 @@ type stepRow struct {
 	retryAt, wakeAt  *time.Time
 	output           json.RawMessage
 	errMsg           string
+	skipped          []int64 // events a wait passed over because their payload did not fit
 }
 
 type execution struct {

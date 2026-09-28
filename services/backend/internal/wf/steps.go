@@ -56,9 +56,13 @@ func SleepUntil(ctx Context, key string, t time.Time) error {
 // WaitForEvent parks the run until an event with this key is recorded (Emit) for the run's firm, or
 // until timeout passes (ErrTimeout). It takes the earliest such event recorded after the run started
 // that this run has not already consumed, so an event that arrives before the wait still counts.
+//
+// An event whose payload does not decode into T is passed over (and listed on the step) rather than
+// failing the run, so a malformed signal cannot keep a later valid one from counting.
 func WaitForEvent[T any](ctx Context, key, event string, timeout time.Duration) (T, error) {
 	var zero T
-	raw, err := ctx.exec().wait(key, event, timeout)
+	fits := func(raw json.RawMessage) error { var payload T; return json.Unmarshal(raw, &payload) }
+	raw, err := ctx.exec().wait(key, event, timeout, fits)
 	if err != nil {
 		return zero, err
 	}
@@ -390,7 +394,7 @@ type eventOutcome struct {
 	TimedOut bool            `json:"timed_out,omitempty"`
 }
 
-func (x *execution) wait(key, event string, timeout time.Duration) (json.RawMessage, error) {
+func (x *execution) wait(key, event string, timeout time.Duration, fits func(json.RawMessage) error) (json.RawMessage, error) {
 	if err := x.enter(key, false); err != nil {
 		return nil, err
 	}
@@ -424,29 +428,43 @@ func (x *execution) wait(key, event string, timeout time.Duration) (json.RawMess
 	case "cancelled":
 		return nil, x.stop(errCancelled)
 	}
-	var id int64
-	var payload []byte
 	org := sql.NullString{String: x.run.org, Valid: x.run.org != ""}
 	var deadline any
 	if s.wakeAt != nil {
 		deadline = *s.wakeAt
 	}
-	// An event recorded after the deadline does not count, even if the run is only now looking.
-	err := x.engine.DB.QueryRowContext(x.sys, `SELECT e.id,e.payload FROM workflow_events e WHERE e.key=$2 AND e.organization_id IS NOT DISTINCT FROM $3 AND e.created_at>=$4
- AND ($5::timestamptz IS NULL OR e.created_at<=$5::timestamptz)
+	for passes := 0; passes < 20; passes++ {
+		var id int64
+		var payload []byte
+		skipped, _ := json.Marshal(append([]int64{}, s.skipped...))
+		// An event recorded after the deadline does not count, even if the run is only now looking.
+		err := x.engine.DB.QueryRowContext(x.sys, `SELECT e.id,e.payload FROM workflow_events e WHERE e.key=$2 AND e.organization_id IS NOT DISTINCT FROM $3 AND e.created_at>=$4
+ AND ($5::timestamptz IS NULL OR e.created_at<=$5::timestamptz) AND NOT e.id IN (SELECT jsonb_array_elements_text($6::jsonb)::bigint)
  AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=$1 AND s.kind='event' AND s.state='completed' AND (s.output->>'event_id')::bigint=e.id)
- ORDER BY e.id LIMIT 1`, x.run.id, event, org, x.run.createdAt, deadline).Scan(&id, &payload)
-	switch {
-	case err == nil:
+ ORDER BY e.id LIMIT 1`, x.run.id, event, org, x.run.createdAt, deadline, string(skipped)).Scan(&id, &payload)
+		if errors.Is(err, sql.ErrNoRows) {
+			break
+		}
+		if err != nil {
+			return nil, x.stop(errAbandoned)
+		}
+		if bad := fits(payload); bad != nil {
+			s.skipped = append(s.skipped, id)
+			list, _ := json.Marshal(s.skipped)
+			if err = x.write(`UPDATE workflow_steps SET input=jsonb_set(COALESCE(input,'{}'::jsonb),'{skipped}',$4::jsonb),error=$5 WHERE run_id=$1 AND key=$3`+fence, x.run.id, x.run.claim, key, string(list), truncate(fmt.Sprintf("Passed over event %d: its payload does not fit: %v", id, bad))); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		raw, _ := json.Marshal(eventOutcome{EventID: id, Payload: payload})
 		if err = x.complete(key, raw); err != nil {
 			return nil, err
 		}
 		return payload, nil
-	case !errors.Is(err, sql.ErrNoRows):
-		return nil, x.stop(errAbandoned)
+	}
+	switch {
 	case s.wakeAt == nil || !s.wakeAt.After(x.engine.now()):
-		if err = x.complete(key, json.RawMessage(`{"timed_out":true}`)); err != nil {
+		if err := x.complete(key, json.RawMessage(`{"timed_out":true}`)); err != nil {
 			return nil, err
 		}
 		return nil, ErrTimeout

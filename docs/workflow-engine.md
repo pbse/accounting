@@ -151,6 +151,8 @@ One migration creates the engine's tables. After it, adding workflows or activit
 
 - `wf.Emit` inside domain transactions for facts other flows care about: `client_request.replied:<id>`, `close.signed_off:<close>`, `evidence.released:<id>`, `approval.granted:<run>/<step>`.
 - A wait is satisfied by the earliest matching event recorded **after the run started** that no earlier wait in the same run consumed. This covers late signals, where the reply arrives before the run reaches the wait. A step can ask for "after this step" instead.
+- An event recorded after a wait's deadline does not satisfy it. An event whose payload does not fit the wait's type is passed over and listed on the step (`input.skipped`), so a malformed signal neither fails the run nor keeps waking it.
+- **Cancelling wins.** Whenever the engine parks, releases or finishes a run, it applies a pending cancel request in the same statement, so a cancel sent while a run executes always ends it (completed steps keep their results; an unknown effect stays unknown).
 - **Event triggers** start runs from `wf.OnEvent(pattern)`. Each start's idempotency key is the event ID, so replaying an event never starts two runs.
 - **Schedules** (`wf.Schedule(cron)`) are evaluated by the engine loop. Each slot has the idempotency key `<workflow>@<slot>`, so a restarted worker cannot double-start one. Schedules can be firm-scoped (for each enabled firm) or platform-wide.
 

@@ -749,3 +749,45 @@ func TestNotAppliedOnACancelledRunClosesTheStep(t *testing.T) {
 		t.Fatalf("a finished run's effect must end closed, not waiting: %v", v.steps)
 	}
 }
+
+func TestMalformedEventIsPassedOverAndAValidOneStillCounts(t *testing.T) {
+	h := setup(t)
+	in := ref{ID: rand.Text()}
+	id := h.start("test_wait", in)
+	h.drain()
+	if _, err := wf.Emit(h.ctx, h.db, h.org, "reply:"+in.ID, map[string]int{"text": 5}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.drain(); n > 1 {
+		t.Fatalf("a malformed event must not keep waking the run (%d executions)", n)
+	}
+	if err := wf.Sweep(h.ctx, h.engine); err != nil {
+		t.Fatal(err)
+	}
+	if h.drain() != 0 {
+		t.Fatal("the sweep woke the run for an event it had passed over")
+	}
+	var skipped string
+	h.db.QueryRow(`SELECT COALESCE(input->>'skipped','') FROM workflow_steps WHERE run_id=$1 AND key='reply'`, id).Scan(&skipped)
+	if v := h.expect(id, "waiting"); skipped == "" || v.steps["reply"] != "waiting" {
+		t.Fatalf("skipped %q, steps %v", skipped, v.steps)
+	}
+	h.emit("reply:"+in.ID, "well formed")
+	h.drain()
+	if v := h.expect(id, "completed"); !strings.Contains(v.output, "well formed") {
+		t.Fatalf("output %s", v.output)
+	}
+}
+
+func TestReleasingAnUnregisteredRunAppliesAPendingCancel(t *testing.T) {
+	h := setup(t)
+	var id int64
+	if err := h.db.QueryRow(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,wake_at,cancel_requested_at,cancel_reason) VALUES($1,'test_not_in_build','x','test','-infinity',now(),'stop') RETURNING id`, h.org).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	h.drain()
+	h.expect(id, "cancelled")
+	if h.drain() != 0 {
+		t.Fatal("a cancelled run was claimed again")
+	}
+}
