@@ -3,17 +3,19 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # Documentation changes alone change nothing deployed.
+    paths-ignore: ['docs/**', '**/*.md']
 permissions:
   contents: read
+  # To find the merged pull request, its CI run and the last successful deploy.
+  actions: read
+  pull-requests: read
 concurrency:
   group: cloudflare-production
   cancel-in-progress: false
 jobs:
-  validate:
-    if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/ci.yml
   deploy:
-    needs: validate
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
@@ -69,6 +71,23 @@ jobs:
       XERO_POSTING_KINDS: ${{ vars.XERO_POSTING_KINDS }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # History back to the last successful deploy, to see whether the text scanner changed.
+          fetch-depth: 0
+      - name: The merged pull request passed CI
+        # CI is not repeated here. A push is deployed only when the pull request it merged passed CI; the image and app
+        # builds below then compile what was merged. Run this workflow by hand to deploy anything else.
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          heads="$(git rev-parse -q --verify HEAD^2 || true) $(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" -q '.[].head.sha' || true)"
+          for head in $heads; do
+            conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$head" --limit 1 --json conclusion -q '.[0].conclusion')
+            if [ "$conclusion" = success ]; then echo "CI passed for $head"; exit 0; fi
+          done
+          echo "::error::No passing CI run for the pull request merged in $GITHUB_SHA (heads: ${heads:-none}). Wait for CI, then run Deploy production by hand."
+          exit 1
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -125,7 +144,20 @@ jobs:
           DATABASE_URL="$MIGRATION_DATABASE_URL" infra/postgres/migrate.sh
       - name: Stamp the workflow code version
         run: echo "$GITHUB_SHA" > services/backend/internal/wf/version.txt
+      - name: Did the text scanner change since the last successful deploy?
+        id: scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Its image holds only cmd/scanner and internal/scanning, which CI checks. A hand run always deploys it.
+        run: |
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy-production.yml --branch main --status success --limit 1 --json headSha -q '.[0].headSha' || true)
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ -n "$last" ] && git diff --quiet "$last" HEAD -- services/scanner workers/scanner services/backend/cmd/scanner services/backend/internal/scanning services/backend/go.mod services/backend/go.sum package-lock.json .github/workflows/deploy-production.yml; then
+            echo "Unchanged since $last; not redeployed."
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Deploy isolated on-demand text scanner
+        if: steps.scanner.outputs.deploy == 'true'
         run: |
           export CLOSE_SCANNER_SECRET_FILE="$(mktemp)"
           trap 'rm -f "$CLOSE_SCANNER_SECRET_FILE"' EXIT

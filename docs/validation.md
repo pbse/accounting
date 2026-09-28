@@ -2656,3 +2656,19 @@ Checks:
 - `TestTheEndedMonthSnapshotIsCapturedAndRefreshedWhenItChanges` (mocked QuickBooks, local PostgreSQL): a snapshot under 20 hours old is not read again; a day-old one is read again and nothing is saved while the reports are unchanged; a changed balance saves a second snapshot. A person's capture during the read still wins, and signed-off, current-month and renamed-company closes are still left alone.
 
 Not verified: the capture against a live QuickBooks company.
+
+## About six Actions minutes per merged change (2026-09-28)
+
+Request: bring a merged pull request's Actions minutes from about 20 down to about 6. Before this, each merge was billed for three jobs: CI on the pull request (5.5 min, billed 6), CI again inside Deploy production (5.3 min, billed 6) and the deploy itself (3.3 min, billed 4). GitHub bills each job rounded up to a whole minute.
+
+What changed:
+- **One CI run per change.** Deploy production no longer calls CI. It deploys a push only when the merged pull request passed CI: it checks the merge commit's second parent or GitHub's commit-to-pull-request link. A hand run skips that check. The image and app builds in the deploy compile what was merged; a merge that main moved past after CI is compiled but not re-tested.
+- **Scanner.** It is redeployed only when its code, the Go modules, the lockfile or the workflow changed since the last successful deploy; a hand run always redeploys it. CI fails if `cmd/scanner` starts using any package besides `internal/scanning`, so that path list stays true.
+- **Faster CI.** The PDF/OCR packages install, and the TypeScript checks, tests, app builds and Worker dry-runs run, in the background while Go is set up and tested; each is waited for and must pass. The app builds run vite directly, since `npm run check` already type-checked them. The two container images build only when a Dockerfile, a `.dockerignore` or the Go modules change; the Go build covers the code, and every deploy builds the images.
+- **Docs-only changes** run neither CI nor Deploy production.
+- **Not added:** a Go build cache. Only runs on `main` can seed a cache that pull requests share, and they no longer compile Go; a cache saved per pull request would only add upload time.
+
+Checks:
+- actionlint passes on the three workflows.
+- The background TypeScript chain (checks, tests, both vite builds, edge dry-run) passes locally in 8 seconds and leaves `apps/frontend/dist`, with the admin app under it, as before.
+- The Actions timings come from this pull request's CI run and its deploy, recorded in the pull request.
