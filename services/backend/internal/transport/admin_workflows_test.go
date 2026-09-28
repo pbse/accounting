@@ -345,9 +345,10 @@ func TestALongRunShowsItsLatestStepsAndChildren(t *testing.T) {
 	if first := read("?steps_before=51"); span(first) != "50:1-50" || first.EarlierSteps {
 		t.Fatalf("the first page: %s %v", span(first), first.EarlierSteps)
 	}
-	var newest int64
-	db.QueryRow(`SELECT max(id) FROM workflow_runs WHERE parent_run_id=$1`, run).Scan(&newest)
-	if len(latest.Children) != 200 || latest.ChildrenTotal != 250 || latest.Children[199].ID != newest || latest.Children[0].ID != newest-199 {
+	// The newest 200 by ID: other tests' runs may take IDs in between, so they are read, not counted on.
+	var newest, oldestShown int64
+	db.QueryRow(`SELECT max(id),min(id) FROM (SELECT id FROM workflow_runs WHERE parent_run_id=$1 ORDER BY id DESC LIMIT 200) c`, run).Scan(&newest, &oldestShown)
+	if len(latest.Children) != 200 || latest.ChildrenTotal != 250 || latest.Children[199].ID != newest || latest.Children[0].ID != oldestShown {
 		t.Fatalf("the newest 200 of 250 child runs, in order: %d of %d", len(latest.Children), latest.ChildrenTotal)
 	}
 	// Every child is in the runs list, a page at a time.
