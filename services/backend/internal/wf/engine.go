@@ -250,6 +250,10 @@ func (e *Engine) settle(x *execution, out json.RawMessage, runErr error) {
 		e.finish(x, "cancelled", nil, "")
 	case errors.Is(x.halt, errSuspended):
 		e.park(x)
+	case x.halt != nil:
+		// A structural error (a reused key, a step that changed kind, a result that no longer fits)
+		// fails the run even if the workflow code ignored it.
+		e.finish(x, "failed", nil, x.halt.Error())
 	case runErr != nil:
 		e.finish(x, "failed", nil, runErr.Error())
 	default:
@@ -272,8 +276,17 @@ func (e *Engine) finish(x *execution, state string, out json.RawMessage, message
 	if out != nil {
 		output = string(out)
 	}
-	result, err := tx.ExecContext(x.sys, `UPDATE workflow_runs SET state=$3,output=$4,error=$5,finished_at=now(),updated_at=now(),claim=NULL,wake_at=NULL,waiting_on='' WHERE id=$1 AND claim=$2`, x.run.id, x.run.claim, state, output, truncate(message))
-	if err == nil && affected(result) && state == "cancelled" {
+	// A cancel requested while the run was executing wins, even over a last step that succeeded:
+	// Cancel promised the run would stop. Completed steps keep their results.
+	err = tx.QueryRowContext(x.sys, `UPDATE workflow_runs SET finished_at=now(),updated_at=now(),claim=NULL,wake_at=NULL,waiting_on='',
+ state=CASE WHEN cancel_requested_at IS NOT NULL THEN 'cancelled' ELSE $3 END,
+ output=CASE WHEN cancel_requested_at IS NOT NULL THEN NULL ELSE $4::jsonb END,
+ error=CASE WHEN cancel_requested_at IS NOT NULL THEN '' ELSE $5 END
+ WHERE id=$1 AND claim=$2 RETURNING state`, x.run.id, x.run.claim, state, output, truncate(message)).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return // another worker holds the run now
+	}
+	if err == nil && state == "cancelled" {
 		// An unknown effect stays unknown: cancelling a run never settles what a provider did.
 		_, err = tx.ExecContext(x.sys, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=$1 AND state IN ('running','waiting')`, x.run.id)
 	}

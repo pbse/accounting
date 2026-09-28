@@ -15,7 +15,8 @@ import (
 // calling fn. A step may run more than once if its worker dies mid-call, so fn must be safe to
 // repeat: use idempotent writes, or StepID as an idempotency key. External writes use Effect.
 func Step[T any](ctx Context, key string, fn func(context.Context) (T, error), options ...StepOption) (T, error) {
-	return typed[T](ctx.exec().step(key, "step", policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
+	x := ctx.exec()
+	return typed[T](x)(x.step(key, "step", policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
 }
 
 // Effect runs an external write (ledger posting, email, provider call) under key. It records the
@@ -24,7 +25,8 @@ func Step[T any](ctx Context, key string, fn func(context.Context) (T, error), o
 // unknown and the run waits until a person checks the provider and resolves it. Cancelling a run
 // never interrupts an effect in flight.
 func Effect[T any](ctx Context, key string, fn func(context.Context) (T, error), options ...StepOption) (T, error) {
-	return typed[T](ctx.exec().step(key, "effect", policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
+	x := ctx.exec()
+	return typed[T](x)(x.step(key, "effect", policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
 }
 
 // StepID identifies the current run and step, for use as an idempotency key in a step's writes.
@@ -87,15 +89,19 @@ func Random(ctx Context) string {
 	return s
 }
 
-func typed[T any](raw json.RawMessage, err error) (T, error) {
-	var out T
-	if err != nil {
-		return out, err
+// typed decodes a step's saved result. A result that no longer fits its type means the code changed
+// under a saved step; that stops the run rather than continuing with a zero value.
+func typed[T any](x *execution) func(json.RawMessage, error) (T, error) {
+	return func(raw json.RawMessage, err error) (T, error) {
+		var out T
+		if err != nil {
+			return out, err
+		}
+		if err = json.Unmarshal(raw, &out); err != nil {
+			return out, x.stop(fmt.Errorf("saved step result does not fit %T (give a changed step a new key): %w", out, err))
+		}
+		return out, nil
 	}
-	if err = json.Unmarshal(raw, &out); err != nil {
-		return out, Permanent(fmt.Errorf("saved step result does not fit %T: %w", out, err))
-	}
-	return out, nil
 }
 
 // stop makes err the run's outcome for this execution: every later primitive returns it too, so
@@ -119,11 +125,12 @@ func (x *execution) enter(key string, internal bool) error {
 	if x.halt != nil {
 		return x.halt
 	}
+	// Structural errors are sticky: code that ignores them cannot go on to run later steps.
 	if key == "" || len(key) > 200 || (!internal && strings.HasPrefix(key, "$")) {
-		return Permanent(fmt.Errorf("invalid step key %q: use 1-200 characters, not starting with $", key))
+		return x.stop(fmt.Errorf("invalid step key %q: use 1-200 characters, not starting with $", key))
 	}
 	if x.visited[key] {
-		return Permanent(fmt.Errorf("step key %q was reached twice in one run; give each call its own key", key))
+		return x.stop(fmt.Errorf("step key %q was reached twice in one run; give each call its own key", key))
 	}
 	x.visited[key] = true
 	return nil
@@ -221,7 +228,7 @@ func (x *execution) step(key, kind string, p policy, fn func(context.Context) (a
 	s := x.steps[key]
 	if s != nil {
 		if s.kind != kind {
-			return nil, Permanent(fmt.Errorf("step %q was a %s and is now a %s; give the new step its own key", key, s.kind, kind))
+			return nil, x.stop(fmt.Errorf("step %q was a %s and is now a %s; give the new step its own key", key, s.kind, kind))
 		}
 		switch s.state {
 		case "completed":
@@ -363,7 +370,7 @@ func (x *execution) sleep(key string, until func() time.Time) error {
 	}
 	switch {
 	case s.kind != "sleep":
-		return Permanent(fmt.Errorf("step %q was a %s and is now a sleep; give the new step its own key", key, s.kind))
+		return x.stop(fmt.Errorf("step %q was a %s and is now a sleep; give the new step its own key", key, s.kind))
 	case s.state == "completed":
 		return nil
 	case s.state == "cancelled":
@@ -399,7 +406,7 @@ func (x *execution) wait(key, event string, timeout time.Duration) (json.RawMess
 		s = x.steps[key]
 	}
 	if s.kind != "event" {
-		return nil, Permanent(fmt.Errorf("step %q was a %s and is now an event wait; give the new step its own key", key, s.kind))
+		return nil, x.stop(fmt.Errorf("step %q was a %s and is now an event wait; give the new step its own key", key, s.kind))
 	}
 	switch s.state {
 	case "completed":

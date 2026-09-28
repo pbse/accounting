@@ -168,10 +168,12 @@ var _ = wf.Define(wf.Spec[ref, string]{
 		if in.ID == "panic" {
 			panic("boom")
 		}
-		// Reusing a key in one run is refused, even if the workflow ignores the error.
+		// Reusing a key in one run is refused and stops the run, even when the workflow ignores the
+		// refusal, runs on and claims success.
 		_, _ = wf.Step(ctx, "same", func(context.Context) (int, error) { return 1, nil })
-		_, err := wf.Step(ctx, "same", func(context.Context) (int, error) { return 2, nil })
-		return "", err
+		_, _ = wf.Step(ctx, "same", func(context.Context) (int, error) { return 2, nil })
+		_, _ = wf.Step(ctx, "later", func(context.Context) (int, error) { count(in.ID + "/later"); return 3, nil })
+		return "ignored", nil
 	},
 })
 
@@ -577,10 +579,11 @@ func TestSleepFaultsSuspendedFirmsAndUnregisteredWorkflows(t *testing.T) {
 	if v := h.run(h.start("test_faults", ref{ID: "panic"})); v.state != "queued" {
 		t.Fatal(v.state)
 	}
-	reused := h.start("test_faults", ref{ID: rand.Text()})
+	reusedIn := ref{ID: rand.Text()}
+	reused := h.start("test_faults", reusedIn)
 	h.drain()
-	if v := h.expect(reused, "failed"); !strings.Contains(v.err, "reached twice") {
-		t.Fatalf("error %q", v.err)
+	if v := h.expect(reused, "failed"); !strings.Contains(v.err, "reached twice") || v.steps["later"] != "" || counted(reusedIn.ID+"/later") != 0 {
+		t.Fatalf("error %q, steps %v", v.err, v.steps)
 	}
 	var panicked string
 	h.db.QueryRow(`SELECT error FROM workflow_runs WHERE organization_id=$1 AND idempotency_key='panic'`, h.org).Scan(&panicked)
@@ -693,5 +696,21 @@ func TestIncompleteSavedValueIsRegenerated(t *testing.T) {
 	var out map[string]string
 	if err := json.Unmarshal([]byte(h.expect(id, "completed").output), &out); err != nil || out["at"] == "" || strings.HasPrefix(out["at"], "0001-") {
 		t.Fatalf("Now replayed an unsaved value: %v %v", out, err)
+	}
+}
+
+func TestCancelDuringTheLastStepEndsTheRunCancelled(t *testing.T) {
+	h := setup(t)
+	id := h.start("test_steps", ref{ID: rand.Text()})
+	wf.Hook(h.engine, func(point, key string) {
+		if point == "before-call" && key == "c" {
+			if err := wf.Cancel(h.ctx, h.db, id, "test", "stop after all"); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	h.drain()
+	if v := h.expect(id, "cancelled"); v.steps["c"] != "completed" || v.output != "" {
+		t.Fatalf("a cancel requested mid-run must win and keep completed steps: %+v", v)
 	}
 }

@@ -87,7 +87,8 @@ func Emit(ctx context.Context, q Querier, org, key string, payload any, actor st
 }
 
 // Cancel stops a run with a reason. A queued or waiting run ends at once; a running run ends at its
-// next step, or sooner when its current step honours cancellation. Effects in flight are never cut
+// next step, or sooner when its current step honours cancellation, and ends cancelled even if its
+// last step then succeeds. Completed steps keep their results. Effects in flight are never cut
 // short, and an unknown effect stays unknown for reconciliation.
 func Cancel(ctx context.Context, db *sql.DB, runID int64, by, reason string) error {
 	if strings.TrimSpace(by) == "" || strings.TrimSpace(reason) == "" {
