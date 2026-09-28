@@ -52,7 +52,7 @@ func OpenTenantDB(url, fallback string) (*sql.DB, error) {
 	}
 	// The firm is a session setting; a transaction pooler could hand one firm's session to another's statement.
 	for _, host := range append([]*pgconn.FallbackConfig{{Host: config.Host}}, config.Fallbacks...) {
-		if strings.Contains(host.Host, "-pooler") {
+		if strings.Contains(strings.ToLower(host.Host), "-pooler") {
 			return nil, errors.New("DATABASE_URL must be a direct connection, not a transaction pooler")
 		}
 	}
