@@ -199,7 +199,7 @@ export function FirmAudit({ firm }: { firm: string }) {
   const audit = useRevealable<{ entries: Entry[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${offset ? `?offset=${offset}` : ""}`);
   return (
     <>
-      <p>Everything staff did to this firm, with their reasons, including actions that were refused and every reveal of client content. Why a refused action failed is hidden until revealed.</p>
+      <p>Everything staff did to this firm, including actions that were refused and every reveal of client content. Reasons and why a refused action failed are hidden until revealed.</p>
       <Reveal reveal={audit.reveal} />
       {audit.error && <p role="alert">{audit.error}</p>}
       {!audit.data && !audit.error && <p role="status">Loading the audit…</p>}
@@ -215,7 +215,7 @@ export function FirmAudit({ firm }: { firm: string }) {
                     <td>{e.staff_user}</td>
                     <td>{e.action}</td>
                     <td>{e.target_type} {e.target_id}</td>
-                    <td>{e.reason}</td>
+                    <td>{shown(e.reason)}</td>
                     <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
                   </tr>
                 ))}

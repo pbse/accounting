@@ -171,8 +171,9 @@ type adminAuditRow struct {
 	CreatedAt  string          `json:"created_at"`
 }
 
-// adminFirmAudit is what staff did to the firm, newest first, with each staff member's reason. The request's details and a
-// refusal's error can echo what was asked for, so their text is masked until revealed.
+// adminFirmAudit is what staff did to the firm, newest first: who, which action, on what, and whether it went through.
+// Reasons, the request's details and a refusal's error are free text that can name a client, so they are masked until
+// revealed.
 func adminFirmAudit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	firm, reveal := r.PathValue("id"), r.URL.Query().Get("reveal") == "1"
 	offset, ok := adminOffset(w, r)
@@ -196,7 +197,7 @@ func adminFirmAudit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				return err
 			}
 			if !reveal {
-				e.Request, e.Error = only(e.Request), maskText(e.Error)
+				e.Reason, e.Request, e.Error = maskText(e.Reason), only(e.Request), maskText(e.Error)
 			}
 			entries = append(entries, e)
 		}
