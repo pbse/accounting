@@ -202,9 +202,18 @@ func TestStaffBuildPlansAndTemplates(t *testing.T) {
 	}
 	adminJSON(t, h, token, "POST", path(proposal), body(`"plan":`+good+`,"reason":"Rewriting the agent's idea"`), 409)
 
+	// A large integer in an input stays exact through saving and the builder's revealed read.
+	exact := int64(adminJSON(t, h, token, "POST", "/v1/admin/plans", body(`"firm":"`+firm+`","plan":{"version":1,"title":"Exact","nodes":[{"id":"tell","activity":"plan_signal","input":{"name":"n","payload":{"n":9007199254740993}}}]},"reason":"Checking large numbers survive"`), 200)["plan_id"].(float64))
+	if inputs := mustString(adminJSON(t, h, token, "GET", path(exact)+"?reveal=1", "", 200, "X-Access-Reason", "editing the plan")["inputs"]); !strings.Contains(inputs, "9007199254740993") {
+		t.Fatalf("inputs as stored: %s", inputs)
+	}
+	if masked := adminJSON(t, h, token, "GET", path(exact), "", 200)["inputs"]; masked != nil {
+		t.Fatalf("inputs are content: %v", masked)
+	}
+
 	var created string
 	if err := db.QueryRow(`SELECT string_agg(action||':'||result||':'||COALESCE(request->>'plan_id','-'),',' ORDER BY id) FROM platform_audit WHERE organization_id=$1 AND action IN ('plan.create','plan.update')`, firm).Scan(&created); err != nil ||
-		created != "plan.create:refused:-,plan.create:ok:"+strconv.FormatInt(draft, 10)+",plan.update:ok:-,plan.update:refused:-,plan.update:refused:-" {
+		created != "plan.create:refused:-,plan.create:ok:"+strconv.FormatInt(draft, 10)+",plan.update:ok:-,plan.update:refused:-,plan.update:refused:-,plan.create:ok:"+strconv.FormatInt(exact, 10) {
 		t.Fatalf("builder audit %q %v", created, err)
 	}
 }

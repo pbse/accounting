@@ -6,15 +6,18 @@ import { FlowGraph, type PlanNode } from "../components/Flow";
 import { Reveal, useRevealable } from "../components/Reveal";
 
 type Kind = "activity" | "workflow" | "event" | "sleep" | "approval";
-// One step as the form edits it; toPlan turns the list into plan JSON.
+// One step as the form edits it; toPlan turns the list into plan JSON. Steps refer to each other by key, which never
+// changes, so renaming a step (even to another step's ID for a moment) never rewires what waits for what.
 type Step = {
+  key: string;
   id: string;
   kind: Kind;
   activity: string;
   workflow: string;
-  input: string;
-  after: string[];
-  when: string;
+  input: string; // the JSON as written, never parsed and re-written, so large numbers stay exact
+  after: string[]; // keys
+  whenKey: string;
+  whenOutcome: string;
   event: string;
   timeout: string;
   duration: string;
@@ -26,7 +29,11 @@ type Schema = { type?: string; properties?: Record<string, Schema> };
 type Activity = { Name: string; Title: string; Description: string; Permission: string; Effect: string; Input: Schema };
 type Definition = { name: string; title: string; input_schema: Schema };
 type StoredNode = PlanNode & { input?: unknown; approval?: { permission: string; subject?: string; prompt?: string; timeout?: string } };
-type Stored = { plan: { id: number; organization: string | null; state: string; source: string; is_template: boolean; plan?: { title: string; nodes: StoredNode[] } }; revealed: boolean };
+type Stored = {
+  plan: { id: number; organization: string | null; state: string; source: string; is_template: boolean; plan?: { title: string; nodes: StoredNode[] } };
+  inputs?: Record<string, string>; // each step's input exactly as stored
+  revealed: boolean;
+};
 
 // What each kind of step can end with, for a later step's "when".
 const outcomes: Record<Kind, string[]> = {
@@ -43,11 +50,10 @@ const kindLabel: Record<Kind, string> = { activity: "Run an activity", workflow:
 function prune(steps: Step[]): Step[] {
   return steps.map((s, i) => {
     const earlier = steps.slice(0, i);
-    const after = s.after.filter((a) => earlier.some((e) => e.id === a));
-    const [on, outcome] = s.when.split(".");
-    const from = earlier.find((e) => e.id === on);
-    const when = from && after.includes(on) && outcomes[from.kind].includes(outcome) ? s.when : "";
-    return { ...s, after, when };
+    const after = s.after.filter((a) => earlier.some((e) => e.key === a));
+    const from = earlier.find((e) => e.key === s.whenKey);
+    const keep = from && after.includes(s.whenKey) && outcomes[from.kind].includes(s.whenOutcome);
+    return { ...s, after, whenKey: keep ? s.whenKey : "", whenOutcome: keep ? s.whenOutcome : "" };
   });
 }
 
@@ -58,7 +64,10 @@ function unusedID(steps: Step[]): string {
   return `step_${n}`;
 }
 
-const blank = (id: string): Step => ({ id, kind: "activity", activity: "", workflow: "", input: "{}", after: [], when: "", event: "", timeout: "72h", duration: "24h", permission: "", subject: "", prompt: "" });
+const blank = (id: string): Step => ({
+  key: crypto.randomUUID(), id, kind: "activity", activity: "", workflow: "", input: "{}", after: [], whenKey: "", whenOutcome: "",
+  event: "", timeout: "72h", duration: "24h", permission: "", subject: "", prompt: "",
+});
 
 // A starting input for a schema: each field with an empty value of its type.
 function skeleton(schema?: Schema): string {
@@ -69,12 +78,18 @@ function skeleton(schema?: Schema): string {
   return JSON.stringify(out, null, 2);
 }
 
-function fromPlan(nodes: StoredNode[]): Step[] {
-  return nodes.map((n) => {
-    const s = blank(n.id);
-    s.after = n.after ?? [];
-    s.when = n.when ?? "";
-    s.input = n.input === undefined ? "{}" : JSON.stringify(n.input, null, 2);
+function fromPlan(nodes: StoredNode[], inputs: Record<string, string> = {}): Step[] {
+  const steps = nodes.map((n) => blank(n.id));
+  const keyOf = (id: string) => steps.find((s) => s.id === id)?.key ?? "";
+  return nodes.map((n, i) => {
+    const s = steps[i];
+    s.after = (n.after ?? []).map(keyOf).filter(Boolean);
+    if (n.when) {
+      const [on, outcome] = n.when.split(".");
+      s.whenKey = keyOf(on);
+      s.whenOutcome = outcome;
+    }
+    s.input = inputs[n.id] ?? (n.input === undefined ? "{}" : JSON.stringify(n.input, null, 2));
     if (n.activity) Object.assign(s, { kind: "activity", activity: n.activity });
     else if (n.workflow) Object.assign(s, { kind: "workflow", workflow: n.workflow });
     else if (n.wait?.event) Object.assign(s, { kind: "event", event: n.wait.event, timeout: n.wait.timeout ?? "" });
@@ -84,28 +99,40 @@ function fromPlan(nodes: StoredNode[]): Step[] {
   });
 }
 
-// toPlan builds plan JSON from the form, or says which step's input is not JSON.
-function toPlan(title: string, steps: Step[]): { plan?: { version: 1; title: string; nodes: StoredNode[] }; error?: string } {
+// toPlan builds the plan as JSON text, with each input spliced in exactly as written (parsing would round integers
+// beyond 2^53), plus a parsed copy for the preview; or says which step's input is not JSON.
+function toPlan(title: string, steps: Step[]): { text?: string; preview?: StoredNode[]; error?: string } {
+  const idOf = (key: string) => steps.find((s) => s.key === key)?.id ?? "";
   const nodes: StoredNode[] = [];
+  const inputs: string[] = [];
   for (const s of steps) {
     const n: StoredNode = { id: s.id };
-    if (s.after.length) n.after = s.after;
-    if (s.when) n.when = s.when;
+    if (s.after.length) n.after = s.after.map(idOf);
+    if (s.whenKey) n.when = `${idOf(s.whenKey)}.${s.whenOutcome}`;
     if (s.kind === "activity" || s.kind === "workflow") {
       if (s.kind === "activity") n.activity = s.activity;
       else n.workflow = s.workflow;
       try {
-        n.input = JSON.parse(s.input || "{}");
+        JSON.parse(s.input || "{}");
       } catch {
         return { error: `Step “${s.id}”: the input is not valid JSON.` };
       }
+      n.input = `@@plan-input-${inputs.length}@@`;
+      inputs.push((s.input || "{}").trim());
     } else if (s.kind === "event") n.wait = { event: s.event, timeout: s.timeout };
     else if (s.kind === "sleep") n.wait = { duration: s.duration };
     else n.approval = { permission: s.permission, ...(s.subject && { subject: s.subject }), ...(s.prompt && { prompt: s.prompt }), timeout: s.timeout };
     nodes.push(n);
   }
-  return { plan: { version: 1, title, nodes } };
+  let text = JSON.stringify({ version: 1, title, nodes });
+  inputs.forEach((raw, i) => {
+    text = text.replace(`"@@plan-input-${i}@@"`, () => raw);
+  });
+  return { text, preview: nodes };
 }
+
+// withPlan is a request body: the fields, and the plan's JSON text as it is.
+const withPlan = (fields: Record<string, unknown>, text: string) => JSON.stringify(fields).replace(/}$/, `${Object.keys(fields).length ? "," : ""}"plan":${text}}`);
 
 // New plan or template (/plans/new, optionally ?template=1, ?firm= or ?from=<plan> to start from a copy), or an edit
 // of a draft (/plans/:id/edit). Editing or copying reads a plan's content, so it is revealed first.
@@ -132,7 +159,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
     if (loaded || !stored.data?.revealed || !stored.data.plan.plan) return;
     const p = stored.data.plan;
     setTitle(editing ? p.plan!.title : `Copy of ${p.plan!.title}`);
-    setSteps(fromPlan(p.plan!.nodes));
+    setSteps(fromPlan(p.plan!.nodes, stored.data.inputs));
     if (!editing) setFirm(p.organization ?? "");
     if (editing) setTemplate(p.is_template);
     setLoaded(true);
@@ -142,10 +169,10 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
   const [check, setCheck] = useState<{ problems: string[]; staff_approvable: boolean; digest: string }>();
   // Check the plan as it is written, a moment after the last change.
   useEffect(() => {
-    if (!loaded || !built.plan) return;
+    if (!loaded || !built.text) return;
     let current = true;
     const timer = setTimeout(() => {
-      post<{ problems: string[]; staff_approvable: boolean; digest: string }>("/v1/admin/plans/validate", { plan: built.plan }).then((c) => current && setCheck(c), () => current && setCheck(undefined));
+      post<{ problems: string[]; staff_approvable: boolean; digest: string }>("/v1/admin/plans/validate", withPlan({}, built.text!)).then((c) => current && setCheck(c), () => current && setCheck(undefined));
     }, 400);
     return () => {
       current = false;
@@ -168,11 +195,6 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
   }
 
   const update = (i: number, change: Partial<Step>) => setSteps(prune(steps.map((s, j) => (j === i ? { ...s, ...change } : s))));
-  // Renaming a step keeps the later steps that wait for it pointing at it.
-  const rename = (i: number, id: string) => {
-    const old = steps[i].id;
-    setSteps(steps.map((s, j) => (j === i ? { ...s, id } : { ...s, after: s.after.map((a) => (a === old ? id : a)), when: s.when.startsWith(`${old}.`) ? `${id}${s.when.slice(old.length)}` : s.when })));
-  };
   const move = (i: number, by: number) => {
     const next = [...steps];
     [next[i], next[i + by]] = [next[i + by], next[i]];
@@ -189,17 +211,18 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
           {steps.map((s, i) => {
             const earlier = steps.slice(0, i);
             const whenOptions = s.after.flatMap((a) => {
-              const from = steps.find((x) => x.id === a);
-              return from ? outcomes[from.kind].map((o) => `${a}.${o}`) : [];
+              const from = steps.find((x) => x.key === a);
+              return from ? outcomes[from.kind].map((o) => ({ value: `${a}|${o}`, label: `${from.id} ends ${o.replaceAll("_", " ")}` })) : [];
             });
+            const whenStep = steps.find((x) => x.key === s.whenKey);
             const activity = activities.data?.activities.find((a) => a.Name === s.activity);
             return (
-              <fieldset key={i} className="schema-form">
+              <fieldset key={s.key} className="schema-form">
                 <legend>Step {i + 1}</legend>
                 <div className="filters">
-                  <label>ID<input value={s.id} onChange={(event) => rename(i, event.target.value.trim())} pattern="[a-z][a-z0-9_]*" /></label>
+                  <label>ID<input value={s.id} onChange={(event) => update(i, { id: event.target.value.trim() })} pattern="[a-z][a-z0-9_]*" /></label>
                   <label>Does
-                    <select value={s.kind} onChange={(event) => update(i, { kind: event.target.value as Kind, when: "" })}>
+                    <select value={s.kind} onChange={(event) => update(i, { kind: event.target.value as Kind })}>
                       {(Object.keys(kindLabel) as Kind[]).map((k) => <option key={k} value={k}>{kindLabel[k]}</option>)}
                     </select>
                   </label>
@@ -253,26 +276,29 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
                     <fieldset>
                       <legend>After</legend>
                       {earlier.map((e) => (
-                        <label key={e.id} className="check">
-                          <input type="checkbox" checked={s.after.includes(e.id)} disabled={!!s.when} onChange={(event) => update(i, { after: event.target.checked ? [...s.after, e.id] : s.after.filter((a) => a !== e.id) })} />
+                        <label key={e.key} className="check">
+                          <input type="checkbox" checked={s.after.includes(e.key)} disabled={!!s.whenKey} onChange={(event) => update(i, { after: event.target.checked ? [...s.after, e.key] : s.after.filter((a) => a !== e.key) })} />
                           {e.id}
                         </label>
                       ))}
                     </fieldset>
                     <label>When
                       {/* The engine checks only the step a "when" names, so the step then waits for that one step alone. */}
-                      <select value={s.when} onChange={(event) => update(i, { when: event.target.value, ...(event.target.value && { after: [event.target.value.split(".")[0]] }) })}>
+                      <select value={s.whenKey ? `${s.whenKey}|${s.whenOutcome}` : ""} onChange={(event) => {
+                        const [whenKey, whenOutcome] = event.target.value ? event.target.value.split("|") : ["", ""];
+                        update(i, { whenKey, whenOutcome, ...(whenKey && { after: [whenKey] }) });
+                      }}>
                         <option value="">They all succeed</option>
-                        {whenOptions.map((w) => <option key={w} value={w}>{w.replace(".", " ends ").replaceAll("_", " ")}</option>)}
+                        {whenOptions.map((w) => <option key={w.value} value={w.value}>{w.label}</option>)}
                       </select>
-                      {s.when && <small>Runs only when {s.when.split(".")[0]} ends this way, so it waits for that step alone.</small>}
+                      {whenStep && <small>Runs only when {whenStep.id} ends this way, so it waits for that step alone.</small>}
                     </label>
                   </div>
                 )}
               </fieldset>
             );
           })}
-          <p><button type="button" onClick={() => setSteps([...steps, { ...blank(unusedID(steps)), after: steps.length ? [steps[steps.length - 1].id] : [] }])}>Add a step</button></p>
+          <p><button type="button" onClick={() => setSteps([...steps, { ...blank(unusedID(steps)), after: steps.length ? [steps[steps.length - 1].key] : [] }])}>Add a step</button></p>
         </section>
         <aside className="inspector">
           <h2>Check</h2>
@@ -289,18 +315,18 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
             </>
           )}
           <ActionForm label={editing ? "Save changes" : "Save as a draft"} minLength={10} onSubmit={async (reason) => {
-            if (!built.plan) throw new Error(built.error);
+            if (!built.text) throw new Error(built.error);
             if (check && check.problems.length > 0) throw new Error("Fix the problems first: a saved plan must be valid.");
             const answer = editing
-              ? await post<{ plan_id: number }>(`/v1/admin/plans/${encodeURIComponent(editing)}`, { plan: built.plan, reason })
-              : await post<{ plan_id: number }>("/v1/admin/plans", { firm: firm.trim(), template, plan: built.plan, reason });
+              ? await post<{ plan_id: number }>(`/v1/admin/plans/${encodeURIComponent(editing)}`, withPlan({ reason }, built.text))
+              : await post<{ plan_id: number }>("/v1/admin/plans", withPlan({ firm: firm.trim(), template, reason }, built.text));
             navigate(`/plans/${answer.plan_id}`);
           }} />
         </aside>
       </div>
       <section>
         <h2>Preview</h2>
-        {built.plan && <FlowGraph steps={[]} plan={built.plan.nodes} onSelect={() => {}} />}
+        {built.preview && <FlowGraph steps={[]} plan={built.preview} onSelect={() => {}} />}
       </section>
     </>
   );

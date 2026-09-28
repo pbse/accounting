@@ -212,11 +212,22 @@ func adminPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problems = found
 	}
 	approvable := (p.State == "draft" || p.State == "proposed") && !p.IsTemplate && p.Organization != nil && len(problems) == 0
-	if !reveal {
+	// Each step's input exactly as stored, for the builder: a browser parsing JSON rounds integers beyond 2^53.
+	var inputs map[string]string
+	if reveal {
+		if plan, err := wf.ParsePlan(p.Plan); err == nil {
+			inputs = map[string]string{}
+			for _, n := range plan.Nodes {
+				if len(n.Input) > 0 {
+					inputs[n.ID] = string(n.Input)
+				}
+			}
+		}
+	} else {
 		p.masked()
 		problems = slices.Repeat([]string{"••••"}, len(problems))
 	}
-	jsonReply(w, 200, map[string]any{"plan": p, "problems": problems, "approvable": approvable, "revealed": reveal})
+	jsonReply(w, 200, map[string]any{"plan": p, "inputs": inputs, "problems": problems, "approvable": approvable, "revealed": reveal})
 }
 
 // errPlanNotReviewed is an approval of a version the staff member has not revealed, and so has not read.
