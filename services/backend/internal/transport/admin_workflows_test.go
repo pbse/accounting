@@ -197,6 +197,15 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 	// A completed step cannot be retried; the refusal is audited too.
 	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(failed)+"/retry", `{"key":"note","reason":"again"}`, 409)
 
+	// A run woken long ago but never claimed is stuck.
+	var woken int64
+	if err := db.QueryRow(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,input,state,wake_at,updated_at) VALUES($1,'test_admin_flow',$2,'test','{"id":"x"}','waiting','-infinity',now()-interval '1 hour') RETURNING id`, firm, rand.Text()).Scan(&woken); err != nil {
+		t.Fatal(err)
+	}
+	if stuck := mustString(adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs?firm="+firm+"&view=stuck", "", 200)["runs"]); !strings.Contains(stuck, `"id":`+jsonNumber(float64(woken))+`,`) {
+		t.Fatalf("a woken, unclaimed run must be stuck: %s", stuck)
+	}
+
 	var actions []string
 	rows, err := db.Query(`SELECT action||' '||result FROM platform_audit WHERE organization_id=$1 ORDER BY id`, firm)
 	if err != nil {
