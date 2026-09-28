@@ -40,7 +40,7 @@ func TestSetupFollowsTheFirmsOwnRecords(t *testing.T) {
 	exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`, org)
 	exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`, org)
 	defer func() {
-		for _, q := range []string{`DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM xero_connections WHERE organization_id=$1`, `DELETE FROM procedure_versions WHERE organization_id=$1`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM close_effort WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM close_effort_entries WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM xero_connections WHERE organization_id=$1`, `DELETE FROM procedure_versions WHERE organization_id=$1`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
@@ -55,6 +55,11 @@ func TestSetupFollowsTheFirmsOwnRecords(t *testing.T) {
 		Permissions  []string
 		Reconnect    []setupReconnect
 		CanReconnect bool `json:"can_reconnect"`
+		FirstDraft   *struct {
+			WorkpaperID string   `json:"workpaper_id"`
+			Elapsed     *float64 `json:"elapsed_minutes"`
+			Human       float64  `json:"human_minutes"`
+		} `json:"first_draft"`
 	}
 	read := func() (setup, map[string]bool) {
 		t.Helper()
@@ -103,13 +108,25 @@ func TestSetupFollowsTheFirmsOwnRecords(t *testing.T) {
 	if _, done = read(); done["ledger"] {
 		t.Fatal("an active sandbox company does not connect books whose captures read the broken production company")
 	}
-	exec(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','setup-draft','{}')`, alpha)
+	// First-draft timing: a procedure document 90 minutes ago does not start the clock; the invoice 60 minutes ago does,
+	// and a later document does not. Twelve minutes of human time before the draft count, time after it does not.
+	exec(`INSERT INTO evidence(close_id,name,digest,content,created_by,purpose,created_at) VALUES($1,'procedure.txt','setup-procedure','Procedure','fixture','procedure',now()-interval '90 minutes'),($1,'invoice.txt','setup-invoice','Invoice','fixture','work',now()-interval '60 minutes'),($1,'late.txt','setup-late','Late','fixture','work',now()-interval '10 minutes')`, alpha)
+	exec(`INSERT INTO close_effort(close_id,actor,minute,activity,seconds) VALUES($1,'user_a',date_trunc('minute',now())-interval '40 minutes','evidence',60),($1,'user_a',date_trunc('minute',now())-interval '30 minutes','prepare',60),($1,'user_a',date_trunc('minute',now())-interval '10 minutes','review',60)`, alpha)
+	exec(`INSERT INTO close_effort_entries(close_id,actor,activity,minutes,note,created_at) VALUES($1,'user_a','prepare',10,'Read the contract offline',now()-interval '25 minutes'),($1,'user_a','review',5,'Checked the draft offline',now()-interval '5 minutes')`, alpha)
+	exec(`INSERT INTO workpapers(close_id,kind,digest,paper,created_at) VALUES($1,'prepaid','setup-draft','{}',now()-interval '22 minutes')`, alpha)
 	var paper string
 	must(db.QueryRow(`SELECT id::text FROM workpapers WHERE close_id::text=$1`, alpha).Scan(&paper))
 	exec(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) VALUES($1,$2,'Beta','fixture','reconnect_required',$3,now(),'t-1')`, beta, org, rand.Text())
 	s, done = read()
 	if !done["prepared"] || s.Steps[5].Href != "/dashboard/closes/"+alpha+"/workpapers/"+paper {
 		t.Fatalf("a draft completes its step with its link: %+v", s.Steps)
+	}
+	if f := s.FirstDraft; f == nil || f.WorkpaperID != paper || f.Elapsed == nil || *f.Elapsed < 37.9 || *f.Elapsed > 38.1 || f.Human != 12 || !strings.Contains(s.Steps[5].Detail, "came 38 minutes after the first document there, with 12 minutes") || !strings.Contains(s.Steps[5].Detail, "estimate") {
+		t.Fatalf("the close's first draft says how long after the first document it came and the human time before it: %+v %q", s.FirstDraft, s.Steps[5].Detail)
+	}
+	exec(`UPDATE evidence SET created_at=now() WHERE close_id=$1 AND purpose='work'`, alpha)
+	if s, _ := read(); s.FirstDraft == nil || s.FirstDraft.Elapsed != nil || !strings.Contains(s.Steps[5].Detail, "was prepared without an earlier work document") {
+		t.Fatalf("a draft no document preceded has no elapsed time: %+v %q", s.FirstDraft, s.Steps[5].Detail)
 	}
 	if len(s.Reconnect) != 1 || s.Reconnect[0].Client != "Alpha" || s.Reconnect[0].Href != "/dashboard/closes/"+alpha+"?tab=settings#quickbooks-production" || !strings.Contains(s.Reconnect[0].Error, "Token refresh") || s.CanReconnect {
 		t.Fatalf("only the member's client's broken connection is listed, linked to its production panel: %+v", s.Reconnect)

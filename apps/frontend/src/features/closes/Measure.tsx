@@ -4,8 +4,19 @@ import { Avatar, Icon } from "../dashboard/Icon";
 import { minutes } from "./Effort";
 import { workspaceRequest } from "./workspace";
 
-type Row = { close_id: string; entity: string; tracked_seconds: number; recorded_minutes: number; approved_drafts: number; measured: boolean; total_minutes?: number };
-type Report = { period: string; items: Row[]; measured: number; median_minutes?: number; has_more: boolean };
+type Row = {
+  close_id: string;
+  entity: string;
+  tracked_seconds: number;
+  recorded_minutes: number;
+  approved_drafts: number;
+  measured: boolean;
+  total_minutes?: number;
+  reviews: number;
+  reviews_after_approval: number;
+  review_minutes: number;
+};
+type Report = { period: string; items: Row[]; measured: number; median_minutes?: number; has_more: boolean; reviews: number; reviews_after_approval: number };
 
 export default function Measure() {
   const [params, setParams] = useSearchParams();
@@ -72,12 +83,17 @@ export default function Measure() {
             Tracked activity counts visible, interactive workspace time; off-screen minutes are whatever the team records on each close. Neither includes
             our own team's assistance, which is recorded separately.
           </p>
+          <p className="note">
+            Reviews this month: {report.reviews}, of which {report.reviews_after_approval} came after an earlier version was approved (any reason, not only a
+            changed source). Review minutes are estimates: tracked time counts each person's minute once under its latest activity, and recorded time
+            under what was entered.
+          </p>
           <div className="rows">
             <div className="rows-head">
               <span>Client</span>
               <span>Human minutes</span>
               <span>Tracked · recorded</span>
-              <span>Approved drafts</span>
+              <span>Approved · reviews</span>
             </div>
             {report.items.length === 0 && <p className="empty">No closes in {report.period || "this month"}.</p>}
             {report.items.map((row) => (
@@ -88,7 +104,15 @@ export default function Measure() {
                 </span>
                 <span>{row.total_minutes === undefined ? <span className="status">Not measured</span> : <strong>{minutes(row.total_minutes)}</strong>}</span>
                 <small>{row.measured ? `${minutes(row.tracked_seconds / 60)} · ${minutes(row.recorded_minutes)}` : "—"}</small>
-                <span className="chip">{row.approved_drafts}</span>
+                <span>
+                  <span className="chip">{row.approved_drafts}</span>
+                  {row.reviews > 0 && (
+                    <small>
+                      {" "}
+                      {row.reviews} reviewed, {row.reviews_after_approval} after approval · {minutes(row.review_minutes)} review
+                    </small>
+                  )}
+                </span>
               </Link>
             ))}
           </div>
