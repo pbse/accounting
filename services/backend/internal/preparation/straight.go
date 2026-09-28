@@ -137,13 +137,28 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if err != nil || amount <= 0 {
 		return Plan{}, "the amount is not a positive money value"
 	}
+	quotes := map[string]string{}
 	for _, f := range p.Facts {
-		if f.Field == "amount" && negativeFigure(f.Candidates[0].Quote, amount) {
-			return Plan{}, "the invoice prints the amount as a negative or bracketed figure"
+		if len(f.Candidates) == 1 {
+			quotes[f.Field] = f.Candidates[0].Quote
 		}
-		if f.Field == "amount" && moneyFigures(f.Candidates[0].Quote) != 1 {
-			return Plan{}, "the cited text prints more than one money figure; which is the invoice amount needs a person"
-		}
+	}
+	if negativeFigure(quotes["amount"], amount) {
+		return Plan{}, "the invoice prints the amount as a negative or bracketed figure"
+	}
+	if moneyFigures(quotes["amount"]) != 1 {
+		return Plan{}, "the cited text prints more than one money figure; which is the invoice amount needs a person"
+	}
+	// The amount is the invoice's total: not a subtotal, pre-tax, unit or partial figure, and no larger figure is printed anywhere.
+	if mentionsAny(quotes["amount"], []string{"subtotal", "sub total", "before tax", "excl", "net of", "deposit", "instal", "partial", "unit", "per month", "monthly", "line", "limit", "balance forward"}) {
+		return Plan{}, "the cited line gives a subtotal, partial or unit figure, not the invoice amount"
+	}
+	if larger := largestFigure(invoice); larger > amount {
+		return Plan{}, "the invoice prints a larger money figure (" + prepaids.Money(larger) + ") than the cited amount"
+	}
+	// The currency is the amount's: each quote prints the other's value.
+	if !documents.AmountIn(quotes["currency"], prepaids.Money(amount)) || !strings.Contains(strings.ToLower(quotes["amount"]), strings.ToLower(currency)) {
+		return Plan{}, "the cited currency and amount are not printed together"
 	}
 	booking, reason := expensedLine(ledger, invoice, facts["vendor"], facts["invoice_number"], prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
 	if reason != "" {
@@ -310,6 +325,32 @@ func moneyFigures(quote string) int {
 		}
 	}
 	return count
+}
+
+// mentionsAny reports whether the quote, compared as text, contains any of the words.
+func mentionsAny(quote string, words []string) bool {
+	normal := documents.NormalizeEntity(quote)
+	for _, word := range words {
+		if strings.Contains(normal, word) {
+			return true
+		}
+	}
+	return false
+}
+
+// largestFigure is the largest money figure the invoice prints, in cents; zero when it prints none it can read.
+func largestFigure(invoice string) int64 {
+	plain := regexp.MustCompile(`(?i)(usd|eur|gbp|cad|aud|[$€£])\s*`).ReplaceAllString(invoice, "¤")
+	var largest int64
+	for _, figure := range regexp.MustCompile(`¤?\d[\d,]*(\.\d{2})?`).FindAllString(plain, -1) {
+		if !strings.HasPrefix(figure, "¤") && !strings.Contains(figure, ".") {
+			continue
+		}
+		if cents, err := prepaids.Amount(strings.ReplaceAll(strings.TrimPrefix(figure, "¤"), ",", "")); err == nil && cents > largest {
+			largest = cents
+		}
+	}
+	return largest
 }
 
 // negativeFigure reports whether the quote prints the amount preceded by a minus sign or an opening bracket, which

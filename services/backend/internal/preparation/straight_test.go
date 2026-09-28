@@ -10,7 +10,10 @@ import (
 
 func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t *testing.T) {
 	fact := func(field, value string) Fact {
-		quote := "Annual premium " + value
+		quote := "Annual premium USD " + value
+		if field == "currency" {
+			quote = "Annual premium USD 1200.00"
+		}
 		if strings.HasPrefix(field, "service_") {
 			quote = "Coverage period " + value
 		}
@@ -105,6 +108,9 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if _, reason = StraightThrough(ranged, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("range line not accepted for both dates", reason)
 	}
+	if _, reason = StraightThrough(proposal, invoice+"\nTotal including tax USD 1,300.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+		t.Fatal("prepared a subtotal when the invoice prints a larger total")
+	}
 	idOnly := bill
 	idOnly.Record = json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)
 	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(idOnly)); reason != "" {
@@ -128,6 +134,8 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"unnamed account on a credit":  {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
 		"amount cited from support":    {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
 		"line-less card credit":        {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"currency on another line":     {func(p *Proposal, _ *Procedure) { p.Facts[3].Candidates[0].Quote = "Payments accepted in USD" }, ledger(bill), false},
+		"subtotal cited":               {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Subtotal USD 1,200.00" }, ledger(bill), false},
 		"not billed to":                {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Not billed to: Example" }, ledger(bill), false},
 		"unicode minus":                {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Credit note total \u22121,200.00" }, ledger(bill), false},
 		"two accounts share the name":  {func(*Proposal, *Procedure) {}, &Ledger{Source: Source{ID: "9", Digest: "cap"}, Rows: []LedgerRow{bill}, Accounts: map[string]string{"12": "Insurance", "14": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12", "14"}, "prepaid expenses": {"13"}}}, false},
