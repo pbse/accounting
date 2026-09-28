@@ -138,6 +138,15 @@ func scanRun(row interface{ Scan(...any) error }) (adminRunRow, error) {
 	return run, err
 }
 
+// maskText hides the free text of a run until content is revealed: its error, which can quote client
+// data, and, for a plan run, the event it waits for, which a plan can build from client data.
+func (run *adminRunRow) maskText() {
+	run.Error = maskText(run.Error)
+	if run.PlanID != nil {
+		run.WaitingOn = maskText(run.WaitingOn)
+	}
+}
+
 func adminRuns(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	q := r.URL.Query()
 	view := q.Get("view")
@@ -171,6 +180,7 @@ func adminRuns(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			if err != nil {
 				return err
 			}
+			run.maskText()
 			runs = append(runs, run)
 		}
 		return rows.Err()
@@ -208,7 +218,8 @@ type adminStep struct {
 
 // adminRun is one run for the flow view: the run, its steps in the order reached, its children and
 // parent, and, for a plan run, the approved plan so unreached nodes can be drawn too. Unless revealed,
-// the plan comes without its nodes' inputs and approval text, which can hold client content.
+// free text is masked: payloads, errors, notes, and a plan's title, inputs, event keys and approval
+// text. Names of workflows and steps, states and times show.
 func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
@@ -218,7 +229,7 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	reveal := r.URL.Query().Get("reveal") == "1"
 	var run adminRunRow
 	var input, output []byte
-	var steps []adminStep
+	steps := []adminStep{}
 	var children, plan []byte
 	err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		row := tx.QueryRowContext(ctx, `SELECT `+adminRunColumns+`,r.input,r.output FROM workflow_runs r LEFT JOIN organizations o ON o.id=r.organization_id WHERE r.id=$1`, id)
@@ -245,8 +256,9 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		}
 		return tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'parent_step',parent_step) ORDER BY id) FROM workflow_runs WHERE parent_run_id=$1),'[]'::jsonb),
- COALESCE((SELECT jsonb_build_object('id',p.id,'title',p.title,'state',p.state,'source',p.source,'plan',CASE WHEN $3 THEN p.plan
-   ELSE jsonb_set(p.plan,'{nodes}',(SELECT COALESCE(jsonb_agg(n-'input' #- '{approval,subject}' #- '{approval,prompt}' ORDER BY i),'[]'::jsonb) FROM jsonb_array_elements(p.plan->'nodes') WITH ORDINALITY AS e(n,i))) END)
+ COALESCE((SELECT jsonb_build_object('id',p.id,'title',CASE WHEN $3 THEN p.title ELSE '••••' END,'state',p.state,'source',p.source,'plan',CASE WHEN $3 THEN p.plan
+   ELSE jsonb_set(p.plan-'title','{nodes}',(SELECT COALESCE(jsonb_agg(CASE WHEN n->'wait' ? 'event' THEN jsonb_set(n,'{wait,event}','"••••"') ELSE n END-'input' #- '{approval,subject}' #- '{approval,prompt}' ORDER BY i),'[]'::jsonb)
+   FROM jsonb_array_elements(p.plan->'nodes') WITH ORDINALITY AS e(n,i))) END)
  FROM workflow_plans p WHERE p.id=$2),'null'::jsonb)`, id, run.PlanID, reveal).Scan(&children, &plan)
 	})
 	if err != nil {
@@ -280,8 +292,17 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	for _, a := range wf.Activities() {
 		activities[a.Name] = a
 	}
+	if !reveal {
+		run.maskText()
+	}
 	for i := range steps {
 		s := &steps[i]
+		if !reveal {
+			s.Error, s.Note = maskText(s.Error), maskText(s.Note)
+			if run.PlanID != nil {
+				s.WaitingOn = maskText(s.WaitingOn)
+			}
+		}
 		switch {
 		case reveal:
 		case s.Kind == "value", s.Kind == "sleep", s.Kind == "step" && string(s.Output) == `"skipped"`:
@@ -289,7 +310,8 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		case s.Kind == "approval":
 			// Who may decide and what was decided show; the subject, prompt and note are the firm's words.
 			s.Input, s.Output = only(s.Input, "permission"), only(s.Output, "approved", "by")
-			s.Note = maskText(s.Note)
+		case s.Kind == "event" && run.PlanID != nil:
+			s.Input, s.Output = only(s.Input), hidden(s.Output)
 		case s.Activity != "":
 			if a, ok := activities[s.Activity]; ok {
 				s.Input = maskActivityInput(s.Input, a.Input)

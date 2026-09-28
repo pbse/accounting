@@ -18,6 +18,10 @@ type Detail = {
 
 const active = ["queued", "running", "waiting"];
 
+// Free text the server masked until client content is revealed.
+const masked = "••••";
+const text = (value: string) => (value === masked ? "Hidden until client content is revealed." : value);
+
 // An action staff take on a run: it always asks why, and the answer goes to the audit log.
 function ActionForm({ label, danger, allowed = true, onSubmit, children }: { label: string; danger?: boolean; allowed?: boolean; onSubmit: (reason: string) => Promise<void>; children?: ReactNode }) {
   const [reason, setReason] = useState("");
@@ -113,7 +117,7 @@ export function Run() {
         <span className={`status ${stateTone[run.state] ?? ""}`}>{run.state}{run.waiting_on && ` · ${run.waiting_on}`}</span>
       </div>
       {!detail.registered && <p className="note">This build does not register the workflow {run.workflow}; a build that does will pick the run up.</p>}
-      {run.error && <p role="alert">{run.error}</p>}
+      {run.error && <p role="alert">{text(run.error)}</p>}
       {detail.plan && (
         <p className="note">Plan #{detail.plan.id} “{detail.plan.title}”, {detail.plan.source}-built, {detail.plan.state}.</p>
       )}
@@ -140,11 +144,11 @@ export function Run() {
                 <dt>Attempts</dt><dd>{step.attempts}</dd>
                 <dt>Started</dt><dd>{when(step.started_at)}</dd>
                 <dt>Finished</dt><dd>{when(step.finished_at)}</dd>
-                {step.waiting_on && <><dt>Waiting for</dt><dd>{step.waiting_on}</dd></>}
+                {step.waiting_on && <><dt>Waiting for</dt><dd>{text(step.waiting_on)}</dd></>}
                 {step.retry_at && <><dt>Retries at</dt><dd>{when(step.retry_at)}</dd></>}
                 {step.wake_at && <><dt>Until</dt><dd>{when(step.wake_at)}</dd></>}
-                {step.error && <><dt>Error</dt><dd>{step.error}</dd></>}
-                {step.actor && <><dt>Decided by</dt><dd>{step.actor}{step.note && ` — ${step.note}`}</dd></>}
+                {step.error && <><dt>Error</dt><dd>{text(step.error)}</dd></>}
+                {step.actor && <><dt>Decided by</dt><dd>{step.actor}{step.note && ` — ${text(step.note)}`}</dd></>}
                 {step.child_run_id && <><dt>Child run</dt><dd><Link to={`/runs/${step.child_run_id}`}>#{step.child_run_id}</Link></dd></>}
               </dl>
               <h3>Input</h3><Json value={step.input} />
@@ -153,7 +157,8 @@ export function Run() {
               {(step.state === "failed" || (step.state === "waiting" && step.retry_at)) && ["failed", "waiting"].includes(run.state) && (
                 <ActionForm label={step.kind === "child" ? "Start a fresh child" : "Retry this step now"} allowed={operate} onSubmit={(reason) => act("retry", { key: step.key, reason })} />
               )}
-              {step.kind === "event" && step.state === "waiting" && step.waiting_on && run.organization && (
+              {step.kind === "event" && step.state === "waiting" && step.waiting_on === masked && <p className="note">Reveal client content to see this plan's event key and send it.</p>}
+              {step.kind === "event" && step.state === "waiting" && step.waiting_on && step.waiting_on !== masked && run.organization && (
                 <SendEventForm allowed={operate} onSubmit={(payload, reason) => post("/v1/admin/workflows/events", { organization: run.organization, key: step.waiting_on, payload, reason }).then(load)} />
               )}
               {step.kind === "effect" && step.state === "unknown" && <ResolveForm allowed={operate} onSubmit={(applied, output, reason) => act("resolve", { key: step.key, applied, output, reason })} />}
@@ -173,7 +178,7 @@ export function Run() {
       <section>
         <h2>Input and output</h2>
         {detail.revealed ? (
-          <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={() => setReveal(undefined)}>Hide it</button></p>
+          <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={() => { setDetail(undefined); setReveal(undefined); }}>Hide it</button></p>
         ) : (
           <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal(reason)} />
         )}

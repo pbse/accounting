@@ -143,7 +143,7 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 	// A plan run's nodes come without their inputs unless revealed.
 	var plan, planRun int64
 	if err := db.QueryRow(`INSERT INTO workflow_plans(organization_id,title,plan,digest,source,created_by) VALUES($1,'Chase',
- '{"version":1,"title":"Chase","nodes":[{"id":"tell","activity":"plan_signal","input":{"name":"n","payload":{"ssn":"123-45-6789"}}},{"id":"ok","after":["tell"],"approval":{"permission":"closes:signoff","subject":"SSN 123-45-6789"}}]}',
+ '{"version":1,"title":"Chase","nodes":[{"id":"tell","activity":"plan_signal","input":{"name":"n","payload":{"ssn":"123-45-6789"}}},{"id":"ok","after":["tell"],"approval":{"permission":"closes:signoff","subject":"SSN 123-45-6789"}},{"id":"w","after":["ok"],"wait":{"event":"reply:123-45-6789","timeout":"1h"}}]}',
  'd','staff','staff:test') RETURNING id`, firm).Scan(&plan); err != nil {
 		t.Fatal(err)
 	}
@@ -151,8 +151,8 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 	planPath := "/v1/admin/workflows/runs/" + jsonNumber(float64(planRun))
-	if text := mustString(adminJSON(t, h, token, "GET", planPath, "", 200)["plan"]); strings.Contains(text, "123-45-6789") || !strings.Contains(text, `"activity":"plan_signal"`) {
-		t.Fatalf("plan node inputs must be masked: %s", text)
+	if text := mustString(adminJSON(t, h, token, "GET", planPath, "", 200)["plan"]); strings.Contains(text, "123-45-6789") || strings.Contains(text, "Chase") || !strings.Contains(text, `"activity":"plan_signal"`) {
+		t.Fatalf("plan text must be masked: %s", text)
 	}
 	if text := mustString(adminJSON(t, h, token, "GET", planPath+"?reveal=1", "", 200, "X-Access-Reason", "checking the plan")["plan"]); !strings.Contains(text, "123-45-6789") {
 		t.Fatalf("a reveal shows the plan's inputs: %s", text)
@@ -173,6 +173,14 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 		t.Fatalf("unknown effects view %v", unknown)
 	}
 	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(uncertain)+"/resolve", `{"key":"post","applied":true,"output":"\"REF-9\"","reason":"found REF-9 at the provider"}`, 200)
+	// Errors are free text, so they are masked until revealed.
+	failedPath := "/v1/admin/workflows/runs/" + jsonNumber(failed)
+	if text := mustString(adminJSON(t, h, token, "GET", failedPath, "", 200)); strings.Contains(text, `"error":"boom"`) {
+		t.Fatalf("errors must be masked: %s", text)
+	}
+	if text := mustString(adminJSON(t, h, token, "GET", failedPath+"?reveal=1", "", 200, "X-Access-Reason", "why did it fail")); !strings.Contains(text, `"error":"boom"`) {
+		t.Fatalf("a reveal shows the error: %s", text)
+	}
 	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(failed)+"/retry", `{"key":"boom","reason":"the provider recovered"}`, 200)
 	// A completed step cannot be retried; the refusal is audited too.
 	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(failed)+"/retry", `{"key":"note","reason":"again"}`, 409)
@@ -208,6 +216,10 @@ func TestReadOnlyStaffCannotActOrReveal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Exec(`DELETE FROM workflow_runs WHERE id=$1`, run)
+	// A run with no step yet has an empty list of steps, not null.
+	if steps := adminJSON(t, h, sign(staffOrg, "platform:read"), "GET", "/v1/admin/workflows/runs/"+jsonNumber(float64(run)), "", 200)["steps"]; steps == nil {
+		t.Fatal("a new run's steps must be an empty list")
+	}
 	adminJSON(t, h, sign(staffOrg, "platform:read", "platform:operate"), "GET", "/v1/admin/workflows/runs/"+jsonNumber(float64(run))+"?reveal=1", "", 403, "X-Access-Reason", "curious")
 }
 
