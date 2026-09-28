@@ -3,17 +3,19 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # Documentation changes alone change nothing deployed.
+    paths-ignore: ['docs/**', '**/*.md']
 permissions:
   contents: read
+  # To find the merged pull request and its CI run.
+  actions: read
+  pull-requests: read
 concurrency:
   group: cloudflare-production
   cancel-in-progress: false
 jobs:
-  validate:
-    if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/ci.yml
   deploy:
-    needs: validate
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
@@ -69,6 +71,23 @@ jobs:
       XERO_POSTING_KINDS: ${{ vars.XERO_POSTING_KINDS }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the merge's parents, and the commit the text scanner was last deployed from.
+          fetch-depth: 0
+      - name: The merged pull request passed CI
+        # CI is not repeated here. A push is deployed only when the pull request it merged passed CI; the image and app
+        # builds below then compile what was merged. Run this workflow by hand to deploy anything else.
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          heads="$(git rev-parse -q --verify HEAD^2 || true) $(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" -q '.[].head.sha' || true)"
+          for head in $heads; do
+            conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$head" --limit 1 --json conclusion -q '.[0].conclusion')
+            if [ "$conclusion" = success ]; then echo "CI passed for $head"; exit 0; fi
+          done
+          echo "::error::No passing CI run for the pull request merged in $GITHUB_SHA (heads: ${heads:-none}). Wait for CI, then run Deploy production by hand."
+          exit 1
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -125,7 +144,33 @@ jobs:
           DATABASE_URL="$MIGRATION_DATABASE_URL" infra/postgres/migrate.sh
       - name: Stamp the workflow code version
         run: echo "$GITHUB_SHA" > services/backend/internal/wf/version.txt
+      # Each scanner deploy saves the commit it deployed and its key's fingerprint (a hash prefix, not the key) as a new
+      # cache entry, so the newest entry describes the scanner now, even when the rest of that run failed.
+      - name: Fingerprint the scanner key
+        id: key
+        run: echo "fingerprint=$(printf %s "$UPLOAD_SCAN_KEY" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: What the scanner last received
+        uses: actions/cache/restore@v4
+        with:
+          path: .scanner-deployed
+          # Never saved under this name: the prefix restores the newest entry.
+          key: production-scanner-newest
+          restore-keys: production-scanner-
+      - name: Did the scanner's code or key change since it was last deployed?
+        id: scanner
+        env:
+          FINGERPRINT: ${{ steps.key.outputs.fingerprint }}
+        # Its image holds only cmd/scanner and internal/scanning, which CI checks. A hand run always deploys it, and so
+        # does a missing or unreadable record.
+        run: |
+          deployed=$(cat .scanner-deployed/sha 2>/dev/null || true)
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$(cat .scanner-deployed/fingerprint 2>/dev/null)" = "$FINGERPRINT" ] && [ -n "$deployed" ] && git diff --quiet "$deployed" HEAD -- services/scanner workers/scanner services/backend/cmd/scanner services/backend/internal/scanning services/backend/go.mod services/backend/go.sum package-lock.json .github/workflows/deploy-production.yml; then
+            echo "Unchanged since $deployed, with the same key; not redeployed."
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Deploy isolated on-demand text scanner
+        if: steps.scanner.outputs.deploy == 'true'
         run: |
           export CLOSE_SCANNER_SECRET_FILE="$(mktemp)"
           trap 'rm -f "$CLOSE_SCANNER_SECRET_FILE"' EXIT
@@ -134,6 +179,13 @@ jobs:
           writeFileSync(process.env.CLOSE_SCANNER_SECRET_FILE, JSON.stringify({UPLOAD_SCAN_KEY: process.env.UPLOAD_SCAN_KEY}), {mode: 0o600});
           JS
           npx wrangler deploy -c workers/scanner/wrangler.jsonc --env production --secrets-file "$CLOSE_SCANNER_SECRET_FILE"
+          mkdir -p .scanner-deployed && echo "$GITHUB_SHA" > .scanner-deployed/sha && echo "${{ steps.key.outputs.fingerprint }}" > .scanner-deployed/fingerprint
+      - name: Record what the scanner has now
+        if: steps.scanner.outputs.deploy == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .scanner-deployed
+          key: production-scanner-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Deploy code and server secrets together
         run: |
           export CLOSE_DEPLOY_SECRET_FILE="$(mktemp)"

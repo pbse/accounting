@@ -1,7 +1,10 @@
 name: CI
-# main is checked by Deploy production, which calls this workflow before deploying.
+# Pull requests are checked here. Deploy production does not run this again: it deploys a merge only when the pull
+# request's own run of this workflow passed. Deploy staging still calls it.
 on:
   pull_request:
+    # Documentation changes alone need no checks and no deploy.
+    paths-ignore: ['docs/**', '**/*.md']
   workflow_call:
 permissions:
   contents: read
@@ -13,49 +16,78 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: close
-          POSTGRES_PASSWORD: test-only
-          POSTGRES_DB: close_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U close -d close_test"
-          --health-interval 5s --health-timeout 3s --health-retries 10
     env:
       TEST_DATABASE_URL: postgres://close:test-only@127.0.0.1:5432/close_test?sslmode=disable
       WORKSPACE_TOKEN: ci-configuration-validation-only-00000000
+      # As the container images build it, so Go that only builds with cgo fails here, not in the deploy.
+      CGO_ENABLED: "0"
+    # Billing rounds each job up to the minute, so slow independent work runs side by side: PostgreSQL, the PDF/OCR
+    # tools, the Go checks and the TypeScript checks each start in the background, are waited for, and must pass.
+    # Each writes its exit status even when it fails (set +e), so a wait never ends in a silent timeout.
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The commit and its parent: a pull request's merge commit, to see what the pull request changes.
+          fetch-depth: 2
+      - name: Start PostgreSQL and install PDF/OCR tools in the background
+        # The Go tests mostly wait on commits, so this throwaway database does not sync them to disk.
+        run: |
+          (set +e; docker run -d --name postgres -p 5432:5432 -e POSTGRES_USER=close -e POSTGRES_PASSWORD=test-only -e POSTGRES_DB=close_test postgres:17-alpine -c fsync=off -c synchronous_commit=off -c full_page_writes=off) > /tmp/postgres.log 2>&1 &
+          (set +e; sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-eng; echo $? > /tmp/apt.status) > /tmp/apt.log 2>&1 &
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/backend/go.mod
+          # A build cache would be saved per pull request and never shared: runs on main no longer compile Go.
+          cache: false
+      - name: Migrations, Go tests and vet in the background
+        # The migration runner is applied twice: the second run must apply nothing. go test skips its own vet pass,
+        # since go vet runs in full afterwards.
+        run: |
+          (set +e
+           timeout 120 sh -c 'until pg_isready -q -h 127.0.0.1 -U close -d close_test; do sleep 1; done' &&
+           DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh &&
+           again=$(DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh) && test -z "$again" &&
+           timeout 300 sh -c 'until [ -f /tmp/apt.status ]; do sleep 1; done' && test "$(cat /tmp/apt.status)" = 0 &&
+           cd services/backend && go test -vet=off ./... && go vet ./...
+           echo $? > /tmp/go.status) > /tmp/go.log 2>&1 &
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: services/backend/go.mod
-          cache: false
       - run: npm ci
-      - run: npm run check && npm test && npm run build
-      - name: Workflow registry matches the workflow directories
-        run: cd services/backend && go generate ./workflows && git diff --exit-code -- workflows/registry_gen.go
-      - name: Validate Worker bundles without publishing
+      - name: TypeScript checks, tests, builds and Worker bundles
+        # The app builds run vite directly: `npm run check` has already type-checked every workspace.
         run: |
+          npm run check
+          npm test
+          npm exec -w @close/frontend -- vite build
+          npm exec -w @close/admin -- vite build
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/scanner/wrangler.jsonc
         env:
           WRANGLER_SEND_METRICS: "false"
-      - name: Apply migrations with the migration runner, twice (the second must apply nothing)
-        run: |
-          DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh
-          again=$(DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh)
-          test -z "$again"
-      - run: sudo apt-get update && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-eng
-      - run: npm run check:go
       - run: test -z "$(gofmt -l services/backend)"
       - run: docker compose config --quiet
-      - run: docker build -t close-backend services/backend
-      - run: docker build -t close-text-scanner -f services/scanner/Dockerfile .
+      - name: Migrations, Go tests and vet passed
+        run: |
+          timeout 600 sh -c 'until [ -f /tmp/go.status ]; do sleep 1; done' || true
+          cat /tmp/go.log
+          test "$(cat /tmp/go.status 2>/dev/null)" = 0 || { cat /tmp/postgres.log /tmp/apt.log; exit 1; }
+      - name: Workflow registry matches the workflow directories
+        run: cd services/backend && go generate ./workflows && git diff --exit-code -- workflows/registry_gen.go
+      - name: The scanner's Go packages are the ones Deploy production watches
+        run: |
+          cd services/backend
+          test "$(go list -deps ./cmd/scanner | grep '^close.local/' | sort | tr '\n' ' ')" = "close.local/backend/cmd/scanner close.local/backend/internal/scanning " ||
+            { echo "::error::cmd/scanner now uses other packages; add them to the scanner paths in deploy-production.yml and here."; exit 1; }
+      - name: Container images build, when a Dockerfile or the Go modules change
+        # Otherwise the Go build above covers the code, and every deploy builds the images again.
+        run: |
+          changed=$(git diff --name-only HEAD^1 HEAD) || changed=Dockerfile
+          if grep -qE '(^|/)(Dockerfile|\.dockerignore)$|^services/backend/go\.(mod|sum)$' <<<"$changed"; then
+            docker build -t close-backend services/backend
+            docker build -t close-text-scanner -f services/scanner/Dockerfile .
+          else
+            echo "No Dockerfile or Go module change."
+          fi

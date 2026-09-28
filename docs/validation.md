@@ -2725,3 +2725,26 @@ Checks:
 - The API side (`/v1/admin/me` accepting only a staff cookie in the staff organization, and requiring `platform:read`) is covered by `TestServerSessionKeepsWorkOSTokensOnTheServer` and `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead`.
 
 Not verified: the gate on a deployed Worker, which needs `AUTH_SESSION=server` in that environment and a real WorkOS staff sign-in (see [sign-in session](auth-sandbox-staging.md#sign-in-session)).
+
+## About six Actions minutes per merged change (2026-09-28)
+
+Request: bring a merged pull request's Actions minutes from about 20 down to about 6. Before this, each merge was billed for three jobs: CI on the pull request (5.5 min, billed 6), CI again inside Deploy production (5.3 min, billed 6) and the deploy itself (3.3 min, billed 4). GitHub bills each job rounded up to a whole minute.
+
+What changed:
+- **One CI run per change.** Deploy production no longer calls CI. It deploys a push only when the merged pull request passed CI: it checks the merge commit's second parent or GitHub's commit-to-pull-request link. A hand run skips that check. The image and app builds in the deploy compile what was merged; a merge that main moved past after CI is compiled but not re-tested.
+- **Scanner.** It is redeployed only when its code, the Go modules, the lockfile, the workflow or `UPLOAD_SCAN_KEY` changed since the scanner was last deployed; a hand run always redeploys it. Each scanner deploy saves the commit it deployed and the first 16 hex characters of its key's SHA-256 as a new Actions cache entry. The newest entry is what the comparison uses, even if the rest of that run failed, and rotating back to an earlier key redeploys too. With no entry (evicted, or the first run), the scanner is redeployed. CI fails if `cmd/scanner` starts using any package besides `internal/scanning`, so that path list stays true.
+- **Faster CI.** PostgreSQL starts with `docker run` in the background instead of as a service container, which held every step until it was healthy. The PDF/OCR packages also install in the background. Once Go is set up, the migrations (twice), `go test` and `go vet` run in the background while Node is set up and the TypeScript checks, tests, app builds and Worker dry-runs run. Everything is waited for and must pass. Further trims:
+  - The test database runs with `fsync`, `synchronous_commit` and `full_page_writes` off. A CPU profile showed the `transport` tests using 1.8 s of CPU in 12 s: they wait on commits, and on the CI VM each one waited on disk.
+  - `go test` skips its own vet pass, since `go vet` then runs in full.
+  - The app builds run vite directly, since `npm run check` already type-checked them.
+  - Go is built and tested with `CGO_ENABLED=0`, as the images build it.
+  - The two container images build only when a Dockerfile, a `.dockerignore` or the Go modules change; every deploy builds them anyway.
+- **Docs-only changes** run neither CI nor Deploy production.
+- **Not added:** a Go build cache. Only runs on `main` can seed a cache that pull requests share, and they no longer compile Go; a cache saved per pull request would only add upload time.
+
+Checks:
+- actionlint passes on the three workflows.
+- The deploy's CI lookup, run by hand for #176's merge commit `3496814`, finds pull request #176's head `6f103cd` and its passing CI run. A `pull_request` run records the pull request's head commit, not GitHub's test merge commit, so looking up by head commit is correct.
+- CI on this pull request, before the database change: 3:12, of which the side-by-side TypeScript and Go work competed for the runner's two cores. Runs after it could not start: the account's Actions minutes ran out.
+- The background TypeScript chain (checks, tests, both vite builds, edge dry-run) passes locally in 8 seconds and leaves `apps/frontend/dist`, with the admin app under it, as before.
+- The Actions timings come from this pull request's CI run and its deploy, recorded in the pull request.
