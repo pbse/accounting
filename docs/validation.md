@@ -2581,3 +2581,16 @@ Checks:
 - `TestOpenTenantDBRefusesPooler`: a Neon `-pooler` URL is refused and the direct one opens.
 
 Not verified: whether production's `DATABASE_URL` is direct. The next production deploy's configuration check will fail if it is pooled; replace the secret with the direct endpoint in that case.
+
+## Citations must show their values; bad links are refused unread (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- The model's extracted amounts and dates must be printed in their own quote (`documents.AmountIn`, `documents.DateIn`), not just cite a quote found once in the source. A value of 12000.00 beside a quote reading "1,200.00" no longer shows as a cited candidate; it becomes a question naming the source, field and value. Amounts compare as exact decimals, ignoring sign, currency signs and thousands separators; dates match common written forms with their year. Text fields (accounts, references, names) are not checked. Statement rows use the same helpers, which now also refuse 1200 against a printed 1,200.99 and a date running into a longer number.
+- `linkPasscode`, which both public link routes call first, now refuses an unknown, expired or revoked link, or one whose firm is suspended, before the reply or file is read. Before, an unknown 26-character token let the reply route buffer an upload of up to 21 MiB before the lookup failed.
+
+Checks:
+- `TestAmountIn`, `TestDateIn`: the examples above, ordinal and Sept dates, and day-first dates.
+- `TestInterpretationContractAndCitationBoundary`: a 12000.00 value on the 1,200.00 quote leaves no candidate and asks about it.
+- `TestUnknownOrRevokedLinkIsRefusedBeforeItsUpload` (local PostgreSQL): an unknown and a revoked link each get 404 on both routes without the body being read.

@@ -1,0 +1,47 @@
+package documents
+
+import "testing"
+
+func TestAmountIn(t *testing.T) {
+	for _, c := range []struct {
+		text, amount string
+		want         bool
+	}{
+		{"Total due: USD 1,200.00", "1200.00", true},
+		{"Total due: USD 1,200.00", "1200", true},
+		{"Total due: USD 1,200.00", "12000.00", false},
+		{"Total due: $1,200.99", "1200", false},
+		{"Deposit 120.00", "20.00", false},
+		{"Fee (5.00)", "-5.00", true},
+		{"Principal 1,250,000.50", "1250000.5", true},
+		{"Paid 2026-09-02", "2.00", false},
+		{"Rate 5.25% per annum", "5.25", true},
+		{"Items 1,2,3", "123", false},
+	} {
+		if AmountIn(c.text, c.amount) != c.want {
+			t.Errorf("AmountIn(%q, %q) = %v", c.text, c.amount, !c.want)
+		}
+	}
+}
+
+func TestDateIn(t *testing.T) {
+	for _, c := range []struct {
+		text, date string
+		yearless   bool
+		want       bool
+	}{
+		{"Coverage starts September 1, 2026.", "2026-09-01", false, true},
+		{"Coverage starts Sept 1st, 2026.", "2026-09-01", false, true},
+		{"Period 01/09/2026 to 31/08/2027", "2027-08-31", false, true},
+		{"Invoice date 11/2/2026", "2026-01-02", false, false},
+		{"Jan 21, 2026", "2026-01-02", false, false},
+		{"Sep 2 Deposit", "2026-09-02", false, false},
+		{"Sep 2 Deposit", "2026-09-02", true, true},
+		{"Credit applies from March 2026", "2026-03", false, true},
+		{"2026-09-03 Deposit", "2026-09-02", true, false},
+	} {
+		if DateIn(c.text, c.date, c.yearless) != c.want {
+			t.Errorf("DateIn(%q, %q, %v) = %v", c.text, c.date, c.yearless, !c.want)
+		}
+	}
+}
