@@ -119,7 +119,14 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 	}
 
 	// Every action and reveal is in the firm's audit, refusals included; it pages by ID.
-	if page := adminJSON(t, h, token, "GET", base+"/audit?before=2", "", 200); len(page["entries"].([]any)) != 0 {
+	var oldest, second string
+	if err := db.QueryRow(`SELECT min(id)::text,(SELECT id FROM platform_audit WHERE organization_id=$1 ORDER BY id OFFSET 1 LIMIT 1)::text FROM platform_audit WHERE organization_id=$1`, firm).Scan(&oldest, &second); err != nil {
+		t.Fatal(err)
+	}
+	if page := adminJSON(t, h, token, "GET", base+"/audit?before="+oldest, "", 200); len(page["entries"].([]any)) != 0 {
+		t.Fatalf("nothing is older than the oldest entry: %v", page)
+	}
+	if page := adminJSON(t, h, token, "GET", base+"/audit?before="+second, "", 200); len(page["entries"].([]any)) != 1 {
 		t.Fatalf("before pages by ID: %v", page)
 	}
 	audit := mustString(adminJSON(t, h, token, "GET", base+"/audit", "", 200))
