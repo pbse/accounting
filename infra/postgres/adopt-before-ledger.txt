@@ -94,3 +94,4 @@
 094_workflow_engine.sql|EXISTS(SELECT 1 FROM pg_policy WHERE polname='tenant' AND polrelid=to_regclass('public.workflow_plans'))
 095_chat_every_month.sql|EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='chat_messages' AND column_name='every_month')
 096_close_export_labels.sql|to_regclass('public.close_export_labels') IS NOT NULL
+097_shared_plan_templates.sql|EXISTS(SELECT 1 FROM pg_policy WHERE polname='shared_templates' AND polrelid=to_regclass('public.workflow_plans'))

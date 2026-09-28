@@ -106,7 +106,7 @@ jobs:
           if (!['require','verify-ca','verify-full'].includes(migration.searchParams.get('sslmode')) || migration.hostname.includes('-pooler')) throw new Error('MIGRATION_DATABASE_URL must be the owner on the direct endpoint and require TLS');
           JS
       - name: Apply pending migrations as the database owner
-        # Production was migrated by hand through 090, before the ledger; the runner ignores this once the ledger exists.
+        # Production was migrated by hand before the ledger; the runner ignores this once the ledger exists.
         env:
           MIGRATION_ADOPT: infra/postgres/adopt-before-ledger.txt
         run: |
