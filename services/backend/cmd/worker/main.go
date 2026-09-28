@@ -6,6 +6,8 @@ import (
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/transport"
+	"close.local/backend/internal/wf"
+	_ "close.local/backend/workflows"
 	"context"
 	"log"
 	"os"
@@ -22,7 +24,9 @@ func main() {
 		log.Fatal("Invalid database configuration")
 	}
 	defer db.Close()
-	db.SetMaxOpenConns(2)
+	// Two for the job loops; each workflow run in flight (WF_CONCURRENCY, default 4) holds one while a
+	// step writes, and its lease heartbeat briefly another.
+	db.SetMaxOpenConns(8)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go preparation.Run(ctx, db)
@@ -38,5 +42,6 @@ func main() {
 	go transport.RunStripeReports(ctx, db)
 	go transport.RunChatExpiry(ctx, db)
 	go transport.RunCloseGoals(ctx, db)
+	go wf.Run(ctx, db)
 	transport.Run(transport.Worker())
 }

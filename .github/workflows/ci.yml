@@ -36,6 +36,8 @@ jobs:
           cache: false
       - run: npm ci
       - run: npm run check && npm test && npm run build
+      - name: Workflow registry matches the workflow directories
+        run: cd services/backend && go generate ./workflows && git diff --exit-code -- workflows/registry_gen.go
       - name: Validate Worker bundles without publishing
         run: |
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc
