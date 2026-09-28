@@ -48,6 +48,8 @@ func adminFirmProblem(w http.ResponseWriter, err error, what string) {
 		problem(w, 409, "Only an open invitation can be revoked. Refresh the list.")
 	case errors.Is(err, errInvitationNotPending):
 		problem(w, 409, "Only a pending invitation that has not expired can be resent. Send a new one instead.")
+	case errors.Is(err, errResendUnconfirmed):
+		problem(w, 502, "WorkOS did not confirm whether it sent the invitation. Check it in WorkOS before resending, or the person may get it twice.")
 	case errors.Is(err, errWorkOS):
 		problem(w, 502, err.Error()+". Nothing changed; try again.")
 	case errors.Is(err, errNotAMember):

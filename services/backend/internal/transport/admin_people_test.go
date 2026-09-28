@@ -40,7 +40,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	t.Cleanup(func() { db.Exec(`DELETE FROM auth_sessions WHERE subject=$1`, person) })
 
 	revoked, resent := []string{}, 0
-	failRevoke, workosDown, resendLost := false, false, false
+	failRevoke, workosDown, resendLost, copyLost := false, false, false, false
 	original := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = original })
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
@@ -83,6 +83,9 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 			}
 		case p == "/user_management/invitations/"+workosID && r.Method == "GET":
 			body = `{"id":"` + workosID + `","state":"pending",` + later + `}`
+			if copyLost {
+				code = 503
+			}
 		default:
 			t.Fatalf("unexpected call %s %s", r.Method, r.URL)
 		}
@@ -163,9 +166,15 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		t.Fatalf("the new expiry is kept (%v) after one resend (%d)", later, resent)
 	}
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 200)
+	// When neither the answer nor WorkOS's copy can be read, the outcome is reported as unknown, not as nothing sent.
+	resendLost, copyLost = true, true
+	if unknown := adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 502)["message"].(string); !strings.Contains(unknown, "did not confirm whether") {
+		t.Fatalf("an unknown outcome: %s", unknown)
+	}
+	resendLost, copyLost = false, false
 	must(`UPDATE member_invitations SET state='revoked' WHERE id::text=$1`, invitation)
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 409)
-	if resent != 2 {
+	if resent != 3 {
 		t.Fatal("a revoked invitation must not reach WorkOS")
 	}
 

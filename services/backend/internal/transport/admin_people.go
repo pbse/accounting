@@ -30,7 +30,11 @@ func registerAdminPeople(mux *http.ServeMux, db *sql.DB, token string) {
 // errWorkOS is WorkOS not answering, or refusing, a call an action needed.
 var errWorkOS = errors.New("WorkOS did not confirm")
 
-var errInvitationNotPending = errors.New("only a pending invitation that has not expired can be resent")
+var (
+	errInvitationNotPending = errors.New("only a pending invitation that has not expired can be resent")
+	// errResendUnconfirmed is a resend WorkOS may have sent: its answer and its copy of the invitation were both lost.
+	errResendUnconfirmed = errors.New("WorkOS did not confirm whether it sent the invitation")
+)
 
 type workosUser struct {
 	ID           string  `json:"id"`
@@ -117,10 +121,10 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	var user, email string
 	switch {
-	case strings.HasPrefix(q, "user_") && len(q) <= 200:
-		user = q
 	case strings.Contains(q, "@") && len(q) >= 3 && len(q) <= 254:
 		email = strings.ToLower(q)
+	case strings.HasPrefix(q, "user_") && len(q) <= 200:
+		user = q
 	default:
 		problem(w, 422, "Search by a WorkOS user ID (user_…) or an email address.")
 		return
@@ -357,8 +361,16 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			}
 			var sent workosInvitation
 			if err = workos(ctx, "POST", "/user_management/invitations/"+url.PathEscape(workosID)+"/resend", map[string]any{}, &sent); err != nil {
-				// An answer lost on the way back is not a refusal: WorkOS's copy says whether it sent (a later expiry).
-				if workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(workosID), nil, &sent) != nil || !sent.ExpiresAt.After(stored) {
+				// A refusal (4xx) sent nothing. Any other failure may have lost the answer after sending: WorkOS's copy says
+				// whether it sent (a later expiry), and when that cannot be read either, the outcome is unknown, not "unsent".
+				var status statusError
+				if errors.As(err, &status) && status.code >= 400 && status.code < 500 {
+					return fmt.Errorf("%w: WorkOS refused to resend it", errWorkOS)
+				}
+				if workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(workosID), nil, &sent) != nil {
+					return errResendUnconfirmed
+				}
+				if !sent.ExpiresAt.After(stored) {
 					return fmt.Errorf("%w: the invitation was not resent", errWorkOS)
 				}
 			}
