@@ -273,7 +273,7 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	}
 	out, streamed := post("/v1/closes/chat", firmQuestion)
 	sentReads := slices.Sorted(maps.Keys(readsSent))
-	if calls != spent+1 || streamed != firmAnswer || !slices.Equal(sentReads, []string{"blocked", "review", "today"}) {
+	if calls != spent+1 || streamed != firmAnswer || !slices.Equal(sentReads, []string{"blocked", "delegated", "review", "today"}) {
 		t.Fatalf("a firm-wide question goes with the member's work lists and streams: calls=%d reads=%v streamed=%q", calls, sentReads, streamed)
 	}
 	if body := out.Messages[len(out.Messages)-1].Body; strings.Contains(body, "Alpha") || !slices.Equal(out.Live, []string{"Alpha has the oldest open close.", "Check its blockers first.", firmWrittenNote}) || len(out.LiveCitations) != 1 || out.LiveCitations[0] != (citation{"Needs a person today", "/dashboard"}) {
