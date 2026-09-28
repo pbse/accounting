@@ -90,6 +90,10 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		if identity && !endsLine(f.Candidates[0].Quote, f.Value) {
 			return Plan{}, "the cited text does not show the " + f.Label + " as a whole"
 		}
+		// An order or reference number is not the invoice number; its line must say so.
+		if f.Field == "invoice_number" && !invoiceLine(f.Candidates[0].Quote, f.Value) {
+			return Plan{}, "the cited line does not name the number as the invoice number"
+		}
 		facts[f.Field] = f.Value
 	}
 	for field, account := range map[string]string{"expense_account": procedure.ExpenseAccount, "prepaid_account": procedure.PrepaidAccount} {
@@ -126,7 +130,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 }
 
 // expensedLine finds the one bill or purchase line in the close month that books the invoice amount to the expense
-// account and belongs to the invoice: its vendor and document number are the invoice's cited vendor and number. Any prepaid line on that bill, a second match, any journal on either account in the month, a vendor or
+// account, nothing anywhere else, and belongs to the invoice: its vendor and document number are the invoice's cited vendor and number. Any prepaid line on that bill, a second match, any journal on either account in the month, a vendor or
 // card credit from the vendor or on either account, or a line of a journal, credit or that vendor's record whose
 // account cannot be named is a question for a person, whatever its currency.
 func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, period, expense, prepaid string) (booking, reason string) {
@@ -139,6 +143,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		var record struct {
 			Credit               bool
 			DocNumber            string
+			TotalAmt             json.Number
 			VendorRef, EntityRef struct{ Name string }
 			Line                 []struct {
 				Amount                        json.Number
@@ -159,6 +164,9 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || ((row.Kind == "VendorCredit" || record.Credit) && (mentioned || fromVendor)) || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
+		// The invoice's own bill must book the whole amount to the expense account and nothing else anywhere.
+		var expensed int64
+		other := false
 		for _, line := range record.Line {
 			var account accountRef
 			if line.AccountBasedExpenseLineDetail != nil {
@@ -190,25 +198,49 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 				return "", "a captured " + row.Kind + " from this vendor books to the prepaid account; its balance needs a person"
 			}
 			value, err := prepaids.Amount(line.Amount.String())
-			if record.Credit || err != nil || prepaids.Money(value) != amount || !onExpense || (row.Currency != "" && row.Currency != currency) {
-				continue
+			if err != nil || record.Credit || (row.Currency != "" && row.Currency != currency) {
+				return "", "a captured " + row.Kind + " for this invoice has a line a person must read"
 			}
-			matches++
-			booking = fmt.Sprintf("QuickBooks %s %s dated %s, %s %s to %s", row.Kind, row.ProviderID, row.Date, currency, amount, name)
+			if onExpense {
+				expensed += value
+			} else {
+				other = true
+			}
 		}
+		if !mine {
+			continue
+		}
+		total, err := prepaids.Amount(record.TotalAmt.String())
+		if other || prepaids.Money(expensed) != amount || (record.TotalAmt != "" && (err != nil || prepaids.Money(total) != amount)) {
+			return "", "a captured " + row.Kind + " for this invoice does not book exactly its amount to the expense account"
+		}
+		matches++
+		booking = fmt.Sprintf("QuickBooks %s %s dated %s, %s %s to %s", row.Kind, row.ProviderID, row.Date, currency, amount, expense)
 	}
 	switch matches {
 	case 0:
-		return "", "no captured bill or purchase in the close month from this vendor or with this invoice number books the amount to the expense account"
+		return "", "no captured bill or purchase in the close month from this vendor bears this invoice number"
 	case 1:
 		return booking, ""
 	}
-	return "", "more than one captured bill or purchase in the close month books this amount"
+	return "", "more than one captured bill or purchase in the close month bears this invoice number"
 }
 
 type accountRef struct {
 	Value string `json:"value"`
 	Name  string `json:"name"`
+}
+
+// invoiceLine reports whether the quoted line ending with the number calls it an invoice, not an order or reference.
+func invoiceLine(quote, number string) bool {
+	want := documents.NormalizeEntity(number)
+	for _, line := range strings.Split(quote, "\n") {
+		normal := documents.NormalizeEntity(line)
+		if strings.HasSuffix(normal, want) && strings.Contains(normal, "invoice") && !strings.Contains(normal, "order") && !strings.Contains(normal, "reference") {
+			return true
+		}
+	}
+	return false
 }
 
 // endsLine reports whether some line of the quote, compared as an entity name, ends with the whole value.
