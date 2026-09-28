@@ -2360,3 +2360,45 @@ Review: GPT-6 Sol (reasoning high) reviewed the plan, judged the work real and u
 - a QuickBooks reconnection was asked for while an active Xero connection could read the books;
 - "What's the plan?" dropped each step's details.
 Two related cases were fixed at the same time: a QuickBooks capture on another connection keeps the scheduled first capture away, so the month is a person's to capture; and the database test now covers that case and an active Xero connection's precedence over a reconnection. A delta review confirmed that all four findings are closed.
+
+## Governed follow-through on delegated closes (2026-09-27)
+
+Request: the product review's fourth item, first half: "Teammate handoffs are tracked in the app; the agent does not actively follow up… add governed follow-through", with the agent owning "getting work to those decisions and resuming afterward" while people keep approval. Verified in the code:
+- A delegated close waiting on a client request said "Waiting on the client's reply to request #N" for as long as it waited, although the firm's reminder rule (`reminderStatus`) knew when a reminder was due.
+- A hand-off produced one Attention item when it was made and nothing afterwards.
+
+What changed:
+- **Client requests.** A waiting document now says when a reminder is due under the firm's rule, as a person's decision ("Approve it on the Requests tab"). It says so only when the approval path would accept one: the latest email delivered, its link live, no adverse delivery, no recorded reply, the current sender. Once reminders run out, or the link lapses first, it says to contact the client another way, in Work's order and words. Nothing is sent by the agent.
+- **Hand-offs.** A hand-off still open after two days adds a follow-up for the teammate in Attention, linked to its document. After four days, or by the close's due date when sooner (a day after the hand-off at the earliest), the goal's owner is asked in Attention and in the plan's documents step, which only the owner sees and which does not change readiness. The goal's history shows both follow-ups at their times, only if the hand-off was still open then.
+- **How it is computed.** Everything is read from the time, with no new tables, settings or scheduler.
+- **Other wording.** The owner's Attention kind reads "Delegated closes that need you". A document the agent can't prepare mentions handing it to a teammate.
+
+Tests (local PostgreSQL):
+- `TestApprovedEmailDurableRetryAndScope` now also checks the goal's words:
+  - before a reminder is due;
+  - when one is due;
+  - not offered while the firm's sender is off;
+  - after the last allowed reminder;
+  - with a lapsed link.
+- `TestHandADocumentToATeammate` now ages a hand-off:
+  - nothing within two days;
+  - the teammate's follow-up at two days, linked to the document, and in the history;
+  - the owner's at four days, in Attention, the plan and the history, and not for another member;
+  - a close due today brings it forward to a day.
+- Ten mutations each fail a test.
+
+Review: GPT-6 Sol (reasoning high) reviewed the plan (relevant; revise). All its points were adopted:
+- a reminder is offered only when approval would accept it, in Work's order;
+- the teammate's follow-up keeps its link;
+- the owner is the goal's author, and the plan line is theirs alone and outside readiness;
+- the notification claim was narrowed;
+- the due date brings the owner's follow-up forward;
+- the history rows are at the threshold times;
+- durations are used instead of dates.
+
+Its code review found three more, all fixed:
+- A request whose work changed could be offered a reminder the approval route refuses. Every document waiting on a request now runs the same freshness check and, when stale, asks for a fresh request. The email test makes a target stale.
+- A due date no longer escalates at midnight UTC, which is the evening before for a firm in New York while its card says "Due tomorrow". It now escalates at midday UTC on the day before the due date, which falls on that day from UTC−11 to UTC+11. The test picks due dates around the last midday UTC, so at any hour it checks one that has not reached that point and one that has; moving the cutoff a day either way fails it.
+- The follow-ups say "at least", since an item keeps its words.
+
+Each fix fails a test without it. Delta reviews closed the stale-request and wording findings in the first round and the due-date cutoff in the second.

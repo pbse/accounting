@@ -69,10 +69,16 @@ const attentionQuery = `WITH scope AS (
  UNION ALL
  SELECT 'handoff:'||h.id,'handoff',g.close_id,h.created_at,h.created_by||' handed you '||h.document||CASE WHEN h.note<>'' THEN ': '||h.note ELSE '' END,''
   FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE g.close_id IN (SELECT id FROM scope) AND h.assignee=$3 AND h.closed_at IS NULL
+ UNION ALL
+ SELECT 'handoff:'||h.id||':reminder','handoff',g.close_id,h.created_at+interval '2 days',h.document||' has been with you for at least 2 days, handed by '||h.created_by||'.',''
+  FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE g.close_id IN (SELECT id FROM scope) AND h.assignee=$3 AND h.closed_at IS NULL AND h.created_at<=now()-interval '2 days'
+ UNION ALL
+ SELECT 'handoff-owner:'||h.id,'goal',g.close_id,` + handoffEscalated + `,` + handoffStall + `,''
+  FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE g.close_id IN (SELECT id FROM scope) AND g.author=$3 AND h.assignee<>$3 AND h.closed_at IS NULL AND ` + handoffEscalated + `<=now()
 )
 SELECT v.key,v.kind,v.close_id::text,v.at,v.text,v.workpaper,COALESCE(h.job_id::text,''),COALESCE(h.account_id,''),s.entity,s.period,s.due_on,s.priority,s.owner,mk.read_at IS NOT NULL,mk.snoozed_until
 FROM events v JOIN scope s ON s.id=v.close_id LEFT JOIN attention_marks mk ON mk.organization_id=$1 AND mk.subject=$3 AND mk.key=v.key
-LEFT JOIN goal_handoffs h ON v.key='handoff:'||h.id
+LEFT JOIN goal_handoffs h ON h.id=CASE WHEN v.key LIKE 'handoff:%' THEN split_part(v.key,':',2)::bigint END
 ORDER BY v.at DESC,v.key`
 
 type attentionEvent struct {
