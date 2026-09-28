@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -359,19 +360,32 @@ func hidden(raw []byte) json.RawMessage {
 	return out
 }
 
-// only keeps the named fields of a recorded object and masks the others.
+// only masks every text in a recorded object, at any depth, except the named fields.
 func only(raw []byte, keep ...string) json.RawMessage {
 	var fields map[string]any
 	if json.Unmarshal(raw, &fields) != nil || fields == nil {
 		return hidden(raw)
 	}
-	for k, v := range fields {
-		if !slices.Contains(keep, k) {
-			fields[k] = maskText(v)
-		}
-	}
-	out, _ := json.Marshal(fields)
+	out, _ := json.Marshal(maskExcept(fields, keep))
 	return out
+}
+
+func maskExcept(v any, keep []string) any {
+	switch value := v.(type) {
+	case map[string]any:
+		for k, item := range value {
+			if !slices.Contains(keep, k) {
+				value[k] = maskExcept(item, keep)
+			}
+		}
+	case []any:
+		for i, item := range value {
+			value[i] = maskExcept(item, keep)
+		}
+	case string:
+		return maskText(value)
+	}
+	return v
 }
 
 // maskText masks a non-empty text; other values pass through.
@@ -472,13 +486,23 @@ func adminStartRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	err := adminAct(r.Context(), db, adminAction{Firm: in.Organization, Action: "workflow.start", TargetType: "workflow", TargetID: in.Workflow, Reason: in.Reason,
 		Request: map[string]string{"workflow": in.Workflow, "organization": in.Organization, "idempotency_key": in.IdempotencyKey}},
 		func(ctx context.Context, tx *sql.Tx) error {
+			d := lookupDefinition(in.Workflow)
+			if d == nil {
+				return fmt.Errorf("%w: %q", wf.ErrUnknownWorkflow, in.Workflow)
+			}
+			switch byHand, firmOnly := d.StartsByHand(); {
+			case !byHand:
+				return fmt.Errorf("%w: %s is not started by hand", wf.ErrInvalidInput, in.Workflow)
+			case firmOnly && in.Organization == "":
+				return fmt.Errorf("%w: %s works on one firm; name it", wf.ErrInvalidInput, in.Workflow)
+			}
 			if in.Organization != "" {
 				var enabled bool
 				if err := tx.QueryRowContext(ctx, `SELECT enabled FROM organizations WHERE id=$1`, in.Organization).Scan(&enabled); err != nil {
 					return err
 				}
 				if !enabled {
-					return errors.New("the firm is suspended: its runs would not be claimed")
+					return fmt.Errorf("%w: the firm is suspended, so its runs would not be claimed", wf.ErrNotAllowed)
 				}
 			}
 			var err error

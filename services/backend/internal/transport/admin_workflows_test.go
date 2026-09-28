@@ -19,8 +19,13 @@ type adminFlowInput struct {
 	Secret string `json:"secret" wf:"sensitive"`
 }
 
+var _ = wf.Define(wf.Spec[struct{}, struct{}]{
+	Name: "test_admin_approved", Title: "Starts on approval", Triggers: []wf.Trigger{wf.OnApproval()},
+	Run: func(wf.Context, struct{}) (struct{}, error) { return struct{}{}, nil },
+})
+
 var _ = wf.Define(wf.Spec[adminFlowInput, map[string]string]{
-	Name: "test_admin_flow", Title: "Admin flow",
+	Name: "test_admin_flow", Title: "Admin flow", Triggers: []wf.Trigger{wf.ManualForFirm()},
 	Run: func(ctx wf.Context, in adminFlowInput) (map[string]string, error) {
 		note, err := wf.Step(ctx, "note", func(context.Context) (string, error) { return "the client said " + in.Secret, nil })
 		if err != nil {
@@ -94,6 +99,9 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 	}
 	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs", `{"workflow":"test_admin_flow","organization":"`+firm+`","input":{"id":"x","secret":"y"}}`, 422)
 	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs", `{"workflow":"test_admin_flow","organization":"`+firm+`","input":{"id":"x","extra":1},"reason":"r"}`, 422)
+	// A firm's workflow needs a firm, and one that starts on approval cannot be started by hand.
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs", `{"workflow":"test_admin_flow","input":{"id":"x"},"reason":"r"}`, 422)
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs", `{"workflow":"test_admin_approved","organization":"`+firm+`","input":{},"reason":"r"}`, 422)
 
 	// The catalog marks the sensitive field.
 	definitions := adminJSON(t, h, token, "GET", "/v1/admin/workflows/definitions", "", 200)
@@ -133,10 +141,14 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 		t.Fatalf("derived client content must be masked: %s", text)
 	}
 
-	// An approval shows who may decide, not the subject or prompt it carries.
+	// An approval shows who may decide and what they decided, not its subject, prompt or note.
 	approval := start("approval")
 	drain()
-	if text := mustString(adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs/"+jsonNumber(approval), "", 200)); strings.Contains(text, "123-45-6789") || !strings.Contains(text, `"permission":"closes:signoff"`) {
+	if err := wf.Approve(context.Background(), db, int64(approval), "sign", wf.Decision{Approved: true, By: "user_1", Note: "checked SSN 123-45-6789"}, []string{"closes:signoff"}); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	if text := mustString(adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs/"+jsonNumber(approval), "", 200)); strings.Contains(text, "123-45-6789") || !strings.Contains(text, `"permission":"closes:signoff"`) || !strings.Contains(text, `"approved":true`) {
 		t.Fatalf("approval text must be masked: %s", text)
 	}
 

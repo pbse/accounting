@@ -14,7 +14,8 @@ type Activity = { Name: string; Title: string; Description: string; Permission: 
 
 function trigger(t: { Kind: string; Value: string }): string {
   switch (t.Kind) {
-    case "manual": return "manual";
+    case "manual": return t.Value === "firm" ? "by hand, for a firm" : "by hand";
+    case "approval": return "when approved";
     case "schedule": return `platform schedule ${t.Value}`;
     case "schedule_each_firm": return `each firm ${t.Value}`;
     case "event": return `on ${t.Value}`;
@@ -44,7 +45,7 @@ export function Workflows() {
                   <td><Link to={`/runs?workflow=${w.name}&view=active`}>{w.active_runs}</Link></td>
                   <td>{w.completed_7d}</td>
                   <td>{w.failed_7d ? <Link to={`/runs?workflow=${w.name}&state=failed`}>{w.failed_7d}</Link> : 0}</td>
-                  <td><Link to={`/runs/new?workflow=${w.name}`}>Start</Link></td>
+                  <td>{w.triggers.some((t) => t.Kind === "manual") && <Link to={`/runs/new?workflow=${w.name}`}>Start</Link>}</td>
                 </tr>
               ))}
             </tbody>

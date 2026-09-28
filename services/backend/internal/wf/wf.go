@@ -45,6 +45,24 @@ type Trigger struct{ Kind, Value string }
 // Manual lets a person or the API start the workflow.
 func Manual() Trigger { return Trigger{Kind: "manual"} }
 
+// ManualForFirm is Manual for a workflow that works on one firm: staff starting it must name one.
+func ManualForFirm() Trigger { return Trigger{Kind: "manual", Value: "firm"} }
+
+// OnApproval marks a workflow that starts only when a person approves something, such as a plan;
+// nobody starts it by hand.
+func OnApproval() Trigger { return Trigger{Kind: "approval"} }
+
+// StartsByHand says whether a person may start the workflow, and whether only for a firm.
+func (d Definition) StartsByHand() (allowed, firmOnly bool) {
+	firmOnly = true
+	for _, t := range d.Triggers {
+		if t.Kind == "manual" {
+			allowed, firmOnly = true, firmOnly && t.Value == "firm"
+		}
+	}
+	return allowed, allowed && firmOnly
+}
+
 // Schedule starts one platform run (no firm) at each slot of a five-field cron expression, in UTC.
 // A slot missed while no worker ran is started late if it is less than a day old; only the latest
 // missed slot runs. The workflow's input must accept {}.
@@ -66,6 +84,11 @@ var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month 
 func (t Trigger) check(input func(json.RawMessage) error) error {
 	switch t.Kind {
 	case "manual":
+		if t.Value != "" && t.Value != "firm" {
+			return fmt.Errorf("manual trigger %q: use Manual or ManualForFirm", t.Value)
+		}
+		return nil
+	case "approval":
 		return nil
 	case "schedule", "schedule_each_firm":
 		if _, err := cronParser.Parse(t.Value); err != nil {
