@@ -2550,3 +2550,16 @@ Review: GPT-6 Sol (reasoning high) found four issues, all fixed, and each checke
 - The pre-ledger guard looked for one table only. Any table in `public` now counts; a database holding just one unrelated table is refused and no ledger is created.
 - The README's fresh-database steps ran the files directly, bypassing the ledger. They now use the runner.
 A delta review closed all four.
+
+## Migrations run on every merge (2026-09-28)
+
+Request: finish #165, so merged migrations reach production automatically, and apply them to production.
+
+What changed:
+- **Deploy production** runs on every push to `main`. Before deploying, both deploy workflows run `infra/postgres/migrate.sh` as the owner (new secret `MIGRATION_DATABASE_URL`, refused unless it requires TLS and uses the direct endpoint), granting to the runtime role named in `DATABASE_URL`. This replaces the hand-kept "Verify migrations are already applied" gate; `/readyz` still checks the schema after the deploy.
+- **Production adoption.** Production's last deploy (#140) passed readiness with migrations through 090, and 091–096 may since have been applied by hand. `infra/postgres/adopt-before-ledger.txt` records 001–090 as in place and each of 091–096 only if what it creates exists; the runner applies the rest.
+
+Checks, running the workflow step's commands against throwaway local databases (since dropped), with a separate owner and runtime role:
+- By hand through 090 plus 094 and 096: 92 adopted, 091, 092, 093 and 095 applied; a second run is silent; the runtime role can use the new tables.
+- By hand through 090: 90 adopted, 091–096 applied.
+- All 96 by hand: all adopted, nothing applied.
