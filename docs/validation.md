@@ -2653,4 +2653,6 @@ Checks:
   - reported for sign-off after a failed month-end read (until a read succeeds), at six scheduled snapshots, at 20 snapshots in all and for a close past the schedule's months, but not once a person captures. The test derives its months from today.
 - `TestDoThrottledRepeatsOnlyThrottledReads`: a read throttled twice (once with a Retry-After date) succeeds on the third try; one throttled throughout stops at three; a throttled PUT is sent once.
 
-Not verified: the capture against a live QuickBooks company. The comparison of a fresh read with the last snapshot is covered by the unit test, not by a mocked provider run.
+- `TestTheEndedMonthSnapshotIsCapturedAndRefreshedWhenItChanges` (mocked QuickBooks, local PostgreSQL): a snapshot under 20 hours old is not read again; a day-old one is read again and nothing is saved while the reports are unchanged; a changed balance saves a second snapshot. A person's capture during the read still wins, and signed-off, current-month and renamed-company closes are still left alone.
+
+Not verified: the capture against a live QuickBooks company.
