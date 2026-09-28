@@ -550,6 +550,9 @@ func idempotent(db *sql.DB, next http.Handler) http.Handler {
 }
 
 func ConfiguredAPI() (http.Handler, func(), error) {
+	if _, err := serverSessions(); err != nil {
+		return nil, nil, err
+	}
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
 		return API(), func() {}, nil
