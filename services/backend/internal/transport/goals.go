@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"close.local/backend/internal/preparation"
 )
 
 // A close handed to the agent. The agent keeps the close's preparation scope current, preparation the firm lets agents
@@ -82,7 +84,8 @@ const goalJobs = `SELECT j.id::text,e.name,j.state,j.error,e.extraction_state,CO
  COALESCE((SELECT jsonb_build_object('id',q.id::text,
    'partial',COALESCE((SELECT NOT s.complete FROM request_submissions s WHERE s.request_id=q.id ORDER BY s.id DESC LIMIT 1),false),
    'undelivered',EXISTS(SELECT 1 FROM (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m WHERE ` + undeliveredEmail + `),
-   'unsent',q.delivered_at IS NULL AND NOT EXISTS(SELECT 1 FROM email_delivery m WHERE m.request_id=q.id))
+   'unsent',q.delivered_at IS NULL AND NOT EXISTS(SELECT 1 FROM email_delivery m WHERE m.request_id=q.id),
+   'follow',` + reminderFollow + `)
   FROM request_jobs rj JOIN work_requests q ON q.id=rj.request_id WHERE rj.job_id=j.id ORDER BY q.id DESC LIMIT 1),'null'::jsonb)
  FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id
  WHERE j.close_id=$1 AND e.superseded_by IS NULL ORDER BY j.id`
@@ -134,6 +137,12 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	}
 	defer rows.Close()
 	prepared, open := 0, 0
+	// waiting is the documents waiting on a client request, by their place in p.Items.
+	type wait struct {
+		at      int
+		request string
+	}
+	waiting := []wait{}
 	for rows.Next() {
 		var state, failure, extraction, kind, summary string
 		var questionsRaw, papersRaw, requestRaw []byte
@@ -147,6 +156,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 			Partial     bool   `json:"partial"`
 			Undelivered bool   `json:"undelivered"`
 			Unsent      bool   `json:"unsent"`
+			Follow      string `json:"follow"`
 		}
 		if err = errors.Join(json.Unmarshal(questionsRaw, &questions), json.Unmarshal(papersRaw, &papers), json.Unmarshal(requestRaw, &request)); err != nil {
 			return p, err
@@ -171,7 +181,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 				if len(questions) > 0 {
 					why = questions[0]
 				}
-				item.Status, item.Text = "unsupported", strings.TrimSpace("I can't prepare this kind of work. "+why+" Answer in Work, prepare it by hand, or stop it.")
+				item.Status, item.Text = "unsupported", strings.TrimSpace("I can't prepare this kind of work. "+why+" Answer in Work, hand it to a teammate, prepare it by hand, or stop it.")
 			case len(questions) > 0:
 				item.Text = fmt.Sprintf("Answer %s in Work: %s", plural(len(questions), "question", "questions"), questions[0])
 			case goalForms[kind] != "":
@@ -189,8 +199,18 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 				item.Text = "The email for request #" + request.ID + " was not delivered. Check it on the Requests tab."
 			case request.Unsent:
 				item.Text = "Request #" + request.ID + " is approved but not sent. Send it, or record how you delivered it."
+			// Following up is the firm's decision: a reminder is due under its rule, or the rule allows no more.
+			case request.Follow == "due":
+				item.Text = "A reminder for request #" + request.ID + " is due under the firm's rule. Approve it on the Requests tab."
+			case request.Follow == "exhausted":
+				item.Text = "Request #" + request.ID + " is unanswered after all the reminders the firm's rule allows. Contact the client another way."
+			case request.Follow == "expiring":
+				item.Text = "The link for request #" + request.ID + " has expired, or expires before the next reminder is due. Contact the client another way."
 			default:
 				item.Status, item.Text = "client", "Waiting on the client's reply to request #"+request.ID+"."
+			}
+			if request != nil && !request.Partial && !request.Undelivered && !request.Unsent {
+				waiting = append(waiting, wait{len(p.Items), request.ID})
 			}
 		case "completed":
 			ready, approved := []string{}, []string{}
@@ -251,6 +271,12 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	}
 	if err = rows.Err(); err != nil {
 		return p, err
+	}
+	// A request whose work changed takes no reply, so waiting on it, or following it up, is a person's to redo.
+	for _, w := range waiting {
+		if stale := preparation.FreshClientRequest(ctx, tx, closeID, w.request); stale != nil {
+			p.Items[w.at].Status, p.Items[w.at].Text = "needs_you", "Request #"+w.request+" no longer takes replies. "+stale.Error()
+		}
 	}
 	switch {
 	case len(p.Items) == 0:
@@ -627,6 +653,8 @@ SELECT at,actor,text,count(*) OVER () FROM (
  UNION ALL SELECT i.decided_at,i.decided_by,i.decided_by||' '||i.state||' an email reply to request #'||i.request_id,0 FROM inbound_replies i WHERE i.close_id=$1 AND i.decided_at IS NOT NULL
  UNION ALL SELECT r.created_at,r.actor,r.actor||CASE r.decision WHEN 'approved' THEN ' approved draft #' ELSE ' asked for changes to draft #' END||r.workpaper_id,0 FROM workpaper_reviews r JOIN workpapers w ON w.id=r.workpaper_id WHERE w.close_id=$1
  UNION ALL SELECT x.created_at,x.actor,x.actor||' rechecked '||e.name,0 FROM recovery_actions x JOIN preparation_intakes i ON i.job_id=x.job_id JOIN evidence e ON e.id=i.source_id WHERE x.close_id=$1
+ UNION ALL SELECT h.created_at+interval '2 days','agent','I followed up with '||h.assignee_name||' on '||h.document,0 FROM goal_handoffs h WHERE h.goal_id=$2 AND h.created_at+interval '2 days'<=LEAST(h.closed_at,now())
+ UNION ALL SELECT ` + handoffEscalated + `,'agent','I asked '||g.author||' to check with '||h.assignee_name||' on '||h.document,0 FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE h.goal_id=$2 AND h.assignee<>g.author AND ` + handoffEscalated + `<=LEAST(h.closed_at,now())
  UNION ALL SELECT s.created_at,s.actor,s.actor||' set what sign-off covers: '||(s.scope->>'description'),0 FROM close_scopes s WHERE s.close_id=$1
  UNION ALL SELECT s.created_at,s.actor,s.actor||CASE s.decision WHEN 'signed_off' THEN ' signed off the close: ' ELSE ' reopened the close: ' END||s.note,0 FROM close_signoffs s WHERE s.close_id=$1
  UNION ALL SELECT p.attempted_at,p.attempted_by,p.attempted_by||' posted the entry for draft #'||p.workpaper_id||' to '||p.target,0 FROM postings p WHERE p.attempted_at IS NOT NULL
@@ -771,6 +799,14 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		if err != nil {
 			problem(w, 503, "The agent's progress is unavailable.")
 			return
+		}
+		// Only the goal's owner is asked to check on a stalled hand-off; it is theirs to decide, not a need of the close.
+		if i := slices.IndexFunc(progress.Plan, func(s planStep) bool { return s.Key == "documents" }); i >= 0 && goal != nil && goal.Author == subject(r) {
+			for _, h := range handoffs {
+				if h.stall != "" {
+					progress.Plan[i].State, progress.Plan[i].Lines = "you", append(progress.Plan[i].Lines, h.stall)
+				}
+			}
 		}
 		// The checks behind the close's brief are heavier than the rest, so the card asks for them about once a minute.
 		if r.URL.Query().Get("verify") == "1" {

@@ -383,14 +383,44 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 		t.Fatal("request missing from coverage")
 		return
 	}
+	// A delegated close's documents say when following up with the client is the firm's decision, as Work does.
+	followUp := func() string {
+		t.Helper()
+		tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+		must(err)
+		defer tx.Rollback()
+		p, err := readGoalProgress(context.Background(), tx, closeID, "review")
+		must(err)
+		for _, item := range p.Items {
+			if item.JobID == jobA {
+				return item.Status + ": " + item.Text
+			}
+		}
+		t.Fatal("the request's document is missing from the goal's progress")
+		return ""
+	}
 	rule(2, 1)
 	_, err = db.Exec(`UPDATE email_delivery_events SET occurred_at=now() WHERE event_id='group-delivered'`)
 	must(err)
 	if left, due, expires := reminderState(); left != 1 || due == nil || due.Before(time.Now().Add(47*time.Hour)) || expires == nil || !expires.After(time.Now()) {
 		t.Fatalf("the next reminder is due two days after delivery, with one allowed, before the emailed link expires: %d %v %v", left, due, expires)
 	}
+	if got := followUp(); got != "client: Waiting on the client's reply to request #"+group.ID+"." {
+		t.Fatalf("before a reminder is due the client has it: %q", got)
+	}
 	approve(first, 409)
 	rule(0, 1)
+	if got := followUp(); got != "needs_you: A reminder for request #"+group.ID+" is due under the firm's rule. Approve it on the Requests tab." {
+		t.Fatalf("a due reminder is the firm's decision: %q", got)
+	}
+	// Only a reminder that could be approved is offered: not while the firm's sender is off.
+	_, err = db.Exec(`UPDATE email_connections SET enabled=false WHERE id::text=$1`, status.Connection.ID)
+	must(err)
+	if got := followUp(); !strings.HasPrefix(got, "client: ") {
+		t.Fatalf("a reminder that cannot be approved is not offered: %q", got)
+	}
+	_, err = db.Exec(`UPDATE email_connections SET enabled=true WHERE id::text=$1`, status.Connection.ID)
+	must(err)
 	reminder := approve(first, 200)
 	if approve(first, 200) != reminder {
 		t.Fatal("duplicate approval queued another reminder")
@@ -407,8 +437,26 @@ func TestApprovedEmailDurableRetryAndScope(t *testing.T) {
 	if left, _, _ := reminderState(); left != 0 {
 		t.Fatalf("the one allowed reminder is used: %d", left)
 	}
+	if got := followUp(); got != "needs_you: Request #"+group.ID+" is unanswered after all the reminders the firm's rule allows. Contact the client another way." {
+		t.Fatalf("with no reminders left the client is contacted another way: %q", got)
+	}
 	approve(reminder, 409)
 	rule(0, 3)
+	var expires time.Time
+	must(db.QueryRow(`UPDATE client_request_links SET expires_at=now()-interval '1 minute' WHERE digest=$1 RETURNING (SELECT expires_at FROM client_request_links WHERE digest=$1)`, firstDigest).Scan(&expires))
+	if got := followUp(); got != "needs_you: The link for request #"+group.ID+" has expired, or expires before the next reminder is due. Contact the client another way." {
+		t.Fatalf("a lapsed link is followed up another way: %q", got)
+	}
+	_, err = db.Exec(`UPDATE client_request_links SET expires_at=$2 WHERE digest=$1`, firstDigest, expires)
+	must(err)
+	// A request whose work changed takes no reply, so the goal asks for a fresh one rather than a reminder.
+	_, err = db.Exec(`UPDATE preparation_intakes SET revision=revision+1 WHERE job_id::text=$1`, jobA)
+	must(err)
+	if got := followUp(); got != "needs_you: Request #"+group.ID+" no longer takes replies. Request work changed. Review and issue a fresh request." {
+		t.Fatalf("a stale request is redone, not reminded: %q", got)
+	}
+	_, err = db.Exec(`UPDATE preparation_intakes SET revision=revision-1 WHERE job_id::text=$1`, jobA)
+	must(err)
 	// A staff-recorded answer also blocks a reminder even with an unused link.
 	_, err = db.Exec(`INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,'fixture','client@example.test')`, group.ID, ledger)
 	must(err)

@@ -33,6 +33,7 @@ type goalHandoff struct {
 	At        time.Time `json:"at"`
 	Mine      bool      `json:"mine"`
 	Handed    string    `json:"handed"`
+	stall     string
 }
 
 // workosList reads every page of a WorkOS list, at most ten; a longer list is an error, never a partial one.
@@ -189,9 +190,22 @@ func mayAct(roles map[string]reviewer, subject string, member, viaGrant, granted
 	return member && r.review && (r.firmWide || granted)
 }
 
-// readHandoffs is the goal's open hand-offs, marking those handed to me.
+// The agent follows up on a hand-off that stays open: with the teammate after two days, and with the goal's owner after
+// four, or the day before the goal is due when that is sooner (at midday UTC, which falls on that day from UTC-11 to
+// UTC+11, where a due date has no time zone), but a day after the hand-off at the earliest. The texts say "at least", since an item keeps its words while it stays open. Each follow-up is
+// read from the time, so nothing is sent or stored; a person decides what to do.
+
+// handoffEscalated is SQL for when the owner of hand-off h's goal g is asked to check on it.
+const handoffEscalated = `(CASE WHEN g.due_on IS NULL THEN h.created_at+interval '4 days' ELSE LEAST(h.created_at+interval '4 days',GREATEST(h.created_at+interval '1 day',(g.due_on-1)::timestamp AT TIME ZONE 'UTC'+interval '12 hours')) END)`
+
+// handoffStall is SQL for what the owner is asked.
+const handoffStall = `h.document||' has been with '||h.assignee_name||' for at least '||(SELECT CASE WHEN d=1 THEN '1 day' ELSE d||' days' END FROM (SELECT floor(extract(epoch FROM ` + handoffEscalated + `-h.created_at)/86400)::int AS d) x)||'. Check with them, or take it back.'`
+
+// readHandoffs is the goal's open hand-offs, marking those handed to me and, once asked, what the owner is asked.
 func readHandoffs(ctx context.Context, tx *sql.Tx, goalID, me string) ([]goalHandoff, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id::text,COALESCE(job_id::text,''),COALESCE(account_id,''),assignee_name,note,created_by,created_at,assignee=$2,document FROM goal_handoffs WHERE goal_id=$1 AND closed_at IS NULL ORDER BY id`, goalID, me)
+	rows, err := tx.QueryContext(ctx, `SELECT h.id::text,COALESCE(h.job_id::text,''),COALESCE(h.account_id,''),h.assignee_name,h.note,h.created_by,h.created_at,h.assignee=$2,h.document,
+ CASE WHEN `+handoffEscalated+`<=now() AND h.assignee<>g.author THEN `+handoffStall+` ELSE '' END
+ FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE h.goal_id=$1 AND h.closed_at IS NULL ORDER BY h.id`, goalID, me)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +213,7 @@ func readHandoffs(ctx context.Context, tx *sql.Tx, goalID, me string) ([]goalHan
 	out := []goalHandoff{}
 	for rows.Next() {
 		var h goalHandoff
-		if err = rows.Scan(&h.ID, &h.JobID, &h.AccountID, &h.Name, &h.Note, &h.By, &h.At, &h.Mine, &h.Handed); err != nil {
+		if err = rows.Scan(&h.ID, &h.JobID, &h.AccountID, &h.Name, &h.Note, &h.By, &h.At, &h.Mine, &h.Handed, &h.stall); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
