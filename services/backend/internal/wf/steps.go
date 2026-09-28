@@ -16,7 +16,7 @@ import (
 // repeat: use idempotent writes, or StepID as an idempotency key. External writes use Effect.
 func Step[T any](ctx Context, key string, fn func(context.Context) (T, error), options ...StepOption) (T, error) {
 	x := ctx.exec()
-	return typed[T](x)(x.step(key, "step", policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
+	return typed[T](x)(x.step(key, "step", nil, policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
 }
 
 // Effect runs an external write (ledger posting, email, provider call) under key. It records the
@@ -26,7 +26,7 @@ func Step[T any](ctx Context, key string, fn func(context.Context) (T, error), o
 // never interrupts an effect in flight.
 func Effect[T any](ctx Context, key string, fn func(context.Context) (T, error), options ...StepOption) (T, error) {
 	x := ctx.exec()
-	return typed[T](x)(x.step(key, "effect", policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
+	return typed[T](x)(x.step(key, "effect", nil, policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
 }
 
 // StepID identifies the current run and step, for use as an idempotency key in a step's writes.
@@ -55,6 +55,11 @@ func Organization(ctx context.Context) string {
 }
 
 type stepKey struct{}
+type stepIDKey struct{}
+
+// CurrentStepID identifies the step running with ctx ("wf:<run>:<key>"), or "" outside a step: an
+// idempotency key for a step's own writes, stable across the step's retries.
+func CurrentStepID(ctx context.Context) string { id, _ := ctx.Value(stepIDKey{}).(string); return id }
 
 func executionOf(ctx context.Context) *execution {
 	if x, ok := ctx.(Context); ok {
@@ -282,7 +287,7 @@ func (x *execution) mark(key, state, message string, retry *time.Time) error {
 	return nil
 }
 
-func (x *execution) step(key, kind string, p policy, fn func(context.Context) (any, error)) (json.RawMessage, error) {
+func (x *execution) step(key, kind string, input any, p policy, fn func(context.Context) (any, error)) (json.RawMessage, error) {
 	if err := x.enter(key, false); err != nil {
 		return nil, err
 	}
@@ -319,7 +324,7 @@ func (x *execution) step(key, kind string, p policy, fn func(context.Context) (a
 	}
 	attempts := 1
 	if s == nil {
-		if err := x.insert(key, kind, "running", nil, "", nil); err != nil {
+		if err := x.insert(key, kind, "running", nil, "", input); err != nil {
 			return nil, err
 		}
 	} else {
@@ -398,7 +403,7 @@ func (x *execution) invoke(kind, key string, p policy, fn func(context.Context) 
 	if kind == "effect" {
 		base = context.WithoutCancel(x)
 	}
-	c, cancel := context.WithTimeout(context.WithValue(base, stepKey{}, x), p.timeout)
+	c, cancel := context.WithTimeout(context.WithValue(context.WithValue(base, stepKey{}, x), stepIDKey{}, fmt.Sprintf("wf:%d:%s", x.run.id, key)), p.timeout)
 	defer cancel()
 	defer func() {
 		if r := recover(); r != nil {

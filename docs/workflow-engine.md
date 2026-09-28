@@ -1,6 +1,6 @@
 # Workflow engine plan
 
-**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core) and W2 (composition) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`. Later phases are proposals. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
+**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core), W2 (composition) and W3 (activities and plans) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`. Later phases are proposals. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
 
 ## Goals
 
@@ -164,60 +164,84 @@ One migration creates the engine's tables. After it, adding workflows or activit
 
 ### Activities
 
-An activity is a Go package that registers `wf.DefineActivity`:
-- `Name` (`client_request.send`), `Title`, and a plain-language `Description`, written to be read by staff and by a model.
-- `Input` and `Output` types. A JSON Schema is generated from them with a schema library such as `invopop/jsonschema`.
-- `Permission`: what the approving person must hold, for example `requests:send`.
-- `Effect`: `read`, `internal` or `external`.
-- `Run`: always a call into existing domain code (`internal/preparation`, `internal/delivery` and so on), never a new copy of accounting logic.
+An activity is a directory under `services/backend/activities/` whose package registers `wf.DefineActivity`. Like workflows, a directory is registered by `go generate ./workflows`, and `workflows/registry_test.go` requires the activity's `Name` to equal its directory name.
 
-The catalog (`GET /v1/admin/workflows/activities`) returns all of this. It is the same shape an LLM tool list needs, which is the first bone for agent proposals.
+- `Name`, `Title`, and a plain-language `Description`, written for staff and for a model.
+- `Input` and `Output` Go types. `wf.Schema` (built in, no dependency) turns them into JSON Schema: required fields, `description` tags, and fields tagged `wf:"sensitive"` marked for masking.
+- `Permission`: what the person approving a plan that uses the activity must hold in the firm, or empty.
+- `Effect` (a `wf.EffectClass`):
+  - `wf.Read` runs as a step.
+  - `wf.Internal` runs as a step, so at least once: write idempotently, for example keyed by `wf.CurrentStepID`.
+  - `wf.External` runs through `wf.Effect`: never repeated when uncertain, and a plan must approve it first.
+- `Run`: always a call into existing domain code, never a new copy of accounting logic.
+
+Code workflows call an activity with `wf.Call(ctx, key, activity, input)`; the plan interpreter uses `wf.CallActivity` by name. `wf.Activities()` is the catalog: every activity with its schemas. It is the same shape a model's tool list needs, which is the first piece agent proposals rely on. Workflow definitions carry `InputSchema`/`OutputSchema` for start forms.
+
+**Activities so far:**
+- `close_summary` (read): a close's client, month, sign-off state and preparation work by state.
+- `plan_signal` (internal): records `plan.<name>` for the firm, once per step, so a plan can wake another. The `plan.` namespace keeps it from forging replies, sign-offs or approvals.
+
+Activities that write domain records need those operations extracted from the HTTP handlers first; that is the same work the [admin panel](admin-panel.md) needs, and activities grow with it.
 
 ### Plan format (version 1)
 
 ```json
 {
   "version": 1,
-  "title": "Collect missing bank statements for Acme, September",
+  "title": "Check Acme, ask for approval, then send",
   "nodes": [
-    {"id": "ask", "activity": "client_request.send", "input": {"close_id": "412", "questions": ["September bank statement for account 1234"]}},
-    {"id": "reply", "after": ["ask"], "wait": {"event": "client_request.replied:{{ask.request_id}}", "timeout": "P14D"}},
-    {"id": "remind", "after": ["reply"], "when": "reply.timed_out", "activity": "client_request.remind", "input": {"request_id": "{{ask.request_id}}"}},
-    {"id": "prepare", "after": ["reply"], "when": "reply.received", "activity": "preparation.start", "input": {"close_id": "412"}},
-    {"id": "review", "after": ["prepare"], "approval": {"permission": "workpapers:review", "subject": "{{prepare.job_id}}"}}
+    {"id": "look", "activity": "close_summary", "input": {"close_id": "412"}},
+    {"id": "reply", "after": ["look"], "wait": {"event": "client_request.replied:881", "timeout": "336h"}},
+    {"id": "ok", "after": ["reply"], "when": "reply.received", "approval": {"permission": "requests:send", "subject": "Send the follow-up", "timeout": "72h"}},
+    {"id": "send", "after": ["ok"], "activity": "an_external_activity", "input": {"entity": "{{look.entity}}"}},
+    {"id": "declined", "after": ["ok"], "when": "ok.rejected", "activity": "plan_signal", "input": {"name": "declined"}}
   ]
 }
 ```
 
-- Nodes form a directed acyclic graph through `after`. Each node is exactly one of `activity`, `wait` (event or duration), `approval` or `workflow` (a child run of a code workflow).
-- `{{node.field}}` references earlier outputs. `when` takes only node outcomes: `received`, `timed_out`, `completed`, `failed`, `approved`, `rejected`. There is no general expression language; anything more complex should become a code workflow.
-- Limits: at most 50 nodes and a 90-day horizon.
+- **Node kinds.** Each node is exactly one of:
+  - `activity` (with `input`);
+  - `workflow` (a child run of a code workflow, with `input`);
+  - `wait`, either `event` plus `timeout`, or a `duration`;
+  - `approval` (`permission`, `timeout`, optional `subject`/`prompt`).
+- **Ordering.** Nodes run in the order listed, and `after` may name only earlier nodes, so there are no cycles.
+- **When a node runs.** Without `when`, a node runs if every node in `after` succeeded (`completed`, `received`, `approved`). With `when: "<node>.<outcome>"` (a node from `after`), it runs if that node ended that way. A node that does not run is recorded as `skipped`.
+- **Outcomes by kind.**
+  - Activities and workflows: `completed` or `failed`.
+  - Event waits: `received` or `timed_out`.
+  - Duration waits: `completed`.
+  - Approvals: `approved`, `rejected` or `timed_out`.
+- **Failure.** The run fails if a node failed and no node handles it with `when: "<node>.failed"`.
+- **References.** `{{node.field}}` (with `.field` or `.0` steps) uses an earlier output, in `input` strings and event keys. A string that is exactly one reference keeps the value's type; otherwise references become text. A reference that cannot be filled fails its node.
+- **Limits.** At most 50 nodes. Every timeout and duration uses Go's form (`"72h"`) and is at most 90 days. The whole plan is at most 64 KiB. There is no general expression language; anything more complex becomes a code workflow.
 
-### Validation (identical for every source)
+### Validation
 
-A plan is accepted only if:
-1. Every activity exists and every input validates against its schema.
-2. References resolve to earlier nodes, and the graph has no cycles.
-3. It stays within the limits.
-4. The approving person holds every activity's permission in that firm.
-5. Every `external` activity is preceded by an `approval` node unless the approver holds that activity's permission and explicitly waives it.
-
-Validation runs on save, on approval and again when the run starts.
+`Plan.Problems(permissions)` lists every rule broken. It runs when a plan is saved, and in full, with the approver's permissions, when it is approved:
+1. Every node has a valid, unique id and exactly one kind, and `after` names only earlier nodes.
+2. `when` names a node in `after`, with an outcome that node can have.
+3. References name a node this one waits for, directly or through `after`.
+4. Activities and workflows exist (`plan` cannot nest). Input without references is checked strictly against the input type; input with references is checked when the node runs.
+5. Waits and approvals have valid durations within the horizon. Event keys do not start with `wf.`.
+6. Every `external` activity directly follows an approval node (in `after`, with no `when` or with `when: "<approval>.approved"`).
+7. The approver holds every activity's permission.
 
 ### Lifecycle
 
-`draft` → `proposed` → `approved` → running as a `plan` run.
-- Approving records the approver and binds to the plan's `digest`. Any edit returns the plan to `draft`, the same digest-bound approval the repo uses for postings.
-- The `plan` workflow receives `{plan_id, digest}`, reloads the approved snapshot, and executes each node as a step keyed by node ID. So a plan run has the same history, retries and flow view as a code workflow.
-- Templates are plans with `is_template`. Instantiating one copies it into a new `draft` for a specific firm and close.
+Go functions; HTTP arrives with the admin panel.
+- `CreatePlan` saves a staff or member plan as a `draft`.
+- `UpdatePlan` edits a draft or rejected plan, which returns it to `draft`.
+- `ProposePlan` asks for approval; `RejectPlan` turns a plan down.
+- `ApprovePlan(id, digest, approver, permissions)` approves exactly the version the approver saw: a different digest is refused. It re-validates, marks the plan `approved`, and starts the built-in `plan` workflow (`workflows/plan`) with `{plan_id, digest}`, linking the run and the plan. The workflow saves the approved plan as its first step, so later edits never change a running plan, and runs each node as a step keyed `node:<id>`. A plan run therefore has the same history, retries and flow view as a code workflow.
+- Templates (`is_template`, firm-specific or shared by all firms) never run themselves: `InstantiateTemplate` copies one into a new draft for a firm.
 
-### Agent-proposed plans: bones now, planner later
+### Agent-proposed plans: the pieces are there, the planner comes later
 
-Built in W3 so nothing needs redesign later:
-- `source = agent`, `rationale` and `agent` attribution columns.
-- An agent plan can only ever be created in `proposed`. **There is no code path that runs an agent plan without a person's approval.**
-- The activity catalog is model-ready: descriptions plus JSON Schemas.
-- Proposals are rate-limited per firm, and the validator treats agent and staff plans identically.
+In place now:
+- **Creation.** `CreatePlan` with `Source: "agent"` requires a firm and a `Rationale`, and creates the plan as `proposed`. The database also refuses an agent plan in `draft`. **Nothing runs an agent plan until a person approves it**, under the same validation as any plan.
+- **No edits.** An agent's proposal is not edited; staff copy it into a plan of their own.
+- **Rate limit.** At most 20 agent proposals per firm per day.
+- **Model-ready catalog.** `wf.Activities()` gives descriptions plus JSON Schemas.
 
 Deferred (W4, low priority):
 - The planner itself: a prompt over the catalog and the close's state, using the existing OpenAI integration and its budget accounting.
@@ -265,9 +289,9 @@ These proofs, which [`workers/workflows`](../workers/workflows/README.md) alread
 | **W0. Spike (1–2 days)** | Try DBOS Transact for Go (open-source durable workflows on PostgreSQL) against this plan: per-connection tenant context with row-level security, a non-superuser runtime role, the proof list. | Go/no-go recorded here. **Go:** the engine wraps DBOS behind the `wf` API. **No-go:** build W1 as specified. |
 | **W1. Engine core** (implemented) | Migration 094; `internal/wf` (`Define`, `Step`, `Effect`, `Sleep`, `SleepUntil`, `WaitForEvent`, `Now`, `Random`, `Permanent`, `NotApplied`); `Start`, `Cancel`, `Emit`, `RetryStep`, `Resolve` as Go functions; concurrency keys; registry generator and CI check; claim loop in `cmd/worker`; version stamping. The first real workflow moved to W2, which brings the event triggers and approvals it needs. | Proofs 1–8 pass in CI (`internal/wf/engine_test.go`); a run survives a container restart in staging. |
 | **W2. Composition** (implemented) | `Child`, `WaitForApproval` and `Approve`, schedule and event triggers, `wf.EmitForClose` for client replies and sign-offs, `DB`/`Organization` for steps, and the first real workflow, `firm_health_check` (daily per firm, read-only). `month_kickoff` was dropped: sign-off already carries reviewed schedules into the next month and close routines create next month's closes, so a second path would duplicate them. Compensation hooks wait until a workflow needs one. | Proofs for each primitive in `internal/wf/engine_test.go`; reply and sign-off events in the transport tests; the health check counts only its firm's problems. |
-| **W3. Activities and plans** | Activities directory and generator, catalog API, plan format and validator, `plan` workflow, plan lifecycle and templates, agent bones (`proposed` only, attribution, rate limit). | Staff build, approve and run a plan from the admin panel; an agent-sourced plan can't run without approval (tested). |
-| **W4. Agent planner (low priority)** | Model-backed proposals over the catalog; MCP `propose_plan`. | Proposals appear in the admin approval queue with rationale. |
-| **W5. Migrate existing loops** | Close goals first (already step-shaped, with an events log), then others where it simplifies. | Each migrated loop is deleted; its UI reads engine runs. |
+| **W3. Activities and plans** (implemented) | The activities directory, `wf.DefineActivity`/`Call`/`CallActivity`, the catalog with built-in JSON Schemas, the plan format and validator, the `plan` workflow, the plan lifecycle and templates, and the agent pieces (proposal only, reason required, no edits, rate limit, database check). First activities: `close_summary` and `plan_signal`. | `internal/wf/plans_test.go` covers validation rules and plan runs; `workflows/plan/workflow_test.go` covers the lifecycle, agent proposals and templates. |
+| **W4. Agent planner (low priority)** (deferred) | Model-backed proposals over the catalog; MCP `propose_plan`. Deferred as agreed: W3 provides every piece it plugs into. | Proposals appear in the admin approval queue with their reason. |
+| **W5. Migrate existing loops** (deferred) | Close goals first (already step-shaped, with an events log), then others where it simplifies. Deferred while close goals are under active development elsewhere (PRs #154–#156), to avoid rewriting a moving target. | Each migrated loop is deleted; its UI reads engine runs. |
 
 ## W0 result: DBOS Transact for Go
 
