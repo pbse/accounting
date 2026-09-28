@@ -681,14 +681,32 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	} else if interpretErr != nil {
 		state, message = "failed", interpretErr.Error()
 	}
+	straight := ""
 	if state == "needs_confirmation" {
 		proposal.InventoryDigest = digest
 		body, _ := json.Marshal(proposal)
 		if _, err = finish.ExecContext(persist, `UPDATE preparation_intakes SET proposal=$2,revision=revision+1 WHERE job_id=$1`, id, string(body)); err != nil {
 			return true, err
 		}
+		// Facts the source and the ledger both show advance to a draft under the firm's procedure; anything else waits for a person.
+		procedure, e := CurrentProcedure(persist, finish, closeID, "prepaid")
+		if e != nil && e != sql.ErrNoRows {
+			return true, e
+		}
+		ledger, e := CloseLedgerRows(persist, finish, closeID)
+		if e != nil {
+			return true, e
+		}
+		plan, reason := StraightThrough(proposal, procedure, profile.Currency, entity, period, id, ledger)
+		straight = "Prepared without confirmation: " + reason
+		if reason == "" {
+			if err = queueStraightThrough(persist, finish, id, plan); err != nil {
+				return true, err
+			}
+			state, straight = "queued", "Prepared without confirmation: every fact is one verified candidate, procedure v"+procedure.ID+" fixes the method and accounts, and one captured bill books the amount."
+		}
 	}
-	checkpointBody, _ := json.Marshal(map[string]any{"stage": state, "inventory_digest": digest, "selected_ids": selectedIDs(selected), "attempt": attempts + 1, "input_tokens": proposal.InputTokens, "output_tokens": proposal.OutputTokens})
+	checkpointBody, _ := json.Marshal(map[string]any{"stage": state, "inventory_digest": digest, "selected_ids": selectedIDs(selected), "attempt": attempts + 1, "input_tokens": proposal.InputTokens, "output_tokens": proposal.OutputTokens, "straight_through": straight})
 	if _, err = finish.ExecContext(persist, `UPDATE preparation_intakes SET agent_claim=NULL,agent_checkpoint=$2 WHERE job_id=$1`, id, string(checkpointBody)); err != nil {
 		return true, err
 	}

@@ -33,6 +33,8 @@ upload → waiting_evidence → interpreting* → needs_confirmation → queued 
                          waiting_client ─┘ (recorded reply → waiting_evidence)
 ```
 
+**Straight-through prepaid drafts.** An agent-read prepaid invoice skips `needs_confirmation` and is queued as a draft when every fact the calculation needs (amount, service start and end, currency) is one verified candidate with no open question, the client's enabled prepaid procedure names equal full months and both accounts (a cited account that differs from the procedure stops it), the invoice is in the client's home currency, and exactly one bill or purchase in the close's newest QuickBooks capture, dated in the close month, books that amount to the procedure's expense account (the invoice was expensed) or prepaid account (that line is the booked balance, cited as the booking reference). Credits, cancellations, booked balances read from the invoice, actual-day procedures and every other kind still wait for a person. The intake records `agent` as its confirmation and the checkpoint says why the draft advanced or did not; the draft is reviewed and approved like any other, and nothing posts.
+
 `preparation_intakes` stores proposals, their revision and confirmation actor. `work_requests` references immutable `request_drafts` and records approval/delivery separately. `work_replies` links the original evidence to the approved request. The queue remains PostgreSQL-backed; no second queue or workflow engine was introduced. Local calculations and their completion are committed atomically. Workers resume waiting/queued jobs after a restart.
 
 Authenticated API additions:

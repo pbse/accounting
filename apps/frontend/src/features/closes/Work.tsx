@@ -34,7 +34,7 @@ type WorkItem = Plan & {
   blockers: string[];
   agent_started_at: string;
   agent_attempts: number;
-  agent_checkpoint: { stage?: string; input_tokens?: number; output_tokens?: number };
+  agent_checkpoint: { stage?: string; input_tokens?: number; output_tokens?: number; straight_through?: string };
   revision: number;
   stale: boolean;
   coordinated: boolean;
@@ -970,6 +970,7 @@ function WorkDetails({
         Durable job #{item.id} · revision {item.revision}. Preparation does not
         approve or post a journal.
       </p>
+      {item.agent_checkpoint?.straight_through && <p>{item.agent_checkpoint.straight_through}</p>}
       {item.coordinated && <p>Agent budget: {item.agent_attempts} of 3 interpretation attempts used. Checkpoint: {item.agent_checkpoint?.stage?.replaceAll("_", " ") ?? "pending"}. Each attempt selects at most 20 sources / 128 KiB and requests at most 8,000 output tokens across selection and interpretation; a fresh client answer or reviewer recheck can reset this budget.</p>}
       {item.error && <p role="alert">{item.error}</p>}
       {item.blockers?.length > 0 && (

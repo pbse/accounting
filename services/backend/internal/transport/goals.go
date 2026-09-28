@@ -642,7 +642,7 @@ const goalActivity = `WITH postings AS (
  UNION ALL SELECT workpaper_id,attempted_at,attempted_by,verified_at,external_id,'the QuickBooks sandbox' FROM sandbox_postings WHERE close_id=$1)
 SELECT at,actor,text,count(*) OVER () FROM (
  SELECT (e->>'at')::timestamptz AS at,e->>'actor' AS actor,e->>'text' AS text,n FROM close_goals g CROSS JOIN LATERAL jsonb_array_elements(g.events) WITH ORDINALITY x(e,n) WHERE g.id=$2
- UNION ALL SELECT i.confirmed_at,i.confirmed_by,i.confirmed_by||' confirmed the facts read from '||e.name,0 FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND i.confirmed_at IS NOT NULL
+ UNION ALL SELECT i.confirmed_at,i.confirmed_by,CASE WHEN i.confirmed_by='agent' THEN 'The agent prepared '||e.name||' from verified facts, without confirmation' ELSE i.confirmed_by||' confirmed the facts read from '||e.name END,0 FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1 AND i.confirmed_at IS NOT NULL
  UNION ALL SELECT a.created_at,a.created_by,a.created_by||' answered a question on '||e.name,0 FROM preparation_answers a JOIN preparation_intakes i ON i.job_id=a.job_id JOIN preparation_jobs j ON j.id=a.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id=$1
  UNION ALL SELECT q.approved_at,q.approved_by,q.approved_by||' approved request #'||q.id||' to the client',0 FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1
  UNION ALL SELECT q.delivered_at,q.delivered_by,q.delivered_by||' recorded delivery of request #'||q.id,0 FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1 AND q.delivered_at IS NOT NULL

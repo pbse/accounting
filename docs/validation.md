@@ -2748,3 +2748,13 @@ Checks:
 - CI on this pull request, before the database change: 3:12, of which the side-by-side TypeScript and Go work competed for the runner's two cores. Runs after it could not start: the account's Actions minutes ran out.
 - The background TypeScript chain (checks, tests, both vite builds, edge dry-run) passes locally in 8 seconds and leaves `apps/frontend/dist`, with the admin app under it, as before.
 - The Actions timings come from this pull request's CI run and its deploy, recorded in the pull request.
+
+## Straight-through prepaid drafts (2026-09-28)
+
+Request: let source-verified facts advance to a draft without a person confirming each field ([maturity](maturity.md), demonstration step 3).
+
+What changed: after interpretation, a prepaid proposal is checked against the client's enabled prepaid procedure and the close's newest QuickBooks capture. When every calculation fact is one verified candidate, there is no open question, the procedure fixes equal full months and both accounts, the currency is the client's, and exactly one bill or purchase in the close month books the amount to one of those accounts, the job is queued as a draft with `agent` as its confirmation; otherwise it waits for a person as before. The Work item and the goal timeline say which. The draft is still reviewed and approved by a person; no posting or approval changed.
+
+Checks:
+- `TestStraightThroughNeedsOneVerifiedCandidatePerFactAndOneBookedLine`: the expensed and the prepaid-booked invoice each queue; no bill, a bill outside the month, two bills, an open question, a conflicting amount, a cited credit, a disabled or actual-day procedure, an account differing from the procedure, another currency, a local proposal, and a close outside the service period each wait for a person.
+- Fresh local PostgreSQL, `go test ./...` (the two PDF extraction tests fail only for want of Poppler and Tesseract on this machine), `go vet`, `gofmt`, `npm run check`, `npm test` (12), frontend build.
