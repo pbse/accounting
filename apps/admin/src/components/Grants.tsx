@@ -11,6 +11,13 @@ const GrantsContext = createContext<{ grants: Grant[]; reload: () => void }>({ g
 // GrantsProvider loads the staff member's open grants once for the console and keeps them current.
 export function GrantsProvider({ enabled, children }: { enabled: boolean; children: ReactNode }) {
   const grants = useResource<{ grants: Grant[] }>(enabled ? "/v1/admin/grants" : null);
+  // The last list the server gave: a refresh that fails keeps it, so only a confirmed end (a later list without the
+  // grant) or the expiry time passing ends a grant here, never a moment of network trouble.
+  const [known, setKnown] = useState<Grant[]>([]);
+  useEffect(() => {
+    if (grants.data) setKnown(grants.data.grants);
+    else if (!enabled) setKnown([]);
+  }, [grants.data, enabled]);
   const [, tick] = useState(0);
   // Re-read every minute, so an expired grant stops revealing without a reload.
   useEffect(() => {
@@ -21,7 +28,7 @@ export function GrantsProvider({ enabled, children }: { enabled: boolean; childr
     }, 60_000);
     return () => clearInterval(timer);
   }, [enabled, grants.reload]);
-  const live = (grants.data?.grants ?? []).filter((g) => new Date(g.expires_at).getTime() > Date.now());
+  const live = known.filter((g) => new Date(g.expires_at).getTime() > Date.now());
   return <GrantsContext.Provider value={{ grants: live, reload: grants.reload }}>{children}</GrantsContext.Provider>;
 }
 

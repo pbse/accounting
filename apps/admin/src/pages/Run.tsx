@@ -48,11 +48,14 @@ export function Run() {
   // Hidden by the staff member while they hold a grant for the run's firm: not revealed again for this run.
   const [hidOn, setHidOn] = useState<string>();
   const [grantLapsed, setGrantLapsed] = useState(false);
+  // The grant this run was revealed under, or tried: one attempt per grant, and a new grant tries again.
+  const [triedWith, setTriedWith] = useState<number>();
   const { reload: reloadGrants } = useGrants();
   useEffect(() => {
     setDetail(undefined);
     setReveal(undefined);
     setGrantLapsed(false);
+    setTriedWith(undefined);
   }, [id]);
   // Only the latest request may update the page, so a slow revealed answer cannot reappear after
   // Hide or on another run.
@@ -71,7 +74,6 @@ export function Run() {
       if (reveal === "" && e instanceof ApiError && e.status === 422) {
         // A grant that no longer holds (ended or expired elsewhere): show the run masked, not an error.
         setGrantLapsed(true);
-        setHidOn(id);
         setReveal(undefined);
         reloadGrants();
         return;
@@ -92,8 +94,12 @@ export function Run() {
   const current = detail && String(detail.run.id) === id ? detail : undefined;
   const grant = useGrantFor(current?.run.organization);
   useEffect(() => {
-    if (grant && hidOn !== id && reveal === undefined && current && !current.revealed) setReveal({ id, reason: "" });
-  }, [grant, hidOn, id, reveal, current]);
+    if (grant && grant.id !== triedWith && hidOn !== id && reveal === undefined && current && !current.revealed) {
+      setTriedWith(grant.id);
+      setGrantLapsed(false);
+      setReveal({ id, reason: "" });
+    }
+  }, [grant, triedWith, hidOn, id, reveal, current]);
   // A grant that ended or expired takes back what it showed.
   useEffect(() => {
     if (!grant && reveal === "") {
@@ -202,7 +208,7 @@ export function Run() {
           <>
             {grantLapsed && <p className="note">Your grant for this firm has ended, so the run is shown masked.</p>}
             <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal({ id, reason })} />
-            {grant && hidOn === id && <p className="muted">Hidden while you hold a grant for this firm. <button className="link" onClick={() => setHidOn(undefined)}>Show it again</button></p>}
+            {grant && hidOn === id && <p className="muted">Hidden while you hold a grant for this firm. <button className="link" onClick={() => { setHidOn(undefined); setTriedWith(undefined); }}>Show it again</button></p>}
             {can.includes("platform:content") && run.organization && !grant && <OpenGrant firm={run.organization} />}
           </>
         )}

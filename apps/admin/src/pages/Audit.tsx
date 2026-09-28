@@ -33,8 +33,9 @@ export function Audit() {
     try {
       const exportQuery = new URLSearchParams(search);
       if (before) exportQuery.set("before", before);
-      if (reason) exportQuery.set("reveal", "1"); // a revealed export is its own audited read
-      const headers = await download(`/v1/admin/audit/export${exportQuery.size ? `?${exportQuery}` : ""}`, "staff-audit.csv", reason ? { "X-Access-Reason": reason } : {});
+      // A revealed export is its own audited read; an empty reason stands on the staff member's grant.
+      if (reason !== undefined) exportQuery.set("reveal", "1");
+      const headers = await download(`/v1/admin/audit/export${exportQuery.size ? `?${exportQuery}` : ""}`, "staff-audit.csv", reason !== undefined ? { "X-Access-Reason": reason } : {});
       const next = headers.get("X-Next-Before");
       setNextBatch(next ? { search, before: next } : undefined);
       setExported(next ? "Exported 5,000 entries; export the next batch for older ones." : "Exported.");
@@ -47,8 +48,8 @@ export function Audit() {
       <div className="page-title">
         <div><div><h1>Staff audit</h1><p>Every staff action and every reveal of client content, refusals included. Reasons, details and errors are hidden until revealed.</p></div></div>
         <div className="title-actions">
-          <button onClick={() => exportBatch()}>Export CSV{reason ? " (revealed)" : ""}</button>
-          {nextBatch?.search === search && <button onClick={() => exportBatch(nextBatch.before)}>Export the next 5,000{reason ? " (revealed)" : ""}</button>}
+          <button onClick={() => exportBatch()}>Export CSV{reason !== undefined ? " (revealed)" : ""}</button>
+          {nextBatch?.search === search && <button onClick={() => exportBatch(nextBatch.before)}>Export the next 5,000{reason !== undefined ? " (revealed)" : ""}</button>}
         </div>
       </div>
       <form className="filters" onSubmit={(event) => {
