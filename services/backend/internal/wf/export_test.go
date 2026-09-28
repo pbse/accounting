@@ -6,7 +6,7 @@ import (
 )
 
 // OnlyOrg limits an engine to one firm's runs, so tests sharing a database cannot claim each other's.
-func OnlyOrg(e *Engine, org string) { e.onlyOrg = org }
+func OnlyOrg(e *Engine, org string) { e.OnlyOrganization = org }
 
 // CrashOnce makes the next arrival at point ("before-call" or "after-call") of step key behave like
 // the worker dying there: nothing more is written for that execution.
@@ -27,3 +27,9 @@ func Hook(e *Engine, fn func(point, key string)) {
 
 // Sweep runs the engine's periodic check for events that arrived while runs were parking.
 func Sweep(ctx context.Context, e *Engine) error { return e.sweep(ctx) }
+
+// Triggers runs one pass of schedule and event triggers.
+func Triggers(ctx context.Context, e *Engine) { e.triggers(ctx) }
+
+// SmallEventScans makes each trigger pass read at most pages pages of size events.
+func SmallEventScans(e *Engine, size, pages int) { e.eventPage, e.eventPages = size, pages }

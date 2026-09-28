@@ -28,8 +28,15 @@ type Engine struct {
 	Lease       time.Duration    // a claim not renewed for this long is taken over; default 2m
 	Now         func() time.Time // clock for sleeps, deadlines and leases; default time.Now
 
-	onlyOrg string                        // tests: claim only this firm's runs
-	hook    func(point, key string) error // tests: simulate a crash at a step boundary
+	// OnlyOrganization, when set, limits the engine to one firm's runs and triggers: for tests and
+	// tools that share a database. Platform runs and schedules are then left alone.
+	OnlyOrganization string
+
+	hook func(point, key string) error // tests: simulate a crash at a step boundary
+
+	cursorMu              sync.Mutex
+	cursors               map[string]int64 // event trigger scan position, per workflow and pattern
+	eventPage, eventPages int              // tests: smaller event scans
 }
 
 // Run executes workflow runs until ctx ends, with WF_CONCURRENCY runs at once (default 4).
@@ -60,7 +67,7 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 	slots := make(chan struct{}, concurrency)
 	var running sync.WaitGroup
-	var swept time.Time
+	var swept, triggered time.Time
 	for {
 		busy := false
 		for len(slots) < cap(slots) {
@@ -82,6 +89,10 @@ func (e *Engine) Run(ctx context.Context) {
 				defer func() { <-slots }()
 				e.execute(ctx, run)
 			}()
+		}
+		if time.Since(triggered) >= 30*time.Second {
+			e.triggers(ctx)
+			triggered = time.Now()
 		}
 		if time.Since(swept) >= 10*time.Second {
 			if err := e.sweep(ctx); err != nil && ctx.Err() == nil {
@@ -135,7 +146,7 @@ func (e *Engine) claim(ctx context.Context) (*claimedRun, error) {
    AND (r.organization_id IS NULL OR o.enabled) AND ($4='' OR r.organization_id=$4)
   ORDER BY r.wake_at NULLS LAST,r.id FOR UPDATE OF r SKIP LOCKED LIMIT 1)
  RETURNING id,organization_id,workflow,input,created_at,cancel_requested_at IS NOT NULL,started_by,agent`,
-		run.claim, now, now.Add(-e.lease()), e.onlyOrg).Scan(&run.id, &org, &run.workflow, &input, &run.createdAt, &run.cancelRequested, &run.startedBy, &run.agent)
+		run.claim, now, now.Add(-e.lease()), e.OnlyOrganization).Scan(&run.id, &org, &run.workflow, &input, &run.createdAt, &run.cancelRequested, &run.startedBy, &run.agent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -180,7 +191,7 @@ func (e *Engine) execute(ctx context.Context, run *claimedRun) {
 }
 
 func (e *Engine) loadSteps(ctx context.Context, runID int64) (map[string]*stepRow, int, error) {
-	rows, err := e.DB.QueryContext(ctx, `SELECT key,kind,state,attempts,retry_at,wake_at,output,error,seq,COALESCE(input->'skipped','[]'::jsonb) FROM workflow_steps WHERE run_id=$1`, runID)
+	rows, err := e.DB.QueryContext(ctx, `SELECT key,kind,state,attempts,retry_at,wake_at,output,error,seq,COALESCE(input->'skipped','[]'::jsonb),COALESCE(child_run_id,0),COALESCE((input->>'generation')::int,0) FROM workflow_steps WHERE run_id=$1`, runID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -191,7 +202,7 @@ func (e *Engine) loadSteps(ctx context.Context, runID int64) (map[string]*stepRo
 		var retry, wake sql.NullTime
 		var output, skipped []byte
 		var seq int
-		if err = rows.Scan(&s.key, &s.kind, &s.state, &s.attempts, &retry, &wake, &output, &s.errMsg, &seq, &skipped); err != nil {
+		if err = rows.Scan(&s.key, &s.kind, &s.state, &s.attempts, &retry, &wake, &output, &s.errMsg, &seq, &skipped, &s.childRunID, &s.generation); err != nil {
 			return nil, 0, err
 		}
 		if err = json.Unmarshal(skipped, &s.skipped); err != nil {
@@ -299,6 +310,32 @@ func (e *Engine) finish(x *execution, state string, out json.RawMessage, message
 	}
 	if err != nil {
 		log.Printf("Workflow run %d could not be marked %s: %v", x.run.id, state, err)
+		return
+	}
+	e.ended(x.sys, x.run.id, state == "cancelled")
+}
+
+// ended does what a run's end requires after its transaction commits: a cancelled run's remaining
+// descendants are cancelled (one may have started while an ancestor was being cancelled), and the
+// parent is woken.
+func (e *Engine) ended(ctx context.Context, runID int64, cancelled bool) {
+	if cancelled {
+		err := inTx(ctx, e.DB, func(tx *sql.Tx) error {
+			return cancelTree(ctx, tx, runID, false, "the parent run was cancelled", "workflow engine")
+		})
+		if err != nil {
+			log.Printf("Workflow run %d was cancelled but its children could not be yet: %v", runID, err)
+		}
+	}
+	e.wakeParent(ctx, runID)
+}
+
+// wakeParent wakes the parent of a run that ended. It runs after the run's own transaction commits,
+// so no transaction holds a child's row while taking its parent's (Cancel takes them the other way
+// round); the sweep catches a wake-up lost in between.
+func (e *Engine) wakeParent(ctx context.Context, runID int64) {
+	if _, err := e.DB.ExecContext(ctx, wakeParent, runID); err != nil {
+		log.Printf("Workflow run %d could not wake its parent: %v", runID, err)
 	}
 }
 
@@ -338,6 +375,10 @@ func (e *Engine) park(x *execution) {
 	}
 	if err != nil {
 		log.Printf("Workflow run %d could not be parked: %v", x.run.id, err)
+		return
+	}
+	if state == "cancelled" {
+		e.ended(x.sys, x.run.id, true)
 	}
 }
 
@@ -370,6 +411,10 @@ func (e *Engine) release(ctx context.Context, run *claimedRun, wake time.Time, m
 	}
 	if err != nil {
 		log.Printf("Workflow run %d could not be released: %v", run.id, err)
+		return
+	}
+	if state == "cancelled" {
+		e.ended(ctx, run.id, true)
 	}
 }
 
@@ -383,9 +428,14 @@ func unconsumed(key, deadline string) string {
  AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=r.id AND s.input->'skipped' @> to_jsonb(e.id))`
 }
 
-// sweep wakes waiting runs whose event arrived in the moment between their check and their parking.
+// sweep wakes waiting runs whose event arrived in the moment between their check and their parking,
+// and parents whose child ended without its wake-up reaching them.
 func (e *Engine) sweep(ctx context.Context) error {
-	_, err := e.DB.ExecContext(ctx, `UPDATE workflow_runs r SET wake_at='-infinity',updated_at=now() WHERE r.state='waiting' AND r.waiting_on<>'' AND r.wake_at>'-infinity' AND ($1='' OR r.organization_id=$1) AND EXISTS(`+unconsumed("r.waiting_on", "r.wake_at")+`)`, e.onlyOrg)
+	_, err := e.DB.ExecContext(ctx, `UPDATE workflow_runs r SET wake_at='-infinity',updated_at=now() WHERE r.state='waiting' AND r.waiting_on<>'' AND r.wake_at>'-infinity' AND ($1='' OR r.organization_id=$1) AND EXISTS(`+unconsumed("r.waiting_on", "r.wake_at")+`)`, e.OnlyOrganization)
+	if err == nil {
+		_, err = e.DB.ExecContext(ctx, `UPDATE workflow_runs r SET wake_at='-infinity',updated_at=now() WHERE r.state='waiting' AND r.wake_at IS DISTINCT FROM '-infinity' AND ($1='' OR r.organization_id=$1)
+ AND EXISTS(SELECT 1 FROM workflow_steps s JOIN workflow_runs c ON c.id=s.child_run_id WHERE s.run_id=r.id AND s.kind='child' AND s.state='waiting' AND c.state IN ('completed','failed','cancelled'))`, e.OnlyOrganization)
+	}
 	return err
 }
 
@@ -422,6 +472,8 @@ type stepRow struct {
 	output           json.RawMessage
 	errMsg           string
 	skipped          []int64 // events a wait passed over because their payload did not fit
+	childRunID       int64
+	generation       int // a child step retried by a person starts a new child under a new key
 }
 
 type execution struct {
