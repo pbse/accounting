@@ -286,16 +286,36 @@ func (e *Engine) finish(x *execution, state string, out json.RawMessage, message
 }
 
 // park releases the claim until the run's wake time (nil: until a person or event wakes it). An
-// event committed while the run was still running is caught here or by the next sweep.
+// event committed while the run was still running is caught here or by the next sweep. A cancel
+// requested while the run was running is applied here, in the same statement, so it cannot slip
+// between this check and Cancel (which only records the request while the run is running).
 func (e *Engine) park(x *execution) {
 	var wake any
 	if x.wakeAt != nil {
 		wake = *x.wakeAt
 	}
+	tx, err := e.DB.BeginTx(x.sys, nil)
+	if err != nil {
+		log.Printf("Workflow run %d could not be parked: %v", x.run.id, err)
+		return
+	}
+	defer tx.Rollback()
 	// SET expressions see the row's old values, so the event check names the new key ($4) itself.
-	_, err := e.DB.ExecContext(x.sys, `UPDATE workflow_runs r SET state='waiting',claim=NULL,updated_at=now(),waiting_on=$4,
- wake_at=CASE WHEN $4<>'' AND EXISTS(`+unconsumed("$4")+`) THEN '-infinity'::timestamptz ELSE $3::timestamptz END
- WHERE id=$1 AND claim=$2`, x.run.id, x.run.claim, wake, x.waitingOn)
+	var state string
+	err = tx.QueryRowContext(x.sys, `UPDATE workflow_runs r SET claim=NULL,updated_at=now(),
+ state=CASE WHEN cancel_requested_at IS NOT NULL THEN 'cancelled' ELSE 'waiting' END,
+ finished_at=CASE WHEN cancel_requested_at IS NOT NULL THEN now() END,
+ waiting_on=CASE WHEN cancel_requested_at IS NOT NULL THEN '' ELSE $4 END,
+ wake_at=CASE WHEN cancel_requested_at IS NOT NULL THEN NULL
+  WHEN $4<>'' AND EXISTS(`+unconsumed("$4", "$3::timestamptz")+`) THEN '-infinity'::timestamptz ELSE $3::timestamptz END
+ WHERE id=$1 AND claim=$2 RETURNING state`, x.run.id, x.run.claim, wake, x.waitingOn).Scan(&state)
+	if err == nil && state == "cancelled" {
+		// An unknown effect stays unknown for reconciliation.
+		_, err = tx.ExecContext(x.sys, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=$1 AND state IN ('running','waiting')`, x.run.id)
+	}
+	if err == nil || errors.Is(err, sql.ErrNoRows) {
+		err = tx.Commit()
+	}
 	if err != nil {
 		log.Printf("Workflow run %d could not be parked: %v", x.run.id, err)
 	}
@@ -312,16 +332,17 @@ func (e *Engine) release(ctx context.Context, run *claimedRun, wake time.Time, m
 	}
 }
 
-// unconsumed matches an event with the given key for run r that the run has not consumed yet and
-// that was recorded after the run started.
-func unconsumed(key string) string {
+// unconsumed matches an event with the given key for run r that the run has not consumed yet, that
+// was recorded after the run started and, when the wait has a deadline, no later than the deadline.
+func unconsumed(key, deadline string) string {
 	return `SELECT 1 FROM workflow_events e WHERE e.key=` + key + ` AND e.organization_id IS NOT DISTINCT FROM r.organization_id AND e.created_at>=r.created_at
+ AND (` + deadline + ` IS NULL OR e.created_at<=` + deadline + `)
  AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=r.id AND s.kind='event' AND s.state='completed' AND (s.output->>'event_id')::bigint=e.id)`
 }
 
 // sweep wakes waiting runs whose event arrived in the moment between their check and their parking.
 func (e *Engine) sweep(ctx context.Context) error {
-	_, err := e.DB.ExecContext(ctx, `UPDATE workflow_runs r SET wake_at='-infinity',updated_at=now() WHERE r.state='waiting' AND r.waiting_on<>'' AND r.wake_at>'-infinity' AND ($1='' OR r.organization_id=$1) AND EXISTS(`+unconsumed("r.waiting_on")+`)`, e.onlyOrg)
+	_, err := e.DB.ExecContext(ctx, `UPDATE workflow_runs r SET wake_at='-infinity',updated_at=now() WHERE r.state='waiting' AND r.waiting_on<>'' AND r.wake_at>'-infinity' AND ($1='' OR r.organization_id=$1) AND EXISTS(`+unconsumed("r.waiting_on", "r.wake_at")+`)`, e.onlyOrg)
 	return err
 }
 

@@ -647,3 +647,51 @@ func TestStepsAreConfinedToTheirFirm(t *testing.T) {
 		t.Fatalf("the step saw %s of the two firms' closes; it must see only its own", v.output)
 	}
 }
+
+// Review regressions.
+
+func TestCancelDuringAnUncertainEffectEndsTheRunAndKeepsTheEffectUnknown(t *testing.T) {
+	h := setup(t)
+	in := ref{ID: rand.Text(), Failures: 1}
+	id := h.start("test_effect", in)
+	wf.Hook(h.engine, func(point, key string) {
+		if point == "before-call" && key == "post" && counted(in.ID+"/post") == 0 {
+			if err := wf.Cancel(h.ctx, h.db, id, "test", "client withdrew mid-call"); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	h.drain()
+	if v := h.expect(id, "cancelled"); v.steps["post"] != "unknown" {
+		t.Fatalf("the effect's outcome must stay unknown for reconciliation: %v", v.steps)
+	}
+}
+
+func TestEventAfterTheDeadlineDoesNotSatisfyTheWait(t *testing.T) {
+	h := setup(t)
+	h.clock.Add(-3 * time.Hour) // the wait's deadline falls before the event is recorded
+	in := ref{ID: rand.Text()}
+	id := h.start("test_wait", in)
+	h.drain()
+	h.emit("reply:"+in.ID, "too late")
+	if n := h.drain(); n > 1 {
+		t.Fatalf("a late event must wake the run at most once, not keep it spinning (%d executions)", n)
+	}
+	h.expect(id, "waiting")
+	h.clock.Add(2 * time.Hour)
+	h.drain()
+	if v := h.expect(id, "completed"); !strings.Contains(v.output, "timed_out") {
+		t.Fatalf("output %s", v.output)
+	}
+}
+
+func TestIncompleteSavedValueIsRegenerated(t *testing.T) {
+	h := setup(t)
+	id := h.start("test_steps", ref{ID: rand.Text()})
+	h.exec(`INSERT INTO workflow_steps(run_id,key,organization_id,seq,kind,state) VALUES($1,'$now/1',$2,99,'value','running')`, id, h.org)
+	h.drain()
+	var out map[string]string
+	if err := json.Unmarshal([]byte(h.expect(id, "completed").output), &out); err != nil || out["at"] == "" || strings.HasPrefix(out["at"], "0001-") {
+		t.Fatalf("Now replayed an unsaved value: %v %v", out, err)
+	}
+}

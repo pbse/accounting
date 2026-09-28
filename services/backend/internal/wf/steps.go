@@ -417,9 +417,15 @@ func (x *execution) wait(key, event string, timeout time.Duration) (json.RawMess
 	var id int64
 	var payload []byte
 	org := sql.NullString{String: x.run.org, Valid: x.run.org != ""}
+	var deadline any
+	if s.wakeAt != nil {
+		deadline = *s.wakeAt
+	}
+	// An event recorded after the deadline does not count, even if the run is only now looking.
 	err := x.engine.DB.QueryRowContext(x.sys, `SELECT e.id,e.payload FROM workflow_events e WHERE e.key=$2 AND e.organization_id IS NOT DISTINCT FROM $3 AND e.created_at>=$4
+ AND ($5::timestamptz IS NULL OR e.created_at<=$5::timestamptz)
  AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=$1 AND s.kind='event' AND s.state='completed' AND (s.output->>'event_id')::bigint=e.id)
- ORDER BY e.id LIMIT 1`, x.run.id, event, org, x.run.createdAt).Scan(&id, &payload)
+ ORDER BY e.id LIMIT 1`, x.run.id, event, org, x.run.createdAt, deadline).Scan(&id, &payload)
 	switch {
 	case err == nil:
 		raw, _ := json.Marshal(eventOutcome{EventID: id, Payload: payload})
@@ -445,18 +451,23 @@ func (x *execution) value(name string, generate func() any) (json.RawMessage, er
 	if err := x.enter(key, true); err != nil {
 		return nil, err
 	}
-	if s := x.steps[key]; s != nil {
+	s := x.steps[key]
+	if s != nil && s.state == "completed" {
 		return s.output, nil
 	}
 	raw, err := json.Marshal(generate())
 	if err != nil {
 		return nil, Permanent(err)
 	}
-	if err = x.insert(key, "value", "running", nil, "", nil); err != nil {
+	if s != nil {
+		// Only a row an older build left incomplete gets here; a value is saved in one write now.
+		return raw, x.complete(key, raw)
+	}
+	if err = x.write(`INSERT INTO workflow_steps(run_id,key,organization_id,seq,kind,state,output,finished_at)
+ SELECT $1,$3,organization_id,$4,'value','completed',$5,now() FROM workflow_runs WHERE id=$1 AND claim=$2`, x.run.id, x.run.claim, key, x.nextSeq, string(raw)); err != nil {
 		return nil, err
 	}
-	if err = x.complete(key, raw); err != nil {
-		return nil, err
-	}
+	x.nextSeq++
+	x.steps[key] = &stepRow{key: key, kind: "value", state: "completed", output: raw}
 	return raw, nil
 }
