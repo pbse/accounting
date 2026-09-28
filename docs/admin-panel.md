@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations), A1 (workflows), A2 (firm management) and A3 (plans) implemented** (2026-09-28); A4 (hardening) is under way: audit search and export, platform alerts, content grants, the security review and large-firm performance are in; only the console's own hostname remains. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations), A1 (workflows), A2 (firm management), A3 (plans) and A4 (hardening) implemented** (2026-09-28). Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -53,7 +53,13 @@ The firm-facing **Security center** stays as it is. It is a firm administrator's
 - **Local development:** when WorkOS isn't configured, the existing `WORKSPACE_TOKEN` also grants every platform permission, mirroring today's local-only development access. A configured WorkOS client disables that.
 
 ### Network (phase A4)
-Move the console to its own hostname (for example `admin.<domain>`) behind Cloudflare Access, or any identity-aware proxy. This limits who can even load it, but it is defence in depth only: authorization stays in Go.
+Every page of the console lives under `/admin` on the app's own hostname, and only internal staff can load any of it.
+- **The check.** The edge Worker serves nothing under `/admin` (pages, scripts, styles) until the API accepts the request's staff session. It asks `GET /v1/admin/me` with the request's cookies, which needs a session in the platform staff organization with `platform:read`.
+- **Refusals.** A signed-out visitor to a page goes to staff sign-in and comes back to that page. A file is refused with 401, and a staff member without the console's role gets 403.
+- **Sign-in mode.** This needs `AUTH_SESSION=server`, whose cookie the edge can see (see [sign-in session](auth-sandbox-staging.md#sign-in-session)). In any other mode the Worker serves nothing under `/admin`.
+- **Authorization.** The gate is defence in depth: every staff API call is still authorized in Go.
+
+A separate hostname behind Cloudflare Access is no longer planned.
 
 ## Architecture
 
@@ -67,6 +73,7 @@ services/backend/internal/transport/admin.go   /v1/admin/* routes, staff middlew
 ### Edge Worker
 - `/v1/admin/*` is already forwarded to the API container because it's under `/v1/`.
 - Add `/admin/*` to `run_worker_first`, serving the asset if it exists and `/admin/index.html` otherwise. The current single-page-app fallback returns the firm app's `index.html`, which is wrong for admin deep links.
+- Before serving anything under `/admin`, check the staff session (see [network](#network-phase-a4)).
 
 ### New setting
 `PLATFORM_ORGANIZATION_ID` must be added everywhere settings are listed:
@@ -190,7 +197,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 | **A1. Workflows** (implemented) | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
 | **A2. Firm management** (implemented) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
 | **A3. Plans** (implemented) | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
-| **A4. Hardening** (all implemented but the console's own hostname, which waits for a domain) | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
+| **A4. Hardening** (implemented) | A0–A3 | `/admin` served only to signed-in platform staff (in place of an own hostname behind Cloudflare Access); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
 
 **Suggested order across both plans:**
 1. Engine W0/W1 alongside admin A0.
@@ -252,6 +259,8 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
   - **Firms list.** It picks its page before counting. Counting in the same query had counted every firm the offset skipped, so page 30 took 330 ms; it now takes 45.
   - **Indexes** (migration 103). Workflow runs are indexed by parent run, by firm and state, and by firm and last update. A firm's run counts and latest activity no longer read all its runs (the big firm's row: 132 ms to 10 ms), and a run's children no longer need a scan of every run on each refresh.
   - **Other lists.** Firms, runs, plans, activity and audit all page with a next link, and each page reads at most 100 rows.
+
+- **Staff-only `/admin`.** The edge Worker serves the console's pages and files only after the API accepts the staff session (`GET /v1/admin/me`); signed-out visitors go to staff sign-in. It needs `AUTH_SESSION=server`. See [network](#network-phase-a4).
 
 ## Later ideas (not planned)
 
