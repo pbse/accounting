@@ -105,7 +105,7 @@ export function Run() {
       {!detail.registered && <p className="note">This build does not register the workflow {run.workflow}; a build that does will pick the run up.</p>}
       {run.error && <p role="alert">{text(run.error)}</p>}
       {detail.plan && (
-        <p className="note">Plan #{detail.plan.id} “{detail.plan.title}”, {detail.plan.source}-built, {detail.plan.state}.</p>
+        <p className="note">{can.includes("platform:plans") ? <Link to={`/plans/${detail.plan.id}`}>Plan #{detail.plan.id}</Link> : `Plan #${detail.plan.id}`} “{text(detail.plan.title)}”, {detail.plan.source}-built, {detail.plan.state}.</p>
       )}
       <div className="run-layout">
         <section>

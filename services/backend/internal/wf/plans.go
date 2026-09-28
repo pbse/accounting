@@ -572,8 +572,13 @@ func UpdatePlan(ctx context.Context, db *sql.DB, id int64, raw json.RawMessage, 
 
 // ProposePlan asks for approval of a draft.
 func ProposePlan(ctx context.Context, db *sql.DB, id int64, by string) error {
-	return planChange(ctx, db, id, func(tx *sql.Tx, state, _ string) error {
-		if state != "draft" {
+	return inTx(ctx, db, func(tx *sql.Tx) error { return ProposePlanTx(ctx, tx, id, by) })
+}
+
+// ProposePlanTx is ProposePlan in the caller's transaction. A template is never proposed: it is copied.
+func ProposePlanTx(ctx context.Context, tx *sql.Tx, id int64, by string) error {
+	return planChangeTx(ctx, tx, id, func(tx *sql.Tx, state, _ string) error {
+		if state != "draft" || isTemplate(ctx, tx, id) {
 			return ErrNotAllowed
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE workflow_plans SET state='proposed',updated_at=now() WHERE id=$1`, id)
@@ -583,8 +588,13 @@ func ProposePlan(ctx context.Context, db *sql.DB, id int64, by string) error {
 
 // RejectPlan turns down a draft or proposal.
 func RejectPlan(ctx context.Context, db *sql.DB, id int64, by string) error {
-	return planChange(ctx, db, id, func(tx *sql.Tx, state, _ string) error {
-		if state != "draft" && state != "proposed" {
+	return inTx(ctx, db, func(tx *sql.Tx) error { return RejectPlanTx(ctx, tx, id, by) })
+}
+
+// RejectPlanTx is RejectPlan in the caller's transaction. A template is never rejected: it is archived.
+func RejectPlanTx(ctx context.Context, tx *sql.Tx, id int64, by string) error {
+	return planChangeTx(ctx, tx, id, func(tx *sql.Tx, state, _ string) error {
+		if (state != "draft" && state != "proposed") || isTemplate(ctx, tx, id) {
 			return ErrNotAllowed
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE workflow_plans SET state='rejected',updated_at=now() WHERE id=$1`, id)
@@ -596,6 +606,16 @@ func RejectPlan(ctx context.Context, db *sql.DB, id int64, by string) error {
 // the approver's in the plan's firm, from their verified session; they must hold every activity's
 // permission, and the plan is checked again in full. Templates are copied first, never run.
 func ApprovePlan(ctx context.Context, db *sql.DB, id int64, digest, approver string, permissions []string) (int64, error) {
+	var runID int64
+	err := inTx(ctx, db, func(tx *sql.Tx) (err error) {
+		runID, err = ApprovePlanTx(ctx, tx, id, digest, approver, permissions)
+		return err
+	})
+	return runID, err
+}
+
+// ApprovePlanTx is ApprovePlan in the caller's transaction, which also holds the run it starts.
+func ApprovePlanTx(ctx context.Context, tx *sql.Tx, id int64, digest, approver string, permissions []string) (int64, error) {
 	if strings.TrimSpace(approver) == "" {
 		return 0, errors.New("an approval needs who approved")
 	}
@@ -603,7 +623,7 @@ func ApprovePlan(ctx context.Context, db *sql.DB, id int64, digest, approver str
 		permissions = []string{} // an approval always checks permissions: nil holds none
 	}
 	var runID int64
-	err := planChange(ctx, db, id, func(tx *sql.Tx, state, _ string) error {
+	err := planChangeTx(ctx, tx, id, func(tx *sql.Tx, state, _ string) error {
 		var raw []byte
 		var current string
 		var template bool
@@ -643,11 +663,21 @@ func ApprovePlan(ctx context.Context, db *sql.DB, id int64, digest, approver str
 
 // InstantiateTemplate copies a template into a new draft for one firm.
 func InstantiateTemplate(ctx context.Context, db *sql.DB, templateID int64, organization, by string) (int64, error) {
+	var id int64
+	err := inTx(ctx, db, func(tx *sql.Tx) (err error) {
+		id, err = InstantiateTemplateTx(ctx, tx, templateID, organization, by)
+		return err
+	})
+	return id, err
+}
+
+// InstantiateTemplateTx is InstantiateTemplate in the caller's transaction.
+func InstantiateTemplateTx(ctx context.Context, tx *sql.Tx, templateID int64, organization, by string) (int64, error) {
 	if organization == "" || strings.TrimSpace(by) == "" {
 		return 0, errors.New("a copy of a template needs a firm and who made it")
 	}
 	var id int64
-	err := db.QueryRowContext(ctx, `INSERT INTO workflow_plans(organization_id,title,plan,digest,state,source,created_by,template_id)
+	err := tx.QueryRowContext(ctx, `INSERT INTO workflow_plans(organization_id,title,plan,digest,state,source,created_by,template_id)
  SELECT $2,title,plan,digest,'draft','staff',$3,id FROM workflow_plans WHERE id=$1 AND is_template AND (organization_id IS NULL OR organization_id=$2) RETURNING id`, templateID, organization, by).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("%w: no such template for this firm", ErrNotAllowed)
@@ -656,14 +686,24 @@ func InstantiateTemplate(ctx context.Context, db *sql.DB, templateID int64, orga
 }
 
 func planChange(ctx context.Context, db *sql.DB, id int64, change func(tx *sql.Tx, state, source string) error) error {
-	return inTx(ctx, db, func(tx *sql.Tx) error {
-		var state, source string
-		if err := tx.QueryRowContext(ctx, `SELECT state,source FROM workflow_plans WHERE id=$1 FOR UPDATE`, id).Scan(&state, &source); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("plan %d was not found: %w", id, err)
-			}
-			return err
+	return inTx(ctx, db, func(tx *sql.Tx) error { return planChangeTx(ctx, tx, id, change) })
+}
+
+// isTemplate says whether a plan the caller has locked is a template; an unreadable one counts as one, so it is refused.
+func isTemplate(ctx context.Context, tx *sql.Tx, id int64) bool {
+	template := true
+	tx.QueryRowContext(ctx, `SELECT is_template FROM workflow_plans WHERE id=$1`, id).Scan(&template)
+	return template
+}
+
+// planChangeTx locks the plan and hands its state to change.
+func planChangeTx(ctx context.Context, tx *sql.Tx, id int64, change func(tx *sql.Tx, state, source string) error) error {
+	var state, source string
+	if err := tx.QueryRowContext(ctx, `SELECT state,source FROM workflow_plans WHERE id=$1 FOR UPDATE`, id).Scan(&state, &source); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("plan %d was not found: %w", id, err)
 		}
-		return change(tx, state, source)
-	})
+		return err
+	}
+	return change(tx, state, source)
 }

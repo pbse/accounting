@@ -257,10 +257,7 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		}
 		return tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'parent_step',parent_step) ORDER BY id) FROM workflow_runs WHERE parent_run_id=$1),'[]'::jsonb),
- COALESCE((SELECT jsonb_build_object('id',p.id,'title',CASE WHEN $3 THEN p.title ELSE '••••' END,'state',p.state,'source',p.source,'plan',CASE WHEN $3 THEN p.plan
-   ELSE jsonb_set(p.plan-'title','{nodes}',(SELECT COALESCE(jsonb_agg(CASE WHEN n->'wait' ? 'event' THEN jsonb_set(n,'{wait,event}','"••••"') ELSE n END-'input' #- '{approval,subject}' #- '{approval,prompt}' ORDER BY i),'[]'::jsonb)
-   FROM jsonb_array_elements(p.plan->'nodes') WITH ORDINALITY AS e(n,i))) END)
- FROM workflow_plans p WHERE p.id=$2),'null'::jsonb)`, id, run.PlanID, reveal).Scan(&children, &plan)
+ COALESCE((SELECT jsonb_build_object('id',p.id,'title',p.title,'state',p.state,'source',p.source,'plan',p.plan) FROM workflow_plans p WHERE p.id=$2),'null'::jsonb)`, id, run.PlanID).Scan(&children, &plan)
 	})
 	if err != nil {
 		adminWorkflowProblem(w, err, "run")
@@ -284,6 +281,12 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	if !reveal {
 		run.maskText()
+		if string(plan) != "null" {
+			var summary map[string]json.RawMessage
+			json.Unmarshal(plan, &summary)
+			summary["title"], summary["plan"] = json.RawMessage(`"••••"`), maskPlan(summary["plan"])
+			plan, _ = json.Marshal(summary)
+		}
 	}
 	for i := range steps {
 		s := &steps[i]
