@@ -196,8 +196,8 @@ export function FirmActivity({ firm }: { firm: string }) {
 type Entry = { id: number; staff_user: string; action: string; target_type: string; target_id: string; reason: string; result: string; error: string; created_at: string };
 
 export function FirmAudit({ firm }: { firm: string }) {
-  const [offset, setOffset] = useState(0);
-  const audit = useRevealable<{ entries: Entry[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${offset ? `?offset=${offset}` : ""}`);
+  const [before, setBefore] = useState(0);
+  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${before ? `?before=${before}` : ""}`);
   return (
     <>
       <p>Everything staff did to this firm, including actions that were refused and every reveal of client content. Reasons and why a refused action failed are hidden until revealed.</p>
@@ -223,7 +223,12 @@ export function FirmAudit({ firm }: { firm: string }) {
               </tbody>
             </table>
           )}
-          <Pager offset={offset} more={audit.data.has_more} next={audit.data.next_offset} onPage={setOffset} />
+          {(before > 0 || audit.data.next_before) && (
+            <p className="title-actions">
+              {before > 0 && <button onClick={() => setBefore(0)}>Newest</button>}
+              {audit.data.next_before && <button onClick={() => setBefore(audit.data!.next_before!)}>Older</button>}
+            </p>
+          )}
         </section>
       )}
     </>

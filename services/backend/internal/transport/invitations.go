@@ -371,6 +371,9 @@ func revokeInWorkOS(ctx context.Context, workosID sql.NullString) string {
 	if !workosID.Valid {
 		return "Invitation revoked. It was still being sent; the app revokes it in WorkOS once WorkOS confirms it."
 	}
+	if os.Getenv("WORKOS_API_KEY") == "" {
+		return "The app will not enroll this invitation. The server has no WorkOS key, so revoke it in WorkOS too."
+	}
 	if workos(ctx, "POST", "/user_management/invitations/"+url.PathEscape(workosID.String)+"/revoke", map[string]any{}, nil) != nil {
 		return "The app will not enroll this invitation, but WorkOS did not confirm revoking it. Check the firm's invitations in WorkOS."
 	}

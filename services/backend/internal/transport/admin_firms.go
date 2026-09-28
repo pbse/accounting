@@ -7,7 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"os"
+	"strconv"
 	"strings"
 )
 
@@ -181,9 +181,14 @@ type adminAuditRow struct {
 // revealed.
 func adminFirmAudit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	firm, reveal := r.PathValue("id"), r.URL.Query().Get("reveal") == "1"
-	offset, ok := adminOffset(w, r)
-	if !ok {
-		return
+	// Paged by ID, not offset: a revealed read adds its own row, which would shift an offset.
+	var before int64
+	if raw := r.URL.Query().Get("before"); raw != "" {
+		var err error
+		if before, err = strconv.ParseInt(raw, 10, 64); err != nil || before < 1 {
+			problem(w, 422, "before is an audit entry's ID.")
+			return
+		}
 	}
 	entries := []adminAuditRow{}
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
@@ -191,7 +196,7 @@ func adminFirmAudit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			return err
 		}
 		rows, err := tx.QueryContext(ctx, `SELECT id,staff_user,action,target_type,target_id,reason,request,result,error,created_at::text
- FROM platform_audit WHERE organization_id=$1 ORDER BY id DESC LIMIT $2 OFFSET $3`, firm, adminPage+1, offset)
+ FROM platform_audit WHERE organization_id=$1 AND ($2=0 OR id<$2) ORDER BY id DESC LIMIT $3`, firm, before, adminPage+1)
 		if err != nil {
 			return err
 		}
@@ -215,11 +220,12 @@ func adminFirmAudit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if reveal && !adminReveal(w, r, db, firm, "firm_audit", firm) {
 		return
 	}
-	more := len(entries) > adminPage
-	if more {
+	next := any(nil)
+	if len(entries) > adminPage {
 		entries = entries[:adminPage]
+		next = entries[len(entries)-1].ID
 	}
-	jsonReply(w, 200, map[string]any{"entries": entries, "has_more": more, "next_offset": offset + len(entries), "revealed": reveal})
+	jsonReply(w, 200, map[string]any{"entries": entries, "next_before": next, "revealed": reveal})
 }
 
 // adminReason reads a staff action's body into in and checks the reason every firm-level change needs: 10–2,000
@@ -311,13 +317,10 @@ func adminRevokeMember(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]bool{"revoked": true})
 }
 
-// adminRevokeInvitation revokes an open invitation in the app, then in WorkOS once that committed.
+// adminRevokeInvitation revokes an open invitation in the app, then in WorkOS once that committed (best effort: the answer
+// says when WorkOS did not confirm, or the server has no key to ask).
 func adminRevokeInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	firm, invitation := r.PathValue("id"), r.PathValue("invitation")
-	if os.Getenv("WORKOS_API_KEY") == "" {
-		problem(w, 503, "Revoking invitations needs the server's WorkOS API key.")
-		return
-	}
 	var in struct {
 		Reason string `json:"reason"`
 	}

@@ -105,7 +105,20 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 	adminJSON(t, h, token, "POST", base+"/invitations/"+invitation+"/revoke", `{"reason":"Sent to the wrong address"}`, 200)
 	adminJSON(t, h, token, "POST", base+"/invitations/"+invitation+"/revoke", `{"reason":"Sent to the wrong address"}`, 409)
 
-	// Every action and reveal is in the firm's audit, refusals included.
+	// Without a WorkOS key, the app still revokes; the answer says to finish in WorkOS.
+	t.Setenv("WORKOS_API_KEY", "")
+	var pending string
+	if err := db.QueryRow(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,'open@firm.example','member','Member',$2,'pending','user_owner','Joining the team next month',now()+interval '1 day') RETURNING id::text`, firm, "invitation_"+rand.Text()).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if answer := mustString(adminJSON(t, h, token, "POST", base+"/invitations/"+pending+"/revoke", `{"reason":"Sent to the wrong address"}`, 200)); !strings.Contains(answer, "no WorkOS key") {
+		t.Fatalf("the answer must say WorkOS still needs revoking: %s", answer)
+	}
+
+	// Every action and reveal is in the firm's audit, refusals included; it pages by ID.
+	if page := adminJSON(t, h, token, "GET", base+"/audit?before=2", "", 200); len(page["entries"].([]any)) != 0 {
+		t.Fatalf("before pages by ID: %v", page)
+	}
 	audit := mustString(adminJSON(t, h, token, "GET", base+"/audit", "", 200))
 	if strings.Contains(audit, "Chargeback") || !strings.Contains(audit, `"previous_id":"••••"`) || !strings.Contains(audit, `"error":"••••"`) {
 		t.Fatalf("the audit masks request details and errors until revealed: %s", audit)
