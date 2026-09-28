@@ -91,7 +91,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			return Plan{}, "the cited text does not show the " + f.Label + " as a whole"
 		}
 		// An order or reference number is not the invoice number, and a ship-to name is not who is billed; the line must say which.
-		if f.Field == "invoice_number" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"invoice"}, []string{"order", "reference"}) {
+		if f.Field == "invoice_number" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"invoice"}, []string{"order", "reference", "date", "due"}) {
 			return Plan{}, "the cited line does not name the number as the invoice number"
 		}
 		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill", "invoice to", "sold to", "customer", "client"}, []string{"ship", "deliver"}) {
@@ -165,11 +165,6 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		if party == "" {
 			party = record.EntityRef.Name
 		}
-		for _, line := range record.Line {
-			if line.DepositLineDetail != nil && party == "" {
-				party = line.DepositLineDetail.Entity.Name
-			}
-		}
 		mentioned := printed(text, party)
 		fromVendor := party != "" && strings.EqualFold(party, vendor)
 		mine := fromVendor && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number))
@@ -198,6 +193,10 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			}
 			if row.Kind == "JournalEntry" && (onExpense || onPrepaid) {
 				return "", "a journal in the close month posts to the expense or prepaid account"
+			}
+			if line.DepositLineDetail != nil {
+				from := line.DepositLineDetail.Entity.Name
+				mentioned, fromVendor = mentioned || printed(text, from), fromVendor || (from != "" && strings.EqualFold(from, vendor))
 			}
 			if row.Kind == "Deposit" && (mentioned || fromVendor || onExpense || onPrepaid) {
 				return "", "a deposit in the close month may refund what this invoice expensed"
@@ -254,7 +253,7 @@ func lineSays(quote, value string, any, none []string) bool {
 	want := documents.NormalizeEntity(value)
 	for _, line := range strings.Split(quote, "\n") {
 		normal := documents.NormalizeEntity(line)
-		if !strings.HasSuffix(normal, want) {
+		if !endsWithName(normal, want) {
 			continue
 		}
 		ok := false
@@ -278,11 +277,16 @@ func endsLine(quote, value string) bool {
 		return false
 	}
 	for _, line := range strings.Split(quote, "\n") {
-		if strings.HasSuffix(documents.NormalizeEntity(line), want) {
+		if endsWithName(documents.NormalizeEntity(line), want) {
 			return true
 		}
 	}
 	return false
+}
+
+// endsWithName reports whether a normalized line is the name or ends with it as whole words: "otherexample" does not end with "example".
+func endsWithName(normal, want string) bool {
+	return normal == want || strings.HasSuffix(normal, " "+want)
 }
 
 // printed reports whether the invoice prints the term as a whole word: "77" is not printed in "INV-778".
