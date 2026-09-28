@@ -2619,3 +2619,16 @@ Checks:
 - `TestAmountIn`, `TestDateIn`: the examples above; a year or day inside a date is never taken for an amount; ordinal, Sept, day-first and unpadded two-digit-year dates.
 - `TestInterpretationContractAndCitationBoundary`: a 12000.00 value on the 1,200.00 quote leaves no candidate and asks about it.
 - `TestUnknownOrRevokedLinkIsRefusedBeforeItsUpload` (local PostgreSQL): an unknown and a revoked link each get 404 on both routes without the body being read.
+
+## Tie-out differences block sign-off; a stalled journal can be resolved in-app (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- Close readiness now computes the tie-out in its own transaction (`closeTieOut`, extracted from the tie-out route unchanged) and adds a blocker for each account that **differs**, with its Trial Balance balance, supported balance and difference. Ties, ties after proposed entries, within materiality and unsupported accounts do not block; an unknown posting was already a blocker. A signed-off close whose tie-out comes to differ shows reopen required, like any new blocker. An unreadable Trial Balance does not block, as with no snapshot; the board still shows its error.
+- A QuickBooks production attempt left `executing` (its request ended before the outcome was recorded) takes a journal ID a person found once it is ten minutes old (`stalled` in the posting read). Verification is the same exact readback as for `unknown`. A younger attempt refuses the ID with 409 because its request may still be running. The posting panel shows the ID field for a stalled attempt. Xero already accepted either state.
+
+Checks (local PostgreSQL):
+- `TestTieOutComparesBalancesWithLatestSupport`: readiness names the differing Accrued audit fees, but not the tied Prepaid insurance or the posting-unknown Accrued rent.
+- `TestProductionPostingSingleDurableAttempt`: an attempt set back to `executing` refuses the found ID (409) while fresh, then verifies it once eleven minutes old, with no second write.
+- The full transport suite passes, except the export PDF test, which needs `pdftotext` (not installed on this machine; CI has it).

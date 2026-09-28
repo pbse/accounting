@@ -47,6 +47,8 @@ type productionPosting struct {
 	Conflicts    []string                     `json:"other_open_intents"`
 	LedgerAfter  json.RawMessage              `json:"ledger_after,omitempty"`
 	VerifiedAt   *time.Time                   `json:"verified_at,omitempty"`
+	// Stalled is an attempt still executing ten minutes after it started: its request ended without recording an outcome.
+	Stalled bool `json:"stalled,omitempty"`
 }
 
 type rehearsalInput struct {
@@ -297,7 +299,7 @@ type productionReader interface {
 func readProductionPosting(ctx context.Context, db productionReader, closeID, paperID string) (productionPosting, error) {
 	var p productionPosting
 	var before []byte
-	err := db.QueryRowContext(ctx, `SELECT id::text,request_id::text,digest,realm,state,journal,COALESCE(approved_by,''),approval_expires_at,COALESCE(external_id,''),last_error,grant_id::text,connection_id::text,ledger_before,COALESCE(ledger_after,'null'::jsonb),verified_at FROM production_postings WHERE close_id::text=$1 AND workpaper_id::text=$2`, closeID, paperID).Scan(&p.ID, &p.RequestID, &p.Digest, &p.Realm, &p.State, &p.Journal, &p.ApprovedBy, &p.Expires, &p.ExternalID, &p.Error, &p.GrantID, &p.ConnectionID, &before, &p.LedgerAfter, &p.VerifiedAt)
+	err := db.QueryRowContext(ctx, `SELECT id::text,request_id::text,digest,realm,state,journal,COALESCE(approved_by,''),approval_expires_at,COALESCE(external_id,''),last_error,grant_id::text,connection_id::text,ledger_before,COALESCE(ledger_after,'null'::jsonb),verified_at,state='executing' AND attempted_at<now()-interval '10 minutes' FROM production_postings WHERE close_id::text=$1 AND workpaper_id::text=$2`, closeID, paperID).Scan(&p.ID, &p.RequestID, &p.Digest, &p.Realm, &p.State, &p.Journal, &p.ApprovedBy, &p.Expires, &p.ExternalID, &p.Error, &p.GrantID, &p.ConnectionID, &before, &p.LedgerAfter, &p.VerifiedAt, &p.Stalled)
 	if err == nil {
 		err = json.Unmarshal(before, &p.LedgerBefore)
 	}
@@ -711,7 +713,12 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "No saved external journal is available. Never retry an unknown write.")
 				return
 			}
-			if record.ExternalID == "" && record.State == "unknown" && quickbooks.ValidRealm(in.ExternalID) {
+			if record.ExternalID == "" && record.State == "executing" && !record.Stalled {
+				problem(w, 409, "This attempt may still be in progress. Ten minutes after it started, enter the QuickBooks journal ID you find for it.")
+				return
+			}
+			// An attempt whose outcome was never recorded, including one whose request ended mid-post, takes the ID a person found.
+			if record.ExternalID == "" && (record.State == "unknown" || record.Stalled) && quickbooks.ValidRealm(in.ExternalID) {
 				record.ExternalID = in.ExternalID
 			}
 			if record.ExternalID == "" || (in.ExternalID != "" && in.ExternalID != record.ExternalID) {

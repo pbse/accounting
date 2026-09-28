@@ -208,6 +208,18 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Production attempt #%d requires canonical readback or investigation.", p.ID))
 		}
 	}
+	// A signed scope must not read as tied while a supported balance differs from its support.
+	tie, err := closeTieOut(ctx, tx, id)
+	if refused, ok := err.(tieRefusal); ok && refused.status == 500 {
+		out.Blockers = append(out.Blockers, "Tie-out: "+refused.message)
+	} else if err != nil {
+		return out, err
+	}
+	for _, row := range tie.Rows {
+		if row.Status == "differs" {
+			out.Blockers = append(out.Blockers, fmt.Sprintf("Tie-out: %s is %s in the Trial Balance but %s in its support, a difference of %s.", row.Account, row.Balance, *row.Expected, *row.Difference))
+		}
+	}
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',s.id::text,'decision',s.decision,'snapshot_digest',s.snapshot_digest,'note',s.note,'actor',s.actor,'created_at',s.created_at) ORDER BY s.id DESC),'[]') FROM close_signoffs s WHERE s.close_id::text=$1`, id).Scan(&out.History)
 	if err != nil {
 		return out, err
