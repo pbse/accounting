@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useResource, when } from "../api";
 
@@ -20,6 +20,7 @@ export function Firms() {
   const query = params.get("q") ?? "";
   const offset = Number(params.get("offset") ?? 0) || 0;
   const [draft, setDraft] = useState(query);
+  useEffect(() => setDraft(query), [query]); // Back and Forward restore the search box too
   const search = new URLSearchParams();
   if (query) search.set("q", query);
   if (offset) search.set("offset", String(offset));

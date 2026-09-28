@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { authorization } from "./auth";
 
 export class ApiError extends Error {
@@ -21,13 +21,18 @@ export async function get<T>(path: string): Promise<T> {
   return response.json();
 }
 
-// useResource loads path and reloads it on demand; a newer load always wins.
+// useResource loads path and reloads it on demand; a newer load always wins. Reloading the same path
+// keeps its data on screen until the new answer; a different path, or a failed load, never shows
+// another path's data.
 export function useResource<T>(path: string) {
   const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true });
   const [version, setVersion] = useState(0);
+  const loaded = useRef(path);
   useEffect(() => {
     let current = true;
-    setState((previous) => ({ ...previous, loading: true }));
+    const samePath = loaded.current === path;
+    loaded.current = path;
+    setState((previous) => (samePath ? { ...previous, loading: true } : { loading: true }));
     get<T>(path).then(
       (data) => current && setState({ data, loading: false }),
       (error: Error) => current && setState({ error: error.message, loading: false }),
