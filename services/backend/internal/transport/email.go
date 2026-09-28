@@ -25,6 +25,21 @@ const reminderStatus = `(SELECT jsonb_build_object('left',o.reminder_max-(SELECT
  FROM request_drafts rd JOIN client_closes rc ON rc.id=rd.close_id JOIN organizations o ON o.id=rc.organization_id
  LEFT JOIN LATERAL (SELECT connection_id,provider_id,link_digest FROM email_outbox WHERE request_id=q.id ORDER BY created_at DESC,id DESC LIMIT 1) m ON true WHERE rd.id=q.draft_id)`
 
+// reminderFollow is SQL for waiting request q, in Work's order: exhausted once the firm's rule allows no more reminders,
+// expiring once the link lapsed or lapses before the next is due, and due while a reminder could be approved now, as the
+// approval checks it; ” before any email was sent, or while the next reminder is not due.
+const reminderFollow = `(SELECT CASE
+ WHEN m.id IS NULL THEN ''
+ WHEN (s->>'left')::int<=0 THEN 'exhausted'
+ WHEN (s->>'expires_at')::timestamptz<=now() OR (s->>'due_at')::timestamptz>=(s->>'expires_at')::timestamptz THEN 'expiring'
+ WHEN (s->>'due_at')::timestamptz<=now() AND m.state='accepted' AND m.delivery='delivered'
+  AND EXISTS(SELECT 1 FROM client_request_links l WHERE l.digest=m.link_digest AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now())
+  AND NOT EXISTS(SELECT 1 FROM email_delivery bad WHERE bad.request_id=q.id AND bad.delivery IN ('bounced','complained','failed','suppressed'))
+  AND NOT EXISTS(SELECT 1 FROM work_replies WHERE request_id=q.id)
+  AND m.connection_id=(SELECT e.id FROM email_connections e JOIN request_drafts rd ON rd.id=q.draft_id JOIN client_closes rc ON rc.id=rd.close_id WHERE e.organization_id=rc.organization_id AND e.enabled) THEN 'due'
+ ELSE '' END
+ FROM (SELECT ` + reminderStatus + ` AS s) x LEFT JOIN LATERAL (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m ON true)`
+
 func registerEmail(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/email", func(w http.ResponseWriter, r *http.Request) {
 		var raw []byte

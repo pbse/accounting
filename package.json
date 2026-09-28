@@ -13,7 +13,7 @@
     "dev:frontend": "npm run dev -w @close/frontend",
     "build": "npm run build -w @close/frontend",
     "check": "npm run check --workspaces --if-present",
-    "test": "node --experimental-strip-types --test workers/queue/src/delivery.test.ts workers/edge/src/upload-scan.test.ts apps/frontend/src/features/dashboard/commands.test.ts apps/frontend/src/features/closes/citation.test.ts apps/frontend/src/features/closes/ask.test.ts",
+    "test": "node --experimental-strip-types --test workers/queue/src/delivery.test.ts workers/edge/src/upload-scan.test.ts workers/edge/src/routes.test.ts apps/frontend/src/features/dashboard/commands.test.ts apps/frontend/src/features/closes/citation.test.ts apps/frontend/src/features/closes/ask.test.ts",
     "check:go": "cd services/backend && go test ./... && go vet ./...",
     "dev:cloudflare": "npm run build && wrangler dev -c workers/edge/wrangler.jsonc",
     "deploy:staging": "npm run build && wrangler deploy -c workers/edge/wrangler.jsonc",

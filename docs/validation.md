@@ -2333,3 +2333,84 @@ Review: GPT-6 Sol (reasoning high) reviewed the plan and then the diff.
 - The plan review asked for four changes, all adopted: fail closed for hosted firms without the key; give the worker the key everywhere it is deployed; read roles per sweep, outside row locks, rather than cache them; and use current firm-wide access instead of the recorded grant flag.
 - The code review found two timing issues. A revoked author's monthly hand-over stays listed until its next month is due, and the 50-goal sweeps can check a goal after more than a minute.
 - In both cases the worker takes no step without the check, and the ticket's gap was work done on revoked authority. The earlier "within a minute" wording was corrected to "before each step" instead of adding a pass over every record. A delta review closed both findings.
+
+## An explicit plan for each delegated close (2026-09-27)
+
+Request: the product review's third item. A close goal advanced uploaded-document preparation and said what people owed, but it laid out no plan across sources, reconciliation and verification: "give each delegated close an explicit plan spanning all required sources and dependencies." Verified in the code: the goal card listed documents, needs, a coverage line and notes. It had no ordered plan, no statement of where the books came from, and no dependencies. The Overview's brief already read the tie-out, the ledger's exceptions and QuickBooks' read agreement, but a delegated close did not use them.
+
+What changed:
+- **The plan's steps.** Every goal card, the hand-over card and "What's the plan?" in the close's assistant show the same ordered plan: read the books, prepare every document, cover every account, reconcile and verify, get every draft ready for review (for sign-off goals, approve every draft and then sign off). Each step says who it is with: done, the agent, a person, the client, waiting on an earlier step, a note, or not checked.
+- **Read the books.** This step follows the capture the ledger reads use: Xero's when newer, otherwise QuickBooks' through the client's reading connection. It counts an unchanged transaction read as a read. It says what a person must do (reconnect, capture again, or capture a month the scheduled reads do not take), and only says "I read them again each day" when the scheduled reads really take the close.
+- **Reconcile and verify.** This step is the brief's own findings: the tie-out, the ledger's questions, and, once the books are read, whether QuickBooks' reads agree. The card reads them about once a minute, not on every poll. They do not change what sign-off requires.
+- **Daily reads.** A close handed to an active goal now has its QuickBooks and Xero books read daily whatever its month, within the existing ten-per-pass limits. Reached and stopped goals are not read this way.
+- **What the card no longer repeats.** The separate needs list, coverage line and notes were folded into the plan's steps. Accounts are a note, not a need, for a review goal, whose finish covers the documents.
+
+Tests (local PostgreSQL):
+- `TestPlanSaysWhoEachStepIsWith` (pure): who has each step for documents, accounts, review and sign-off, with a person's need ahead of the agent's work; the books step's agent and person states.
+- `TestPlanReadsTheBooksTheLedgerReadsUse`: no ledger; a Xero capture; an older QuickBooks capture that stays behind Xero's; a newer one with an unchanged transaction read; a replaced source (out of date); a connection needing reconnection.
+- `TestVerifyTakesTheBriefsChecks`, `TestAssistantShowsTheClosePlan`.
+- `TestAgentClosesAreReadWhateverTheirMonth` (QuickBooks) and `TestXeroReadsAnAgentsCloseWhateverItsMonth`: an older month is read only while an active goal works on it.
+- The existing goal test reads the plan and its brief-backed checks through the endpoint.
+- Fifteen mutations each fail a test.
+- In a local browser, the card and the hand-over card showed the plan against a seeded close with a QuickBooks capture and three documents. Looking at them led to two changes: the accounts step for a review goal became a note (the headline counted one need, the plan showed two), and Xero's text says "it" rather than "them".
+
+Review: GPT-6 Sol (reasoning high) reviewed the plan, judged the work real and undone, and asked for five changes, all adopted: a reconcile-and-verify step from the existing checks; books following the ledger reads' own source rule, with connection, transaction read and capture as separate states; daily reads only for active goals; `waits` only for real prerequisites; and a concise card. Its code review found four more, all fixed and each proven by a test that fails without the fix:
+- a sign-off goal's draft awaiting approval was counted as an unprepared document;
+- accounts from an out-of-date capture asked for decisions that cannot resolve them;
+- a QuickBooks reconnection was asked for while an active Xero connection could read the books;
+- "What's the plan?" dropped each step's details.
+Two related cases were fixed at the same time: a QuickBooks capture on another connection keeps the scheduled first capture away, so the month is a person's to capture; and the database test now covers that case and an active Xero connection's precedence over a reconnection. A delta review confirmed that all four findings are closed.
+
+## Hosted MCP and posting kinds reach the API (2026-09-27)
+
+Request: the first remaining PRD item, wiring the Cloudflare edge so hosted MCP and posting kinds beyond prepaid can work. The edge returned 404 for `/mcp`, sent OAuth discovery to the single-page app, and neither it, Compose nor the deploy workflows passed `WORKOS_AUTHKIT_DOMAIN`, `MCP_RESOURCE_URL`, `MCP_ALLOWED_ORIGINS`, `PRODUCTION_POSTING_KINDS` or `XERO_POSTING_KINDS` to the API. The edge now forwards `/mcp`, `/.well-known/oauth-protected-resource` and paths under it through the same path as `/v1` (the hosted sign-in check, which now covers everything forwarded except `/healthz` and the public reference, and the stripping of a caller's upload-scan key); `/internal/*` stays private. The five settings reach the API container from the edge, Compose and both workflows; the background worker reads none of them.
+
+Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `claude/edge-mcp-wiring @ d7df2b8`); both judged it real, undone work. Adopted: `MCP_RESOURCE_URL` must be exactly `/mcp` on the API origin (`VITE_API_BASE_URL`, else the environment URL), since the API may be on its own host; `WORKOS_AUTHKIT_DOMAIN` must be a bare HTTPS origin, because Go appends `/oauth2/jwks`; the sign-in check exempts only `/healthz` and the reference instead of listing guarded paths; the route rule lives in its own module so a Node test can import it; both discovery patterns in `run_worker_first`; the settings table lists the new variables.
+
+Tests: `workers/edge/src/routes.test.ts` checks that `/mcp` and both discovery forms reach the API and that `/internal/*`, the workspace, `/mcp/extra`, other `.well-known` paths and a look-alike prefix do not; it fails on the old rule. The workflows' configuration check was run with 9 settings combinations each: unset and a correct pair pass, a separate API origin passes, and one setting alone, a domain with a path, an HTTP domain, a resource on another host or with a query fail. `npm run check` (including the edge's `tsc`) and `npm test` pass; the workflow and Compose YAML parse.
+
+Code review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `claude/edge-mcp-wiring @ 05fbb31`) both approved; Gemini's one note, committing the corrected sentence in onboarding.md about hosted MCP and posting kinds, is applied.
+
+Not verified: a Cloudflare deploy, WorkOS Connect configuration and a hosted MCP sign-in.
+
+## Governed follow-through on delegated closes (2026-09-27)
+
+Request: the product review's fourth item, first half: "Teammate handoffs are tracked in the app; the agent does not actively follow up… add governed follow-through", with the agent owning "getting work to those decisions and resuming afterward" while people keep approval. Verified in the code:
+- A delegated close waiting on a client request said "Waiting on the client's reply to request #N" for as long as it waited, although the firm's reminder rule (`reminderStatus`) knew when a reminder was due.
+- A hand-off produced one Attention item when it was made and nothing afterwards.
+
+What changed:
+- **Client requests.** A waiting document now says when a reminder is due under the firm's rule, as a person's decision ("Approve it on the Requests tab"). It says so only when the approval path would accept one: the latest email delivered, its link live, no adverse delivery, no recorded reply, the current sender. Once reminders run out, or the link lapses first, it says to contact the client another way, in Work's order and words. Nothing is sent by the agent.
+- **Hand-offs.** A hand-off still open after two days adds a follow-up for the teammate in Attention, linked to its document. After four days, or by the close's due date when sooner (a day after the hand-off at the earliest), the goal's owner is asked in Attention and in the plan's documents step, which only the owner sees and which does not change readiness. The goal's history shows both follow-ups at their times, only if the hand-off was still open then.
+- **How it is computed.** Everything is read from the time, with no new tables, settings or scheduler.
+- **Other wording.** The owner's Attention kind reads "Delegated closes that need you". A document the agent can't prepare mentions handing it to a teammate.
+
+Tests (local PostgreSQL):
+- `TestApprovedEmailDurableRetryAndScope` now also checks the goal's words:
+  - before a reminder is due;
+  - when one is due;
+  - not offered while the firm's sender is off;
+  - after the last allowed reminder;
+  - with a lapsed link.
+- `TestHandADocumentToATeammate` now ages a hand-off:
+  - nothing within two days;
+  - the teammate's follow-up at two days, linked to the document, and in the history;
+  - the owner's at four days, in Attention, the plan and the history, and not for another member;
+  - a close due today brings it forward to a day.
+- Ten mutations each fail a test.
+
+Review: GPT-6 Sol (reasoning high) reviewed the plan (relevant; revise). All its points were adopted:
+- a reminder is offered only when approval would accept it, in Work's order;
+- the teammate's follow-up keeps its link;
+- the owner is the goal's author, and the plan line is theirs alone and outside readiness;
+- the notification claim was narrowed;
+- the due date brings the owner's follow-up forward;
+- the history rows are at the threshold times;
+- durations are used instead of dates.
+
+Its code review found three more, all fixed:
+- A request whose work changed could be offered a reminder the approval route refuses. Every document waiting on a request now runs the same freshness check and, when stale, asks for a fresh request. The email test makes a target stale.
+- A due date no longer escalates at midnight UTC, which is the evening before for a firm in New York while its card says "Due tomorrow". It now escalates at midday UTC on the day before the due date, which falls on that day from UTC−11 to UTC+11. The test picks due dates around the last midday UTC, so at any hour it checks one that has not reached that point and one that has; moving the cutoff a day either way fails it.
+- The follow-ups say "at least", since an item keeps its words.
+
+Each fix fails a test without it. Delta reviews closed the stale-request and wording findings in the first round and the due-date cutoff in the second.

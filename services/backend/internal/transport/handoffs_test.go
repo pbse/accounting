@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -248,9 +249,83 @@ func TestHandADocumentToATeammate(t *testing.T) {
 	}
 	hand(invoice, "user_b", 422)
 
-	// The teammate can hand it back; stopping the agent closes what is still handed.
+	// A hand-off that stays open is followed up: with the teammate after two days, then with the goal's owner after four,
+	// or by the close's due date when that is sooner. Only the owner sees it in the plan.
 	hand(lease, "user_b", 200)
 	id := read("user_a", partner).Handoffs[0].ID
+	age := func(hours int, due string) {
+		t.Helper()
+		_, err := db.Exec(`UPDATE goal_handoffs SET created_at=now()-make_interval(hours=>$2) WHERE id::text=$1`, id, hours)
+		must(err)
+		_, err = db.Exec(`UPDATE close_goals SET created_at=now()-interval '10 days',due_on=NULLIF($2,'')::date WHERE id::text=$1`, goal, due)
+		must(err)
+	}
+	owner := func(subject string) (asked []string, plan []string, history []string) {
+		t.Helper()
+		var inbox struct {
+			Groups []struct {
+				Events []struct {
+					Kind string `json:"kind"`
+					Text string `json:"text"`
+				} `json:"events"`
+			} `json:"groups"`
+		}
+		must(json.Unmarshal(call(subject, partner, "GET", "/v1/closes/attention", nil, 200), &inbox))
+		for _, g := range inbox.Groups {
+			for _, e := range g.Events {
+				if e.Kind == "goal" && strings.Contains(e.Text, "has been with") {
+					asked = append(asked, e.Text)
+				}
+			}
+		}
+		var s struct {
+			Progress struct {
+				Plan []planStep `json:"plan"`
+			} `json:"progress"`
+			Activity []struct {
+				Text string `json:"text"`
+			} `json:"activity"`
+		}
+		must(json.Unmarshal(call(subject, partner, "GET", "/v1/closes/"+alpha+"/goal", nil, 200), &s))
+		plan = s.Progress.Plan[1].Lines
+		for _, a := range s.Activity {
+			if strings.HasPrefix(a.Text, "I followed up") || strings.HasPrefix(a.Text, "I asked") {
+				history = append(history, a.Text)
+			}
+		}
+		return
+	}
+	age(30, "")
+	if asked, plan, history := owner("user_a"); len(handed("user_b", partner)) != 1 || len(asked)+len(plan)+len(history) != 0 {
+		t.Fatalf("nobody is followed up with within two days: %v %v %v", asked, plan, history)
+	}
+	age(50, "")
+	if got := handed("user_b", partner); len(got) != 2 || got[0] != lease+" lease.txt has been with you for at least 2 days, handed by user_a." {
+		t.Fatalf("after two days the teammate is followed up with, linked to the document: %v", got)
+	}
+	if asked, _, history := owner("user_a"); len(asked) != 0 || len(history) != 1 || history[0] != "I followed up with Bea Brown on lease.txt" {
+		t.Fatalf("the follow-up is in the goal's history, and the owner is not asked yet: %v %v", asked, history)
+	}
+	stall := "lease.txt has been with Bea Brown for at least 4 days. Check with them, or take it back."
+	age(100, "")
+	if asked, plan, history := owner("user_a"); len(asked) != 1 || asked[0] != stall || !slices.Contains(plan, stall) || len(history) != 2 || history[0] != "I asked user_a to check with Bea Brown on lease.txt" {
+		t.Fatalf("after four days the owner is asked, on the card and in the history: %v %v %v", asked, plan, history)
+	}
+	if asked, plan, _ := owner("user_e"); len(asked) != 0 || slices.Contains(plan, stall) {
+		t.Fatalf("only the goal's owner is asked: %v %v", asked, plan)
+	}
+	// A close due soon brings the owner's follow-up forward to midday UTC the day before it is due, a day after the
+	// hand-off at the earliest. The last midday UTC decides which due date has reached that point, at any hour.
+	midday := time.Now().UTC().Add(-12 * time.Hour)
+	age(50, midday.AddDate(0, 0, 2).Format("2006-01-02"))
+	if asked, _, _ := owner("user_a"); len(asked) != 0 {
+		t.Fatalf("a close whose day before starts at the next midday is not followed up yet: %v", asked)
+	}
+	age(50, midday.AddDate(0, 0, 1).Format("2006-01-02"))
+	if asked, _, _ := owner("user_a"); len(asked) != 1 || !strings.HasPrefix(asked[0], "lease.txt has been with Bea Brown for at least ") {
+		t.Fatalf("the due date brings the follow-up forward: %v", asked)
+	}
+	age(0, "")
 	call("user_b", partner, "POST", "/v1/closes/"+alpha+"/goal/handoffs/"+id+"/take-back", nil, 200)
 	call("user_b", partner, "POST", "/v1/closes/"+alpha+"/goal/handoffs/"+id+"/take-back", nil, 409)
 	if text := last(); text != "Bea Brown handed lease.txt back." {

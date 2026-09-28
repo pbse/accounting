@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { askAssistant } from "../dashboard/assistantStore";
 import { Avatar, Icon } from "../dashboard/Icon";
@@ -12,9 +12,10 @@ type Finish = "review" | "signoff";
 type Goal = { id: string; author: string; due_on: string; state: "active" | "reached" | "stopped"; finish: Finish; created_at: string; reached_at: string | null; ready_at: string | null; finished_at: string | null; events: { actor: string; text: string; at: string }[] };
 type Signoff = { state: "open" | "signed_off" | "reopen_required"; signer: string; needs: string[]; entries: { draft: string; text: string }[]; next_close: string };
 type Routine = { author: string; finish: Finish; due_days: number | null; next_period: string; waiting: string };
+type Step = { key: string; title: string; state: "done" | "agent" | "you" | "client" | "waits" | "none" | "unknown"; text: string; lines?: string[]; link?: string };
 type Status = {
   goal: Goal | null;
-  progress: { items: Item[]; needs: string[]; notes: string[]; ready: boolean; signoff?: Signoff; coverage?: { total: number; open: number } };
+  progress: { items: Item[]; needs: string[]; ready: boolean; signoff?: Signoff; coverage?: { total: number; open: number }; plan: Step[] };
   activity: { at: string; actor: string; text: string }[];
   activity_total: number;
   signed_off: boolean;
@@ -32,6 +33,35 @@ const sections: [Item["status"], string][] = [
   ["stopped", "Left out"],
 ];
 const handOver = "Get this close ready for review";
+const stepWords: Record<Step["state"], [string, string]> = {
+  done: ["status ok", "Done"],
+  agent: ["status info", "I'm on it"],
+  you: ["status warn", "Needs you"],
+  client: ["status info", "Waiting on the client"],
+  waits: ["status info", "Waits"],
+  none: ["status info", "Note"],
+  unknown: ["status danger", "Not checked"],
+};
+
+// Plan lists, in order, what getting the close to its finish takes and who each step is with.
+function Plan({ plan }: { plan: Step[] }) {
+  return (
+    <ol aria-label="Plan">
+      {plan.map((s) => (
+        <li key={s.key}>
+          <span className={stepWords[s.state][0]}>{stepWords[s.state][1]}</span> <strong>{s.title}</strong>: {s.text} {s.link && <Link to={s.link}>Open →</Link>}
+          {!!s.lines?.length && (
+            <ul>
+              {s.lines.map((l) => (
+                <li key={l}>{l}</li>
+              ))}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
 const finishes: Record<Finish, string> = { review: "ready for review", signoff: "signed off" };
 
 export function localDate(d = new Date()) {
@@ -43,13 +73,6 @@ function due(on: string) {
   const day = new Date(`${on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
   if (days < 0) return `Due ${day}, ${-days} day${days === -1 ? "" : "s"} overdue`;
   return days === 0 ? "Due today" : days === 1 ? "Due tomorrow" : `Due ${day}, in ${days} days`;
-}
-
-function counts(items: Item[]) {
-  if (!items.length) return "No documents yet.";
-  const by = (s: Item["status"]) => items.filter((i) => i.status === s).length;
-  const parts = [`${by("prepared")} ready for review`, `${by("needs_you") + by("unsupported")} need you`, `${by("client")} waiting on the client`, `${by("working")} in progress`].filter((p) => !p.startsWith("0 "));
-  return `${items.length} document${items.length === 1 ? "" : "s"}: ${parts.join(", ")}.`;
 }
 
 function monthName(period: string) {
@@ -240,24 +263,31 @@ function headline(goal: Goal, progress: Status["progress"], needs: number) {
   return `I'm getting this close ${finishes[goal.finish]}.`;
 }
 
-// useGoal reads the close's goal and live progress, polling while shown.
+// useGoal reads the close's goal and live progress, polling while shown. The plan's checks are heavier, so they are read
+// about once a minute and kept between polls.
 function useGoal(closeId: string, live: boolean, every: number) {
   const [status, setStatus] = useState<Status>();
   const [error, setError] = useState("");
   const [asked, setAsked] = useState(0);
+  const checked = useRef<{ close: string; at: number; step?: Step }>({ close: "", at: 0 });
   useEffect(() => {
     if (!live) return;
     let on = true;
     let timer: ReturnType<typeof setTimeout>;
-    const poll = () =>
-      workspaceRequest(`/${closeId}/goal`)
+    const poll = () => {
+      const verify = checked.current.close !== closeId || Date.now() - checked.current.at > 60_000;
+      return workspaceRequest(`/${closeId}/goal${verify ? "?verify=1" : ""}`)
         .then((data: Status) => {
           if (!on) return;
+          const step = data.progress.plan.find((s) => s.key === "verify");
+          if (verify) checked.current = { close: closeId, at: Date.now(), step };
+          else if (checked.current.step) data.progress.plan = data.progress.plan.map((s) => (s.key === "verify" ? (checked.current.step as Step) : s));
           setStatus(data);
           setError("");
         })
         .catch((e) => on && setError(e instanceof Error ? e.message : "The agent's progress is unavailable."))
         .finally(() => on && (timer = setTimeout(poll, every)));
+    };
     void poll();
     return () => {
       on = false;
@@ -307,21 +337,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
       </p>
       {!stopped && (
         <>
-          {progress.needs.length > 0 && (
-            <ul aria-label="Needs you">
-              {progress.needs.map((n) => (
-                <li key={n}>{n}</li>
-              ))}
-            </ul>
-          )}
-          {coverage && (
-            <p className={goal.finish === "signoff" && coverage.open ? undefined : "assistant-note"}>
-              {coverage.open
-                ? `${goal.finish === "signoff" ? "" : "Before sign-off, "}${coverage.open} of ${coverage.total} accounts in the ledger capture still ${coverage.open === 1 ? "needs" : "need"} a coverage decision or resolution. `
-                : `All ${coverage.total} accounts in the ledger capture are resolved or excluded. `}
-              <Link to={`/dashboard/closes/${closeId}#coverage-work`}>{coverage.open ? "Review them in Coverage →" : "See Coverage →"}</Link>
-            </p>
-          )}
+          <Plan plan={progress.plan} />
           {(!!coverage?.open || status.handoffs.some((h) => h.account_id)) && <AccountHandOffs closeId={closeId} status={status} refresh={refresh} />}
           {sections.map(([key, title]) => {
             const items = progress.items.filter((i) => i.status === key);
@@ -375,11 +391,6 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
               </ul>
             </div>
           )}
-          {progress.notes.map((n) => (
-            <p key={n} className="assistant-note">
-              {n}
-            </p>
-          ))}
         </>
       )}
       <RoutineLine closeId={closeId} status={status} refresh={refresh} />
@@ -462,15 +473,9 @@ function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueO
           <input type="radio" name={group} checked={finish === "signoff"} onChange={() => setFinish("signoff")} /> The close is signed off
         </label>
       </fieldset>
-      <p>I'll keep this close moving until it is {finishes[finish]}:</p>
-      <ul>
-        <li>I bring new documents and client replies into preparation as they arrive.</li>
-        {finish === "signoff" && <li>I line up what sign-off needs: approvals, its scope and each entry to post.</li>}
-        <li>I tell you exactly what I need from you, and why.</li>
-        <li>I let you know as soon as it's {finish === "signoff" ? "ready to sign off" : "ready for review"}.</li>
-      </ul>
+      <p>Here's my plan to get this close {finishes[finish]}, and where each step stands now. I keep it moving, bring new documents and client replies in as they arrive, and tell you exactly what I need from you.</p>
+      <Plan plan={finish === "signoff" ? [...status.progress.plan, { key: "signoff", title: "Sign off", state: "waits", text: "Then I line up what sign-off needs: approvals, its scope and each entry to post." }] : status.progress.plan} />
       <p>I never approve, send, post or sign off anything, and you can stop me at any time.</p>
-      <p>Now: {counts(status.progress.items)}</p>
       <label>
         {finish === "signoff" ? "Signed off by" : "Ready for review by"} <input type="date" value={date} min={localDate()} onChange={(e) => setDate(e.target.value)} />
       </label>
