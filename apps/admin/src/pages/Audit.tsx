@@ -13,13 +13,16 @@ const filters = ["firm", "staff", "action", "result"];
 // Every staff action and reveal, across firms, newest first, searchable and exported as CSV.
 export function Audit() {
   const [params, setParams] = useSearchParams();
-  const [before, setBefore] = useState(0);
+  // The page cursor belongs to its search: another search (by form or by history) starts at the newest.
+  const [page, setPage] = useState<{ search: string; before: number }>();
   const [exported, setExported] = useState("");
   // Where the next export batch starts, for the search it came from.
   const [nextBatch, setNextBatch] = useState<{ search: string; before: string }>();
   const query = new URLSearchParams();
   for (const name of filters) if (params.get(name)) query.set(name, params.get(name)!);
   const search = query.toString();
+  const before = page?.search === search ? page.before : 0;
+  const setBefore = (value: number) => setPage({ search, before: value });
   if (before) query.set("before", String(before));
   // A reveal covers this search: paging keeps it, other filters are masked until revealed anew.
   const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/audit${query.size ? `?${query}` : ""}`, search);

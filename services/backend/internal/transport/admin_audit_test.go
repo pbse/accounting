@@ -111,6 +111,12 @@ func TestStaffSearchAndExportTheAuditAcrossFirms(t *testing.T) {
 		t.Fatalf("reveal scope %q %v", covered, err)
 	}
 	adminJSON(t, h, token, "GET", "/v1/admin/audit?before=zero", "", 422)
+	// A reveal of one firm's search is that firm's, even when it shows nothing.
+	adminJSON(t, h, token, "GET", "/v1/admin/audit?firm="+firmA+"&staff=nobody&reveal=1", "", 200, "X-Access-Reason", "checking an empty firm search")
+	var firmEmpty int
+	if db.QueryRow(`SELECT count(*) FROM platform_audit WHERE organization_id=$1 AND action='content.reveal' AND request->>'staff'='nobody'`, firmA).Scan(&firmEmpty); firmEmpty != 1 {
+		t.Fatalf("an empty firm reveal belongs to the firm: %d", firmEmpty)
+	}
 	// A reveal that shows nothing is still recorded, at platform level.
 	nobody := "staff_nobody_" + strings.ToLower(rand.Text())
 	adminJSON(t, h, token, "GET", "/v1/admin/audit?staff="+nobody+"&reveal=1", "", 200, "X-Access-Reason", "checking an empty search")

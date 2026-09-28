@@ -105,6 +105,9 @@ func revealAudit(w http.ResponseWriter, r *http.Request, db *sql.DB, q auditQuer
 			firms = append(firms, firm)
 		}
 	}
+	if q.firm != "" && q.firm != "platform" {
+		firms = []string{q.firm} // one firm's search is that firm's, even when it shows nothing
+	}
 	shown := map[string]any{"firm": q.firm, "staff": q.staff, "action": q.action, "result": q.result, "entries": len(entries)}
 	if len(entries) > 0 {
 		shown["newest_id"], shown["oldest_id"] = entries[0].ID, entries[len(entries)-1].ID
