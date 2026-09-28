@@ -191,11 +191,13 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 	return "", "more than one captured bill or purchase in the close month books this amount"
 }
 
-// numberLike keeps a bill's document number from matching a year or a short figure printed in the invoice: it must
-// carry a letter or punctuation, or be at least six characters.
+// numberLike keeps a bill's document number from matching a year, a date fragment or a short figure printed in the
+// invoice: it must carry a letter, or be at least six digits with nothing else.
 func numberLike(number string) bool {
 	number = strings.TrimSpace(number)
-	return len(number) >= 6 || strings.ContainsFunc(number, func(r rune) bool { return r < '0' || r > '9' })
+	letter := strings.ContainsFunc(number, func(r rune) bool { return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' })
+	digits := !strings.ContainsFunc(number, func(r rune) bool { return r < '0' || r > '9' })
+	return letter || (digits && len(number) >= 6)
 }
 
 // printed reports whether the invoice prints the term as a whole word: "77" is not printed in "INV-778".

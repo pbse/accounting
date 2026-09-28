@@ -712,7 +712,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			home = profile.Currency
 		}
 		plan, reason := StraightThrough(proposal, invoice, procedure, home, entity, period, id, unread, ledger)
-		straight = "Prepared without confirmation: " + reason
+		straight = "Waiting for a person: " + reason + "."
 		if reason == "" {
 			if err = queueStraightThrough(persist, finish, id, plan); err != nil {
 				return true, err

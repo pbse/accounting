@@ -68,6 +68,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"line-less vendor credit":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "71", Date: "2026-09-10", Record: json.RawMessage(`{"VendorRef":{"Name":"Acme Insurance Co"}}`)}), false},
 		"line-less journal":           {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "72", Date: "2026-09-10", Record: json.RawMessage(`{}`)}), false},
 		"card refund":                 {func(*Proposal, *Procedure) {}, ledger(bill, refund), false},
+		"date as document number":     {func(*Proposal, *Procedure) {}, ledger(row("Bill", "75", "2026-09-03", "Other Vendor", "2026-09", "Insurance", "1200")), false},
 		"year as document number":     {func(*Proposal, *Procedure) {}, ledger(row("Bill", "73", "2026-09-03", "Other Vendor", "2026", "Insurance", "1200")), false},
 		"unread evidence":             {func(*Proposal, *Procedure) {}, ledger(bill), true},
 		"partial prepaid line":        {func(*Proposal, *Procedure) {}, ledger(split), false},
