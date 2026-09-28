@@ -140,8 +140,9 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			people = found
 		}
 	}
-	// Who the search names: WorkOS's answer, and the app's own records (accepted invitations, its sessions), so an email
-	// search still finds a person's memberships when WorkOS does not answer.
+	// Who the search names: the user ID searched for, or, for an email, WorkOS's accounts and the IDs the app itself
+	// recorded for that address (accepted invitations, its sessions), so memberships still show when WorkOS does not
+	// answer. Invitations not yet accepted are matched by the searched address, or by the user's current WorkOS address.
 	ids, emails := []string{}, []string{}
 	if user != "" {
 		ids = append(ids, user)
@@ -150,12 +151,19 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		emails = append(emails, email)
 	}
 	for _, p := range people {
-		ids, emails = append(ids, p.ID), append(emails, strings.ToLower(p.Email))
+		if !slices.Contains(ids, p.ID) {
+			ids = append(ids, p.ID)
+		}
+		if address := strings.ToLower(p.Email); !slices.Contains(emails, address) {
+			emails = append(emails, address)
+		}
 	}
 	system := context.WithValue(r.Context(), systemKey{}, true)
-	if err := knownPeople(system, db, &ids, &emails, user == ""); err != nil {
-		adminFirmProblem(w, err, "people search")
-		return
+	if email != "" {
+		if err := recordedIDs(system, db, email, &ids); err != nil {
+			adminFirmProblem(w, err, "people search")
+			return
+		}
 	}
 	// As the firm's own list does: expire and settle the firms' invitations first, so staff act on their real state.
 	if err := reconcilePersonInvitations(system, db, emails, ids); err != nil {
@@ -208,28 +216,22 @@ func jsonList(values []string) string {
 	return string(raw)
 }
 
-// knownPeople adds the addresses the app has recorded for these IDs (an accepted invitation, a sign-in it holds) and, for
-// a search by email (byEmail), the IDs it has recorded for these addresses. A search by user ID never widens to other
-// accounts that once used the same address.
-func knownPeople(ctx context.Context, db *sql.DB, ids, emails *[]string, byEmail bool) error {
-	rows, err := db.QueryContext(ctx, `SELECT DISTINCT subject,lower(email) FROM (
- SELECT subject,email FROM member_invitations WHERE subject IS NOT NULL
- UNION ALL SELECT subject,email FROM auth_sessions) k
- WHERE ($3 AND lower(email) IN (SELECT jsonb_array_elements_text($1::jsonb))) OR subject=ANY(string_to_array($2,','))`, jsonList(*emails), strings.Join(*ids, ","), byEmail)
+// recordedIDs adds the user IDs the app has recorded for an email address: whoever accepted an invitation to it, and
+// whoever holds a sign-in with it.
+func recordedIDs(ctx context.Context, db *sql.DB, email string, ids *[]string) error {
+	rows, err := db.QueryContext(ctx, `SELECT subject FROM member_invitations WHERE email=$1 AND subject IS NOT NULL
+ UNION SELECT subject FROM auth_sessions WHERE lower(email)=$1`, email)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, email string
-		if err = rows.Scan(&id, &email); err != nil {
+		var id string
+		if err = rows.Scan(&id); err != nil {
 			return err
 		}
 		if !slices.Contains(*ids, id) {
 			*ids = append(*ids, id)
-		}
-		if !slices.Contains(*emails, email) {
-			*emails = append(*emails, email)
 		}
 	}
 	return rows.Err()
@@ -287,7 +289,7 @@ func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	request := map[string]any{}
 	err := adminAct(ctx, db, adminAction{Action: "sessions.revoke", TargetType: "user", TargetID: user, Reason: reason, Request: request},
 		func(ctx context.Context, tx *sql.Tx) error {
-			result, err := tx.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=now() WHERE subject=$1 AND revoked_at IS NULL`, user)
+			result, err := tx.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=now() WHERE subject=$1 AND revoked_at IS NULL AND expires_at>now()`, user)
 			if err == nil {
 				app, _ = result.RowsAffected()
 				request["app_sessions"] = app

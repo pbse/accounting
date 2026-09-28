@@ -37,6 +37,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	must(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,$2,'member','Member',$3,'pending','user_owner','Joining the team next week',$4)`, firm, email, workosID, expires)
 	// A session the API holds for them (AUTH_SESSION=server).
 	must(`INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,'session_1',$4,'\x00','\x00',now()+interval '5 minutes',now()+interval '30 days')`, rand.Text(), person, firm, email)
+	must(`INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,'session_expired',$4,'\x00','\x00',now()-interval '2 days',now()-interval '1 day')`, rand.Text(), person, firm, email)
 	t.Cleanup(func() { db.Exec(`DELETE FROM auth_sessions WHERE subject=$1`, person) })
 
 	revoked, resent := []string{}, 0
@@ -129,6 +130,13 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	must(`INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,'session_old',$4,'\x00','\x00',now(),now()+interval '1 day')`, rand.Text(), previous, other, email)
 	t.Cleanup(func() { db.Exec(`DELETE FROM auth_sessions WHERE subject=$1`, previous) })
 	must(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,subject,decided_at) VALUES($1,$2,'member','Member',$3,'accepted','user_owner','Joined years ago',$4,now())`, other, email, "invitation_"+rand.Text(), previous)
+	// An address the user signed in with once, now someone else's, is not theirs: its open invitation does not show.
+	former := strings.ToLower(rand.Text()) + "@former.example"
+	must(`INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,'session_former',$4,'\x00','\x00',now(),now()-interval '1 hour')`, rand.Text(), person, firm, former)
+	must(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,state,invited_by,reason) VALUES($1,$2,'member','Member','sending','user_owner','Invited the new owner of the address')`, other, former)
+	if byID := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person, "", 200)["invitations"]); strings.Contains(byID, former) {
+		t.Fatalf("a former address's invitation is not this user's: %s", byID)
+	}
 	if byID := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person, "", 200)); strings.Contains(byID, previous) || strings.Contains(byID, `"state":"accepted"`) {
 		t.Fatalf("a user-ID search must not include another account's memberships or accepted invitations: %s", byID)
 	}
@@ -152,7 +160,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		t.Fatalf("partial answer: %s", partial)
 	}
 	var appRevoked bool
-	if db.QueryRow(`SELECT revoked_at IS NOT NULL FROM auth_sessions WHERE subject=$1`, person).Scan(&appRevoked); !appRevoked {
+	if db.QueryRow(`SELECT revoked_at IS NOT NULL FROM auth_sessions WHERE subject=$1 AND workos_session='session_1'`, person).Scan(&appRevoked); !appRevoked {
 		t.Fatal("the app's own session must end even when WorkOS fails")
 	}
 	failRevoke, revoked = false, nil
