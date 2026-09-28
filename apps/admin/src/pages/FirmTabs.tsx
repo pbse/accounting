@@ -66,6 +66,8 @@ type Invitation = { id: string; email: string; role: string; state: string; invi
 
 export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () => void }) {
   const people = useRevealable<{ people: Person[]; invitations: Invitation[]; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/people`);
+  // What the last invitation revoke said: it tells staff when WorkOS still needs revoking by hand.
+  const [revoked, setRevoked] = useState("");
   const operate = usePermissions().includes("platform:operate");
   const base = `/v1/admin/firms/${encodeURIComponent(firm)}`;
   return (
@@ -111,6 +113,7 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
           </section>
           <section>
             <h2>Invitations</h2>
+            {revoked && <p className="note" role="status">{revoked}</p>}
             {people.data.invitations.length === 0 ? <p>No invitation has been sent.</p> : (
               <table>
                 <thead><tr><th>Email</th><th>Role</th><th>State</th><th>Invited by</th><th>Sent</th><th>Expires</th><th /></tr></thead>
@@ -128,7 +131,8 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
                           <details>
                             <summary>Revoke</summary>
                             <ActionForm label="Revoke invitation" danger allowed={operate} minLength={10} onSubmit={async (reason) => {
-                              await post(`${base}/invitations/${encodeURIComponent(i.id)}/revoke`, { reason });
+                              const answer = await post<{ message: string }>(`${base}/invitations/${encodeURIComponent(i.id)}/revoke`, { reason });
+                              setRevoked(answer.message);
                               people.reload();
                             }} />
                           </details>
