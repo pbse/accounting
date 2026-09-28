@@ -312,7 +312,22 @@ func (e *Engine) finish(x *execution, state string, out json.RawMessage, message
 		log.Printf("Workflow run %d could not be marked %s: %v", x.run.id, state, err)
 		return
 	}
-	e.wakeParent(x.sys, x.run.id)
+	e.ended(x.sys, x.run.id, state == "cancelled")
+}
+
+// ended does what a run's end requires after its transaction commits: a cancelled run's remaining
+// descendants are cancelled (one may have started while an ancestor was being cancelled), and the
+// parent is woken.
+func (e *Engine) ended(ctx context.Context, runID int64, cancelled bool) {
+	if cancelled {
+		err := inTx(ctx, e.DB, func(tx *sql.Tx) error {
+			return cancelTree(ctx, tx, runID, false, "the parent run was cancelled", "workflow engine")
+		})
+		if err != nil {
+			log.Printf("Workflow run %d was cancelled but its children could not be yet: %v", runID, err)
+		}
+	}
+	e.wakeParent(ctx, runID)
 }
 
 // wakeParent wakes the parent of a run that ended. It runs after the run's own transaction commits,
@@ -363,7 +378,7 @@ func (e *Engine) park(x *execution) {
 		return
 	}
 	if state == "cancelled" {
-		e.wakeParent(x.sys, x.run.id)
+		e.ended(x.sys, x.run.id, true)
 	}
 }
 
@@ -399,7 +414,7 @@ func (e *Engine) release(ctx context.Context, run *claimedRun, wake time.Time, m
 		return
 	}
 	if state == "cancelled" {
-		e.wakeParent(ctx, run.id)
+		e.ended(ctx, run.id, true)
 	}
 }
 

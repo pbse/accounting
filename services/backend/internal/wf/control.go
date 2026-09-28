@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 
@@ -127,44 +128,54 @@ func Cancel(ctx context.Context, db *sql.DB, runID int64, by, reason string) err
 		if slices.Contains([]string{"completed", "failed", "cancelled"}, state) {
 			return ErrNotAllowed
 		}
-		// The run and every active descendant: a running one ends at its next step, the rest at once.
-		rows, err := tx.QueryContext(ctx, `WITH RECURSIVE tree(id) AS (SELECT $1::bigint UNION SELECT r.id FROM workflow_runs r JOIN tree t ON r.parent_run_id=t.id)
- UPDATE workflow_runs SET cancel_requested_at=COALESCE(cancel_requested_at,now()),cancelled_by=$3,updated_at=now(),
-  cancel_reason=CASE WHEN id=$1 THEN $2 ELSE 'Parent run cancelled: '||$2 END,
-  state=CASE WHEN state='running' THEN state ELSE 'cancelled' END,
-  finished_at=CASE WHEN state='running' THEN finished_at ELSE now() END,
-  wake_at=CASE WHEN state='running' THEN wake_at END,
-  waiting_on=CASE WHEN state='running' THEN waiting_on ELSE '' END
- WHERE id IN (SELECT id FROM tree) AND state IN ('queued','running','waiting') RETURNING id,state`, runID, truncate(reason), by)
-		if err != nil {
-			return err
-		}
-		var ended []int64
-		for rows.Next() {
-			var id int64
-			var after string
-			if err = rows.Scan(&id, &after); err != nil {
-				rows.Close()
-				return err
-			}
-			if after == "cancelled" {
-				ended = append(ended, id)
-			}
-		}
-		rows.Close()
-		if err = rows.Err(); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=ANY($1) AND state IN ('running','waiting')`, ended); err != nil {
+		if err := cancelTree(ctx, tx, runID, true, truncate(reason), by); err != nil {
 			return err
 		}
 		wake = state != "running"
 		return nil
 	})
 	if err == nil && wake {
-		// After commit, never holding this run's row while taking its parent's (see Engine.wakeParent).
-		_, err = db.ExecContext(ctx, wakeParent, runID)
+		// Best effort, after commit, never holding this run's row while taking its parent's (see
+		// Engine.wakeParent); the sweep wakes the parent if this fails. The cancel itself stands.
+		if _, werr := db.ExecContext(ctx, wakeParent, runID); werr != nil {
+			log.Printf("Workflow run %d was cancelled but could not wake its parent yet: %v", runID, werr)
+		}
 	}
+	return err
+}
+
+// cancelTree cancels the active descendants of root, and root too when includeRoot: a running run
+// ends at its next step, the rest at once. The engine calls it again whenever a run ends cancelled,
+// so a child started while an ancestor was being cancelled is caught when its parent stops.
+func cancelTree(ctx context.Context, tx *sql.Tx, root int64, includeRoot bool, reason, by string) error {
+	rows, err := tx.QueryContext(ctx, `WITH RECURSIVE tree(id) AS (SELECT $1::bigint UNION SELECT r.id FROM workflow_runs r JOIN tree t ON r.parent_run_id=t.id)
+ UPDATE workflow_runs SET cancel_requested_at=COALESCE(cancel_requested_at,now()),cancelled_by=$3,updated_at=now(),
+  cancel_reason=CASE WHEN id=$1 THEN $2 ELSE 'Parent run cancelled: '||$2 END,
+  state=CASE WHEN state='running' THEN state ELSE 'cancelled' END,
+  finished_at=CASE WHEN state='running' THEN finished_at ELSE now() END,
+  wake_at=CASE WHEN state='running' THEN wake_at END,
+  waiting_on=CASE WHEN state='running' THEN waiting_on ELSE '' END
+ WHERE id IN (SELECT id FROM tree) AND ($4 OR id<>$1) AND state IN ('queued','running','waiting') RETURNING id,state`, root, reason, by, includeRoot)
+	if err != nil {
+		return err
+	}
+	var ended []int64
+	for rows.Next() {
+		var id int64
+		var after string
+		if err = rows.Scan(&id, &after); err != nil {
+			rows.Close()
+			return err
+		}
+		if after == "cancelled" {
+			ended = append(ended, id)
+		}
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='cancelled',finished_at=now() WHERE run_id=ANY($1) AND state IN ('running','waiting')`, ended)
 	return err
 }
 

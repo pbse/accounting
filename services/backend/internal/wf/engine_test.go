@@ -24,6 +24,7 @@ type ref struct {
 	ID       string   `json:"id"`
 	Failures int      `json:"failures,omitempty"`
 	Closes   []string `json:"closes,omitempty"`
+	Level    int      `json:"level,omitempty"`
 }
 
 var calls = struct {
@@ -1130,4 +1131,29 @@ func TestEventScansResumeWhereTheyStopped(t *testing.T) {
 	if !started() {
 		t.Fatal("later events were never reached past busy ones")
 	}
+}
+
+var _ = wf.Define(wf.Spec[ref, json.RawMessage]{
+	Name: "test_chain", Title: "A chain of children",
+	Run: func(ctx wf.Context, in ref) (json.RawMessage, error) {
+		if in.Level > 0 {
+			return wf.Child[json.RawMessage](ctx, "down", "test_chain", ref{ID: in.ID, Level: in.Level - 1})
+		}
+		return wf.WaitForEvent[json.RawMessage](ctx, "reply", "reply:"+in.ID, time.Hour)
+	},
+})
+
+// A grandchild started while an ancestor was being cancelled is caught when its parent stops.
+func TestADescendantMissedByACancelEndsWithItsParent(t *testing.T) {
+	h := setup(t)
+	root := h.start("test_chain", ref{ID: rand.Text(), Level: 2})
+	h.drain()
+	child := h.childOf(root)
+	grandchild := h.childOf(child)
+	h.expect(grandchild, "waiting")
+	h.exec(`UPDATE workflow_runs SET state='cancelled',finished_at=now(),wake_at=NULL,waiting_on='',cancel_requested_at=now() WHERE id=$1`, root)
+	h.exec(`UPDATE workflow_runs SET cancel_requested_at=now(),wake_at='-infinity' WHERE id=$1`, child) // flagged while it ran
+	h.drain()
+	h.expect(child, "cancelled")
+	h.expect(grandchild, "cancelled")
 }
