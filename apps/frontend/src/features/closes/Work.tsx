@@ -679,7 +679,7 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
         <>
           {needsReason && <label>Reason for stopping<textarea value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></label>}
           <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {handing
-            ? `Hand the ${pending} pending close${pending === 1 ? "" : "s"} to the agent to get each ${current.finish === "signoff" ? "signed off" : "ready for review"}. The agent never confirms facts, approves, sends, posts or signs off.`
+            ? `Hand the ${pending} pending close${pending === 1 ? "" : "s"} to the agent to get each ${current.finish === "signoff" ? "signed off" : "ready for review"}. A prepaid invoice whose facts the invoice and the QuickBooks capture both prove is drafted under the firm's procedure without field-by-field confirmation; everything else waits for a person. The agent never approves, sends, posts or signs off.`
             : `${current.action[0].toUpperCase() + current.action.slice(1)} the ${pending} pending close${pending === 1 ? "" : "s"}; facts and methods still need separate review.`}</label>
           <button type="button" disabled={busy || !confirmed || (needsReason && !reason.trim())} onClick={() => void run()}>{busy ? "Running…" : `Run for ${pending} close${pending === 1 ? "" : "s"}`}</button>
         </>

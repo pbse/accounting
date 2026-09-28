@@ -47,7 +47,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		return Plan{}, "the agent has open questions"
 	}
 	if unread {
-		return Plan{}, "evidence in the close is not extracted yet, or failed extraction"
+		return Plan{}, "evidence in the close is not readable yet, or belongs to another job's request or answer"
 	}
 	if currency == "" {
 		return Plan{}, "the client's home currency is not detected from a connected ledger"
@@ -185,7 +185,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		return Plan{}, reason
 	}
 	// An invoice printing other money figures (a tax, a fee) must say which is payable: a total line printing the amount.
-	if len(distinctFigures(invoice)) > 1 && !totalLineShows(invoice, amount) {
+	if moneyFigures(invoice) > 1 && !totalLineShows(invoice, amount) {
 		return Plan{}, "the invoice prints several money figures and no total line printing the cited amount"
 	}
 	// The currency is the amount's: both quotes print the currency's code or sign immediately before the figure.

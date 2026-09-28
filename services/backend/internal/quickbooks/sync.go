@@ -447,6 +447,45 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	return tx.Commit()
 }
 
+// SweepCitedCharts runs the chart supersession for every close whose newest period snapshot is not the one a draft
+// cites as its chart, so a supersession deferred while a posting was unsettled happens once it settles, whether or not
+// another capture is ever taken.
+func SweepCitedCharts(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT s.close_id::text,s.connection_id::text,s.payload->>'period',s.payload->>'source_id' FROM quickbooks_snapshots s
+ WHERE s.payload ? 'period' AND s.id=(SELECT max(z.id) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.payload->>'period'=s.payload->>'period')
+ AND EXISTS(SELECT 1 FROM evidence e JOIN workpapers w ON w.close_id=e.close_id WHERE e.close_id=s.close_id AND e.superseded_by IS NULL AND e.id::text<>s.payload->>'source_id' AND e.id::text IN (SELECT o.payload->>'source_id' FROM quickbooks_snapshots o WHERE o.close_id=s.close_id AND o.connection_id=s.connection_id AND o.payload->>'period'=s.payload->>'period') AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text,'role','chart')))`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type due struct{ close, connection, period, source string }
+	var dues []due
+	for rows.Next() {
+		var d due
+		if err := rows.Scan(&d.close, &d.connection, &d.period, &d.source); err != nil {
+			return err
+		}
+		dues = append(dues, d)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, d := range dues {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if err := SupersedeCitedChart(ctx, tx, d.close, d.source, d.connection, d.period, "scheduled-quickbooks-refresh"); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SupersedeCitedChart marks the earlier period-snapshot evidence of a close's connection and period superseded by a new
 // one where a draft prepared without confirmation cites it as its chart, so the existing source-change review reopens
 // that draft, as a capture a person saves already does to every prior period entry. Period evidence no draft cites as
@@ -475,6 +514,9 @@ func RunSync(ctx context.Context, db *sql.DB) {
 		if !time.Now().Before(nextSchedule) {
 			if err := scheduleSync(ctx, db); err != nil && ctx.Err() == nil {
 				log.Print("Transaction refresh scheduler could not queue due closes")
+			}
+			if err := SweepCitedCharts(ctx, db); err != nil && ctx.Err() == nil {
+				log.Print("Chart supersession sweep could not update durable state")
 			}
 			nextSchedule = time.Now().Add(5 * time.Minute)
 		}
