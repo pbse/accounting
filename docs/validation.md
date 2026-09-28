@@ -2369,4 +2369,6 @@ Plan review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `claude/edge-mcp
 
 Tests: `workers/edge/src/routes.test.ts` checks that `/mcp` and both discovery forms reach the API and that `/internal/*`, the workspace, `/mcp/extra`, other `.well-known` paths and a look-alike prefix do not; it fails on the old rule. The workflows' configuration check was run with 9 settings combinations each: unset and a correct pair pass, a separate API origin passes, and one setting alone, a domain with a path, an HTTP domain, a resource on another host or with a query fail. `npm run check` (including the edge's `tsc`) and `npm test` pass; the workflow and Compose YAML parse.
 
+Code review: GPT-6 Sol (reasoning high) and Gemini (agy-review, `claude/edge-mcp-wiring @ 05fbb31`) both approved; Gemini's one note, committing the corrected sentence in onboarding.md about hosted MCP and posting kinds, is applied.
+
 Not verified: a Cloudflare deploy, WorkOS Connect configuration and a hosted MCP sign-in.
