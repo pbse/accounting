@@ -119,10 +119,10 @@ func capabilityRegister(evidence, grants, services json.RawMessage) ([]map[strin
 			row["permission"] = "A posting grant for the client that covers " + c.kind
 			if c.provider == "Xero" {
 				scope := "post journals"
-			if c.kind == "bill_correction" {
-				scope = "write invoices"
-			}
-			row["permission"] = "A posting grant for the client that covers " + c.kind + ", on a connection authorized to " + scope + " (one made before that scope was requested must reconnect)"
+				if c.kind == "bill_correction" {
+					scope = "write invoices"
+				}
+				row["permission"] = "A posting grant for the client that covers " + c.kind + ", on a connection authorized to " + scope + " (one made before that scope was requested must reconnect)"
 			}
 			row["owner"] = "Server operator: " + setting
 			row["fallback"] = "A person books the approved draft in " + c.provider
