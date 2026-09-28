@@ -106,6 +106,8 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"unnamed account on a credit":    {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
 		"amount cited from support":      {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
 		"line-less card credit":          {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"two figures in the quote":       {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Total $1,200; amount due $500" }, ledger(bill), false},
+		"customer service footer":        {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Customer Service: Example" }, ledger(bill), false},
 		"negative printed amount":        {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Credit note total -1,200.00" }, ledger(bill), false},
 		"bracketed printed amount":       {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Adjustment (USD 1,200.00)" }, ledger(bill), false},
 		"bill without a total":           {func(*Proposal, *Procedure) {}, ledger(noTotal), false},

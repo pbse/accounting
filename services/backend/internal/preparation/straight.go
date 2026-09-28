@@ -94,7 +94,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		if f.Field == "invoice_number" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"invoice"}, []string{"order", "reference", "date", "due"}) {
 			return Plan{}, "the cited line does not name the number as the invoice number"
 		}
-		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill", "invoice to", "sold to", "customer", "client"}, []string{"ship", "deliver"}) {
+		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill", "invoice to", "sold to"}, []string{"ship", "deliver", "service", "support", "contact"}) {
 			return Plan{}, "the cited line does not say the invoice is billed to that name"
 		}
 		facts[f.Field] = f.Value
@@ -119,6 +119,9 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	for _, f := range p.Facts {
 		if f.Field == "amount" && negativeFigure(f.Candidates[0].Quote, amount) {
 			return Plan{}, "the invoice prints the amount as a negative or bracketed figure"
+		}
+		if f.Field == "amount" && moneyFigures(f.Candidates[0].Quote) != 1 {
+			return Plan{}, "the cited text prints more than one money figure; which is the invoice amount needs a person"
 		}
 	}
 	booking, reason := expensedLine(ledger, invoice, facts["vendor"], facts["invoice_number"], prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
@@ -250,6 +253,19 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 type accountRef struct {
 	Value string `json:"value"`
 	Name  string `json:"name"`
+}
+
+// moneyFigures counts the money figures a quote prints: a number with cents, or one a currency sign or code precedes.
+// Bare integers such as a year or an invoice number do not count.
+func moneyFigures(quote string) int {
+	plain := regexp.MustCompile(`(?i)(usd|eur|gbp|cad|aud|[$€£])\s*`).ReplaceAllString(quote, "¤")
+	count := 0
+	for _, figure := range regexp.MustCompile(`¤?\d[\d,]*(\.\d{2})?`).FindAllString(plain, -1) {
+		if strings.HasPrefix(figure, "¤") || strings.Contains(figure, ".") {
+			count++
+		}
+	}
+	return count
 }
 
 // negativeFigure reports whether the quote prints the amount preceded by a minus sign or an opening bracket, which
