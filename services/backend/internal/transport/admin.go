@@ -310,9 +310,10 @@ func adminFirms(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	firms := []adminFirmRow{}
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT `+adminFirmColumns+` FROM organizations o
- WHERE o.id<>'local-development' AND ($1='' OR position(lower($1) in lower(o.name))>0 OR position(lower($1) in lower(o.id))>0)
- ORDER BY o.created_at DESC,o.id LIMIT $2 OFFSET $3`, search, adminPage+1, offset)
+		// The page's firms first, then their counts: counting in the outer query would count every firm the offset skips.
+		rows, err := tx.QueryContext(ctx, `SELECT `+adminFirmColumns+` FROM (SELECT id FROM organizations
+ WHERE id<>'local-development' AND ($1='' OR position(lower($1) in lower(name))>0 OR position(lower($1) in lower(id))>0)
+ ORDER BY created_at DESC,id LIMIT $2 OFFSET $3) page JOIN organizations o ON o.id=page.id ORDER BY o.created_at DESC,o.id`, search, adminPage+1, offset)
 		if err != nil {
 			return err
 		}

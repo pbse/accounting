@@ -12,13 +12,18 @@ type Detail = {
   input: unknown;
   output: unknown;
   steps: Step[];
+  steps_total: number;
   children: { id: number; workflow: string; state: string; parent_step: string }[];
+  children_total: number;
   plan: { id: number; title: string; state: string; source: string; plan: { nodes: PlanNode[] } } | null;
   registered: boolean;
   revealed: boolean;
 };
 
 const active = ["queued", "running", "waiting"];
+// A long run shows its latest steps, this many more at a time, up to the server's 2,000.
+const moreSteps = 200;
+const mostSteps = 2000;
 
 // Free text the server masked until client content is revealed.
 const masked = "••••";
@@ -52,11 +57,14 @@ export function Run() {
   // The grant this run was revealed under, or tried: one attempt per grant, and a new grant tries again.
   const [triedWith, setTriedWith] = useState<number>();
   const { reload: reloadGrants } = useGrants();
+  // How many of a long run's latest steps to show; the server's default until asked for more.
+  const [stepsShown, setStepsShown] = useState<number>();
   useEffect(() => {
     setDetail(undefined);
     setReveal(undefined);
     setGrantLapsed(false);
     setTriedWith(undefined);
+    setStepsShown(undefined);
   }, [id]);
   // Only the latest request may update the page, so a slow revealed answer cannot reappear after
   // Hide or on another run.
@@ -65,7 +73,10 @@ export function Run() {
     const request = ++latest.current;
     try {
       // An empty reason reveals under the staff member's content grant for the run's firm.
-      const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${reveal !== undefined ? "?reveal=1" : ""}`;
+      const query = new URLSearchParams();
+      if (reveal !== undefined) query.set("reveal", "1");
+      if (stepsShown) query.set("steps", String(stepsShown));
+      const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${query.size ? `?${query}` : ""}`;
       const next = await get<Detail>(path, reveal !== undefined ? { "X-Access-Reason": reveal } : {});
       if (request !== latest.current) return;
       setDetail(next);
@@ -83,7 +94,7 @@ export function Run() {
       setDetail(undefined);
       setReveal(undefined);
     }
-  }, [id, reveal, reloadGrants]);
+  }, [id, reveal, stepsShown, reloadGrants]);
   useEffect(() => {
     load();
     return () => {
@@ -149,6 +160,12 @@ export function Run() {
           <h2>Flow</h2>
           <FlowGraph steps={detail.steps} plan={detail.plan?.plan.nodes} selected={selected} onSelect={setSelected} />
           <h3>Steps in order</h3>
+          {detail.steps_total > detail.steps.length && (
+            <p className="note">
+              Showing the latest {detail.steps.length} of {detail.steps_total} steps.{" "}
+              {detail.steps.length < mostSteps && <button className="link" onClick={() => setStepsShown(Math.min(detail.steps.length + moreSteps, mostSteps))}>Show {moreSteps} earlier</button>}
+            </p>
+          )}
           <ol className="steps">
             {detail.steps.map((s) => (
               <li key={s.key}>
@@ -187,7 +204,7 @@ export function Run() {
               {step.kind === "effect" && step.state === "unknown" && <ResolveForm allowed={operate} onSubmit={(applied, output, reason) => act("resolve", { key: step.key, applied, output, reason })} />}
             </>
           ) : (
-            <p>Select a step in the flow or the list to see its details.</p>
+            <p>{selected ? `Step ${selected} is not among the steps shown: show earlier steps to find it.` : "Select a step in the flow or the list to see its details."}</p>
           )}
         </aside>
       </div>
@@ -219,6 +236,7 @@ export function Run() {
       {detail.children.length > 0 && (
         <section>
           <h2>Child runs</h2>
+          {detail.children_total > detail.children.length && <p className="note">Showing the newest {detail.children.length} of {detail.children_total}.</p>}
           <ul>{detail.children.map((c) => <li key={c.id}><Link to={`/runs/${c.id}`}>#{c.id} {c.workflow}</Link> from step {c.parent_step} · {c.state}</li>)}</ul>
         </section>
       )}

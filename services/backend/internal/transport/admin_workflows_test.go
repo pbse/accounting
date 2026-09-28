@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -288,3 +289,47 @@ func TestEventKeysShowOnlyTheirTopic(t *testing.T) {
 func mustString(v any) string { raw, _ := json.Marshal(v); return string(raw) }
 
 func jsonNumber(f float64) string { raw, _ := json.Marshal(int64(f)); return string(raw) }
+
+// A long run shows its latest steps and newest child runs, with how many it has; more steps are asked for.
+func TestALongRunShowsItsLatestStepsAndChildren(t *testing.T) {
+	db := adminDB(t)
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	token := strings.Repeat("l", 32)
+	firm := "org_Long" + rand.Text()
+	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Long runs')`, firm); err != nil {
+		t.Fatal(err)
+	}
+	var run int64
+	if err := db.QueryRow(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,state,input,finished_at) VALUES($1,'test_admin_flow','long','seed','completed','{}',now()) RETURNING id`, firm).Scan(&run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO workflow_steps(run_id,key,organization_id,seq,kind,state) SELECT $1,'step'||g,$2,g,'step','completed' FROM generate_series(1,250) g`, run, firm); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,state,input,finished_at,parent_run_id,parent_step) SELECT $1,'test_admin_flow','child'||g,'seed','completed','{}',now(),$2,'step1' FROM generate_series(1,250) g`, firm, run); err != nil {
+		t.Fatal(err)
+	}
+	h := apiWithStore(db, token)
+	path := "/v1/admin/workflows/runs/" + strconv.FormatInt(run, 10)
+	var detail struct {
+		Steps         []adminStep `json:"steps"`
+		StepsTotal    int         `json:"steps_total"`
+		Children      []struct{ ID int64 }
+		ChildrenTotal int `json:"children_total"`
+	}
+	json.Unmarshal(adminCall(t, h, token, "GET", path, 200), &detail)
+	if len(detail.Steps) != 200 || detail.StepsTotal != 250 || detail.Steps[0].Seq != 51 || detail.Steps[199].Seq != 250 {
+		t.Fatalf("the latest 200 of 250 steps, in order: %d of %d, seq %d to %d", len(detail.Steps), detail.StepsTotal, detail.Steps[0].Seq, detail.Steps[len(detail.Steps)-1].Seq)
+	}
+	var newest int64
+	db.QueryRow(`SELECT max(id) FROM workflow_runs WHERE parent_run_id=$1`, run).Scan(&newest)
+	if len(detail.Children) != 200 || detail.ChildrenTotal != 250 || detail.Children[199].ID != newest || detail.Children[0].ID != newest-199 {
+		t.Fatalf("the newest 200 of 250 child runs, in order: %d of %d", len(detail.Children), detail.ChildrenTotal)
+	}
+	json.Unmarshal(adminCall(t, h, token, "GET", path+"?steps=2000", 200), &detail)
+	if len(detail.Steps) != 250 || detail.Steps[0].Seq != 1 {
+		t.Fatalf("asked for more, every step: %d", len(detail.Steps))
+	}
+	adminCall(t, h, token, "GET", path+"?steps=0", 422)
+	adminCall(t, h, token, "GET", path+"?steps=2001", 422)
+}

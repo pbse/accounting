@@ -223,24 +223,36 @@ type adminStep struct {
 // parent, and, for a plan run, the approved plan so unreached nodes can be drawn too. Unless revealed,
 // free text is masked: payloads, errors, notes, and a plan's title, inputs, event keys and approval
 // text. Names of workflows and steps, states and times show.
+// A long run shows its latest steps and child runs, with how many it has in all: adminRunSteps of each, or up to
+// adminRunMaxSteps steps as ?steps asks.
+const adminRunSteps, adminRunMaxSteps = 200, 2000
+
 func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		problem(w, 404, "Run not found.")
 		return
 	}
+	window := adminRunSteps
+	if raw := r.URL.Query().Get("steps"); raw != "" {
+		if window, err = strconv.Atoi(raw); err != nil || window < 1 || window > adminRunMaxSteps {
+			problem(w, 422, fmt.Sprintf("steps is how many of the run's latest steps to show, 1 to %d.", adminRunMaxSteps))
+			return
+		}
+	}
 	reveal := r.URL.Query().Get("reveal") == "1"
 	var run adminRunRow
 	var input, output []byte
 	steps := []adminStep{}
 	var children, plan []byte
+	var stepsTotal, childrenTotal int
 	err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		row := tx.QueryRowContext(ctx, `SELECT `+adminRunColumns+`,r.input,r.output FROM workflow_runs r LEFT JOIN organizations o ON o.id=r.organization_id WHERE r.id=$1`, id)
 		if err := row.Scan(&run.ID, &run.Organization, &run.FirmName, &run.Workflow, &run.State, &run.WaitingOn, &run.StartedBy, &run.Error, &run.CreatedAt, &run.UpdatedAt, &run.FinishedAt, &run.ParentRunID, &run.PlanID, &input, &output); err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT key,seq,kind,state,attempts,retry_at::text,wake_at::text,waiting_on,error,actor,note,started_at::text,finished_at::text,child_run_id,COALESCE(input->>'activity',''),input,output
- FROM workflow_steps WHERE run_id=$1 ORDER BY seq`, id)
+		rows, err := tx.QueryContext(ctx, `SELECT * FROM (SELECT key,seq,kind,state,attempts,retry_at::text,wake_at::text,waiting_on,error,actor,note,started_at::text,finished_at::text,child_run_id,COALESCE(input->>'activity',''),input,output
+ FROM workflow_steps WHERE run_id=$1 ORDER BY seq DESC LIMIT $2) s ORDER BY seq`, id, window)
 		if err != nil {
 			return err
 		}
@@ -258,8 +270,10 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			return err
 		}
 		return tx.QueryRowContext(ctx, `SELECT
- COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'parent_step',parent_step) ORDER BY id) FROM workflow_runs WHERE parent_run_id=$1),'[]'::jsonb),
- COALESCE((SELECT jsonb_build_object('id',p.id,'title',p.title,'state',p.state,'source',p.source,'plan',p.plan) FROM workflow_plans p WHERE p.id=$2),'null'::jsonb)`, id, run.PlanID).Scan(&children, &plan)
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'parent_step',parent_step) ORDER BY id)
+  FROM (SELECT id,workflow,state,parent_step FROM workflow_runs WHERE parent_run_id=$1 ORDER BY id DESC LIMIT $3) c),'[]'::jsonb),
+ COALESCE((SELECT jsonb_build_object('id',p.id,'title',p.title,'state',p.state,'source',p.source,'plan',p.plan) FROM workflow_plans p WHERE p.id=$2),'null'::jsonb),
+ (SELECT count(*) FROM workflow_steps WHERE run_id=$1),(SELECT count(*) FROM workflow_runs WHERE parent_run_id=$1)`, id, run.PlanID, adminRunSteps).Scan(&children, &plan, &stepsTotal, &childrenTotal)
 	})
 	if err != nil {
 		adminWorkflowProblem(w, err, "run")
@@ -329,7 +343,7 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		registered = true
 	}
 	jsonReply(w, 200, map[string]any{"run": run, "input": json.RawMessage(nonNull(input)), "output": json.RawMessage(nonNull(output)), "steps": steps,
-		"children": json.RawMessage(children), "plan": json.RawMessage(plan), "registered": registered, "revealed": reveal})
+		"steps_total": stepsTotal, "children": json.RawMessage(children), "children_total": childrenTotal, "plan": json.RawMessage(plan), "registered": registered, "revealed": reveal})
 }
 
 func lookupDefinition(name string) *wf.Definition {
