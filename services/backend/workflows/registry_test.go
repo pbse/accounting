@@ -34,3 +34,29 @@ func TestEveryDirectoryRegistersItsWorkflow(t *testing.T) {
 		}
 	}
 }
+
+// The same holds for activities: each directory under activities/ registers the activity named after it.
+func TestEveryActivityDirectoryRegistersItsActivity(t *testing.T) {
+	entries, err := os.ReadDir("../activities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directories := map[string]bool{}
+	for _, entry := range entries {
+		if files, _ := filepath.Glob(filepath.Join("../activities", entry.Name(), "*.go")); entry.IsDir() && entry.Name() != "testdata" && len(files) > 0 {
+			directories[entry.Name()] = true
+		}
+	}
+	registered := map[string]bool{}
+	for _, activity := range wf.Activities() {
+		registered[activity.Name] = true
+		if !directories[activity.Name] {
+			t.Errorf("activity %q is not defined in activities/%s", activity.Name, activity.Name)
+		}
+	}
+	for name := range directories {
+		if !registered[name] {
+			t.Errorf("activities/%s does not register an activity named %q (run go generate ./workflows)", name, name)
+		}
+	}
+}

@@ -5,6 +5,7 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY workflows ./workflows
+COPY activities ./activities
 RUN CGO_ENABLED=0 go build -trimpath -o /api ./cmd/api && CGO_ENABLED=0 go build -trimpath -o /worker ./cmd/worker
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates poppler-utils tesseract-ocr tesseract-ocr-eng util-linux && rm -rf /var/lib/apt/lists/*

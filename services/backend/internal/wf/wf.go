@@ -101,6 +101,8 @@ type Definition struct {
 	Name, Title, Description string
 	Triggers                 []Trigger
 	Input, Output            reflect.Type
+	InputSchema              map[string]any // for start forms and plan inputs
+	OutputSchema             map[string]any
 }
 
 type workflow struct {
@@ -122,7 +124,7 @@ func Define[I, O any](s Spec[I, O]) Definition {
 	if !namePattern.MatchString(s.Name) || s.Run == nil || strings.TrimSpace(s.Title) == "" {
 		panic(fmt.Sprintf("wf: invalid workflow definition %q", s.Name))
 	}
-	d := Definition{Name: s.Name, Title: s.Title, Description: s.Description, Triggers: slices.Clone(s.Triggers), Input: reflect.TypeFor[I](), Output: reflect.TypeFor[O]()}
+	d := Definition{Name: s.Name, Title: s.Title, Description: s.Description, Triggers: slices.Clone(s.Triggers), Input: reflect.TypeFor[I](), Output: reflect.TypeFor[O](), InputSchema: Schema(reflect.TypeFor[I]()), OutputSchema: Schema(reflect.TypeFor[O]())}
 	if len(d.Triggers) == 0 {
 		d.Triggers = []Trigger{Manual()}
 	}
@@ -139,7 +141,17 @@ func Define[I, O any](s Spec[I, O]) Definition {
 		return in, nil
 	}
 	w := &workflow{Definition: d}
-	w.validate = func(raw json.RawMessage) error { _, err := decode(raw, true); return err }
+	// Strict: unknown fields and missing required fields are refused, so hand-written input (plans,
+	// start forms) is caught before it runs.
+	w.validate = func(raw json.RawMessage) error {
+		if _, err := decode(raw, true); err != nil {
+			return err
+		}
+		if err := checkRequired(d.InputSchema, raw); err != nil {
+			return fmt.Errorf("invalid input for %s: %w", s.Name, err)
+		}
+		return nil
+	}
 	for _, trigger := range d.Triggers {
 		if err := trigger.check(w.validate); err != nil {
 			panic(fmt.Sprintf("wf: workflow %q: %v", s.Name, err))
