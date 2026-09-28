@@ -149,16 +149,13 @@ func (run *adminRunRow) maskText() {
 }
 
 // maskKey masks an event key. A code workflow names the key's topic, the part before the first ":",
-// and often builds the rest from its input, so only the topic shows. A plan writes the whole key,
-// possibly from client data, so none of it shows.
+// and often builds the rest from its input, so only the topic shows; a key with no topic is masked
+// whole. A plan writes the whole key, possibly from client data, so none of it shows.
 func (run *adminRunRow) maskKey(key string) string {
-	if run.PlanID != nil {
-		return maskText(key)
-	}
-	if topic, rest, ok := strings.Cut(key, ":"); ok && rest != "" {
+	if topic, _, ok := strings.Cut(key, ":"); ok && run.PlanID == nil {
 		return topic + ":••••"
 	}
-	return key
+	return maskText(key)
 }
 
 func adminRuns(w http.ResponseWriter, r *http.Request, db *sql.DB) {

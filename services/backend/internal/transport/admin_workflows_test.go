@@ -268,6 +268,23 @@ func TestReadOnlyStaffCannotActOrReveal(t *testing.T) {
 	adminJSON(t, h, sign(staffOrg, "platform:read", "platform:operate"), "GET", "/v1/admin/workflows/runs/"+jsonNumber(float64(run))+"?reveal=1", "", 403, "X-Access-Reason", "curious")
 }
 
+func TestEventKeysShowOnlyTheirTopic(t *testing.T) {
+	code, plan := &adminRunRow{}, &adminRunRow{PlanID: new(int64)}
+	for _, c := range []struct {
+		run       *adminRunRow
+		key, want string
+	}{
+		{code, "client_request.replied:42", "client_request.replied:••••"},
+		{code, "Acme Payroll", "••••"},
+		{code, "", ""},
+		{plan, "reply:42", "••••"},
+	} {
+		if got := c.run.maskKey(c.key); got != c.want {
+			t.Errorf("maskKey(%q) = %q, want %q", c.key, got, c.want)
+		}
+	}
+}
+
 func mustString(v any) string { raw, _ := json.Marshal(v); return string(raw) }
 
 func jsonNumber(f float64) string { raw, _ := json.Marshal(int64(f)); return string(raw) }
