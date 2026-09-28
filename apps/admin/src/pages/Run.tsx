@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { usePermissions } from "../App";
 import { get, post, when } from "../api";
@@ -72,12 +72,19 @@ export function Run() {
     setDetail(undefined);
     setReveal(undefined);
   }, [id]);
+  // Only the latest request may update the page, so a slow revealed answer cannot reappear after
+  // Hide or on another run.
+  const latest = useRef(0);
   const load = useCallback(async () => {
+    const request = ++latest.current;
     try {
       const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${reveal ? "?reveal=1" : ""}`;
-      setDetail(await get<Detail>(path, reveal ? { "X-Access-Reason": reveal } : {}));
+      const next = await get<Detail>(path, reveal ? { "X-Access-Reason": reveal } : {});
+      if (request !== latest.current) return;
+      setDetail(next);
       setError("");
     } catch (e) {
+      if (request !== latest.current) return;
       setError((e as Error).message);
       setDetail(undefined);
       setReveal(undefined);
@@ -85,6 +92,9 @@ export function Run() {
   }, [id, reveal]);
   useEffect(() => {
     load();
+    return () => {
+      latest.current++;
+    };
   }, [load]);
   // Follow an active run every 3 seconds; a reveal is audited, so it is read once, not polled.
   const running = detail && active.includes(detail.run.state);
@@ -178,7 +188,7 @@ export function Run() {
       <section>
         <h2>Input and output</h2>
         {detail.revealed ? (
-          <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={() => { setDetail(undefined); setReveal(undefined); }}>Hide it</button></p>
+          <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={() => { latest.current++; setDetail(undefined); setReveal(undefined); }}>Hide it</button></p>
         ) : (
           <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal(reason)} />
         )}
