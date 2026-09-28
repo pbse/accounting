@@ -28,7 +28,10 @@ func registerAdminFirms(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("POST /v1/admin/firms/{id}/invitations/{invitation}/revoke", route(platformOperate, adminRevokeInvitation))
 }
 
-var errInvitationClosed = errors.New("only an open invitation can be revoked")
+var (
+	errInvitationClosed = errors.New("only an open invitation can be revoked")
+	errNotAMember       = errors.New("this person is not a member of the firm")
+)
 
 // adminFirmProblem answers a failed firm read or action.
 func adminFirmProblem(w http.ResponseWriter, err error, what string) {
@@ -43,6 +46,8 @@ func adminFirmProblem(w http.ResponseWriter, err error, what string) {
 		problem(w, 409, "This person's access changed since you loaded it. Refresh and decide again.")
 	case errors.Is(err, errInvitationClosed):
 		problem(w, 409, "Only an open invitation can be revoked. Refresh the list.")
+	case errors.Is(err, errNotAMember):
+		problem(w, 409, "This person is not a member of the firm. Refresh the list.")
 	default:
 		log.Printf("Admin %s failed: %v", what, err)
 		problem(w, 503, "The "+what+" could not be completed. Refresh and try again.")
@@ -284,11 +289,19 @@ func adminRevokeMember(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "member.revoke", TargetType: "member", TargetID: member, Reason: strings.TrimSpace(in.Reason), Request: map[string]string{"previous_id": in.PreviousID}},
 		func(ctx context.Context, tx *sql.Tx) error {
 			// The firm's row lock serializes this with the firm's own member changes.
-			var enabled bool
+			var enabled, granted bool
 			if err := tx.QueryRowContext(ctx, `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, firm).Scan(&enabled); err != nil {
 				return err
 			}
-			_, err := decideMemberAccess(ctx, tx, firm, member, false, in.PreviousID, strings.TrimSpace(in.Reason), by)
+			// Only a current member can be revoked; this route never creates a membership record for anyone else.
+			err := tx.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, firm, member).Scan(&granted)
+			if errors.Is(err, sql.ErrNoRows) || (err == nil && !granted) {
+				return errNotAMember
+			}
+			if err != nil {
+				return err
+			}
+			_, err = decideMemberAccess(ctx, tx, firm, member, false, in.PreviousID, strings.TrimSpace(in.Reason), by)
 			return err
 		})
 	if err != nil {

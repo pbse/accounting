@@ -85,10 +85,16 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 		t.Fatal(err)
 	}
 	adminJSON(t, h, token, "POST", base+"/members/user_leaver/revoke", `{"previous_id":"1","reason":"Left the firm last Friday"}`, 409)
+	adminJSON(t, h, token, "POST", base+"/members/user_stranger/revoke", `{"previous_id":"","reason":"Never belonged to the firm"}`, 409)
 	adminJSON(t, h, token, "POST", base+"/members/user_leaver/revoke", `{"previous_id":"`+current+`","reason":"Left the firm last Friday"}`, 200)
 	var granted bool
 	if db.QueryRow(`SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject='user_leaver'`, firm).Scan(&granted); granted {
 		t.Fatal("the member must be revoked")
+	}
+	adminJSON(t, h, token, "POST", base+"/members/user_leaver/revoke", `{"previous_id":"`+current+`","reason":"Left the firm last Friday"}`, 409)
+	var strangers int
+	if db.QueryRow(`SELECT count(*) FROM organization_member_access WHERE organization_id=$1 AND subject='user_stranger'`, firm).Scan(&strangers); strangers != 0 {
+		t.Fatal("revoking a stranger must not record anything")
 	}
 
 	// An open invitation is revoked once.

@@ -64,7 +64,7 @@ type Person = {
 };
 type Invitation = { id: string; email: string; role: string; state: string; invited_by: string; created_at: string; expires_at: string | null; decided_at: string | null };
 
-export function FirmPeople({ firm }: { firm: string }) {
+export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () => void }) {
   const people = useRevealable<{ people: Person[]; invitations: Invitation[]; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/people`);
   const operate = usePermissions().includes("platform:operate");
   const base = `/v1/admin/firms/${encodeURIComponent(firm)}`;
@@ -98,6 +98,7 @@ export function FirmPeople({ firm }: { firm: string }) {
                             <ActionForm label="Revoke membership" danger allowed={operate} minLength={10} onSubmit={async (reason) => {
                               await post(`${base}/members/${encodeURIComponent(p.subject)}/revoke`, { previous_id: p.id, reason });
                               people.reload();
+                              onChanged();
                             }} />
                           </details>
                         )}

@@ -42,7 +42,7 @@ export function Firm() {
           </nav>
           {/* Keyed by firm, so a reveal never carries over to another firm. */}
           {tab === "" && <Overview key={id} detail={firm.data} reload={firm.reload} />}
-          {tab === "people" && <FirmPeople key={id} firm={id} />}
+          {tab === "people" && <FirmPeople key={id} firm={id} onChanged={firm.reload} />}
           {tab === "activity" && <FirmActivity key={id} firm={id} />}
           {tab === "audit" && <FirmAudit key={id} firm={id} />}
         </>
