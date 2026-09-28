@@ -689,29 +689,41 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			return true, err
 		}
 		// Facts the source and the ledger both show advance to a draft under the firm's procedure; anything else waits for a person.
-		procedure, e := CurrentProcedure(persist, finish, closeID, "prepaid")
-		if e != nil && e != sql.ErrNoRows {
-			return true, e
-		}
-		ledger, e := CloseLedger(persist, finish, closeID)
-		if e != nil {
-			return true, e
-		}
-		invoice := ""
-		for _, s := range selected {
-			if s.ID == primary {
-				invoice = s.Content
+		// The procedure, the capture and the aliases are read here, in the finishing transaction, and only for a proposal that could qualify.
+		var plan Plan
+		reason := "only an agent-read prepaid invoice with no open questions and no unused evidence can be prepared without confirmation"
+		if proposal.Kind == "prepaid" && proposal.Engine == "openai" && len(proposal.Questions) == 0 && len(proposal.Unselected) == 0 {
+			procedure, e := CurrentProcedure(persist, finish, closeID, "prepaid")
+			if e != nil && e != sql.ErrNoRows {
+				return true, e
+			}
+			ledger, e := CloseLedger(persist, finish, closeID)
+			if e != nil {
+				return true, e
+			}
+			current, e := ClientAliases(persist, finish, closeID)
+			if e != nil {
+				return true, e
+			}
+			invoice := ""
+			for _, s := range selected {
+				if s.ID == primary {
+					invoice = s.Content
+				}
+			}
+			var unread bool
+			if err = finish.QueryRowContext(persist, `SELECT EXISTS(SELECT 1 FROM evidence WHERE close_id=$1 AND purpose='work' AND superseded_by IS NULL AND extraction_state<>'ready')`, closeID).Scan(&unread); err != nil {
+				return true, err
+			}
+			home := ""
+			if profile.State == "detected" {
+				home = profile.Currency
+			}
+			plan, reason = StraightThrough(proposal, invoice, current, procedure, home, entity, period, id, unread, ledger)
+			if reason == "" {
+				straight = "Prepared without confirmation: every fact is one verified candidate, procedure v" + procedure.ID + " fixes the method and accounts, and one captured bill from its vendor expenses the amount."
 			}
 		}
-		var unread bool
-		if err = finish.QueryRowContext(persist, `SELECT EXISTS(SELECT 1 FROM evidence WHERE close_id=$1 AND purpose='work' AND superseded_by IS NULL AND extraction_state<>'ready')`, closeID).Scan(&unread); err != nil {
-			return true, err
-		}
-		home := ""
-		if profile.State == "detected" {
-			home = profile.Currency
-		}
-		plan, reason := StraightThrough(proposal, invoice, aliases, procedure, home, entity, period, id, unread, ledger)
 		if reason == "" {
 			// The same policy check the preparation worker applies, so a draft the firm's basis or procedure refuses waits for a person instead of failing later.
 			body, _ := Calculate(plan, entity, period)
@@ -719,12 +731,14 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 				reason = e.Error()
 			}
 		}
-		straight = "Waiting for a person: " + reason + "."
+		if reason != "" {
+			straight = "Waiting for a person: " + reason + "."
+		}
 		if reason == "" {
 			if err = queueStraightThrough(persist, finish, id, plan); err != nil {
 				return true, err
 			}
-			state, straight = "queued", "Prepared without confirmation: every fact is one verified candidate, procedure v"+procedure.ID+" fixes the method and accounts, and one captured bill from its vendor expenses the amount."
+			state = "queued"
 		}
 	}
 	checkpointBody, _ := json.Marshal(map[string]any{"stage": state, "inventory_digest": digest, "selected_ids": selectedIDs(selected), "attempt": attempts + 1, "input_tokens": proposal.InputTokens, "output_tokens": proposal.OutputTokens, "straight_through": straight})

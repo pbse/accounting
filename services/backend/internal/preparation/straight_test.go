@@ -34,21 +34,23 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		if kind == "Purchase" {
 			who = "EntityRef"
 		}
-		record, _ := json.Marshal(map[string]any{"DocNumber": number, who: map[string]string{"Name": vendor}, "Line": []map[string]any{{"Amount": json.Number(amount), detail: map[string]any{"AccountRef": map[string]string{"Name": account}}}}})
+		record, _ := json.Marshal(map[string]any{"DocNumber": number, "TotalAmt": json.Number(amount), who: map[string]string{"Name": vendor}, "Line": []map[string]any{{"Amount": json.Number(amount), detail: map[string]any{"AccountRef": map[string]string{"Name": account}}}}})
 		return LedgerRow{Kind: kind, ProviderID: id, Date: date, Currency: "USD", Record: record}
 	}
 	bill := row("Bill", "41", "2026-09-03", "Acme Insurance Co", "INV-778", "Insurance", "1200")
 	split := bill
-	split.Record, _ = json.Marshal(map[string]any{"DocNumber": "INV-778", "VendorRef": map[string]string{"Name": "Acme Insurance Co"}, "Line": []map[string]any{{"Amount": json.Number("1200"), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"Name": "Insurance"}}}, {"Amount": json.Number("300"), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"Name": "Prepaid Expenses"}}}}})
+	split.Record, _ = json.Marshal(map[string]any{"DocNumber": "INV-778", "TotalAmt": json.Number("1500"), "VendorRef": map[string]string{"Name": "Acme Insurance Co"}, "Line": []map[string]any{{"Amount": json.Number("1200"), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"Name": "Insurance"}}}, {"Amount": json.Number("300"), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"Name": "Prepaid Expenses"}}}}})
 	refund := row("Purchase", "74", "2026-09-12", "Acme Insurance Co", "", "Insurance", "100")
 	refund.Record = json.RawMessage(strings.Replace(string(refund.Record), `{"DocNumber"`, `{"Credit":true,"DocNumber"`, 1))
 	line := func(account, amount string) map[string]any {
 		return map[string]any{"Amount": json.Number(amount), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"Name": account}}}
 	}
 	discounted, twoAccounts, totalOff := bill, bill, bill
-	discounted.Record, _ = json.Marshal(map[string]any{"DocNumber": "INV-778", "VendorRef": map[string]string{"Name": "Acme Insurance Co"}, "Line": []map[string]any{line("Insurance", "1200"), line("Insurance", "-100")}})
-	twoAccounts.Record, _ = json.Marshal(map[string]any{"DocNumber": "INV-778", "VendorRef": map[string]string{"Name": "Acme Insurance Co"}, "Line": []map[string]any{line("Insurance", "1200"), line("Travel", "40")}})
+	discounted.Record, _ = json.Marshal(map[string]any{"DocNumber": "INV-778", "TotalAmt": json.Number("1100"), "VendorRef": map[string]string{"Name": "Acme Insurance Co"}, "Line": []map[string]any{line("Insurance", "1200"), line("Insurance", "-100")}})
+	twoAccounts.Record, _ = json.Marshal(map[string]any{"DocNumber": "INV-778", "TotalAmt": json.Number("1240"), "VendorRef": map[string]string{"Name": "Acme Insurance Co"}, "Line": []map[string]any{line("Insurance", "1200"), line("Travel", "40")}})
 	totalOff.Record, _ = json.Marshal(map[string]any{"DocNumber": "INV-778", "TotalAmt": json.Number("1100"), "VendorRef": map[string]string{"Name": "Acme Insurance Co"}, "Line": []map[string]any{line("Insurance", "1200")}})
+	noTotal := bill
+	noTotal.Record = json.RawMessage(`{"DocNumber":"INV-778","VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"name":"Insurance"}}}]}`)
 	foreign := row("JournalEntry", "65", "2026-09-30", "", "", "Insurance", "900")
 	foreign.Currency = "CAD"
 	ledger := func(rows ...LedgerRow) *Ledger {
@@ -82,7 +84,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		t.Fatal("confirmed alias not accepted", reason)
 	}
 	idOnly := bill
-	idOnly.Record = json.RawMessage(`{"DocNumber":"INV-778","VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)
+	idOnly.Record = json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)
 	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(idOnly)); reason != "" {
 		t.Fatal("bill line naming its account by ID only not accepted", reason)
 	}
@@ -104,6 +106,9 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"unnamed account on a credit":    {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
 		"amount cited from support":      {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
 		"line-less card credit":          {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"negative printed amount":        {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Credit note total -1,200.00" }, ledger(bill), false},
+		"bracketed printed amount":       {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Adjustment (USD 1,200.00)" }, ledger(bill), false},
+		"bill without a total":           {func(*Proposal, *Procedure) {}, ledger(noTotal), false},
 		"billed-to inside another name":  {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Bill to: OtherExample" }, ledger(bill), false},
 		"invoice date cited as number":   {func(p *Proposal, _ *Procedure) { p.Facts[9].Candidates[0].Quote = "Invoice date: INV-778" }, ledger(bill), false},
 		"vendor on a later deposit line": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "84", Date: "2026-09-15", Record: json.RawMessage(`{"Line":[{"Amount":5,"DepositLineDetail":{"AccountRef":{"name":"Bank"},"Entity":{"Name":"Someone"}}},{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Bank"},"Entity":{"Name":"Acme Insurance Co"}}}]}`)}), false},

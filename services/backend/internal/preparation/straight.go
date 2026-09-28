@@ -116,6 +116,11 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if err != nil || amount <= 0 {
 		return Plan{}, "the amount is not a positive money value"
 	}
+	for _, f := range p.Facts {
+		if f.Field == "amount" && negativeFigure(f.Candidates[0].Quote, amount) {
+			return Plan{}, "the invoice prints the amount as a negative or bracketed figure"
+		}
+	}
 	booking, reason := expensedLine(ledger, invoice, facts["vendor"], facts["invoice_number"], prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
 	if reason != "" {
 		return Plan{}, reason
@@ -227,7 +232,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			continue
 		}
 		total, err := prepaids.Amount(record.TotalAmt.String())
-		if other || prepaids.Money(expensed) != amount || (record.TotalAmt != "" && (err != nil || prepaids.Money(total) != amount)) {
+		if other || prepaids.Money(expensed) != amount || err != nil || prepaids.Money(total) != amount {
 			return "", "a captured " + row.Kind + " for this invoice does not book exactly its amount to the expense account"
 		}
 		matches++
@@ -245,6 +250,14 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 type accountRef struct {
 	Value string `json:"value"`
 	Name  string `json:"name"`
+}
+
+// negativeFigure reports whether the quote prints the amount preceded by a minus sign or an opening bracket, which
+// the quote check ignores: a credit is not an invoice.
+func negativeFigure(quote string, cents int64) bool {
+	plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "").Replace(strings.ToLower(quote))
+	digits := fmt.Sprintf(`%d(\.%02d)?`, cents/100, cents%100)
+	return regexp.MustCompile(`[-(]\s*(usd|eur|gbp|cad|aud)?\s*` + digits + `([^0-9]|$)`).MatchString(plain)
 }
 
 // lineSays reports whether the quoted line ending with the value contains one of the words that give it its meaning
