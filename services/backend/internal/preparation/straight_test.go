@@ -126,6 +126,9 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if _, reason = StraightThrough(proposal, invoice+"\nDiscount USD 100.00\nTotal USD 1,100.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared a line item when the invoice prints a discount and a lower total")
 	}
+	if _, reason = StraightThrough(proposal, invoice+"\nDue date: 2026-09-30\nPayment due 2026-10-01", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+		t.Fatal("an invoice with due-date lines refused", reason)
+	}
 	if _, reason = StraightThrough(proposal, invoice+"\nTotal: to be determined", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared an invoice whose total line prints no figure")
 	}
@@ -250,6 +253,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 			p.Facts[0].Candidates[0].Quote = "Currency: USD\nTotal $1,200.00"
 			p.Facts[3].Candidates[0].Quote = "Currency: USD\nTotal $1,200.00"
 		}, ledger(bill), false},
+		"remit-to cited as vendor":     {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates[0].Quote = "Remit to: Acme Insurance Co" }, ledger(bill), false},
 		"payment-from cited as vendor": {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates[0].Quote = "Payment from: Acme Insurance Co" }, ledger(bill), false},
 		"bare from cited as vendor":    {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates[0].Quote = "From: Acme Insurance Co" }, ledger(bill), false},
 		"processor cited as vendor": {func(p *Proposal, _ *Procedure) {

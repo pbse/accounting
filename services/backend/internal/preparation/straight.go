@@ -455,6 +455,11 @@ func ProcedurePinned(p Plan, current Procedure) error {
 	return nil
 }
 
+// printsDate reports whether a line prints a date in numeric form.
+func printsDate(line string) bool {
+	return regexp.MustCompile(`\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{2,4}|\d{1,2}\.\d{1,2}\.\d{4}`).MatchString(line)
+}
+
 // totalDisagrees reports why the invoice's own total, due or payable lines do not support the cited amount: a discount
 // anywhere, or such a line printing a different or negative figure.
 func totalDisagrees(invoice string, cents int64) string {
@@ -464,7 +469,10 @@ func totalDisagrees(invoice string, cents int64) string {
 			return "the invoice prints a discount; the payable total needs a person"
 		}
 		// A total, due or payable line states what is owed; a subtotal does not.
-		payable := (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total")) || strings.Contains(normal, " due") || strings.HasPrefix(normal, "due") || strings.Contains(normal, "payable")
+		// A due date is a date, not an amount due: a due line counts only when it prints no date and either prints a money
+		// figure or calls itself an amount or balance ("Amount due 1300").
+		dueAmount := (strings.Contains(normal, " due") || strings.HasPrefix(normal, "due")) && !strings.Contains(normal, "date") && !printsDate(line) && (moneyFigures(line) > 0 || strings.Contains(normal, "amount") || strings.Contains(normal, "balance"))
+		payable := (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total")) || dueAmount || strings.Contains(normal, "payable")
 		if !payable {
 			continue
 		}
@@ -506,7 +514,7 @@ func distinctFigures(invoice string) map[int64]bool {
 func totalLineShows(invoice string, cents int64) bool {
 	for _, line := range strings.Split(invoice, "\n") {
 		normal := documents.NormalizeEntity(line)
-		if (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total") || strings.Contains(normal, " due") || strings.Contains(normal, "payable")) && distinctFigures(line)[cents] {
+		if (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total") || (strings.Contains(normal, " due") && !strings.Contains(normal, "date")) || strings.Contains(normal, "payable")) && distinctFigures(line)[cents] {
 			return true
 		}
 	}
@@ -601,10 +609,10 @@ func issuerLine(quote, value, invoice string) bool {
 		// invoice's first, its letterhead. A bare name anywhere else (a footer, a payment line) proves nothing.
 		// "Payment from" is not "invoice from".
 		ok := label == "" && normal == letterhead
-		for _, l := range []string{"invoice from", "bill from", "issued by", "billed by", "invoiced by", "vendor", "vendor name", "supplier", "supplier name", "seller", "provider", "issuer", "remit to"} {
+		for _, l := range []string{"invoice from", "bill from", "issued by", "billed by", "invoiced by", "vendor", "vendor name", "supplier", "supplier name", "seller", "provider", "issuer"} {
 			ok = ok || label == l
 		}
-		for _, word := range []string{"payment", "processor", "pay to", "payable", "bill to", "billed to", "sold to", "ship", "customer", "client", "contact", "agent", "broker", "via", "online", "care of", "attn"} {
+		for _, word := range []string{"payment", "processor", "pay to", "payable", "remit", "bill to", "billed to", "sold to", "ship", "customer", "client", "contact", "agent", "broker", "via", "online", "care of", "attn"} {
 			ok = ok && !strings.Contains(label, word)
 		}
 		if ok {
