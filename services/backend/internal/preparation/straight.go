@@ -159,14 +159,14 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			Credit               bool
 			DocNumber            string
 			TotalAmt             json.Number
-			VendorRef, EntityRef struct{ Name string }
+			VendorRef, EntityRef accountRef
 			Line                 []struct {
 				Amount                        json.Number
 				AccountBasedExpenseLineDetail *struct{ AccountRef accountRef }
 				JournalEntryLineDetail        *struct{ AccountRef accountRef }
 				DepositLineDetail             *struct {
 					AccountRef accountRef
-					Entity     struct{ Name string }
+					Entity     accountRef
 				}
 			}
 		}
@@ -176,6 +176,10 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		party := record.VendorRef.Name
 		if party == "" {
 			party = record.EntityRef.Name
+		}
+		// A credit whose counterparty carries only an ID may be this vendor's; nothing here can tell.
+		if party == "" && (record.VendorRef.Value != "" || record.EntityRef.Value != "") && (row.Kind == "VendorCredit" || record.Credit) {
+			return "", "a captured " + row.Kind + " in the close month does not name its counterparty"
 		}
 		mentioned := printed(text, party)
 		fromVendor := party != "" && strings.EqualFold(party, vendor)
@@ -207,6 +211,9 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 				return "", "a journal in the close month posts to the expense or prepaid account"
 			}
 			if line.DepositLineDetail != nil {
+				if line.DepositLineDetail.Entity.Name == "" && line.DepositLineDetail.Entity.Value != "" {
+					return "", "a captured Deposit in the close month does not name a counterparty"
+				}
 				from := line.DepositLineDetail.Entity.Name
 				mentioned, fromVendor = mentioned || printed(text, from), fromVendor || (from != "" && strings.EqualFold(from, vendor))
 			}
