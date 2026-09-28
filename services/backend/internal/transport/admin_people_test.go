@@ -97,6 +97,13 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	if byEmail := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+email, "", 200)["invitations"]); !strings.Contains(byEmail, `"state":"pending"`) {
 		t.Fatalf("the person's invitations are listed: %s", byEmail)
 	}
+	// Their firms' invitations are reconciled first, as the firm's own list does: a pending one past its expiry expires.
+	must(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,$2,'member','Member',$3,'pending','user_owner','Joining the team last month',now()-interval '1 day')`, other, email, "invitation_"+rand.Text())
+	adminJSON(t, h, token, "GET", "/v1/admin/people?q="+email, "", 200)
+	var stale int
+	if db.QueryRow(`SELECT count(*) FROM member_invitations WHERE organization_id=$1 AND state='pending'`, other).Scan(&stale); stale != 0 {
+		t.Fatal("a pending invitation past its expiry must be expired before it is listed")
+	}
 	adminJSON(t, h, token, "GET", "/v1/admin/people?q=ab", "", 422)
 	adminJSON(t, h, token, "GET", "/v1/admin/people?q=Acme+Payroll", "", 422)
 	if nobody := adminJSON(t, h, token, "GET", "/v1/admin/people?q=user_nobody", "", 200); len(nobody["users"].([]any)) != 0 {

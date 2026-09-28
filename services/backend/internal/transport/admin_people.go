@@ -143,6 +143,11 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			ids = append(ids, p.ID)
 		}
 	}
+	// As the firm's own list does: expire and settle the firms' invitations first, so staff act on their real state.
+	if err := reconcilePersonInvitations(context.WithValue(r.Context(), systemKey{}, true), db, email, ids); err != nil {
+		adminFirmProblem(w, err, "invitation check")
+		return
+	}
 	var memberships, invitations, firms []byte
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		orgs := []string{}
@@ -180,6 +185,32 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		}
 	}
 	jsonReply(w, 200, map[string]any{"query": q, "workos": state, "users": people, "memberships": json.RawMessage(memberships), "invitations": json.RawMessage(invitations)})
+}
+
+// reconcilePersonInvitations runs reconcileInvitations for each firm that invited this person.
+func reconcilePersonInvitations(ctx context.Context, db *sql.DB, email string, ids []string) error {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT organization_id FROM member_invitations WHERE ($1<>'' AND email=$1) OR subject=ANY(string_to_array($2,','))`, email, strings.Join(ids, ","))
+	if err != nil {
+		return err
+	}
+	firms := []string{}
+	for rows.Next() {
+		var firm string
+		if err = rows.Scan(&firm); err != nil {
+			rows.Close()
+			return err
+		}
+		firms = append(firms, firm)
+	}
+	if rows.Close(); rows.Err() != nil {
+		return rows.Err()
+	}
+	for _, firm := range firms {
+		if err = reconcileInvitations(ctx, db, firm); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // adminRevokeSessions signs a person out everywhere: the app's own sessions (AUTH_SESSION=server) end with the audited
