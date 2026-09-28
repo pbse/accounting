@@ -19,8 +19,10 @@ export function HistoricalExports({ closeId }: { closeId: string }) {
   const load = () =>
     Promise.all([workspaceRequest(`/${closeId}/historical-exports`), workspaceRequest(`/${closeId}/evidence`)])
       .then(([data, evidence]) => {
+        const current = (evidence as File[]).filter((f) => !f.superseded_by && f.purpose !== "procedure");
         setLabel(data.label);
-        setFiles((evidence as File[]).filter((f) => !f.superseded_by && f.purpose !== "procedure"));
+        setFiles(current);
+        setChosen((ids) => ids.filter((id) => current.some((f) => f.id === id)));
       })
       .catch((e) => setMessage(e instanceof Error ? e.message : "Historical exports are unavailable."));
   useEffect(() => {
