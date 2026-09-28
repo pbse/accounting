@@ -10,6 +10,12 @@ services:
       VITE_WORKOS_API_HOSTNAME: ${WORKOS_API_HOSTNAME:-}
       VITE_PLATFORM_ORGANIZATION_ID: ${PLATFORM_ORGANIZATION_ID:-}
     ports: ["127.0.0.1:5173:5173"]
+    # Healthy once npm ci has finished and Vite answers, so services sharing node_modules can wait for it.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
     volumes:
       - .:/workspace
       - node_modules:/workspace/node_modules
@@ -28,7 +34,9 @@ services:
     volumes:
       - .:/workspace
       - node_modules:/workspace/node_modules
-    depends_on: [frontend]
+    depends_on:
+      frontend:
+        condition: service_healthy
   api:
     build: ./services/backend
     environment:

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,11 +144,14 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 	}
 	tx, err := db.BeginTx(acting, nil)
 	if err == nil {
-		defer tx.Rollback()
 		if err = fn(acting, tx); err == nil {
 			if err = record(acting, tx, "ok", ""); err == nil {
 				err = tx.Commit()
 			}
+		}
+		if err != nil {
+			// Release the action's locks first: the refusal's own insert may need the same firm row.
+			tx.Rollback()
 		}
 	}
 	if err != nil {
@@ -240,18 +244,30 @@ func scanFirm(row interface{ Scan(...any) error }) (adminFirmRow, error) {
 	return f, err
 }
 
-// adminFirms lists firms, newest first, optionally filtered by a fragment of the name or ID.
+// adminPage is how many rows a staff list returns at a time.
+const adminPage = 100
+
+// adminFirms lists firms, newest first, a page at a time, optionally filtered by a fragment of the
+// name or ID.
 func adminFirms(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
 	if len(search) > 200 {
 		problem(w, 422, "The search is too long.")
 		return
 	}
+	offset, err := strconv.Atoi(r.URL.Query().Get("offset"))
+	if r.URL.Query().Get("offset") == "" {
+		offset, err = 0, nil
+	}
+	if err != nil || offset < 0 || offset > 1_000_000 {
+		problem(w, 422, "The offset must be a whole number.")
+		return
+	}
 	firms := []adminFirmRow{}
-	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
+	err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT `+adminFirmColumns+` FROM organizations o
  WHERE o.id<>'local-development' AND ($1='' OR position(lower($1) in lower(o.name))>0 OR position(lower($1) in lower(o.id))>0)
- ORDER BY o.created_at DESC LIMIT 200`, search)
+ ORDER BY o.created_at DESC,o.id LIMIT $2 OFFSET $3`, search, adminPage+1, offset)
 		if err != nil {
 			return err
 		}
@@ -270,7 +286,11 @@ func adminFirms(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 503, "Firms are unavailable.")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"firms": firms})
+	more := len(firms) > adminPage
+	if more {
+		firms = firms[:adminPage]
+	}
+	jsonReply(w, 200, map[string]any{"firms": firms, "has_more": more, "next_offset": offset + len(firms)})
 }
 
 // adminFirm is one firm: its summary, members, recent workflow runs and latest health check.

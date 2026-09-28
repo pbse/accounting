@@ -29,9 +29,12 @@ ALTER TABLE platform_audit ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON platform_audit USING (current_setting('app.organization',true) IN ('*',organization_id));
 ALTER TABLE worker_heartbeats ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON worker_heartbeats USING (current_setting('app.organization',true)='*');
--- The audit log is append-only for the runtime role (grants follow the owner's default privileges).
-DO $$ DECLARE r record; BEGIN
- FOR r IN SELECT grantee FROM information_schema.role_table_grants WHERE table_schema='public' AND table_name='platform_audit' AND privilege_type IN ('UPDATE','DELETE') AND grantee<>current_user LOOP
-  EXECUTE format('REVOKE UPDATE, DELETE ON platform_audit FROM %I', r.grantee);
- END LOOP;
+-- The audit log is append-only for everyone, whatever table grants a later migration run hands out: a
+-- change to or removal of a recorded action is refused. A reviewed retention change would have to
+-- disable this trigger in its own migration.
+CREATE FUNCTION platform_audit_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ RAISE EXCEPTION 'platform_audit is append-only';
 END $$;
+CREATE TRIGGER platform_audit_append_only BEFORE UPDATE OR DELETE ON platform_audit FOR EACH ROW EXECUTE FUNCTION platform_audit_append_only();
+CREATE TRIGGER platform_audit_no_truncate BEFORE TRUNCATE ON platform_audit FOR EACH STATEMENT EXECUTE FUNCTION platform_audit_append_only();

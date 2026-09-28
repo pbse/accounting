@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -142,8 +143,7 @@ func TestAdminActionsRunAsTheFirmAndAreAudited(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Acted firm')`, firm); err != nil {
 		t.Fatal(err)
 	}
-	defer db.Exec(`DELETE FROM organizations WHERE id=$1`, firm)
-	defer db.Exec(`DELETE FROM platform_audit WHERE organization_id=$1`, firm)
+	// The audit log is append-only, so this firm and its audit rows stay behind, as they would in production.
 	ctx := context.WithValue(context.Background(), staffKey{}, &staffMember{Subject: "user_staff", Permissions: platformPermissions})
 	var actingAs, agent string
 	err := adminAct(ctx, db, adminAction{Firm: firm, Action: "test.touch", TargetType: "organization", TargetID: firm, Reason: "support ticket 42", Request: map[string]string{"note": "touch"}},
@@ -205,3 +205,76 @@ func TestFirmDetailShowsRunsAndTheLatestHealthCheck(t *testing.T) {
 }
 
 func mustJSON(v any) []byte { raw, _ := json.Marshal(v); return raw }
+
+func TestTheAuditLogCannotBeChangedOrErased(t *testing.T) {
+	db := adminDB(t)
+	firm := "org_Audited" + rand.Text()
+	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Audited firm')`, firm); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), staffKey{}, &staffMember{Subject: "user_staff", Permissions: platformPermissions})
+	if err := adminAct(ctx, db, adminAction{Firm: firm, Action: "test.recorded", Reason: "for the record"}, func(context.Context, *sql.Tx) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`UPDATE platform_audit SET reason='rewritten' WHERE organization_id=$1`, `DELETE FROM platform_audit WHERE organization_id=$1`} {
+		if _, err := db.Exec(q, firm); err == nil || !strings.Contains(err.Error(), "append-only") {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if _, err := db.Exec(`TRUNCATE platform_audit`); err == nil {
+		t.Fatal("the audit log must not be truncated")
+	}
+}
+
+func TestARefusedActionThatLockedTheFirmIsAuditedPromptly(t *testing.T) {
+	db := adminDB(t)
+	firm := "org_Locked" + rand.Text()
+	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Locked firm')`, firm); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), staffKey{}, &staffMember{Subject: "user_staff", Permissions: platformPermissions}), 10*time.Second)
+	defer cancel()
+	refused := errors.New("refused after locking")
+	err := adminAct(ctx, db, adminAction{Firm: firm, Action: "test.locked", Reason: "check the lock"}, func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, firm); err != nil {
+			return err
+		}
+		return refused
+	})
+	if !errors.Is(err, refused) || ctx.Err() != nil {
+		t.Fatalf("the refusal must be recorded without waiting on the action's own lock: %v %v", err, ctx.Err())
+	}
+	var n int
+	db.QueryRow(`SELECT count(*) FROM platform_audit WHERE organization_id=$1 AND result='refused'`, firm).Scan(&n)
+	if n != 1 {
+		t.Fatalf("refusals recorded: %d", n)
+	}
+}
+
+func TestTheFirmsListPagesInsteadOfTruncating(t *testing.T) {
+	db := adminDB(t)
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	token := strings.Repeat("d", 32)
+	prefix := "org_Page" + rand.Text()[:8]
+	for i := 0; i < 101; i++ {
+		if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Paged firm')`, fmt.Sprintf("%s%03d", prefix, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer db.Exec(`DELETE FROM organizations WHERE id LIKE $1`, prefix+"%")
+	h := apiWithStore(db, token)
+	var page struct {
+		Firms      []adminFirmRow
+		HasMore    bool `json:"has_more"`
+		NextOffset int  `json:"next_offset"`
+	}
+	json.Unmarshal(adminCall(t, h, token, "GET", "/v1/admin/firms?q="+prefix, 200), &page)
+	if len(page.Firms) != 100 || !page.HasMore || page.NextOffset != 100 {
+		t.Fatalf("first page: %d firms, more %v, next %d", len(page.Firms), page.HasMore, page.NextOffset)
+	}
+	json.Unmarshal(adminCall(t, h, token, "GET", fmt.Sprintf("/v1/admin/firms?q=%s&offset=%d", prefix, page.NextOffset), 200), &page)
+	if len(page.Firms) != 1 || page.HasMore {
+		t.Fatalf("second page: %d firms, more %v", len(page.Firms), page.HasMore)
+	}
+	adminCall(t, h, token, "GET", "/v1/admin/firms?offset=-1", 422)
+}

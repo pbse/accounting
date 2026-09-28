@@ -18,8 +18,13 @@ export type FirmRow = {
 export function Firms() {
   const [params, setParams] = useSearchParams();
   const query = params.get("q") ?? "";
+  const offset = Number(params.get("offset") ?? 0) || 0;
   const [draft, setDraft] = useState(query);
-  const firms = useResource<{ firms: FirmRow[] }>(`/v1/admin/firms${query ? `?q=${encodeURIComponent(query)}` : ""}`);
+  const search = new URLSearchParams();
+  if (query) search.set("q", query);
+  if (offset) search.set("offset", String(offset));
+  const firms = useResource<{ firms: FirmRow[]; has_more: boolean; next_offset: number }>(`/v1/admin/firms${search.size ? `?${search}` : ""}`);
+  const page = (next: number) => setParams({ ...(query ? { q: query } : {}), ...(next ? { offset: String(next) } : {}) });
   return (
     <>
       <div className="page-title">
@@ -66,6 +71,12 @@ export function Firms() {
                 ))}
               </tbody>
             </table>
+          )}
+          {(offset > 0 || firms.data.has_more) && (
+            <p className="title-actions">
+              {offset > 0 && <button onClick={() => page(0)}>First page</button>}
+              {firms.data.has_more && <button onClick={() => page(firms.data!.next_offset)}>More firms</button>}
+            </p>
           )}
         </section>
       )}
