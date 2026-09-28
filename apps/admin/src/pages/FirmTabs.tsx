@@ -176,10 +176,12 @@ type Entry = { id: number; staff_user: string; action: string; target_type: stri
 
 export function FirmAudit({ firm }: { firm: string }) {
   const [offset, setOffset] = useState(0);
-  const audit = useResource<{ entries: Entry[]; has_more: boolean; next_offset: number }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${offset ? `?offset=${offset}` : ""}`);
+  const [reveal, setReveal] = useState<string>();
+  const audit = useResource<{ entries: Entry[]; has_more: boolean; next_offset: number }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${offset ? `?offset=${offset}` : ""}`, reveal);
   return (
     <>
-      <p>Everything staff did to this firm, with their reasons, including actions that were refused and every reveal of client content.</p>
+      <p>Everything staff did to this firm, with their reasons, including actions that were refused and every reveal of client content. Why a refused action failed is hidden until revealed.</p>
+      <Reveal revealed={!!reveal} onReveal={setReveal} onHide={() => setReveal(undefined)} />
       {audit.error && <p role="alert">{audit.error}</p>}
       {!audit.data && !audit.error && <p role="status">Loading the audit…</p>}
       {audit.data && (
@@ -195,7 +197,7 @@ export function FirmAudit({ firm }: { firm: string }) {
                     <td>{e.action}</td>
                     <td>{e.target_type} {e.target_id}</td>
                     <td>{e.reason}</td>
-                    <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {e.error}</small>}</td>
+                    <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
                   </tr>
                 ))}
               </tbody>

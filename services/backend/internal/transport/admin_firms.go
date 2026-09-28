@@ -153,33 +153,62 @@ func adminFirmActivity(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{"events": events, "has_more": more, "next_offset": offset + len(events), "revealed": reveal})
 }
 
-// adminFirmAudit is what staff did to the firm, newest first: staff members' own words, so nothing is masked.
+type adminAuditRow struct {
+	ID         int64           `json:"id"`
+	StaffUser  string          `json:"staff_user"`
+	Action     string          `json:"action"`
+	TargetType string          `json:"target_type"`
+	TargetID   string          `json:"target_id"`
+	Reason     string          `json:"reason"`
+	Request    json.RawMessage `json:"request"`
+	Result     string          `json:"result"`
+	Error      string          `json:"error"`
+	CreatedAt  string          `json:"created_at"`
+}
+
+// adminFirmAudit is what staff did to the firm, newest first, with each staff member's reason. The request's details and a
+// refusal's error can echo what was asked for, so their text is masked until revealed.
 func adminFirmAudit(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	firm := r.PathValue("id")
+	firm, reveal := r.PathValue("id"), r.URL.Query().Get("reveal") == "1"
 	offset, ok := adminOffset(w, r)
 	if !ok {
 		return
 	}
-	var raw []byte
+	entries := []adminAuditRow{}
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		if err := adminFirmExists(ctx, tx, firm); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'staff_user',staff_user,'action',action,'target_type',target_type,'target_id',target_id,
- 'reason',reason,'request',request,'result',result,'error',error,'created_at',created_at) ORDER BY id DESC),'[]'::jsonb)
- FROM (SELECT * FROM platform_audit WHERE organization_id=$1 ORDER BY id DESC LIMIT $2 OFFSET $3) a`, firm, adminPage+1, offset).Scan(&raw)
+		rows, err := tx.QueryContext(ctx, `SELECT id,staff_user,action,target_type,target_id,reason,request,result,error,created_at::text
+ FROM platform_audit WHERE organization_id=$1 ORDER BY id DESC LIMIT $2 OFFSET $3`, firm, adminPage+1, offset)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e adminAuditRow
+			if err = rows.Scan(&e.ID, &e.StaffUser, &e.Action, &e.TargetType, &e.TargetID, &e.Reason, &e.Request, &e.Result, &e.Error, &e.CreatedAt); err != nil {
+				return err
+			}
+			if !reveal {
+				e.Request, e.Error = only(e.Request), maskText(e.Error)
+			}
+			entries = append(entries, e)
+		}
+		return rows.Err()
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "audit read")
 		return
 	}
-	var entries []json.RawMessage
-	json.Unmarshal(raw, &entries)
+	if reveal && !adminReveal(w, r, db, firm, "firm_audit", firm) {
+		return
+	}
 	more := len(entries) > adminPage
 	if more {
 		entries = entries[:adminPage]
 	}
-	jsonReply(w, 200, map[string]any{"entries": entries, "has_more": more, "next_offset": offset + len(entries)})
+	jsonReply(w, 200, map[string]any{"entries": entries, "has_more": more, "next_offset": offset + len(entries), "revealed": reveal})
 }
 
 // adminReason reads a staff action's body into in and checks the reason every firm-level change needs: 10–2,000

@@ -97,6 +97,12 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 
 	// Every action and reveal is in the firm's audit, refusals included.
 	audit := mustString(adminJSON(t, h, token, "GET", base+"/audit", "", 200))
+	if !strings.Contains(audit, `"previous_id":"••••"`) || !strings.Contains(audit, `"error":"••••"`) {
+		t.Fatalf("the audit masks request details and errors until revealed: %s", audit)
+	}
+	if revealed := mustString(adminJSON(t, h, token, "GET", base+"/audit?reveal=1", "", 200, "X-Access-Reason", "reviewing staff actions")); !strings.Contains(revealed, `"previous_id":"`+current+`"`) {
+		t.Fatalf("a reveal shows the request details: %s", revealed)
+	}
 	for _, want := range []string{`"action":"firm.suspend"`, `"action":"firm.resume"`, `"action":"member.revoke"`, `"result":"refused"`, `"action":"invitation.revoke"`, `"action":"content.reveal"`} {
 		if !strings.Contains(audit, want) {
 			t.Fatalf("audit lacks %s: %s", want, audit)

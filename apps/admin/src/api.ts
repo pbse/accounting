@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { authorization } from "./auth";
 
 export class ApiError extends Error {
@@ -44,28 +44,27 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
 // another path's data. With a reason, it asks for client content revealed (an audited read); a
 // reveal counts as a different path, so hiding it clears the content at once.
 export function useResource<T>(path: string, revealReason?: string) {
-  const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true });
-  const [version, setVersion] = useState(0);
   const key = revealReason === undefined ? path : `${path} revealed for ${revealReason}`;
-  const loaded = useRef(key);
+  const [state, setState] = useState<{ key: string; data?: T; error?: string; loading: boolean }>({ key, loading: true });
+  const [version, setVersion] = useState(0);
   useEffect(() => {
     let current = true;
-    const samePath = loaded.current === key;
-    loaded.current = key;
-    setState((previous) => (samePath ? { ...previous, loading: true } : { loading: true }));
+    setState((previous) => (previous.key === key ? { ...previous, loading: true } : { key, loading: true }));
     const request = revealReason === undefined
       ? get<T>(path)
       : get<T>(`${path}${path.includes("?") ? "&" : "?"}reveal=1`, { "X-Access-Reason": revealReason });
     request.then(
-      (data) => current && setState({ data, loading: false }),
-      (error: Error) => current && setState({ error: error.message, loading: false }),
+      (data) => current && setState({ key, data, loading: false }),
+      (error: Error) => current && setState({ key, error: error.message, loading: false }),
     );
     return () => {
       current = false;
     };
   }, [key, version]); // path and revealReason are in key
   const reload = useCallback(() => setVersion((v) => v + 1), []);
-  return { ...state, reload };
+  // What belongs to another path or reveal is never returned, not even for the render before the effect.
+  const fresh = state.key === key;
+  return { data: fresh ? state.data : undefined, error: fresh ? state.error : undefined, loading: fresh ? state.loading : true, reload };
 }
 
 export function when(value?: string | null): string {
