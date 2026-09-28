@@ -66,12 +66,12 @@ type adminPerson struct {
 	Sessions    []workosSession    `json:"sessions"`
 }
 
-// workosSessions lists a user's newest sessions, at most a hundred.
-func workosSessions(ctx context.Context, user string) ([]workosSession, error) {
+// workosRecentSessions lists a user's twenty newest sessions, for staff to see.
+func workosRecentSessions(ctx context.Context, user string) ([]workosSession, error) {
 	var page struct {
 		Data []workosSession `json:"data"`
 	}
-	err := workos(ctx, "GET", "/user_management/users/"+url.PathEscape(user)+"/sessions?limit=100", nil, &page)
+	err := workos(ctx, "GET", "/user_management/users/"+url.PathEscape(user)+"/sessions?limit=20", nil, &page)
 	return page.Data, err
 }
 
@@ -102,7 +102,7 @@ func workosPeople(ctx context.Context, user, email string) ([]adminPerson, error
 		if p.Memberships, err = workosList[workosMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {u.ID}, "limit": {"100"}}); err != nil {
 			return nil, err
 		}
-		if p.Sessions, err = workosSessions(ctx, u.ID); err != nil {
+		if p.Sessions, err = workosRecentSessions(ctx, u.ID); err != nil {
 			return nil, err
 		}
 		people = append(people, p)
@@ -182,8 +182,9 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{"query": q, "workos": state, "users": people, "memberships": json.RawMessage(memberships), "invitations": json.RawMessage(invitations)})
 }
 
-// adminRevokeSessions ends every active WorkOS session of a person, in every organization: they must sign in again.
-// Their memberships are untouched.
+// adminRevokeSessions signs a person out everywhere: the app's own sessions (AUTH_SESSION=server) end with the audited
+// action, whatever WorkOS then does, and every active WorkOS session, in every organization, is revoked so none can be
+// refreshed. Their memberships are untouched. When WorkOS fails part way, the answer says exactly what ended.
 func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	user := r.PathValue("user")
 	if !strings.HasPrefix(user, "user_") || len(user) > 200 {
@@ -201,37 +202,46 @@ func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	request := map[string]any{}
-	ended := 0
+	var app int64
+	ended, active, listed := 0, 0, false
 	err := adminAct(r.Context(), db, adminAction{Action: "sessions.revoke", TargetType: "user", TargetID: user, Reason: strings.TrimSpace(in.Reason), Request: request},
-		func(ctx context.Context, _ *sql.Tx) error {
-			sessions, err := workosSessions(ctx, user)
+		func(ctx context.Context, tx *sql.Tx) error {
+			result, err := tx.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=now() WHERE subject=$1 AND revoked_at IS NULL`, user)
 			if err != nil {
-				return fmt.Errorf("%w: the sessions could not be listed", errWorkOS)
+				return err
 			}
-			active := 0
-			for _, s := range sessions {
-				if s.Status == "active" {
+			app, _ = result.RowsAffected()
+			// Every page of sessions, so "all" means all; a list WorkOS cannot finish is a failure, not a partial success.
+			sessions, err := workosList[workosSession](ctx, "/user_management/users/"+url.PathEscape(user)+"/sessions", url.Values{"limit": {"100"}})
+			if err == nil {
+				listed = true
+				for _, s := range sessions {
+					if s.Status != "active" {
+						continue
+					}
 					active++
+					if err = workos(ctx, "POST", "/user_management/sessions/revoke", map[string]string{"session_id": s.ID}, nil); err != nil {
+						break
+					}
+					ended++
 				}
 			}
-			for _, s := range sessions {
-				if s.Status != "active" {
-					continue
-				}
-				if err := workos(ctx, "POST", "/user_management/sessions/revoke", map[string]string{"session_id": s.ID}, nil); err != nil {
-					request["ended"] = ended
-					return fmt.Errorf("%w: ended %d of %d sessions", errWorkOS, ended, active)
-				}
-				ended++
-			}
-			request["ended"] = ended
+			request["app_sessions"], request["workos_ended"], request["workos_complete"] = app, ended, err == nil
 			return nil
 		})
 	if err != nil {
 		adminFirmProblem(w, err, "session revoke")
 		return
 	}
-	jsonReply(w, 200, map[string]int{"ended": ended})
+	if !listed || ended < active {
+		what := "WorkOS did not list their sessions"
+		if listed {
+			what = fmt.Sprintf("WorkOS ended %d of their %d active sessions, then failed", ended, active)
+		}
+		problem(w, 502, fmt.Sprintf("The app's own sessions for this person ended (%d). %s; end sessions again to finish.", app, what))
+		return
+	}
+	jsonReply(w, 200, map[string]any{"ended": ended, "app_sessions": app})
 }
 
 // adminResendInvitation asks WorkOS to send a pending invitation's email again, and keeps the new expiry.

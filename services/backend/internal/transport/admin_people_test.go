@@ -35,6 +35,9 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	workosID := "invitation_" + rand.Text()
 	expires := time.Now().Add(24 * time.Hour)
 	must(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,$2,'member','Member',$3,'pending','user_owner','Joining the team next week',$4)`, firm, email, workosID, expires)
+	// A session the API holds for them (AUTH_SESSION=server).
+	must(`INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,'session_1',$4,'\x00','\x00',now()+interval '5 minutes',now()+interval '30 days')`, rand.Text(), person, firm, email)
+	t.Cleanup(func() { db.Exec(`DELETE FROM auth_sessions WHERE subject=$1`, person) })
 
 	revoked, resent := []string{}, 0
 	failRevoke := false
@@ -56,8 +59,10 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 			code = 404
 		case p == "/user_management/organization_memberships":
 			body = `{"data":[{"organization_id":"` + firm + `","status":"active","role":{"slug":"member"}}],"list_metadata":{}}`
+		case p == "/user_management/users/"+person+"/sessions" && r.URL.Query().Get("after") == "session_2":
+			body = `{"data":[{"id":"session_3","status":"active"}],"list_metadata":{}}`
 		case p == "/user_management/users/"+person+"/sessions":
-			body = `{"data":[{"id":"session_1","status":"active","auth_method":"password","ip_address":"203.0.113.9","user_agent":"Secret Browser"},{"id":"session_2","status":"revoked"},{"id":"session_3","status":"active"}]}`
+			body = `{"data":[{"id":"session_1","status":"active","auth_method":"password","ip_address":"203.0.113.9","user_agent":"Secret Browser"},{"id":"session_2","status":"revoked"}],"list_metadata":{"after":"session_2"}}`
 		case p == "/user_management/sessions/revoke" && r.Method == "POST":
 			var in map[string]string
 			raw, _ := io.ReadAll(r.Body)
@@ -98,16 +103,23 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		t.Fatalf("an unknown user: %v", nobody)
 	}
 
-	// Ending sessions ends the active ones only, and says how many; a partial failure is refused and audited.
+	// Ending sessions ends the app's own at once, then every active WorkOS session on every page. When WorkOS fails part
+	// way, the answer says exactly what ended; ending again finishes.
 	adminJSON(t, h, token, "POST", "/v1/admin/people/"+person+"/sessions/revoke", `{"reason":"short"}`, 422)
 	failRevoke = true
-	adminJSON(t, h, token, "POST", "/v1/admin/people/"+person+"/sessions/revoke", `{"reason":"Laptop reported stolen"}`, 502)
+	if partial := adminJSON(t, h, token, "POST", "/v1/admin/people/"+person+"/sessions/revoke", `{"reason":"Laptop reported stolen"}`, 502)["message"].(string); !strings.Contains(partial, "own sessions for this person ended (1)") || !strings.Contains(partial, "ended 1 of their 2 active sessions") {
+		t.Fatalf("partial answer: %s", partial)
+	}
+	var appRevoked bool
+	if db.QueryRow(`SELECT revoked_at IS NOT NULL FROM auth_sessions WHERE subject=$1`, person).Scan(&appRevoked); !appRevoked {
+		t.Fatal("the app's own session must end even when WorkOS fails")
+	}
 	failRevoke, revoked = false, nil
 	if ended := adminJSON(t, h, token, "POST", "/v1/admin/people/"+person+"/sessions/revoke", `{"reason":"Laptop reported stolen"}`, 200)["ended"]; ended != float64(2) || strings.Join(revoked, ",") != "session_1,session_3" {
 		t.Fatalf("ended %v, revoked %v", ended, revoked)
 	}
 	var sessionAudits string
-	if err := db.QueryRow(`SELECT string_agg(result||':'||COALESCE(organization_id,'platform'),',' ORDER BY id) FROM platform_audit WHERE action='sessions.revoke' AND target_id=$1`, person).Scan(&sessionAudits); err != nil || sessionAudits != "refused:platform,ok:platform" {
+	if err := db.QueryRow(`SELECT string_agg(COALESCE(organization_id,'platform')||':'||(request->>'workos_complete'),',' ORDER BY id) FROM platform_audit WHERE action='sessions.revoke' AND target_id=$1 AND result='ok'`, person).Scan(&sessionAudits); err != nil || sessionAudits != "platform:false,platform:true" {
 		t.Fatalf("session audits %q %v", sessionAudits, err)
 	}
 

@@ -49,7 +49,7 @@ func adminFirmProblem(w http.ResponseWriter, err error, what string) {
 	case errors.Is(err, errInvitationNotPending):
 		problem(w, 409, "Only a pending invitation that has not expired can be resent. Send a new one instead.")
 	case errors.Is(err, errWorkOS):
-		problem(w, 502, err.Error()+". Nothing else changed; try again.")
+		problem(w, 502, err.Error()+". Nothing changed; try again.")
 	case errors.Is(err, errNotAMember):
 		problem(w, 409, "This person is not a member of the firm. Refresh the list.")
 	default:

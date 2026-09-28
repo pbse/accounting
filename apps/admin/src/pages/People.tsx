@@ -68,7 +68,7 @@ export function People() {
                   </tbody>
                 </table>
               )}
-              <h3>Sessions</h3>
+              <h3>Newest sessions</h3>
               {u.sessions.length === 0 ? <p>None.</p> : (
                 <table>
                   <thead><tr><th>Organization</th><th>Status</th><th>Signed in with</th><th>Started</th><th>Expires</th><th>Ended</th></tr></thead>
@@ -89,10 +89,10 @@ export function People() {
               {u.sessions.some((s) => s.status === "active") && (
                 <details>
                   <summary>End all sessions</summary>
-                  <p>Signs {u.email} out everywhere, in every organization. Their memberships stay as they are.</p>
+                  <p>Signs {u.email} out everywhere: the app's own sessions end at once, and every active WorkOS session, in every organization, is revoked. Their memberships stay as they are.</p>
                   <ActionForm label="End all sessions" danger allowed={operate} minLength={10} onSubmit={async (reason) => {
-                    const answer = await post<{ ended: number }>(`/v1/admin/people/${encodeURIComponent(u.id)}/sessions/revoke`, { reason });
-                    setSaid(`Ended ${answer.ended} session${answer.ended === 1 ? "" : "s"} for ${u.email}.`);
+                    const answer = await post<{ ended: number; app_sessions: number }>(`/v1/admin/people/${encodeURIComponent(u.id)}/sessions/revoke`, { reason });
+                    setSaid(`Signed ${u.email} out: ${answer.ended} WorkOS session${answer.ended === 1 ? "" : "s"} and ${answer.app_sessions} app session${answer.app_sessions === 1 ? "" : "s"} ended.`);
                     found.reload();
                   }} />
                 </details>
