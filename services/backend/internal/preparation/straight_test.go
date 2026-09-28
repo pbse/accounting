@@ -116,6 +116,12 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if _, reason = StraightThrough(ranged, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("range line not accepted for both dates", reason)
 	}
+	if _, reason = StraightThrough(proposal, invoice+"\nDiscount USD 100.00\nTotal USD 1,100.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+		t.Fatal("prepared a line item when the invoice prints a discount and a lower total")
+	}
+	if _, reason = StraightThrough(proposal, invoice+"\nTotal USD 1,200.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+		t.Fatal("a total line printing the amount refused", reason)
+	}
 	if _, reason = StraightThrough(proposal, invoice+"\nTotal including tax USD 1,300.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared a subtotal when the invoice prints a larger total")
 	}
@@ -144,6 +150,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"line-less card credit":         {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
 		"line-less credit, other party": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "92", Date: "2026-09-20", Record: json.RawMessage(`{"VendorRef":{"name":"Someone Else"}}`)}), false},
 		"journal on an unlisted ID":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "93", Date: "2026-09-30", Record: json.RawMessage(`{"Line":[{"Amount":100,"JournalEntryLineDetail":{"AccountRef":{"value":"99","name":"Insurance"}}}]}`)}), false},
+		"deposit with no counterparty":  {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "94", Date: "2026-09-20", Record: json.RawMessage(`{"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Bank"}}}]}`)}), false},
 		"dollar sign beside another code": {func(p *Proposal, _ *Procedure) {
 			p.Facts[0].Candidates[0].Quote = "Total CAD $1,200.00 (USD accepted)"
 			p.Facts[3].Candidates[0].Quote = "Total CAD $1,200.00 (USD accepted)"

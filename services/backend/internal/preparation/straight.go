@@ -157,6 +157,9 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if larger := largestFigure(invoice); larger > amount {
 		return Plan{}, "the invoice prints a larger money figure (" + prepaids.Money(larger) + ") than the cited amount"
 	}
+	if reason := totalDisagrees(invoice, amount); reason != "" {
+		return Plan{}, reason
+	}
 	// The currency is the amount's: both quotes print the currency's code or sign immediately before the figure.
 	if !currencyBefore(quotes["amount"], currency, amount) || !currencyBefore(quotes["currency"], currency, amount) {
 		return Plan{}, "the cited currency is not printed with the cited amount"
@@ -264,7 +267,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 				return "", "a journal in the close month posts to the expense or prepaid account"
 			}
 			if line.DepositLineDetail != nil {
-				if line.DepositLineDetail.Entity.Name == "" && line.DepositLineDetail.Entity.Value != "" {
+				if line.DepositLineDetail.Entity.Name == "" {
 					return "", "a captured Deposit in the close month does not name a counterparty"
 				}
 				from := line.DepositLineDetail.Entity.Name
@@ -363,6 +366,24 @@ func ProcedurePinned(p Plan, current Procedure) error {
 		return fmt.Errorf("The procedure this draft was prepared under (v%s) is no longer the client's current enabled procedure with these accounts; a person confirms the facts", p.Procedure)
 	}
 	return nil
+}
+
+// totalDisagrees reports why the invoice's own total lines do not support the cited amount: a discount anywhere, or a
+// total line (not a subtotal) printing a different figure.
+func totalDisagrees(invoice string, cents int64) string {
+	for _, line := range strings.Split(invoice, "\n") {
+		normal := documents.NormalizeEntity(line)
+		if strings.Contains(normal, "discount") {
+			return "the invoice prints a discount; the payable total needs a person"
+		}
+		if !strings.Contains(normal, "total") || strings.Contains(normal, "subtotal") || strings.Contains(normal, "sub total") {
+			continue
+		}
+		if figures := moneyFigures(line); figures > 0 && (figures != 1 || largestFigure(line) != cents) {
+			return "a total line of the invoice prints a figure other than the cited amount"
+		}
+	}
+	return ""
 }
 
 // mentionsAny reports whether the quote, compared as text, contains any of the words.
