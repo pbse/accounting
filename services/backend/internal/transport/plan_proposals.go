@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,10 +63,17 @@ func registerPlanProposals(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/plans/catalog", func(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, 200, planCatalog())
 	})
-	// The firm's agent proposals, newest first, with where each stands, so an agent learns what became of them.
+	// The firm's agent proposals, newest first, 50 at a time (before pages back), with where each stands, so an agent
+	// learns what became of them. A member limited to some clients sees only the proposals made as them: others may
+	// be about clients they cannot open.
 	mux.HandleFunc("GET /v1/closes/plans/proposals", func(w http.ResponseWriter, r *http.Request) {
+		before, err := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+		if r.URL.Query().Get("before") != "" && (err != nil || before < 1) {
+			problem(w, 422, "before is a proposal's ID.")
+			return
+		}
 		rows, err := db.QueryContext(r.Context(), `SELECT id,title,state,agent,created_by,created_at,updated_at,approved_at,run_id FROM workflow_plans
- WHERE organization_id=$1 AND source='agent' ORDER BY id DESC LIMIT 50`, organization(r))
+ WHERE organization_id=$1 AND source='agent' AND ($2 OR created_by=$3) AND ($4=0 OR id<$4) ORDER BY id DESC LIMIT 51`, organization(r), firmAccess(r), subject(r), before)
 		if err != nil {
 			problem(w, 503, "Plan proposals are unavailable.")
 			return
@@ -95,7 +103,12 @@ func registerPlanProposals(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Plan proposals are unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"proposals": proposals})
+		next := any(nil)
+		if len(proposals) > 50 {
+			proposals = proposals[:50]
+			next = proposals[49].ID
+		}
+		jsonReply(w, 200, map[string]any{"proposals": proposals, "next_before": next})
 	})
 	// A connected agent proposes a plan for the firm, saying why. It needs workpapers:review, and it waits for platform
 	// staff: nothing in it runs before they approve the exact version they reviewed.

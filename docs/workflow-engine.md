@@ -253,6 +253,7 @@ The agents (W4):
   - The model answers in a fixed shape that the planner turns into a plan. A draft that does not validate gets one more attempt, told what was wrong.
   - It is saved as the agent's proposal (`planner (<model>)`), waiting in the queue like any other.
   - It writes only for a firm that turned model-written answers on, and each attempt counts against the firm's daily model calls.
+  - Both attempts together get 25 seconds, so the request always answers; a draft that runs out of time saves nothing.
 - **Evaluation.** Every planner draft is audited as `plan.draft_with_model`: ok with its plan, or refused with what was wrong. The Plans page's **Agents' proposals** shows, for 30 days and by agent, how many were proposed, are waiting, were approved and were rejected, and how many planner drafts were still invalid after the second try or got no answer (`GET /v1/admin/plans/agents`).
 
 ## API

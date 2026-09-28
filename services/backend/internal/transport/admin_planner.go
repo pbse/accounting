@@ -77,15 +77,18 @@ func toPlan(title string, nodes []plannerNode) (json.RawMessage, error) {
 	return json.Marshal(p)
 }
 
-// askPlanner asks the model for one draft.
+// plannerTime is how long a whole draft may take, both attempts included: the API answers within 30 seconds, and a
+// draft saved after its request gave up would invite a duplicate. plannerRetry is the least time a second attempt
+// needs.
+var plannerTime, plannerRetry = 25 * time.Second, 8 * time.Second
+
+// askPlanner asks the model for one draft, within ctx's deadline.
 func askPlanner(ctx context.Context, key, model string, input any) (plan json.RawMessage, rationale string, err error) {
 	data, _ := json.Marshal(input)
-	payload, _ := json.Marshal(map[string]any{"model": model, "store": false, "max_output_tokens": 6000, "input": []map[string]string{
+	payload, _ := json.Marshal(map[string]any{"model": model, "store": false, "max_output_tokens": 4000, "input": []map[string]string{
 		{"role": "system", "content": plannerInstructions}, {"role": "user", "content": string(data)}},
 		"text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "plan", "strict": true, "schema": json.RawMessage(plannerSchema)}}})
-	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-	request, err := http.NewRequestWithContext(callCtx, "POST", "https://api.openai.com/v1/responses", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/responses", bytes.NewReader(payload))
 	if err != nil {
 		return nil, "", err
 	}
@@ -93,6 +96,9 @@ func askPlanner(ctx context.Context, key, model string, input any) (plan json.Ra
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, "", fmt.Errorf("%w: it ran out of time", errPlannerFailed)
+		}
 		return nil, "", fmt.Errorf("%w: the model could not be reached", errPlannerFailed)
 	}
 	defer response.Body.Close()
@@ -202,13 +208,19 @@ func adminDraftPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if closeState != nil {
 		input["close"] = closeState
 	}
-	// Each attempt counts against the firm's daily model calls, as every other model call does.
+	// Each attempt counts against the firm's daily model calls, as every other model call does. Both attempts share
+	// plannerTime; a second starts only with time for it.
 	system := context.WithValue(r.Context(), systemKey{}, true)
+	deadline, cancel := context.WithTimeout(r.Context(), plannerTime)
+	defer cancel()
 	var plan json.RawMessage
 	var rationale string
 	var draftErr error
 	attempts := 0
 	for attempts < 2 {
+		if left, _ := deadline.Deadline(); attempts > 0 && time.Until(left) < plannerRetry {
+			break
+		}
 		if err := preparation.ReserveModelCalls(system, db, in.Firm, 1); errors.Is(err, preparation.ErrModelLimit) {
 			if attempts == 0 {
 				problem(w, 429, "The firm's daily model limit is reached, so the planner cannot write now.")
@@ -220,7 +232,7 @@ func adminDraftPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			return
 		}
 		attempts++
-		plan, rationale, draftErr = askPlanner(r.Context(), key, model, input)
+		plan, rationale, draftErr = askPlanner(deadline, key, model, input)
 		if draftErr == nil {
 			if problems, _, _ := planProblems(plan); len(problems) > 0 {
 				draftErr = fmt.Errorf("%w: %s", wf.ErrPlanInvalid, strings.Join(problems, "; "))
@@ -232,6 +244,9 @@ func adminDraftPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			break
 		}
 		input["your_previous_plan"], input["what_was_wrong"] = plan, strings.TrimPrefix(draftErr.Error(), wf.ErrPlanInvalid.Error()+": ")
+	}
+	if draftErr == nil && deadline.Err() != nil {
+		draftErr = fmt.Errorf("%w: it ran out of time", errPlannerFailed)
 	}
 	request := map[string]any{"close_id": in.CloseID, "model": model, "attempts": attempts}
 	var id int64

@@ -2807,7 +2807,9 @@ Checks (local PostgreSQL):
   - the valid second draft is saved as `planner (test-model)` by `staff:local-development`, and two model calls are counted;
   - two invalid drafts give 422 naming the problem, and a model that is down gives 502;
   - the audit reads ok, refused (not valid), refused (no draft);
+  - a model slower than the planner's time saves nothing and gives 502 ("ran out of time");
   - the track record counts the planner's proposal and its failures.
+- `TestPlanProposalsPageAndStayWithinAMembersClients`: 55 proposals page as 50, then the 5 older ones; a member without `clients:all` sees only the 3 made as them.
 - `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead` covers the two new staff routes. The existing MCP, plan and admin tests pass. The admin app typechecks and builds.
 
 Not verified: the planner against the real OpenAI API, and `propose_plan` from a hosted MCP client under OAuth agent access.

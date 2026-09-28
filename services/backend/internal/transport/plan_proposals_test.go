@@ -13,8 +13,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	_ "close.local/backend/activities/close_summary"
+	"close.local/backend/internal/auth"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -144,6 +147,15 @@ func TestThePlannerDraftsAProposalWithTheFirmsModel(t *testing.T) {
 		asked = append(asked, string(body))
 		answer := answers[0]
 		answers = answers[1:]
+		if answer == "slow" {
+			mu.Unlock()
+			defer mu.Lock()
+			select {
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
 		if answer == "down" {
 			return &http.Response{StatusCode: 500, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
 		}
@@ -193,6 +205,20 @@ func TestThePlannerDraftsAProposalWithTheFirmsModel(t *testing.T) {
 		t.Fatalf("every draft is recorded: %q %v", audit, err)
 	}
 
+	// A draft is bounded so the request can still answer: one that runs out of time saves nothing.
+	defer func(was time.Duration) { plannerTime = was }(plannerTime)
+	plannerTime = 100 * time.Millisecond
+	var before int
+	db.QueryRow(`SELECT count(*) FROM workflow_plans WHERE organization_id=$1`, firm).Scan(&before)
+	answers = []string{"slow"}
+	if message := draft(502)["message"].(string); !strings.Contains(message, "ran out of time") {
+		t.Fatalf("a slow model runs out of time: %s", message)
+	}
+	var after int
+	if db.QueryRow(`SELECT count(*) FROM workflow_plans WHERE organization_id=$1`, firm).Scan(&after); after != before {
+		t.Fatalf("a draft that ran out of time saves nothing: %d/%d", after, before)
+	}
+
 	// The track record counts the planner's proposals and its drafts that failed.
 	var record struct {
 		Agents []struct {
@@ -209,5 +235,55 @@ func TestThePlannerDraftsAProposalWithTheFirmsModel(t *testing.T) {
 	}
 	if !found || record.Planner["drafts"] < 3 || record.Planner["invalid"] < 1 || record.Planner["failed"] < 1 {
 		t.Fatalf("the track record: %s", raw)
+	}
+}
+
+// The firm's proposals page back 50 at a time, and a member limited to some clients sees only proposals made as them.
+func TestPlanProposalsPageAndStayWithinAMembersClients(t *testing.T) {
+	db := adminDB(t)
+	org := "org_Proposals" + rand.Text()
+	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Proposal firm')`, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_all',true,'Synthetic','fixture'),($1,'user_some',true,'Synthetic','fixture')`, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO workflow_plans(organization_id,title,plan,digest,state,source,rationale,agent,created_by)
+ SELECT $1,'Proposal '||g,'{"version":1,"title":"x","nodes":[]}','digest'||g,'proposed','agent','Because it helps','MCP',CASE WHEN g<=3 THEN 'user_some' ELSE 'user_all' END FROM generate_series(1,55) g`, org); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM workflow_plans WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	})
+	store := savedCloses(db, strings.Repeat("a", 32))
+	list := func(who string, permissions []string, query string) (ids []int64, next any) {
+		t.Helper()
+		r := httptest.NewRequest("GET", "/v1/closes/plans/proposals"+query, nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: who}, Organization: org, Permissions: permissions}))
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		var out struct {
+			Proposals []struct{ ID int64 }
+			NextBefore any `json:"next_before"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("%s: %d %s", who, w.Code, w.Body.String())
+		}
+		for _, p := range out.Proposals {
+			ids = append(ids, p.ID)
+		}
+		return ids, out.NextBefore
+	}
+	first, next := list("user_all", []string{"clients:all"}, "")
+	if len(first) != 50 || next == nil {
+		t.Fatalf("the newest 50 and a way back: %d %v", len(first), next)
+	}
+	rest, more := list("user_all", []string{"clients:all"}, "?before="+strconv.FormatInt(int64(next.(float64)), 10))
+	if len(rest) != 5 || more != nil || rest[0] >= first[49] {
+		t.Fatalf("the rest, older: %d %v", len(rest), more)
+	}
+	if mine, _ := list("user_some", nil, ""); len(mine) != 3 {
+		t.Fatalf("a member limited to some clients sees only their own proposals: %d", len(mine))
 	}
 }
