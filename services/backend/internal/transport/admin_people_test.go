@@ -189,10 +189,15 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 200)
 	// When neither the answer nor WorkOS's copy can be read, the outcome is reported as unknown, not as nothing sent.
 	resendLost, loseCopyOnResend = true, true
+	must(`UPDATE member_invitations SET expires_at=now()+interval '1 hour' WHERE id::text=$1`, invitation)
 	if unknown := adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 502)["message"].(string); !strings.Contains(unknown, "did not confirm whether") {
 		t.Fatalf("an unknown outcome: %s", unknown)
 	}
 	resendLost, loseCopyOnResend, copyLost = false, false, false
+	// The old date cannot expire an invitation WorkOS may have renewed.
+	if db.QueryRow(`SELECT expires_at>now()+interval '6 days' FROM member_invitations WHERE id::text=$1`, invitation).Scan(&later); !later {
+		t.Fatal("an unconfirmed resend keeps the invitation open as long as a resend would")
+	}
 	must(`UPDATE member_invitations SET state='revoked' WHERE id::text=$1`, invitation)
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 409)
 	if resent != 3 {

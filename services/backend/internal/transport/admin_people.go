@@ -31,11 +31,7 @@ func registerAdminPeople(mux *http.ServeMux, db *sql.DB, token string) {
 // errWorkOS is WorkOS not answering, or refusing, a call an action needed.
 var errWorkOS = errors.New("WorkOS did not confirm")
 
-var (
-	errInvitationNotPending = errors.New("only a pending invitation that has not expired can be resent")
-	// errResendUnconfirmed is a resend WorkOS may have sent: its answer and its copy of the invitation were both lost.
-	errResendUnconfirmed = errors.New("WorkOS did not confirm whether it sent the invitation")
-)
+var errInvitationNotPending = errors.New("only a pending invitation that has not expired can be resent")
 
 type workosUser struct {
 	ID           string  `json:"id"`
@@ -363,9 +359,11 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	var expires time.Time
-	sent := false // WorkOS resent it: from here on, a failure is the app's, and resending would email the person twice.
+	sent := false        // WorkOS resent it: from here on, a failure is the app's, and resending would email the person twice.
+	unconfirmed := false // WorkOS may have resent it: its answer and its copy were both lost.
+	request := map[string]any{}
 	// Outlives the request, so a closed browser cannot leave WorkOS's answer unrecorded.
-	err := adminAct(context.WithoutCancel(r.Context()), db, adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason)},
+	err := adminAct(context.WithoutCancel(r.Context()), db, adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason), Request: request},
 		func(ctx context.Context, tx *sql.Tx) error {
 			var workosID string
 			err := tx.QueryRowContext(ctx, `SELECT workos_id FROM member_invitations WHERE id::text=$1 AND organization_id=$2 AND state='pending' AND workos_id IS NOT NULL AND expires_at>now() FOR UPDATE`, invitation, firm).Scan(&workosID)
@@ -393,7 +391,11 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 					return fmt.Errorf("%w: WorkOS refused to resend it", errWorkOS)
 				}
 				if workos(ctx, "GET", path, nil, &current) != nil {
-					return errResendUnconfirmed
+					// Unknown. Keep the invitation open at least as long as a resend would (WorkOS's seven days), so the
+					// old date cannot expire an invitation WorkOS renewed; WorkOS's state still decides acceptance.
+					unconfirmed, request["outcome"] = true, "unconfirmed"
+					_, err = tx.ExecContext(ctx, `UPDATE member_invitations SET expires_at=GREATEST(expires_at,now()+interval '7 days') WHERE id::text=$1 AND organization_id=$2`, invitation, firm)
+					return err
 				}
 				if !current.ExpiresAt.After(before.ExpiresAt) {
 					return fmt.Errorf("%w: the invitation was not resent", errWorkOS)
@@ -413,6 +415,10 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	if err != nil {
 		adminFirmProblem(w, err, "invitation resend")
+		return
+	}
+	if unconfirmed {
+		problem(w, 502, "WorkOS did not confirm whether it sent the invitation. Check it in WorkOS before resending, or the person may get it twice.")
 		return
 	}
 	jsonReply(w, 200, map[string]any{"message": "Invitation sent again.", "expires_at": expires})
