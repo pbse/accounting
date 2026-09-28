@@ -38,6 +38,23 @@ const outcomes: Record<Kind, string[]> = {
 };
 const kindLabel: Record<Kind, string> = { activity: "Run an activity", workflow: "Run a workflow", event: "Wait for an event", sleep: "Wait a while", approval: "Ask for approval" };
 
+// prune drops what no longer points at an earlier step (after a move or a removal): a step comes after earlier steps only,
+// and its "when" names one of them.
+function prune(steps: Step[]): Step[] {
+  return steps.map((s, i) => {
+    const earlier = steps.slice(0, i).map((e) => e.id);
+    const after = s.after.filter((a) => earlier.includes(a));
+    return { ...s, after, when: after.some((a) => s.when.startsWith(`${a}.`)) ? s.when : "" };
+  });
+}
+
+// unusedID is the first step_<n> no step has.
+function unusedID(steps: Step[]): string {
+  let n = steps.length + 1;
+  while (steps.some((s) => s.id === `step_${n}`)) n++;
+  return `step_${n}`;
+}
+
 const blank = (id: string): Step => ({ id, kind: "activity", activity: "", workflow: "", input: "{}", after: [], when: "", event: "", timeout: "72h", duration: "24h", permission: "", subject: "", prompt: "" });
 
 // A starting input for a schema: each field with an empty value of its type.
@@ -156,7 +173,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
   const move = (i: number, by: number) => {
     const next = [...steps];
     [next[i], next[i + by]] = [next[i + by], next[i]];
-    setSteps(next);
+    setSteps(prune(next));
   };
   const workflows = (definitions.data?.workflows ?? []).filter((w) => w.name !== "plan");
   return (
@@ -185,7 +202,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
                   </label>
                   <button type="button" disabled={i === 0} onClick={() => move(i, -1)}>Up</button>
                   <button type="button" disabled={i === steps.length - 1} onClick={() => move(i, 1)}>Down</button>
-                  <button type="button" disabled={steps.length === 1} onClick={() => setSteps(steps.filter((_, j) => j !== i).map((x) => ({ ...x, after: x.after.filter((a) => a !== s.id), when: x.when.startsWith(`${s.id}.`) ? "" : x.when })))}>Remove</button>
+                  <button type="button" disabled={steps.length === 1} onClick={() => setSteps(prune(steps.filter((_, j) => j !== i)))}>Remove</button>
                 </div>
                 {s.kind === "activity" && (
                   <>
@@ -250,7 +267,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
               </fieldset>
             );
           })}
-          <p><button type="button" onClick={() => setSteps([...steps, { ...blank(`step_${steps.length + 1}`), after: steps.length ? [steps[steps.length - 1].id] : [] }])}>Add a step</button></p>
+          <p><button type="button" onClick={() => setSteps([...steps, { ...blank(unusedID(steps)), after: steps.length ? [steps[steps.length - 1].id] : [] }])}>Add a step</button></p>
         </section>
         <aside className="inspector">
           <h2>Check</h2>
