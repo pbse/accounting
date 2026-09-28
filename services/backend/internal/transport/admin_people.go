@@ -391,18 +391,15 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				return errInvitationNotPending
 			}
 			if err = workos(ctx, "POST", path+"/resend", map[string]any{}, &current); err != nil {
-				// A refusal (4xx) sent nothing. Any other failure may have lost the answer after sending: WorkOS's copy
-				// says whether this attempt sent (an expiry later than just before it), and when that cannot be read,
-				// the outcome is unknown, not "unsent".
+				// A refusal (4xx) sent nothing. Any other failure may have lost the answer after sending: only an expiry in
+				// WorkOS's copy later than just before this attempt proves it went; an unreadable or unchanged copy (WorkOS
+				// may not show it yet) is unknown, not "unsent".
 				var status statusError
 				if errors.As(err, &status) && status.code >= 400 && status.code < 500 {
 					return fmt.Errorf("%w: WorkOS refused to resend it", errWorkOS)
 				}
-				if workos(ctx, "GET", path, nil, &current) != nil {
+				if workos(ctx, "GET", path, nil, &current) != nil || !current.ExpiresAt.After(before.ExpiresAt) {
 					return errResendUnconfirmed
-				}
-				if !current.ExpiresAt.After(before.ExpiresAt) {
-					return fmt.Errorf("%w: the invitation was not resent", errWorkOS)
 				}
 			}
 			sent = true
