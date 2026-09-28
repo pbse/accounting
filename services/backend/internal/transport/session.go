@@ -31,6 +31,7 @@ import (
 
 const (
 	sessionCookie = "__Host-close_session"
+	staffCookie   = "__Host-close_staff"
 	loginCookie   = "__Host-close_login"
 	sessionDays   = 30
 )
@@ -68,14 +69,45 @@ func hashToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// dashboardPath admits only a workspace path on this site as the place to return to after sign-in.
-func dashboardPath(p string) bool {
+// sessionKind is the firm workspace's session or the staff console's. Each has its own cookie, return paths, WorkOS
+// organization and verifier, so a staff sign-in never replaces a firm session and neither cookie opens the other's
+// routes.
+type sessionKind struct {
+	staff              bool
+	cookie, root, home string
+}
+
+var (
+	firmSession  = sessionKind{false, sessionCookie, "/dashboard", "/dashboard"}
+	staffSession = sessionKind{true, staffCookie, "/admin", "/admin/"}
+)
+
+// kindOf is the staff session for ?staff=1 (sign-in, the session check and sign-out), otherwise the firm session.
+func kindOf(r *http.Request) sessionKind {
+	if r.URL.Query().Get("staff") == "1" {
+		return staffSession
+	}
+	return firmSession
+}
+
+// returnPath admits only a path of this site under the session's root as the place to return to after sign-in.
+func (k sessionKind) returnPath(p string) bool {
 	u, err := url.Parse(p)
 	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\\r\n\t") {
 		return false
 	}
 	clean := path.Clean(u.Path)
-	return clean == u.Path && (clean == "/dashboard" || strings.HasPrefix(clean, "/dashboard/"))
+	return (u.Path == clean || u.Path == clean+"/") && (clean == k.root || strings.HasPrefix(clean, k.root+"/"))
+}
+
+// owns says whether a session row's organization belongs to this kind: the platform staff organization for staff, any
+// other organization for firms.
+func (k sessionKind) owns(org string) bool {
+	platform := os.Getenv("PLATFORM_ORGANIZATION_ID")
+	if k.staff {
+		return platform != "" && org == platform
+	}
+	return platform == "" || org != platform
 }
 
 func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
@@ -124,15 +156,24 @@ func systemContext(ctx context.Context) context.Context {
 }
 
 func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.Verifier) {
+	staff := staffVerifier()
 	mux.HandleFunc("GET /v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		kind := kindOf(r)
+		org := os.Getenv("WORKOS_ORGANIZATION_ID")
+		if kind.staff {
+			if org = os.Getenv("PLATFORM_ORGANIZATION_ID"); org == "" {
+				problem(w, 503, "Staff sign-in is not configured: set PLATFORM_ORGANIZATION_ID.")
+				return
+			}
+		}
 		back := r.URL.Query().Get("return")
-		if !dashboardPath(back) {
-			back = "/dashboard"
+		if !kind.returnPath(back) {
+			back = kind.home
 		}
 		state := randomToken()
 		setCookie(w, loginCookie, state+"."+base64.RawURLEncoding.EncodeToString([]byte(back)), 600)
 		query := url.Values{"client_id": {c.clientID}, "redirect_uri": {c.app + "/v1/auth/callback"}, "response_type": {"code"}, "provider": {"authkit"}, "state": {state}}
-		if org := os.Getenv("WORKOS_ORGANIZATION_ID"); org != "" {
+		if org != "" {
 			query.Set("organization_id", org)
 		}
 		w.Header().Set("Cache-Control", "no-store")
@@ -148,7 +189,12 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		}
 		raw, _ := base64.RawURLEncoding.DecodeString(encoded)
 		back := string(raw)
-		if state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 || r.URL.Query().Get("code") == "" || !dashboardPath(back) {
+		// Sign-in only ever returns a staff session to the console, so the return path says which kind this is.
+		kind, check := firmSession, verifier
+		if staffSession.returnPath(back) {
+			kind, check = staffSession, staff
+		}
+		if state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 || r.URL.Query().Get("code") == "" || !kind.returnPath(back) {
 			problem(w, 400, "This sign-in expired or did not start here. Start again from the sign-in page.")
 			return
 		}
@@ -157,8 +203,8 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			problem(w, 502, "WorkOS could not complete the sign-in. Try again.")
 			return
 		}
-		claims, err := verifier.Verify(r.Context(), tokens.AccessToken)
-		if err != nil || claims.Subject != tokens.User.ID || claims.ExpiresAt == nil {
+		claims, err := check.Verify(r.Context(), tokens.AccessToken)
+		if err != nil || claims.Subject != tokens.User.ID || claims.ExpiresAt == nil || !kind.owns(claims.Organization) {
 			problem(w, 401, "The sign-in could not be verified.")
 			return
 		}
@@ -176,21 +222,25 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			return
 		}
 		db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE expires_at<now() OR revoked_at<now()-interval '1 day'`)
-		setCookie(w, sessionCookie, id, sessionDays*24*60*60)
+		setCookie(w, kind.cookie, id, sessionDays*24*60*60)
 		http.Redirect(w, r, back, http.StatusFound)
 	})
 	mux.HandleFunc("GET /v1/auth/session", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		kind := kindOf(r)
 		var subject, email, org string
-		cookie, err := r.Cookie(sessionCookie)
+		cookie, err := r.Cookie(kind.cookie)
 		if err == nil {
 			err = db.QueryRowContext(systemContext(r.Context()), `SELECT subject,email,organization_id FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(cookie.Value)).Scan(&subject, &email, &org)
+			if err == nil && !kind.owns(org) {
+				err = sql.ErrNoRows
+			}
 		}
 		if err == sql.ErrNoRows || errors.Is(err, http.ErrNoCookie) {
 			if err == sql.ErrNoRows {
-				setCookie(w, sessionCookie, "", -1)
+				setCookie(w, kind.cookie, "", -1)
 			}
-			problem(w, 401, "Sign in to open your firm's workspace.")
+			problem(w, 401, "Sign in again.")
 			return
 		}
 		if err != nil {
@@ -204,8 +254,13 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			problem(w, 403, "Sign out from this site.")
 			return
 		}
-		logout := c.app + "/"
-		if cookie, err := r.Cookie(sessionCookie); err == nil {
+		kind := kindOf(r)
+		home := c.app + "/"
+		if kind.staff {
+			home = c.app + kind.home
+		}
+		logout := home
+		if cookie, err := r.Cookie(kind.cookie); err == nil {
 			var workos string
 			err = db.QueryRowContext(systemContext(r.Context()), `UPDATE auth_sessions SET revoked_at=now() WHERE id_hash=$1 AND revoked_at IS NULL RETURNING workos_session`, hashToken(cookie.Value)).Scan(&workos)
 			if err != nil && err != sql.ErrNoRows {
@@ -213,20 +268,26 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 				return
 			}
 			if workos != "" {
-				logout = workosAPI + "/user_management/sessions/logout?" + url.Values{"session_id": {workos}, "return_to": {c.app + "/"}}.Encode()
+				logout = workosAPI + "/user_management/sessions/logout?" + url.Values{"session_id": {workos}, "return_to": {home}}.Encode()
 			}
 		}
-		setCookie(w, sessionCookie, "", -1)
+		setCookie(w, kind.cookie, "", -1)
 		jsonReply(w, 200, map[string]string{"logout_url": logout})
 	})
 }
 
-// bearer turns a session cookie into the request's Bearer token for /v1 routes. A request that already names a token
-// keeps it, /v1/auth/* manages the cookie itself, and routes outside /v1 (MCP among them) never accept it. A cookie
-// cannot make a cross-site change: every request other than GET or HEAD must come from this site.
+// bearer turns a session cookie into the request's Bearer token for /v1 routes: the staff cookie for /v1/admin/*, the
+// firm cookie for the rest. A request that already names a token keeps it, /v1/auth/* manages the cookies itself, and
+// routes outside /v1 (MCP among them) never accept one. A cookie cannot make a cross-site change: every request other
+// than GET or HEAD must come from this site.
 func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Handler) http.Handler {
+	staff := staffVerifier()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(sessionCookie)
+		kind, check := firmSession, verifier
+		if strings.HasPrefix(r.URL.Path, "/v1/admin/") {
+			kind, check = staffSession, staff
+		}
+		cookie, err := r.Cookie(kind.cookie)
 		if err != nil || r.Header.Get("Authorization") != "" || !strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/v1/auth/") {
 			next.ServeHTTP(w, r)
 			return
@@ -235,13 +296,13 @@ func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Ha
 			problem(w, 403, "This change must come from the workspace itself.")
 			return
 		}
-		token, status := c.accessToken(r.Context(), db, verifier, cookie.Value)
+		token, status := c.accessToken(r.Context(), db, check, cookie.Value)
 		switch status {
 		case 0:
 			r.Header.Set("Authorization", "Bearer "+token)
 			next.ServeHTTP(w, r)
 		case 401:
-			setCookie(w, sessionCookie, "", -1)
+			setCookie(w, kind.cookie, "", -1)
 			problem(w, 401, "Your session ended. Sign in again.")
 		default:
 			problem(w, 503, "Sign-in is temporarily unavailable. Try again shortly.")
