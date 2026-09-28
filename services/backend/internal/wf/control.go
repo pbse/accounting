@@ -152,7 +152,9 @@ type Resolution struct {
 }
 
 // Resolve records a person's reconciliation of an unknown effect. Applied completes the step
-// without calling the provider; not applied lets the effect run again. A waiting run wakes.
+// without calling the provider; not applied lets the effect run again, or, when the run has already
+// ended (it was cancelled), closes the step as cancelled. A live run wakes, even one still running
+// that has not parked yet.
 func Resolve(ctx context.Context, db *sql.DB, r Resolution) error {
 	if strings.TrimSpace(r.By) == "" || strings.TrimSpace(r.Note) == "" {
 		return errors.New("resolving an effect needs who and what was checked")
@@ -172,13 +174,18 @@ func Resolve(ctx context.Context, db *sql.DB, r Resolution) error {
 		if kind != "effect" || stepState != "unknown" {
 			return ErrNotAllowed
 		}
+		live := runState == "waiting" || runState == "running"
 		var err error
-		if r.Applied {
+		switch {
+		case r.Applied:
 			_, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='completed',output=$3,error='',actor=$4,note=$5,finished_at=now() WHERE run_id=$1 AND key=$2`, r.RunID, r.Key, string(output), r.By, truncate(r.Note))
-		} else {
+		case live:
 			_, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='waiting',retry_at=NULL,attempts=0,error='',actor=$3,note=$4,finished_at=NULL WHERE run_id=$1 AND key=$2`, r.RunID, r.Key, r.By, truncate(r.Note))
+		default:
+			// Nothing will run this step again: record the reconciliation and close it.
+			_, err = tx.ExecContext(ctx, `UPDATE workflow_steps SET state='cancelled',error='',actor=$3,note=$4,finished_at=now() WHERE run_id=$1 AND key=$2`, r.RunID, r.Key, r.By, truncate(r.Note))
 		}
-		if err == nil && runState == "waiting" {
+		if err == nil && live {
 			_, err = tx.ExecContext(ctx, `UPDATE workflow_runs SET wake_at='-infinity',updated_at=now() WHERE id=$1`, r.RunID)
 		}
 		return err

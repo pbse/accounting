@@ -304,6 +304,9 @@ func (x *execution) step(key, kind string, p policy, fn func(context.Context) (a
 		if err := x.mark(key, "unknown", callErr.Error(), nil); err != nil {
 			return nil, err
 		}
+		if err := x.crash("marked-unknown", key); err != nil {
+			return nil, err
+		}
 		return nil, x.parkUntil("", nil)
 	}
 	if x.cancelled.Load() && kind != "effect" {

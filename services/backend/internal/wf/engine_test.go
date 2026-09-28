@@ -714,3 +714,38 @@ func TestCancelDuringTheLastStepEndsTheRunCancelled(t *testing.T) {
 		t.Fatalf("a cancel requested mid-run must win and keep completed steps: %+v", v)
 	}
 }
+
+func TestResolvingBeforeTheRunParksStillWakesIt(t *testing.T) {
+	h := setup(t)
+	in := ref{ID: rand.Text(), Failures: 1}
+	id := h.start("test_effect", in)
+	wf.Hook(h.engine, func(point, key string) {
+		if point == "marked-unknown" && key == "post" {
+			if err := wf.Resolve(h.ctx, h.db, wf.Resolution{RunID: id, Key: "post", Applied: true, Output: json.RawMessage(`"REF-EARLY"`), By: "test", Note: "found it before the run parked"}); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	h.drain()
+	if v := h.expect(id, "completed"); v.output != `"posted REF-EARLY"` {
+		t.Fatalf("output %s", v.output)
+	}
+}
+
+func TestNotAppliedOnACancelledRunClosesTheStep(t *testing.T) {
+	h := setup(t)
+	id := h.start("test_effect", ref{ID: rand.Text(), Failures: 1})
+	h.drain()
+	if err := wf.Cancel(h.ctx, h.db, id, "test", "client withdrew"); err != nil {
+		t.Fatal(err)
+	}
+	if v := h.expect(id, "cancelled"); v.steps["post"] != "unknown" {
+		t.Fatalf("steps %v", v.steps)
+	}
+	if err := wf.Resolve(h.ctx, h.db, wf.Resolution{RunID: id, Key: "post", Applied: false, By: "test", Note: "no such request at the provider"}); err != nil {
+		t.Fatal(err)
+	}
+	if v := h.expect(id, "cancelled"); v.steps["post"] != "cancelled" {
+		t.Fatalf("a finished run's effect must end closed, not waiting: %v", v.steps)
+	}
+}

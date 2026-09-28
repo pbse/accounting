@@ -128,7 +128,8 @@ func (e *Engine) claim(ctx context.Context) (*claimedRun, error) {
 	run := claimedRun{claim: rand.Text()}
 	var org sql.NullString
 	var input []byte
-	err := e.DB.QueryRowContext(ctx, `UPDATE workflow_runs SET state='running',claim=$1,claimed_at=$2,attempts=attempts+1,started_at=COALESCE(started_at,$2),updated_at=now()
+	// wake_at is cleared while a run executes, so a wake requested meanwhile (Resolve) survives parking.
+	err := e.DB.QueryRowContext(ctx, `UPDATE workflow_runs SET state='running',claim=$1,claimed_at=$2,attempts=attempts+1,started_at=COALESCE(started_at,$2),updated_at=now(),wake_at=NULL
  WHERE id=(SELECT r.id FROM workflow_runs r LEFT JOIN organizations o ON o.id=r.organization_id
   WHERE ((r.state IN ('queued','waiting') AND r.wake_at<=$2) OR (r.state='running' AND r.claimed_at<$3))
    AND (r.organization_id IS NULL OR o.enabled) AND ($4='' OR r.organization_id=$4)
@@ -301,7 +302,9 @@ func (e *Engine) finish(x *execution, state string, out json.RawMessage, message
 // park releases the claim until the run's wake time (nil: until a person or event wakes it). An
 // event committed while the run was still running is caught here or by the next sweep. A cancel
 // requested while the run was running is applied here, in the same statement, so it cannot slip
-// between this check and Cancel (which only records the request while the run is running).
+// between this check and Cancel (which only records the request while the run is running). Likewise
+// a wake requested while it ran (Resolve sets wake_at to -infinity) is kept. Waiting for the row
+// lock, Postgres re-reads the row's latest values, so either order of the two is safe.
 func (e *Engine) park(x *execution) {
 	var wake any
 	if x.wakeAt != nil {
@@ -320,6 +323,7 @@ func (e *Engine) park(x *execution) {
  finished_at=CASE WHEN cancel_requested_at IS NOT NULL THEN now() END,
  waiting_on=CASE WHEN cancel_requested_at IS NOT NULL THEN '' ELSE $4 END,
  wake_at=CASE WHEN cancel_requested_at IS NOT NULL THEN NULL
+  WHEN r.wake_at='-infinity' THEN '-infinity'::timestamptz
   WHEN $4<>'' AND EXISTS(`+unconsumed("$4", "$3::timestamptz")+`) THEN '-infinity'::timestamptz ELSE $3::timestamptz END
  WHERE id=$1 AND claim=$2 RETURNING state`, x.run.id, x.run.claim, wake, x.waitingOn).Scan(&state)
 	if err == nil && state == "cancelled" {
