@@ -299,6 +299,13 @@ func TestALongRunShowsItsLatestStepsAndChildren(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Long runs')`, firm); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM workflow_steps WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1 AND parent_run_id IS NOT NULL`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			if _, err := db.Exec(q, firm); err != nil {
+				t.Error(err)
+			}
+		}
+	})
 	var run int64
 	if err := db.QueryRow(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,state,input,finished_at) VALUES($1,'test_admin_flow','long','seed','completed','{}',now()) RETURNING id`, firm).Scan(&run); err != nil {
 		t.Fatal(err)
