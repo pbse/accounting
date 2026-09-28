@@ -9,10 +9,18 @@ import (
 	"close.local/backend/internal/wf"
 	_ "close.local/backend/workflows"
 	"context"
+	"database/sql"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"slices"
+	"strings"
+	"sync"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -29,20 +37,110 @@ func main() {
 	db.SetMaxOpenConns(8)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	go preparation.Run(ctx, db)
-	go delivery.Run(ctx, db)
-	go forwarded.Run(ctx, db)
-	go quickbooks.RunSync(ctx, db)
-	go transport.RunAlerts(ctx, db)
-	go transport.RunStandingApprovals(ctx, db)
-	go transport.RunComparisons(ctx, db)
-	go transport.RunReplays(ctx, db)
-	go transport.RunXeroRefresh(ctx, db)
-	go transport.BackfillXeroRows(ctx, db)
-	go transport.RunStripeReports(ctx, db)
-	go transport.RunChatExpiry(ctx, db)
-	go transport.RunCloseGoals(ctx, db)
-	go wf.Run(ctx, db)
-	go transport.RunHeartbeat(ctx, db, "worker")
-	transport.Run(transport.Worker())
+	loops := map[string]func(context.Context, *sql.DB){
+		"preparation":        preparation.Run,
+		"delivery":           delivery.Run,
+		"forwarded":          forwarded.Run,
+		"quickbooks_sync":    quickbooks.RunSync,
+		"alerts":             transport.RunAlerts,
+		"standing_approvals": transport.RunStandingApprovals,
+		"comparisons":        transport.RunComparisons,
+		"replays":            transport.RunReplays,
+		"xero_refresh":       transport.RunXeroRefresh,
+		"xero_backfill":      transport.BackfillXeroRows,
+		"stripe_reports":     transport.RunStripeReports,
+		"chat_expiry":        transport.RunChatExpiry,
+		"close_goals":        transport.RunCloseGoals,
+		"workflow_engine":    wf.Run,
+		"heartbeat":          func(ctx context.Context, db *sql.DB) { transport.RunHeartbeat(ctx, db, "worker") },
+	}
+	for name, loop := range loops {
+		go supervise(ctx, name, func() { loop(ctx, db) }, recordPanic(db))
+	}
+	transport.Run(reportFailing(transport.Worker()))
+}
+
+// restartAfter spaces restarts, so a loop that panics on every pass does not spin.
+var restartAfter = 30 * time.Second
+
+// failing holds, per loop that keeps panicking, when its last repeated panic stops counting against health.
+var failing = struct {
+	sync.Mutex
+	until map[string]time.Time
+}{until: map[string]time.Time{}}
+
+// supervise runs one background loop and restarts it after a panic, so one failing loop no
+// longer stops the others. A loop that returns is finished and is not restarted. Three panics
+// without ten clean minutes between them fail the worker's health check for fifteen minutes.
+func supervise(ctx context.Context, name string, loop func(), panicked func(name string, p any, stack []byte)) {
+	streak := 0
+	for {
+		started := time.Now()
+		p, stack := func() (p any, stack []byte) {
+			defer func() {
+				if p = recover(); p != nil {
+					stack = debug.Stack()
+				}
+			}()
+			loop()
+			return nil, nil
+		}()
+		if p == nil {
+			return
+		}
+		if time.Since(started) > 10*time.Minute {
+			streak = 0
+		}
+		if streak++; streak >= 3 {
+			failing.Lock()
+			failing.until[name] = time.Now().Add(15 * time.Minute)
+			failing.Unlock()
+		}
+		panicked(name, p, stack)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(restartAfter):
+		}
+	}
+}
+
+// recordPanic logs the stack and puts the latest panic on the worker's heartbeat, where the admin overview shows it.
+func recordPanic(db *sql.DB) func(string, any, []byte) {
+	instance, _ := os.Hostname()
+	return func(name string, p any, stack []byte) {
+		log.Printf("Worker loop %s panicked; restarting in %s: %v\n%s", name, restartAfter, p, stack)
+		message := []rune(fmt.Sprintf("%s: %v", name, p))
+		if len(message) > 300 {
+			message = message[:300]
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := db.ExecContext(ctx, `INSERT INTO worker_heartbeats(loop,instance,detail) VALUES('worker',$1,jsonb_build_object('panic',$2::text,'panicked_at',now()))
+ ON CONFLICT (loop) DO UPDATE SET detail=worker_heartbeats.detail||EXCLUDED.detail`, instance, string(message)); err != nil {
+			log.Printf("Panic in %s could not be recorded: %v", name, err)
+		}
+	}
+}
+
+// reportFailing fails /healthz, which the queue Worker's cron checks every minute, while a loop keeps panicking.
+func reportFailing(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			failing.Lock()
+			names := []string{}
+			for name, until := range failing.until {
+				if time.Now().Before(until) {
+					names = append(names, name)
+				}
+			}
+			failing.Unlock()
+			if len(names) > 0 {
+				slices.Sort(names)
+				http.Error(w, "Worker loops keep panicking: "+strings.Join(names, ", "), http.StatusServiceUnavailable)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }

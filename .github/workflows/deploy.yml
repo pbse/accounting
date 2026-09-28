@@ -108,8 +108,10 @@ jobs:
             if (new URL(process.env[name]).protocol !== 'https:') throw new Error(`${name} must use HTTPS`);
           }
           if (!['require','verify-ca','verify-full'].includes(new URL(process.env.DATABASE_URL).searchParams.get('sslmode'))) throw new Error('Staging PostgreSQL must require TLS');
+          // The firm is a session setting, which a transaction pooler would share between firms.
+          if (new URL(process.env.DATABASE_URL).hostname.toLowerCase().includes('-pooler')) throw new Error('Staging DATABASE_URL must use the direct endpoint, not the -pooler one');
           const migration = new URL(process.env.MIGRATION_DATABASE_URL);
-          if (!['require','verify-ca','verify-full'].includes(migration.searchParams.get('sslmode')) || migration.hostname.includes('-pooler')) throw new Error('MIGRATION_DATABASE_URL must be the owner on the direct endpoint and require TLS');
+          if (!['require','verify-ca','verify-full'].includes(migration.searchParams.get('sslmode')) || migration.hostname.toLowerCase().includes('-pooler')) throw new Error('MIGRATION_DATABASE_URL must be the owner on the direct endpoint and require TLS');
           JS
       - name: Apply pending migrations as the database owner
         run: |

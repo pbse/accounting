@@ -189,7 +189,7 @@ func adminOverview(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var unknownEffects, firms, suspended, reconnect, failedPreparation int
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT
- COALESCE((SELECT jsonb_agg(jsonb_build_object('loop',loop,'instance',instance,'beat_at',beat_at,'stale',beat_at<now()-interval '5 minutes') ORDER BY loop) FROM worker_heartbeats),'[]'::jsonb),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('loop',loop,'instance',instance,'beat_at',beat_at,'stale',beat_at<now()-interval '5 minutes','panic',detail->>'panic','panicked_at',detail->'panicked_at') ORDER BY loop) FROM worker_heartbeats),'[]'::jsonb),
  COALESCE((SELECT jsonb_object_agg(state,n) FROM (SELECT state,count(*) AS n FROM workflow_runs WHERE state IN ('queued','running','waiting') OR finished_at>now()-interval '24 hours' GROUP BY state) s),'{}'::jsonb),
  (SELECT min(created_at) FROM workflow_runs WHERE state='queued'),
  (SELECT count(*) FROM workflow_steps WHERE state='unknown'),
