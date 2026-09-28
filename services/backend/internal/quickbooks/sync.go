@@ -475,6 +475,16 @@ func SweepCitedCharts(ctx context.Context, db *sql.DB) error {
 		if err != nil {
 			return err
 		}
+		// With the close locked, the selected snapshot must still be the newest; a capture saved since is left to the next sweep.
+		var newest string
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT s.payload->>'source_id' FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.connection_id::text=$2 AND s.payload->>'period'=$3 ORDER BY s.id DESC LIMIT 1),'') FROM client_closes c WHERE c.id::text=$1 FOR UPDATE OF c`, d.close, d.connection, d.period).Scan(&newest)
+		if err != nil || newest != d.source {
+			tx.Rollback()
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			continue
+		}
 		if err := SupersedeCitedChart(ctx, tx, d.close, d.source, d.connection, d.period, "scheduled-quickbooks-refresh"); err != nil {
 			tx.Rollback()
 			return err
