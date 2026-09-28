@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -40,8 +41,14 @@ func TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	// Last month: ended, and still in the months the scheduler reads.
+	now := time.Now().UTC()
+	if now.Day() == 1 && now.Hour() < 13 {
+		t.Skip("last month has not ended everywhere yet")
+	}
+	month, older := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, time.UTC).Format("2006-01"), time.Date(now.Year(), now.Month()-3, 1, 0, 0, 0, 0, time.UTC).Format("2006-01")
 	var closeID, connection string
-	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-08') RETURNING id::text`, "Fresh snapshot "+rand.Text()).Scan(&closeID); err != nil {
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,$2) RETURNING id::text`, "Fresh snapshot "+rand.Text(), month).Scan(&closeID); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
@@ -55,7 +62,7 @@ func TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures(t *testing.T) {
 	due := func() bool {
 		t.Helper()
 		var org, entity, company string
-		err := db.QueryRow(firstPeriod, closeID, connection, "2026-08").Scan(&org, &entity, &company)
+		err := db.QueryRow(firstPeriod, closeID, connection, month).Scan(&org, &entity, &company)
 		if err != nil && err != sql.ErrNoRows {
 			t.Fatal(err)
 		}
@@ -63,7 +70,7 @@ func TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures(t *testing.T) {
 	}
 	snapshot := func(actor, age string) {
 		t.Helper()
-		if _, err := db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor,captured_at) VALUES($1,$2,'123',$3,'{"period":"2026-08"}',now(),$4,now()-$5::interval)`, closeID, connection, rand.Text(), actor, age); err != nil {
+		if _, err := db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor,captured_at) VALUES($1,$2,'123',$3,jsonb_build_object('period',$6::text),now(),$4,now()-$5::interval)`, closeID, connection, rand.Text(), actor, age, month); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -101,12 +108,18 @@ func TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures(t *testing.T) {
 	if !due() {
 		t.Fatal("the cap outlived its snapshots")
 	}
+	// A close holding its twenty snapshots is no longer refreshed.
+	db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) SELECT $1,$2,'123',md5(random()::text),'{}',now(),'person@example.test' FROM generate_series(1,17)`, closeID, connection)
+	if !stopped() {
+		t.Fatal("a close at its snapshot limit was not reported for sign-off")
+	}
+	db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1 AND NOT payload ? 'period'`, closeID)
 	// A close past the months the scheduler reads is no longer refreshed either.
-	db.Exec(`UPDATE client_closes SET period='2026-06' WHERE id=$1`, closeID)
+	db.Exec(`UPDATE client_closes SET period=$2 WHERE id=$1`, closeID, older)
 	if !stopped() {
 		t.Fatal("a close the scheduler no longer reads was not reported for sign-off")
 	}
-	db.Exec(`UPDATE client_closes SET period='2026-08' WHERE id=$1`, closeID)
+	db.Exec(`UPDATE client_closes SET period=$2 WHERE id=$1`, closeID, month)
 	snapshot("person@example.test", "0 seconds")
 	if due() || stopped() {
 		t.Fatal("a person's capture was refreshed over, or still asks for a capture")
