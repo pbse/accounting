@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations), A1 (workflows), A2 (firm management) and A3 (plans) implemented** (2026-09-28); A4 (hardening) is under way: audit search and export are in. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations), A1 (workflows), A2 (firm management) and A3 (plans) implemented** (2026-09-28); A4 (hardening) is under way: audit search and export, and platform alerts, are in. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -190,7 +190,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 | **A1. Workflows** (implemented) | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
 | **A2. Firm management** (implemented) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
 | **A3. Plans** (implemented) | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
-| **A4. Hardening** (audit search and export implemented) | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
+| **A4. Hardening** (audit search and export, platform alerts implemented) | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
 
 **Suggested order across both plans:**
 1. Engine W0/W1 alongside admin A0.
@@ -240,6 +240,8 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 ## As built (A4, so far)
 
 - **Staff audit.** `/admin/audit` searches every staff action and reveal across firms: by firm (`platform` for entries on no firm), staff member, action or its start (`plan.`, `content.reveal`) and result, newest first, paged by entry ID. The firm page's Staff audit tab uses the same search, and `GET /audit/export` returns it as CSV (at most 5,000 entries; `X-Truncated` says when there are more). Who did which action to what, and whether it went through, always show. Reasons, request details and refusal errors are masked until revealed, in the page and the export. A reveal is recorded, in one transaction, against every firm whose entries it shows, and entries on no firm at platform level, with the search and the entry IDs it covered. In the console a reveal belongs to its search (and a plans list's reveal to its filters): paging keeps it, and other filters are masked until revealed anew. CSV values that start like a formula (`=`, `+`, `-`, `@`, also after leading whitespace), or with whitespace or a control character, are prefixed with an apostrophe, so a spreadsheet never runs a staff member's text.
+
+- **Platform alerts.** A worker loop of its own (`platform_alerts`, supervised like the others, so a backlog of firm alerts never delays it) watches the platform itself every minute: a heartbeat stopped for 5 minutes (the worker process and the workflow engine report one; the other job loops' stalls show as their stuck items, under Stuck work and in the firms' alerts), workflow runs stuck (the stuck view's rule, shared as `stuckRuns`), and provider writes of unknown outcome. Each opens one alert in `platform_alerts` (migration 100), sent once to the operations webhook and resolved when the problem clears (see [operations](operations.md)). A send the worker stopped before the webhook answered becomes unconfirmed, not stuck sending. The Overview lists the problems now, live, with when each was alerted and whether the webhook took it. A worker that is down cannot report itself, so an uptime monitor on the API, or someone watching the Overview, remains the check for that.
 
 ## Later ideas (not planned)
 

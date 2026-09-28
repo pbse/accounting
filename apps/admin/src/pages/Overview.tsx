@@ -1,5 +1,7 @@
 import { useResource, when } from "../api";
 
+type Problem = { kind: string; item_id: string; detail: string; since: string | null; delivery: string | null };
+const problemLabel: Record<string, string> = { "platform.loop_stale": "A heartbeat stopped", "platform.runs_stuck": "Workflow runs stuck", "platform.unknown_effects": "Provider writes to reconcile" };
 type Heartbeat = { loop: string; instance: string; beat_at: string; stale: boolean; panic: string | null; panicked_at: string | null };
 type Overview = {
   heartbeats: Heartbeat[];
@@ -10,6 +12,7 @@ type Overview = {
   suspended_firms: number;
   reconnect_required: number;
   failed_preparation_24h: number;
+  platform_problems: Problem[];
 };
 
 export function Overview() {
@@ -39,6 +42,25 @@ export function Overview() {
             <Stat label="Connections to reconnect" value={o.reconnect_required} tone={o.reconnect_required ? "warn" : "ok"} />
             <Stat label="Preparation failed" value={o.failed_preparation_24h} note="in 24 hours" tone={o.failed_preparation_24h ? "warn" : "ok"} />
           </div>
+          <section>
+            <h2>Platform alerts</h2>
+            {o.platform_problems.length === 0 ? <p><span className="status ok">No platform problem now.</span></p> : (
+              <table>
+                <thead><tr><th>Problem</th><th>Where</th><th>Now</th><th>Alerted</th></tr></thead>
+                <tbody>
+                  {o.platform_problems.map((p) => (
+                    <tr key={`${p.kind}-${p.item_id}`}>
+                      <td><span className="status danger">{problemLabel[p.kind] ?? p.kind}</span></td>
+                      <td>{p.item_id}</td>
+                      <td>{p.detail}</td>
+                      <td>{p.since ? `${when(p.since)} · ${p.delivery === "accepted" ? "delivered" : p.delivery === "unknown" ? "delivery unconfirmed" : "sending"}` : "not yet"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <p className="muted">The worker checks every minute and sends each new problem once to the operations webhook (OPERATIONS_ALERT_WEBHOOK_URL), when one is set; it resolves when the problem clears. Heartbeats come from the worker process and the workflow engine; the other job loops' stalls show as their stuck items, under Stuck work. A worker that is down cannot report itself: watch this page, or point an uptime monitor at the API.</p>
+          </section>
           <section>
             <h2>Background loops</h2>
             {o.heartbeats.length === 0 ? (
