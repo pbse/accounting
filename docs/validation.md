@@ -2675,5 +2675,7 @@ What changed:
 
 Checks:
 - actionlint passes on the three workflows.
+- The deploy's CI lookup, run by hand for #176's merge commit `3496814`, finds pull request #176's head `6f103cd` and its passing CI run. A `pull_request` run records the pull request's head commit, not GitHub's test merge commit, so looking up by head commit is correct.
+- CI on this pull request, before the database change: 3:12, of which the side-by-side TypeScript and Go work competed for the runner's two cores. Runs after it could not start: the account's Actions minutes ran out.
 - The background TypeScript chain (checks, tests, both vite builds, edge dry-run) passes locally in 8 seconds and leaves `apps/frontend/dist`, with the admin app under it, as before.
 - The Actions timings come from this pull request's CI run and its deploy, recorded in the pull request.
