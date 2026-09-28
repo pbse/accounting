@@ -23,11 +23,12 @@ type LedgerRow struct {
 // Ledger is the close's current QuickBooks capture: its evidence entry, the rows the check reads, and the account
 // names by ID and IDs by name from the same connection's newest chart of accounts.
 type Ledger struct {
-	Source   Source
-	Chart    string // the quickbooks_snapshots row the accounts come from
-	Rows     []LedgerRow
-	Accounts map[string]string   // account ID → name
-	IDs      map[string][]string // lower-cased name or fully qualified name → account IDs
+	Source      Source
+	Chart       string // the quickbooks_snapshots row the accounts come from
+	ChartSource Source // that snapshot's evidence entry, cited by the draft so a new chart reopens its review
+	Rows        []LedgerRow
+	Accounts    map[string]string   // account ID → name
+	IDs         map[string][]string // lower-cased name or fully qualified name → account IDs
 }
 
 // StraightThrough turns an agent proposal into a prepaid plan without a person confirming each field, when every
@@ -37,7 +38,7 @@ type Ledger struct {
 // month moves that amount on either account. The reason says why a proposal still needs a person. The draft it
 // queues cites the capture and is reviewed like any other; nothing is approved here. Evidence in the close the agent
 // did not use, or could not read, is left for a person, as the confirmation form asks.
-func StraightThrough(p Proposal, invoice string, aliases []string, procedure Procedure, currency, entity, period, jobID string, unread bool, ledger *Ledger) (Plan, string) {
+func StraightThrough(p Proposal, invoice string, aliases []string, procedure Procedure, procedureSource Source, currency, entity, period, jobID string, unread bool, ledger *Ledger) (Plan, string) {
 	if p.Engine != "openai" || p.Kind != "prepaid" {
 		return Plan{}, "only an agent-read prepaid invoice can be prepared without confirmation"
 	}
@@ -56,8 +57,14 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if !procedure.Enabled || procedure.Kind != "prepaid" || procedure.Method != prepaids.Method || procedure.ExpenseAccount == "" || procedure.PrepaidAccount == "" {
 		return Plan{}, "no enabled prepaid procedure names equal full months and both accounts for this client"
 	}
+	if procedureSource.ID == "" {
+		return Plan{}, "the approved prepaid procedure has not been applied to this close as evidence"
+	}
 	if ledger == nil {
 		return Plan{}, "the close has no current QuickBooks capture"
+	}
+	if ledger.ChartSource.ID == "" {
+		return Plan{}, "the close's chart of accounts capture has no current evidence entry"
 	}
 	primary := ""
 	for _, s := range p.Sources {
@@ -173,9 +180,12 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	input := prepaids.Input{Entity: entity, ClosePeriod: period, SourceReference: "Evidence #" + primary + " · work #" + jobID, Currency: currency, Amount: prepaids.Money(amount), ServiceStart: facts["service_start"], ServiceEnd: facts["service_end"],
 		ExpenseAccount: procedure.ExpenseAccount, PrepaidAccount: procedure.PrepaidAccount, Basis: "accrual", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true}
 	raw, _ := json.Marshal(input)
-	capture := ledger.Source
+	// The draft cites the capture, the chart and the procedure evidence, so a change to any of them reopens its review.
+	capture, chart, rule := ledger.Source, ledger.ChartSource, procedureSource
 	capture.Role, capture.Location = "period_ledger", booking
-	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, BilledTo: facts["billed_to"], Input: raw, Sources: append(append([]Source{}, p.Sources...), capture)}
+	chart.Role, chart.Location = "chart", "Accounts "+expenseIDsLabel(ledger, procedure)
+	rule.Role, rule.Location = "procedure", "Version "+procedure.ID
+	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, BilledTo: facts["billed_to"], Input: raw, Sources: append(append([]Source{}, p.Sources...), capture, chart, rule)}
 	if _, err := Calculate(plan, entity, period); err != nil {
 		return Plan{}, err.Error()
 	}
@@ -214,7 +224,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			}
 		}
 		if json.Unmarshal(row.Record, &record) != nil {
-			continue
+			return "", "a captured " + row.Kind + " in the close month could not be read"
 		}
 		party := record.VendorRef.Name
 		if party == "" {
@@ -354,6 +364,11 @@ func currencyBefore(quote, currency string, cents int64) bool {
 	}
 	digits := fmt.Sprintf(`%d(\.%02d)?([^0-9]|$)`, cents/100, cents%100)
 	return regexp.MustCompile(`(` + code + `|` + sign + `)\s*` + digits).MatchString(plain)
+}
+
+// expenseIDsLabel names the chart accounts the draft was checked against.
+func expenseIDsLabel(ledger *Ledger, procedure Procedure) string {
+	return strings.Join(append(ledger.IDs[strings.ToLower(procedure.ExpenseAccount)], ledger.IDs[strings.ToLower(procedure.PrepaidAccount)]...), ", ")
 }
 
 // BilledToClient refuses a billed-to name that is not the client's name or one of its confirmed, unretired aliases,
@@ -577,6 +592,17 @@ func printed(text, term string) bool {
 	return regexp.MustCompile(`(^|[^0-9a-z])` + regexp.QuoteMeta(term) + `([^0-9a-z]|$)`).MatchString(text)
 }
 
+// ProcedureEvidence is the close's current evidence copy of a procedure version, or an empty Source when it was never
+// applied to the close.
+func ProcedureEvidence(ctx context.Context, tx *sql.Tx, closeID, procedureID string) (Source, error) {
+	var s Source
+	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name FROM evidence e WHERE e.close_id::text=$1 AND e.procedure_id::text=$2 AND e.superseded_by IS NULL ORDER BY e.id DESC LIMIT 1`, closeID, procedureID).Scan(&s.ID, &s.Digest, &s.Name)
+	if err == sql.ErrNoRows {
+		return Source{}, nil
+	}
+	return s, err
+}
+
 // CloseLedger is the newest completed capture of the close month on the close's reading connection, with its
 // current evidence entry and its bill, purchase, journal, vendor credit and deposit rows (a newer sync that found the books
 // unchanged reuses them); nil when a newer capture is still pending or failed,
@@ -608,7 +634,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 		return nil, err
 	}
 	var catalog []byte
-	err = tx.QueryRowContext(ctx, `SELECT id::text,payload->'accounts' FROM quickbooks_snapshots WHERE close_id::text=$1 AND connection_id::text=$2 AND payload ? 'period' ORDER BY id DESC LIMIT 1`, closeID, connection).Scan(&l.Chart, &catalog)
+	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.payload->'accounts',COALESCE(e.id::text,''),COALESCE(e.digest,''),COALESCE(e.name,'') FROM quickbooks_snapshots s LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id AND e.superseded_by IS NULL WHERE s.close_id::text=$1 AND s.connection_id::text=$2 AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1`, closeID, connection).Scan(&l.Chart, &catalog, &l.ChartSource.ID, &l.ChartSource.Digest, &l.ChartSource.Name)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}

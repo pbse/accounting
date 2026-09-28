@@ -719,7 +719,11 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			if profile.State == "detected" {
 				home = profile.Currency
 			}
-			plan, reason = StraightThrough(proposal, invoice, current, procedure, home, entity, period, id, unread, ledger)
+			rule, e := ProcedureEvidence(persist, finish, closeID, procedure.ID)
+			if e != nil {
+				return true, e
+			}
+			plan, reason = StraightThrough(proposal, invoice, current, procedure, rule, home, entity, period, id, unread, ledger)
 			if reason == "" {
 				straight = "Prepared without confirmation: every fact is one verified candidate, procedure v" + procedure.ID + " fixes the method and accounts, and one captured bill from its vendor expenses the amount."
 			}

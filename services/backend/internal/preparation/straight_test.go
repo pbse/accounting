@@ -33,6 +33,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	proposal := Proposal{Kind: "prepaid", Engine: "openai", Sources: []Source{{ID: "1", Digest: "d", Name: "insurance.pdf", Role: "invoice"}},
 		Facts: []Fact{fact("amount", "1200.00"), fact("service_start", "2026-09-01"), fact("service_end", "2027-08-31"), fact("currency", "USD"), {Field: "expense_account", Label: "expense account"}, {Field: "prepaid_account", Label: "prepaid account"}, {Field: "booked_balance", Label: "booked balance", Optional: true}, vendorFact, billedTo, invoiceNumber}}
 	invoice := "Acme Insurance Co\nInvoice INV-778\nPO-123\nBill to: Example\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027\n\nPay online with Stripe"
+	rule := Source{ID: "3", Digest: "rule", Name: "Approved prepaid procedure v7.txt"}
 	procedure := Procedure{ID: "7", Kind: "prepaid", Method: prepaids.Method, ExpenseAccount: "Insurance", PrepaidAccount: "Prepaid Expenses", Enabled: true}
 	row := func(kind, id, date, vendor, number, account, amount string) LedgerRow {
 		detail := "AccountBasedExpenseLineDetail"
@@ -63,10 +64,10 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	foreign := row("JournalEntry", "65", "2026-09-30", "", "", "Insurance", "900")
 	foreign.Currency = "CAD"
 	ledger := func(rows ...LedgerRow) *Ledger {
-		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Chart: "31", Rows: rows, Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12"}, "prepaid expenses": {"13"}}}
+		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Chart: "31", ChartSource: Source{ID: "8", Digest: "chart", Name: "QuickBooks accounts 2026-09"}, Rows: rows, Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12"}, "prepaid expenses": {"13"}}}
 	}
-	plan, reason := StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200")))
-	if reason != "" || plan.Kind != "prepaid" || len(plan.Sources) != 2 || plan.Sources[1].Role != "period_ledger" || plan.Sources[1].Digest != "cap" || !strings.Contains(plan.Sources[1].Location, "Bill 41") {
+	plan, reason := StraightThrough(proposal, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200")))
+	if reason != "" || plan.Kind != "prepaid" || len(plan.Sources) != 4 || plan.Sources[1].Role != "period_ledger" || plan.Sources[1].Digest != "cap" || !strings.Contains(plan.Sources[1].Location, "Bill 41") || plan.Sources[2].Role != "chart" || plan.Sources[2].ID != "8" || plan.Sources[3].Role != "procedure" || plan.Sources[3].ID != "3" {
 		t.Fatal("expensed invoice not prepared with the capture cited", reason, plan.Sources)
 	}
 	var input prepaids.Input
@@ -88,29 +89,29 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 			t.Fatal(name, "accepted at preparation")
 		}
 	}
-	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "52", "2026-09-09", "Other Vendor", "", "Prepaid Expenses", "1200"))); reason != "" {
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "52", "2026-09-09", "Other Vendor", "", "Prepaid Expenses", "1200"))); reason != "" {
 		t.Fatal("another vendor's prepaid bill blocked this invoice", reason)
 	}
-	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "51", "2026-09-03", "Acme Insurance Co", "INV-778", "Insurance", "1200"))); reason != "" {
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "51", "2026-09-03", "Acme Insurance Co", "INV-778", "Insurance", "1200"))); reason != "" {
 		t.Fatal("purchase from the vendor not accepted", reason)
 	}
 	other := proposal
 	other.Facts = append([]Fact(nil), proposal.Facts...)
 	other.Facts[8] = optionalFact("billed_to", "Other Co")
 	other.Facts[8].Candidates[0].Quote = "Bill to: Other Co"
-	if _, reason = StraightThrough(other, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+	if _, reason = StraightThrough(other, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared an invoice billed to another company")
 	}
 	other.Facts[8] = optionalFact("billed_to", "Example Services LLC")
 	other.Facts[8].Candidates[0].Quote = "Billed to Example Services LLC"
-	if _, reason = StraightThrough(other, invoice, []string{"Example Services, LLC"}, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+	if _, reason = StraightThrough(other, invoice, []string{"Example Services, LLC"}, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("confirmed alias not accepted", reason)
 	}
 	issued := proposal
 	issued.Facts = append([]Fact(nil), proposal.Facts...)
 	issued.Facts[7] = optionalFact("vendor", "Acme Insurance Co")
 	issued.Facts[7].Candidates[0].Quote = "From: Acme Insurance Co"
-	if _, reason = StraightThrough(issued, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+	if _, reason = StraightThrough(issued, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("issuer-labelled vendor line not accepted", reason)
 	}
 	ranged := proposal
@@ -119,27 +120,35 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	ranged.Facts[2] = fact("service_end", "2027-08-31")
 	ranged.Facts[1].Candidates[0].Quote = "Coverage from 2026-09-01 through 2027-08-31"
 	ranged.Facts[2].Candidates[0].Quote = "Coverage from 2026-09-01 through 2027-08-31"
-	if _, reason = StraightThrough(ranged, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+	if _, reason = StraightThrough(ranged, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("range line not accepted for both dates", reason)
 	}
-	if _, reason = StraightThrough(proposal, invoice+"\nDiscount USD 100.00\nTotal USD 1,100.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+	if _, reason = StraightThrough(proposal, invoice+"\nDiscount USD 100.00\nTotal USD 1,100.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared a line item when the invoice prints a discount and a lower total")
 	}
-	if _, reason = StraightThrough(proposal, invoice+"\nTotal 1,300", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+	if _, reason = StraightThrough(proposal, invoice+"\nTotal 1,300", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared against a bare-integer total that differs")
 	}
-	if _, reason = StraightThrough(proposal, invoice+"\nTotal USD 1,200.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+	if _, reason = StraightThrough(proposal, invoice+"\nTotal USD 1,200.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("a total line printing the amount refused", reason)
 	}
-	if _, reason = StraightThrough(proposal, invoice+"\nTotal including tax USD 1,300.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+	if _, reason = StraightThrough(proposal, invoice+"\nTotal including tax USD 1,300.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared a subtotal when the invoice prints a larger total")
+	}
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, Source{}, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+		t.Fatal("prepared without the procedure applied to the close as evidence")
+	}
+	bare := ledger(bill)
+	bare.ChartSource = Source{}
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, bare); reason == "" {
+		t.Fatal("prepared without a chart evidence entry")
 	}
 	idOnly := bill
 	idOnly.Record = json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)
-	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(idOnly)); reason != "" {
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(idOnly)); reason != "" {
 		t.Fatal("bill line naming its account by ID only not accepted", reason)
 	}
-	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, rule, "", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared without a detected home currency")
 	}
 	for name, c := range map[string]struct {
@@ -163,6 +172,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 			p.Facts[4].Value = "Insurance"
 			p.Facts[4].Candidates = []Candidate{{Value: "Insurance", SourceID: "1", Quote: "Expense account: Prepaid Insurance"}}
 		}, ledger(bill), false},
+		"undecodable capture row":      {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "95", Date: "2026-09-20", Record: json.RawMessage(`{"Line":{"Amount":1}}`)}), false},
 		"deposit with no counterparty": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "94", Date: "2026-09-20", Record: json.RawMessage(`{"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Bank"}}}]}`)}), false},
 		"dollar sign beside another code": {func(p *Proposal, _ *Procedure) {
 			p.Facts[0].Candidates[0].Quote = "Total CAD $1,200.00 (USD accepted)"
@@ -261,7 +271,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 			p.Facts[i].Candidates = append([]Candidate(nil), p.Facts[i].Candidates...)
 		}
 		c.change(&p, &q)
-		if _, reason := StraightThrough(p, invoice, nil, q, "USD", "Example", "2026-09", "5", c.unread, c.ledger); reason == "" {
+		if _, reason := StraightThrough(p, invoice, nil, q, rule, "USD", "Example", "2026-09", "5", c.unread, c.ledger); reason == "" {
 			t.Fatal(name, "prepared without a person")
 		}
 	}
