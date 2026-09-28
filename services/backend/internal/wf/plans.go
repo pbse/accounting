@@ -363,8 +363,8 @@ func value(id, path string, outputs map[string]json.RawMessage) (any, error) {
 	if !ok || len(raw) == 0 {
 		return nil, fmt.Errorf("{{%s%s}}: node %q produced no output", id, path, id)
 	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	v, err := decodeExact(raw)
+	if err != nil {
 		return nil, err
 	}
 	for _, field := range strings.Split(strings.TrimPrefix(path, "."), ".") {
@@ -399,6 +399,16 @@ func text(v any) string {
 	return string(raw)
 }
 
+// decodeExact decodes JSON keeping numbers as written (json.Number), so an integer above 2^53 is
+// not rounded on its way through a plan.
+func decodeExact(raw []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var v any
+	err := decoder.Decode(&v)
+	return v, err
+}
+
 // resolveText fills every template in s with its value's text.
 func resolveText(s string, outputs map[string]json.RawMessage) (string, error) {
 	var failure error
@@ -419,8 +429,8 @@ func resolveInput(raw json.RawMessage, outputs map[string]json.RawMessage) (json
 	if len(raw) == 0 {
 		return json.RawMessage("{}"), nil
 	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	v, err := decodeExact(raw)
+	if err != nil {
 		return nil, err
 	}
 	var walk func(any) (any, error)
@@ -505,19 +515,24 @@ func CreatePlan(ctx context.Context, db *sql.DB, d PlanDraft) (int64, error) {
 		if d.IsTemplate || d.Organization == "" || strings.TrimSpace(d.Rationale) == "" {
 			return 0, errors.New("an agent proposes a plan for one firm and says why")
 		}
-		var today int
-		if err = db.QueryRowContext(ctx, `SELECT count(*) FROM workflow_plans WHERE organization_id=$1 AND source='agent' AND created_at>now()-interval '1 day'`, d.Organization).Scan(&today); err != nil {
-			return 0, err
-		}
-		if today >= maxAgentPlansPerDay {
-			return 0, fmt.Errorf("%w: this firm already has %d agent proposals today", ErrNotAllowed, today)
-		}
 		state = "proposed"
 	}
 	canonical, _ := json.Marshal(p)
 	var id int64
-	err = db.QueryRowContext(ctx, `INSERT INTO workflow_plans(organization_id,title,plan,digest,state,source,rationale,agent,created_by,is_template)
+	err = inTx(ctx, db, func(tx *sql.Tx) error {
+		if d.Source == "agent" {
+			// Counting and saving under the firm's row lock keeps concurrent proposals within the limit.
+			var today int
+			if err := tx.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM workflow_plans WHERE organization_id=$1 AND source='agent' AND created_at>now()-interval '1 day') FROM organizations WHERE id=$1 FOR UPDATE`, d.Organization).Scan(&today); err != nil {
+				return err
+			}
+			if today >= maxAgentPlansPerDay {
+				return fmt.Errorf("%w: this firm already has %d agent proposals today", ErrNotAllowed, today)
+			}
+		}
+		return tx.QueryRowContext(ctx, `INSERT INTO workflow_plans(organization_id,title,plan,digest,state,source,rationale,agent,created_by,is_template)
  VALUES(NULLIF($1,''),$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, d.Organization, p.Title, string(canonical), p.Digest(), state, d.Source, truncate(d.Rationale), d.Agent, d.CreatedBy, d.IsTemplate).Scan(&id)
+	})
 	return id, err
 }
 

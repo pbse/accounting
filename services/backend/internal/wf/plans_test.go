@@ -210,3 +210,28 @@ func TestPlanEventWaitsUseEarlierOutputs(t *testing.T) {
 		t.Fatalf("output %s", v.output)
 	}
 }
+
+func TestPlanInputsKeepLargeIntegersExact(t *testing.T) {
+	h := setup(t)
+	id := h.runPlan(`{"version":1,"title":"Big","nodes":[{"id":"a","activity":"test_double","input":{"n":9007199254740993}}]}`)
+	h.expect(id, "completed")
+	var output string
+	h.db.QueryRow(`SELECT output::text FROM workflow_steps WHERE run_id=$1 AND key='node:a'`, id).Scan(&output)
+	if !strings.Contains(output, "18014398509481986") {
+		t.Fatalf("the number changed on its way through the plan: %s", output)
+	}
+}
+
+func TestExternalInputThatDoesNotFitFailsWithoutAnUnknownEffect(t *testing.T) {
+	h := setup(t)
+	id := h.runPlan(`{"version":1,"title":"Wrong type","nodes":[{"id":"first","activity":"test_double","input":{"n":1}},
+ {"id":"ok","after":["first"],"approval":{"permission":"requests:send","timeout":"24h"}},
+ {"id":"send","after":["ok"],"activity":"test_send","input":{"id":"{{first.n}}"}}]}`)
+	if err := wf.Approve(h.ctx, h.db, id, "node:ok", wf.Decision{Approved: true, By: "user_b"}, []string{"requests:send"}); err != nil {
+		t.Fatal(err)
+	}
+	h.drain()
+	if v := h.expect(id, "failed"); v.steps["node:send"] != "failed" {
+		t.Fatalf("input that never reached the provider must fail plainly, not become unknown: %v", v.steps)
+	}
+}

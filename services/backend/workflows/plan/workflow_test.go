@@ -107,12 +107,30 @@ func TestAgentPlansAreOnlyProposals(t *testing.T) {
 	if _, err = db.Exec(`UPDATE workflow_plans SET state='draft' WHERE id=$1`, id); err == nil {
 		t.Fatal("the database must refuse an agent plan in draft")
 	}
-	for i := 0; i < 19; i++ {
+	for i := 0; i < 18; i++ {
 		_, err = wf.CreatePlan(ctx, db, wf.PlanDraft{Organization: org, Plan: look(closeID), Source: "agent", CreatedBy: "agent:claude", Rationale: "again"})
 		must(t, err)
 	}
-	if _, err = wf.CreatePlan(ctx, db, wf.PlanDraft{Organization: org, Plan: look(closeID), Source: "agent", CreatedBy: "agent:claude", Rationale: "one too many"}); !errors.Is(err, wf.ErrNotAllowed) {
-		t.Fatalf("a firm takes at most 20 agent proposals a day: %v", err)
+	// Five proposals at once when one place is left: exactly one gets it.
+	results := make(chan error, 5)
+	for i := 0; i < 5; i++ {
+		go func() {
+			_, err := wf.CreatePlan(ctx, db, wf.PlanDraft{Organization: org, Plan: look(closeID), Source: "agent", CreatedBy: "agent:claude", Rationale: "racing"})
+			results <- err
+		}()
+	}
+	accepted := 0
+	for i := 0; i < 5; i++ {
+		if err := <-results; err == nil {
+			accepted++
+		} else if !errors.Is(err, wf.ErrNotAllowed) {
+			t.Fatal(err)
+		}
+	}
+	var total int
+	must(t, db.QueryRow(`SELECT count(*) FROM workflow_plans WHERE organization_id=$1 AND source='agent'`, org).Scan(&total))
+	if accepted != 1 || total != 20 {
+		t.Fatalf("a firm takes at most 20 agent proposals a day, also concurrently: accepted %d, total %d", accepted, total)
 	}
 }
 
