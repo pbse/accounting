@@ -70,6 +70,9 @@ func compareProposal(p readProposal, plan confirmedPlan, expected []string) (boo
 		changed = append(changed, "kind")
 	}
 	for _, f := range p.Facts {
+		if slices.Contains(preparation.IdentityFacts, f.Field) {
+			continue
+		}
 		confirmed := factText(plan.Input[f.Field])
 		switch {
 		case strings.TrimSpace(f.Value) != "":

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"close.local/backend/internal/prepaids"
@@ -18,10 +19,12 @@ type LedgerRow struct {
 	Record                           json.RawMessage
 }
 
-// Ledger is the close's current QuickBooks capture: its evidence entry and the rows the check reads.
+// Ledger is the close's current QuickBooks capture: its evidence entry, the rows the check reads, and the account
+// names by ID from the close's newest chart of accounts, for a line that carries only the ID.
 type Ledger struct {
-	Source Source
-	Rows   []LedgerRow
+	Source   Source
+	Rows     []LedgerRow
+	Accounts map[string]string
 }
 
 // StraightThrough turns an agent proposal into a prepaid plan without a person confirming each field, when every
@@ -44,14 +47,6 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if unread {
 		return Plan{}, "evidence in the close is not extracted yet, or failed extraction"
 	}
-	// A booking in this client's ledger does not make the invoice this client's; the invoice must name the client.
-	addressed := printed(strings.ToLower(invoice), entity)
-	for _, alias := range aliases {
-		addressed = addressed || printed(strings.ToLower(invoice), alias)
-	}
-	if !addressed {
-		return Plan{}, "the invoice does not name the client or a confirmed alias"
-	}
 	if currency == "" {
 		return Plan{}, "the client's home currency is not detected from a connected ledger"
 	}
@@ -69,13 +64,14 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	}
 	facts := map[string]string{}
 	for _, f := range p.Facts {
+		identity := slices.Contains(IdentityFacts, f.Field)
 		if len(f.Candidates) == 0 {
-			if !f.Optional && f.Field != "expense_account" && f.Field != "prepaid_account" {
+			if (!f.Optional || identity) && f.Field != "expense_account" && f.Field != "prepaid_account" {
 				return Plan{}, "the " + f.Label + " was not read from the source"
 			}
 			continue
 		}
-		if f.Optional {
+		if f.Optional && !identity {
 			return Plan{}, "the source cites a " + f.Label + ", which needs a reviewed method"
 		}
 		if f.Value == "" || len(f.Candidates) != 1 {
@@ -86,7 +82,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			return Plan{}, "the " + f.Label + " is cited from a supporting document, not the invoice"
 		}
 		// Amounts and dates were checked against their quotes when the proposal was validated; names are checked here.
-		if (f.Field == "currency" || strings.HasSuffix(f.Field, "_account")) && !strings.Contains(strings.ToLower(f.Candidates[0].Quote), strings.ToLower(f.Value)) {
+		if (f.Field == "currency" || strings.HasSuffix(f.Field, "_account") || identity) && !strings.Contains(strings.ToLower(f.Candidates[0].Quote), strings.ToLower(f.Value)) {
 			return Plan{}, "the cited text does not show the " + f.Label
 		}
 		facts[f.Field] = f.Value
@@ -96,6 +92,10 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			return Plan{}, "the source names a different " + strings.ReplaceAll(field, "_", " ") + " than the procedure"
 		}
 	}
+	// A booking in this client's ledger does not make the invoice this client's; the invoice must bill the client.
+	if !strings.EqualFold(facts["billed_to"], entity) && !slices.ContainsFunc(aliases, func(alias string) bool { return strings.EqualFold(alias, facts["billed_to"]) }) {
+		return Plan{}, "the invoice is billed to " + facts["billed_to"] + ", not the client or a confirmed alias"
+	}
 	if facts["currency"] != currency {
 		return Plan{}, "the invoice is not in the client's home currency"
 	}
@@ -103,7 +103,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if err != nil || amount <= 0 {
 		return Plan{}, "the amount is not a positive money value"
 	}
-	booking, reason := expensedLine(ledger.Rows, invoice, prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
+	booking, reason := expensedLine(ledger, invoice, facts["vendor"], prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
 	if reason != "" {
 		return Plan{}, reason
 	}
@@ -120,25 +120,14 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 }
 
 // expensedLine finds the one bill or purchase line in the close month that books the invoice amount to the expense
-// account and belongs to the invoice: its vendor's name heads the invoice or its document number is printed in it. Any prepaid
-// line on that bill, a second match, any journal on either account in the month, a vendor credit from the vendor or on
-// either account, or a line whose account is not named is a question for a person, whatever its currency.
-func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, prepaid string) (booking, reason string) {
+// account and belongs to the invoice: its vendor is the invoice's cited vendor, or its document number is printed in
+// the invoice. Any prepaid line on that bill, a second match, any journal on either account in the month, a vendor or
+// card credit from the vendor or on either account, or a line of a journal, credit or that vendor's record whose
+// account cannot be named is a question for a person, whatever its currency.
+func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, expense, prepaid string) (booking, reason string) {
 	text := strings.ToLower(invoice)
-	// ponytail: the invoice's own vendor is taken to be a name in its first three lines (the letterhead); a name printed
-	// anywhere else, such as a payment processor's, only counts against it. A parsed vendor fact would replace this.
-	head := []string{}
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) != "" {
-			head = append(head, line)
-		}
-		if len(head) == 3 {
-			break
-		}
-	}
-	letterhead := strings.Join(head, "\n")
 	matches := 0
-	for _, row := range rows {
+	for _, row := range ledger.Rows {
 		if !strings.HasPrefix(row.Date, period+"-") {
 			continue
 		}
@@ -148,36 +137,44 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 			VendorRef, EntityRef struct{ Name string }
 			Line                 []struct {
 				Amount                        json.Number
-				AccountBasedExpenseLineDetail *struct{ AccountRef struct{ Name string } }
-				JournalEntryLineDetail        *struct{ AccountRef struct{ Name string } }
+				AccountBasedExpenseLineDetail *struct{ AccountRef accountRef }
+				JournalEntryLineDetail        *struct{ AccountRef accountRef }
 			}
 		}
 		if json.Unmarshal(row.Record, &record) != nil {
 			continue
 		}
-		mentioned := printed(text, record.VendorRef.Name) || printed(text, record.EntityRef.Name) || printed(text, record.DocNumber)
-		mine := printed(letterhead, record.VendorRef.Name) || printed(letterhead, record.EntityRef.Name) || (numberLike(record.DocNumber) && printedWhole(text, record.DocNumber))
+		party := record.VendorRef.Name
+		if party == "" {
+			party = record.EntityRef.Name
+		}
+		mentioned := printed(text, party) || printed(text, record.DocNumber)
+		mine := (party != "" && strings.EqualFold(party, vendor)) || (numberLike(record.DocNumber) && printedWhole(text, record.DocNumber))
 		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || ((row.Kind == "VendorCredit" || record.Credit) && mentioned) || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
 		for _, line := range record.Line {
-			name := ""
+			var account accountRef
 			if line.AccountBasedExpenseLineDetail != nil {
-				name = line.AccountBasedExpenseLineDetail.AccountRef.Name
+				account = line.AccountBasedExpenseLineDetail.AccountRef
 			} else if line.JournalEntryLineDetail != nil {
-				name = line.JournalEntryLineDetail.AccountRef.Name
+				account = line.JournalEntryLineDetail.AccountRef
+			}
+			name := account.Name
+			if name == "" {
+				name = ledger.Accounts[account.Value]
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
-			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || record.Credit || mentioned) {
-				return "", "a captured " + row.Kind + " in the close month has a line whose account is not named"
+			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || record.Credit || mentioned || mine) {
+				return "", "a captured " + row.Kind + " in the close month has a line whose account cannot be named"
 			}
 			if row.Kind == "JournalEntry" && (onExpense || onPrepaid) {
 				return "", "a journal in the close month posts to the expense or prepaid account"
 			}
-			if row.Kind == "VendorCredit" && (mentioned || onExpense || onPrepaid) {
+			if row.Kind == "VendorCredit" && (mentioned || mine || onExpense || onPrepaid) {
 				return "", "a vendor credit in the close month may change what this invoice expensed"
 			}
-			if row.Kind == "Purchase" && record.Credit && (mentioned || onExpense || onPrepaid) {
+			if row.Kind == "Purchase" && record.Credit && (mentioned || mine || onExpense || onPrepaid) {
 				return "", "a card credit in the close month may change what this invoice expensed"
 			}
 			if (row.Kind != "Bill" && row.Kind != "Purchase") || !mine {
@@ -201,6 +198,11 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 		return booking, ""
 	}
 	return "", "more than one captured bill or purchase in the close month books this amount"
+}
+
+type accountRef struct {
+	Value string `json:"value"`
+	Name  string `json:"name"`
 }
 
 // numberLike keeps a bill's document number from matching a year, a date fragment or a short figure printed in the
@@ -257,7 +259,23 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 		}
 		l.Rows = append(l.Rows, r)
 	}
-	return &l, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var catalog []byte
+	err = tx.QueryRowContext(ctx, `SELECT payload->'accounts' FROM quickbooks_snapshots WHERE close_id::text=$1 AND payload ? 'period' ORDER BY id DESC LIMIT 1`, closeID).Scan(&catalog)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	var accounts []struct{ ID, Name string }
+	json.Unmarshal(catalog, &accounts)
+	l.Accounts = map[string]string{}
+	for _, a := range accounts {
+		if a.ID != "" {
+			l.Accounts[a.ID] = a.Name
+		}
+	}
+	return &l, nil
 }
 
 // queueStraightThrough queues the plan on the job as the agent's confirmation.

@@ -937,7 +937,7 @@ function WorkDetails({
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const input: Record<string, unknown> = Object.fromEntries(
-      facts.map((f) => [f.field, String(data.get(f.field) ?? "")]),
+      facts.filter((f) => !["vendor", "billed_to"].includes(f.field)).map((f) => [f.field, String(data.get(f.field) ?? "")]),
     );
     if (kind === "reconciliation") {
       Object.assign(input, {
