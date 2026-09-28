@@ -141,7 +141,17 @@ func Define[I, O any](s Spec[I, O]) Definition {
 		return in, nil
 	}
 	w := &workflow{Definition: d}
-	w.validate = func(raw json.RawMessage) error { _, err := decode(raw, true); return err }
+	// Strict: unknown fields and missing required fields are refused, so hand-written input (plans,
+	// start forms) is caught before it runs.
+	w.validate = func(raw json.RawMessage) error {
+		if _, err := decode(raw, true); err != nil {
+			return err
+		}
+		if err := checkRequired(d.InputSchema, raw); err != nil {
+			return fmt.Errorf("invalid input for %s: %w", s.Name, err)
+		}
+		return nil
+	}
 	for _, trigger := range d.Triggers {
 		if err := trigger.check(w.validate); err != nil {
 			panic(fmt.Sprintf("wf: workflow %q: %v", s.Name, err))

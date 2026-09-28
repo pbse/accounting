@@ -468,17 +468,26 @@ func resolveInput(raw json.RawMessage, outputs map[string]json.RawMessage) (json
 }
 
 // LoadApprovedPlan reads the plan a run was started for, inside a step, and refuses it unless it
-// is still the approved version (same digest) and belongs to the run's firm.
+// is still the approved version (same digest), belongs to the run's firm, and this run is the one
+// the approval started: starting the plan workflow again never re-runs an approved plan.
 func LoadApprovedPlan(ctx context.Context, id int64, digest string) (Plan, error) {
+	x := executionOf(ctx)
+	if x == nil {
+		return Plan{}, Permanent(errors.New("an approved plan is loaded inside its run"))
+	}
 	var raw []byte
 	var state string
 	var approved, org sql.NullString
-	err := DB(ctx).QueryRowContext(ctx, `SELECT plan,state,approved_digest,organization_id FROM workflow_plans WHERE id=$1`, id).Scan(&raw, &state, &approved, &org)
+	var runID sql.NullInt64
+	err := DB(ctx).QueryRowContext(ctx, `SELECT plan,state,approved_digest,organization_id,run_id FROM workflow_plans WHERE id=$1`, id).Scan(&raw, &state, &approved, &org, &runID)
 	if err != nil {
 		return Plan{}, err
 	}
 	if state != "approved" || approved.String != digest || org.String != Organization(ctx) {
 		return Plan{}, Permanent(fmt.Errorf("plan %d is not approved as %s for this firm", id, digest))
+	}
+	if runID.Int64 != x.run.id {
+		return Plan{}, Permanent(fmt.Errorf("plan %d was approved to run as run %d, not this one; approve it again to run it again", id, runID.Int64))
 	}
 	return ParsePlan(raw)
 }

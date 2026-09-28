@@ -43,11 +43,23 @@ func signal(ctx context.Context, in Input) (Output, error) {
 	if len(in.Payload) == 0 {
 		payload = nil
 	}
-	// A step can run again after a crash; the step's ID keeps it to one signal.
+	// A step can run again after a crash, even while an earlier attempt is still running: a lock on
+	// the step's ID makes checking for its signal and recording it one step, so it signals once.
 	step := wf.CurrentStepID(ctx)
-	err := wf.DB(ctx).QueryRowContext(ctx, `SELECT id FROM workflow_events WHERE key=$1 AND actor=$2`, out.Event, step).Scan(&out.EventID)
+	tx, err := wf.DB(ctx).BeginTx(ctx, nil)
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, step); err != nil {
+		return out, err
+	}
+	err = tx.QueryRowContext(ctx, `SELECT id FROM workflow_events WHERE key=$1 AND actor=$2`, out.Event, step).Scan(&out.EventID)
 	if errors.Is(err, sql.ErrNoRows) {
-		out.EventID, err = wf.Emit(ctx, wf.DB(ctx), wf.Organization(ctx), out.Event, payload, step)
+		out.EventID, err = wf.Emit(ctx, tx, wf.Organization(ctx), out.Event, payload, step)
+	}
+	if err == nil {
+		err = tx.Commit()
 	}
 	return out, err
 }

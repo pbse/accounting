@@ -70,8 +70,7 @@ func DefineActivity[I, O any](s ActivitySpec[I, O]) *Activity[I, O] {
 	a := &activity{
 		ActivityInfo: ActivityInfo{Name: s.Name, Title: s.Title, Description: s.Description, Permission: s.Permission, Effect: s.Effect,
 			Input: Schema(reflect.TypeFor[I]()), Output: Schema(reflect.TypeFor[O]())},
-		validate: func(raw json.RawMessage) error { _, err := decode(raw, true); return err },
-		fits:     func(raw json.RawMessage) error { _, err := decode(raw, false); return err },
+		fits: func(raw json.RawMessage) error { _, err := decode(raw, false); return err },
 		run: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			in, err := decode(raw, false)
 			if err != nil {
@@ -79,6 +78,15 @@ func DefineActivity[I, O any](s ActivitySpec[I, O]) *Activity[I, O] {
 			}
 			return s.Run(ctx, in)
 		},
+	}
+	a.validate = func(raw json.RawMessage) error {
+		if _, err := decode(raw, true); err != nil {
+			return err
+		}
+		if err := checkRequired(a.Input, raw); err != nil {
+			return fmt.Errorf("invalid input for activity %s: %w", s.Name, err)
+		}
+		return nil
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()

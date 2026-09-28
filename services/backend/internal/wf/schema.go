@@ -2,6 +2,7 @@ package wf
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -57,6 +58,57 @@ func schemaOf(t reflect.Type, depth int) map[string]any {
 		return schema
 	}
 	return map[string]any{}
+}
+
+// missingRequired names the first field a JSON value lacks that schema requires, searching nested
+// objects and lists, or returns "".
+func missingRequired(schema map[string]any, v any, path string) string {
+	switch value := v.(type) {
+	case map[string]any:
+		if required, ok := schema["required"].([]string); ok {
+			for _, name := range required {
+				if _, present := value[name]; !present {
+					return path + name
+				}
+			}
+		}
+		properties, _ := schema["properties"].(map[string]any)
+		for name, item := range value {
+			if property, ok := properties[name].(map[string]any); ok {
+				if missing := missingRequired(property, item, path+name+"."); missing != "" {
+					return missing
+				}
+			}
+		}
+		if extra, ok := schema["additionalProperties"].(map[string]any); ok {
+			for name, item := range value {
+				if missing := missingRequired(extra, item, path+name+"."); missing != "" {
+					return missing
+				}
+			}
+		}
+	case []any:
+		if items, ok := schema["items"].(map[string]any); ok {
+			for i, item := range value {
+				if missing := missingRequired(items, item, fmt.Sprintf("%s%d.", path, i)); missing != "" {
+					return missing
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// checkRequired reports a required field missing from raw.
+func checkRequired(schema map[string]any, raw json.RawMessage) error {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return err
+	}
+	if missing := missingRequired(schema, v, ""); missing != "" {
+		return fmt.Errorf("missing required field %s", missing)
+	}
+	return nil
 }
 
 func addFields(t reflect.Type, properties map[string]any, required *[]string, depth int) {

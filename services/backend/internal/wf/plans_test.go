@@ -121,6 +121,7 @@ func TestPlanProblemsNameEveryRuleBroken(t *testing.T) {
 		"exactly one of":                  `{"version":1,"title":"x","nodes":[{"id":"a","activity":"test_double","workflow":"test_call"}]}`,
 		"unknown field":                   `{"version":1,"title":"x","nodes":[{"id":"a","activity":"test_double","input":{"m":1}}]}`,
 		"cannot run inside a plan":        `{"version":1,"title":"x","nodes":[{"id":"a","workflow":"plan"}]}`,
+		"missing required field n":        `{"version":1,"title":"x","nodes":[{"id":"a","activity":"test_double","input":{}}]}`,
 	} {
 		if problems := strings.Join(plan(t, raw).Problems(nil), "; "); !strings.Contains(problems, want) {
 			t.Errorf("want %q in problems for %s, got %q", want, raw, problems)
@@ -187,11 +188,11 @@ func TestPlansPassOutputsAndFollowApprovals(t *testing.T) {
 
 func TestPlanFailuresFailTheRunUnlessHandled(t *testing.T) {
 	h := setup(t)
-	unhandled := h.runPlan(`{"version":1,"title":"Fails","nodes":[{"id":"broken","activity":"test_fail"}]}`)
+	unhandled := h.runPlan(`{"version":1,"title":"Fails","nodes":[{"id":"broken","activity":"test_fail","input":{"n":1}}]}`)
 	if v := h.expect(unhandled, "failed"); !strings.Contains(v.err, "plan nodes failed: broken") {
 		t.Fatalf("error %q", v.err)
 	}
-	handled := h.runPlan(`{"version":1,"title":"Recovers","nodes":[{"id":"broken","activity":"test_fail"},{"id":"fallback","after":["broken"],"when":"broken.failed","activity":"test_double","input":{"n":1}}]}`)
+	handled := h.runPlan(`{"version":1,"title":"Recovers","nodes":[{"id":"broken","activity":"test_fail","input":{"n":1}},{"id":"fallback","after":["broken"],"when":"broken.failed","activity":"test_double","input":{"n":1}}]}`)
 	if v := h.expect(handled, "completed"); !strings.Contains(v.output, `"fallback": "completed"`) {
 		t.Fatalf("output %s", v.output)
 	}

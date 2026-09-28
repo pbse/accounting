@@ -87,6 +87,17 @@ func TestStaffPlanRunsOnlyAsApproved(t *testing.T) {
 	if !strings.Contains(payload, "Acme") {
 		t.Fatalf("the signal carries the summary's output: %s", payload)
 	}
+	// Starting the plan workflow again for the same approval never re-runs the plan.
+	again, _, err := wf.Start(ctx, db, wf.StartRequest{Workflow: "plan", Organization: org, Input: map[string]any{"plan_id": id, "digest": digest}, IdempotencyKey: "again", StartedBy: "someone"})
+	must(t, err)
+	if ran, err := engine.Tick(ctx); err != nil || !ran {
+		t.Fatalf("tick: %v %v", ran, err)
+	}
+	var againState, againError string
+	must(t, db.QueryRow(`SELECT state,error FROM workflow_runs WHERE id=$1`, again).Scan(&againState, &againError))
+	if againState != "failed" || !strings.Contains(againError, "approve it again") {
+		t.Fatalf("a second run of an approved plan must be refused: %s %s", againState, againError)
+	}
 }
 
 func TestAgentPlansAreOnlyProposals(t *testing.T) {
@@ -153,6 +164,9 @@ func TestTemplatesAreCopiedNeverRun(t *testing.T) {
 	}
 	if _, err = wf.CreatePlan(ctx, db, wf.PlanDraft{Organization: org, Plan: json.RawMessage(`{"version":1,"title":"x","nodes":[{"id":"a","activity":"close_summary","input":{"close_id":1}}]}`), Source: "staff", CreatedBy: "staff:ops@example.com"}); !errors.Is(err, wf.ErrPlanInvalid) {
 		t.Fatalf("an invalid plan is refused when saved: %v", err)
+	}
+	if _, err = wf.CreatePlan(ctx, db, wf.PlanDraft{Organization: org, Plan: json.RawMessage(`{"version":1,"title":"x","nodes":[{"id":"a","activity":"close_summary","input":{}}]}`), Source: "staff", CreatedBy: "staff:ops@example.com"}); !errors.Is(err, wf.ErrPlanInvalid) || !strings.Contains(err.Error(), "close_id") {
+		t.Fatalf("a plan missing a required input is refused when saved: %v", err)
 	}
 }
 
