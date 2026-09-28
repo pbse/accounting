@@ -64,6 +64,7 @@ func apiWithStore(db *sql.DB, token string) http.Handler {
 		w.Write(reference.Prepaid)
 	})
 	registerEnrollment(mux, db)
+	registerAdmin(mux, db, token)
 	mux.HandleFunc("POST /v1/webhooks/resend/{connection}", system(emailWebhook(db)))
 	mux.HandleFunc("POST /v1/webhooks/quickbooks", system(quickbooksWebhook(db)))
 	mux.HandleFunc("POST /v1/webhooks/xero", system(xeroWebhook(db)))

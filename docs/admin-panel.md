@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** proposed (2026-09-27). Nothing here is implemented yet. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations) implemented** (2026-09-28); later phases are proposals. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -59,7 +59,8 @@ Move the console to its own hostname (for example `admin.<domain>`) behind Cloud
 ```text
 apps/admin/                 separate Vite + React app (own bundle; firm users never load it)
   → built to apps/frontend/dist/admin/ (base "/admin/"), served by the same edge Worker for now
-services/backend/internal/admin/   /v1/admin/* routes, staff middleware, read/act helpers, audit
+services/backend/internal/transport/admin.go   /v1/admin/* routes, staff middleware, read/act helpers, audit
+  (in transport, beside every other route, so it shares the mux, problem replies and tenant database)
 ```
 
 ### Edge Worker
@@ -82,7 +83,7 @@ The root `build` script runs the firm app, then the admin app. The admin app emp
 
 None of these reach the firm app's bundle.
 
-### Go helpers (`internal/admin`)
+### Go helpers (`internal/transport/admin.go`)
 - `admin.Read(ctx, db, fn)`: marks the context as system work (`*`) and runs `fn` in a `READ ONLY` transaction, so a read-only screen cannot write even by mistake.
 - `admin.Act(ctx, db, firm, action, reason, fn)`: runs `fn` with `auth.WithActor` set to the target firm (subject = staff user) and `auth.WithAgent(ctx, "staff:<email>")`, then inserts the `platform_audit` row in the same transaction. The reason is required and non-empty.
 - **Content access:** handlers that return client content check `platform:content`, require an `X-Access-Reason` header, and audit the read.
@@ -97,7 +98,7 @@ One admin migration. Both tables enable row-level security so `/readyz` keeps pa
 - `id`, `staff_user`, `staff_email`, `action`, `organization_id` (the affected firm, nullable), `target_type`, `target_id`, `reason`.
 - `request`: redacted JSON of the parameters. `result`: `ok` or `refused`, plus the error.
 - `created_at`, `request_id`.
-- Append-only: the runtime role gets no `UPDATE` or `DELETE` grant.
+- Append-only: a trigger refuses updates, deletes and truncation for every role, whatever table grants a migration run hands out.
 - Policy: `IN ('*', organization_id)`, so a later firm-facing "staff actions on your firm" view is possible.
 
 **`worker_heartbeats`**
@@ -183,7 +184,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 
 | Phase | Depends on | Scope | Exit criteria |
 |---|---|---|---|
-| **A0. Foundations** | none | Staff organization, roles and permissions in WorkOS (staging and production); `PLATFORM_ORGANIZATION_ID` wired through every place settings are listed; `internal/admin` middleware and the `Read`/`Act` helpers; admin migration; `apps/admin` shell with staff sign-in; `/admin` edge routing; read-only Firms list and Overview (heartbeats). | A staff member signs in and lists firms; a firm token gets 403 on `/v1/admin/*`; a staff token gets 403 on firm routes; `admin.Read` refuses writes; tests cover all three. |
+| **A0. Foundations** (implemented) | none | Staff organization, roles and permissions in WorkOS (staging and production); `PLATFORM_ORGANIZATION_ID` wired through every place settings are listed; staff middleware and the `adminRead`/`adminAct` helpers; admin migration (098); `apps/admin` shell with staff sign-in; `/admin` edge routing; read-only Overview (heartbeats), Firms and firm detail. | `internal/transport/admin_test.go`: a firm token gets 401 on `/v1/admin/*` (even claiming a platform permission); a staff token gets 403 on firm routes; `adminRead` refuses writes; `adminAct` runs as the firm and audits success and refusal; the edge serves admin pages (`routes.test.ts`). |
 | **A1. Workflows** | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
 | **A2. Firm management** | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
 | **A3. Plans** | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
@@ -195,6 +196,15 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 3. W2 and A2.
 4. W3 and A3.
 5. W4 and W5.
+
+## As built (A0)
+
+- **WorkOS.** "Platform staff" is its own organization in each environment (production `org_01M3JTPHHZXPV1MPYTQTZMQ52H`, staging `org_01M3JTPJ7038BZYHDY9M3K4ENK`). The permissions `platform:read`, `platform:operate`, `platform:content` and `platform:plans` are environment-wide, but the roles are scoped to the staff organization, so they cannot be given to a firm member. WorkOS requires organization roles to start with `org-`: `org-platform-support`, `org-platform-operator`, `org-platform-content`, `org-platform-admin`.
+- **Settings.** The API reads `PLATFORM_ORGANIZATION_ID`; with WorkOS configured and this unset, every staff route answers 503. The admin app is built with `VITE_PLATFORM_ORGANIZATION_ID` (the same public ID) and signs staff in to that organization. The deploy workflows derive both from the GitHub variable `PLATFORM_ORGANIZATION_ID`, which is already set for production.
+- **WorkOS redirect.** Register `https://<app>/admin/` as a redirect URI for the environment's AuthKit application before staff sign in.
+- **Heartbeats.** Only the worker process (`worker`) and the workflow engine loop (`workflow_engine`) report so far. Adding one per job loop means touching each loop; that comes with A2's jobs screen.
+- **One browser, one organization.** AuthKit keeps one session per browser. A person who is both a firm member and staff signs in to one organization at a time; the console offers to switch. The console's own hostname (A4) removes this.
+- **Local development.** Without WorkOS, the workspace token unlocks the console with every platform permission. Run it with `npm run dev:admin` (port 5174, `/admin/`), or the `admin` Compose service.
 
 ## Later ideas (not planned)
 

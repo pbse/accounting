@@ -1,0 +1,34 @@
+/* Staff console additions to the firm app's stylesheet. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 0.9rem;
+  margin-bottom: 1.2rem;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+}
+.stat-label,
+.stat-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.stat strong {
+  font-size: 1.35rem;
+  line-height: 1.3;
+}
+.app-main td small {
+  color: var(--muted);
+}
+.app-main .title-actions input {
+  font: inherit;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-strong, #c9c9c3);
+  border-radius: 7px;
+}

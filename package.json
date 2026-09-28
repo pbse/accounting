@@ -11,7 +11,8 @@
   "scripts": {
     "dev": "docker compose up --build --watch",
     "dev:frontend": "npm run dev -w @close/frontend",
-    "build": "npm run build -w @close/frontend",
+    "dev:admin": "npm run dev -w @close/admin",
+    "build": "npm run build -w @close/frontend && npm run build -w @close/admin",
     "check": "npm run check --workspaces --if-present",
     "test": "node --experimental-strip-types --test workers/queue/src/delivery.test.ts workers/edge/src/upload-scan.test.ts workers/edge/src/routes.test.ts apps/frontend/src/features/dashboard/commands.test.ts apps/frontend/src/features/closes/citation.test.ts apps/frontend/src/features/closes/ask.test.ts",
     "check:go": "cd services/backend && go test ./... && go vet ./...",
