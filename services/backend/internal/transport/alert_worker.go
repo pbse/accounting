@@ -60,12 +60,17 @@ func collectOperationsAlerts(ctx context.Context, db *sql.DB) error {
 
 func sendOperationsAlert(ctx context.Context, endpoint, token string, a operationsAlert) error {
 	content, _ := json.Marshal(a)
+	return postAlert(ctx, endpoint, token, fmt.Sprintf("close-alert/%d", a.ID), content)
+}
+
+// postAlert posts one alert to the operations webhook, with an idempotency key so a retried delivery is one alert.
+func postAlert(ctx context.Context, endpoint, token, key string, content []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(content))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Idempotency-Key", fmt.Sprintf("close-alert/%d", a.ID))
+	req.Header.Set("Idempotency-Key", key)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -106,6 +111,53 @@ func deliverOperationsAlerts(ctx context.Context, db *sql.DB, endpoint, token st
 	}
 }
 
+// platformAlertQuery is the platform's own problems now, as (kind, item_id, detail): a worker loop whose heartbeat stopped
+// (the loop's process is alive, since this runs in it, but the loop is stalled), workflow runs stuck as the admin
+// panel's stuck view counts them, and provider writes whose outcome is unknown. The detail may change without
+// re-alerting; a new alert needs a new kind or item.
+const platformAlertQuery = `SELECT 'platform.loop_stale',loop,'last beat '||beat_at::text FROM worker_heartbeats WHERE beat_at<now()-interval '5 minutes'
+ UNION ALL SELECT 'platform.runs_stuck','workflow_runs',count(*)||' runnable run(s) not picked up' FROM workflow_runs r WHERE ` + stuckRuns + ` HAVING count(*)>0
+ UNION ALL SELECT 'platform.unknown_effects','workflow_steps',count(*)||' provider write(s) to reconcile' FROM workflow_steps WHERE state='unknown' HAVING count(*)>0`
+
+// collectPlatformAlerts resolves platform alerts whose problem cleared and opens one for each new problem.
+func collectPlatformAlerts(ctx context.Context, db *sql.DB) error {
+	ctx = context.WithValue(ctx, systemKey{}, true)
+	if _, err := db.ExecContext(ctx, `UPDATE platform_alerts a SET resolved_at=now() WHERE a.resolved_at IS NULL
+ AND NOT EXISTS(SELECT 1 FROM (`+platformAlertQuery+`) p(kind,item_id,detail) WHERE p.kind=a.kind AND p.item_id=a.item_id)`); err != nil {
+		return err
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO platform_alerts(kind,item_id,detail) SELECT kind,item_id,detail FROM (`+platformAlertQuery+`) p(kind,item_id,detail) ON CONFLICT DO NOTHING`)
+	return err
+}
+
+// deliverPlatformAlerts sends each queued platform alert to the operations webhook, once, like a firm's alert.
+func deliverPlatformAlerts(ctx context.Context, db *sql.DB, endpoint, token string) error {
+	ctx = context.WithValue(ctx, systemKey{}, true)
+	for {
+		var id int64
+		var kind, item, detail string
+		err := db.QueryRowContext(ctx, `UPDATE platform_alerts SET status='sending',claimed_at=now() WHERE id=(SELECT id FROM platform_alerts WHERE status='queued' AND resolved_at IS NULL ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,kind,item_id,detail`).Scan(&id, &kind, &item, &detail)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		content, _ := json.Marshal(map[string]string{"scope": "platform", "kind": kind, "item_id": item, "detail": detail})
+		sendErr := postAlert(ctx, endpoint, token, fmt.Sprintf("close-platform-alert/%d", id), content)
+		state, failure := "accepted", ""
+		if sendErr != nil {
+			state, failure = "unknown", sendErr.Error()
+		}
+		persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		_, err = db.ExecContext(persist, `UPDATE platform_alerts SET status=$2,error=$3,finished_at=now() WHERE id=$1 AND status='sending'`, id, state, failure)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+}
+
 func RunAlerts(ctx context.Context, db *sql.DB) {
 	endpoint := os.Getenv("OPERATIONS_ALERT_WEBHOOK_URL")
 	if endpoint == "" {
@@ -124,6 +176,12 @@ func RunAlerts(ctx context.Context, db *sql.DB) {
 		}
 		if err := deliverOperationsAlerts(ctx, db, endpoint, os.Getenv("OPERATIONS_ALERT_WEBHOOK_TOKEN")); err != nil && ctx.Err() == nil {
 			log.Print("Could not deliver operations alerts: ", err)
+		}
+		if err := collectPlatformAlerts(ctx, db); err != nil && ctx.Err() == nil {
+			log.Print("Could not collect platform alerts: ", err)
+		}
+		if err := deliverPlatformAlerts(ctx, db, endpoint, os.Getenv("OPERATIONS_ALERT_WEBHOOK_TOKEN")); err != nil && ctx.Err() == nil {
+			log.Print("Could not deliver platform alerts: ", err)
 		}
 		select {
 		case <-ctx.Done():

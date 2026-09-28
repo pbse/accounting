@@ -100,12 +100,14 @@ func adminDefinitions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 }
 
 // Saved views of the runs list.
+// stuckRuns is a run (r) that is runnable but not picked up: queued for an hour, a lease nobody renewed, a wake time long
+// past, or woken (by an event, retry or resolution, which set updated_at) and left unclaimed. Platform alerts use it too.
+const stuckRuns = `((r.state='queued' AND r.created_at<now()-interval '1 hour') OR (r.state='running' AND r.claimed_at<now()-interval '10 minutes')
+ OR (r.state='waiting' AND ((r.wake_at>'-infinity' AND r.wake_at<now()-interval '10 minutes') OR (r.wake_at='-infinity' AND r.updated_at<now()-interval '10 minutes'))))`
+
 var runViews = map[string]string{
-	"active": `r.state IN ('queued','running','waiting')`,
-	// Runnable but not picked up: queued for an hour, a lease nobody renewed, a wake time long past, or
-	// woken (by an event, retry or resolution, which set updated_at) and left unclaimed.
-	"stuck": `((r.state='queued' AND r.created_at<now()-interval '1 hour') OR (r.state='running' AND r.claimed_at<now()-interval '10 minutes')
- OR (r.state='waiting' AND ((r.wake_at>'-infinity' AND r.wake_at<now()-interval '10 minutes') OR (r.wake_at='-infinity' AND r.updated_at<now()-interval '10 minutes'))))`,
+	"active":            `r.state IN ('queued','running','waiting')`,
+	"stuck":             stuckRuns,
 	"waiting_on_client": `(r.state='waiting' AND r.waiting_on LIKE 'client\_request.replied:%' AND r.updated_at<now()-interval '7 days')`,
 	"unknown_effects":   `EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=r.id AND s.state='unknown')`,
 	"failed_today":      `(r.state='failed' AND r.finished_at>now()-interval '24 hours')`,

@@ -210,7 +210,7 @@ func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
 
 // adminOverview is the platform's health at a glance.
 func adminOverview(w http.ResponseWriter, r *http.Request, db *sql.DB) {
-	var heartbeats, runs []byte
+	var heartbeats, runs, alerts []byte
 	var oldestQueued sql.NullTime
 	var unknownEffects, firms, suspended, reconnect, failedPreparation int
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
@@ -222,8 +222,10 @@ func adminOverview(w http.ResponseWriter, r *http.Request, db *sql.DB) {
  (SELECT count(*) FROM organizations WHERE id<>'local-development'),
  (SELECT count(*) FROM organizations WHERE id<>'local-development' AND NOT enabled),
  (SELECT count(*) FROM quickbooks_connections WHERE state='reconnect_required')+(SELECT count(*) FROM xero_connections WHERE state='reconnect_required'),
- (SELECT count(*) FROM preparation_jobs WHERE state='failed' AND state_changed_at>now()-interval '24 hours')`).Scan(
-			&heartbeats, &runs, &oldestQueued, &unknownEffects, &firms, &suspended, &reconnect, &failedPreparation)
+ (SELECT count(*) FROM preparation_jobs WHERE state='failed' AND state_changed_at>now()-interval '24 hours'),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('kind',p.kind,'item_id',p.item_id,'detail',p.detail,'since',a.created_at,'delivery',a.status) ORDER BY p.kind,p.item_id)
+  FROM (`+platformAlertQuery+`) p(kind,item_id,detail) LEFT JOIN platform_alerts a ON a.kind=p.kind AND a.item_id=p.item_id AND a.resolved_at IS NULL),'[]'::jsonb)`).Scan(
+			&heartbeats, &runs, &oldestQueued, &unknownEffects, &firms, &suspended, &reconnect, &failedPreparation, &alerts)
 	})
 	if err != nil {
 		log.Printf("Admin overview could not be read: %v", err)
@@ -237,7 +239,7 @@ func adminOverview(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{
 		"heartbeats": json.RawMessage(heartbeats), "runs": json.RawMessage(runs), "oldest_queued_at": oldest,
 		"unknown_effects": unknownEffects, "firms": firms, "suspended_firms": suspended,
-		"reconnect_required": reconnect, "failed_preparation_24h": failedPreparation,
+		"reconnect_required": reconnect, "failed_preparation_24h": failedPreparation, "platform_problems": json.RawMessage(alerts),
 	})
 }
 
