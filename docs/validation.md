@@ -2776,3 +2776,40 @@ Checks (local PostgreSQL):
 - The engine's and workflows' tests pass, including the registry check for the two new directories.
 
 Not verified: the runs on a deployed worker. The first hourly upkeep after the deploy takes over the goals already open.
+
+## Agents propose plans; the planner drafts them (W4) (2026-09-28)
+
+Request: W4 of the [workflow engine plan](workflow-engine.md#agent-proposed-plans), after W5's close goals.
+
+What changed:
+- **The plan catalog.** `GET /v1/closes/plans/catalog` gives the plan format and every activity with its input schema, permission and effect. It is one list, shared by connected agents and the planner.
+- **MCP.**
+  - `plan_catalog`, and `list_plan_proposals` (`GET /v1/closes/plans/proposals`: the firm's agent proposals and where each stands).
+  - `propose_plan` (`POST /v1/closes/plans/proposals`, `workpapers:review`, reachable only through an agent). It saves a proposal attributed to the agent and the member, with a reason of 10–2,000 characters.
+  - A plan that does not validate is refused with the validator's problems, and over 20 a firm a day is refused with 429.
+- **The planner** (`POST /v1/admin/plans/draft`, `platform:plans`, with a reason). The firm's model drafts a plan from the catalog, the redacted instruction and, for a close, where it stands.
+  - A draft that does not validate gets one more attempt, told what was wrong.
+  - The result is saved as the agent's proposal, `planner (<model>)`.
+  - Only for firms with model-written answers on; each attempt counts against the firm's model calls. Every draft is audited (`plan.draft_with_model`).
+- **Evaluation.** The admin Plans page has **Ask the planner** and **Agents' proposals** (`GET /v1/admin/plans/agents`): per agent over 30 days, proposed, waiting, approved and rejected, plus the planner's invalid and unanswered drafts.
+
+Checks (local PostgreSQL):
+- `TestAgentsProposePlansThroughMCP`, through a real MCP client session:
+  - the catalog lists `close_summary` and the format rules;
+  - an unknown activity is refused, naming it, and a short reason is refused;
+  - a valid plan is saved as `agent`, `proposed`, agent `MCP`, with its reason and no run;
+  - `list_plan_proposals` shows it;
+  - the staff queue lists it, and its reason shows once revealed;
+  - a direct request outside MCP gets 403.
+- `TestThePlannerDraftsAProposalWithTheFirmsModel`, with the OpenAI API faked:
+  - a firm without model-written answers gets 409 and no model call;
+  - an invalid first draft is retried with `what_was_wrong`, and the model is told the close's client and the catalog;
+  - the valid second draft is saved as `planner (test-model)` by `staff:local-development`, and two model calls are counted;
+  - two invalid drafts give 422 naming the problem, and a model that is down gives 502;
+  - the audit reads ok, refused (not valid), refused (no draft);
+  - a model slower than the planner's time saves nothing and gives 502 ("ran out of time");
+  - the track record counts the planner's proposal and its failures.
+- `TestPlanProposalsPageAndStayWithinAMembersClients`: 55 proposals page as 50, then the 5 older ones; a member without `clients:all` sees only the 3 made as them.
+- `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead` covers the two new staff routes. The existing MCP, plan and admin tests pass. The admin app typechecks and builds.
+
+Not verified: the planner against the real OpenAI API, and `propose_plan` from a hosted MCP client under OAuth agent access.

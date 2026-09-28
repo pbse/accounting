@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { post, when } from "../api";
+import { post, useResource, when } from "../api";
 import { usePermissions } from "../App";
 import { ActionForm } from "../components/ActionForm";
 import { FlowGraph, type PlanNode } from "../components/Flow";
@@ -80,6 +80,8 @@ export function Plans() {
         <label>Firm ID<input name="firm" key={`f${params.get("firm")}`} defaultValue={params.get("firm") ?? ""} placeholder="Any" /></label>
         <button>Filter</button>
       </form>
+      {!templates && <AskThePlanner key={params.get("firm") ?? ""} firm={params.get("firm") ?? ""} />}
+      {!templates && <AgentRecord />}
       <Reveal reveal={plans.reveal} firm={params.get("firm")} />
       {plans.error && <p role="alert">{plans.error}</p>}
       {!plans.data && !plans.error && <p role="status">Loading plans…</p>}
@@ -112,6 +114,50 @@ export function Plans() {
         </section>
       )}
     </>
+  );
+}
+
+// The planner: staff describe what a firm needs and the firm's model drafts a plan from the catalog, saved as the
+// agent's proposal for review like any other. It writes only for firms that allow model-written answers.
+function AskThePlanner({ firm: startFirm }: { firm: string }) {
+  const navigate = useNavigate();
+  const [firm, setFirm] = useState(startFirm);
+  const [closeID, setCloseID] = useState("");
+  const [instruction, setInstruction] = useState("");
+  return (
+    <details>
+      <summary>Ask the planner to propose a plan</summary>
+      <p>The firm's model drafts a plan from the activity catalog, and it waits here as the agent's proposal: nothing runs until someone approves it. Each draft counts against the firm's daily model calls.</p>
+      <ActionForm label="Draft the plan" minLength={10} onSubmit={async (reason) => {
+        const { plan_id } = await post<{ plan_id: number }>("/v1/admin/plans/draft", { firm: firm.trim(), close_id: closeID.trim(), instruction: instruction.trim(), reason });
+        navigate(`/plans/${plan_id}`);
+      }}>
+        <label>Firm ID<input required value={firm} onChange={(event) => setFirm(event.target.value)} /></label>
+        <label>Close ID (optional)<input value={closeID} onChange={(event) => setCloseID(event.target.value)} /></label>
+        <label>What should the plan do?<textarea required minLength={10} maxLength={2000} value={instruction} onChange={(event) => setInstruction(event.target.value)} /></label>
+      </ActionForm>
+    </details>
+  );
+}
+
+type AgentRecordData = { agents: { agent: string; proposed: number; pending: number; approved: number; rejected: number }[]; planner: { drafts: number; invalid: number; failed: number } };
+
+// How the agents' proposals fared over 30 days, and how often the planner's drafts were not valid plans.
+function AgentRecord() {
+  const record = useResource<AgentRecordData>("/v1/admin/plans/agents");
+  if (!record.data || (record.data.agents.length === 0 && record.data.planner.drafts === 0)) return null;
+  const { agents, planner } = record.data;
+  return (
+    <details>
+      <summary>Agents' proposals, past 30 days</summary>
+      {agents.length > 0 && (
+        <table>
+          <thead><tr><th>Agent</th><th>Proposed</th><th>Waiting</th><th>Approved</th><th>Rejected</th></tr></thead>
+          <tbody>{agents.map((a) => <tr key={a.agent}><td>{a.agent || "unnamed"}</td><td>{a.proposed}</td><td>{a.pending}</td><td>{a.approved}</td><td>{a.rejected}</td></tr>)}</tbody>
+        </table>
+      )}
+      <p className="muted">The planner drafted {planner.drafts} {planner.drafts === 1 ? "time" : "times"}: {planner.invalid} not a valid plan after its second try, {planner.failed} with no answer from the model.</p>
+    </details>
   );
 }
 
