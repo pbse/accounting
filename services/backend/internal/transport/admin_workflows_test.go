@@ -290,7 +290,8 @@ func mustString(v any) string { raw, _ := json.Marshal(v); return string(raw) }
 
 func jsonNumber(f float64) string { raw, _ := json.Marshal(int64(f)); return string(raw) }
 
-// A long run shows its latest steps and newest child runs, with how many it has; more steps are asked for.
+// A long run shows its steps a page at a time, latest first, and its newest child runs; every step and child stays
+// reachable, by paging back and through the runs list.
 func TestALongRunShowsItsLatestStepsAndChildren(t *testing.T) {
 	db := adminDB(t)
 	t.Setenv("WORKOS_CLIENT_ID", "")
@@ -310,7 +311,7 @@ func TestALongRunShowsItsLatestStepsAndChildren(t *testing.T) {
 	if err := db.QueryRow(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,state,input,finished_at) VALUES($1,'test_admin_flow','long','seed','completed','{}',now()) RETURNING id`, firm).Scan(&run); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO workflow_steps(run_id,key,organization_id,seq,kind,state) SELECT $1,'step'||g,$2,g,'step','completed' FROM generate_series(1,250) g`, run, firm); err != nil {
+	if _, err := db.Exec(`INSERT INTO workflow_steps(run_id,key,organization_id,seq,kind,state) SELECT $1,'step'||g,$2,g,'step','completed' FROM generate_series(1,450) g`, run, firm); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,state,input,finished_at,parent_run_id,parent_step) SELECT $1,'test_admin_flow','child'||g,'seed','completed','{}',now(),$2,'step1' FROM generate_series(1,250) g`, firm, run); err != nil {
@@ -318,25 +319,50 @@ func TestALongRunShowsItsLatestStepsAndChildren(t *testing.T) {
 	}
 	h := apiWithStore(db, token)
 	path := "/v1/admin/workflows/runs/" + strconv.FormatInt(run, 10)
-	var detail struct {
+	type page struct {
 		Steps         []adminStep `json:"steps"`
 		StepsTotal    int         `json:"steps_total"`
+		EarlierSteps  bool        `json:"earlier_steps"`
 		Children      []struct{ ID int64 }
 		ChildrenTotal int `json:"children_total"`
 	}
-	json.Unmarshal(adminCall(t, h, token, "GET", path, 200), &detail)
-	if len(detail.Steps) != 200 || detail.StepsTotal != 250 || detail.Steps[0].Seq != 51 || detail.Steps[199].Seq != 250 {
-		t.Fatalf("the latest 200 of 250 steps, in order: %d of %d, seq %d to %d", len(detail.Steps), detail.StepsTotal, detail.Steps[0].Seq, detail.Steps[len(detail.Steps)-1].Seq)
+	read := func(query string) page {
+		t.Helper()
+		var p page
+		json.Unmarshal(adminCall(t, h, token, "GET", path+query, 200), &p)
+		return p
+	}
+	span := func(p page) string {
+		return strconv.Itoa(len(p.Steps)) + ":" + strconv.Itoa(p.Steps[0].Seq) + "-" + strconv.Itoa(p.Steps[len(p.Steps)-1].Seq)
+	}
+	latest := read("")
+	if span(latest) != "200:251-450" || latest.StepsTotal != 450 || !latest.EarlierSteps {
+		t.Fatalf("the latest 200 of 450 steps, in order, with earlier ones: %s of %d %v", span(latest), latest.StepsTotal, latest.EarlierSteps)
+	}
+	if back := read("?steps_before=251"); span(back) != "200:51-250" || !back.EarlierSteps {
+		t.Fatalf("the page before: %s %v", span(back), back.EarlierSteps)
+	}
+	if first := read("?steps_before=51"); span(first) != "50:1-50" || first.EarlierSteps {
+		t.Fatalf("the first page: %s %v", span(first), first.EarlierSteps)
 	}
 	var newest int64
 	db.QueryRow(`SELECT max(id) FROM workflow_runs WHERE parent_run_id=$1`, run).Scan(&newest)
-	if len(detail.Children) != 200 || detail.ChildrenTotal != 250 || detail.Children[199].ID != newest || detail.Children[0].ID != newest-199 {
-		t.Fatalf("the newest 200 of 250 child runs, in order: %d of %d", len(detail.Children), detail.ChildrenTotal)
+	if len(latest.Children) != 200 || latest.ChildrenTotal != 250 || latest.Children[199].ID != newest || latest.Children[0].ID != newest-199 {
+		t.Fatalf("the newest 200 of 250 child runs, in order: %d of %d", len(latest.Children), latest.ChildrenTotal)
 	}
-	json.Unmarshal(adminCall(t, h, token, "GET", path+"?steps=2000", 200), &detail)
-	if len(detail.Steps) != 250 || detail.Steps[0].Seq != 1 {
-		t.Fatalf("asked for more, every step: %d", len(detail.Steps))
+	// Every child is in the runs list, a page at a time.
+	children := 0
+	for offset := 0; ; {
+		list := adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs?parent="+strconv.FormatInt(run, 10)+"&offset="+strconv.Itoa(offset), "", 200)
+		children += len(list["runs"].([]any))
+		if list["has_more"] != true {
+			break
+		}
+		offset = int(list["next_offset"].(float64))
 	}
-	adminCall(t, h, token, "GET", path+"?steps=0", 422)
-	adminCall(t, h, token, "GET", path+"?steps=2001", 422)
+	if children != 250 {
+		t.Fatalf("the runs list holds every child: %d", children)
+	}
+	adminCall(t, h, token, "GET", path+"?steps_before=0", 422)
+	adminCall(t, h, token, "GET", "/v1/admin/workflows/runs?parent=first", 422)
 }

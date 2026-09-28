@@ -70,6 +70,7 @@ export function Runs() {
         </label>
         <button>Filter</button>
       </form>
+      {params.get("parent") && <p className="note">Child runs of <Link to={`/runs/${params.get("parent")}`}>#{params.get("parent")}</Link>. <button className="link" onClick={() => set("parent", "")}>All runs</button></p>}
       {runs.error && <p role="alert">{runs.error}</p>}
       {runs.data && (
         <section>

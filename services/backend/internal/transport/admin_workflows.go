@@ -169,11 +169,20 @@ func adminRuns(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if !ok {
 		return
 	}
+	// A parent run's children, every one of them: its own page shows only the newest.
+	parent := int64(0)
+	if raw := q.Get("parent"); raw != "" {
+		var err error
+		if parent, err = strconv.ParseInt(raw, 10, 64); err != nil || parent < 1 {
+			problem(w, 422, "parent is a run's ID.")
+			return
+		}
+	}
 	runs := []adminRunRow{}
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT `+adminRunColumns+` FROM workflow_runs r LEFT JOIN organizations o ON o.id=r.organization_id
- WHERE ($1='' OR r.organization_id=$1) AND ($2='' OR r.workflow=$2) AND ($3='' OR r.state=$3) AND `+condition+`
- ORDER BY r.id DESC LIMIT $4 OFFSET $5`, q.Get("firm"), q.Get("workflow"), q.Get("state"), adminPage+1, offset)
+ WHERE ($1='' OR r.organization_id=$1) AND ($2='' OR r.workflow=$2) AND ($3='' OR r.state=$3) AND ($6=0 OR r.parent_run_id=$6) AND `+condition+`
+ ORDER BY r.id DESC LIMIT $4 OFFSET $5`, q.Get("firm"), q.Get("workflow"), q.Get("state"), adminPage+1, offset, parent)
 		if err != nil {
 			return err
 		}
@@ -223,9 +232,9 @@ type adminStep struct {
 // parent, and, for a plan run, the approved plan so unreached nodes can be drawn too. Unless revealed,
 // free text is masked: payloads, errors, notes, and a plan's title, inputs, event keys and approval
 // text. Names of workflows and steps, states and times show.
-// A long run shows its latest steps and child runs, with how many it has in all: adminRunSteps of each, or up to
-// adminRunMaxSteps steps as ?steps asks.
-const adminRunSteps, adminRunMaxSteps = 200, 2000
+// A long run shows its steps a page of adminRunSteps at a time, latest first (?steps_before, a step's seq, pages back),
+// and its newest adminRunSteps child runs; the runs list (?parent) has every child. Totals say how many there are.
+const adminRunSteps = 200
 
 func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -233,10 +242,10 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 404, "Run not found.")
 		return
 	}
-	window := adminRunSteps
-	if raw := r.URL.Query().Get("steps"); raw != "" {
-		if window, err = strconv.Atoi(raw); err != nil || window < 1 || window > adminRunMaxSteps {
-			problem(w, 422, fmt.Sprintf("steps is how many of the run's latest steps to show, 1 to %d.", adminRunMaxSteps))
+	before := 0
+	if raw := r.URL.Query().Get("steps_before"); raw != "" {
+		if before, err = strconv.Atoi(raw); err != nil || before < 1 {
+			problem(w, 422, "steps_before is a step's seq.")
 			return
 		}
 	}
@@ -246,13 +255,14 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	steps := []adminStep{}
 	var children, plan []byte
 	var stepsTotal, childrenTotal int
+	var earlier bool
 	err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		row := tx.QueryRowContext(ctx, `SELECT `+adminRunColumns+`,r.input,r.output FROM workflow_runs r LEFT JOIN organizations o ON o.id=r.organization_id WHERE r.id=$1`, id)
 		if err := row.Scan(&run.ID, &run.Organization, &run.FirmName, &run.Workflow, &run.State, &run.WaitingOn, &run.StartedBy, &run.Error, &run.CreatedAt, &run.UpdatedAt, &run.FinishedAt, &run.ParentRunID, &run.PlanID, &input, &output); err != nil {
 			return err
 		}
 		rows, err := tx.QueryContext(ctx, `SELECT * FROM (SELECT key,seq,kind,state,attempts,retry_at::text,wake_at::text,waiting_on,error,actor,note,started_at::text,finished_at::text,child_run_id,COALESCE(input->>'activity',''),input,output
- FROM workflow_steps WHERE run_id=$1 ORDER BY seq DESC LIMIT $2) s ORDER BY seq`, id, window)
+ FROM workflow_steps WHERE run_id=$1 AND ($2=0 OR seq<$2) ORDER BY seq DESC LIMIT $3) s ORDER BY seq`, id, before, adminRunSteps+1)
 		if err != nil {
 			return err
 		}
@@ -268,6 +278,9 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		}
 		if err = rows.Err(); err != nil {
 			return err
+		}
+		if earlier = len(steps) > adminRunSteps; earlier {
+			steps = steps[1:]
 		}
 		return tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'parent_step',parent_step) ORDER BY id)
@@ -343,7 +356,7 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		registered = true
 	}
 	jsonReply(w, 200, map[string]any{"run": run, "input": json.RawMessage(nonNull(input)), "output": json.RawMessage(nonNull(output)), "steps": steps,
-		"steps_total": stepsTotal, "children": json.RawMessage(children), "children_total": childrenTotal, "plan": json.RawMessage(plan), "registered": registered, "revealed": reveal})
+		"steps_total": stepsTotal, "earlier_steps": earlier, "children": json.RawMessage(children), "children_total": childrenTotal, "plan": json.RawMessage(plan), "registered": registered, "revealed": reveal})
 }
 
 func lookupDefinition(name string) *wf.Definition {
