@@ -2684,7 +2684,7 @@ Fixed:
    - `X-Content-Type-Options: nosniff`;
    - `Referrer-Policy: no-referrer`.
 2. **Cross-site staff reads.** With `AUTH_SESSION=server`, the staff cookie (SameSite=Lax) went along with a link from another site. Under a content grant, or for an export, a GET alone reveals and records. A request carrying the staff cookie whose `Sec-Fetch-Site` is `cross-site` or `same-site` is now refused with 403; the console's own requests (`same-origin`) and typed addresses (`none`) pass. The other site could never read the answer; this stops forced, audited reveals and downloads in a staff member's name.
-3. **Reveal reasons had no size limit** (GPT-6 Sol, P2). A reveal across firms copies its reason to every firm shown, from up to 5,000 entries. A reason over 2,000 bytes is now refused with 422, as action reasons already were. Audit reads also stop at 32 MiB however large their entries: a page goes on from there (`next_before`), and an export is marked truncated.
+3. **Reveal reasons had no size limit** (GPT-6 Sol, P2). A reveal across firms copies its reason to every firm shown, from up to 5,000 entries. A reason over 2,000 bytes is now refused with 422, as action reasons already were. Audit reads also stop at 32 MiB however large their entries: a page goes on from there (`next_before`), and an export is marked truncated and says how many entries it holds (`X-Entries`). An entry too large on its own is shown without its free text.
 4. **WorkOS effects could come before their audit** (P2). Invitation resend and session revoke recorded their audit entry after WorkOS acted, in the same transaction, so a failed commit left a real effect audited as refused, or not at all. Both now commit a `started` entry (migration 102) before calling WorkOS, and the outcome follows as its own entry. A resend whose new expiry cannot be saved records that WorkOS sent it.
 5. **Session revoke held a database connection** (P2). The WorkOS loop (up to 10,000 pages) ran inside the audit transaction, holding one of the API's few database connections even after the caller left. It now runs with no transaction held, between its start and outcome entries.
 
@@ -2693,9 +2693,9 @@ Checks (local PostgreSQL; each fails with its fix removed):
 - `TestServerSessionKeepsWorkOSTokensOnTheServer`: a staff-cookie read from `cross-site` or `same-site` gets 403; from `same-origin` or `none` it gets 200.
 - The edge route test checks the admin headers, and that the page's type and body are unchanged.
 - `TestStaffFindAPersonAcrossFirmsAndEndTheirSessions`: WorkOS is reached only after the action's start is committed, as seen from another connection. The audit reads started, refused, started, ok.
-- `TestStaffSearchAndExportTheAuditAcrossFirms`: a 2,001-byte reason gets 422. At its byte limit, a read pages on and an export is marked truncated.
+- `TestStaffSearchAndExportTheAuditAcrossFirms`: a 2,001-byte reason gets 422. At its byte limit, a read pages on, an entry too large on its own is shown without its text, and an export is marked truncated with its count.
 - `TestContentGrantsStandInForAReasonOnOneFirmForAWhile`: a 2,001-byte reason gets 422 on a firm's screen.
-- A fresh database migrated twice. The full Go suite passes, except the two tests that need poppler (`pdfinfo`, `pdftotext`), which is not installed here. The admin app typechecks and builds, and the JS tests pass.
+- A fresh database migrated twice. The full Go suite passes, except the two tests that need poppler (`pdfinfo`, `pdftotext`), which is not installed here. The admin app typechecks and builds, and the JS tests pass. In the browser, the audit page filters `started` entries and marks them as started.
 
 Accepted or still open:
 - **Own hostname behind Cloudflare Access** (the A4 network item) waits for a domain. It is defence in depth only: authorization stays in Go.
