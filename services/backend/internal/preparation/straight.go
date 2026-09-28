@@ -457,9 +457,14 @@ func totalDisagrees(invoice string, cents int64) string {
 		if negativeFigure(line, cents) {
 			return "a total line of the invoice prints the amount as a credit"
 		}
-		// On a total line every number counts, cents or not: "Total 1,300" is a total.
+		// On a total line every number counts, cents or not: "Total 1,300" is a total; a total line with no figure at all
+		// ("Total: to be determined") leaves the payable amount unresolved.
 		plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "").Replace(line)
-		for _, figure := range regexp.MustCompile(`\d+(\.\d{1,2})?`).FindAllString(plain, -1) {
+		figures := regexp.MustCompile(`\d+(\.\d{1,2})?`).FindAllString(plain, -1)
+		if len(figures) == 0 {
+			return "a total line of the invoice prints no figure; the payable amount is unresolved"
+		}
+		for _, figure := range figures {
 			if value, err := prepaids.Amount(figure); err != nil || value != cents {
 				return "a total line of the invoice prints a figure other than the cited amount"
 			}
