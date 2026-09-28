@@ -128,8 +128,9 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	must(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,'Earlier owner of the address','fixture')`, other, previous)
 	must(`INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,'session_old',$4,'\x00','\x00',now(),now()+interval '1 day')`, rand.Text(), previous, other, email)
 	t.Cleanup(func() { db.Exec(`DELETE FROM auth_sessions WHERE subject=$1`, previous) })
-	if byID := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person, "", 200)["memberships"]); strings.Contains(byID, previous) {
-		t.Fatalf("a user-ID search must not include another account: %s", byID)
+	must(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,subject,decided_at) VALUES($1,$2,'member','Member',$3,'accepted','user_owner','Joined years ago',$4,now())`, other, email, "invitation_"+rand.Text(), previous)
+	if byID := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person, "", 200)); strings.Contains(byID, previous) || strings.Contains(byID, `"state":"accepted"`) {
+		t.Fatalf("a user-ID search must not include another account's memberships or accepted invitations: %s", byID)
 	}
 	// When WorkOS does not answer, an email search still finds their memberships through the app's own records.
 	workosDown = true

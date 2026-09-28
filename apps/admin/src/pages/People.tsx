@@ -89,7 +89,7 @@ export function People() {
               {/* Always offered: the action reads every session, not just the newest shown, and the app's own. */}
               <details>
                 <summary>End all sessions</summary>
-                <p>Signs {u.email} out everywhere: the app's own sessions end at once, and every active WorkOS session, in every organization, is revoked. Their memberships stay as they are.</p>
+                <p>Signs {u.email} out everywhere. Sessions the app holds end at once. Every active WorkOS session, in every organization, is revoked, so none can be renewed; a browser that already holds an access token keeps it until it expires, within minutes. Their memberships stay as they are.</p>
                 <ActionForm label="End all sessions" danger allowed={operate} minLength={10} onSubmit={async (reason) => {
                   const answer = await post<{ ended: number; app_sessions: number }>(`/v1/admin/people/${encodeURIComponent(u.id)}/sessions/revoke`, { reason });
                   setSaid(`Signed ${u.email} out: ${answer.ended} WorkOS session${answer.ended === 1 ? "" : "s"} and ${answer.app_sessions} app session${answer.app_sessions === 1 ? "" : "s"} ended.`);

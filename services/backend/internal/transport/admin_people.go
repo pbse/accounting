@@ -170,7 +170,8 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				orgs = append(orgs, m.OrganizationID)
 			}
 		}
-		// IDs are WorkOS's (user_…, org_…), which never contain a comma.
+		// IDs are WorkOS's (user_…, org_…), which never contain a comma. An accepted invitation belongs to whoever accepted
+		// it; only one not yet accepted is matched by address.
 		return tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT jsonb_agg(jsonb_build_object('subject',m.subject,'organization_id',m.organization_id,'firm_name',o.name,'firm_enabled',o.enabled,'id',m.id::text,
    'granted',m.granted,'decided_by',m.actor,'decided_at',m.created_at,
@@ -179,7 +180,7 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
   FROM current_organization_members m JOIN organizations o ON o.id=m.organization_id WHERE m.subject=ANY(string_to_array($1,','))),'[]'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id::text,'organization_id',i.organization_id,'firm_name',o.name,'email',i.email,'role',i.role_name,
    'state',CASE WHEN i.state='pending' AND i.expires_at<=now() THEN 'expired' ELSE i.state END,'invited_by',i.invited_by,'created_at',i.created_at,'expires_at',i.expires_at) ORDER BY i.id DESC)
-  FROM (SELECT * FROM member_invitations WHERE email IN (SELECT jsonb_array_elements_text($2::jsonb)) OR subject=ANY(string_to_array($1,',')) ORDER BY id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
+  FROM (SELECT * FROM member_invitations WHERE subject=ANY(string_to_array($1,',')) OR (subject IS NULL AND email IN (SELECT jsonb_array_elements_text($2::jsonb))) ORDER BY id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
  COALESCE((SELECT jsonb_object_agg(id,name) FROM organizations WHERE id=ANY(string_to_array($3,','))),'{}'::jsonb)`,
 			strings.Join(ids, ","), jsonList(emails), strings.Join(orgs, ",")).Scan(&memberships, &invitations, &firms)
 	})
@@ -263,7 +264,8 @@ func reconcilePersonInvitations(ctx context.Context, db *sql.DB, emails, ids []s
 // adminRevokeSessions signs a person out everywhere, in two audited steps that outlive the request: first the app's own
 // sessions (AUTH_SESSION=server) end and commit, so nothing later can undo that; then every active WorkOS session, in
 // every organization, is revoked so none can be refreshed (sessions.revoke_workos: refused, with what ended, when WorkOS
-// fails part way). Their memberships are untouched.
+// fails part way). An access token a browser already holds (AUTH_SESSION=client) is checked locally and keeps working
+// until it expires, minutes later. Their memberships are untouched.
 func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	user := r.PathValue("user")
 	if !strings.HasPrefix(user, "user_") || len(user) > 200 {
