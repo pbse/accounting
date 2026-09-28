@@ -95,8 +95,12 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			return Plan{}, "the cited line does not name the number as the invoice number"
 		}
 		// A date is the service period's only when its quote speaks of the service, coverage or term, not the invoice, issue or due date.
-		if strings.HasPrefix(f.Field, "service_") && !quoteSays(f.Candidates[0].Quote, []string{"service", "coverage", "cover", "period", "term", "effective", "start", "begin", "end", "expir", "through", "policy", "subscription", "from"}, []string{"invoice date", "date of invoice", "issued", "issue date", "due", "payment", "paid", "order date"}) {
-			return Plan{}, "the cited text does not give the " + f.Label + " as a service-period date"
+		if strings.HasPrefix(f.Field, "service_") && !dateLineSays(f.Candidates[0].Quote, f.Value, []string{"service", "coverage", "cover", "period", "term", "effective", "start", "begin", "end", "expir", "through", "policy", "subscription", "from"}, []string{"invoice date", "date of invoice", "issued", "issue date", "due", "payment", "paid", "order"}) {
+			return Plan{}, "the cited line does not give the " + f.Label + " as a service-period date"
+		}
+		// The vendor is the issuer: a bare letterhead line, or one labelled as the issuer, never a processor, payee or recipient line.
+		if f.Field == "vendor" && !issuerLine(f.Candidates[0].Quote, f.Value) {
+			return Plan{}, "the cited line does not name the vendor as the invoice's issuer"
 		}
 		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill", "invoice to", "sold to"}, []string{"ship", "deliver", "service", "support", "contact"}) {
 			return Plan{}, "the cited line does not say the invoice is billed to that name"
@@ -176,6 +180,10 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		party := record.VendorRef.Name
 		if party == "" {
 			party = record.EntityRef.Name
+		}
+		// A bill bearing the invoice's number whose vendor carries only an ID cannot be tied to the vendor here.
+		if party == "" && (record.VendorRef.Value != "" || record.EntityRef.Value != "") && (row.Kind == "Bill" || row.Kind == "Purchase") && !record.Credit && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number)) {
+			return "", "the captured " + row.Kind + " bearing this invoice number does not name its vendor"
 		}
 		// A credit whose counterparty carries only an ID may be this vendor's; nothing here can tell.
 		if party == "" && (record.VendorRef.Value != "" || record.EntityRef.Value != "") && (row.Kind == "VendorCredit" || record.Credit) {
@@ -287,18 +295,50 @@ func negativeFigure(quote string, cents int64) bool {
 	return regexp.MustCompile(`[-(]\s*(usd|eur|gbp|cad|aud)?\s*` + digits + `([^0-9]|$)`).MatchString(plain)
 }
 
-// quoteSays reports whether the whole quote, compared as text, contains one of the words that give a date its
-// meaning and none of the words that give it another.
-func quoteSays(quote string, any, none []string) bool {
-	normal := documents.NormalizeEntity(quote)
-	ok := false
-	for _, word := range any {
-		ok = ok || strings.Contains(normal, word)
+// dateLineSays reports whether the line of the quote that prints the date contains one of the words that make it
+// a service-period date and none of the words that make it another date.
+func dateLineSays(quote, value string, any, none []string) bool {
+	for _, line := range strings.Split(quote, "\n") {
+		if !documents.DateIn(line, value, false) {
+			continue
+		}
+		normal := documents.NormalizeEntity(line)
+		ok := false
+		for _, word := range any {
+			ok = ok || strings.Contains(normal, word)
+		}
+		for _, word := range none {
+			ok = ok && !strings.Contains(normal, word)
+		}
+		if ok {
+			return true
+		}
 	}
-	for _, word := range none {
-		ok = ok && !strings.Contains(normal, word)
+	return false
+}
+
+// issuerLine reports whether the quoted line ending with the vendor's name is a bare letterhead line or one that
+// labels the name as the issuer, and not one naming a processor, payee, recipient or contact.
+func issuerLine(quote, value string) bool {
+	want := documents.NormalizeEntity(value)
+	for _, line := range strings.Split(quote, "\n") {
+		normal := documents.NormalizeEntity(line)
+		if !endsWithName(normal, want) {
+			continue
+		}
+		label := strings.TrimSpace(strings.TrimSuffix(normal, want))
+		ok := label == ""
+		for _, word := range []string{"from", "issued by", "vendor", "supplier", "seller", "provider", "issuer"} {
+			ok = ok || strings.Contains(label, word)
+		}
+		for _, word := range []string{"processor", "pay to", "payable", "remit", "bill to", "billed to", "sold to", "ship", "customer", "client", "contact", "agent", "broker", "via", "online", "care of", "attn"} {
+			ok = ok && !strings.Contains(label, word)
+		}
+		if ok {
+			return true
+		}
 	}
-	return ok
+	return false
 }
 
 // lineSays reports whether the quoted line ending with the value contains one of the words that give it its meaning
