@@ -23,6 +23,7 @@ var _ = wf.Define(wf.Spec[Input, Output]{
 	Name:        "plan",
 	Title:       "Approved plan",
 	Description: "Runs a plan built by staff or proposed by the agent, exactly as a person approved it.",
+	Triggers:    []wf.Trigger{wf.OnApproval()},
 	Concurrency: func(in Input) string { return fmt.Sprintf("plan:%d", in.PlanID) },
 	Run: func(ctx wf.Context, in Input) (Output, error) {
 		// The approved version is saved with the run, so later edits to the plan never change it.
