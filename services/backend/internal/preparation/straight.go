@@ -285,12 +285,14 @@ func lineSays(quote, value string, any, none []string) bool {
 		if !endsWithName(normal, want) {
 			continue
 		}
+		// The words are looked for in the label before the name, so a client called "Example Services" is not a service line.
+		label := strings.TrimSuffix(normal, want)
 		ok := false
 		for _, word := range any {
-			ok = ok || strings.Contains(normal, word)
+			ok = ok || strings.Contains(label, word)
 		}
 		for _, word := range none {
-			ok = ok && !strings.Contains(normal, word)
+			ok = ok && !strings.Contains(label, word)
 		}
 		if ok {
 			return true
