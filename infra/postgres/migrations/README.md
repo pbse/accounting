@@ -4,16 +4,14 @@ Apply every numbered SQL file in filename order for a fresh database. These migr
 
 ## Fresh hosted database
 
-Use a dedicated database and its owning role for migration. Stop API/worker traffic and set `DATABASE_URL` privately to that database's **direct** TLS endpoint. From the repository root, the following applies migrations only after verifying that `public` has no application tables:
+Use a dedicated database and its owning role for migration. Set `DATABASE_URL` privately to that database's **direct** TLS endpoint. From the repository root, the following applies every migration with the runner, which records each in its ledger (see below), only after verifying that `public` has no application tables:
 
 ```sh
 bash <<'SH'
 set -euo pipefail
 : "${DATABASE_URL:?Set the approved fresh database owner URL privately}"
 test "$(psql "$DATABASE_URL" -XAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")" = 0
-for migration in infra/postgres/migrations/[0-9]*.sql; do
-  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
-done
+infra/postgres/migrate.sh
 SH
 ```
 
@@ -23,9 +21,15 @@ Use this runtime role's direct TLS URL for both API and worker; never use Neon's
 
 ## Existing database upgrades
 
-The repository has no automatic migration ledger. Keep an operator record of exactly which files succeeded; readiness checks are not a replacement for that record. Back up, stop API/worker, compare the recorded list with this directory, and apply only unapplied files in numeric order as the migration owner. Do not rerun all migrations against an existing volume, delete that volume to upgrade, or guess the last migration from a single table. If history is unknown or a migration fails, inspect the schema and reconcile the record before continuing. Restart API/worker from the same revision and check `/readyz` plus a durable job.
+`infra/postgres/migrate.sh` applies the files a database does not have yet, in numeric order, as the migration owner (`DATABASE_URL`). It records each file in a ledger, `migrations.applied`, in the same transaction as the file itself, so a file is either applied and recorded or neither; a failing file stops the run with nothing of it kept. The ledger sits outside the `public` schema, which hosted readiness requires to be entirely under row-level security. Runs wait for each other on an advisory lock, and a file changed after it was applied stops the run: add a new migration instead. With `MIGRATION_GRANT_TO` set to the app's role, it then grants that role the app's privileges on every table and sequence in `public`. CI runs it on every change, twice, and the second run must apply nothing.
 
-Fresh Compose volumes run every migration automatically. Existing Compose volumes do not; apply each confirmed pending file using `docker compose exec -T postgres psql -U close -d close -v ON_ERROR_STOP=1` with that file on stdin. Hosted migrations remain an explicitly authorized operator action; the staging workflow only checks schema readiness.
+A migration runs while the previous code may still be serving, and stays if the deploy that needs it fails, so it must work with the code already running: add tables and columns, and drop or rename only in a later release, once no running code uses them.
+
+A database migrated before the ledger (it has tables, but no `migrations.applied`) is refused until it is told once what it already has. Set `MIGRATION_ADOPT` to a file of `migration|SQL condition` lines. Each file whose condition holds is recorded as adopted without running, and every other file is then applied. For example, `001_saved_closes.sql|true` records a file known to be in place, and `095_chat_every_month.sql|EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='chat_messages' AND column_name='every_month')` records one only if what it adds exists. After that first run the ledger decides, and `MIGRATION_ADOPT` is ignored.
+
+Back up before a hosted run. The script applies each file while the API and worker keep running, so they need no stop for migrations that follow the rule above. Afterwards, check `/readyz` plus a durable job.
+
+Fresh Compose volumes run every migration automatically, without the ledger; to use the script on such a volume, adopt everything it already has first. The deploy workflows do not run the script yet; they only check that the schema is ready.
 
 ## Historical migration notes
 

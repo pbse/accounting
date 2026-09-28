@@ -2517,3 +2517,36 @@ Tests: `TestHistoricalExportsAreLabeledAsReportedNotLive` refuses a future date,
 Code review: GPT-6 Sol (reasoning high) found that the sentence claimed no live ledger connection, false in a package once a close connects later (it now says uploaded historical exports); that the panel kept a stale document list and label (it reads again when opened); that validation and saving were separate statements, so a replacement could slip between them (they now run in one transaction that locks the close, as a replacement does); and that the GET repeated the boundary's close check (removed). Gemini (agy-review, on a separate copy) found that a firm ahead of UTC could not label today's exports (a date is now refused only past tomorrow in UTC), that the panel allowed more than 20 documents, and that the note length counted bytes, not characters; all are fixed, and the test adds a five-character Unicode note. A second delta review found that a replaced document could stay selected after the panel reloaded; the reload now drops it. Both reviewers closed every finding.
 
 Not verified: the panel in a browser.
+
+## A migration runner with a ledger (2026-09-28)
+
+Request: apply migrations to production automatically once a PR merges. Verified first:
+- Nothing recorded which files a database had applied (the README asked operators to keep a list).
+- The files are not safe to re-run.
+- Production's `DATABASE_URL` cannot be the table owner. Hosted readiness refuses a role that owns tables, and the last production deploy (#140) passed it three minutes after that secret was last set. So migrations need the owner's URL separately.
+
+What changed:
+- **The runner.** `infra/postgres/migrate.sh` applies the files a database lacks, in order, each in one transaction with its row in the ledger `migrations.applied`.
+  - The ledger sits outside `public`, whose tables hosted readiness requires to be under row-level security.
+  - Runs wait on an advisory lock, and a file changed after it was applied stops the run.
+  - With `MIGRATION_GRANT_TO` it grants the app's role its privileges on every table and sequence.
+- **Databases migrated before the ledger** are refused until told once what they have (`MIGRATION_ADOPT`: a file known to be in place, or recorded only if what it creates exists).
+- **CI** now migrates its database with the runner, twice, and the second run must apply nothing.
+- **Not done:** wiring the runner into the deploy workflows, and deploying on every merge. The permission guard blocked editing the production deploy workflow, and that decision is left to the owner.
+
+Checks (throwaway local databases, since dropped):
+- A fresh database applies all 96 files; a second run is silent.
+- An edited, already-applied file stops the run.
+- A database migrated by hand through 090 is refused without adoption, and nothing is created. With adoption, 90 are recorded and 091–096 applied.
+- By hand through 090 plus 094 and 096: 92 adopted, and 091, 092, 093 and 095 applied.
+- Everything by hand: all adopted, nothing applied.
+- Two concurrent runs apply everything once, without errors.
+- A migration that fails partway keeps nothing of itself and is not recorded.
+- After granting to a restricted role, that role can use every table, and the hosted row-level security rule holds as that role.
+
+Review: GPT-6 Sol (reasoning high) found four issues, all fixed, and each checked:
+- CI hid a failing second run inside `test`. The output is now captured first; a failing run fails the step (exit 2).
+- `grep … || true` could record a file it failed to read. The transaction lines are now stripped with `sed`, and checksums are taken as checked assignments; an unreadable file stops the run with nothing applied (exit 1).
+- The pre-ledger guard looked for one table only. Any table in `public` now counts; a database holding just one unrelated table is refused and no ledger is created.
+- The README's fresh-database steps ran the files directly, bypassing the ledger. They now use the runner.
+A delta review closed all four.
