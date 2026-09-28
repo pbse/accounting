@@ -45,7 +45,7 @@ jobs:
           (set +e
            timeout 120 sh -c 'until pg_isready -q -h 127.0.0.1 -U close -d close_test; do sleep 1; done' &&
            DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh &&
-           test -z "$(DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh)" &&
+           again=$(DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh) && test -z "$again" &&
            timeout 300 sh -c 'until [ -f /tmp/apt.status ]; do sleep 1; done' && test "$(cat /tmp/apt.status)" = 0 &&
            cd services/backend && go test -vet=off ./... && go vet ./...
            echo $? > /tmp/go.status) > /tmp/go.log 2>&1 &
