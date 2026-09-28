@@ -47,7 +47,10 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if input.BookedBalance != "" || !input.BookingConfirmed || input.Method != prepaids.Method || input.ExpenseAccount != "Insurance" || input.SourceReference != "Evidence #1 · work #5" {
 		t.Fatal("unexpected input", input)
 	}
-	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "50", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
+	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "53", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
+		t.Fatal("purchase bearing the invoice number not accepted", reason)
+	}
+	if _, reason = StraightThrough(proposal, "Acme Insurance Co\nInvoice #INV-778.\nUSD 1,200.00", procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "50", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
 		t.Fatal("purchase bearing the invoice number not accepted", reason)
 	}
 	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "52", "2026-09-09", "Other Vendor", "", "Prepaid Expenses", "1200"))); reason != "" {
@@ -68,6 +71,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"line-less vendor credit":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "71", Date: "2026-09-10", Record: json.RawMessage(`{"VendorRef":{"Name":"Acme Insurance Co"}}`)}), false},
 		"line-less journal":           {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "72", Date: "2026-09-10", Record: json.RawMessage(`{}`)}), false},
 		"card refund":                 {func(*Proposal, *Procedure) {}, ledger(bill, refund), false},
+		"number is a prefix":          {func(p *Proposal, _ *Procedure) {}, ledger(row("Bill", "76", "2026-09-03", "Other Vendor", "INV-77", "Insurance", "1200")), false},
 		"date as document number":     {func(*Proposal, *Procedure) {}, ledger(row("Bill", "75", "2026-09-03", "Other Vendor", "2026-09", "Insurance", "1200")), false},
 		"year as document number":     {func(*Proposal, *Procedure) {}, ledger(row("Bill", "73", "2026-09-03", "Other Vendor", "2026", "Insurance", "1200")), false},
 		"unread evidence":             {func(*Proposal, *Procedure) {}, ledger(bill), true},

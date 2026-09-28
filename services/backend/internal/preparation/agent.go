@@ -712,6 +712,13 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			home = profile.Currency
 		}
 		plan, reason := StraightThrough(proposal, invoice, procedure, home, entity, period, id, unread, ledger)
+		if reason == "" {
+			// The same policy check the preparation worker applies, so a draft the firm's basis or procedure refuses waits for a person instead of failing later.
+			body, _ := Calculate(plan, entity, period)
+			if e := CheckProcedureMethod(persist, finish, closeID, "prepaid", body); e != nil {
+				reason = e.Error()
+			}
+		}
 		straight = "Waiting for a person: " + reason + "."
 		if reason == "" {
 			if err = queueStraightThrough(persist, finish, id, plan); err != nil {

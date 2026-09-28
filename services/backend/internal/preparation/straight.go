@@ -144,7 +144,7 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 			continue
 		}
 		mentioned := printed(text, record.VendorRef.Name) || printed(text, record.EntityRef.Name) || printed(text, record.DocNumber)
-		mine := printed(letterhead, record.VendorRef.Name) || printed(letterhead, record.EntityRef.Name) || (numberLike(record.DocNumber) && printed(text, record.DocNumber))
+		mine := printed(letterhead, record.VendorRef.Name) || printed(letterhead, record.EntityRef.Name) || (numberLike(record.DocNumber) && printedWhole(text, record.DocNumber))
 		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || (row.Kind == "VendorCredit" && mentioned) || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
@@ -198,6 +198,16 @@ func numberLike(number string) bool {
 	letter := strings.ContainsFunc(number, func(r rune) bool { return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' })
 	digits := !strings.ContainsFunc(number, func(r rune) bool { return r < '0' || r > '9' })
 	return letter || (digits && len(number) >= 6)
+}
+
+// printedWhole reports whether the invoice prints the document number as a whole identifier, set off by whitespace or
+// plain punctuation: "INV-778" is not printed in "INV-778-A" or "INV-778/2".
+func printedWhole(text, number string) bool {
+	number = strings.ToLower(strings.TrimSpace(number))
+	if number == "" {
+		return false
+	}
+	return regexp.MustCompile(`(^|[\s#(:])` + regexp.QuoteMeta(number) + `([\s).,;:]|$)`).MatchString(text)
 }
 
 // printed reports whether the invoice prints the term as a whole word: "77" is not printed in "INV-778".

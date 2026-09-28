@@ -31,7 +31,7 @@ type replayItem struct {
 
 // runReplay reads up to three of a close's confirmed documents again with the current model, counted against the firm's daily limit, and compares each with what was confirmed.
 func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayItem, error) {
-	rows, err := db.QueryContext(ctx, `SELECT i.job_id::text,e.name,j.plans FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND i.confirmed_by IS NOT NULL AND i.proposal->>'engine'='openai' ORDER BY i.confirmed_at DESC,i.job_id DESC LIMIT 3`, closeID)
+	rows, err := db.QueryContext(ctx, `SELECT i.job_id::text,e.name,j.plans FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine'='openai' ORDER BY i.confirmed_at DESC,i.job_id DESC LIMIT 3`, closeID)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func sweepReplays(ctx context.Context, db *sql.DB) error {
 	if os.Getenv("OPENAI_API_KEY") == "" || model == "" {
 		return nil
 	}
-	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.proposal->>'engine'='openai' ORDER BY i.confirmed_at DESC LIMIT 1) j
+	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine'='openai' ORDER BY i.confirmed_at DESC LIMIT 1) j
  WHERE o.enabled AND NOT EXISTS(SELECT 1 FROM replay_runs r WHERE r.organization_id=o.id AND r.model=$1) ORDER BY o.id LIMIT 20`, model)
 	if err != nil {
 		return err
