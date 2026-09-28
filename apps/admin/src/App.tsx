@@ -11,6 +11,7 @@ import { Run } from "./pages/Run";
 import { StartRun } from "./pages/StartRun";
 import { Connections, Jobs } from "./pages/Operations";
 import { People } from "./pages/People";
+import { Audit } from "./pages/Audit";
 import { Plan, Plans } from "./pages/Plans";
 import { PlanBuilder } from "./pages/PlanBuilder";
 
@@ -28,6 +29,7 @@ export function App() {
           <Route path="firms" element={<Firms />} />
           <Route path="firms/:id" element={<Firm />} />
           <Route path="people" element={<People />} />
+          <Route path="audit" element={<Audit />} />
           <Route path="workflows" element={<Workflows />} />
           <Route path="runs" element={<Runs />} />
           <Route path="runs/new" element={<StartRun />} />
@@ -65,6 +67,7 @@ function Layout() {
             <NavLink className="nav-item" end to="/">Overview</NavLink>
             <NavLink className="nav-item" to="/firms">Firms</NavLink>
             <NavLink className="nav-item" to="/people">People</NavLink>
+            <NavLink className="nav-item" to="/audit">Staff audit</NavLink>
           </div>
           <div className="nav-group">
             <div className="nav-label">Workflows</div>

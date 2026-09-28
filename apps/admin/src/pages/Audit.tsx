@@ -1,0 +1,91 @@
+import { useState } from "react";
+import { Link, useSearchParams } from "react-router";
+import { download, when } from "../api";
+import { Reveal, shown, useRevealable } from "../components/Reveal";
+
+type Entry = { id: number; organization: string | null; staff_user: string; action: string; target_type: string; target_id: string; reason: string; result: string; error: string; created_at: string };
+const filters = ["firm", "staff", "action", "result"];
+
+// Every staff action and reveal, across firms, newest first, searchable and exported as CSV.
+export function Audit() {
+  const [params, setParams] = useSearchParams();
+  const [before, setBefore] = useState(0);
+  const [exported, setExported] = useState("");
+  const query = new URLSearchParams();
+  for (const name of filters) if (params.get(name)) query.set(name, params.get(name)!);
+  const search = query.toString();
+  if (before) query.set("before", String(before));
+  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/audit${query.size ? `?${query}` : ""}`);
+  const reason = audit.reveal.shown ? audit.reveal.reason : undefined;
+  return (
+    <>
+      <div className="page-title">
+        <div><div><h1>Staff audit</h1><p>Every staff action and every reveal of client content, refusals included. Reasons, details and errors are hidden until revealed.</p></div></div>
+        <div className="title-actions">
+          <button onClick={async () => {
+            setExported("");
+            try {
+              const exportQuery = new URLSearchParams(search);
+              if (reason) exportQuery.set("reveal", "1"); // a revealed export is its own audited read
+              const truncated = await download(`/v1/admin/audit/export${exportQuery.size ? `?${exportQuery}` : ""}`, "staff-audit.csv", reason ? { "X-Access-Reason": reason } : {});
+              setExported(truncated ? "Exported the newest 5,000 entries; narrow the search for the rest." : "Exported.");
+            } catch (e) {
+              setExported((e as Error).message);
+            }
+          }}>Export CSV{reason ? " (revealed)" : ""}</button>
+        </div>
+      </div>
+      <form className="filters" onSubmit={(event) => {
+        event.preventDefault();
+        setBefore(0);
+        const next = new URLSearchParams();
+        for (const [k, v] of new FormData(event.currentTarget)) if (String(v).trim()) next.set(k, String(v).trim());
+        setParams(next);
+      }}>
+        <label>Firm ID<input name="firm" key={`f${params.get("firm")}`} defaultValue={params.get("firm") ?? ""} placeholder="Any, or platform" /></label>
+        <label>Staff<input name="staff" key={`s${params.get("staff")}`} defaultValue={params.get("staff") ?? ""} placeholder="Any" /></label>
+        <label>Action<input name="action" key={`a${params.get("action")}`} defaultValue={params.get("action") ?? ""} placeholder="plan. or content.reveal" /></label>
+        <label>Result
+          <select name="result" key={`r${params.get("result")}`} defaultValue={params.get("result") ?? ""}>
+            <option value="">Any</option>
+            <option value="ok">ok</option>
+            <option value="refused">refused</option>
+          </select>
+        </label>
+        <button>Search</button>
+      </form>
+      {exported && <p className="note" role="status">{exported}</p>}
+      <Reveal reveal={audit.reveal} />
+      {audit.error && <p role="alert">{audit.error}</p>}
+      {!audit.data && !audit.error && <p role="status">Loading the audit…</p>}
+      {audit.data && (
+        <section>
+          {audit.data.entries.length === 0 ? <p>No entry matches.</p> : (
+            <table>
+              <thead><tr><th>When</th><th>Firm</th><th>Staff</th><th>Action</th><th>Target</th><th>Reason</th><th>Result</th></tr></thead>
+              <tbody>
+                {audit.data.entries.map((e) => (
+                  <tr key={e.id}>
+                    <td>{when(e.created_at)}</td>
+                    <td>{e.organization ? <Link to={`/firms/${encodeURIComponent(e.organization)}`}>{e.organization}</Link> : "platform"}</td>
+                    <td>{e.staff_user}</td>
+                    <td>{e.action}</td>
+                    <td>{e.target_type} {e.target_id}</td>
+                    <td>{shown(e.reason)}</td>
+                    <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {(before > 0 || audit.data.next_before) && (
+            <p className="title-actions">
+              {before > 0 && <button onClick={() => setBefore(0)}>Newest</button>}
+              {audit.data.next_before && <button onClick={() => setBefore(audit.data!.next_before!)}>Older</button>}
+            </p>
+          )}
+        </section>
+      )}
+    </>
+  );
+}

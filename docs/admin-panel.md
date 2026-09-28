@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations), A1 (workflows), A2 (firm management) and A3 (plans) implemented** (2026-09-28); A4 (hardening) is a proposal. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations), A1 (workflows), A2 (firm management) and A3 (plans) implemented** (2026-09-28); A4 (hardening) is under way: audit search and export are in. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -179,7 +179,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 | `POST /workflows/runs`, `POST /workflows/runs/{id}/cancel`, `…/retry` and `…/resolve` (step `key` in the body), `POST /workflows/events` | `platform:operate` |
 | `GET /plans`, `GET /plans/{id}`, `POST /plans` (a draft or template), `POST /plans/{id}` (edit a draft), `POST /plans/validate`, `POST /plans/{id}/propose`, `…/reject`, `…/instantiate` (templates) | `platform:plans` |
 | `POST /plans/{id}/approve` (the reviewed digest) | `platform:plans` and `platform:content` |
-| `GET /jobs`, `GET /connections`, `GET /audit` | `platform:read` |
+| `GET /jobs`, `GET /connections`, `GET /audit`, `GET /audit/export` (CSV) | `platform:read` |
 | Any response field marked content, when revealed | `platform:content` plus the `X-Access-Reason` header |
 
 ## Phases
@@ -190,7 +190,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 | **A1. Workflows** (implemented) | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
 | **A2. Firm management** (implemented) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
 | **A3. Plans** (implemented) | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
-| **A4. Hardening** | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
+| **A4. Hardening** (audit search and export implemented) | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
 
 **Suggested order across both plans:**
 1. Engine W0/W1 alongside admin A0.
@@ -236,6 +236,10 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 - **Approval.** Approving means reading the plan, so it needs `platform:content` as well as `platform:plans`. The server accepts an approval only when that staff member revealed that exact version (the reveal's audit row records its digest) within the last day. The page offers it only once the plan is revealed, and a changed plan is refused. Templates are copied, never proposed, rejected or approved; the engine refuses them. The approval and the run it starts commit with the audit row, as the plan's firm (`wf.ApprovePlanTx`, alongside `ProposePlanTx`, `RejectPlanTx` and `InstantiateTemplateTx`).
 - **Staff approve with no firm permissions.** A plan whose activities need a firm permission (`ActivitySpec.Permission`) is not approvable by staff, and the page says which permission it needs. Such a plan waits for the firm to approve it, which comes with the firm-facing plan screens. External activities still need an approval node in the plan, which a firm member decides when the plan reaches it.
 - **Builder.** `/admin/plans/new` writes a new draft for a firm, or a template for one firm or for every firm. `/admin/plans/{id}/edit` rewrites a draft or rejected plan staff wrote (never an agent's), and `/admin/plans/new?from={id}` starts from a copy of any plan, which is how staff take up an agent's proposal. Editing or copying reads the plan, so it is revealed first. The form edits steps (activity or workflow with JSON input prefilled from its schema, event wait, timed wait, approval), their order, what each comes after and on which outcome. A live graph preview and the validator's problems update as the plan is written (`POST /plans/validate`, which also says whether staff could approve it). A saved plan must be valid. Steps refer to each other by a key that never changes, so renaming a step never rewires what waits for what. Inputs stay as the JSON text written, and a revealed plan returns each step's input exactly as stored, so integers beyond 2^53 survive editing and copying. Each save needs a reason and is audited (`plan.create` with the new plan's ID, `plan.update`), as the firm, through `wf.CreatePlanTx` and `wf.UpdatePlanTx`. Drag-and-drop editing on the graph stays a later improvement.
+
+## As built (A4, so far)
+
+- **Staff audit.** `/admin/audit` searches every staff action and reveal across firms: by firm (`platform` for entries on no firm), staff member, action or its start (`plan.`, `content.reveal`) and result, newest first, paged by entry ID. The firm page's Staff audit tab uses the same search, and `GET /audit/export` returns it as CSV (at most 5,000 entries; `X-Truncated` says when there are more). Who did which action to what, and whether it went through, always show. Reasons, request details and refusal errors are masked until revealed, in the page and the export. A reveal is recorded against every firm whose entries it shows, and entries on no firm at platform level. CSV values that start like a formula (`=`, `+`, `-`, `@`) are prefixed with an apostrophe, so a spreadsheet never runs a staff member's text.
 
 ## Later ideas (not planned)
 

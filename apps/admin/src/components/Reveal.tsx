@@ -21,7 +21,7 @@ export function useRevealable<T extends { revealed?: boolean }>(path: string | n
   }, [reason, resource.error]);
   return {
     ...resource,
-    reveal: { pending: reason !== undefined && !resource.data?.revealed, shown: !!resource.data?.revealed, failure, show: (r: string) => { setFailure(""); setReason(r); }, hide: () => setReason(undefined) },
+    reveal: { pending: reason !== undefined && !resource.data?.revealed, shown: !!resource.data?.revealed, reason, failure, show: (r: string) => { setFailure(""); setReason(r); }, hide: () => setReason(undefined) },
   };
 }
 
