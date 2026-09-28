@@ -1,0 +1,181 @@
+package transport
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"close.local/backend/internal/wf"
+)
+
+type adminFlowInput struct {
+	ID     string `json:"id"`
+	Secret string `json:"secret" wf:"sensitive"`
+}
+
+var _ = wf.Define(wf.Spec[adminFlowInput, map[string]string]{
+	Name: "test_admin_flow", Title: "Admin flow",
+	Run: func(ctx wf.Context, in adminFlowInput) (map[string]string, error) {
+		note, err := wf.Step(ctx, "note", func(context.Context) (string, error) { return "the client said " + in.Secret, nil })
+		if err != nil {
+			return nil, err
+		}
+		switch in.ID {
+		case "fail":
+			_, err = wf.Step(ctx, "boom", func(context.Context) (int, error) { return 0, wf.Permanent(errors.New("boom")) })
+			return nil, err
+		case "effect":
+			if _, err = wf.Effect(ctx, "post", func(context.Context) (string, error) { return "", errors.New("provider timed out") }); err != nil {
+				return nil, err
+			}
+		}
+		reply, err := wf.WaitForEvent[map[string]string](ctx, "reply", "admin.reply:"+in.ID, time.Hour)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"note": note, "reply": reply["text"]}, nil
+	},
+})
+
+func adminJSON(t *testing.T, h http.Handler, token, method, path, body string, want int, header ...string) map[string]any {
+	t.Helper()
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("Content-Type", "application/json")
+	for i := 0; i+1 < len(header); i += 2 {
+		r.Header.Set(header[i], header[i+1])
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != want {
+		t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+	}
+	var out map[string]any
+	json.Unmarshal(w.Body.Bytes(), &out)
+	return out
+}
+
+func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
+	db := adminDB(t)
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	token := strings.Repeat("d", 32)
+	firm := "org_Flows" + rand.Text()
+	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Flow firm')`, firm); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM workflow_steps WHERE organization_id=$1`, firm)
+		db.Exec(`DELETE FROM workflow_runs WHERE organization_id=$1`, firm)
+		db.Exec(`DELETE FROM workflow_events WHERE organization_id=$1`, firm)
+	})
+	h := apiWithStore(db, token)
+	engine := &wf.Engine{DB: db, OnlyOrganization: firm}
+	drain := func() {
+		for i := 0; i < 20; i++ {
+			if ran, err := engine.Tick(context.Background()); err != nil || !ran {
+				return
+			}
+		}
+	}
+	start := func(id string) float64 {
+		body := `{"workflow":"test_admin_flow","organization":"` + firm + `","input":{"id":"` + id + `","secret":"SSN 123-45-6789"},"reason":"support ticket 7"}`
+		return adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs", body, 200)["id"].(float64)
+	}
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs", `{"workflow":"test_admin_flow","organization":"`+firm+`","input":{"id":"x","secret":"y"}}`, 422)
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs", `{"workflow":"test_admin_flow","organization":"`+firm+`","input":{"id":"x","extra":1},"reason":"r"}`, 422)
+
+	// The catalog marks the sensitive field.
+	definitions := adminJSON(t, h, token, "GET", "/v1/admin/workflows/definitions", "", 200)
+	if !strings.Contains(mustString(definitions), `"secret":{"sensitive":true`) {
+		t.Fatalf("the catalog must mark sensitive inputs: %s", mustString(definitions))
+	}
+
+	// A started run is listed and masked; revealing needs a reason and is audited.
+	id := start("main")
+	drain()
+	runPath := "/v1/admin/workflows/runs/" + jsonNumber(id)
+	detail := adminJSON(t, h, token, "GET", runPath, "", 200)
+	text := mustString(detail)
+	if strings.Contains(text, "123-45-6789") || !strings.Contains(text, `"secret":"••••"`) || !strings.Contains(text, `"hidden":true`) {
+		t.Fatalf("client content must be masked by default: %s", text)
+	}
+	adminJSON(t, h, token, "GET", runPath+"?reveal=1", "", 422)
+	revealed := adminJSON(t, h, token, "GET", runPath+"?reveal=1", "", 200, "X-Access-Reason", "the firm asked us to check the reply")
+	if !strings.Contains(mustString(revealed), "123-45-6789") {
+		t.Fatalf("a reveal with a reason shows the content: %s", mustString(revealed))
+	}
+	listed := adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs?firm="+firm+"&state=waiting", "", 200)
+	if runs := listed["runs"].([]any); len(runs) != 1 {
+		t.Fatalf("runs %v", runs)
+	}
+
+	// An event sent by staff wakes the run; engine events cannot be sent.
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/events", `{"organization":"`+firm+`","key":"admin.reply:main","payload":{"text":"received"},"reason":"the client replied by phone"}`, 200)
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/events", `{"organization":"`+firm+`","key":"wf.approval:1:x","payload":{},"reason":"forge"}`, 422)
+	drain()
+	if state := adminJSON(t, h, token, "GET", runPath, "", 200)["run"].(map[string]any)["state"]; state != "completed" {
+		t.Fatalf("the event must complete the run: %v", state)
+	}
+
+	// Cancel needs a reason.
+	cancelled := start("cancelled")
+	drain()
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(cancelled)+"/cancel", `{}`, 422)
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(cancelled)+"/cancel", `{"reason":"the firm withdrew the request"}`, 200)
+
+	// An unknown effect is found in its view and resolved; a failed step is retried.
+	uncertain := start("effect")
+	failed := start("fail")
+	drain()
+	unknown := adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs?firm="+firm+"&view=unknown_effects", "", 200)["runs"].([]any)
+	if len(unknown) != 1 {
+		t.Fatalf("unknown effects view %v", unknown)
+	}
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(uncertain)+"/resolve", `{"key":"post","applied":true,"output":"\"REF-9\"","reason":"found REF-9 at the provider"}`, 200)
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(failed)+"/retry", `{"key":"boom","reason":"the provider recovered"}`, 200)
+	// A completed step cannot be retried; the refusal is audited too.
+	adminJSON(t, h, token, "POST", "/v1/admin/workflows/runs/"+jsonNumber(failed)+"/retry", `{"key":"note","reason":"again"}`, 409)
+
+	var actions []string
+	rows, err := db.Query(`SELECT action||' '||result FROM platform_audit WHERE organization_id=$1 ORDER BY id`, firm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a string
+		rows.Scan(&a)
+		actions = append(actions, a)
+	}
+	for _, want := range []string{"workflow.start ok", "content.reveal ok", "workflow.event ok", "workflow.cancel ok", "workflow.resolve ok", "workflow.retry ok", "workflow.retry refused"} {
+		if !strings.Contains(strings.Join(actions, "|"), want) {
+			t.Fatalf("audit %v lacks %q", actions, want)
+		}
+	}
+}
+
+func TestReadOnlyStaffCannotActOrReveal(t *testing.T) {
+	db := adminDB(t)
+	sign := signer(t)
+	staffOrg := "org_Staff" + rand.Text()
+	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
+	h := apiWithStore(db, strings.Repeat("x", 32))
+	adminJSON(t, h, sign(staffOrg, "platform:read"), "POST", "/v1/admin/workflows/runs", `{"workflow":"test_admin_flow","reason":"r"}`, 403)
+	adminJSON(t, h, sign(staffOrg, "platform:read"), "POST", "/v1/admin/workflows/runs/1/cancel", `{"reason":"r"}`, 403)
+	var run int64
+	if err := db.QueryRow(`INSERT INTO workflow_runs(workflow,idempotency_key,started_by,input) VALUES('test_admin_flow',$1,'test','{"id":"p","secret":"s"}') RETURNING id`, rand.Text()).Scan(&run); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DELETE FROM workflow_runs WHERE id=$1`, run)
+	adminJSON(t, h, sign(staffOrg, "platform:read", "platform:operate"), "GET", "/v1/admin/workflows/runs/"+jsonNumber(float64(run))+"?reveal=1", "", 403, "X-Access-Reason", "curious")
+}
+
+func mustString(v any) string { raw, _ := json.Marshal(v); return string(raw) }
+
+func jsonNumber(f float64) string { raw, _ := json.Marshal(int64(f)); return string(raw) }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"close.local/backend/internal/transport"
+	_ "close.local/backend/workflows" // the workflow catalog, for the admin panel and starting runs
 	"log"
 )
 
