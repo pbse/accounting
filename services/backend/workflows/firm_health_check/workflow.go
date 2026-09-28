@@ -28,7 +28,7 @@ var _ = wf.Define(wf.Spec[Input, Report]{
 	Name:        "firm_health_check",
 	Title:       "Firm health check",
 	Description: "Counts the firm's failed or stuck background work, provider writes awaiting reconciliation and connections to reconnect. Reads only.",
-	Triggers:    []wf.Trigger{wf.Manual(), wf.ScheduleEachFirm("15 5 * * *")},
+	Triggers:    []wf.Trigger{wf.ManualForFirm(), wf.ScheduleEachFirm("15 5 * * *")},
 	Concurrency: func(Input) string { return "firm_health_check" },
 	Run: func(ctx wf.Context, _ Input) (Report, error) {
 		return wf.Step(ctx, "count", count)

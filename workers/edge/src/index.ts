@@ -43,6 +43,7 @@ export class CapabilityAPI extends Container<Env> {
     MCP_ALLOWED_ORIGINS: this.env.MCP_ALLOWED_ORIGINS ?? "",
     PRODUCTION_POSTING_KINDS: this.env.PRODUCTION_POSTING_KINDS ?? "",
     XERO_POSTING_KINDS: this.env.XERO_POSTING_KINDS ?? "",
+    AUTH_SESSION: this.env.AUTH_SESSION ?? "",
   };
   sleepAfter = "5m";
 }
@@ -85,6 +86,7 @@ interface Env {
   MCP_ALLOWED_ORIGINS?: string;
   PRODUCTION_POSTING_KINDS?: string;
   XERO_POSTING_KINDS?: string;
+  AUTH_SESSION?: string;
   API: DurableObjectNamespace<CapabilityAPI>;
   ASSETS: Fetcher;
 }

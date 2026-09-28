@@ -4,7 +4,7 @@ WorkOS AuthKit is the implemented hosted identity provider. The application supp
 
 ## Configure WorkOS
 
-1. Use separate WorkOS staging and production environments. Enable Google sign-in and the desired email login option. The provided auth domain is sufficient; a paid custom auth domain is optional.
+1. Use separate WorkOS staging and production environments. Enable Google sign-in and the desired email login option. Choose the sign-in session below: the provided auth domain is enough with `AUTH_SESSION=server`; `AUTH_SESSION=client` needs a paid custom authentication domain in production.
 2. Register the frontend origin, `/login` on that origin as redirect/login URI, and the origin as sign-out URI. Configure the firm's MFA policy in WorkOS.
 3. Set backend `WORKOS_CLIENT_ID` and exact `WORKOS_ISSUER`. Frontend uses `VITE_WORKOS_CLIENT_ID` and `VITE_WORKOS_API_HOSTNAME`; Compose and GitHub derive these from the root/environment WorkOS settings. Copy the environment's hostname and issuer, not values from an unverified incoming token.
 4. Create a WorkOS organization for each accounting firm and invite staff. Give the first administrator `org:enroll`, `members:manage` and `clients:all`, then sign in and enroll the firm in the app.
@@ -34,3 +34,22 @@ An `executing` or `unknown` result requires investigation and canonical provider
 Use the [staging acceptance matrix](onboarding.md#staging-acceptance-matrix) and retain the release revision and evidence of each result. Existing tests use synthetic identities/provider responses; they do not prove live WorkOS, Intuit, Xero or Cloudflare configuration. Historical validation entries remain in [validation](validation.md).
 
 References: [WorkOS React SDK](https://github.com/workos/authkit-react), [WorkOS sessions](https://workos.com/docs/authkit/sessions).
+
+## Sign-in session
+
+One setting, `AUTH_SESSION` (a GitHub environment variable; the workflows pass it to both the frontend build and the API), chooses where the WorkOS session lives:
+
+- **`client` (the default when unset):** WorkOS's AuthKit browser session, as before. WorkOS's client-only SDK needs a custom authentication domain in production (`WORKOS_API_HOSTNAME=auth.<your-domain>`, $99/month); with `api.workos.com` its refresh cookie is third-party, and the deploy prints a warning.
+- **`server`:** WorkOS AuthKit still shows its sign-in page, but it returns to the API (`/v1/auth/callback`). The API exchanges the code with `WORKOS_API_KEY`, keeps WorkOS's access and refresh tokens sealed with `SECRETS_KEY` in `auth_sessions` (migration 099, readable only by system work), and gives the browser a random `__Host-close_session` cookie (HttpOnly, Secure, SameSite=Lax, 30 days) whose SHA-256 is all the table keeps. On every `/v1` request the API turns the cookie into the usual Bearer token, so token verification, firm membership, client access and row-level security are unchanged. It refreshes an access token with under a minute left, once, with the row locked, and keeps WorkOS's rotated refresh token; WorkOS declining the refresh, or a refreshed token for another person, session or firm, ends the session, while a WorkOS outage returns 503 and keeps it. Any change other than a GET must come from the app's own origin. MCP (`/mcp`) never accepts the cookie. Sign-out revokes the row and returns WorkOS's logout URL. An `AUTH_SESSION=server` API without `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `SECRETS_KEY` and an https `PUBLIC_APP_URL`, or with an unknown value, refuses to start, and the deploy refuses a separate API origin.
+
+`AUTH_SESSION=server` covers the firm workspace. The staff console (`/admin`, platform staff only) still signs in with WorkOS's browser session and its own Bearer token, which the cookie path never touches; until it gets the same server session, staff sign-in in production needs the custom WorkOS domain or accepts that WorkOS's refresh cookie is third-party.
+
+**Turning server sessions on** (a merge alone does not; production deploys on every merge but keeps `client` until the variable changes):
+
+1. Add the `WORKOS_API_KEY` secret to the GitHub environment (the API and worker then both receive it).
+2. In the WorkOS dashboard, add `https://<app>/v1/auth/callback` as a redirect URI and `https://<app>/` as a sign-out redirect.
+3. Set the variable `AUTH_SESSION=server` and deploy.
+4. Sign in, reload the page, wait more than five minutes and reload again (a refresh), then sign out.
+
+**Going back to WorkOS's browser session** with a custom domain: set up the WorkOS custom authentication domain, set `WORKOS_API_HOSTNAME=auth.<your-domain>` and `AUTH_SESSION=client`, and deploy. Everyone signs in once more. The backend session is then unused and can be removed: `services/backend/internal/transport/session.go`, its registration in `apiWithStore`, the server branch in `apps/frontend/src/features/auth/Auth.tsx`, and the `auth_sessions` table.
+
