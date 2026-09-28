@@ -4,6 +4,7 @@ import { post, useResource } from "../api";
 import { ActionForm } from "../components/ActionForm";
 import { FlowGraph, type PlanNode } from "../components/Flow";
 import { Reveal, useRevealable } from "../components/Reveal";
+import { useGrantFor } from "../components/Grants";
 
 type Kind = "activity" | "workflow" | "event" | "sleep" | "approval";
 // One step as the form edits it; toPlan turns the list into plan JSON. Steps refer to each other by key, which never
@@ -151,7 +152,11 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
   const [firm, setFirm] = useState(startFirm);
   const [template, setTemplate] = useState(startAsTemplate);
   const [loaded, setLoaded] = useState(!source);
+  // Loaded under a content grant: the builder holds that content only while the grant does.
+  const [underGrant, setUnderGrant] = useState(false);
+  const [lapsed, setLapsed] = useState(false);
   const stored = useRevealable<Stored>(source ? `/v1/admin/plans/${encodeURIComponent(source)}` : null);
+  const grant = useGrantFor(stored.data?.plan.organization);
   const activities = useResource<{ activities: Activity[] }>("/v1/admin/workflows/activities");
   const definitions = useResource<{ workflows: Definition[] }>("/v1/admin/workflows/definitions");
 
@@ -163,8 +168,19 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
     setSteps(fromPlan(p.plan!.nodes, stored.data.inputs));
     setFirm(p.organization ?? "");
     if (editing) setTemplate(p.is_template);
+    setUnderGrant(stored.reveal.reason === "");
     setLoaded(true);
   }, [loaded, stored.data, editing]);
+  // A grant that ended or expired takes back the content it loaded, unsaved edits included.
+  useEffect(() => {
+    if (!underGrant || grant) return;
+    setTitle("");
+    setSteps([blank("first")]);
+    setUnderGrant(false);
+    setLoaded(false);
+    setLapsed(true);
+    stored.reveal.hide();
+  }, [underGrant, grant]); // stored.reveal.hide is new each render
 
   const built = useMemo(() => toPlan(title, steps), [title, steps]);
   const [check, setCheck] = useState<{ problems: string[]; staff_approvable: boolean; digest: string }>();
@@ -187,6 +203,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
         <p><Link to={`/plans/${source}`}>← Plan #{source}</Link></p>
         <div className="page-title"><div><div><h1>{editing ? `Edit plan #${source}` : `Copy plan #${source}`}</h1><p>Editing or copying a plan means reading it: reveal it first.</p></div></div></div>
         {stored.error && <p role="alert">{stored.error}</p>}
+        {lapsed && <p role="alert">Your grant for this firm ended, so the plan was closed. Reveal it again to go on.</p>}
         <Reveal reveal={stored.reveal} firm={stored.data?.plan.organization} />
       </>
     );
@@ -315,6 +332,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
             </p>
           )}
           <h2>Save</h2>
+          {underGrant && grant && <p className="note">Loaded under your content grant, which ends at {new Date(grant.expires_at).toLocaleTimeString()}: save before then, or the plan closes and unsaved changes are lost.</p>}
           {!editing && (
             <>
               <label className="check"><input type="checkbox" checked={template} onChange={(event) => setTemplate(event.target.checked)} /> A template (copied into plans; never runs itself)</label>

@@ -44,10 +44,11 @@ export function Reveal({ reveal, firm }: { reveal: ReturnType<typeof useRevealab
   useEffect(() => {
     if (grant && !hidden && !reveal.shown && !reveal.pending && !reveal.failure) reveal.show("");
   }, [grant, hidden, reveal.shown, reveal.pending, reveal.failure]); // reveal.show is new each render; these decide
-  // A grant that ended or expired takes back what it showed.
+  // A grant that ended or expired takes back what it showed. Only with the firm known: a screen whose
+  // firm comes from its data has none while the revealed version loads.
   useEffect(() => {
-    if (!grant && reveal.reason === "") reveal.hide();
-  }, [grant, reveal.reason]); // as above
+    if (firm && !grant && reveal.reason === "") reveal.hide();
+  }, [firm, grant, reveal.reason]); // as above
   if (reveal.shown) {
     return (
       <p className="note">

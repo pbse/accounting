@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { usePermissions } from "../App";
 import { get, post, when } from "../api";
 import { ActionForm } from "../components/ActionForm";
-import { OpenGrant, useGrantFor } from "../components/Grants";
+import { OpenGrant, useGrantFor, useGrants } from "../components/Grants";
 import { FlowGraph, type PlanNode, type Step } from "../components/Flow";
 import { stateTone, type RunRow } from "./Runs";
 
@@ -47,6 +47,8 @@ export function Run() {
   const operate = can.includes("platform:operate");
   // Hidden by the staff member while they hold a grant for the run's firm: not revealed again for this run.
   const [hidOn, setHidOn] = useState<string>();
+  const [grantLapsed, setGrantLapsed] = useState(false);
+  const { reload: reloadGrants } = useGrants();
   useEffect(() => {
     setDetail(undefined);
     setReveal(undefined);
@@ -65,11 +67,19 @@ export function Run() {
       setError("");
     } catch (e) {
       if (request !== latest.current) return;
+      if (reveal === "") {
+        // A grant that no longer holds (ended or expired elsewhere): show the run masked, not an error.
+        setGrantLapsed(true);
+        setHidOn(id);
+        setReveal(undefined);
+        reloadGrants();
+        return;
+      }
       setError((e as Error).message);
       setDetail(undefined);
       setReveal(undefined);
     }
-  }, [id, reveal]);
+  }, [id, reveal, reloadGrants]);
   useEffect(() => {
     load();
     return () => {
@@ -187,6 +197,7 @@ export function Run() {
           </p>
         ) : (
           <>
+            {grantLapsed && <p className="note">Your grant for this firm has ended, so the run is shown masked.</p>}
             <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal({ id, reason })} />
             {grant && hidOn === id && <p className="muted">Hidden while you hold a grant for this firm. <button className="link" onClick={() => setHidOn(undefined)}>Show it again</button></p>}
             {can.includes("platform:content") && run.organization && !grant && <OpenGrant firm={run.organization} />}

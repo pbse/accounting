@@ -404,6 +404,10 @@ func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, firms
 		return false
 	}
 	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	if reason == "" && len(firms) == 1 && firms[0] != "" {
+		// A read of one firm's content may stand on the staff member's grant for it.
+		reason = activeGrantReason(r.Context(), db, member.Subject, firms[0])
+	}
 	if reason == "" {
 		problem(w, 422, errReasonRequired.Error())
 		return false
