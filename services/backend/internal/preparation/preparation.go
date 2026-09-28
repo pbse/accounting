@@ -32,9 +32,12 @@ type Plan struct {
 	CarryForward     *CarryForward     `json:"carry_forward,omitempty"`
 	RecurringAccrual *RecurringAccrual `json:"recurring_accrual,omitempty"`
 	Revises          string            `json:"revises,omitempty"`
-	Kind             string            `json:"kind"`
-	Input            json.RawMessage   `json:"input"`
-	Sources          []Source          `json:"sources"`
+	// Procedure is the enabled procedure version a straight-through draft was prepared under; the worker refuses the
+	// plan if that version is no longer the client's current, enabled one with the same accounts.
+	Procedure string          `json:"procedure,omitempty"`
+	Kind      string          `json:"kind"`
+	Input     json.RawMessage `json:"input"`
+	Sources   []Source        `json:"sources"`
 }
 
 // WorkKind is the kind of work a plan prepares: a prepaid plan with a schedule prepares deferred revenue or depreciation.
@@ -229,6 +232,16 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		}
 		if p.RecurringAccrual != nil {
 			if e := ValidateRecurringAccrual(ctx, tx, p, closeID, entity, period); e != nil {
+				failure = e.Error()
+				break
+			}
+		}
+		if p.Procedure != "" {
+			current, e := CurrentProcedure(ctx, tx, closeID, p.Kind)
+			if e != nil && e != sql.ErrNoRows {
+				return false, e
+			}
+			if e := ProcedurePinned(p, current); e != nil {
 				failure = e.Error()
 				break
 			}

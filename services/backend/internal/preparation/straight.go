@@ -156,9 +156,9 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if larger := largestFigure(invoice); larger > amount {
 		return Plan{}, "the invoice prints a larger money figure (" + prepaids.Money(larger) + ") than the cited amount"
 	}
-	// The currency is the amount's: each quote prints the other's value.
-	if !documents.AmountIn(quotes["currency"], prepaids.Money(amount)) || !strings.Contains(strings.ToLower(quotes["amount"]), strings.ToLower(currency)) {
-		return Plan{}, "the cited currency and amount are not printed together"
+	// The currency is the amount's: both quotes print the currency's code or sign immediately before the figure.
+	if !currencyBefore(quotes["amount"], currency, amount) || !currencyBefore(quotes["currency"], currency, amount) {
+		return Plan{}, "the cited currency is not printed with the cited amount"
 	}
 	booking, reason := expensedLine(ledger, invoice, facts["vendor"], facts["invoice_number"], prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
 	if reason != "" {
@@ -169,7 +169,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	raw, _ := json.Marshal(input)
 	capture := ledger.Source
 	capture.Role, capture.Location = "period_ledger", booking
-	plan := Plan{Kind: "prepaid", Input: raw, Sources: append(append([]Source{}, p.Sources...), capture)}
+	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Input: raw, Sources: append(append([]Source{}, p.Sources...), capture)}
 	if _, err := Calculate(plan, entity, period); err != nil {
 		return Plan{}, err.Error()
 	}
@@ -218,8 +218,8 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		if party == "" && (record.VendorRef.Value != "" || record.EntityRef.Value != "") && (row.Kind == "Bill" || row.Kind == "Purchase") && !record.Credit && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number)) {
 			return "", "the captured " + row.Kind + " bearing this invoice number does not name its vendor"
 		}
-		// A credit whose counterparty carries only an ID may be this vendor's; nothing here can tell.
-		if party == "" && (record.VendorRef.Value != "" || record.EntityRef.Value != "") && (row.Kind == "VendorCredit" || record.Credit) {
+		// A credit whose counterparty is missing or carries only an ID may be this vendor's; nothing here can tell.
+		if party == "" && (row.Kind == "VendorCredit" || record.Credit) {
 			return "", "a captured " + row.Kind + " in the close month does not name its counterparty"
 		}
 		mentioned := printed(text, party)
@@ -325,6 +325,33 @@ func moneyFigures(quote string) int {
 		}
 	}
 	return count
+}
+
+// currencyBefore reports whether the quote prints the currency's code or sign immediately before the amount.
+func currencyBefore(quote, currency string, cents int64) bool {
+	signs := map[string]string{"USD": `\$`, "CAD": `\$|c\$|ca\$`, "AUD": `\$|a\$`, "EUR": `€`, "GBP": `£`}
+	code := strings.ToLower(currency)
+	sign, ok := signs[strings.ToUpper(currency)]
+	if !ok {
+		sign = code
+	}
+	plain := strings.ReplaceAll(strings.ToLower(quote), ",", "")
+	digits := fmt.Sprintf(`%d(\.%02d)?([^0-9]|$)`, cents/100, cents%100)
+	return regexp.MustCompile(`(` + code + `|` + sign + `)\s*` + digits).MatchString(plain)
+}
+
+// ProcedurePinned refuses a plan prepared under a procedure version that is no longer the client's current, enabled
+// prepaid procedure with the accounts the plan uses.
+func ProcedurePinned(p Plan, current Procedure) error {
+	var input struct {
+		ExpenseAccount string `json:"expense_account"`
+		PrepaidAccount string `json:"prepaid_account"`
+	}
+	json.Unmarshal(p.Input, &input)
+	if current.ID != p.Procedure || !current.Enabled || !strings.EqualFold(current.ExpenseAccount, input.ExpenseAccount) || !strings.EqualFold(current.PrepaidAccount, input.PrepaidAccount) {
+		return fmt.Errorf("The procedure this draft was prepared under (v%s) is no longer the client's current enabled procedure with these accounts; a person confirms the facts", p.Procedure)
+	}
+	return nil
 }
 
 // mentionsAny reports whether the quote, compared as text, contains any of the words.
