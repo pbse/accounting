@@ -225,7 +225,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		mentioned := printed(text, party)
 		fromVendor := party != "" && strings.EqualFold(party, vendor)
 		mine := fromVendor && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number))
-		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || ((row.Kind == "VendorCredit" || record.Credit) && (mentioned || fromVendor)) || mine) {
+		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || row.Kind == "VendorCredit" || record.Credit || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
 		// The invoice's own bill must book the whole amount to the expense account and nothing else anywhere.
@@ -240,13 +240,17 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			} else if line.DepositLineDetail != nil {
 				account = line.DepositLineDetail.AccountRef
 			}
-			// The current chart names an account by its ID; a printed name that disagrees means a rename since capture.
+			// The current chart names an account by its ID; a printed name that disagrees means a rename since capture, and an
+			// ID the chart does not know cannot be placed on a journal, credit, deposit or the invoice's own bill.
 			name := account.Name
+			relevant := row.Kind == "JournalEntry" || row.Kind == "Deposit" || row.Kind == "VendorCredit" || record.Credit || mine
 			if current, known := ledger.Accounts[account.Value]; known && account.Value != "" {
 				if name != "" && !strings.EqualFold(name, current) {
 					return "", "a captured " + row.Kind + " in the close month names an account differently from the current chart of accounts"
 				}
 				name = current
+			} else if account.Value != "" && relevant {
+				return "", "a captured " + row.Kind + " in the close month posts to an account the current chart of accounts does not list"
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
 			if account.Value != "" {

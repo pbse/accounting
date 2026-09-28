@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -243,6 +244,17 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 			if e := ProcedurePinned(p, current); e != nil {
 				failure = e.Error()
+				break
+			}
+			// The capture the plan cites must still be the close's current one; a capture queued or failed since then is a question for a person.
+			ledger, e := CloseLedger(ctx, tx, closeID)
+			if e != nil {
+				return false, e
+			}
+			if ledger == nil || !slices.ContainsFunc(p.Sources, func(s Source) bool {
+				return s.Role == "period_ledger" && s.ID == ledger.Source.ID && s.Digest == ledger.Source.Digest
+			}) {
+				failure = "The QuickBooks capture this draft was prepared from is no longer the close's current one; a person confirms the facts."
 				break
 			}
 		}

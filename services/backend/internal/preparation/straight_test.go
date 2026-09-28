@@ -132,16 +132,18 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		ledger *Ledger
 		unread bool
 	}{
-		"processor heads the invoice": {func(*Proposal, *Procedure) {}, ledger(row("Bill", "79", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
-		"vendor not read":             {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates = nil; p.Facts[7].Value = "" }, ledger(bill), false},
-		"billed-to not read":          {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates = nil; p.Facts[8].Value = "" }, ledger(bill), false},
-		"processor named in the body": {func(*Proposal, *Procedure) {}, ledger(row("Bill", "70", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
-		"line-less vendor credit":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "71", Date: "2026-09-10", Record: json.RawMessage(`{"VendorRef":{"Name":"Acme Insurance Co"}}`)}), false},
-		"line-less journal":           {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "72", Date: "2026-09-10", Record: json.RawMessage(`{}`)}), false},
-		"card refund":                 {func(*Proposal, *Procedure) {}, ledger(bill, refund), false},
-		"unnamed account on a credit": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
-		"amount cited from support":   {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
-		"line-less card credit":       {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"processor heads the invoice":   {func(*Proposal, *Procedure) {}, ledger(row("Bill", "79", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
+		"vendor not read":               {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates = nil; p.Facts[7].Value = "" }, ledger(bill), false},
+		"billed-to not read":            {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates = nil; p.Facts[8].Value = "" }, ledger(bill), false},
+		"processor named in the body":   {func(*Proposal, *Procedure) {}, ledger(row("Bill", "70", "2026-09-03", "Stripe", "", "Insurance", "1200")), false},
+		"line-less vendor credit":       {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "71", Date: "2026-09-10", Record: json.RawMessage(`{"VendorRef":{"Name":"Acme Insurance Co"}}`)}), false},
+		"line-less journal":             {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "72", Date: "2026-09-10", Record: json.RawMessage(`{}`)}), false},
+		"card refund":                   {func(*Proposal, *Procedure) {}, ledger(bill, refund), false},
+		"unnamed account on a credit":   {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
+		"amount cited from support":     {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
+		"line-less card credit":         {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"line-less credit, other party": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "92", Date: "2026-09-20", Record: json.RawMessage(`{"VendorRef":{"name":"Someone Else"}}`)}), false},
+		"journal on an unlisted ID":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "93", Date: "2026-09-30", Record: json.RawMessage(`{"Line":[{"Amount":100,"JournalEntryLineDetail":{"AccountRef":{"value":"99","name":"Insurance"}}}]}`)}), false},
 		"currency not before the figure": {func(p *Proposal, _ *Procedure) {
 			p.Facts[0].Candidates[0].Quote = "Total CAD 1,200.00 (USD accepted)"
 			p.Facts[3].Candidates[0].Quote = "Total CAD 1,200.00 (USD accepted)"
