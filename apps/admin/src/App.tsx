@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { BrowserRouter, Link, NavLink, Outlet, Route, Routes, useOutletContext } from "react-router";
 import { signOut } from "./auth";
 import { useResource } from "./api";
@@ -35,6 +36,7 @@ export function App() {
 
 function Layout() {
   const me = useResource<Me>("/v1/admin/me");
+  const [signOutError, setSignOutError] = useState("");
   return (
     <div className="app-shell">
       <a className="skip" href="#main">Skip to content</a>
@@ -68,7 +70,8 @@ function Layout() {
             </p>
           )}
           {me.error && <p role="alert">{me.error}</p>}
-          <button onClick={signOut}>Sign out</button>
+          {signOutError && <p role="alert">{signOutError}</p>}
+          <button onClick={() => signOut().catch((error: Error) => setSignOutError(error.message))}>Sign out</button>
         </div>
       </aside>
       <main id="main" className="app-main">
