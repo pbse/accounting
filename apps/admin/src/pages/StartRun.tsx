@@ -24,6 +24,7 @@ export function StartRun() {
   const chosen = definitions.data?.workflows.find((w) => w.name === workflow);
   const allowed = usePermissions().includes("platform:operate");
   const needsFirm = !!chosen && manual(chosen).every((t) => t.Value === "firm");
+  const noFirm = !!chosen && manual(chosen).every((t) => t.Value === "platform");
   return (
     <>
       <div className="page-title"><div><div><h1>Start a run</h1><p>Runs as the firm you name, recorded with your reason.</p></div></div></div>
@@ -34,7 +35,7 @@ export function StartRun() {
           setBusy(true);
           setError("");
           try {
-            const result = await post<{ id: number }>("/v1/admin/workflows/runs", { workflow, organization: firm.trim(), input: input.value, idempotency_key: idempotencyKey, reason });
+            const result = await post<{ id: number }>("/v1/admin/workflows/runs", { workflow, organization: noFirm ? "" : firm.trim(), input: input.value, idempotency_key: idempotencyKey, reason });
             navigate(`/runs/${result.id}`);
           } catch (e) {
             setError((e as Error).message);
@@ -48,9 +49,11 @@ export function StartRun() {
               {definitions.data?.workflows.filter((w) => manual(w).length > 0).map((w) => <option key={w.name} value={w.name}>{w.title} ({w.name})</option>)}
             </select>
           </label>
-          <label>Firm ID
-            <input value={firm} required={needsFirm} placeholder={needsFirm ? "org_…" : "org_… (leave empty for platform work)"} onChange={(event) => setFirm(event.target.value)} />
-          </label>
+          {noFirm ? <p className="muted">This workflow works across the platform, so it names no firm.</p> : (
+            <label>Firm ID
+              <input value={firm} required={needsFirm} placeholder={needsFirm ? "org_…" : "org_… (leave empty for platform work)"} onChange={(event) => setFirm(event.target.value)} />
+            </label>
+          )}
           {chosen && <SchemaForm key={chosen.name} schema={chosen.input_schema as never} onChange={(value, valid) => setInput({ value, valid })} />}
           <label>Why are you starting it?
             <input required value={reason} onChange={(event) => setReason(event.target.value)} maxLength={500} />

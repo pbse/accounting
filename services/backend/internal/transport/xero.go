@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -258,35 +258,36 @@ const xeroRowsInsert = `INSERT INTO xero_transaction_rows(snapshot_id,kind,provi
  SELECT $1::bigint,r."Kind",r."ProviderID",r."Date"::date,NULLIF(r."Currency",''),NULLIF(r."Amount",''),r."Record" FROM jsonb_to_recordset($2::jsonb) AS r("Kind" text,"ProviderID" text,"Date" text,"Currency" text,"Amount" text,"Record" jsonb)
  ON CONFLICT DO NOTHING`
 
-// BackfillXeroRows gives each close's newest Xero capture of its month that holds transactions but was saved before
-// ledger rows were, its rows for search. It runs once per worker start, one snapshot at a time.
-func BackfillXeroRows(ctx context.Context, db *sql.DB) {
-	after := "0"
-	for ctx.Err() == nil {
+// backfillXeroRows gives each close's newest Xero capture of its month that holds transactions but was saved before
+// ledger rows were, its rows for search: up to limit captures after the one with ID after. It returns where it stopped,
+// or "0" once it reached the end, and what went wrong on the way, having carried on past it.
+func backfillXeroRows(ctx context.Context, db *sql.DB, after string, limit int) (string, error) {
+	var failures []error
+	for range limit {
 		var id string
 		var payload []byte
 		err := db.QueryRowContext(ctx, `SELECT s.id::text,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period WHERE s.id>$1::bigint AND s.payload ? 'transactions'
  AND NOT EXISTS(SELECT 1 FROM xero_snapshots n WHERE n.close_id=s.close_id AND n.period=s.period AND n.id>s.id)
  AND NOT EXISTS(SELECT 1 FROM xero_transaction_rows t WHERE t.snapshot_id=s.id) ORDER BY s.id LIMIT 1`, after).Scan(&id, &payload)
 		if err == sql.ErrNoRows {
-			return
+			return "0", errors.Join(failures...)
 		}
 		if err != nil {
-			log.Print("Xero search rows could not be backfilled: ", err)
-			return
+			return after, errors.Join(append(failures, fmt.Errorf("Xero search rows could not be backfilled: %w", err))...)
 		}
 		after = id
 		rows, _, _, _, e := xero.Ledger(payload)
 		if e != nil {
-			log.Print("Xero search rows could not be read from snapshot ", id)
+			failures = append(failures, fmt.Errorf("Xero search rows could not be read from snapshot %s", id))
 			continue
 		}
 		if raw, _ := json.Marshal(rows); len(rows) > 0 {
 			if _, err = db.ExecContext(ctx, xeroRowsInsert, id, string(raw)); err != nil {
-				log.Print("Xero search rows could not be saved for snapshot ", id, ": ", err)
+				failures = append(failures, fmt.Errorf("Xero search rows could not be saved for snapshot %s: %w", id, err))
 			}
 		}
 	}
+	return after, errors.Join(failures...)
 }
 
 // captureXero saves a connected organisation's Trial Balance as at the close's month end.
@@ -485,6 +486,7 @@ func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	var failures []error
 	for _, d := range closes {
 		claim, err := db.ExecContext(ctx, `UPDATE client_closes c SET xero_refresh_at=now() WHERE c.id::text=$1 AND `+xeroDue, d.close)
 		if err != nil {
@@ -498,26 +500,11 @@ func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 		err = captureXero(run, db, d.org, d.connection, d.close, d.period, "scheduled-xero-refresh")
 		cancel()
 		if err != nil {
-			log.Print("Scheduled Xero capture did not complete for close ", d.close, ": ", err)
+			// Recorded on the connection; the pass goes on to the other closes and reports it.
+			failures = append(failures, fmt.Errorf("the scheduled Xero capture did not complete for close %s: %w", d.close, err))
 		}
 	}
-	return nil
-}
-
-// RunXeroRefresh looks for due Xero captures every ten minutes.
-func RunXeroRefresh(ctx context.Context, db *sql.DB) {
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
-	for {
-		if err := sweepXeroRefresh(ctx, db); err != nil && ctx.Err() == nil {
-			log.Print("Scheduled Xero captures could not run: ", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	return errors.Join(failures...)
 }
 
 // nativeReconciliation reports Xero's own reconciled flags per bank account from the close month's newest Xero capture on

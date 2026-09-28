@@ -33,9 +33,9 @@ func Effect[T any](ctx Context, key string, fn func(context.Context) (T, error),
 // watch over something that changes in its own time (a close handed to the agent) costs one row, not one per look. fn
 // must be safe to repeat, like a step's. An error is recorded on the step (and cleared by the next call that succeeds)
 // and fn is called again after the interval, so a watch never fails its run; it ends when fn reports done or the run
-// is cancelled. The step's attempts count the calls.
-func Watch(ctx Context, key string, every time.Duration, fn func(context.Context) (bool, error)) error {
-	return ctx.exec().watch(key, every, fn)
+// is cancelled. The step's attempts count the calls. Of the step options, only Timeout applies, to each call.
+func Watch(ctx Context, key string, every time.Duration, fn func(context.Context) (bool, error), options ...StepOption) error {
+	return ctx.exec().watch(key, every, policyOf(options), fn)
 }
 
 // StepID identifies the current run and step, for use as an idempotency key in a step's writes.
@@ -459,7 +459,7 @@ func (x *execution) sleep(key string, until func() time.Time) error {
 	return x.parkUntil("", s.wakeAt)
 }
 
-func (x *execution) watch(key string, every time.Duration, fn func(context.Context) (bool, error)) error {
+func (x *execution) watch(key string, every time.Duration, p policy, fn func(context.Context) (bool, error)) error {
 	if err := x.enter(key, false); err != nil {
 		return err
 	}
@@ -489,7 +489,7 @@ func (x *execution) watch(key string, every time.Duration, fn func(context.Conte
 	} else if err := x.write(`UPDATE workflow_steps SET state='running',attempts=attempts+1,wake_at=NULL WHERE run_id=$1 AND key=$3`+fence, x.run.id, x.run.claim, key); err != nil {
 		return err
 	}
-	result, callErr := x.invoke("watch", key, policyOf(nil), func(c context.Context) (any, error) { return fn(c) })
+	result, callErr := x.invoke("watch", key, p, func(c context.Context) (any, error) { return fn(c) })
 	switch {
 	case x.lost.Load():
 		return x.stop(errAbandoned)

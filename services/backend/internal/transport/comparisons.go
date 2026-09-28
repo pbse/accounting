@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/big"
 	"strings"
-	"time"
 
 	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/prepaids"
@@ -154,23 +152,4 @@ func queueComparisons(ctx context.Context, db *sql.DB, closeID string) (int, err
 		return 0, err
 	}
 	return queued, failure
-}
-
-// RunComparisons prepares month-end schedule comparisons once a minute; a person approves each draft and posting keeps its own approval.
-func RunComparisons(ctx context.Context, db *sql.DB) {
-	cursor := "0"
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		next, _, err := sweepComparisons(ctx, db, cursor)
-		if err != nil && ctx.Err() == nil {
-			log.Print("Scheduled comparisons could not run: ", err)
-		}
-		cursor = next
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
