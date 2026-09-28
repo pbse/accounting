@@ -63,6 +63,7 @@ type closePackage struct {
 	XeroCorrections      json.RawMessage `json:"xero_corrections"`
 	LedgerCertification  map[string]any  `json:"ledger_certification"`
 	LedgerCompleteness   string          `json:"ledger_completeness"`
+	HistoricalExports    *exportLabel    `json:"historical_exports"`
 	NativeReconciliation map[string]any  `json:"native_reconciliation"`
 	NativeSentences      []string        `json:"native_reconciliation_statements"`
 	Reviews              json.RawMessage `json:"reviews"`
@@ -186,6 +187,13 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
 			return
 		}
 		pack.LedgerCompleteness = certificationSentence(pack.LedgerCertification)
+		if pack.HistoricalExports, err = latestExportLabel(ctx, tx, pack.Close.ID); err != nil {
+			problem(w, 503, "Could not read the historical exports label.")
+			return
+		}
+		if pack.HistoricalExports != nil {
+			pack.LedgerCompleteness += " " + pack.HistoricalExports.sentence()
+		}
 		if pack.NativeReconciliation, err = nativeReconciliation(ctx, tx, pack.Close.ID); err != nil {
 			problem(w, 503, "Could not read native reconciliation status.")
 			return

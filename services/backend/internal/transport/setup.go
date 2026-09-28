@@ -143,19 +143,28 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		}
 		switch {
 		case closeID == "":
-			steps = append(steps, setupStep{"ledger", "Connect the client's books", false, "Open a client close first.", "/dashboard/closes"}, setupStep{"rules", "Confirm the period and rules", false, "Open a client close first.", "/dashboard/closes"})
+			steps = append(steps, setupStep{"ledger", "Connect the books or label historical exports", false, "Open a client close first.", "/dashboard/closes"}, setupStep{"rules", "Confirm the period and rules", false, "Open a client close first.", "/dashboard/closes"})
 		default:
-			books := "Connect QuickBooks (production on the close's Settings tab, sandbox on Evidence) or Xero (Evidence) for " + entity + "."
+			books := "Connect QuickBooks (production on the close's Settings tab, sandbox on Evidence) or Xero (Evidence) for " + entity + ", or upload and label its historical exports on Evidence."
+			// A live connection counts first; labeled exports count only while they are the current documents.
+			historical, labelErr := latestExportLabel(r.Context(), tx, closeID)
+			if labelErr != nil {
+				problem(w, 503, "Setup is unavailable.")
+				return
+			}
+			labeled := historical != nil && historical.Current
 			if ledger {
 				books = entity + "'s books are connected."
+			} else if labeled {
+				books = entity + " uses historical exports a person labeled (exported " + historical.ExportedOn + "), not a live ledger connection."
 			} else if !quickbooks.OAuthConfiguredFor("production") && !quickbooks.OAuthConfigured() && !xero.Configured() {
-				books = "QuickBooks and Xero are not configured on this server; upload " + entity + "'s ledger reports as evidence instead."
+				books = "QuickBooks and Xero are not configured on this server; upload " + entity + "'s ledger reports as evidence and label them as historical exports instead."
 			}
 			applied := "No approved procedure applies to " + entity + " yet; approve one or apply the firm's."
 			if len(rules) > 0 {
 				applied = "Approved procedures apply to " + entity + " for " + strings.Join(rules, ", ") + "."
 			}
-			steps = append(steps, setupStep{"ledger", "Connect the client's books", ledger, books, base + "?tab=evidence"}, setupStep{"rules", "Confirm the period and rules", len(rules) > 0, label + ". " + applied, base + "?tab=settings"})
+			steps = append(steps, setupStep{"ledger", "Connect the books or label historical exports", ledger || labeled, books, base + "?tab=evidence"}, setupStep{"rules", "Confirm the period and rules", len(rules) > 0, label + ". " + applied, base + "?tab=settings"})
 		}
 		switch {
 		case paper != "":

@@ -74,8 +74,18 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 		case !boardRead:
 			add("ledger", "unknown", "The ledger snapshot could not be read.", "evidence")
 		case board.Snapshot == nil:
-			add("ledger", "attention", "No month-end Trial Balance yet. Capture a period snapshot so balances can be tied.", "evidence")
-			needs = append(needs, "capture a month-end snapshot")
+			// Uploaded exports a person labeled stand in for a live ledger, as reported, never as verified.
+			label, err := latestExportLabel(r.Context(), db, r.PathValue("id"))
+			switch {
+			case err != nil:
+				add("ledger", "unknown", "The historical exports label could not be read.", "evidence")
+			case label != nil:
+				add("ledger", "attention", label.sentence(), "evidence")
+				needs = append(needs, "verify the labeled exports")
+			default:
+				add("ledger", "attention", "No month-end Trial Balance yet. Capture a period snapshot so balances can be tied.", "evidence")
+				needs = append(needs, "capture a month-end snapshot")
+			}
 		default:
 			source := "QuickBooks"
 			if board.Snapshot.Source == "xero" {
