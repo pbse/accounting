@@ -43,6 +43,7 @@ func main() {
 		"forwarded":          forwarded.Run,
 		"quickbooks_sync":    quickbooks.RunSync,
 		"alerts":             transport.RunAlerts,
+		"platform_alerts":    transport.RunPlatformAlerts,
 		"standing_approvals": transport.RunStandingApprovals,
 		"comparisons":        transport.RunComparisons,
 		"replays":            transport.RunReplays,

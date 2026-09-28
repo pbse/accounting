@@ -164,30 +164,57 @@ func deliverPlatformAlerts(ctx context.Context, db *sql.DB, endpoint, token stri
 	}
 }
 
-func RunAlerts(ctx context.Context, db *sql.DB) {
-	endpoint := os.Getenv("OPERATIONS_ALERT_WEBHOOK_URL")
+// alertWebhook is the operations webhook alerts go to; ok is false when none is set or the setting is not a plain
+// HTTPS endpoint.
+func alertWebhook() (endpoint, token string, ok bool) {
+	endpoint = os.Getenv("OPERATIONS_ALERT_WEBHOOK_URL")
 	if endpoint == "" {
-		return
+		return "", "", false
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || strings.ContainsAny(endpoint, "\r\n") {
 		log.Print("Operations alert webhook URL must be an HTTPS endpoint without credentials or fragment")
+		return "", "", false
+	}
+	return endpoint, os.Getenv("OPERATIONS_ALERT_WEBHOOK_TOKEN"), true
+}
+
+// RunPlatformAlerts checks the platform's own problems every minute and sends each new one to the operations webhook.
+// It is its own loop, so a backlog of firm alerts never delays it.
+func RunPlatformAlerts(ctx context.Context, db *sql.DB) {
+	endpoint, token, ok := alertWebhook()
+	if !ok {
 		return
 	}
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
-		// The platform's own problems go first: a backlog of firm alerts never delays them.
 		if err := collectPlatformAlerts(ctx, db); err != nil && ctx.Err() == nil {
 			log.Print("Could not collect platform alerts: ", err)
 		}
-		if err := deliverPlatformAlerts(ctx, db, endpoint, os.Getenv("OPERATIONS_ALERT_WEBHOOK_TOKEN")); err != nil && ctx.Err() == nil {
+		if err := deliverPlatformAlerts(ctx, db, endpoint, token); err != nil && ctx.Err() == nil {
 			log.Print("Could not deliver platform alerts: ", err)
 		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func RunAlerts(ctx context.Context, db *sql.DB) {
+	endpoint, token, ok := alertWebhook()
+	if !ok {
+		return
+	}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
 		if err := collectOperationsAlerts(ctx, db); err != nil && ctx.Err() == nil {
 			log.Print("Could not collect operations alerts: ", err)
 		}
-		if err := deliverOperationsAlerts(ctx, db, endpoint, os.Getenv("OPERATIONS_ALERT_WEBHOOK_TOKEN")); err != nil && ctx.Err() == nil {
+		if err := deliverOperationsAlerts(ctx, db, endpoint, token); err != nil && ctx.Err() == nil {
 			log.Print("Could not deliver operations alerts: ", err)
 		}
 		select {
