@@ -324,7 +324,7 @@ The worker's sweeps are periodic workflows (`wf.Periodic`), each in its own dire
 | `schedule_comparisons` | minute | `comparisons` |
 | `stripe_reports` | minute | `stripe_reports` |
 | `operations_alerts` | minute (only with the operations webhook) | `alerts` |
-| `xero_refresh` | 10 minutes, and gives older captures their search rows | `xero_refresh`, `xero_backfill` |
+| `xero_refresh` | 10 minutes: due captures first, then up to 20 older captures get their search rows | `xero_refresh`, `xero_backfill` |
 | `model_replays` | hour | `replays` |
 | `chat_expiry` | hour | `chat_expiry` |
 

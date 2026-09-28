@@ -24,8 +24,8 @@ import (
 // ones. They live in the worker running the day's run; another worker starts again from the beginning.
 var sweepCursors = struct {
 	sync.Mutex
-	standing, comparisons string
-}{standing: "0", comparisons: "0"}
+	standing, comparisons, xeroRows string
+}{standing: "0", comparisons: "0", xeroRows: "0"}
 
 // cursorSweep runs a sweep from the cursor at *at and keeps where it stopped.
 func cursorSweep(ctx context.Context, at *string, sweep func(context.Context, string) (string, int, error)) error {
@@ -60,9 +60,13 @@ func init() {
 		return errors.Join(collectOperationsAlerts(ctx, db), deliverOperationsAlerts(ctx, db, endpoint, token))
 	}
 	model_replays.Sweep = func(ctx context.Context) error { return sweepReplays(ctx, wf.DB(ctx)) }
+	// Due captures first; then up to 20 older captures get their search rows, the rest on later passes.
 	xero_refresh.Sweep = func(ctx context.Context) error {
-		backfillXeroRows(ctx, wf.DB(ctx))
-		return sweepXeroRefresh(ctx, wf.DB(ctx))
+		captured := sweepXeroRefresh(ctx, wf.DB(ctx))
+		return errors.Join(captured, cursorSweep(ctx, &sweepCursors.xeroRows, func(ctx context.Context, cursor string) (string, int, error) {
+			next, err := backfillXeroRows(ctx, wf.DB(ctx), cursor, 20)
+			return next, 0, err
+		}))
 	}
 	chat_expiry.Sweep = func(ctx context.Context) error { return expireChat(ctx, wf.DB(ctx)) }
 }

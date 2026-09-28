@@ -295,13 +295,15 @@ func TestBackfillGivesTheNewestOldXeroCaptureItsRows(t *testing.T) {
 		must(db.QueryRow(`SELECT count(*) FROM xero_transaction_rows WHERE snapshot_id::text=$1`, snapshot).Scan(&n))
 		return
 	}
-	backfillXeroRows(t.Context(), db)
+	if _, err := backfillXeroRows(t.Context(), db, "0", 1000); err != nil {
+		t.Fatal(err)
+	}
 	if rows(newest) != 1 || rows(older) != 0 || rows(empty) != 0 {
 		t.Fatalf("only the newest capture of the month with transactions gets rows: %d %d %d", rows(newest), rows(older), rows(empty))
 	}
 	var payee string
 	must(db.QueryRow(`SELECT record->'VendorRef'->>'name' FROM xero_transaction_rows WHERE snapshot_id::text=$1`, newest).Scan(&payee))
-	backfillXeroRows(t.Context(), db)
+	backfillXeroRows(t.Context(), db, "0", 1000)
 	if payee != "Harbor Printing" || rows(newest) != 1 {
 		t.Fatalf("the rows are the newest capture's, and a second run adds none: %q %d", payee, rows(newest))
 	}

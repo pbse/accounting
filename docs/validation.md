@@ -2833,7 +2833,7 @@ Checks (local PostgreSQL):
   - all seven workflows have their pass;
   - staff starting a periodic job for a firm get 422 (it runs across the platform);
   - a day's `chat_expiry` run, executed by the engine, removes the expired firm-wide message and keeps the recent one, then waits for its next look.
-- Codex found, and this fixes: a Xero pass could outlast the default five-minute step, and a claimed capture might then wait a day, so periodic passes get an hour; and a periodic job started by hand for one firm could run beside the platform's own run.
+- Codex found, and this fixes: a Xero pass could outlast the default five-minute step, and a claimed capture might then wait a day, so periodic passes get an hour; and a periodic job started by hand for one firm could run beside the platform's own run. In a second round: the Xero pass now captures due closes before backfilling search rows (at most 20 older captures a pass, resuming where it stopped), and reports failed captures and backfills on the job's watch instead of only logging them.
 - The chat and search tests call the passes directly (`expireChat`, `backfillXeroRows`). The workflow registry check covers the seven new directories.
 - `TestSearchFindsMatchesOnlyInAccessibleCloses` failed once on a fresh database when run with the chat, standing, comparison, replay, Xero, Stripe and alert tests, and passed when run again. It does the same on `main`, so it is an existing ordering problem between tests, not this change.
 
