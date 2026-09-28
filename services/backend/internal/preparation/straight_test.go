@@ -145,9 +145,10 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	}
 	withRule := proposal
 	withRule.Sources = append([]Source{}, proposal.Sources...)
-	withRule.Sources = append(withRule.Sources, Source{ID: "3", Digest: "rule", Name: rule.Name, Role: "support"})
+	withRule.Sources = append(withRule.Sources, Source{ID: "3", Digest: "rule", Name: rule.Name, Role: "support"}, Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09", Role: "support"})
+	withRule.Unselected = []Source{{ID: "8", Digest: "chart", Name: "QuickBooks accounts 2026-09"}}
 	if _, reason = StraightThrough(withRule, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
-		t.Fatal("the procedure's own evidence copy as support refused", reason)
+		t.Fatal("the procedure copy, the capture and the chart refused as selected or unselected evidence", reason)
 	}
 	idOnly := bill
 	idOnly.Record = json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)

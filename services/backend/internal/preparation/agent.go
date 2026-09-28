@@ -691,8 +691,8 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		// Facts the source and the ledger both show advance to a draft under the firm's procedure; anything else waits for a person.
 		// The procedure, the capture and the aliases are read here, in the finishing transaction, and only for a proposal that could qualify.
 		var plan Plan
-		reason := "only an agent-read prepaid invoice with no open questions and no unused evidence can be prepared without confirmation"
-		if proposal.Kind == "prepaid" && proposal.Engine == "openai" && len(proposal.Questions) == 0 && len(proposal.Unselected) == 0 {
+		reason := "only an agent-read prepaid invoice with no open questions can be prepared without confirmation"
+		if proposal.Kind == "prepaid" && proposal.Engine == "openai" && len(proposal.Questions) == 0 {
 			procedure, e := CurrentProcedure(persist, finish, closeID, "prepaid")
 			if e != nil && e != sql.ErrNoRows {
 				return true, e

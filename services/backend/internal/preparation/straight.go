@@ -37,16 +37,14 @@ type Ledger struct {
 // invoice's vendor or bearing its number, books the amount to the procedure's expense account, and no journal in the
 // month moves that amount on either account. The reason says why a proposal still needs a person. The draft it
 // queues cites the capture and is reviewed like any other; nothing is approved here. Evidence in the close the agent
-// did not use, or could not read, is left for a person, as the confirmation form asks.
+// did not use, or could not read, is left for a person, as the confirmation form asks, except the capture, the chart
+// and the procedure copy, which this check reads itself.
 func StraightThrough(p Proposal, invoice string, aliases []string, procedure Procedure, procedureSource Source, currency, entity, period, jobID string, unread bool, ledger *Ledger) (Plan, string) {
 	if p.Engine != "openai" || p.Kind != "prepaid" {
 		return Plan{}, "only an agent-read prepaid invoice can be prepared without confirmation"
 	}
 	if len(p.Questions) > 0 {
 		return Plan{}, "the agent has open questions"
-	}
-	if len(p.Unselected) > 0 {
-		return Plan{}, "evidence in the close was not used; a person confirms it is unrelated"
 	}
 	if unread {
 		return Plan{}, "evidence in the close is not extracted yet, or failed extraction"
@@ -66,11 +64,17 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if ledger.ChartSource.ID == "" {
 		return Plan{}, "the close's chart of accounts capture has no current evidence entry"
 	}
-	// Every fact comes from the invoice, so any other selected document (a credit note, a reply) is something only a
-	// person can weigh; the procedure's own evidence copy is the one exception.
+	// Every fact comes from the invoice, so any other document in the close (a credit note, a reply), selected or not, is
+	// something only a person can weigh. The capture, the chart and the procedure's evidence copy are checked here instead.
+	machine := map[string]bool{procedureSource.ID: true, ledger.Source.ID: true, ledger.ChartSource.ID: true}
 	for _, s := range p.Sources {
-		if s.Role != "invoice" && s.ID != procedureSource.ID {
+		if s.Role != "invoice" && !machine[s.ID] {
 			return Plan{}, "supporting evidence (" + s.Name + ") was selected; a person reviews it"
+		}
+	}
+	for _, s := range p.Unselected {
+		if !machine[s.ID] {
+			return Plan{}, "evidence in the close (" + s.Name + ") was not used; a person confirms it is unrelated"
 		}
 	}
 	primary := ""
