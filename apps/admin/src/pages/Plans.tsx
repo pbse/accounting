@@ -147,7 +147,7 @@ function PlanDetail({ id }: { id: string }) {
         </div>
         <span className={`status ${tone[p.state] ?? ""}`}>{p.state}</span>
       </div>
-      <Reveal reveal={plan.reveal} />
+      <Reveal reveal={plan.reveal} firm={p.organization} />
       {p.source === "agent" && <p className="note">The agent's reason: {shown(p.rationale)}</p>}
       {p.approved_by && <p className="note">Approved by {p.approved_by} {when(p.approved_at)}.</p>}
       <section>

@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { usePermissions } from "../App";
 import { get, post, when } from "../api";
 import { ActionForm } from "../components/ActionForm";
+import { OpenGrant, useGrantFor } from "../components/Grants";
 import { FlowGraph, type PlanNode, type Step } from "../components/Flow";
 import { stateTone, type RunRow } from "./Runs";
 
@@ -44,6 +45,8 @@ export function Run() {
   const setSelected = (key: string) => setParams({ step: key }, { replace: true });
   const can = usePermissions();
   const operate = can.includes("platform:operate");
+  // Hidden by the staff member while they hold a grant for the run's firm: not revealed again for this run.
+  const [hidOn, setHidOn] = useState<string>();
   useEffect(() => {
     setDetail(undefined);
     setReveal(undefined);
@@ -54,8 +57,9 @@ export function Run() {
   const load = useCallback(async () => {
     const request = ++latest.current;
     try {
-      const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${reveal ? "?reveal=1" : ""}`;
-      const next = await get<Detail>(path, reveal ? { "X-Access-Reason": reveal } : {});
+      // An empty reason reveals under the staff member's content grant for the run's firm.
+      const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${reveal !== undefined ? "?reveal=1" : ""}`;
+      const next = await get<Detail>(path, reveal !== undefined ? { "X-Access-Reason": reveal } : {});
       if (request !== latest.current) return;
       setDetail(next);
       setError("");
@@ -72,10 +76,23 @@ export function Run() {
       latest.current++;
     };
   }, [load]);
+  // A content grant for the run's firm reveals it without asking, until the staff member hides it.
+  const grant = useGrantFor(detail?.run.organization);
+  useEffect(() => {
+    if (grant && hidOn !== id && reveal === undefined && detail && !detail.revealed) setReveal({ id, reason: "" });
+  }, [grant, hidOn, id, reveal, detail]);
+  // A grant that ended or expired takes back what it showed.
+  useEffect(() => {
+    if (!grant && reveal === "") {
+      latest.current++;
+      setDetail(undefined);
+      setReveal(undefined);
+    }
+  }, [grant, reveal]);
   // Follow an active run every 3 seconds; a reveal is audited, so it is read once, not polled.
   const running = detail && active.includes(detail.run.state);
   useEffect(() => {
-    if (!running || reveal) return;
+    if (!running || reveal !== undefined) return;
     const timer = setInterval(load, 3000);
     return () => clearInterval(timer);
   }, [running, reveal, load]);
@@ -164,9 +181,16 @@ export function Run() {
       <section>
         <h2>Input and output</h2>
         {detail.revealed ? (
-          <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={() => { latest.current++; setDetail(undefined); setReveal(undefined); }}>Hide it</button></p>
+          <p className="note">
+            {reveal === "" && grant ? `Showing client content under your grant, until ${new Date(grant.expires_at).toLocaleTimeString()}.` : "Showing client content."} This view was recorded in the audit log.{" "}
+            <button onClick={() => { latest.current++; setHidOn(id); setDetail(undefined); setReveal(undefined); }}>Hide it</button>
+          </p>
         ) : (
-          <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal({ id, reason })} />
+          <>
+            <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal({ id, reason })} />
+            {grant && hidOn === id && <p className="muted">Hidden while you hold a grant for this firm. <button className="link" onClick={() => setHidOn(undefined)}>Show it again</button></p>}
+            {can.includes("platform:content") && run.organization && !grant && <OpenGrant firm={run.organization} />}
+          </>
         )}
         <h3>Input</h3><Json value={detail.input} />
         <h3>Output</h3><Json value={detail.output} />

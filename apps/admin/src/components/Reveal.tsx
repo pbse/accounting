@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useResource } from "../api";
 import { usePermissions } from "../App";
 import { ActionForm } from "./ActionForm";
+import { OpenGrant, useGrantFor } from "./Grants";
 
 // What the server sends in place of client text until it is revealed.
 export const masked = "••••";
@@ -33,18 +34,38 @@ export function useRevealable<T extends { revealed?: boolean }>(path: string | n
   };
 }
 
-// Reveal asks why before showing client content; each reveal is recorded in the audit log.
-export function Reveal({ reveal }: { reveal: ReturnType<typeof useRevealable>["reveal"] }) {
+// Reveal asks why before showing client content; each reveal is recorded in the audit log. On one
+// firm's screen (firm), a content grant the staff member holds for it reveals without asking (an
+// empty reason: the server records the grant's), until they hide it.
+export function Reveal({ reveal, firm }: { reveal: ReturnType<typeof useRevealable>["reveal"]; firm?: string | null }) {
   const allowed = usePermissions().includes("platform:content");
-  if (reveal.shown) return <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={reveal.hide}>Hide it</button></p>;
+  const grant = useGrantFor(firm);
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    if (grant && !hidden && !reveal.shown && !reveal.pending && !reveal.failure) reveal.show("");
+  }, [grant, hidden, reveal.shown, reveal.pending, reveal.failure]); // reveal.show is new each render; these decide
+  // A grant that ended or expired takes back what it showed.
+  useEffect(() => {
+    if (!grant && reveal.reason === "") reveal.hide();
+  }, [grant, reveal.reason]); // as above
+  if (reveal.shown) {
+    return (
+      <p className="note">
+        {reveal.reason === "" && grant ? `Showing client content under your grant, until ${new Date(grant.expires_at).toLocaleTimeString()}.` : "Showing client content."} This view was recorded in the audit log.{" "}
+        <button onClick={() => { setHidden(true); reveal.hide(); }}>Hide it</button>
+      </p>
+    );
+  }
   if (reveal.pending) return <p role="status">Revealing…</p>;
   return (
     <>
       {reveal.failure && <p role="alert">The content was not revealed: {reveal.failure}</p>}
+      {grant && hidden && <p className="muted">Hidden while you hold a grant for this firm. <button className="link" onClick={() => setHidden(false)}>Show it again</button></p>}
       <details>
         <summary>Reveal client content</summary>
         <ActionForm label="Reveal client content" allowed={allowed} onSubmit={async (reason) => reveal.show(reason)} />
       </details>
+      {allowed && firm && !grant && <OpenGrant firm={firm} />}
     </>
   );
 }

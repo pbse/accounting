@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { BrowserRouter, Link, NavLink, Outlet, Route, Routes, useOutletContext } from "react-router";
 import { signOut } from "./auth";
+import { GrantList, GrantsProvider } from "./components/Grants";
 import { useResource } from "./api";
 import { Overview } from "./pages/Overview";
 import { Firms } from "./pages/Firms";
@@ -51,6 +52,7 @@ function Layout() {
   const me = useResource<Me>("/v1/admin/me");
   const [signOutError, setSignOutError] = useState("");
   return (
+    <GrantsProvider enabled={me.data?.permissions.includes("platform:content") ?? false}>
     <div className="app-shell">
       <a className="skip" href="#main">Skip to content</a>
       <aside className="sidebar">
@@ -82,6 +84,7 @@ function Layout() {
           </div>
         </nav>
         <div className="sidebar-footer">
+          <GrantList />
           {me.data && (
             <p>
               Signed in as {me.data.subject}
@@ -101,5 +104,6 @@ function Layout() {
         </div>
       </main>
     </div>
+    </GrantsProvider>
   );
 }
