@@ -1,0 +1,211 @@
+# Admin panel plan
+
+**Status:** proposed (2026-09-27). Nothing here is implemented yet. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+
+## Purpose
+
+An internal console for **platform staff** (our employees, not firm members) to manage every firm from one place:
+- firms and their status and usage;
+- people and access;
+- activity;
+- workflow runs, which staff can start, cancel, retry and approve, and inspect step by step in a flow view;
+- staff-built and agent-proposed plans;
+- health of connections and the existing background jobs;
+- an audit trail of everything staff do.
+
+The firm-facing **Security center** stays as it is. It is a firm administrator's view of their own firm; this console is ours, across all firms.
+
+## Principles
+
+1. **Separate identity.** Staff sign in as members of a dedicated WorkOS organization that is never enrolled as a firm. Firm sessions cannot reach admin routes, and staff sessions cannot use firm routes.
+2. **Least privilege, explicit permissions.** Reading, operating and viewing client content are separate permissions.
+3. **Metadata by default.** Staff see states, counts, errors and IDs. Client content (documents, extracted text, `wf:"sensitive"` fields, email bodies) requires `platform:content` and a stated reason, and is logged.
+4. **Writes go through domain code, under the target firm.** An admin action runs with that firm's tenant context, so row-level security still confines it, and it calls the same Go function the app uses. No raw SQL edits, no "set state to queued".
+5. **Accounting invariants still hold.** Staff cannot bypass them:
+   - an unknown external outcome is reconciled, never retried;
+   - approvals stay bound to their evidence;
+   - a signed-off close must be reopened through its normal path.
+   See [production posting](production-posting.md) and [operations](operations.md#access-and-incidents).
+6. **Everything is audited.** Every staff write records who, what, which firm, why and the result, in the same transaction as the change.
+
+## Identity and access
+
+### WorkOS setup
+- **Staff organization:** create "Platform staff" in each WorkOS environment. The API reads its ID from `PLATFORM_ORGANIZATION_ID`.
+- **Permissions:**
+  - `platform:read`: see all firms' metadata.
+  - `platform:operate`: start, cancel and retry runs, signal and approve, suspend or resume a firm, manage invitations.
+  - `platform:content`: view client content, with a reason.
+  - `platform:plans`: build and approve plans. Approving still requires the plan validator's per-activity permission check.
+- **Roles:**
+  - Support: `platform:read`.
+  - Operator: adds `platform:operate`.
+  - Content reviewer: adds `platform:content`.
+  - Platform admin: all four.
+  Staff are added and removed in the WorkOS dashboard in phase A0; an in-console staff screen comes in A2.
+- **MFA:** require it for every staff member, either through WorkOS's MFA setting or through SSO to a company identity provider that enforces it. Confirm which one WorkOS applies per organization before relying on it.
+- **Short sessions:** the admin app refreshes tokens, and the API rejects staff tokens whose organization isn't `PLATFORM_ORGANIZATION_ID`.
+
+### API verification
+- A staff verifier is `auth.Verifier{ClientID, Issuer, Organization: PLATFORM_ORGANIZATION_ID}`. The pinned organization means a firm's token fails verification on admin routes.
+- Firm routes already refuse the staff organization, because it's never registered in `organizations` (the "403 organization not enabled" case in [onboarding](onboarding.md)). A test must prove both directions.
+- **Local development:** when WorkOS isn't configured, the existing `WORKSPACE_TOKEN` also grants every platform permission, mirroring today's local-only development access. A configured WorkOS client disables that.
+
+### Network (phase A4)
+Move the console to its own hostname (for example `admin.<domain>`) behind Cloudflare Access, or any identity-aware proxy. This limits who can even load it, but it is defence in depth only: authorization stays in Go.
+
+## Architecture
+
+```text
+apps/admin/                 separate Vite + React app (own bundle; firm users never load it)
+  → built to apps/frontend/dist/admin/ (base "/admin/"), served by the same edge Worker for now
+services/backend/internal/admin/   /v1/admin/* routes, staff middleware, read/act helpers, audit
+```
+
+### Edge Worker
+- `/v1/admin/*` is already forwarded to the API container because it's under `/v1/`.
+- Add `/admin/*` to `run_worker_first`, serving the asset if it exists and `/admin/index.html` otherwise. The current single-page-app fallback returns the firm app's `index.html`, which is wrong for admin deep links.
+
+### New setting
+`PLATFORM_ORGANIZATION_ID` must be added everywhere settings are listed:
+- `.env.example`;
+- `compose.yaml`;
+- the edge Worker's container `envVars`;
+- both deploy workflows' configuration checks and secrets files.
+
+### Build
+The root `build` script runs the firm app, then the admin app. The admin app empties only its own `dist/admin`.
+
+### Admin-only dependencies
+- `@xyflow/react` (React Flow) for graphs, with `elkjs` for layered layout.
+- A JSON-Schema form renderer, chosen in A1: a small in-house renderer for the subset the schema generator emits, or `@rjsf/core`.
+
+None of these reach the firm app's bundle.
+
+### Go helpers (`internal/admin`)
+- `admin.Read(ctx, db, fn)`: marks the context as system work (`*`) and runs `fn` in a `READ ONLY` transaction, so a read-only screen cannot write even by mistake.
+- `admin.Act(ctx, db, firm, action, reason, fn)`: runs `fn` with `auth.WithActor` set to the target firm (subject = staff user) and `auth.WithAgent(ctx, "staff:<email>")`, then inserts the `platform_audit` row in the same transaction. The reason is required and non-empty.
+- **Content access:** handlers that return client content check `platform:content`, require an `X-Access-Reason` header, and audit the read.
+
+**Existing handlers can't be reused directly.** Many operations live inline in HTTP handlers in `internal/transport`, and they authorize the *signed-in member* (active membership plus WorkOS permissions), which a staff user never has. Each admin action therefore includes separating that operation into a function that takes an explicit authority: the member, or the audited staff actor. This is the bulk of phase A2's work; budget for it per action.
+
+## Data
+
+One admin migration. Both tables enable row-level security so `/readyz` keeps passing.
+
+**`platform_audit`**
+- `id`, `staff_user`, `staff_email`, `action`, `organization_id` (the affected firm, nullable), `target_type`, `target_id`, `reason`.
+- `request`: redacted JSON of the parameters. `result`: `ok` or `refused`, plus the error.
+- `created_at`, `request_id`.
+- Append-only: the runtime role gets no `UPDATE` or `DELETE` grant.
+- Policy: `IN ('*', organization_id)`, so a later firm-facing "staff actions on your firm" view is possible.
+
+**`worker_heartbeats`**
+- `loop` (primary key), `instance`, `beat_at`, `detail` (JSON: last error, items processed).
+- Written by each worker loop, including the engine's, at most once a minute.
+- Platform-level: policy `current_setting('app.organization',true) = '*'`.
+
+Workflow tables (`workflow_runs`, `workflow_steps`, `workflow_events`, `workflow_plans`) come from the engine's migration.
+
+## Information architecture
+
+| Area | Screens | Actions (permission) |
+|---|---|---|
+| **Overview** | Platform health: worker loop heartbeats (stale over 5 minutes), runs by state, oldest waiting run, failed runs and jobs in the last 24 hours, unknown effects, connections needing reconnect, firms suspended. | Links only. |
+| **Firms** | List: name, status, created, members, clients, open closes, active and failed runs, last activity, model calls in 30 days, stored evidence size. **Firm detail** tabs: Overview, People, Clients and closes, Workflows, Plans, Jobs, Connections, Activity, Audit. | Suspend or resume with a typed firm ID and reason (`platform:operate`), through the same function as today's `POST /v1/closes/organization/revoke`. |
+| **People** | Global search by email or user ID across firms. Per person: app memberships and their decisions, client assignments, WorkOS memberships and roles, pending invitations, agent (MCP) access, recent sessions. | Revoke app membership, resend or revoke an invitation, revoke WorkOS sessions (`platform:operate`, needs `WORKOS_API_KEY` on the API). |
+| **Activity** | Per-firm and global timelines, filterable by firm, person, type and date. | None; read-only. |
+| **Workflows** | **Catalog**: each workflow's title, description, triggers, input schema, active runs, success rate. **Runs**: filters (firm, workflow, state, started by, date) and saved views ("stuck over 1 hour", "waiting on client over 7 days", "unknown effects", "failed today"). **Run detail**: flow graph, step inspector, events, children. **Start run**: pick a firm and workflow, fill a schema-driven form, see the idempotency key, confirm. | Start, cancel, retry a failed step, send an event, approve or reject a step (`platform:operate`). Resolve an `unknown` effect with a reconciliation reference (`platform:operate`; never re-calls the provider). |
+| **Plans** | Builder, templates, and a **proposed plans queue** (agent- and member-sourced) showing rationale, validation result and digest. | Save draft, propose, approve or reject (`platform:plans`, plus the validator's per-activity permissions), instantiate a template for a firm. |
+| **Jobs** | Health of the existing job tables until they move to the engine: by kind and firm, queued, running, failed, oldest age, stale claims. Kinds: preparation, email outbox, forwarded files, QuickBooks syncs, Stripe reports, alerts. | Only the recheck or cancel each kind already exposes, through its own function. Never a generic requeue. |
+| **Connections** | QuickBooks, Xero, Stripe and email-sender connections across firms, by state and last successful capture. | None in A2; reconnecting stays a firm action. |
+| **Audit** | Search staff actions by staff member, firm, action and date; export CSV. | None. |
+
+### Activity sources
+
+**Phase A2 reads the existing records through one paged API:**
+- the Security center's "Recent changes" derivation in `internal/transport/security.go`: membership, client and agent access, invitations, connections, posting grants, email-sender changes, and records agents made;
+- close goal events;
+- preparation job state changes;
+- email outbox deliveries;
+- workflow steps and events;
+- `platform_audit`.
+
+**Later, if needed:** an append-only activity log written by domain code. One migration then, not per feature.
+
+## Workflow flow view
+
+The run detail page is the centre of the console.
+
+### The graph (from `workflow_steps`, in order reached)
+- **Nodes:** one per step, with an icon by kind (step, effect, activity, sleep, event wait, approval, child) and a colour by state (running, waiting, completed, failed, unknown, cancelled).
+- **Waits** show what they wait for and for how long, for example "client_request.replied:881 · 3 days".
+- **Child runs** are collapsible groups that link to their own page.
+- **Plan runs** also show nodes not reached yet, dimmed, from the plan's graph. Branches not taken are drawn as "skipped".
+- **Loops:** more than 20 steps sharing a key prefix collapse into one counted node.
+
+### Step inspector (side panel)
+- Kind, state, attempts with timestamps and errors, duration, and the actor for approvals and signals.
+- Input and output JSON, with `wf:"sensitive"` fields masked. **Reveal** requires `platform:content` and a reason.
+- Child and event links.
+
+### Actions
+- **Header:** Cancel (reason); Retry step on failed steps; Resolve on `unknown` effects; Approve or Reject on approval waits; Send event on event waits. Each asks for a reason.
+- **Controls:** disabled with an explanation when the staff member lacks the permission.
+
+### Behaviour
+- **Live updates:** polls every 3 seconds while the run is active and stops when it ends. Server-sent events can replace polling later.
+- **Accessibility:** an ordered step list mirrors the graph for keyboard and screen-reader use. Every graph action is also available from the list.
+- **Deep links:** `/admin/runs/{id}?step={key}`.
+
+### Plan builder (phase A3)
+- A form-based node editor: choose an activity from the searchable catalog, fill its schema form, set `after` and `when`.
+- A live, read-only React Flow preview, with inline errors from the server-side validator.
+- Drag-and-drop editing on the same graph component is a later improvement, not an MVP requirement.
+
+## API (staff)
+
+All routes under `/v1/admin`. They require a staff token plus the permission listed, and every write needs a `reason` field.
+
+| Route | Permission |
+|---|---|
+| `GET /overview`, `GET /firms`, `GET /firms/{id}`, `GET /firms/{id}/activity` | `platform:read` |
+| `POST /firms/{id}/suspend`, `POST /firms/{id}/resume` | `platform:operate` |
+| `GET /people?query=`, `GET /people/{userId}` | `platform:read` |
+| `POST /people/{userId}/memberships/{firm}/revoke`, `POST /invitations/{id}/resend`, `POST /invitations/{id}/revoke`, `POST /people/{userId}/sessions/revoke` | `platform:operate` |
+| `GET /workflows/definitions`, `GET /workflows/activities`, `GET /workflows/runs`, `GET /workflows/runs/{id}` | `platform:read` |
+| `POST /workflows/runs`, `…/cancel`, `…/steps/{key}/retry`, `…/steps/{key}/resolve`, `POST /workflows/events` | `platform:operate` |
+| `GET /workflows/plans`, `POST /workflows/plans`, `…/propose`, `…/approve`, `…/reject`, `…/instantiate` | `platform:plans` |
+| `GET /jobs`, `GET /connections`, `GET /audit` | `platform:read` |
+| Any response field marked content, when revealed | `platform:content` plus the `X-Access-Reason` header |
+
+## Phases
+
+| Phase | Depends on | Scope | Exit criteria |
+|---|---|---|---|
+| **A0. Foundations** | none | Staff organization, roles and permissions in WorkOS (staging and production); `PLATFORM_ORGANIZATION_ID` wired through every place settings are listed; `internal/admin` middleware and the `Read`/`Act` helpers; admin migration; `apps/admin` shell with staff sign-in; `/admin` edge routing; read-only Firms list and Overview (heartbeats). | A staff member signs in and lists firms; a firm token gets 403 on `/v1/admin/*`; a staff token gets 403 on firm routes; `admin.Read` refuses writes; tests cover all three. |
+| **A1. Workflows** | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
+| **A2. Firm management** | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
+| **A3. Plans** | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
+| **A4. Hardening** | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
+
+**Suggested order across both plans:**
+1. Engine W0/W1 alongside admin A0.
+2. A1.
+3. W2 and A2.
+4. W3 and A3.
+5. W4 and W5.
+
+## Later ideas (not planned)
+
+- Per-firm feature flags and limits (model budget, plan limits).
+- Read-only "view as firm" support mode, behind `platform:content` and a time-boxed grant.
+- A firm-facing "staff actions on your firm" page from `platform_audit`.
+- Usage and billing views.
+- In-console staff management.
+
+## Open questions
+
+- **MFA:** whether WorkOS can require MFA for one organization, or only for the whole environment, which would include firm users.
+- **Retention:** how long `platform_audit` is kept, and whether firms can see it.
+- **Content-reveal policy:** which roles hold `platform:content`, and whether a second person must approve the reveal.
