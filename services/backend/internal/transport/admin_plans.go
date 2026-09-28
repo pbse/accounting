@@ -139,7 +139,7 @@ func adminPlans(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	// A revealed list is recorded against every firm whose plans it shows (a shared template's at platform level), so
 	// each firm's audit has it.
 	if reveal {
-		firms := []string{}
+		firms, ids := []string{}, []int64{}
 		for _, p := range plans {
 			firm := ""
 			if p.Organization != nil {
@@ -148,11 +148,10 @@ func adminPlans(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			if !slices.Contains(firms, firm) {
 				firms = append(firms, firm)
 			}
+			ids = append(ids, p.ID)
 		}
-		for _, firm := range firms {
-			if !adminReveal(w, r, db, firm, "plans", "list") {
-				return
-			}
+		if !adminRevealAcross(w, r, db, firms, "plans", "list", map[string]any{"plans": ids}) {
+			return
 		}
 	}
 	more := len(plans) > adminPage

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // The staff audit (docs/admin-panel.md, phase A4): every staff action and reveal, searchable across firms and exported
@@ -91,8 +92,9 @@ func readAudit(ctx context.Context, tx *sql.Tx, q auditQuery, reveal bool) ([]ad
 }
 
 // revealAudit records a reveal of these entries against every firm they belong to (entries on no firm at platform
-// level), so each firm's own audit shows it. It answers the request itself and returns false when refused.
-func revealAudit(w http.ResponseWriter, r *http.Request, db *sql.DB, entries []adminAuditRow) bool {
+// level), in one transaction, so each firm's own audit shows it, with the search and the IDs it covered. It answers the
+// request itself and returns false when refused.
+func revealAudit(w http.ResponseWriter, r *http.Request, db *sql.DB, q auditQuery, entries []adminAuditRow, what string) bool {
 	firms := []string{}
 	for _, e := range entries {
 		firm := ""
@@ -103,12 +105,11 @@ func revealAudit(w http.ResponseWriter, r *http.Request, db *sql.DB, entries []a
 			firms = append(firms, firm)
 		}
 	}
-	for _, firm := range firms {
-		if !adminReveal(w, r, db, firm, "audit", "search") {
-			return false
-		}
+	shown := map[string]any{"firm": q.firm, "staff": q.staff, "action": q.action, "result": q.result, "entries": len(entries)}
+	if len(entries) > 0 {
+		shown["newest_id"], shown["oldest_id"] = entries[0].ID, entries[len(entries)-1].ID
 	}
-	return true
+	return adminRevealAcross(w, r, db, firms, "audit", what, shown)
 }
 
 // adminAuditPage answers one page of an audit search.
@@ -129,7 +130,7 @@ func adminAuditPage(w http.ResponseWriter, r *http.Request, db *sql.DB, q auditQ
 		entries = entries[:adminPage]
 		next = entries[len(entries)-1].ID
 	}
-	if reveal && !revealAudit(w, r, db, entries) {
+	if reveal && !revealAudit(w, r, db, q, entries, "search") {
 		return
 	}
 	jsonReply(w, 200, map[string]any{"entries": entries, "next_before": next, "revealed": reveal})
@@ -139,10 +140,11 @@ func adminAuditPage(w http.ResponseWriter, r *http.Request, db *sql.DB, q auditQ
 // before set to the last ID).
 const auditExportLimit = 5000
 
-// spreadsheetSafe keeps a spreadsheet from running a value as a formula: text starting with =, +, -, @ or a control
-// character is prefixed with an apostrophe.
+// spreadsheetSafe keeps a spreadsheet from running a value as a formula: text whose first character is whitespace or a
+// control character, or whose first other character starts a formula (=, +, -, @), is prefixed with an apostrophe.
 func spreadsheetSafe(value string) string {
-	if value != "" && strings.ContainsRune("=+-@\t\r", rune(value[0])) {
+	trimmed := strings.TrimLeftFunc(value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
+	if trimmed != value || (trimmed != "" && strings.ContainsRune("=+-@", rune(trimmed[0]))) {
 		return "'" + value
 	}
 	return value
@@ -169,7 +171,7 @@ func adminAuditExport(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if truncated {
 		entries = entries[:auditExportLimit]
 	}
-	if reveal && !revealAudit(w, r, db, entries) {
+	if reveal && !revealAudit(w, r, db, q, entries, "export") {
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")

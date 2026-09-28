@@ -387,3 +387,43 @@ func adminRevealOf(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, tar
 	}
 	return true
 }
+
+// adminRevealAcross records one reveal per firm ("" for platform level) in a single transaction, for a read that shows
+// several firms' content at once; request says what was shown. When it refuses, it has answered and returns false.
+func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, firms []string, targetType, targetID string, request any) bool {
+	member := staffOf(r.Context())
+	if !slices.Contains(member.Permissions, platformContent) {
+		problem(w, 403, "Revealing client content needs platform:content.")
+		return false
+	}
+	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	if reason == "" {
+		problem(w, 422, errReasonRequired.Error())
+		return false
+	}
+	raw, _ := json.Marshal(request)
+	if string(raw) == "null" {
+		raw = []byte("{}")
+	}
+	system := context.WithValue(r.Context(), systemKey{}, true)
+	tx, err := db.BeginTx(system, nil)
+	if err == nil {
+		for _, firm := range firms {
+			if _, err = tx.ExecContext(system, `INSERT INTO platform_audit(staff_user,action,organization_id,target_type,target_id,reason,request,result,error) VALUES($1,'content.reveal',NULLIF($2,''),$3,$4,$5,$6,'ok','')`,
+				member.Subject, firm, targetType, targetID, reason, string(raw)); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			tx.Rollback()
+		}
+	}
+	if err != nil {
+		log.Printf("Content reveal could not be recorded: %v", err)
+		problem(w, 503, "The reveal could not be recorded, so nothing was shown.")
+		return false
+	}
+	return true
+}

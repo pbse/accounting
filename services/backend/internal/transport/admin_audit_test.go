@@ -64,7 +64,7 @@ func TestStaffSearchAndExportTheAuditAcrossFirms(t *testing.T) {
 	}
 	for _, firm := range []string{firmA, firmB} {
 		var reveals int
-		if db.QueryRow(`SELECT count(*) FROM platform_audit WHERE organization_id=$1 AND action='content.reveal' AND target_type='audit'`, firm).Scan(&reveals); reveals != 1 {
+		if db.QueryRow(`SELECT count(*) FROM platform_audit WHERE organization_id=$1 AND action='content.reveal' AND target_type='audit' AND target_id='search'`, firm).Scan(&reveals); reveals != 1 {
 			t.Fatalf("%s's audit must show the reveal: %d", firm, reveals)
 		}
 	}
@@ -99,6 +99,16 @@ func TestStaffSearchAndExportTheAuditAcrossFirms(t *testing.T) {
 	joined := mustString(rows)
 	if !strings.Contains(joined, "Acme Secret") || !strings.Contains(joined, `'=cmd|`) || !strings.Contains(joined, `'=HYPERLINK`) {
 		t.Fatalf("revealed export, formulas neutralized: %v", rows)
+	}
+	for value, want := range map[string]string{"\n=1+1": "'\n=1+1", " =1": "' =1", "plain": "plain", "-5 days": "'-5 days", "": ""} {
+		if got := spreadsheetSafe(value); got != want {
+			t.Errorf("spreadsheetSafe(%q) = %q, want %q", value, got, want)
+		}
+	}
+	// A reveal says what it showed.
+	var covered string
+	if err := db.QueryRow(`SELECT request::text FROM platform_audit WHERE organization_id=$1 AND action='content.reveal' AND target_type='audit' AND target_id='export'`, firmA).Scan(&covered); err != nil || !strings.Contains(covered, `"staff": "`+staff+`"`) || !strings.Contains(covered, `"entries": 3`) {
+		t.Fatalf("reveal scope %q %v", covered, err)
 	}
 	adminJSON(t, h, token, "GET", "/v1/admin/audit?before=zero", "", 422)
 }

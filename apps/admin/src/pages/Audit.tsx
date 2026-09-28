@@ -15,7 +15,8 @@ export function Audit() {
   for (const name of filters) if (params.get(name)) query.set(name, params.get(name)!);
   const search = query.toString();
   if (before) query.set("before", String(before));
-  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/audit${query.size ? `?${query}` : ""}`);
+  // A reveal covers this search: paging keeps it, other filters are masked until revealed anew.
+  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/audit${query.size ? `?${query}` : ""}`, search);
   const reason = audit.reveal.shown ? audit.reveal.reason : undefined;
   return (
     <>
