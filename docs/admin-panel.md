@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations), A1 (workflows) and most of A2 (firm people, activity, audit, suspension; stuck work and connections) implemented** (2026-09-28); the rest are proposals. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations), A1 (workflows) and A2 (firm management) implemented** (2026-09-28); A3 and A4 are proposals. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -172,8 +172,8 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 |---|---|
 | `GET /overview`, `GET /firms`, `GET /firms/{id}`, `GET /firms/{id}/people`, `GET /firms/{id}/activity`, `GET /firms/{id}/audit` | `platform:read` |
 | `POST /firms/{id}/suspend`, `POST /firms/{id}/resume` (typed firm ID), `POST /firms/{id}/members/{userId}/revoke`, `POST /firms/{id}/invitations/{id}/revoke` | `platform:operate` |
-| `GET /people?query=`, `GET /people/{userId}` | `platform:read` |
-| `POST /invitations/{id}/resend`, `POST /people/{userId}/sessions/revoke` | `platform:operate` |
+| `GET /people?q=` (a WorkOS user ID or an email address) | `platform:read` |
+| `POST /firms/{id}/invitations/{id}/resend`, `POST /people/{userId}/sessions/revoke` | `platform:operate` |
 | `GET /workflows/definitions`, `GET /workflows/activities`, `GET /workflows/runs`, `GET /workflows/runs/{id}` | `platform:read` |
 | `POST /workflows/runs`, `POST /workflows/runs/{id}/cancel`, `…/retry` and `…/resolve` (step `key` in the body), `POST /workflows/events` | `platform:operate` |
 | `GET /workflows/plans`, `POST /workflows/plans`, `…/propose`, `…/approve`, `…/reject`, `…/instantiate` | `platform:plans` |
@@ -186,7 +186,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 |---|---|---|---|
 | **A0. Foundations** (implemented) | none | Staff organization, roles and permissions in WorkOS (staging and production); `PLATFORM_ORGANIZATION_ID` wired through every place settings are listed; staff middleware and the `adminRead`/`adminAct` helpers; admin migration (098); `apps/admin` shell with staff sign-in; `/admin` edge routing; read-only Overview (heartbeats), Firms and firm detail. | `internal/transport/admin_test.go`: a firm token gets 401 on `/v1/admin/*` (even claiming a platform permission); a staff token gets 403 on firm routes; `adminRead` refuses writes; `adminAct` runs as the firm and audits success and refusal; the edge serves admin pages (`routes.test.ts`). |
 | **A1. Workflows** (implemented) | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
-| **A2. Firm management** (implemented except global people and WorkOS) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
+| **A2. Firm management** (implemented) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
 | **A3. Plans** | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
 | **A4. Hardening** | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
 
@@ -216,7 +216,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 - **Not yet.** Loops are not collapsed and child runs are links rather than nested groups; both wait for a workflow that needs them.
 - **Local check.** `npm run dev:admin` against a local API and worker; the run page was exercised on a staff-approved plan waiting for an event, and sending that event from the inspector completed the run.
 
-## As built (A2, first half)
+## As built (A2)
 
 - **Firm page tabs.** Overview (counts, last health check, recent runs, suspend or resume), People (members with their decision, client-assignment count and agent access; invitations), Activity (paged, filterable by kind) and Staff audit (paged `platform_audit` for the firm, refusals and reveals included).
 - **Shared domain functions.** The firm's own screens and the console call the same code: `setOrganizationEnabled` (suspend and, new, resume), `decideMemberAccess` (a membership decision, removing a revoked member's assistant history, portfolio goals and attention marks), `closeInvitation` and `revokeInWorkOS`. Staff actions run through `adminAct` as the firm, need a reason of 10–2,000 characters like the firm's own screens, and are audited. Suspending or resuming needs the firm's ID typed to confirm. Revoking a member needs the decision staff saw (`previous_id`), so a change made meanwhile is not overwritten.
@@ -224,7 +224,8 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 - **Firm detail.** Moved members to People (masked) and dropped run errors from the recent-runs list; the run page masks them.
 - **Stuck work.** `GET /v1/admin/jobs` lists what each firm's operations screen shows, across firms: counts by kind (items, firms, oldest), then items oldest first, filtered by kind and firm. It shares `operationsAlerts` (`operations.go`) with the firm screen and the alert worker; one firm or all firms, by the same query. Read-only: firms act on their items from their own screen, and no generic requeue exists.
 - **Connections.** `GET /v1/admin/connections` lists QuickBooks, Xero, Stripe and the enabled email sender across firms. Each row has its state, mode, when it was connected and changed, and when it last brought data in (a snapshot, a saved Stripe report, an accepted email). Counts by provider and state come first, and connections needing a reconnect lead the list. Client, company and account names are never selected. Reconnecting stays a firm action.
-- **Next (A2, last part).** Global people search with WorkOS memberships and sessions, and invitation resend. Audit search and export belong to A4.
+- **People.** `GET /v1/admin/people?q=` finds one person by WorkOS user ID or email address. It returns their WorkOS account, organization memberships and sessions (state, organization, sign-in method, times; never IP address or browser), and the app's membership decisions and invitations for them in every firm, with no reasons or client names. Without a WorkOS key, or when WorkOS does not answer, the app's records still show and the page says why the rest is missing. Staff can sign a person out everywhere, in two platform-level audit entries that outlive the request. `sessions.revoke` ends the app's own sessions (`auth_sessions`, `AUTH_SESSION=server`) and commits first. `sessions.revoke_workos` then revokes every active WorkOS session on every page of the list, so none can be renewed; it is refused, with what ended, when WorkOS fails part way, and ending again finishes the job. With `AUTH_SESSION=client`, the API checks access tokens locally, so a token a browser already holds keeps working until it expires (minutes); rejecting such tokens at once would need a revocation check on every request. When WorkOS cannot answer an email search, the IDs the app itself recorded for that address (accepted invitations, its sessions) stand in, so memberships still show; the page warns they may include earlier owners of the address. A resend whose answer is lost is judged against WorkOS's copy of the invitation read just before it. When that copy cannot be read either, the outcome is reported as unknown and audited as refused with that reason. The invitation is then kept open at least as long as a resend would, so a stale date cannot expire an invitation WorkOS renewed. They can also resend a pending invitation that has not expired, keeping WorkOS's new expiry. Revoking a membership stays on the firm's People tab, where the decision being replaced shows.
+- **Not in A2.** Audit search and export belong to A4.
 
 ## Later ideas (not planned)
 

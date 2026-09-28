@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { post, useResource, when } from "../api";
 import { usePermissions } from "../App";
+import { Link } from "react-router";
 import { ActionForm } from "../components/ActionForm";
+import { InvitationActions } from "./People";
 
 // What the server sends in place of client text until it is revealed.
 const masked = "••••";
@@ -66,7 +68,7 @@ type Invitation = { id: string; email: string; role: string; state: string; invi
 
 export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () => void }) {
   const people = useRevealable<{ people: Person[]; invitations: Invitation[]; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/people`);
-  // What the last invitation revoke said: it tells staff when WorkOS still needs revoking by hand.
+  // What the last invitation action said: a revoke tells staff when WorkOS still needs revoking by hand.
   const [revoked, setRevoked] = useState("");
   const operate = usePermissions().includes("platform:operate");
   const base = `/v1/admin/firms/${encodeURIComponent(firm)}`;
@@ -86,7 +88,7 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
                 <tbody>
                   {people.data.people.map((p) => (
                     <tr key={p.subject}>
-                      <td>{p.subject}</td>
+                      <td><Link to={`/people?q=${encodeURIComponent(p.subject)}`}>{p.subject}</Link></td>
                       <td><span className={`status ${p.granted ? "ok" : "danger"}`}>{p.granted ? "Granted" : "Revoked"}</span></td>
                       <td>{p.assignments.length}{p.assignments.some((a) => a !== masked) && <small> {p.assignments.join(", ")}</small>}</td>
                       <td>{p.agent_scope_in_force ?? p.agent?.state ?? "—"}</td>
@@ -127,16 +129,7 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
                       <td>{when(i.created_at)}</td>
                       <td>{when(i.expires_at)}</td>
                       <td>
-                        {(i.state === "sending" || i.state === "pending") && (
-                          <details>
-                            <summary>Revoke</summary>
-                            <ActionForm label="Revoke invitation" danger allowed={operate} minLength={10} onSubmit={async (reason) => {
-                              const answer = await post<{ message: string }>(`${base}/invitations/${encodeURIComponent(i.id)}/revoke`, { reason });
-                              setRevoked(answer.message);
-                              people.reload();
-                            }} />
-                          </details>
-                        )}
+                        <InvitationActions firm={firm} invitation={i} allowed={operate} onDone={(message) => { setRevoked(message); people.reload(); }} />
                       </td>
                     </tr>
                   ))}
