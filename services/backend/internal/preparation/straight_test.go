@@ -60,7 +60,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	foreign := row("JournalEntry", "65", "2026-09-30", "", "", "Insurance", "900")
 	foreign.Currency = "CAD"
 	ledger := func(rows ...LedgerRow) *Ledger {
-		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Rows: rows, Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}}
+		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Rows: rows, Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12"}, "prepaid expenses": {"13"}}}
 	}
 	plan, reason := StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200")))
 	if reason != "" || plan.Kind != "prepaid" || len(plan.Sources) != 2 || plan.Sources[1].Role != "period_ledger" || plan.Sources[1].Digest != "cap" || !strings.Contains(plan.Sources[1].Location, "Bill 41") {
@@ -128,6 +128,10 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"unnamed account on a credit":  {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
 		"amount cited from support":    {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
 		"line-less card credit":        {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"not billed to":                {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Not billed to: Example" }, ledger(bill), false},
+		"unicode minus":                {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Credit note total \u22121,200.00" }, ledger(bill), false},
+		"two accounts share the name":  {func(*Proposal, *Procedure) {}, &Ledger{Source: Source{ID: "9", Digest: "cap"}, Rows: []LedgerRow{bill}, Accounts: map[string]string{"12": "Insurance", "14": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12", "14"}, "prepaid expenses": {"13"}}}, false},
+		"line ID is another account":   {func(*Proposal, *Procedure) {}, ledger(LedgerRow{Kind: "Bill", ProviderID: "90", Date: "2026-09-03", Record: json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"14"}}}]}`)}), false},
 		"bill-from cited as billed-to": {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Bill from: Example" }, ledger(bill), false},
 		"end line cited as start":      {func(p *Proposal, _ *Procedure) { p.Facts[1].Candidates[0].Quote = "Coverage ends 2026-09-01" }, ledger(bill), false},
 		"renamed account":              {func(*Proposal, *Procedure) {}, ledger(LedgerRow{Kind: "Bill", ProviderID: "89", Date: "2026-09-03", Record: json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"13","name":"Insurance"}}}]}`)}), false},

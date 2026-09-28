@@ -21,11 +21,12 @@ type LedgerRow struct {
 }
 
 // Ledger is the close's current QuickBooks capture: its evidence entry, the rows the check reads, and the account
-// names by ID from the same connection's newest chart of accounts, for a line that carries only the ID.
+// names by ID and IDs by name from the same connection's newest chart of accounts.
 type Ledger struct {
 	Source   Source
 	Rows     []LedgerRow
-	Accounts map[string]string
+	Accounts map[string]string   // account ID → name
+	IDs      map[string][]string // lower-cased name or fully qualified name → account IDs
 }
 
 // StraightThrough turns an agent proposal into a prepaid plan without a person confirming each field, when every
@@ -166,6 +167,11 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 // account cannot be named is a question for a person, whatever its currency.
 func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, period, expense, prepaid string) (booking, reason string) {
 	text := strings.ToLower(invoice)
+	// The procedure's accounts must each be one account in the current chart; a line carrying an ID is compared by ID.
+	expenseIDs, prepaidIDs := ledger.IDs[strings.ToLower(expense)], ledger.IDs[strings.ToLower(prepaid)]
+	if len(expenseIDs) != 1 || len(prepaidIDs) != 1 {
+		return "", "the current chart of accounts does not name the procedure's expense and prepaid accounts exactly once each"
+	}
 	matches := 0
 	for _, row := range ledger.Rows {
 		if !strings.HasPrefix(row.Date, period+"-") {
@@ -228,6 +234,9 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 				name = current
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
+			if account.Value != "" {
+				onExpense, onPrepaid = account.Value == expenseIDs[0], account.Value == prepaidIDs[0]
+			}
 			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || row.Kind == "VendorCredit" || record.Credit || mentioned || fromVendor) {
 				return "", "a captured " + row.Kind + " in the close month has a line whose account cannot be named"
 			}
@@ -306,7 +315,7 @@ func moneyFigures(quote string) int {
 // negativeFigure reports whether the quote prints the amount preceded by a minus sign or an opening bracket, which
 // the quote check ignores: a credit is not an invoice.
 func negativeFigure(quote string, cents int64) bool {
-	plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "").Replace(strings.ToLower(quote))
+	plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "", "−", "-", "–", "-", "—", "-", "‐", "-").Replace(strings.ToLower(quote))
 	digits := fmt.Sprintf(`%d(\.%02d)?`, cents/100, cents%100)
 	return regexp.MustCompile(`[-(]\s*(usd|eur|gbp|cad|aud)?\s*` + digits + `([^0-9]|$)`).MatchString(plain)
 }
@@ -349,6 +358,9 @@ func issuerLine(quote, value string) bool {
 			continue
 		}
 		label := strings.TrimSpace(strings.TrimSuffix(normal, want))
+		if negated(label) {
+			continue
+		}
 		ok := label == ""
 		for _, word := range []string{"from", "issued by", "vendor", "supplier", "seller", "provider", "issuer"} {
 			ok = ok || strings.Contains(label, word)
@@ -374,14 +386,26 @@ func lineSays(quote, value string, any, none []string) bool {
 		}
 		// The words are looked for in the label before the name, so a client called "Example Services" is not a service line.
 		label := strings.TrimSuffix(normal, want)
-		ok := false
+		ok := !negated(label)
+		found := false
 		for _, word := range any {
-			ok = ok || strings.Contains(label, word)
+			found = found || strings.Contains(label, word)
 		}
+		ok = ok && found
 		for _, word := range none {
 			ok = ok && !strings.Contains(label, word)
 		}
 		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// negated reports whether a label denies what it says: "not billed to" is not a bill-to label.
+func negated(label string) bool {
+	for _, word := range strings.Fields(label) {
+		if word == "not" || word == "no" || word == "never" || word == "except" || word == "formerly" || word == "previously" {
 			return true
 		}
 	}
@@ -451,12 +475,18 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	var accounts []struct{ ID, Name string }
+	var accounts []struct{ ID, Name, FullyQualifiedName string }
 	json.Unmarshal(catalog, &accounts)
-	l.Accounts = map[string]string{}
+	l.Accounts, l.IDs = map[string]string{}, map[string][]string{}
 	for _, a := range accounts {
-		if a.ID != "" {
-			l.Accounts[a.ID] = a.Name
+		if a.ID == "" {
+			continue
+		}
+		l.Accounts[a.ID] = a.Name
+		for _, name := range []string{a.Name, a.FullyQualifiedName} {
+			if name != "" && !slices.Contains(l.IDs[strings.ToLower(name)], a.ID) {
+				l.IDs[strings.ToLower(name)] = append(l.IDs[strings.ToLower(name)], a.ID)
+			}
 		}
 	}
 	return &l, nil
