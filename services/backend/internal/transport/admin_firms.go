@@ -64,6 +64,11 @@ const adminInvitations = `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::
 // member is assigned to are masked unless revealed; the number of assignments shows.
 func adminFirmPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	firm, reveal := r.PathValue("id"), r.URL.Query().Get("reveal") == "1"
+	// As the firm's own list does: expire and settle invitations first, so staff act on their real state.
+	if err := reconcileInvitations(context.WithValue(r.Context(), systemKey{}, true), db, firm); err != nil {
+		adminFirmProblem(w, err, "invitation check")
+		return
+	}
 	var people, invitations []byte
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		if err := adminFirmExists(ctx, tx, firm); err != nil {

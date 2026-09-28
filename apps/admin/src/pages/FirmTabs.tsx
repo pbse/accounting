@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { post, useResource, when } from "../api";
 import { usePermissions } from "../App";
 import { ActionForm } from "../components/ActionForm";
@@ -7,15 +7,37 @@ import { ActionForm } from "../components/ActionForm";
 const masked = "••••";
 const shown = (value: string) => (value === masked ? <span className="muted">hidden</span> : value);
 
+// useRevealable loads path, masked until someone reveals it with a reason. A reveal the server
+// refuses is dropped, with its error, so the masked view and the form come back.
+function useRevealable<T extends { revealed?: boolean }>(path: string) {
+  const [reason, setReason] = useState<string>();
+  const [failure, setFailure] = useState("");
+  const resource = useResource<T>(path, reason);
+  useEffect(() => {
+    if (reason !== undefined && resource.error) {
+      setFailure(resource.error);
+      setReason(undefined);
+    }
+  }, [reason, resource.error]);
+  return {
+    ...resource,
+    reveal: { pending: reason !== undefined && !resource.data?.revealed, shown: !!resource.data?.revealed, failure, show: (r: string) => { setFailure(""); setReason(r); }, hide: () => setReason(undefined) },
+  };
+}
+
 // Reveal asks why before showing client content; each reveal is recorded in the audit log.
-function Reveal({ revealed, onReveal, onHide }: { revealed: boolean; onReveal: (reason: string) => void; onHide: () => void }) {
+function Reveal({ reveal }: { reveal: ReturnType<typeof useRevealable>["reveal"] }) {
   const allowed = usePermissions().includes("platform:content");
-  if (revealed) return <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={onHide}>Hide it</button></p>;
+  if (reveal.shown) return <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={reveal.hide}>Hide it</button></p>;
+  if (reveal.pending) return <p role="status">Revealing…</p>;
   return (
-    <details>
-      <summary>Reveal client content</summary>
-      <ActionForm label="Reveal client content" allowed={allowed} onSubmit={async (reason) => onReveal(reason)} />
-    </details>
+    <>
+      {reveal.failure && <p role="alert">The content was not revealed: {reveal.failure}</p>}
+      <details>
+        <summary>Reveal client content</summary>
+        <ActionForm label="Reveal client content" allowed={allowed} onSubmit={async (reason) => reveal.show(reason)} />
+      </details>
+    </>
   );
 }
 
@@ -43,13 +65,12 @@ type Person = {
 type Invitation = { id: string; email: string; role: string; state: string; invited_by: string; created_at: string; expires_at: string | null; decided_at: string | null };
 
 export function FirmPeople({ firm }: { firm: string }) {
-  const [reveal, setReveal] = useState<string>();
-  const people = useResource<{ people: Person[]; invitations: Invitation[] }>(`/v1/admin/firms/${encodeURIComponent(firm)}/people`, reveal);
+  const people = useRevealable<{ people: Person[]; invitations: Invitation[]; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/people`);
   const operate = usePermissions().includes("platform:operate");
   const base = `/v1/admin/firms/${encodeURIComponent(firm)}`;
   return (
     <>
-      <Reveal revealed={!!reveal} onReveal={setReveal} onHide={() => setReveal(undefined)} />
+      <Reveal reveal={people.reveal} />
       {people.error && <p role="alert">{people.error}</p>}
       {!people.data && !people.error && <p role="status">Loading people…</p>}
       {people.data && (
@@ -128,17 +149,16 @@ type Event = { at: string; actor: string; kind: string; text: string; masked: bo
 const kinds = ["", "member", "client", "invitation", "agent_access", "agent.", "posting", "quickbooks", "xero", "stripe", "email", "workflow", "firm"];
 
 export function FirmActivity({ firm }: { firm: string }) {
-  const [reveal, setReveal] = useState<string>();
   const [kind, setKind] = useState("");
   const [offset, setOffset] = useState(0);
   const query = new URLSearchParams();
   if (kind) query.set("kind", kind);
   if (offset) query.set("offset", String(offset));
-  const activity = useResource<{ events: Event[]; has_more: boolean; next_offset: number }>(`/v1/admin/firms/${encodeURIComponent(firm)}/activity${query.size ? `?${query}` : ""}`, reveal);
+  const activity = useRevealable<{ events: Event[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/activity${query.size ? `?${query}` : ""}`);
   return (
     <>
       <p>The firm's recorded access decisions, connections, posting grants, work agents did, and workflow runs, newest first.</p>
-      <Reveal revealed={!!reveal} onReveal={setReveal} onHide={() => setReveal(undefined)} />
+      <Reveal reveal={activity.reveal} />
       <div className="filters">
         <label>Kind
           <select value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); }}>
@@ -176,12 +196,11 @@ type Entry = { id: number; staff_user: string; action: string; target_type: stri
 
 export function FirmAudit({ firm }: { firm: string }) {
   const [offset, setOffset] = useState(0);
-  const [reveal, setReveal] = useState<string>();
-  const audit = useResource<{ entries: Entry[]; has_more: boolean; next_offset: number }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${offset ? `?offset=${offset}` : ""}`, reveal);
+  const audit = useRevealable<{ entries: Entry[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${offset ? `?offset=${offset}` : ""}`);
   return (
     <>
       <p>Everything staff did to this firm, with their reasons, including actions that were refused and every reveal of client content. Why a refused action failed is hidden until revealed.</p>
-      <Reveal revealed={!!reveal} onReveal={setReveal} onHide={() => setReveal(undefined)} />
+      <Reveal reveal={audit.reveal} />
       {audit.error && <p role="alert">{audit.error}</p>}
       {!audit.data && !audit.error && <p role="status">Loading the audit…</p>}
       {audit.data && (

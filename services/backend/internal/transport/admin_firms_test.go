@@ -28,6 +28,7 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 	must(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_owner',true,'Founding partner of the firm','fixture'),($1,'user_leaver',true,'Hired for the Acme Secret Client','fixture')`, firm)
 	must(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_leaver','Acme Secret Client',true,'Assigned to the payroll close','fixture')`, firm)
 	must(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,state,invited_by,reason) VALUES($1,'new@firm.example','member','Member','sending','user_owner','Joining the team next week')`, firm)
+	must(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,'late@firm.example','member','Member',$2,'pending','user_owner','Joining the team last month',now()-interval '1 day')`, firm, "invitation_"+rand.Text())
 	must(`INSERT INTO workflow_runs(organization_id,workflow,idempotency_key,started_by,input,state,finished_at) VALUES($1,'test_admin_flow',$2,'schedule','{}','completed',now())`, firm, rand.Text())
 	h := apiWithStore(db, token)
 	base := "/v1/admin/firms/" + firm
@@ -36,6 +37,9 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 	people := mustString(adminJSON(t, h, token, "GET", base+"/people", "", 200))
 	if strings.Contains(people, "Acme Secret") || strings.Contains(people, "Founding partner") || !strings.Contains(people, `"subject":"user_leaver"`) || !strings.Contains(people, "new@firm.example") {
 		t.Fatalf("people must show identities and mask client text: %s", people)
+	}
+	if !strings.Contains(people, `"state":"expired"`) {
+		t.Fatalf("an invitation past its expiry is listed as expired: %s", people)
 	}
 	adminJSON(t, h, token, "GET", base+"/people?reveal=1", "", 422)
 	if revealed := mustString(adminJSON(t, h, token, "GET", base+"/people?reveal=1", "", 200, "X-Access-Reason", "the firm asked who has Acme")); !strings.Contains(revealed, "Acme Secret Client") {
@@ -89,7 +93,7 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 
 	// An open invitation is revoked once.
 	var invitation string
-	if err := db.QueryRow(`SELECT id::text FROM member_invitations WHERE organization_id=$1`, firm).Scan(&invitation); err != nil {
+	if err := db.QueryRow(`SELECT id::text FROM member_invitations WHERE organization_id=$1 AND state='sending'`, firm).Scan(&invitation); err != nil {
 		t.Fatal(err)
 	}
 	adminJSON(t, h, token, "POST", base+"/invitations/"+invitation+"/revoke", `{"reason":"Sent to the wrong address"}`, 200)

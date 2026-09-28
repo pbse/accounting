@@ -143,6 +143,16 @@ func invitationEnrollment(ctx context.Context, db *sql.DB, org, sub string) bool
 // settleInvitations resolves sends WorkOS did not confirm, and sends revoked before they were confirmed, from WorkOS's
 // own list. Only an invitation that matches the send's firm, address, role and inviter, created around the send, is
 // taken as it; anything absent or ambiguous stays unsettled.
+// reconcileInvitations brings the firm's invitations up to date before they are listed: pending ones past their expiry
+// expire, and, with a WorkOS key, sends WorkOS completed but the app did not record are settled.
+func reconcileInvitations(ctx context.Context, db *sql.DB, org string) error {
+	_, err := db.ExecContext(ctx, `UPDATE member_invitations SET state='expired',decided_at=now() WHERE organization_id=$1 AND state='pending' AND expires_at<=now()`, org)
+	if err == nil && os.Getenv("WORKOS_API_KEY") != "" {
+		err = settleInvitations(ctx, db, org)
+	}
+	return err
+}
+
 func settleInvitations(ctx context.Context, db *sql.DB, org string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -221,10 +231,7 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		org := organization(r)
-		_, err := db.ExecContext(r.Context(), `UPDATE member_invitations SET state='expired',decided_at=now() WHERE organization_id=$1 AND state='pending' AND expires_at<=now()`, org)
-		if err == nil && os.Getenv("WORKOS_API_KEY") != "" {
-			err = settleInvitations(r.Context(), db, org)
-		}
+		err := reconcileInvitations(r.Context(), db, org)
 		var raw []byte
 		if err == nil {
 			err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(to_jsonb(i) - 'organization_id' - 'workos_id' ORDER BY i.state NOT IN ('sending','pending'),i.id::bigint DESC),'[]'::jsonb) FROM (SELECT member_invitations.id::text AS id,organization_id,email,role_name,workos_id,state,invited_by,reason,subject,expires_at,created_at,decided_at FROM member_invitations WHERE organization_id=$1 ORDER BY member_invitations.id DESC LIMIT 50) i`, org).Scan(&raw)
