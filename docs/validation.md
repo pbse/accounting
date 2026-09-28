@@ -2579,3 +2579,18 @@ Tests: `TestServerSessionKeepsWorkOSTokensOnTheServer` mocks WorkOS's signing ke
 Code review: GPT-6 Sol (reasoning high) found that the staff console (`/admin`, added by #168) still uses WorkOS's browser session, so server mode covers only the firm workspace (now stated in the docs and left for a follow-up, since bringing it over needs its own staff-organization sign-in); that a refreshed token whose signing key could not be fetched ended the session (it now keeps the session and WorkOS's rotated refresh token and answers 503); that WorkOS rate limiting (429) ended the session (it is now temporary); that a failed sign-out still left the page (it now stays and says so); that a session check failing for any reason other than 401 showed the sign-in prompt (it now says the session could not be checked); and that startup validation was skipped without a database (it now runs first). Gemini (agy-review, on a separate copy) approved, noting that `..` segments could leave the workspace after sign-in (the return path must now equal its cleaned form) and that the session check left a dead cookie (it now clears it). A second delta review found the key-failure branch also kept sessions whose refreshed token had invalid claims; the verifier now reports signing-key problems as `auth.ErrSigningKeys`, only that keeps the session, and any other verification failure ends it. Tests add a 429, a refreshed token with an unknown signing key followed by a refresh with the rotated token, a refreshed token with no WorkOS session (ends the session), a `..` return path, a dead cookie cleared by the session check, and an unknown mode refused without a database; each fails without its fix.
 
 Not verified: a real WorkOS sign-in, refresh and sign-out on the deployed site, which needs the activation steps in [sign-in session](auth-sandbox-staging.md#sign-in-session).
+
+## Worker loops survive a panic; pooled runtime URLs are refused (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- The worker's fifteen background loops each run under `supervise` in `cmd/worker/main.go`. A panic is logged with its stack, recorded on the `worker` heartbeat's `detail`, and the loop restarts 30 seconds later; the others keep running. A loop that returns (the Xero row backfill) stays finished. The admin overview shows the latest panic beside the worker's heartbeat. Three panics in one loop without ten clean minutes between them fail the worker's `/healthz`, which the queue Worker's cron checks every minute, for fifteen minutes.
+- `OpenTenantDB` refuses a host or fallback host containing `-pooler`, and both deploy workflows refuse such a runtime `DATABASE_URL` before migrating. The firm is a session setting (`set_config(..., false)`), which a transaction pooler could share between firms.
+
+Checks:
+- `go test ./cmd/worker`: a loop that panics once runs twice and reports one panic with its stack; after cancellation it is not restarted.
+- `TestRepeatedPanicsFailHealth`: two panics leave `/healthz` at 200; three fail it with 503.
+- `TestOpenTenantDBRefusesPooler`: a Neon `-pooler` URL, or a direct host with a `-pooler` fallback, is refused; direct hosts open.
+
+Not verified: whether production's `DATABASE_URL` is direct. The next production deploy's configuration check will fail if it is pooled; replace the secret with the direct endpoint in that case.

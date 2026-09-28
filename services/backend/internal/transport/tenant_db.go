@@ -6,9 +6,11 @@ import (
 	"database/sql/driver"
 	"errors"
 	"net/http"
+	"strings"
 
 	"close.local/backend/internal/auth"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -47,6 +49,12 @@ func OpenTenantDB(url, fallback string) (*sql.DB, error) {
 	config, err := pgx.ParseConfig(url)
 	if err != nil {
 		return nil, err
+	}
+	// The firm is a session setting; a transaction pooler could hand one firm's session to another's statement.
+	for _, host := range append([]*pgconn.FallbackConfig{{Host: config.Host}}, config.Fallbacks...) {
+		if strings.Contains(strings.ToLower(host.Host), "-pooler") {
+			return nil, errors.New("DATABASE_URL must be a direct connection, not a transaction pooler")
+		}
 	}
 	return sql.OpenDB(tenantConnector{stdlib.GetConnector(*config), fallback}), nil
 }

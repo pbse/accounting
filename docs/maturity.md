@@ -1,0 +1,132 @@
+# Product maturity and design-partner readiness
+
+**Status:** working handoff, 2026-09-28. This document records the product judgment and build priorities from the maturity review. It is not a claim that a hosted environment or a real client close has been validated. Before acting on any item, recheck the current code, [delivery backlog](implementation-backlog.md), [validation history](validation.md), and [deployment guide](deployment.md); these change faster than this assessment.
+
+## The objective
+
+Build an **agent-first accounting preparation system for firms**. The system should own supported work across a client portfolio: collect permitted evidence, inspect the ledger, investigate differences, prepare calculations and drafts, follow up on missing information, react to changes, and return a compact set of decisions. The firm supplies accounting judgment and approval. The connected ledger remains the ledger of record.
+
+The desired first impression is not a clever chat answer or one polished calculator. A firm should see that the agent has already moved a real close forward and can explain its work. The target demonstration is: **the agent managed the portfolio, finished supported work, brought only decisions to the firm, and kept the close current when facts changed**. It should work across at least two periods, with deliberately messy evidence, not just one idealized invoice.
+
+The founder does not want design partners to be the test team for basic bugs or missing workflows. Use independent accounting review, authorized historical books, and an internal regression corpus before putting client work in a partner's hands. Partners should evaluate value, fit, and willingness to pay; they will still uncover edge cases, but should not discover that the core flow fails.
+
+**Existing authority decision:** people approve anything sent to a client or written to a connected system. The agent must not grant itself accounting authority, confirm policy, approve its own work, post, or sign off. This is compatible with agent-first preparation. Reduce human effort by letting source-verified facts advance to **drafts** and grouping review around workpapers and exceptions, while keeping external effects and final decisions human-approved. See [backlog decisions](implementation-backlog.md#decisions) and [agent contract](architecture.md#identity-and-authority).
+
+## Current verdict
+
+| Dimension | Assessment | Evidence and limitation |
+| --- | --- | --- |
+| Accounting calculations and ledger-write controls | Strong engineering design | Exact money arithmetic, explicit grants, a durable one-attempt write, canonical readback, and unknown-outcome blocking exist. Provider behavior and actual accounting output remain unproven on real books. |
+| Agent preparation | Real but narrow | Durable intake, model evidence selection/interpretation, close goals, coverage, recurring schedules, and request resumption exist. Most model uses are single structured calls. The assistant mostly routes fixed phrases; model-written answers are opt-in. |
+| Review and continuity | Broad foundation | Source links, workpaper versions, change review, sign-off, binders, carry-forward, firm methods, and standing approvals exist. The system still asks a person to confirm extracted facts before a draft, and change propagation is incomplete in some paths. |
+| Hosted operations | Controls in code, activation unproven | RLS, readiness, retention, alerts, heartbeat, and local synthetic restore rehearsal exist. Actual runtime settings, external monitoring, live alert delivery, hosted restore, and recovery time were not checked. |
+| Product validation | Missing | No documented accountant-reviewed close on real books, held-out extraction benchmark, measured savings, or demonstrated second-month repeatability. Mocked providers and synthetic data dominate validation. |
+| Commercial readiness | Discovery and disclosed demo only | Contact route is unfinished; pilot data terms, privacy/AI disclosures, connector approval and customer operations need work. Billing code can wait for manually invoiced pilots. |
+
+**Readiness call:** begin design-partner discovery with a clearly labeled demonstration. A supervised, read-only shadow close requires the correctness and hosted gates below. Do not claim routine live close readiness, autonomous accounting judgment, production posting validation, or observed time savings yet. Investor conversations can present a technology thesis and progress, but outcome claims must come from dated pilot evidence rather than the roadmap.
+
+## Product and code already present
+
+The [backlog](implementation-backlog.md) has the fuller feature inventory. The relevant foundation includes:
+
+- Firm/client access through WorkOS, client assignments, PostgreSQL row-level security, and server-side permission checks.
+- QuickBooks and Xero connection/capture paths, ledger reports and transaction indexes, account coverage, exception checks, tie-out, changes from last month, and read-only ledger certification.
+- PDF/TXT/CSV evidence intake, OCR, scan gates, forwarded intake, source revisions, client links, email/reply paths, and durable preparation jobs.
+- Reconciliation, prepaid, accrual, loan, owner, depreciation, settlement, and other supported workpaper calculations, with exact arithmetic and accountant-approved methods.
+- Work, Attention, review canvas, consolidated requests, bulk approval where eligible, close readiness/sign-off, portable binder, and year-end handoff.
+- Recurring schedules, firm procedures and learned rules, standing approval for bounded later periods, client memory, delegated close goals, and monthly hand-over.
+- Controlled QuickBooks/Xero write code, preview/rehearsal, production grants, one attempt and readback; most kinds are disabled until activation checks.
+- MCP access to existing capabilities, a Go workflow engine (W1-W3), and an initial platform admin foundation. Model-backed plan generation is deferred; neither constitutes a proven autonomous close.
+
+Do not equate code-backed, locally tested, configured, live-provider tested, and accountant accepted. The [deployment guide](deployment.md), [onboarding acceptance matrix](onboarding.md#staging-acceptance-matrix), and [validation history](validation.md) preserve those distinctions. The homepage's “in development” language is appropriate; the [contact page](../apps/frontend/src/features/marketing/Contact.tsx) currently leads to “Our contact channel is coming soon.” The sidebar still says “Sandbox posting only” even though controlled production code exists, and some README deployment text lags current code. Align public copy with actual activation.
+
+## The competitive bar
+
+Public claims checked on 2026-09-28 are marketing claims, not independently verified comparative performance:
+
+| Product | Public positioning relevant to this pitch |
+| --- | --- |
+| [Basis](https://www.getbasis.ai/) | Agents that take on long-horizon firm work and let accountants start at review; markets end-to-end CAS close. |
+| [Double](https://doublehq.com/scale/) | AI transactions and workpapers, accruals, reusable skills, close workflow, and emerging agents. Its [public product update](https://help.doublehq.com/en/articles/6283095-double-take-webinar-series) describes agents in private beta as of August 2026. |
+| [Xenett](https://www.xenett.com/software-for-bookkeepers) | Automated financial checks, close management, accruals, review, QBO/Xero firm operations. |
+| [Numeric](https://www.numeric.io/product/cash-matching) | Automated cash matching, reconciliation, variance explanation, and broader close workflow, primarily for corporate accounting. |
+
+Therefore a single prepaid or bank workpaper, a checklist, a generic “AI assistant,” or more feature names will not look ahead of the market. The credible distinction to test is the **combination** of portfolio-scale proactive work, source-to-ledger investigation, firm-specific method memory, governed client follow-through, live change propagation, and exact approval/readback. Do not claim “10 steps ahead” until prospects compare this working experience with their alternatives and measured results support it.
+
+## The integrated demonstration to build
+
+Show one supported US, single-entity, USD service-business close on QuickBooks read-only, then show the next month. The scenario must include a statement, invoices, ledger transactions, a missing answer, a late changed source, an approved firm method, and a supported proposed adjustment. Keep unsupported accounts and unresolved questions explicit. The demo may start from a resettable realistic fixture, but run the same path against authorized historical books internally before calling it reliable.
+
+1. **Before login: portfolio operator.** Scheduled captures and delegated goals have started the supported work. The firm sees which clients are prepared, waiting on review, waiting on evidence, stale, or blocked, with last-ledger-read time and account coverage. Opening a client reveals what the agent did and why. Existing base: [close coordinator](close-coordinator.md), [Work](work-inbox.md), [ledger capture](quickbooks-onboarding.md). Finish the automatic start, truthful status, freshness, and recovery path; do not require a command to begin every close.
+2. **Investigation rather than anomaly list.** Ask “Why is this prepaid balance different?” The agent reads the current invoice, prior schedule, Trial Balance, relevant ledger rows and approved procedure, then produces a cited explanation and a supported draft or a precise question. Implement a bounded, read-only model tool loop over existing permission-checked capabilities, with step limits and a saved trace. It may invoke the existing prepare capability for a draft, but cannot approve or create external effects. Reuse the Go capability layer; no second accounting engine. Current [chat](../services/backend/internal/transport/chat.go) is chiefly keyword routing; opt-in written answers are single-shot and do not perform an investigation.
+3. **Straight-through draft preparation.** For selected source types, verify each extracted money/date value against the exact cited line or structured export; check client identity, period, source revision, method eligibility, and cross-source conflicts. When every required fact passes, prepare a draft without a separate field-by-field human confirmation. Ambiguous or unsupported facts remain questions. The accountant reviews the workpaper, source and proposed effect. This is a proposed change to the current [confirmation gate](../services/backend/internal/transport/work.go); it does not auto-approve accounting treatment or posting.
+4. **Client follow-through.** Agent combines missing evidence into one proposed request. A person approves sending. A client supplies a partial answer and then the final document; the system authenticates, scans/releases as required, resumes affected work, and produces the updated draft without a manual restart. Existing parts are in [client request links](client-request-links.md), [coverage requests](coverage-requests.md), and [email delivery](email-delivery.md). Activate real provider and scanner routes, and verify the entire sequence, including stale links/replies.
+5. **Living close.** Replace an invoice or add a late ledger entry. The system identifies affected work, refreshes the source and snapshot, recalculates the draft, invalidates stale approval, and shows only the relevant before/after difference plus the full support. Other current approvals should stand. Existing [change review](change-review-and-requests.md) and [workpaper review](workpaper-review.md) are a base, but automatic dependent recalculation needs an end-to-end proof.
+6. **Month two learns and carries.** The next period opens and prepares under the approved firm method, prior schedule and current ledger evidence. It calls out changed terms; unchanged, explicitly covered later-month drafts can use standing approval. Existing [procedures](firm-procedures.md), [carry-forward](carry-forward.md), and [goals](close-coordinator.md) are the base. Prove one ordinary and one changed second month.
+7. **Governed finish.** Show close rehearsal, a human-approved sandbox journal, exact provider readback, sign-off of the declared scope, and a portable binder. Production posting is separate and remains gated by live provider validation and explicit client authority. An unmatched or unsupported reconciliation must never become a silently “complete” close. See [production posting](production-posting.md) and [close package](close-review-package.md).
+
+The demo narrative should be one connected journey, not seven unrelated tabs. The strongest moment is a late change or client answer causing the agent to resume, update the affected conclusion, and return a focused decision. Show a deliberate refusal too: a conflicting amount, missing page, or unsupported treatment that the system does **not** paper over.
+
+## Build order and acceptance gates
+
+These are ordered dependencies, not a mandate to build another platform. Reuse existing helpers, routes, jobs, and calculations before adding code. Keep the supported first scenario explicit; more schedule types, Xero breadth, generic plan builders, or further dashboard modules do not improve this pitch until the journey works.
+
+### Gate 0 — fix correctness and operator traps
+
+- Check that extracted numeric/date `Value` agrees with its `Quote`, in addition to the current unique quote-location check in [agent.go](../services/backend/internal/preparation/agent.go). Regression: a quote of `1,200.00` with a value of `12000.00` must not appear as a verified candidate.
+- Ensure a later QuickBooks entry is picked up automatically after the first month-end capture or clearly forces a fresh capture before “current” is claimed. The [first-period query](../services/backend/internal/quickbooks/sync.go) currently requires no previous period snapshot. Treat freshness in the client's business period, not merely UTC rollover.
+- Make tie-out differences affect close readiness, or require an explicit scoped variance acceptance with source/reason. The [readiness function](../services/backend/internal/transport/readiness.go) currently does not read tie-out. A signed scope must not imply the balances tie when they do not.
+- Permit safe in-app reconciliation of a QuickBooks `executing` journal whose ID was lost, after a person finds the exact ID and canonical readback proves it. Current [verify path](../services/backend/internal/transport/production_posting.go) only accepts a newly supplied ID when state is `unknown`; never retry the uncertain write.
+- Validate client link existence and revocation before parsing a submission, preserving passcode behavior. Currently [client request](../services/backend/internal/transport/client_requests.go) checks token shape/passcode first, then [submission parsing](../services/backend/internal/transport/attachments.go) may buffer up to 21 MiB before link lookup.
+- **Done 2026-09-28:** each worker loop restarts 30 seconds after a panic, and the admin overview shows the latest one. Was: contain worker panics at process/job boundaries and make recovery visible. Most loops in [worker main](../services/backend/cmd/worker/main.go) run as bare goroutines; a panic can terminate the process. The workflow engine catches some panics, but that does not cover the other loops.
+- **Done 2026-09-28:** the deploy workflows, API and worker refuse a `-pooler` runtime host. Was: reject a transaction-pooled runtime `DATABASE_URL` or change tenant isolation to transaction-local context. [tenant_db.go](../services/backend/internal/transport/tenant_db.go) caches a session-level tenant; the [deployment guide](deployment.md#database-setup) says to use a direct connection, while current deploy checks reject a pooler for the migration URL only. Actual production configuration was not inspected.
+
+Do not add a blanket retry to ledger writes. Read-only QuickBooks/Xero calls may use bounded status-aware backoff; uncertain external writes retain one-attempt/readback semantics. Intuit [documents 429 throttling](https://static.developer.intuit.com/output_html/qbo/docs/learn/limits-and-throttles.html).
+
+### Gate 1 — quality corpus and internal accounting acceptance
+
+- Secure permission to use de-identified historical client packages or other authorized real books, with an accountant outside the build team. A design partner should not be the first person to exercise the pipeline on realistic records.
+- Begin with roughly 20 varied client-month packages and 100 documents across at least two periods; these are planning targets, not statistically sufficient proof. Include clean and adversarial cases: repeated quotes, OCR errors, decimal-place errors, wrong client, stale ledger entry, duplicate invoices, missing statement page, partial reply, ambiguous match, wrong-side balance, and unsupported accounting method.
+- Store expected extracted fields, source locations, account/period identity, workpaper results, unresolved questions, and human decisions. Run each package through the actual extraction/agent/calculation flow after relevant changes. Keep a held-out subset. Prefer a small versioned replay harness over a new evaluation platform. The model's confidence score is not an accounting check.
+- Score **false accepted facts**, missed material exceptions, false “ready” states, draft correctness, review edits, time to first useful draft, total firm setup/preparation/review/correction minutes, and our own assistance time. Report per work type and failure mode rather than one vague accuracy percentage. A zero-error result on a finite set is a release gate for that set, not a general 100% guarantee.
+- Have a qualified accountant approve the supported treatment examples and the wording of unresolved cases. Use one independent person to attempt onboarding and the full scenario without live help from the builders.
+
+### Gate 2 — make the agent perform the complete journey
+
+- Build the automatic portfolio start/freshness path, bounded investigation tools, source-verified draft advancement, client reply resumption, change-triggered recalculation, and second-month memory in the order above.
+- Keep every agent action attributable and inspectable: input sources and revisions, tools/capabilities used, deterministic calculation, blocked reason, model/version, human changes, and current state. Do not expose chain-of-thought or treat fluent model text as evidence.
+- Ensure an unsupported client can still have a useful partial result: exactly which accounts and documents were covered, which were not, what the agent asks next, and whether sign-off covers them.
+
+### Gate 3 — hosted reliability and pilot readiness
+
+- Use local PostgreSQL for development/tests under [AGENTS.md](../AGENTS.md). Never create a Neon branch. Apply migrations to a local disposable database and run the real-Postgres integration suite and end-to-end scenario. The previous review ran TypeScript checks, eight Node tests, and focused Go package tests successfully; it did **not** run PostgreSQL integration tests because Docker access was denied in that environment.
+- Exercise a QuickBooks sandbox and an authorized historical period. Test OAuth expiry/reconnect, pagination and 429s, daily refresh, late entries, interrupted jobs, client replies, stale approvals, and readback. Use real model calls on the authorized corpus, not only mocked transport.
+- Set up a custom protected hostname and required PDF scanning before client PDFs. Cloudflare [malicious upload detection](https://developers.cloudflare.com/waf/detections/malicious-uploads/) currently requires Enterprise with a paid add-on; if unavailable, pilot only evidence types the configured scanner safely accepts. Do not bypass quarantine.
+- Configure an **external** uptime/worker monitor and the existing optional alert receiver, validate delivery, perform a timed hosted restore with matching encryption key and external-effect reconciliation, and document who responds. An in-worker alert cannot report its own process outage. See [operations](operations.md).
+- For live QuickBooks access, complete Intuit's [production app assessment](https://help.developer.intuit.com/s/question/0D5TR00000pDmO10AK/is-it-possible-to-have-a-production-access-to-a-company-us-uk-so-we-can-confirm-everyting-is-working-as-it-should-we-have-finished-developing-our-features-in-our-software-it-works-fine-on-sandbox-is-it-possible-to-test-in-a-production-company). Xero's initial connection/certification rules differ by tier; its advanced **Journals** endpoint requires separate approval, while this product's write path uses **ManualJournals**. Verify current scopes and terms rather than treating every Xero pilot as blocked by Journals approval ([Xero pricing](https://developer.xero.com/pricing)).
+- Prepare pilot terms, a working contact channel, privacy/subprocessor and AI data statements, retention/deletion terms, and a support contact before admitting files. `store:false` in OpenAI requests does not prove zero data retention; the provider describes [separately approved controls](https://platform.openai.com/docs/models/default-usage-policies-by-endpoint). Manual invoicing suffices for early pilots.
+
+## Demonstration and claim discipline
+
+**Design-partner pitch now:** show a labeled synthetic or de-identified integrated demonstration, say which connectors and mail paths are live, and ask the firm to judge the value of decisions returned versus its current close. Do not position a mocked provider response as a live integration.
+
+**Supervised shadow pilot after gates:** run beside the existing process, read-only at first. The named accountant compares the outputs to the ordinary close and records corrections and total labor. Use one QuickBooks sandbox plus one authorized historical period; repeat in the following month if possible. Add production writes only after operation-specific sandbox checks, client grant, hosted monitoring and a separate decision.
+
+**Investor evidence:** show the end-to-end demonstration, dated real-close results, before/after total human minutes, supported coverage, false-positive/false-ready cases, repeat-month results, our own service labor, and the limits of the sample. The [PRD pilot section](product-requirements.md#18-shadow-pilots-actual-use-and-fundraising-evidence) already states the distinction between a target and an observed result. Repository breadth and commit count are not substitutes for customer proof.
+
+**Language:** “agent-prepared, firm-approved” is accurate today. “Agent-first” becomes credible when the system starts and resumes supported work without a person driving each step. “Autonomous close,” “reconciled,” “verified citation,” “production-ready,” “tamper-evident audit log,” or a savings percentage each requires its own specific proof. The platform audit table has database append-only triggers; ordinary product histories should not be marketed as tamper-evident merely because handlers append by convention.
+
+## What to defer
+
+- More accounting methods, Xero breadth, Stripe variants, Daily Books expansion, a general agent planner, or a second workflow engine until the integrated QBO close passes the gates. Existing code may still be shown as optional depth when honestly activated.
+- Native `.xlsx` generation unless firms' real review/export workflow needs it; schedules and reconciliation CSVs already exist in the binder. Keep exported spreadsheet needs on the pilot interview list.
+- Automatic client sending or ledger posting. This contradicts the recorded human-approval boundary. Automate **preparation and follow-through up to the approval**, not the approval itself.
+- Billing infrastructure for first pilots; manual invoices are sufficient. Do not defer the contact channel, consent, privacy and support paths.
+
+## Handoff for the next agent
+
+1. Treat this as a priority and evidence record, not permission to activate providers, send client mail, post to a ledger, create hosted resources, or use real client data. Those actions need their own authorized setup and prerequisites.
+2. Recheck current code and docs before changing it. Search every caller of a shared function before a bug fix. Preserve exact arithmetic, tenant isolation, approval boundaries, uncertain-write handling, and source/version lineage.
+3. Start with Gate 0 and the smallest meaningful checks for each nontrivial fix. Use only local PostgreSQL for local tests; never create a Neon branch.
+4. When implementing the integrated journey, reuse the existing Go capabilities, durable jobs, review routes, MCP adapter and workflow primitives. A new framework or generic abstraction is justified only by a demonstrated need in this journey.
+5. Record validation by level: pure/local test, local PostgreSQL, live provider sandbox, hosted staging, accountant-reviewed real books, and production activation. Do not promote one level into another in the docs or UI.
