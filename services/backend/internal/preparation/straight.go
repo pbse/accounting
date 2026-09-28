@@ -90,9 +90,12 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		if identity && !endsLine(f.Candidates[0].Quote, f.Value) {
 			return Plan{}, "the cited text does not show the " + f.Label + " as a whole"
 		}
-		// An order or reference number is not the invoice number; its line must say so.
-		if f.Field == "invoice_number" && !invoiceLine(f.Candidates[0].Quote, f.Value) {
+		// An order or reference number is not the invoice number, and a ship-to name is not who is billed; the line must say which.
+		if f.Field == "invoice_number" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"invoice"}, []string{"order", "reference"}) {
 			return Plan{}, "the cited line does not name the number as the invoice number"
+		}
+		if f.Field == "billed_to" && !lineSays(f.Candidates[0].Quote, f.Value, []string{"bill", "invoice to", "sold to", "customer", "client"}, []string{"ship", "deliver"}) {
+			return Plan{}, "the cited line does not say the invoice is billed to that name"
 		}
 		facts[f.Field] = f.Value
 	}
@@ -149,6 +152,10 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 				Amount                        json.Number
 				AccountBasedExpenseLineDetail *struct{ AccountRef accountRef }
 				JournalEntryLineDetail        *struct{ AccountRef accountRef }
+				DepositLineDetail             *struct {
+					AccountRef accountRef
+					Entity     struct{ Name string }
+				}
 			}
 		}
 		if json.Unmarshal(row.Record, &record) != nil {
@@ -158,10 +165,15 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		if party == "" {
 			party = record.EntityRef.Name
 		}
+		for _, line := range record.Line {
+			if line.DepositLineDetail != nil && party == "" {
+				party = line.DepositLineDetail.Entity.Name
+			}
+		}
 		mentioned := printed(text, party)
 		fromVendor := party != "" && strings.EqualFold(party, vendor)
 		mine := fromVendor && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number))
-		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || ((row.Kind == "VendorCredit" || record.Credit) && (mentioned || fromVendor)) || mine) {
+		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || ((row.Kind == "VendorCredit" || record.Credit) && (mentioned || fromVendor)) || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
 		// The invoice's own bill must book the whole amount to the expense account and nothing else anywhere.
@@ -173,17 +185,22 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 				account = line.AccountBasedExpenseLineDetail.AccountRef
 			} else if line.JournalEntryLineDetail != nil {
 				account = line.JournalEntryLineDetail.AccountRef
+			} else if line.DepositLineDetail != nil {
+				account = line.DepositLineDetail.AccountRef
 			}
 			name := account.Name
 			if name == "" {
 				name = ledger.Accounts[account.Value]
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
-			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || record.Credit || mentioned || fromVendor) {
+			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || row.Kind == "VendorCredit" || record.Credit || mentioned || fromVendor) {
 				return "", "a captured " + row.Kind + " in the close month has a line whose account cannot be named"
 			}
 			if row.Kind == "JournalEntry" && (onExpense || onPrepaid) {
 				return "", "a journal in the close month posts to the expense or prepaid account"
+			}
+			if row.Kind == "Deposit" && (mentioned || fromVendor || onExpense || onPrepaid) {
+				return "", "a deposit in the close month may refund what this invoice expensed"
 			}
 			if row.Kind == "VendorCredit" && (mentioned || fromVendor || onExpense || onPrepaid) {
 				return "", "a vendor credit in the close month may change what this invoice expensed"
@@ -231,12 +248,23 @@ type accountRef struct {
 	Name  string `json:"name"`
 }
 
-// invoiceLine reports whether the quoted line ending with the number calls it an invoice, not an order or reference.
-func invoiceLine(quote, number string) bool {
-	want := documents.NormalizeEntity(number)
+// lineSays reports whether the quoted line ending with the value contains one of the words that give it its meaning
+// and none of the words that give it another.
+func lineSays(quote, value string, any, none []string) bool {
+	want := documents.NormalizeEntity(value)
 	for _, line := range strings.Split(quote, "\n") {
 		normal := documents.NormalizeEntity(line)
-		if strings.HasSuffix(normal, want) && strings.Contains(normal, "invoice") && !strings.Contains(normal, "order") && !strings.Contains(normal, "reference") {
+		if !strings.HasSuffix(normal, want) {
+			continue
+		}
+		ok := false
+		for _, word := range any {
+			ok = ok || strings.Contains(normal, word)
+		}
+		for _, word := range none {
+			ok = ok && !strings.Contains(normal, word)
+		}
+		if ok {
 			return true
 		}
 	}
@@ -267,7 +295,7 @@ func printed(text, term string) bool {
 }
 
 // CloseLedger is the newest completed capture of the close month on the close's reading connection, with its
-// current evidence entry and its bill, purchase, journal and vendor credit rows (a newer sync that found the books
+// current evidence entry and its bill, purchase, journal, vendor credit and deposit rows (a newer sync that found the books
 // unchanged reuses them); nil when a newer capture is still pending or failed,
 // or there is none.
 func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, error) {
@@ -281,7 +309,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT t.kind,t.provider_id,t.txn_date::text,COALESCE(t.currency,''),t.record FROM quickbooks_transaction_rows t JOIN quickbooks_entity_syncs s ON s.id=t.sync_id WHERE s.evidence_id::text=$1 AND t.kind IN ('Bill','Purchase','JournalEntry','VendorCredit')`, l.Source.ID)
+	rows, err := tx.QueryContext(ctx, `SELECT t.kind,t.provider_id,t.txn_date::text,COALESCE(t.currency,''),t.record FROM quickbooks_transaction_rows t JOIN quickbooks_entity_syncs s ON s.id=t.sync_id WHERE s.evidence_id::text=$1 AND t.kind IN ('Bill','Purchase','JournalEntry','VendorCredit','Deposit')`, l.Source.ID)
 	if err != nil {
 		return nil, err
 	}

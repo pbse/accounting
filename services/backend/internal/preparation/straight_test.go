@@ -17,10 +17,12 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		f.Optional = true
 		return f
 	}
+	billedTo := optionalFact("billed_to", "Example")
+	billedTo.Candidates[0].Quote = "Bill to: Example"
 	invoiceNumber := optionalFact("invoice_number", "INV-778")
 	invoiceNumber.Candidates[0].Quote = "Invoice INV-778"
 	proposal := Proposal{Kind: "prepaid", Engine: "openai", Sources: []Source{{ID: "1", Digest: "d", Name: "insurance.pdf", Role: "invoice"}},
-		Facts: []Fact{fact("amount", "1200.00"), fact("service_start", "2026-09-01"), fact("service_end", "2027-08-31"), fact("currency", "USD"), {Field: "expense_account", Label: "expense account"}, {Field: "prepaid_account", Label: "prepaid account"}, {Field: "booked_balance", Label: "booked balance", Optional: true}, optionalFact("vendor", "Acme Insurance Co"), optionalFact("billed_to", "Example"), invoiceNumber}}
+		Facts: []Fact{fact("amount", "1200.00"), fact("service_start", "2026-09-01"), fact("service_end", "2027-08-31"), fact("currency", "USD"), {Field: "expense_account", Label: "expense account"}, {Field: "prepaid_account", Label: "prepaid account"}, {Field: "booked_balance", Label: "booked balance", Optional: true}, optionalFact("vendor", "Acme Insurance Co"), billedTo, invoiceNumber}}
 	invoice := "Acme Insurance Co\nInvoice INV-778\nPO-123\nBill to: Example\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027\n\nPay online with Stripe"
 	procedure := Procedure{ID: "7", Kind: "prepaid", Method: prepaids.Method, ExpenseAccount: "Insurance", PrepaidAccount: "Prepaid Expenses", Enabled: true}
 	row := func(kind, id, date, vendor, number, account, amount string) LedgerRow {
@@ -70,10 +72,12 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	other := proposal
 	other.Facts = append([]Fact(nil), proposal.Facts...)
 	other.Facts[8] = optionalFact("billed_to", "Other Co")
+	other.Facts[8].Candidates[0].Quote = "Bill to: Other Co"
 	if _, reason = StraightThrough(other, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared an invoice billed to another company")
 	}
 	other.Facts[8] = optionalFact("billed_to", "Example Services LLC")
+	other.Facts[8].Candidates[0].Quote = "Billed to Example Services LLC"
 	if _, reason = StraightThrough(other, invoice, []string{"Example Services, LLC"}, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("confirmed alias not accepted", reason)
 	}
@@ -100,6 +104,9 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"unnamed account on a credit":   {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
 		"amount cited from support":     {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
 		"line-less card credit":         {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"ship-to cited as billed-to":    {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Ship to: Example" }, ledger(bill), false},
+		"refund deposit":                {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "82", Date: "2026-09-15", Record: json.RawMessage(`{"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Insurance"},"Entity":{"Name":"Someone"}}}]}`)}), false},
+		"deposit from the vendor":       {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Deposit", ProviderID: "83", Date: "2026-09-15", Record: json.RawMessage(`{"Line":[{"Amount":100,"DepositLineDetail":{"AccountRef":{"name":"Bank"},"Entity":{"Name":"Acme Insurance Co"}}}]}`)}), false},
 		"order number cited as invoice": {func(p *Proposal, _ *Procedure) { p.Facts[9].Candidates[0].Quote = "Purchase order INV-778" }, ledger(bill), false},
 		"discount line on the bill":     {func(*Proposal, *Procedure) {}, ledger(discounted), false},
 		"other account on the bill":     {func(*Proposal, *Procedure) {}, ledger(twoAccounts), false},
