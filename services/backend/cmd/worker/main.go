@@ -43,5 +43,6 @@ func main() {
 	go transport.RunChatExpiry(ctx, db)
 	go transport.RunCloseGoals(ctx, db)
 	go wf.Run(ctx, db)
+	go transport.RunHeartbeat(ctx, db, "worker")
 	transport.Run(transport.Worker())
 }

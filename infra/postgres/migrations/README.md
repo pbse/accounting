@@ -108,3 +108,5 @@ Fresh Compose volumes run every migration automatically, without the ledger; to 
 `094_workflow_engine.sql` creates the workflow engine's tables: runs, steps, events and plans, each with row-level security by firm (a `NULL` firm is platform work, visible to system work only). It is the only migration the engine needs; new workflows are directories, not schema. Apply it before deploying a build whose worker runs the engine. See [workflow engine](../../../docs/workflow-engine.md).
 
 `097_shared_plan_templates.sql` lets every firm read a plan template that belongs to no firm, so a firm can copy a shared template into a draft of its own. It adds reading only.
+
+`098_admin.sql` adds the staff audit log (`platform_audit`, append-only: a trigger refuses updates, deletes and truncation for every role; visible to system work and the affected firm) and `worker_heartbeats` (system work only) for the admin panel. See [admin panel](../../../docs/admin-panel.md).

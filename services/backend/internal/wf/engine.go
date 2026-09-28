@@ -67,7 +67,7 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 	slots := make(chan struct{}, concurrency)
 	var running sync.WaitGroup
-	var swept, triggered time.Time
+	var swept, triggered, beat time.Time
 	for {
 		busy := false
 		for len(slots) < cap(slots) {
@@ -89,6 +89,13 @@ func (e *Engine) Run(ctx context.Context) {
 				defer func() { <-slots }()
 				e.execute(ctx, run)
 			}()
+		}
+		if time.Since(beat) >= 30*time.Second && e.OnlyOrganization == "" {
+			// The engine's own sign of life for the admin overview, apart from the worker's.
+			if _, err := e.DB.ExecContext(ctx, `INSERT INTO worker_heartbeats(loop,beat_at) VALUES('workflow_engine',now()) ON CONFLICT (loop) DO UPDATE SET beat_at=now()`); err != nil && ctx.Err() == nil {
+				log.Print("Workflow engine heartbeat could not be recorded: ", err)
+			}
+			beat = time.Now()
 		}
 		if time.Since(triggered) >= 30*time.Second {
 			e.triggers(ctx)

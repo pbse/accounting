@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import { forwardsToAPI } from "./routes";
+import { adminPage, forwardsToAPI } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
 
 export class CapabilityAPI extends Container<Env> {
@@ -30,6 +30,7 @@ export class CapabilityAPI extends Container<Env> {
     WORKOS_CLIENT_ID: this.env.WORKOS_CLIENT_ID ?? "",
     WORKOS_ORGANIZATION_ID: this.env.WORKOS_ORGANIZATION_ID ?? "",
     WORKOS_ISSUER: this.env.WORKOS_ISSUER ?? "",
+    PLATFORM_ORGANIZATION_ID: this.env.PLATFORM_ORGANIZATION_ID ?? "",
     QBO_SANDBOX_REALM_ID: this.env.QBO_SANDBOX_REALM_ID ?? "",
     QBO_SANDBOX_ACCESS_TOKEN: this.env.QBO_SANDBOX_ACCESS_TOKEN ?? "",
     QBO_SANDBOX_ENTITY: this.env.QBO_SANDBOX_ENTITY ?? "",
@@ -74,6 +75,7 @@ interface Env {
   WORKOS_CLIENT_ID?: string;
   WORKOS_ORGANIZATION_ID?: string;
   WORKOS_ISSUER?: string;
+  PLATFORM_ORGANIZATION_ID?: string;
   QBO_SANDBOX_REALM_ID?: string;
   QBO_SANDBOX_ACCESS_TOKEN?: string;
   QBO_SANDBOX_ENTITY?: string;
@@ -129,6 +131,10 @@ export default {
     }
     if (path.startsWith("/internal/")) {
       return new Response("Not found", { status: 404 });
+    }
+    // The staff admin panel is its own single-page app: its pages load /admin/index.html.
+    if (adminPage(path)) {
+      return env.ASSETS.fetch(new Request(new URL("/admin/index.html", request.url), request));
     }
     return env.ASSETS.fetch(request);
   },
