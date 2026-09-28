@@ -40,7 +40,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	t.Cleanup(func() { db.Exec(`DELETE FROM auth_sessions WHERE subject=$1`, person) })
 
 	revoked, resent := []string{}, 0
-	failRevoke := false
+	failRevoke, workosDown, resendLost := false, false, false
 	original := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = original })
 	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
@@ -48,7 +48,10 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 			t.Fatalf("unexpected call %s", r.URL)
 		}
 		code, body := 200, `{}`
+		later := `"expires_at":"` + time.Now().Add(7*24*time.Hour).UTC().Format(time.RFC3339) + `"`
 		switch p := r.URL.Path; {
+		case workosDown:
+			code = 503
 		case p == "/user_management/users" && r.URL.Query().Get("email") == email:
 			body = `{"data":[{"id":"` + person + `","email":"` + email + `","first_name":"Pat","last_name":"Person"}],"list_metadata":{}}`
 		case p == "/user_management/users":
@@ -74,7 +77,12 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 			}
 		case p == "/user_management/invitations/"+workosID+"/resend" && r.Method == "POST":
 			resent++
-			body = `{"id":"` + workosID + `","state":"pending","expires_at":"` + time.Now().Add(7*24*time.Hour).UTC().Format(time.RFC3339) + `"}`
+			body = `{"id":"` + workosID + `","state":"pending",` + later + `}`
+			if resendLost {
+				code = 504
+			}
+		case p == "/user_management/invitations/"+workosID && r.Method == "GET":
+			body = `{"id":"` + workosID + `","state":"pending",` + later + `}`
 		default:
 			t.Fatalf("unexpected call %s %s", r.Method, r.URL)
 		}
@@ -104,6 +112,16 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	if db.QueryRow(`SELECT count(*) FROM member_invitations WHERE organization_id=$1 AND state='pending'`, other).Scan(&stale); stale != 0 {
 		t.Fatal("a pending invitation past its expiry must be expired before it is listed")
 	}
+	// By user ID, their invitations are found by the email WorkOS knows them by.
+	if byID := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person, "", 200)["invitations"]); !strings.Contains(byID, email) {
+		t.Fatalf("invitations by the person's WorkOS email: %s", byID)
+	}
+	// When WorkOS does not answer, an email search still finds their memberships through the app's own records.
+	workosDown = true
+	if down := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+email, "", 200)); !strings.Contains(down, `"workos":"unavailable"`) || !strings.Contains(down, "Current firm") {
+		t.Fatalf("app records during a WorkOS outage: %s", down)
+	}
+	workosDown = false
 	adminJSON(t, h, token, "GET", "/v1/admin/people?q=ab", "", 422)
 	adminJSON(t, h, token, "GET", "/v1/admin/people?q=Acme+Payroll", "", 422)
 	if nobody := adminJSON(t, h, token, "GET", "/v1/admin/people?q=user_nobody", "", 200); len(nobody["users"].([]any)) != 0 {
@@ -126,7 +144,8 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		t.Fatalf("ended %v, revoked %v", ended, revoked)
 	}
 	var sessionAudits string
-	if err := db.QueryRow(`SELECT string_agg(COALESCE(organization_id,'platform')||':'||(request->>'workos_complete'),',' ORDER BY id) FROM platform_audit WHERE action='sessions.revoke' AND target_id=$1 AND result='ok'`, person).Scan(&sessionAudits); err != nil || sessionAudits != "platform:false,platform:true" {
+	if err := db.QueryRow(`SELECT string_agg(action||':'||result||':'||COALESCE(organization_id,'platform'),',' ORDER BY id) FROM platform_audit WHERE action LIKE 'sessions.%' AND target_id=$1 AND reason<>'short'`, person).Scan(&sessionAudits); err != nil ||
+		sessionAudits != "sessions.revoke:ok:platform,sessions.revoke_workos:refused:platform,sessions.revoke:ok:platform,sessions.revoke_workos:ok:platform" {
 		t.Fatalf("session audits %q %v", sessionAudits, err)
 	}
 
@@ -135,14 +154,18 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	if err := db.QueryRow(`SELECT id::text FROM member_invitations WHERE workos_id=$1`, workosID).Scan(&invitation); err != nil {
 		t.Fatal(err)
 	}
+	// WorkOS sent it but the answer was lost: its copy's later expiry shows it went, so it is kept, not refused.
+	resendLost = true
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 200)
+	resendLost = false
 	var later bool
 	if db.QueryRow(`SELECT expires_at>now()+interval '6 days' FROM member_invitations WHERE id::text=$1`, invitation).Scan(&later); !later || resent != 1 {
 		t.Fatalf("the new expiry is kept (%v) after one resend (%d)", later, resent)
 	}
+	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 200)
 	must(`UPDATE member_invitations SET state='revoked' WHERE id::text=$1`, invitation)
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 409)
-	if resent != 1 {
+	if resent != 2 {
 		t.Fatal("a revoked invitation must not reach WorkOS")
 	}
 

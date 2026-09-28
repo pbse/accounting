@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -134,17 +135,25 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			people = found
 		}
 	}
-	ids := []string{}
+	// Who the search names: WorkOS's answer, and the app's own records (accepted invitations, its sessions), so an email
+	// search still finds a person's memberships when WorkOS does not answer.
+	ids, emails := []string{}, []string{}
 	if user != "" {
 		ids = append(ids, user)
 	}
+	if email != "" {
+		emails = append(emails, email)
+	}
 	for _, p := range people {
-		if p.ID != user {
-			ids = append(ids, p.ID)
-		}
+		ids, emails = append(ids, p.ID), append(emails, strings.ToLower(p.Email))
+	}
+	system := context.WithValue(r.Context(), systemKey{}, true)
+	if err := knownPeople(system, db, &ids, &emails); err != nil {
+		adminFirmProblem(w, err, "people search")
+		return
 	}
 	// As the firm's own list does: expire and settle the firms' invitations first, so staff act on their real state.
-	if err := reconcilePersonInvitations(context.WithValue(r.Context(), systemKey{}, true), db, email, ids); err != nil {
+	if err := reconcilePersonInvitations(system, db, emails, ids); err != nil {
 		adminFirmProblem(w, err, "invitation check")
 		return
 	}
@@ -165,9 +174,9 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
   FROM current_organization_members m JOIN organizations o ON o.id=m.organization_id WHERE m.subject=ANY(string_to_array($1,','))),'[]'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id::text,'organization_id',i.organization_id,'firm_name',o.name,'email',i.email,'role',i.role_name,
    'state',CASE WHEN i.state='pending' AND i.expires_at<=now() THEN 'expired' ELSE i.state END,'invited_by',i.invited_by,'created_at',i.created_at,'expires_at',i.expires_at) ORDER BY i.id DESC)
-  FROM (SELECT * FROM member_invitations WHERE ($2<>'' AND email=$2) OR subject=ANY(string_to_array($1,',')) ORDER BY id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
+  FROM (SELECT * FROM member_invitations WHERE email IN (SELECT jsonb_array_elements_text($2::jsonb)) OR subject=ANY(string_to_array($1,',')) ORDER BY id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
  COALESCE((SELECT jsonb_object_agg(id,name) FROM organizations WHERE id=ANY(string_to_array($3,','))),'{}'::jsonb)`,
-			strings.Join(ids, ","), email, strings.Join(orgs, ",")).Scan(&memberships, &invitations, &firms)
+			strings.Join(ids, ","), jsonList(emails), strings.Join(orgs, ",")).Scan(&memberships, &invitations, &firms)
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "people search")
@@ -187,9 +196,41 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{"query": q, "workos": state, "users": people, "memberships": json.RawMessage(memberships), "invitations": json.RawMessage(invitations)})
 }
 
+// jsonList is a list of text for a query to read with jsonb_array_elements_text: email addresses may hold any character.
+func jsonList(values []string) string {
+	raw, _ := json.Marshal(values)
+	return string(raw)
+}
+
+// knownPeople adds the user IDs the app has recorded for these email addresses (an accepted invitation, a sign-in it
+// holds) and the addresses it has recorded for these IDs.
+func knownPeople(ctx context.Context, db *sql.DB, ids, emails *[]string) error {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT subject,lower(email) FROM (
+ SELECT subject,email FROM member_invitations WHERE subject IS NOT NULL
+ UNION ALL SELECT subject,email FROM auth_sessions) k
+ WHERE lower(email) IN (SELECT jsonb_array_elements_text($1::jsonb)) OR subject=ANY(string_to_array($2,','))`, jsonList(*emails), strings.Join(*ids, ","))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, email string
+		if err = rows.Scan(&id, &email); err != nil {
+			return err
+		}
+		if !slices.Contains(*ids, id) {
+			*ids = append(*ids, id)
+		}
+		if !slices.Contains(*emails, email) {
+			*emails = append(*emails, email)
+		}
+	}
+	return rows.Err()
+}
+
 // reconcilePersonInvitations runs reconcileInvitations for each firm that invited this person.
-func reconcilePersonInvitations(ctx context.Context, db *sql.DB, email string, ids []string) error {
-	rows, err := db.QueryContext(ctx, `SELECT DISTINCT organization_id FROM member_invitations WHERE ($1<>'' AND email=$1) OR subject=ANY(string_to_array($2,','))`, email, strings.Join(ids, ","))
+func reconcilePersonInvitations(ctx context.Context, db *sql.DB, emails, ids []string) error {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT organization_id FROM member_invitations WHERE email IN (SELECT jsonb_array_elements_text($1::jsonb)) OR subject=ANY(string_to_array($2,','))`, jsonList(emails), strings.Join(ids, ","))
 	if err != nil {
 		return err
 	}
@@ -213,9 +254,10 @@ func reconcilePersonInvitations(ctx context.Context, db *sql.DB, email string, i
 	return nil
 }
 
-// adminRevokeSessions signs a person out everywhere: the app's own sessions (AUTH_SESSION=server) end with the audited
-// action, whatever WorkOS then does, and every active WorkOS session, in every organization, is revoked so none can be
-// refreshed. Their memberships are untouched. When WorkOS fails part way, the answer says exactly what ended.
+// adminRevokeSessions signs a person out everywhere, in two audited steps that outlive the request: first the app's own
+// sessions (AUTH_SESSION=server) end and commit, so nothing later can undo that; then every active WorkOS session, in
+// every organization, is revoked so none can be refreshed (sessions.revoke_workos: refused, with what ended, when WorkOS
+// fails part way). Their memberships are untouched.
 func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	user := r.PathValue("user")
 	if !strings.HasPrefix(user, "user_") || len(user) > 200 {
@@ -232,44 +274,52 @@ func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if !adminReason(w, r, &in, func() string { return in.Reason }) {
 		return
 	}
-	request := map[string]any{}
+	ctx, reason := context.WithoutCancel(r.Context()), strings.TrimSpace(in.Reason)
 	var app int64
-	ended, active, listed := 0, 0, false
-	err := adminAct(r.Context(), db, adminAction{Action: "sessions.revoke", TargetType: "user", TargetID: user, Reason: strings.TrimSpace(in.Reason), Request: request},
+	request := map[string]any{}
+	err := adminAct(ctx, db, adminAction{Action: "sessions.revoke", TargetType: "user", TargetID: user, Reason: reason, Request: request},
 		func(ctx context.Context, tx *sql.Tx) error {
 			result, err := tx.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=now() WHERE subject=$1 AND revoked_at IS NULL`, user)
-			if err != nil {
-				return err
-			}
-			app, _ = result.RowsAffected()
-			// Every page of sessions, so "all" means all; a list WorkOS cannot finish is a failure, not a partial success.
-			sessions, err := workosList[workosSession](ctx, "/user_management/users/"+url.PathEscape(user)+"/sessions", url.Values{"limit": {"100"}})
 			if err == nil {
-				listed = true
-				for _, s := range sessions {
-					if s.Status != "active" {
-						continue
-					}
-					active++
-					if err = workos(ctx, "POST", "/user_management/sessions/revoke", map[string]string{"session_id": s.ID}, nil); err != nil {
-						break
-					}
-					ended++
-				}
+				app, _ = result.RowsAffected()
+				request["app_sessions"] = app
 			}
-			request["app_sessions"], request["workos_ended"], request["workos_complete"] = app, ended, err == nil
-			return nil
+			return err
 		})
 	if err != nil {
 		adminFirmProblem(w, err, "session revoke")
 		return
 	}
-	if !listed || ended < active {
-		what := "WorkOS did not list their sessions"
-		if listed {
-			what = fmt.Sprintf("WorkOS ended %d of their %d active sessions, then failed", ended, active)
-		}
-		problem(w, 502, fmt.Sprintf("The app's own sessions for this person ended (%d). %s; end sessions again to finish.", app, what))
+	ended := 0
+	outcome := map[string]any{}
+	err = adminAct(ctx, db, adminAction{Action: "sessions.revoke_workos", TargetType: "user", TargetID: user, Reason: reason, Request: outcome},
+		func(ctx context.Context, _ *sql.Tx) error {
+			// Every page of sessions, so "all" means all; a list WorkOS cannot finish is a failure, not a partial success.
+			sessions, err := workosList[workosSession](ctx, "/user_management/users/"+url.PathEscape(user)+"/sessions", url.Values{"limit": {"100"}})
+			if err != nil {
+				return fmt.Errorf("%w: WorkOS did not list their sessions", errWorkOS)
+			}
+			active := 0
+			for _, s := range sessions {
+				if s.Status == "active" {
+					active++
+				}
+			}
+			for _, s := range sessions {
+				if s.Status != "active" {
+					continue
+				}
+				if err = workos(ctx, "POST", "/user_management/sessions/revoke", map[string]string{"session_id": s.ID}, nil); err != nil {
+					outcome["ended"] = ended
+					return fmt.Errorf("%w: WorkOS ended %d of their %d active sessions, then failed", errWorkOS, ended, active)
+				}
+				ended++
+			}
+			outcome["ended"] = ended
+			return nil
+		})
+	if err != nil {
+		problem(w, 502, fmt.Sprintf("The app's own sessions for this person ended (%d). %s; end sessions again to finish.", app, strings.TrimPrefix(err.Error(), errWorkOS.Error()+": ")))
 		return
 	}
 	jsonReply(w, 200, map[string]any{"ended": ended, "app_sessions": app})
@@ -293,10 +343,12 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	var expires time.Time
-	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason)},
+	// Outlives the request, so a closed browser cannot leave WorkOS's answer unrecorded.
+	err := adminAct(context.WithoutCancel(r.Context()), db, adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason)},
 		func(ctx context.Context, tx *sql.Tx) error {
 			var workosID string
-			err := tx.QueryRowContext(ctx, `SELECT workos_id FROM member_invitations WHERE id::text=$1 AND organization_id=$2 AND state='pending' AND workos_id IS NOT NULL AND expires_at>now() FOR UPDATE`, invitation, firm).Scan(&workosID)
+			var stored time.Time
+			err := tx.QueryRowContext(ctx, `SELECT workos_id,expires_at FROM member_invitations WHERE id::text=$1 AND organization_id=$2 AND state='pending' AND workos_id IS NOT NULL AND expires_at>now() FOR UPDATE`, invitation, firm).Scan(&workosID, &stored)
 			if errors.Is(err, sql.ErrNoRows) {
 				return errInvitationNotPending
 			}
@@ -305,7 +357,10 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			}
 			var sent workosInvitation
 			if err = workos(ctx, "POST", "/user_management/invitations/"+url.PathEscape(workosID)+"/resend", map[string]any{}, &sent); err != nil {
-				return fmt.Errorf("%w: the invitation was not resent", errWorkOS)
+				// An answer lost on the way back is not a refusal: WorkOS's copy says whether it sent (a later expiry).
+				if workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(workosID), nil, &sent) != nil || !sent.ExpiresAt.After(stored) {
+					return fmt.Errorf("%w: the invitation was not resent", errWorkOS)
+				}
 			}
 			if expires = sent.ExpiresAt; expires.IsZero() {
 				return nil
