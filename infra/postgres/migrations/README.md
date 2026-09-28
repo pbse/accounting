@@ -106,3 +106,5 @@ Fresh Compose volumes run every migration automatically, without the ledger; to 
 `072_chat_messages.sql` stores each member's assistant conversation for one close or firm-wide, read only by its author, with row-level security like 047. Apply after 071 with API/worker stopped; `/readyz` checks it.
 
 `094_workflow_engine.sql` creates the workflow engine's tables: runs, steps, events and plans, each with row-level security by firm (a `NULL` firm is platform work, visible to system work only). It is the only migration the engine needs; new workflows are directories, not schema. Apply it before deploying a build whose worker runs the engine; the deploy workflows check for it. See [workflow engine](../../../docs/workflow-engine.md).
+
+`098_admin.sql` adds the staff audit log (`platform_audit`, append-only for the runtime role, visible to system work and the affected firm) and `worker_heartbeats` (system work only) for the admin panel. See [admin panel](../../../docs/admin-panel.md).
