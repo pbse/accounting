@@ -37,6 +37,7 @@ type chatReply struct {
 	action    string
 	due       string
 	finish    string
+	monthly   bool
 }
 
 type chatMessage struct {
@@ -48,6 +49,7 @@ type chatMessage struct {
 	Action      string          `json:"action,omitempty"`
 	DueOn       string          `json:"due_on,omitempty"`
 	Finish      string          `json:"finish,omitempty"`
+	EveryMonth  bool            `json:"every_month,omitempty"`
 	Outcome     json.RawMessage `json:"outcome"`
 	CreatedAt   time.Time       `json:"created_at"`
 }
@@ -117,6 +119,34 @@ func chatWords(text string) []string {
 
 var chatPolite = strings.Fields("please can could would will you thanks thank")
 
+// nameAt is where the client's name (its words) first appears in words, as [start, end), or an empty span.
+func nameAt(words, name []string) (int, int) {
+	for i := 0; len(name) > 0 && i+len(name) <= len(words); i++ {
+		if slices.Equal(words[i:i+len(name)], name) {
+			return i, i + len(name)
+		}
+	}
+	return 0, 0
+}
+
+// monthlyAt says whether words[i] starts "every month", "each month" or "monthly", asking for the monthly hand-over;
+// the client's name, where it appears (from to end), never does.
+func monthlyAt(words []string, i, from, end int) bool {
+	return (i < from || i >= end) && (words[i] == "monthly" || (words[i] == "every" || words[i] == "each") && i+1 < len(words) && words[i+1] == "month" && (i+1 < from || i+1 >= end))
+}
+
+// chatMonthly says whether a request to hand entity's close over asks for every month too.
+func chatMonthly(text, entity string) bool {
+	words := chatWords(text)
+	from, end := nameAt(words, chatWords(entity))
+	for i := range words {
+		if monthlyAt(words, i, from, end) {
+			return true
+		}
+	}
+	return false
+}
+
 var chatDelegateWords = strings.Fields("this the a my our close books work month it now to over agent for ready review get have make hand delegate signed sign off signoff sign-off signed-off closed")
 
 // chatDelegate reads a request to hand the close (entity, period) to the agent, such as "Get this close ready for
@@ -156,6 +186,7 @@ func chatDelegate(text string, today time.Time, entity, period string) (finish, 
 	}
 	name := strings.ToLower(month.Month().String())
 	known := append(chatWords(entity), period, name, name[:3], strconv.Itoa(month.Year()))
+	from, end := nameAt(words, chatWords(entity))
 	for i := 1; i < len(words); i++ {
 		switch w := words[i]; {
 		case (w == "by" || w == "due" || w == "before") && due == "":
@@ -170,6 +201,10 @@ func chatDelegate(text string, today time.Time, entity, period string) (finish, 
 				day = day.AddDate(0, 0, -1)
 			}
 			due, i = day.Format("2006-01-02"), last
+		case monthlyAt(words, i, from, end):
+			if w != "monthly" {
+				i++
+			}
 		case !slices.Contains(chatDelegateWords, w) && !slices.Contains(chatPolite, w) && !slices.Contains(known, w):
 			extra = append(extra, w)
 		}
@@ -213,6 +248,9 @@ func delegateTargets(r *http.Request, db *sql.DB, text string, today time.Time) 
 			if due != "" {
 				ask += " by " + due
 			}
+			if chatMonthly(text, entity) {
+				ask += " every month"
+			}
 			links = append(links, chatCitation{entity + " · " + period + ": hand it to the agent", "/dashboard/closes/" + id + "?ask=" + url.QueryEscape(ask)})
 		}
 	}
@@ -221,6 +259,15 @@ func delegateTargets(r *http.Request, db *sql.DB, text string, today time.Time) 
 
 // chatIntent picks the read a question is about; the first match wins, and "" means the help reply.
 func chatIntent(text string, closeScoped, paper bool) string {
+	// Across the firm, a question about delegated closes comes before a search or another list: asked plainly it lists
+	// them, and a more specific one ("which delegated closes are blocked?") goes to written answers, never to a list of
+	// other work.
+	if asked, listing := chatDelegated(text); !closeScoped && asked {
+		if listing {
+			return "delegated"
+		}
+		return ""
+	}
 	if chatQuery(text) != "" {
 		return "find"
 	}
@@ -469,6 +516,55 @@ func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text, pr
 	return chatReply{body: help}
 }
 
+var chatDelegatedWords = strings.Fields("show me list how what which are is was have has i we you our my the all a of to on over with delegated closes close agent agent's working doing handed work status report")
+
+// chatDelegated says whether a question is about the closes handed to the agent ("delegated", or the agent with its
+// work: "What is the agent working on?"), and whether it only asks for them, in listing words alone.
+func chatDelegated(text string) (asked, listing bool) {
+	words := chatWords(text)
+	asked = slices.Contains(words, "delegated") || slices.Contains(words, "agent") && slices.ContainsFunc(words, func(w string) bool {
+		return w == "working" || w == "doing" || w == "handed" || w == "closes" || w == "work"
+	})
+	return asked, asked && !slices.ContainsFunc(words, func(w string) bool { return !slices.Contains(chatDelegatedWords, w) && !slices.Contains(chatPolite, w) })
+}
+
+// delegatedWords says where a delegated close stands from what the agent last found, in the words of Work's list.
+func delegatedWords(finish, state string, needs int, ready bool, signoff, asOf string) string {
+	switch {
+	case asOf == "":
+		return "updating"
+	case signoff == "reopen_required":
+		return "needs reopening"
+	case signoff == "signed_off":
+		return "signed off"
+	case finish == "review" && state == "reached":
+		return "ready for review"
+	case needs > 0:
+		return plural(needs, "thing needs", "things need") + " a person"
+	case signoff == "open" && ready:
+		return "ready to sign off"
+	}
+	return "the agent is working"
+}
+
+// portfolioListing words a "show" goal's selection, shown once with the first ten closes linked; Work has the rest.
+func portfolioListing(op portfolioOperation, work chatCitation) (string, []string, []chatCitation) {
+	count := plural(len(op.Items), "close matches", "closes match")
+	if op.HasMore {
+		count = "More than 100 closes match"
+	}
+	lines, links := []string{count + ": " + strings.ToLower(op.Scope[:1]) + op.Scope[1:] + "."}, []chatCitation{}
+	for i, item := range op.Items {
+		if i == 10 {
+			lines = append(lines, "The rest are in Work.")
+			break
+		}
+		lines = append(lines, item.Label+" · "+item.Result)
+		links = append(links, chatCitation{item.Label, "/dashboard/closes/" + item.CloseID})
+	}
+	return "Here are the closes this selects, shown once. Ask again, or open Work, for the current list.", lines, append(links, work)
+}
+
 // firmAnswer answers a firm-wide question. Only a generic reply is stored; the live lines are shown once, so history
 // never keeps client details a member may later lose access to.
 func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []string, []chatCitation) {
@@ -524,6 +620,54 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 			}
 		}
 		return chatReply{body: "Here is the review queue. Open Work to review the current drafts.", citations: work}, lines, nil
+	case "delegated":
+		var g struct {
+			Goals []struct {
+				CloseID string `json:"close_id"`
+				Entity  string `json:"entity"`
+				Period  string `json:"period"`
+				Finish  string `json:"finish"`
+				DueOn   string `json:"due_on"`
+				State   string `json:"state"`
+				Author  string `json:"author"`
+				Summary struct {
+					Needs   int    `json:"needs"`
+					Ready   bool   `json:"ready"`
+					Signoff string `json:"signoff"`
+					AsOf    string `json:"as_of"`
+				} `json:"summary"`
+			} `json:"goals"`
+			More bool `json:"more"`
+		}
+		if !read("/goals", &g) {
+			return unread, nil, nil
+		}
+		count := plural(len(g.Goals), "close is", "closes are") + " handed to the agent, those needing a person first."
+		if g.More {
+			count = "More than 100 closes are handed to the agent, those needing a person first."
+		}
+		lines, links := []string{count}, []chatCitation{}
+		for i, d := range g.Goals {
+			if i == 10 {
+				lines = append(lines, "The rest are in Work.")
+				break
+			}
+			month := d.Period
+			if at, err := time.Parse("2006-01", d.Period); err == nil {
+				month = at.Format("January 2006")
+			}
+			line := d.Entity + " · " + month + ": " + delegatedWords(d.Finish, d.State, d.Summary.Needs, d.Summary.Ready, d.Summary.Signoff, d.Summary.AsOf)
+			// Progress more than ten minutes old says when it was found, as Work does.
+			if at, err := time.Parse(time.RFC3339Nano, d.Summary.AsOf); err == nil && time.Since(at) > 10*time.Minute {
+				line += " (as of " + at.UTC().Format("Jan 2, 15:04 UTC") + ")"
+			}
+			if day, err := time.Parse("2006-01-02", d.DueOn); err == nil {
+				line += " · due " + day.Format("Mon 2 Jan")
+			}
+			lines = append(lines, line+" · handed over by "+d.Author)
+			links = append(links, chatCitation{d.Entity + " · " + d.Period, "/dashboard/closes/" + d.CloseID})
+		}
+		return chatReply{body: "Here are the closes handed to the agent. Open Work for the current list.", citations: work}, lines, append(links, work...)
 	case "blocked":
 		// Work lists at most 100 items; its counts hold the whole number.
 		var b struct {
@@ -547,7 +691,7 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 		}
 		return chatReply{body: "Here is the blocked work. Open Work for the current list.", citations: work}, lines, nil
 	}
-	return chatReply{body: "Across the firm I can find documents, drafts, transactions, procedures and review decisions, and tell you what needs a person today, what is ready for review, and what work is blocked. Open a client close to ask about it, or name one to hand it to me (“Get Acme ready for review by Friday”)."}, nil, nil
+	return chatReply{body: "Across the firm I can find documents, drafts, transactions, procedures and review decisions, and tell you what needs a person today, what is ready for review, what work is blocked, how the closes handed to me stand, and which closes a goal such as “show my clients due Friday” selects. Open a client close to ask about it, or name one to hand it to me (“Get Acme ready for review by Friday”)."}, nil, nil
 }
 
 // searchCitations links each match with a label that says what it is.
@@ -570,7 +714,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	// scope binds every query to the firm, the signed-in author and one conversation.
 	const scope = `organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint`
 	history := func(w http.ResponseWriter, r *http.Request, extra map[string]any) {
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),COALESCE(outcome,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),every_month,COALESCE(outcome,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Conversation unavailable.")
 			return
@@ -579,7 +723,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		messages := []chatMessage{}
 		for rows.Next() {
 			var m chatMessage
-			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.DueOn, &m.Finish, &m.Outcome, &m.CreatedAt) != nil {
+			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.DueOn, &m.Finish, &m.EveryMonth, &m.Outcome, &m.CreatedAt) != nil {
 				problem(w, 503, "Conversation unavailable.")
 				return
 			}
@@ -669,12 +813,18 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if closeID != "" && delegate {
 			extra = unknown
 		}
-		if goal, err := parsePortfolioGoal(in.Text, time.Now().UTC()); closeID == "" && err == nil {
-			body := "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts."
+		if goal, err := parsePortfolioGoal(in.Text, today); closeID == "" && err == nil {
+			work := chatCitation{"Open this goal in Work", "/dashboard?goal=" + url.QueryEscape(in.Text)}
+			reply = chatReply{body: "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts.", citations: []chatCitation{work}}
+			// A listing selects and changes nothing, so it is answered here, from Work's own selection for the member.
+			var op portfolioOperation
 			if goal.action == "show" {
-				body = "Work shows what this selects."
+				reply.body = "Work shows what this selects."
+				if rec := replay(r, "POST", "/v1/closes/portfolio", map[string]string{"text": in.Text, "today": in.Today}); rec.Code == 200 && json.Unmarshal(rec.Body.Bytes(), &op) == nil {
+					reply.body, live, linked = portfolioListing(op, work)
+					reply.citations = nil
+				}
 			}
-			reply = chatReply{body: body, citations: []chatCitation{{"Open this goal in Work", "/dashboard?goal=" + url.QueryEscape(in.Text)}}}
 		} else if len(targets) == 1 {
 			// Only a generic reply is kept; the close itself is linked once, like any firm-wide answer.
 			reply, linked = chatReply{body: "I found the close you mean. Open it to see my plan and hand it over."}, targets
@@ -691,7 +841,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			reply, live, linked = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, intent, in.Text)
 			ask = intent == ""
 		} else if delegate {
-			reply = chatReply{body: "I can take this close from here. Check my plan and hand it over.", action: "delegate", due: due, finish: finish}
+			reply = chatReply{body: "I can take this close from here. Check my plan and hand it over.", action: "delegate", due: due, finish: finish, monthly: chatMonthly(in.Text, entity)}
 		} else if action := chatAction(in.Text); action != "" {
 			link := chatCitation{"Close preparation", "/dashboard/closes/" + closeID + "?tab=overview"}
 			if action == "request" {
@@ -828,8 +978,11 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if attempted != "" {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5)`, org, author, closeID, attempted, latency)
 		}
-		for _, m := range []struct{ role, body, citations, action, due, finish string }{{"user", in.Text, "[]", "", "", ""}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish}} {
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''))`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish); err != nil {
+		for _, m := range []struct {
+			role, body, citations, action, due, finish string
+			monthly                                    bool
+		}{{"user", in.Text, "[]", "", "", "", false}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish, reply.monthly}} {
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11)`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly); err != nil {
 				break
 			}
 		}

@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,22 +49,27 @@ func TestAssistantAnswersFromTheMembersOwnScopedReads(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','chat-draft','{"blockers":["Confirm the service period."],"questions":["Is the policy annual?"]}') RETURNING id::text`, alpha).Scan(&draft))
 	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','chat-foreign','{}') RETURNING id::text`, beta).Scan(&foreign))
 	defer func() {
-		for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1`, `DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM close_routines WHERE organization_id=$1`, `DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
 	store := savedCloses(db, strings.Repeat("a", 32))
 	type message struct {
-		Role      string `json:"role"`
-		Body      string `json:"body"`
-		Citations []struct {
+		ID         string `json:"id"`
+		Role       string `json:"role"`
+		Body       string `json:"body"`
+		EveryMonth bool   `json:"every_month"`
+		Citations  []struct {
 			Label string `json:"label"`
 			Href  string `json:"href"`
 		} `json:"citations"`
 	}
 	type conversation struct {
-		Messages []message `json:"messages"`
-		Live     []string  `json:"live"`
+		Messages      []message `json:"messages"`
+		Live          []string  `json:"live"`
+		LiveCitations []struct {
+			Href string `json:"href"`
+		} `json:"live_citations"`
 	}
 	call := func(subject string, permissions []string, method, path string, body any, want int) conversation {
 		t.Helper()
@@ -192,6 +199,37 @@ func TestAssistantAnswersFromTheMembersOwnScopedReads(t *testing.T) {
 	must(db.QueryRow(`SELECT count(*) FROM chat_messages WHERE organization_id=$1 AND author='user_a' AND close_id IS NULL`, org).Scan(&firmLeft))
 	if firmLeft == 0 {
 		t.Fatal("clearing one conversation leaves the others")
+	}
+	// A hand-over asked for every month makes a card that offers the monthly hand-over; confirming sets it up.
+	card := ask("Get this close ready for review every month")
+	if !card.EveryMonth || !strings.Contains(card.Body, "Check my plan") {
+		t.Fatalf("the card keeps that every month was asked for: %+v", card)
+	}
+	call("user_a", []string{"workpapers:review"}, "POST", closeChat+"/"+card.ID+"/confirm", map[string]any{"every_month": true}, 200)
+	var routines int
+	must(db.QueryRow(`SELECT count(*) FROM close_routines WHERE organization_id=$1 AND stopped_at IS NULL`, org).Scan(&routines))
+	if routines != 1 {
+		t.Fatalf("confirming the card sets up the monthly hand-over: %d", routines)
+	}
+	// Across the firm, a listing goal and the closes handed to the agent are answered once, from the member's own reads.
+	_, err = db.Exec(`UPDATE client_closes SET due_on='2026-10-02' WHERE organization_id=$1`, org)
+	must(err)
+	askFirm := func(text string) conversation {
+		t.Helper()
+		out := call("user_a", nil, "POST", "/v1/closes/chat", map[string]string{"text": text, "today": "2026-09-27"}, 200)
+		if body := out.Messages[len(out.Messages)-1].Body; strings.Contains(body, "Alpha") {
+			t.Fatalf("history keeps no client details: %q", body)
+		}
+		return out
+	}
+	if out := askFirm("Show closes due by 2026-12-31"); len(out.Live) != 2 || out.Live[0] != "1 close matches: closes you can access that are not signed off, due on or before Thu 31 Dec 2026." || out.Live[1] != "Alpha · 2026-09 · due Fri 2 Oct 2026" {
+		t.Fatalf("a listing goal lists the member's closes: %q", out.Live)
+	}
+	if out := askFirm("How are my delegated closes doing?"); len(out.Live) != 2 || out.Live[0] != "1 close is handed to the agent, those needing a person first." || !strings.HasPrefix(out.Live[1], "Alpha · September 2026: ") || !strings.HasSuffix(out.Live[1], " · handed over by user_a") {
+		t.Fatalf("the closes handed to the agent are listed in Work's words: %q", out.Live)
+	}
+	if out := askFirm("Get Alpha ready for review every month"); len(out.LiveCitations) != 1 || !strings.HasSuffix(out.LiveCitations[0].Href, "?ask="+url.QueryEscape("Get this close ready for review every month")) {
+		t.Fatalf("a firm-wide hand-over keeps every month in the close's ask: %+v", out.LiveCitations)
 	}
 	// A removed member's history goes with their membership.
 	call("user_admin", []string{"clients:all", "members:manage"}, "POST", "/v1/closes/members", map[string]any{"subject": "user_a", "granted": false, "previous_id": func() string {
@@ -436,5 +474,45 @@ func TestAssistantShowsTheClosePlan(t *testing.T) {
 	goal = "null"
 	if reply := closeAnswer(read, "7", "", "plan", "What's the plan?", ""); !strings.Contains(reply.body, "isn't handed to me") || len(reply.lines) != 3 {
 		t.Fatalf("a close not handed over gets the plan it would follow: %+v", reply)
+	}
+}
+
+func TestFirmReportsAndMonthlyRequests(t *testing.T) {
+	for text, want := range map[string]bool{"Get this close ready for review every month": true, "Hand it over each month": true, "Get it signed off monthly": true, "Get this close ready for review": false} {
+		if _, _, extra, ok := chatDelegate(text, time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC), "Acme", "2026-09"); !ok || len(extra) > 0 || chatMonthly(text, "Acme") != want {
+			t.Errorf("%q: %v %v %v", text, ok, extra, chatMonthly(text, "Acme"))
+		}
+	}
+	// A client's name is never a schedule.
+	if chatMonthly("Get Monthly Analytics ready for review", "Monthly Analytics") || !chatMonthly("Get Monthly Analytics ready for review every month", "Monthly Analytics") || !chatMonthly("Get Monthly Analytics ready for review monthly", "Monthly Analytics") {
+		t.Fatal("a client named Monthly is handed over once unless every month is asked for")
+	}
+	if _, _, extra, _ := chatDelegate("Get this close ready for review every week", time.Now(), "Acme", "2026-09"); strings.Join(extra, " ") != "every week" {
+		t.Fatalf("another schedule is still an instruction the agent does not act on: %v", extra)
+	}
+	for text, want := range map[string]string{"Show me delegated closes": "delegated", "What is the agent working on?": "delegated", "How are my delegated closes doing?": "delegated", "Find agent emails": "find", "What's blocked?": "blocked",
+		"Which delegated closes are due this week and still waiting on the client?": "", "Which delegated closes are blocked?": ""} {
+		if got := chatIntent(text, false, false); got != want {
+			t.Errorf("%q routes to %q", text, got)
+		}
+	}
+	// A capped listing says so and links ten closes, then Work.
+	items := []portfolioItem{}
+	for i := range 12 {
+		items = append(items, portfolioItem{CloseID: strconv.Itoa(i), Label: "Client " + strconv.Itoa(i) + " · 2026-09", Result: "no due date"})
+	}
+	_, lines, links := portfolioListing(portfolioOperation{Scope: "Closes you can access that are not signed off", HasMore: true, Items: items}, chatCitation{"Work", "/dashboard"})
+	if lines[0] != "More than 100 closes match: closes you can access that are not signed off." || len(lines) != 12 || lines[11] != "The rest are in Work." || len(links) != 11 || links[10].Href != "/dashboard" {
+		t.Fatalf("a capped listing: %q %v", lines, links)
+	}
+	if got := delegatedWords("review", "active", 2, false, "", "2026-09-27T00:00:00Z"); got != "2 things need a person" {
+		t.Fatalf("Work's words: %q", got)
+	}
+	// Progress more than ten minutes old says when it was found.
+	read := func(path string, out any) bool {
+		return path == "/goals" && json.Unmarshal([]byte(`{"goals":[{"close_id":"7","entity":"Acme","period":"2026-09","finish":"review","state":"active","author":"user_a","summary":{"needs":1,"as_of":"2026-09-27T10:00:00Z"}}]}`), out) == nil
+	}
+	if _, lines, _ := firmAnswer(read, "delegated", "How are my delegated closes doing?"); len(lines) != 2 || lines[1] != "Acme · September 2026: 1 thing needs a person (as of Sep 27, 10:00 UTC) · handed over by user_a" {
+		t.Fatalf("stale progress says when it was found: %q", lines)
 	}
 }

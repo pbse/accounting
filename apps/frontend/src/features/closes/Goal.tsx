@@ -435,9 +435,10 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
   );
 }
 
-function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueOn: string; proposed: string; onConfirm: (body: { due_on: string; finish: Finish; every_month: boolean }) => Promise<void> }) {
+function Proposal({ status, dueOn, proposed, everyMonth, onConfirm }: { status: Status; dueOn: string; proposed: string; everyMonth: boolean; onConfirm: (body: { due_on: string; finish: Finish; every_month: boolean }) => Promise<void> }) {
   const [date, setDate] = useState(dueOn);
-  const [monthly, setMonthly] = useState(false);
+  // A request that asked for every month starts with the monthly hand-over ticked; the person still confirms it.
+  const [monthly, setMonthly] = useState(everyMonth && !status.routine);
   const [finish, setFinish] = useState<Finish>(proposed === "signoff" ? "signoff" : "review");
   const group = useId();
   // A monthly hand-over keeps the due date's distance after this month's end; one inside the month has no date.
@@ -454,7 +455,7 @@ function Proposal({ status, dueOn, proposed, onConfirm }: { status: Status; dueO
     setBusy(true);
     setError("");
     try {
-      await onConfirm({ due_on: date, finish, every_month: monthly });
+      await onConfirm({ due_on: date, finish, every_month: monthly && !status.routine });
     } catch (e) {
       setError(e instanceof Error ? e.message : "The close could not be handed over.");
       setAgreed(false);
@@ -587,7 +588,7 @@ export function DelegatedCloses({ refresh, client }: { refresh: number; client: 
 }
 
 // GoalCard is the assistant's card for handing its close to the agent: the proposal, then the goal's live progress.
-export function GoalCard({ closeId, dueOn, finish, outcome, live, onConfirm }: { closeId: string; dueOn: string; finish: string; outcome?: { at: string } | null; live: boolean; onConfirm: (body: { due_on: string; finish: Finish; every_month: boolean }) => Promise<void> }) {
+export function GoalCard({ closeId, dueOn, finish, everyMonth = false, outcome, live, onConfirm }: { closeId: string; dueOn: string; finish: string; everyMonth?: boolean; outcome?: { at: string } | null; live: boolean; onConfirm: (body: { due_on: string; finish: Finish; every_month: boolean }) => Promise<void> }) {
   const { status, error, refresh } = useGoal(closeId, live, 5000);
   const card = (body: ReactNode) => (
     <div className="assistant-card">
@@ -600,7 +601,7 @@ export function GoalCard({ closeId, dueOn, finish, outcome, live, onConfirm }: {
   if (!status) return card(!error && <p role="status">Loading the close…</p>);
   if (outcome || (status.goal && status.goal.state !== "stopped")) return card(<Progress closeId={closeId} status={status} refresh={refresh} />);
   if (status.signed_off) return card(<p>This close is signed off, so there is nothing left for me to prepare.</p>);
-  return card(<Proposal status={status} dueOn={dueOn} proposed={finish} onConfirm={onConfirm} />);
+  return card(<Proposal status={status} dueOn={dueOn} proposed={finish} everyMonth={everyMonth} onConfirm={onConfirm} />);
 }
 
 // GoalPanel shows the close's goal at the top of its Overview, or offers to hand the close to the agent.
