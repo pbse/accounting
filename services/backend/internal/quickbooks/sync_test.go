@@ -79,19 +79,36 @@ func TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures(t *testing.T) {
 	if !due() {
 		t.Fatal("a day-old scheduled snapshot is not refreshed")
 	}
+	stopped := func() bool {
+		t.Helper()
+		var stopped bool
+		if err := db.QueryRow(`SELECT `+RefreshStopped("$1::bigint"), closeID).Scan(&stopped); err != nil {
+			t.Fatal(err)
+		}
+		return stopped
+	}
+	if stopped() {
+		t.Fatal("refresh counted as stopped with two scheduled snapshots in the scheduler's months")
+	}
 	for i := 0; i < 4; i++ {
 		snapshot("scheduled-quickbooks-refresh", "2 days")
 	}
-	if due() {
-		t.Fatal("a seventh scheduled snapshot was due")
+	if due() || !stopped() {
+		t.Fatal("a seventh scheduled snapshot was due, or the stop was not reported for sign-off")
 	}
 	db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1 AND captured_at<now()-interval '1 day'`, closeID)
 	snapshot("scheduled-quickbooks-refresh", "2 days")
 	if !due() {
 		t.Fatal("the cap outlived its snapshots")
 	}
-	snapshot("person@example.test", "2 days")
-	if due() {
-		t.Fatal("a person's capture was refreshed over")
+	// A close past the months the scheduler reads is no longer refreshed either.
+	db.Exec(`UPDATE client_closes SET period='2026-06' WHERE id=$1`, closeID)
+	if !stopped() {
+		t.Fatal("a close the scheduler no longer reads was not reported for sign-off")
+	}
+	db.Exec(`UPDATE client_closes SET period='2026-08' WHERE id=$1`, closeID)
+	snapshot("person@example.test", "0 seconds")
+	if due() || stopped() {
+		t.Fatal("a person's capture was refreshed over, or still asks for a capture")
 	}
 }

@@ -301,6 +301,16 @@ var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_
  -- Six scheduled ones at most, leaving the rest of the close's twenty for people.
  AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.actor='scheduled-quickbooks-refresh' AND s.payload ? 'period')<6`
 
+// RefreshStopped is a SQL condition: the close's newest period snapshot on its reading connection is the scheduler's,
+// and the scheduler no longer refreshes it, because six are taken or the close is past the months scheduleSync reads.
+// Later entries may then be missing, so sign-off waits for a person's capture.
+func RefreshStopped(close string) string {
+	return `COALESCE((SELECT s.actor='scheduled-quickbooks-refresh' AND ((SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id AND z.actor='scheduled-quickbooks-refresh' AND z.payload ? 'period')>=6
+ OR sc.period<to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=sc.id AND g.state='active'))
+ FROM quickbooks_snapshots s JOIN client_closes sc ON sc.id=s.close_id WHERE s.close_id=` + close + ` AND s.payload ? 'period' AND s.connection_id=` + ReadingConnection(close) + `
+ ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),false)`
+}
+
 // periodContent digests a period snapshot's accounts and reports, leaving out what changes on every read (a report's
 // generation time) or with activity after the month (current balances, sync tokens); "" when it cannot be read.
 func periodContent(payload []byte) string {
