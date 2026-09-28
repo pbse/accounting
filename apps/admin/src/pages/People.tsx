@@ -16,7 +16,7 @@ type WorkOSUser = {
 };
 type Membership = { subject: string; organization_id: string; firm_name: string; firm_enabled: boolean; id: string; granted: boolean; decided_by: string; decided_at: string; assignments: number; agent: string | null };
 type Invitation = { id: string; organization_id: string; firm_name: string; email: string; role: string; state: string; invited_by: string; created_at: string; expires_at: string | null };
-type Found = { query: string; workos: "ok" | "not_configured" | "unavailable"; users: WorkOSUser[]; memberships: Membership[]; invitations: Invitation[] };
+type Found = { query: string; workos: "ok" | "not_configured" | "unavailable"; from_app_records: boolean; users: WorkOSUser[]; memberships: Membership[]; invitations: Invitation[] };
 
 const firmLink = (id: string, name: string, tab = "people") => (name ? <Link to={`/firms/${encodeURIComponent(id)}?tab=${tab}`}>{name}</Link> : id);
 
@@ -100,6 +100,7 @@ export function People() {
           ))}
           <section>
             <h2>Firm memberships in the app</h2>
+            {found.data.from_app_records && <p className="note">Found through the app's own records of this address, which may include earlier owners of it. Check the member IDs.</p>}
             {found.data.memberships.length === 0 ? <p>No firm has a membership decision for this person.</p> : (
               <table>
                 <thead><tr><th>Firm</th><th>Member</th><th>Access</th><th>Clients</th><th>Agent</th><th>Decided by</th><th>When</th></tr></thead>

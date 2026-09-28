@@ -124,6 +124,10 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	if byID := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person, "", 200)["invitations"]); !strings.Contains(byID, email) {
 		t.Fatalf("invitations by the person's WorkOS email: %s", byID)
 	}
+	// While WorkOS answers, an email search shows only its current account, not earlier ones the app recorded.
+	if byEmail := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+email, "", 200)); !strings.Contains(byEmail, `"from_app_records":false`) {
+		t.Fatalf("WorkOS's account only: %s", byEmail)
+	}
 	// An earlier account that used the same address is not this user: a user-ID search does not widen to it.
 	previous := "user_previous" + strings.ToLower(rand.Text())
 	must(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,'Earlier owner of the address','fixture')`, other, previous)
@@ -142,7 +146,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	}
 	// When WorkOS does not answer, an email search still finds their memberships through the app's own records.
 	workosDown = true
-	if down := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+email, "", 200)); !strings.Contains(down, `"workos":"unavailable"`) || !strings.Contains(down, "Current firm") {
+	if down := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+email, "", 200)); !strings.Contains(down, `"workos":"unavailable"`) || !strings.Contains(down, `"from_app_records":true`) || !strings.Contains(down, "Current firm") {
 		t.Fatalf("app records during a WorkOS outage: %s", down)
 	}
 	workosDown = false
@@ -194,9 +198,13 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 		t.Fatalf("an unknown outcome: %s", unknown)
 	}
 	resendLost, loseCopyOnResend, copyLost = false, false, false
-	// The old date cannot expire an invitation WorkOS may have renewed.
+	// The old date cannot expire an invitation WorkOS may have renewed; the audit says the outcome is unknown.
 	if db.QueryRow(`SELECT expires_at>now()+interval '6 days' FROM member_invitations WHERE id::text=$1`, invitation).Scan(&later); !later {
 		t.Fatal("an unconfirmed resend keeps the invitation open as long as a resend would")
+	}
+	var unconfirmedAudit string
+	if err := db.QueryRow(`SELECT result||': '||error FROM platform_audit WHERE action='invitation.resend' AND target_id=$1 ORDER BY id DESC LIMIT 1`, invitation).Scan(&unconfirmedAudit); err != nil || !strings.Contains(unconfirmedAudit, "refused: WorkOS did not confirm whether") {
+		t.Fatalf("unconfirmed audit %q %v", unconfirmedAudit, err)
 	}
 	must(`UPDATE member_invitations SET state='revoked' WHERE id::text=$1`, invitation)
 	adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/invitations/"+invitation+"/resend", `{"reason":"They lost the first email"}`, 409)
