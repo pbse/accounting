@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations), A1 (workflows), A2 (firm management) and A3 (plans) implemented** (2026-09-28); A4 (hardening) is under way: audit search and export, platform alerts, content grants and the security review are in. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations), A1 (workflows), A2 (firm management) and A3 (plans) implemented** (2026-09-28); A4 (hardening) is under way: audit search and export, platform alerts, content grants, the security review and large-firm performance are in; only the console's own hostname remains. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -190,7 +190,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 | **A1. Workflows** (implemented) | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
 | **A2. Firm management** (implemented) | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
 | **A3. Plans** (implemented) | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
-| **A4. Hardening** (audit search and export, platform alerts, content grants and the security review implemented) | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
+| **A4. Hardening** (all implemented but the console's own hostname, which waits for a domain) | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
 
 **Suggested order across both plans:**
 1. Engine W0/W1 alongside admin A0.
@@ -246,6 +246,12 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 - **Content grants.** A staff member with `platform:content` can open a grant for one firm, for 15 minutes to 8 hours, with a reason (`POST /firms/{id}/grant`, audited as `content.grant`; migration 101). Opening another grant for the same firm replaces it. While a grant lasts, that firm's screens (its tabs, its runs, its plans, including editing or copying one, and the audit search or plans list filtered to that firm) reveal without asking. Each reveal is still recorded, with the reason `Under content grant #N: <reason>`. A request that can span firms (an unfiltered search, people) still asks every time; whether a grant applies depends on the request's scope, never on which firms one page of results holds. The sidebar lists open grants, each with a way to end it early (`content.grant_end`). A grant that ends or expires takes back what it showed (the plan builder closes, unsaved changes included, and warns of this while open), and hiding content while holding a grant keeps it hidden on that screen until shown again. The API honours a grant only for its holder and its firm, and only until it expires.
 
 - **Security review.** Recorded in [validation](validation.md#staff-console-security-review-2026-09-28). The edge Worker serves `/admin` with a script-only-from-self, never-framed policy. A request carrying the staff cookie from another site is refused. Reveal reasons are capped at 2,000 bytes, and audit reads at 32 MiB. A WorkOS session revoke or invitation resend records a `started` entry (migration 102) before calling WorkOS, and its outcome after, and holds no transaction while WorkOS works. `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead` covers every staff route as it is added.
+
+- **Large firms.** Measured against a local firm with 208,000 runs, 605,000 steps, 300,000 evidence files and 300,000 audit entries, plus 3,000 small firms. Every staff read answers in under 100 ms. To get there:
+  - **Run page.** It shows a long run's latest 200 steps and newest 200 child runs, with how many there are in all, and can show 200 earlier steps at a time, up to 2,000 (`?steps`). A run with 5,000 of each went from 1.8 MB to 71 KB.
+  - **Firms list.** It picks its page before counting. Counting in the same query had counted every firm the offset skipped, so page 30 took 330 ms; it now takes 45.
+  - **Indexes** (migration 103). Workflow runs are indexed by parent run, by firm and state, and by firm and last update. A firm's run counts and latest activity no longer read all its runs (the big firm's row: 132 ms to 10 ms), and a run's children no longer need a scan of every run on each refresh.
+  - **Other lists.** Firms, runs, plans, activity and audit all page with a next link, and each page reads at most 100 rows.
 
 ## Later ideas (not planned)
 
