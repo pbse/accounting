@@ -164,7 +164,7 @@ func TestAgentsActOnlyUnderAnApprovedMemberGrant(t *testing.T) {
 		t.Fatalf("administrators must see each member's access in force: %d %s", listed.Code, listed.Body.String())
 	}
 	session := connect()
-	if list := names(session); slices.Contains(list, "prepare_close") || slices.Contains(list, "request_approval") || !slices.Contains(list, "list_closes") || !slices.Contains(list, "native_reconciliation") || !slices.Contains(list, "list_close_jobs") {
+	if list := names(session); slices.Contains(list, "prepare_close") || slices.Contains(list, "request_approval") || slices.Contains(list, "recheck_close") || !slices.Contains(list, "list_closes") || !slices.Contains(list, "native_reconciliation") || !slices.Contains(list, "list_close_jobs") || !slices.Contains(list, "export_close_package") {
 		t.Fatalf("a read grant must offer only read tools: %v", list)
 	}
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_closes", Arguments: map[string]any{}})
