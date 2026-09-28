@@ -111,9 +111,10 @@ func deliverOperationsAlerts(ctx context.Context, db *sql.DB, endpoint, token st
 	}
 }
 
-// platformAlertQuery is the platform's own problems now, as (kind, item_id, detail): a worker loop whose heartbeat stopped
-// (the loop's process is alive, since this runs in it, but the loop is stalled), workflow runs stuck as the admin
-// panel's stuck view counts them, and provider writes whose outcome is unknown. The detail may change without
+// platformAlertQuery is the platform's own problems now, as (kind, item_id, detail): a loop whose heartbeat stopped (only
+// the worker process and the workflow engine report one; the other job loops' stalls show as their stuck items, in
+// Stuck work and the firms' alerts), workflow runs stuck as the admin panel's stuck view counts them, and provider
+// writes whose outcome is unknown. The detail may change without
 // re-alerting; a new alert needs a new kind or item.
 const platformAlertQuery = `SELECT 'platform.loop_stale',loop,'last beat '||beat_at::text FROM worker_heartbeats WHERE beat_at<now()-interval '5 minutes'
  UNION ALL SELECT 'platform.runs_stuck','workflow_runs',count(*)||' runnable run(s) not picked up' FROM workflow_runs r WHERE ` + stuckRuns + ` HAVING count(*)>0

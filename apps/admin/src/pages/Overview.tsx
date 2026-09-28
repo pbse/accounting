@@ -1,7 +1,7 @@
 import { useResource, when } from "../api";
 
 type Problem = { kind: string; item_id: string; detail: string; since: string | null; delivery: string | null };
-const problemLabel: Record<string, string> = { "platform.loop_stale": "A background loop stalled", "platform.runs_stuck": "Workflow runs stuck", "platform.unknown_effects": "Provider writes to reconcile" };
+const problemLabel: Record<string, string> = { "platform.loop_stale": "A heartbeat stopped", "platform.runs_stuck": "Workflow runs stuck", "platform.unknown_effects": "Provider writes to reconcile" };
 type Heartbeat = { loop: string; instance: string; beat_at: string; stale: boolean; panic: string | null; panicked_at: string | null };
 type Overview = {
   heartbeats: Heartbeat[];
@@ -59,7 +59,7 @@ export function Overview() {
                 </tbody>
               </table>
             )}
-            <p className="muted">The worker checks every minute and sends each new problem once to the operations webhook (OPERATIONS_ALERT_WEBHOOK_URL), when one is set; it resolves when the problem clears. A worker that is down cannot report itself: watch this page, or point an uptime monitor at the API.</p>
+            <p className="muted">The worker checks every minute and sends each new problem once to the operations webhook (OPERATIONS_ALERT_WEBHOOK_URL), when one is set; it resolves when the problem clears. Heartbeats come from the worker process and the workflow engine; the other job loops' stalls show as their stuck items, under Stuck work. A worker that is down cannot report itself: watch this page, or point an uptime monitor at the API.</p>
           </section>
           <section>
             <h2>Background loops</h2>
