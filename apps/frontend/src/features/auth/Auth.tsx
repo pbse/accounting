@@ -1,15 +1,23 @@
 import { AuthKitProvider, useAuth } from "@workos-inc/authkit-react";
-import { useLayoutEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { apiBaseUrl } from "../../lib/api";
 
 export const authKitClientId = import.meta.env.VITE_WORKOS_CLIENT_ID as
   string | undefined;
+// AUTH_SESSION=server keeps WorkOS's tokens on our API behind an HttpOnly cookie. Unset or "client" uses WorkOS's
+// browser session, which needs a custom WorkOS authentication domain (VITE_WORKOS_API_HOSTNAME) in production.
+const serverSession = import.meta.env.VITE_AUTH_SESSION === "server";
+
+type Session = { user: { email: string } | null; isLoading: boolean; signIn: () => Promise<void> | void; signOut: () => Promise<void> | void };
+
 let accessToken: (() => Promise<string>) | undefined;
 export async function authenticationHeaders(): Promise<Record<string, string>> {
-  if (!authKitClientId) return {};
+  // The server session's cookie goes with every same-origin request on its own.
+  if (!authKitClientId || serverSession) return {};
   if (!accessToken) throw new Error("Sign in before opening client work.");
   return { Authorization: `Bearer ${await accessToken()}` };
 }
-function Session({ children }: { children: ReactNode }) {
+function ClientSession({ children }: { children: ReactNode }) {
   const { getAccessToken } = useAuth();
   useLayoutEffect(() => {
     accessToken = getAccessToken;
@@ -19,8 +27,50 @@ function Session({ children }: { children: ReactNode }) {
   }, [getAccessToken]);
   return children;
 }
+
+function startServerSignIn() {
+  window.location.assign(`${apiBaseUrl}/v1/auth/login?return=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+}
+async function endServerSession() {
+  const response = await fetch(`${apiBaseUrl}/v1/auth/logout`, { method: "POST" });
+  const { logout_url } = response.ok ? await response.json() : { logout_url: "/" };
+  window.location.assign(logout_url);
+}
+const signedOut: Session = { user: null, isLoading: false, signIn: startServerSignIn, signOut: endServerSession };
+const ServerSessionContext = createContext<Session>({ ...signedOut, isLoading: true });
+function ServerSession({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session>({ ...signedOut, isLoading: true });
+  useEffect(() => {
+    let live = true;
+    fetch(`${apiBaseUrl}/v1/auth/session`)
+      .then(async (response) => (response.ok ? (await response.json()).user : null))
+      .catch(() => null)
+      .then((user) => live && setSession({ ...signedOut, user }));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return <ServerSessionContext.Provider value={session}>{children}</ServerSessionContext.Provider>;
+}
+
+function useClientSession(): Session {
+  const { user, isLoading, signIn, signOut } = useAuth();
+  return {
+    user: user ? { email: user.email } : null,
+    isLoading,
+    signIn: () => {
+      sessionStorage.setItem("returnTo", window.location.pathname + window.location.search);
+      return signIn();
+    },
+    signOut: () => signOut({ returnTo: window.location.origin }),
+  };
+}
+// Chosen once, so every render calls the same hooks.
+export const useSession: () => Session = serverSession ? () => useContext(ServerSessionContext) : useClientSession;
+
 export function Authentication({ children }: { children: ReactNode }) {
   if (!authKitClientId) return children;
+  if (serverSession) return <ServerSession>{children}</ServerSession>;
   return (
     <AuthKitProvider
       clientId={authKitClientId}
@@ -32,12 +82,12 @@ export function Authentication({ children }: { children: ReactNode }) {
         window.location.replace(next.startsWith("/dashboard") ? next : "/dashboard");
       }}
     >
-      <Session>{children}</Session>
+      <ClientSession>{children}</ClientSession>
     </AuthKitProvider>
   );
 }
 export function AccountAccess() {
-  const { user, isLoading, signIn, signOut } = useAuth();
+  const { user, isLoading, signIn, signOut } = useSession();
   const [error, setError] = useState("");
   if (isLoading) return <p role="status">Checking your session…</p>;
   return (
@@ -48,16 +98,11 @@ export function AccountAccess() {
           : "Sign in to open your firm’s workspace."}
       </p>
       <button
-        onClick={() => {
-          if (user) {
-            signOut({ returnTo: window.location.origin });
-            return;
-          }
-          sessionStorage.setItem("returnTo", window.location.pathname + window.location.search);
-          void signIn().catch(() =>
-            setError("Sign-in could not start. Please try again."),
-          );
-        }}
+        onClick={() =>
+          void Promise.resolve(user ? signOut() : signIn()).catch(() =>
+            setError(user ? "Sign-out could not finish. Please try again." : "Sign-in could not start. Please try again."),
+          )
+        }
       >
         {user ? "Sign out" : "Sign in with AuthKit"}
       </button>

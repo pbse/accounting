@@ -1,7 +1,6 @@
-import { useAuth } from "@workos-inc/authkit-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { authKitClientId } from "../auth/Auth";
+import { authKitClientId, useSession } from "../auth/Auth";
 import { GoalCard, localDate } from "../closes/Goal";
 import { useUnlocked, workspaceRequest } from "../closes/workspace";
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
@@ -23,7 +22,7 @@ function readOpen() {
 
 // The panel shows only in a signed-in (or unlocked) workspace.
 export function useSignedIn() {
-  return authKitClientId ? !!useAuth().user : useUnlocked();
+  return authKitClientId ? !!useSession().user : useUnlocked();
 }
 
 export function Assistant() {
