@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -152,7 +153,7 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		ids, emails = append(ids, p.ID), append(emails, strings.ToLower(p.Email))
 	}
 	system := context.WithValue(r.Context(), systemKey{}, true)
-	if err := knownPeople(system, db, &ids, &emails); err != nil {
+	if err := knownPeople(system, db, &ids, &emails, user == ""); err != nil {
 		adminFirmProblem(w, err, "people search")
 		return
 	}
@@ -206,13 +207,14 @@ func jsonList(values []string) string {
 	return string(raw)
 }
 
-// knownPeople adds the user IDs the app has recorded for these email addresses (an accepted invitation, a sign-in it
-// holds) and the addresses it has recorded for these IDs.
-func knownPeople(ctx context.Context, db *sql.DB, ids, emails *[]string) error {
+// knownPeople adds the addresses the app has recorded for these IDs (an accepted invitation, a sign-in it holds) and, for
+// a search by email (byEmail), the IDs it has recorded for these addresses. A search by user ID never widens to other
+// accounts that once used the same address.
+func knownPeople(ctx context.Context, db *sql.DB, ids, emails *[]string, byEmail bool) error {
 	rows, err := db.QueryContext(ctx, `SELECT DISTINCT subject,lower(email) FROM (
  SELECT subject,email FROM member_invitations WHERE subject IS NOT NULL
  UNION ALL SELECT subject,email FROM auth_sessions) k
- WHERE lower(email) IN (SELECT jsonb_array_elements_text($1::jsonb)) OR subject=ANY(string_to_array($2,','))`, jsonList(*emails), strings.Join(*ids, ","))
+ WHERE ($3 AND lower(email) IN (SELECT jsonb_array_elements_text($1::jsonb))) OR subject=ANY(string_to_array($2,','))`, jsonList(*emails), strings.Join(*ids, ","), byEmail)
 	if err != nil {
 		return err
 	}
@@ -357,6 +359,7 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	var expires time.Time
+	sent := false // WorkOS resent it: from here on, a failure is the app's, and resending would email the person twice.
 	// Outlives the request, so a closed browser cannot leave WorkOS's answer unrecorded.
 	err := adminAct(context.WithoutCancel(r.Context()), db, adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason)},
 		func(ctx context.Context, tx *sql.Tx) error {
@@ -369,7 +372,7 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				return err
 			}
 			// WorkOS's own copy, just before this attempt: what a lost answer is judged against.
-			var before, sent workosInvitation
+			var before, current workosInvitation
 			path := "/user_management/invitations/" + url.PathEscape(workosID)
 			if workos(ctx, "GET", path, nil, &before) != nil {
 				return fmt.Errorf("%w: WorkOS did not answer", errWorkOS)
@@ -377,7 +380,7 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			if before.State != "pending" {
 				return errInvitationNotPending
 			}
-			if err = workos(ctx, "POST", path+"/resend", map[string]any{}, &sent); err != nil {
+			if err = workos(ctx, "POST", path+"/resend", map[string]any{}, &current); err != nil {
 				// A refusal (4xx) sent nothing. Any other failure may have lost the answer after sending: WorkOS's copy
 				// says whether this attempt sent (an expiry later than just before it), and when that cannot be read,
 				// the outcome is unknown, not "unsent".
@@ -385,19 +388,25 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				if errors.As(err, &status) && status.code >= 400 && status.code < 500 {
 					return fmt.Errorf("%w: WorkOS refused to resend it", errWorkOS)
 				}
-				if workos(ctx, "GET", path, nil, &sent) != nil {
+				if workos(ctx, "GET", path, nil, &current) != nil {
 					return errResendUnconfirmed
 				}
-				if !sent.ExpiresAt.After(before.ExpiresAt) {
+				if !current.ExpiresAt.After(before.ExpiresAt) {
 					return fmt.Errorf("%w: the invitation was not resent", errWorkOS)
 				}
 			}
-			if expires = sent.ExpiresAt; expires.IsZero() {
+			sent = true
+			if expires = current.ExpiresAt; expires.IsZero() {
 				return nil
 			}
 			_, err = tx.ExecContext(ctx, `UPDATE member_invitations SET expires_at=$3 WHERE id::text=$1 AND organization_id=$2`, invitation, firm, expires)
 			return err
 		})
+	if err != nil && sent {
+		log.Printf("Invitation %s was resent but the app could not record it: %v", invitation, err)
+		problem(w, 503, "WorkOS sent the invitation again, but the app could not record it. Do not resend it, or the person gets it twice.")
+		return
+	}
 	if err != nil {
 		adminFirmProblem(w, err, "invitation resend")
 		return

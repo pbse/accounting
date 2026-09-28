@@ -123,6 +123,14 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	if byID := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person, "", 200)["invitations"]); !strings.Contains(byID, email) {
 		t.Fatalf("invitations by the person's WorkOS email: %s", byID)
 	}
+	// An earlier account that used the same address is not this user: a user-ID search does not widen to it.
+	previous := "user_previous" + strings.ToLower(rand.Text())
+	must(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,'Earlier owner of the address','fixture')`, other, previous)
+	must(`INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,'session_old',$4,'\x00','\x00',now(),now()+interval '1 day')`, rand.Text(), previous, other, email)
+	t.Cleanup(func() { db.Exec(`DELETE FROM auth_sessions WHERE subject=$1`, previous) })
+	if byID := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person, "", 200)["memberships"]); strings.Contains(byID, previous) {
+		t.Fatalf("a user-ID search must not include another account: %s", byID)
+	}
 	// When WorkOS does not answer, an email search still finds their memberships through the app's own records.
 	workosDown = true
 	if down := mustString(adminJSON(t, h, token, "GET", "/v1/admin/people?q="+email, "", 200)); !strings.Contains(down, `"workos":"unavailable"`) || !strings.Contains(down, "Current firm") {
