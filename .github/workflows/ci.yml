@@ -39,7 +39,8 @@ jobs:
           # The commit and its parent: a pull request's merge commit, to see what the pull request changes.
           fetch-depth: 2
       - name: Install PDF and OCR tools in the background
-        run: (sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-eng; echo $? > /tmp/apt.status) > /tmp/apt.log 2>&1 &
+        # set +e: a failure must still write its status, or the wait below could only time out.
+        run: (set +e; sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-eng; echo $? > /tmp/apt.status) > /tmp/apt.log 2>&1 &
       - name: Apply migrations with the migration runner, twice (the second must apply nothing)
         run: |
           DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh
@@ -58,7 +59,7 @@ jobs:
       - name: TypeScript checks, tests, builds and Worker bundles in the background
         # The app builds run vite directly: `npm run check` has already type-checked every workspace.
         run: |
-          (npm run check && npm test && npm exec -w @close/frontend -- vite build && npm exec -w @close/admin -- vite build &&
+          (set +e; npm run check && npm test && npm exec -w @close/frontend -- vite build && npm exec -w @close/admin -- vite build &&
            npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc &&
            npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc &&
            npx wrangler deploy --dry-run --containers-rollout=none -c workers/scanner/wrangler.jsonc; echo $? > /tmp/node.status) > /tmp/node.log 2>&1 &
@@ -66,8 +67,8 @@ jobs:
           WRANGLER_SEND_METRICS: "false"
       - name: Go tests and vet
         run: |
-          timeout 300 sh -c 'until [ -f /tmp/apt.status ]; do sleep 1; done'
-          test "$(cat /tmp/apt.status)" = 0 || { cat /tmp/apt.log; exit 1; }
+          timeout 300 sh -c 'until [ -f /tmp/apt.status ]; do sleep 1; done' || true
+          test "$(cat /tmp/apt.status 2>/dev/null)" = 0 || { cat /tmp/apt.log; exit 1; }
           npm run check:go
       - name: Workflow registry matches the workflow directories
         run: cd services/backend && go generate ./workflows && git diff --exit-code -- workflows/registry_gen.go
@@ -80,9 +81,9 @@ jobs:
       - run: docker compose config --quiet
       - name: TypeScript checks, tests, builds and Worker bundles passed
         run: |
-          timeout 300 sh -c 'until [ -f /tmp/node.status ]; do sleep 1; done'
+          timeout 300 sh -c 'until [ -f /tmp/node.status ]; do sleep 1; done' || true
           cat /tmp/node.log
-          test "$(cat /tmp/node.status)" = 0
+          test "$(cat /tmp/node.status 2>/dev/null)" = 0
       - name: Container images build, when a Dockerfile or the Go modules change
         # Otherwise the Go build above covers the code, and every deploy builds the images again.
         run: |
