@@ -1,8 +1,10 @@
 package transport
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -114,41 +116,20 @@ func registerMembers(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var org string
-		if err = tx.QueryRowContext(r.Context(), `SELECT id FROM organizations WHERE id=$1 AND enabled FOR UPDATE`, organization(r)).Scan(&org); err != nil {
+		org := organization(r)
+		var enabled, actorStillMember bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, org).Scan(&enabled); err != nil || !enabled {
 			problem(w, 403, "Organization unavailable.")
 			return
 		}
-		var actorStillMember bool
 		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, org, subject(r)).Scan(&actorStillMember); err != nil || !actorStillMember {
 			problem(w, 403, "Your firm membership changed. No member access was changed.")
 			return
 		}
-		var prior string
-		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM current_organization_members WHERE organization_id=$1 AND subject=$2),'')`, org, in.Subject).Scan(&prior); err != nil {
-			problem(w, 503, "Current member access unavailable.")
-			return
-		}
-		if prior != in.PreviousID {
+		id, err := decideMemberAccess(r.Context(), tx, org, in.Subject, in.Granted, in.PreviousID, in.Reason, subject(r))
+		if errors.Is(err, errMemberChanged) {
 			problem(w, 409, "Member access changed. Refresh history before deciding.")
 			return
-		}
-		var id string
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, org, in.Subject, in.Granted, in.Reason, subject(r)).Scan(&id)
-		// A removed member's assistant history, portfolio goals and attention marks and preferences go with their membership.
-		if err == nil && !in.Granted {
-			_, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE organization_id=$1 AND author=$2`, org, in.Subject)
-			if err == nil {
-				_, err = tx.ExecContext(r.Context(), `DELETE FROM assistant_answers WHERE organization_id=$1 AND author=$2`, org, in.Subject)
-			}
-			if err == nil {
-				_, err = tx.ExecContext(r.Context(), `DELETE FROM portfolio_operations WHERE organization_id=$1 AND author=$2`, org, in.Subject)
-			}
-			for _, table := range []string{"attention_marks", "attention_preferences"} {
-				if err == nil {
-					_, err = tx.ExecContext(r.Context(), `DELETE FROM `+table+` WHERE organization_id=$1 AND subject=$2`, org, in.Subject)
-				}
-			}
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "Member access change could not be confirmed. Refresh before retrying.")
@@ -156,6 +137,33 @@ func registerMembers(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]string{"id": id})
 	})
+}
+
+var errMemberChanged = errors.New("the member's access changed since it was read")
+
+// decideMemberAccess records a grant or revocation of a person's membership in the firm, if their current decision is still
+// previousID (empty: none). The caller holds the firm's row lock. A removed member's assistant history, portfolio goals and
+// attention marks and preferences go with their membership.
+func decideMemberAccess(ctx context.Context, tx *sql.Tx, org, member string, granted bool, previousID, reason, actor string) (string, error) {
+	var prior, id string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT id::text FROM current_organization_members WHERE organization_id=$1 AND subject=$2),'')`, org, member).Scan(&prior); err != nil {
+		return "", err
+	}
+	if prior != previousID {
+		return "", errMemberChanged
+	}
+	err := tx.QueryRowContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,$3,$4,$5) RETURNING id::text`, org, member, granted, reason, actor).Scan(&id)
+	if err != nil || granted {
+		return id, err
+	}
+	for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1 AND author=$2`, `DELETE FROM assistant_answers WHERE organization_id=$1 AND author=$2`,
+		`DELETE FROM portfolio_operations WHERE organization_id=$1 AND author=$2`, `DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2`,
+		`DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2`} {
+		if _, err = tx.ExecContext(ctx, q, org, member); err != nil {
+			return "", err
+		}
+	}
+	return id, nil
 }
 
 func registerOrganizationRevocation(mux *http.ServeMux, db *sql.DB) {
@@ -178,16 +186,37 @@ func registerOrganizationRevocation(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Confirm this exact firm and a suspension reason.")
 			return
 		}
-		result, err := db.ExecContext(r.Context(), `UPDATE organizations SET enabled=false,disabled_at=now(),disabled_by=$2,disabled_reason=$3 WHERE id=$1 AND enabled`, in.OrganizationID, subject(r), in.Reason)
+		err := setOrganizationEnabled(r.Context(), db, in.OrganizationID, false, subject(r), in.Reason)
+		if errors.Is(err, errAlreadyThatWay) {
+			problem(w, 409, "Firm is already suspended. No access was changed.")
+			return
+		}
 		if err != nil {
 			problem(w, 503, "Firm suspension could not be confirmed.")
 			return
 		}
-		n, _ := result.RowsAffected()
-		if n != 1 {
-			problem(w, 409, "Firm is already suspended. No access was changed.")
-			return
-		}
 		jsonReply(w, 200, map[string]bool{"revoked": true})
 	})
+}
+
+var errAlreadyThatWay = errors.New("the firm is already suspended or already active")
+
+// setOrganizationEnabled suspends a firm (its members' requests are refused and workers skip it) or resumes it. A suspension
+// keeps who and why on the firm; resuming leaves that record of the last suspension in place.
+func setOrganizationEnabled(ctx context.Context, q interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, org string, enabled bool, by, reason string) error {
+	query := `UPDATE organizations SET enabled=false,disabled_at=now(),disabled_by=$2,disabled_reason=$3 WHERE id=$1 AND enabled`
+	args := []any{org, by, reason}
+	if enabled {
+		query, args = `UPDATE organizations SET enabled=true WHERE id=$1 AND NOT enabled`, []any{org}
+	}
+	result, err := q.ExecContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return errAlreadyThatWay
+	}
+	return nil
 }

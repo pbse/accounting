@@ -41,24 +41,29 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
 
 // useResource loads path and reloads it on demand; a newer load always wins. Reloading the same path
 // keeps its data on screen until the new answer; a different path, or a failed load, never shows
-// another path's data.
-export function useResource<T>(path: string) {
+// another path's data. With a reason, it asks for client content revealed (an audited read); a
+// reveal counts as a different path, so hiding it clears the content at once.
+export function useResource<T>(path: string, revealReason?: string) {
   const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true });
   const [version, setVersion] = useState(0);
-  const loaded = useRef(path);
+  const key = revealReason === undefined ? path : `${path} revealed for ${revealReason}`;
+  const loaded = useRef(key);
   useEffect(() => {
     let current = true;
-    const samePath = loaded.current === path;
-    loaded.current = path;
+    const samePath = loaded.current === key;
+    loaded.current = key;
     setState((previous) => (samePath ? { ...previous, loading: true } : { loading: true }));
-    get<T>(path).then(
+    const request = revealReason === undefined
+      ? get<T>(path)
+      : get<T>(`${path}${path.includes("?") ? "&" : "?"}reveal=1`, { "X-Access-Reason": revealReason });
+    request.then(
       (data) => current && setState({ data, loading: false }),
       (error: Error) => current && setState({ error: error.message, loading: false }),
     );
     return () => {
       current = false;
     };
-  }, [path, version]);
+  }, [key, version]); // path and revealReason are in key
   const reload = useCallback(() => setVersion((v) => v + 1), []);
   return { ...state, reload };
 }

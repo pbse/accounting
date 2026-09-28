@@ -22,14 +22,8 @@ import (
 // reason. Client content in inputs and outputs is masked unless a staff member with platform:content
 // reveals it with a reason, which is audited too.
 func registerAdminWorkflows(mux *http.ServeMux, db *sql.DB, token string) {
-	guard := func(permission string, next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
-		return staffOnly(token, permission, func(w http.ResponseWriter, r *http.Request) {
-			if db == nil {
-				problem(w, 503, "The admin panel needs a configured database.")
-				return
-			}
-			next(w, r)
-		})
+	guard := func(permission string, next http.HandlerFunc) http.HandlerFunc {
+		return adminGuard(token, db, permission, next)
 	}
 	mux.HandleFunc("GET /v1/admin/workflows/definitions", guard(platformRead, func(w http.ResponseWriter, r *http.Request) { adminDefinitions(w, r, db) }))
 	mux.HandleFunc("GET /v1/admin/workflows/activities", guard(platformRead, func(w http.ResponseWriter, r *http.Request) {
@@ -169,16 +163,12 @@ func adminRuns(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if condition == "" {
 		condition = "true"
 	}
-	offset, err := strconv.Atoi(q.Get("offset"))
-	if q.Get("offset") == "" {
-		offset, err = 0, nil
-	}
-	if err != nil || offset < 0 || offset > 1_000_000 {
-		problem(w, 422, "The offset must be a whole number.")
+	offset, ok := adminOffset(w, r)
+	if !ok {
 		return
 	}
 	runs := []adminRunRow{}
-	err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
+	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT `+adminRunColumns+` FROM workflow_runs r LEFT JOIN organizations o ON o.id=r.organization_id
  WHERE ($1='' OR r.organization_id=$1) AND ($2='' OR r.workflow=$2) AND ($3='' OR r.state=$3) AND `+condition+`
  ORDER BY r.id DESC LIMIT $4 OFFSET $5`, q.Get("firm"), q.Get("workflow"), q.Get("state"), adminPage+1, offset)
@@ -276,23 +266,12 @@ func adminRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		adminWorkflowProblem(w, err, "run")
 		return
 	}
-	if reveal {
-		// Seeing client content is a staff action: it needs the permission and a reason, and is audited.
-		member := staffOf(r.Context())
-		if !slices.Contains(member.Permissions, platformContent) {
-			problem(w, 403, "Revealing client content needs platform:content.")
-			return
-		}
-		firm := ""
-		if run.Organization != nil {
-			firm = *run.Organization
-		}
-		reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
-		if err = adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.reveal", TargetType: "workflow_run", TargetID: strconv.FormatInt(id, 10), Reason: reason},
-			func(context.Context, *sql.Tx) error { return nil }); err != nil {
-			adminWorkflowProblem(w, err, "reveal")
-			return
-		}
+	firm := ""
+	if run.Organization != nil {
+		firm = *run.Organization
+	}
+	if reveal && !adminReveal(w, r, db, firm, "workflow_run", strconv.FormatInt(id, 10)) {
+		return
 	}
 	definition := lookupDefinition(run.Workflow)
 	var inputSchema, outputSchema map[string]any
@@ -373,13 +352,13 @@ func hidden(raw []byte) json.RawMessage {
 	return out
 }
 
-// only masks every text in a recorded object, at any depth, except the named fields.
+// only masks every text in a recorded value, at any depth, except the named fields.
 func only(raw []byte, keep ...string) json.RawMessage {
-	var fields map[string]any
-	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+	var v any
+	if json.Unmarshal(raw, &v) != nil || v == nil {
 		return hidden(raw)
 	}
-	out, _ := json.Marshal(maskExcept(fields, keep))
+	out, _ := json.Marshal(maskExcept(v, keep))
 	return out
 }
 

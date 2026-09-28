@@ -163,16 +163,33 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 	return err
 }
 
-func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
-	read := func(next http.HandlerFunc) http.HandlerFunc {
-		return staffOnly(token, platformRead, func(w http.ResponseWriter, r *http.Request) {
-			if db == nil {
-				problem(w, 503, "The admin panel needs a configured database.")
-				return
-			}
-			next(w, r)
-		})
+// adminGuard lets through staff holding permission, once a database is configured.
+func adminGuard(token string, db *sql.DB, permission string, next http.HandlerFunc) http.HandlerFunc {
+	return staffOnly(token, permission, func(w http.ResponseWriter, r *http.Request) {
+		if db == nil {
+			problem(w, 503, "The admin panel needs a configured database.")
+			return
+		}
+		next(w, r)
+	})
+}
+
+// adminOffset reads a list's ?offset; when it is not a whole number it answers 422 and returns false.
+func adminOffset(w http.ResponseWriter, r *http.Request) (int, bool) {
+	raw := r.URL.Query().Get("offset")
+	if raw == "" {
+		return 0, true
 	}
+	offset, err := strconv.Atoi(raw)
+	if err != nil || offset < 0 || offset > 1_000_000 {
+		problem(w, 422, "The offset must be a whole number.")
+		return 0, false
+	}
+	return offset, true
+}
+
+func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
+	read := func(next http.HandlerFunc) http.HandlerFunc { return adminGuard(token, db, platformRead, next) }
 	mux.HandleFunc("GET /v1/admin/me", read(func(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, 200, staffOf(r.Context()))
 	}))
@@ -180,6 +197,7 @@ func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("GET /v1/admin/firms", read(func(w http.ResponseWriter, r *http.Request) { adminFirms(w, r, db) }))
 	mux.HandleFunc("GET /v1/admin/firms/{id}", read(func(w http.ResponseWriter, r *http.Request) { adminFirm(w, r, db) }))
 	registerAdminWorkflows(mux, db, token)
+	registerAdminFirms(mux, db, token)
 }
 
 // adminOverview is the platform's health at a glance.
@@ -257,16 +275,12 @@ func adminFirms(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 422, "The search is too long.")
 		return
 	}
-	offset, err := strconv.Atoi(r.URL.Query().Get("offset"))
-	if r.URL.Query().Get("offset") == "" {
-		offset, err = 0, nil
-	}
-	if err != nil || offset < 0 || offset > 1_000_000 {
-		problem(w, 422, "The offset must be a whole number.")
+	offset, ok := adminOffset(w, r)
+	if !ok {
 		return
 	}
 	firms := []adminFirmRow{}
-	err = adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
+	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT `+adminFirmColumns+` FROM organizations o
  WHERE o.id<>'local-development' AND ($1='' OR position(lower($1) in lower(o.name))>0 OR position(lower($1) in lower(o.id))>0)
  ORDER BY o.created_at DESC,o.id LIMIT $2 OFFSET $3`, search, adminPage+1, offset)
@@ -299,17 +313,17 @@ func adminFirms(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id := r.PathValue("id")
 	var firm adminFirmRow
-	var members, runs, health []byte
+	var suspension, runs, health []byte
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		var err error
 		if firm, err = scanFirm(tx.QueryRowContext(ctx, `SELECT `+adminFirmColumns+` FROM organizations o WHERE o.id=$1`, id)); err != nil {
 			return err
 		}
 		return tx.QueryRowContext(ctx, `SELECT
- COALESCE((SELECT jsonb_agg(jsonb_build_object('subject',subject,'granted',granted,'decided_by',actor,'reason',reason,'decided_at',created_at) ORDER BY granted DESC,subject) FROM current_organization_members WHERE organization_id=$1),'[]'::jsonb),
- COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'started_by',started_by,'created_at',created_at,'finished_at',finished_at,'error',error) ORDER BY id DESC)
+ (SELECT CASE WHEN disabled_at IS NULL THEN 'null'::jsonb ELSE jsonb_build_object('at',disabled_at,'by',disabled_by) END FROM organizations WHERE id=$1),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'started_by',started_by,'created_at',created_at,'finished_at',finished_at) ORDER BY id DESC)
    FROM (SELECT * FROM workflow_runs WHERE organization_id=$1 ORDER BY id DESC LIMIT 20) r),'[]'::jsonb),
- COALESCE((SELECT jsonb_build_object('run_id',id,'finished_at',finished_at,'report',output) FROM workflow_runs WHERE organization_id=$1 AND workflow='firm_health_check' AND state='completed' ORDER BY finished_at DESC LIMIT 1),'null'::jsonb)`, id).Scan(&members, &runs, &health)
+ COALESCE((SELECT jsonb_build_object('run_id',id,'finished_at',finished_at,'report',output) FROM workflow_runs WHERE organization_id=$1 AND workflow='firm_health_check' AND state='completed' ORDER BY finished_at DESC LIMIT 1),'null'::jsonb)`, id).Scan(&suspension, &runs, &health)
 	})
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "local-development") {
 		problem(w, 404, "Firm not found.")
@@ -320,7 +334,8 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 503, "The firm is unavailable.")
 		return
 	}
-	jsonReply(w, 200, map[string]any{"firm": firm, "members": json.RawMessage(members), "runs": json.RawMessage(runs), "health": json.RawMessage(health)})
+	// The last suspension's reason is free text; it is in the firm's activity, masked until revealed.
+	jsonReply(w, 200, map[string]any{"firm": firm, "last_suspension": json.RawMessage(suspension), "runs": json.RawMessage(runs), "health": json.RawMessage(health)})
 }
 
 // RunHeartbeat records every 30 seconds that loop is alive, for the admin overview.
@@ -336,4 +351,26 @@ func RunHeartbeat(ctx context.Context, db *sql.DB, loop string) {
 		case <-time.After(30 * time.Second):
 		}
 	}
+}
+
+// adminReveal lets a staff member see client content: it needs platform:content and a reason in the X-Access-Reason header,
+// and records the read as content.reveal on the firm. When it refuses, it has answered the request and returns false.
+func adminReveal(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, targetType, targetID string) bool {
+	if !slices.Contains(staffOf(r.Context()).Permissions, platformContent) {
+		problem(w, 403, "Revealing client content needs platform:content.")
+		return false
+	}
+	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.reveal", TargetType: targetType, TargetID: targetID, Reason: reason},
+		func(context.Context, *sql.Tx) error { return nil })
+	if errors.Is(err, errReasonRequired) {
+		problem(w, 422, err.Error())
+		return false
+	}
+	if err != nil {
+		log.Printf("Content reveal could not be recorded: %v", err)
+		problem(w, 503, "The reveal could not be recorded, so nothing was shown.")
+		return false
+	}
+	return true
 }

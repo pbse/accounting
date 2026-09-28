@@ -262,20 +262,12 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if in.Action == "revoke" {
-			// The app's authority goes first, so a failed WorkOS revoke can never leave it ready to enroll. A send still
-			// unconfirmed is revoked in WorkOS when it completes or is settled.
-			var workosID sql.NullString
-			if err := db.QueryRowContext(r.Context(), `UPDATE member_invitations SET state='revoked',decided_at=now() WHERE id::text=$1 AND organization_id=$2 AND state IN ('sending','pending') RETURNING workos_id`, in.ID, org).Scan(&workosID); err != nil {
+			workosID, err := closeInvitation(r.Context(), db, org, in.ID)
+			if err != nil {
 				problem(w, 409, "Only an open invitation can be revoked. Refresh the list.")
 				return
 			}
-			message := "Invitation revoked."
-			if !workosID.Valid {
-				message = "Invitation revoked. It was still being sent; the app revokes it in WorkOS once WorkOS confirms it."
-			} else if workos(r.Context(), "POST", "/user_management/invitations/"+url.PathEscape(workosID.String)+"/revoke", map[string]any{}, nil) != nil {
-				message = "The app will not enroll this invitation, but WorkOS did not confirm revoking it. Check the firm's invitations in WorkOS."
-			}
-			jsonReply(w, 200, map[string]string{"message": message})
+			jsonReply(w, 200, map[string]string{"message": revokeInWorkOS(r.Context(), workosID)})
 			return
 		}
 		address, err := mail.ParseAddress(strings.TrimSpace(in.Email))
@@ -354,4 +346,26 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]string{"id": id, "message": "Invitation sent to " + email + "."})
 	})
+}
+
+// closeInvitation revokes an open invitation in the app, returning its WorkOS ID (null while it is still being sent). The
+// app's authority goes first, so a failed WorkOS revoke can never leave it ready to enroll; see revokeInWorkOS.
+func closeInvitation(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, org, id string) (sql.NullString, error) {
+	var workosID sql.NullString
+	err := q.QueryRowContext(ctx, `UPDATE member_invitations SET state='revoked',decided_at=now() WHERE id::text=$1 AND organization_id=$2 AND state IN ('sending','pending') RETURNING workos_id`, id, org).Scan(&workosID)
+	return workosID, err
+}
+
+// revokeInWorkOS revokes an invitation closeInvitation closed, after that change committed, and says what happened. A send
+// still unconfirmed is revoked in WorkOS when it completes or is settled.
+func revokeInWorkOS(ctx context.Context, workosID sql.NullString) string {
+	if !workosID.Valid {
+		return "Invitation revoked. It was still being sent; the app revokes it in WorkOS once WorkOS confirms it."
+	}
+	if workos(ctx, "POST", "/user_management/invitations/"+url.PathEscape(workosID.String)+"/revoke", map[string]any{}, nil) != nil {
+		return "The app will not enroll this invitation, but WorkOS did not confirm revoking it. Check the firm's invitations in WorkOS."
+	}
+	return "Invitation revoked."
 }

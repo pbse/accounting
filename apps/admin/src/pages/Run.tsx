@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { usePermissions } from "../App";
 import { get, post, when } from "../api";
+import { ActionForm } from "../components/ActionForm";
 import { FlowGraph, type PlanNode, type Step } from "../components/Flow";
 import { stateTone, type RunRow } from "./Runs";
 
@@ -22,34 +23,6 @@ const active = ["queued", "running", "waiting"];
 const masked = "••••";
 const text = (value: string) => (value === masked ? "Hidden until client content is revealed." : value);
 const isMasked = (value: string) => value.includes(masked);
-
-// An action staff take on a run: it always asks why, and the answer goes to the audit log.
-function ActionForm({ label, danger, allowed = true, onSubmit, children }: { label: string; danger?: boolean; allowed?: boolean; onSubmit: (reason: string) => Promise<void>; children?: ReactNode }) {
-  const [reason, setReason] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  if (!allowed) return <p className="muted">{label}: your role does not allow this.</p>;
-  return (
-    <form className="action" onSubmit={async (event) => {
-      event.preventDefault();
-      setBusy(true);
-      setError("");
-      try {
-        await onSubmit(reason.trim());
-        setReason("");
-      } catch (e) {
-        setError((e as Error).message);
-      } finally {
-        setBusy(false);
-      }
-    }}>
-      {children}
-      <label>Reason<input required value={reason} maxLength={500} onChange={(event) => setReason(event.target.value)} /></label>
-      <button className={danger ? "danger" : "primary"} disabled={busy || !reason.trim()}>{label}</button>
-      {error && <p role="alert">{error}</p>}
-    </form>
-  );
-}
 
 function Json({ value }: { value: unknown }) {
   if (value === null || value === undefined) return <p className="muted">None</p>;
