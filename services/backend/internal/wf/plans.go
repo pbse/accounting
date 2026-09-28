@@ -507,6 +507,16 @@ type PlanDraft struct {
 // agent's plan can only be created as a proposal (at most 20 a day per firm), so nothing an agent
 // writes runs until a person approves it.
 func CreatePlan(ctx context.Context, db *sql.DB, d PlanDraft) (int64, error) {
+	var id int64
+	err := inTx(ctx, db, func(tx *sql.Tx) (err error) {
+		id, err = CreatePlanTx(ctx, tx, d)
+		return err
+	})
+	return id, err
+}
+
+// CreatePlanTx is CreatePlan in the caller's transaction.
+func CreatePlanTx(ctx context.Context, tx *sql.Tx, d PlanDraft) (int64, error) {
 	p, err := ParsePlan(d.Plan)
 	if err == nil {
 		err = p.check(nil)
@@ -527,32 +537,35 @@ func CreatePlan(ctx context.Context, db *sql.DB, d PlanDraft) (int64, error) {
 		state = "proposed"
 	}
 	canonical, _ := json.Marshal(p)
-	var id int64
-	err = inTx(ctx, db, func(tx *sql.Tx) error {
-		if d.Source == "agent" {
-			// Lock the firm first, then count in a new statement, whose snapshot includes a concurrent
-			// proposal that committed while this one waited: concurrent proposals stay within the limit.
-			var firm string
-			if err := tx.QueryRowContext(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, d.Organization).Scan(&firm); err != nil {
-				return err
-			}
-			var today int
-			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM workflow_plans WHERE organization_id=$1 AND source='agent' AND created_at>now()-interval '1 day'`, d.Organization).Scan(&today); err != nil {
-				return err
-			}
-			if today >= maxAgentPlansPerDay {
-				return fmt.Errorf("%w: this firm already has %d agent proposals today", ErrNotAllowed, today)
-			}
+	if d.Source == "agent" {
+		// Lock the firm first, then count in a new statement, whose snapshot includes a concurrent
+		// proposal that committed while this one waited: concurrent proposals stay within the limit.
+		var firm string
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, d.Organization).Scan(&firm); err != nil {
+			return 0, err
 		}
-		return tx.QueryRowContext(ctx, `INSERT INTO workflow_plans(organization_id,title,plan,digest,state,source,rationale,agent,created_by,is_template)
+		var today int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM workflow_plans WHERE organization_id=$1 AND source='agent' AND created_at>now()-interval '1 day'`, d.Organization).Scan(&today); err != nil {
+			return 0, err
+		}
+		if today >= maxAgentPlansPerDay {
+			return 0, fmt.Errorf("%w: this firm already has %d agent proposals today", ErrNotAllowed, today)
+		}
+	}
+	var id int64
+	err = tx.QueryRowContext(ctx, `INSERT INTO workflow_plans(organization_id,title,plan,digest,state,source,rationale,agent,created_by,is_template)
  VALUES(NULLIF($1,''),$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, d.Organization, p.Title, string(canonical), p.Digest(), state, d.Source, truncate(d.Rationale), d.Agent, d.CreatedBy, d.IsTemplate).Scan(&id)
-	})
 	return id, err
 }
 
 // UpdatePlan replaces a draft or rejected plan's content; it becomes a draft again. An agent's
 // proposal is not edited: copy it into a new plan instead.
 func UpdatePlan(ctx context.Context, db *sql.DB, id int64, raw json.RawMessage, by string) error {
+	return inTx(ctx, db, func(tx *sql.Tx) error { return UpdatePlanTx(ctx, tx, id, raw, by) })
+}
+
+// UpdatePlanTx is UpdatePlan in the caller's transaction.
+func UpdatePlanTx(ctx context.Context, tx *sql.Tx, id int64, raw json.RawMessage, by string) error {
 	p, err := ParsePlan(raw)
 	if err == nil {
 		err = p.check(nil)
@@ -561,7 +574,7 @@ func UpdatePlan(ctx context.Context, db *sql.DB, id int64, raw json.RawMessage, 
 		return err
 	}
 	canonical, _ := json.Marshal(p)
-	return planChange(ctx, db, id, func(tx *sql.Tx, state, source string) error {
+	return planChangeTx(ctx, tx, id, func(tx *sql.Tx, state, source string) error {
 		if source == "agent" || (state != "draft" && state != "rejected") {
 			return ErrNotAllowed
 		}
@@ -683,10 +696,6 @@ func InstantiateTemplateTx(ctx context.Context, tx *sql.Tx, templateID int64, or
 		return 0, fmt.Errorf("%w: no such template for this firm", ErrNotAllowed)
 	}
 	return id, err
-}
-
-func planChange(ctx context.Context, db *sql.DB, id int64, change func(tx *sql.Tx, state, source string) error) error {
-	return inTx(ctx, db, func(tx *sql.Tx) error { return planChangeTx(ctx, tx, id, change) })
 }
 
 // isTemplate says whether a plan the caller has locked is a template; an unreadable one counts as one, so it is refused.

@@ -135,7 +135,90 @@ func TestPlansNeedThePlansPermissionAndApprovalNeedsContent(t *testing.T) {
 	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
 	h := apiWithStore(db, strings.Repeat("x", 32))
 	adminJSON(t, h, sign(staffOrg, "platform:read", "platform:operate"), "GET", "/v1/admin/plans", "", 403)
+	// platform:read is every staff role's baseline, so plans alone open nothing.
+	adminJSON(t, h, sign(staffOrg, "platform:plans"), "GET", "/v1/admin/plans", "", 403)
 	planner := sign(staffOrg, "platform:read", "platform:plans")
 	adminJSON(t, h, planner, "GET", "/v1/admin/plans", "", 200)
 	adminJSON(t, h, planner, "POST", "/v1/admin/plans/1/approve", `{"digest":"`+strings.Repeat("0", 64)+`","reason":"Approving without reading it"}`, 403)
+}
+
+func TestStaffBuildPlansAndTemplates(t *testing.T) {
+	db := adminDB(t)
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	token := strings.Repeat("b", 32)
+	firm := "org_Build" + rand.Text()
+	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Builder firm')`, firm); err != nil {
+		t.Fatal(err)
+	}
+	var shared int64
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM workflow_plans WHERE organization_id=$1`, firm)
+		db.Exec(`DELETE FROM workflow_plans WHERE id=$1`, shared)
+	})
+	h := apiWithStore(db, token)
+	body := func(fields string) string { return `{` + fields + `}` }
+	good := `{"version":1,"title":"Remind","nodes":[{"id":"tell","activity":"plan_signal","input":{"name":"remind"}}]}`
+	guarded := `{"version":1,"title":"Sign off","nodes":[{"id":"sign","activity":"test_admin_guarded","input":{}}]}`
+	broken := `{"version":1,"title":"Broken","nodes":[{"id":"late","after":["missing"],"activity":"plan_signal","input":{"name":"x"}}]}`
+
+	// Live validation: what is wrong, in the author's words; or the digest and whether staff could approve it.
+	if v := adminJSON(t, h, token, "POST", "/v1/admin/plans/validate", body(`"plan":`+broken), 200); !strings.Contains(mustString(v["problems"]), "missing") || v["digest"] != "" {
+		t.Fatalf("broken plan: %v", v)
+	}
+	if v := adminJSON(t, h, token, "POST", "/v1/admin/plans/validate", body(`"plan":`+good), 200); mustString(v["problems"]) != "[]" || len(v["digest"].(string)) != 64 || v["staff_approvable"] != true {
+		t.Fatalf("good plan: %v", v)
+	}
+	if v := adminJSON(t, h, token, "POST", "/v1/admin/plans/validate", body(`"plan":`+guarded), 200); v["staff_approvable"] != false {
+		t.Fatalf("a plan needing a firm permission: %v", v)
+	}
+
+	// Saving: a plan for a firm, or a template; a broken plan is refused with its problems.
+	adminJSON(t, h, token, "POST", "/v1/admin/plans", body(`"plan":`+good+`,"reason":"Weekly reminder for the firm"`), 422)
+	adminJSON(t, h, token, "POST", "/v1/admin/plans", body(`"firm":"org_Missing","plan":`+good+`,"reason":"Weekly reminder for the firm"`), 404)
+	if refused := adminJSON(t, h, token, "POST", "/v1/admin/plans", body(`"firm":"`+firm+`","plan":`+broken+`,"reason":"Weekly reminder for the firm"`), 422); !strings.Contains(refused["message"].(string), "missing") {
+		t.Fatalf("refused save: %v", refused)
+	}
+	draft := int64(adminJSON(t, h, token, "POST", "/v1/admin/plans", body(`"firm":"`+firm+`","plan":`+good+`,"reason":"Weekly reminder for the firm"`), 200)["plan_id"].(float64))
+	shared = int64(adminJSON(t, h, token, "POST", "/v1/admin/plans", body(`"template":true,"plan":`+good+`,"reason":"A reminder any firm can use"`), 200)["plan_id"].(float64))
+	var state, source, by string
+	var template, orgless bool
+	if err := db.QueryRow(`SELECT state,source,created_by,is_template,organization_id IS NULL FROM workflow_plans WHERE id=$1`, shared).Scan(&state, &source, &by, &template, &orgless); err != nil || state != "draft" || source != "staff" || by != "staff:local-development" || !template || !orgless {
+		t.Fatalf("shared template: %s %s %s %v %v %v", state, source, by, template, orgless, err)
+	}
+
+	// Editing a draft replaces it; an agent's proposal and an approved plan are not edited.
+	path := func(id int64) string { return "/v1/admin/plans/" + strconv.FormatInt(id, 10) }
+	var before, after string
+	db.QueryRow(`SELECT digest FROM workflow_plans WHERE id=$1`, draft).Scan(&before)
+	adminJSON(t, h, token, "POST", path(draft), body(`"plan":`+strings.Replace(good, "Remind", "Remind again", 1)+`,"reason":"Clearer title for the firm"`), 200)
+	db.QueryRow(`SELECT digest FROM workflow_plans WHERE id=$1`, draft).Scan(&after)
+	if before == after {
+		t.Fatal("the edit must change the plan")
+	}
+	adminJSON(t, h, token, "POST", path(draft), body(`"plan":`+broken+`,"reason":"Clearer title for the firm"`), 422)
+	proposal, err := wf.CreatePlan(context.Background(), db, wf.PlanDraft{Organization: firm, Plan: json.RawMessage(good), Source: "agent", CreatedBy: "agent:planner", Agent: "planner", Rationale: "Reminders help"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJSON(t, h, token, "POST", path(proposal), body(`"plan":`+good+`,"reason":"Rewriting the agent's idea"`), 409)
+	member, err := wf.CreatePlan(context.Background(), db, wf.PlanDraft{Organization: firm, Plan: json.RawMessage(good), Source: "member", CreatedBy: "user_member"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJSON(t, h, token, "POST", path(member), body(`"plan":`+good+`,"reason":"Rewriting the member's plan"`), 409)
+
+	// A large integer in an input stays exact through saving and the builder's revealed read.
+	exact := int64(adminJSON(t, h, token, "POST", "/v1/admin/plans", body(`"firm":"`+firm+`","plan":{"version":1,"title":"Exact","nodes":[{"id":"tell","activity":"plan_signal","input":{"name":"n","payload":{"n":9007199254740993}}}]},"reason":"Checking large numbers survive"`), 200)["plan_id"].(float64))
+	if inputs := mustString(adminJSON(t, h, token, "GET", path(exact)+"?reveal=1", "", 200, "X-Access-Reason", "editing the plan")["inputs"]); !strings.Contains(inputs, "9007199254740993") {
+		t.Fatalf("inputs as stored: %s", inputs)
+	}
+	if masked := adminJSON(t, h, token, "GET", path(exact), "", 200)["inputs"]; masked != nil {
+		t.Fatalf("inputs are content: %v", masked)
+	}
+
+	var created string
+	if err := db.QueryRow(`SELECT string_agg(action||':'||result||':'||COALESCE(request->>'plan_id','-'),',' ORDER BY id) FROM platform_audit WHERE organization_id=$1 AND action IN ('plan.create','plan.update')`, firm).Scan(&created); err != nil ||
+		created != "plan.create:refused:-,plan.create:ok:"+strconv.FormatInt(draft, 10)+",plan.update:ok:-,plan.update:refused:-,plan.update:refused:-,plan.update:refused:-,plan.create:ok:"+strconv.FormatInt(exact, 10) {
+		t.Fatalf("builder audit %q %v", created, err)
+	}
 }

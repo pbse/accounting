@@ -25,7 +25,7 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
     headers: { ...(await authorization()), "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: typeof body === "string" ? body : JSON.stringify(body), // a string is JSON text sent as it is
   });
   if (!response.ok) {
     let message = response.statusText;

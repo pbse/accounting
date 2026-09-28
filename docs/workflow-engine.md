@@ -264,7 +264,7 @@ W1 provides these as Go functions (`wf.Start`, `wf.Cancel`, `wf.Emit`, `wf.Retry
 | Retry a failed step (`key` in the body) | `POST …/runs/{id}/retry` |
 | Resolve an `unknown` effect after reconciliation (`key` in the body; records who and the evidence reference; never re-calls) | `POST …/runs/{id}/resolve` |
 | Send an event or approval | `POST …/events` |
-| Plans: list, read, propose, approve, reject, instantiate a template (create and edit come with the builder) | `/v1/admin/plans…` |
+| Plans: list, read, create, edit, check, propose, approve, reject, instantiate a template | `/v1/admin/plans…` |
 
 ## Testing
 

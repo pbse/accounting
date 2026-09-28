@@ -9,7 +9,7 @@ export const shown = (value: string) => (value === masked ? <span className="mut
 
 // useRevealable loads path, masked until someone reveals it with a reason. A reveal the server
 // refuses is dropped, with its error, so the masked view and the form come back.
-export function useRevealable<T extends { revealed?: boolean }>(path: string) {
+export function useRevealable<T extends { revealed?: boolean }>(path: string | null) {
   const [reason, setReason] = useState<string>();
   const [failure, setFailure] = useState("");
   const resource = useResource<T>(path, reason);

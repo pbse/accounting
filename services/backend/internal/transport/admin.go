@@ -79,9 +79,13 @@ func staffOnly(token, permission string, next http.HandlerFunc) http.HandlerFunc
 			}
 			member = staffMember{Subject: "local-development", Permissions: platformPermissions, Mode: "local-development"}
 		}
-		if !slices.Contains(member.Permissions, permission) {
-			problem(w, 403, "Your staff role does not include "+permission+".")
-			return
+		// platform:read is every staff role's baseline: the console cannot be used without it (who you are, the
+		// catalogs a builder chooses from), so a route's own permission comes on top of it.
+		for _, needed := range []string{platformRead, permission} {
+			if !slices.Contains(member.Permissions, needed) {
+				problem(w, 403, "Your staff role does not include "+needed+".")
+				return
+			}
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), staffKey{}, &member)))
 	}
