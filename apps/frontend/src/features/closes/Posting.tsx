@@ -201,6 +201,7 @@ type ProductionIntent = Intent & {
   other_open_intents?: string[];
   ledger_after?: unknown;
   verified_at?: string;
+  stalled?: boolean;
 };
 export function ProductionPosting({ closeId, paperId }: { closeId: string; paperId: string }) {
   const [intent, setIntent] = useState<ProductionIntent>();
@@ -255,12 +256,12 @@ export function ProductionPosting({ closeId, paperId }: { closeId: string; paper
         </button>
       </>}
       {intent.external_id && <button disabled={busy} onClick={() => void run("verify")}>{intent.state === "verified" ? "Recheck journal identity" : "Recheck saved journal and balances"}</button>}
-      {intent.state === "unknown" && !intent.external_id && <>
+      {(intent.state === "unknown" || intent.stalled) && !intent.external_id && <>
         <p>Investigate the provider request ID in QuickBooks. If you find the exact matching journal, enter its numeric ID for readback. This UI will not issue another write.</p>
         <label>QuickBooks journal ID<input value={journalID} onChange={e => setJournalID(e.target.value)} inputMode="numeric" /></label>
         <button disabled={busy || !/^\d{1,30}$/.test(journalID)} onClick={() => void run("verify")}>Verify found journal against saved intent</button>
       </>}
-      {intent.state === "executing" && !intent.external_id && <p>Investigate the saved provider request ID. This UI will not issue another write.</p>}
+      {intent.state === "executing" && !intent.stalled && !intent.external_id && <p>Investigate the saved provider request ID. Ten minutes after the attempt started you can enter the journal ID you find. This UI will not issue another write.</p>}
     </>}
     {busy && <p role="status">Checking production QuickBooks…</p>}
   </details>;
