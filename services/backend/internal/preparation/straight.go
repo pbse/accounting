@@ -472,7 +472,7 @@ func totalDisagrees(invoice string, cents int64) string {
 		// A total, due or payable line states what is owed; a subtotal does not.
 		// A due date is a date, not an amount due: a due line counts only when it prints no date and either prints a money
 		// figure or calls itself an amount or balance ("Amount due 1300").
-		dueAmount := (strings.Contains(normal, " due") || strings.HasPrefix(normal, "due")) && !strings.Contains(normal, "date") && !printsDate(line) && (moneyFigures(line) > 0 || strings.Contains(normal, "amount") || strings.Contains(normal, "balance"))
+		dueAmount := (strings.Contains(normal, " due") || strings.HasPrefix(normal, "due")) && !strings.Contains(normal, "date") && (moneyFigures(line) > 0 || ((strings.Contains(normal, "amount") || strings.Contains(normal, "balance")) && !printsDate(line)))
 		payable := (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total")) || dueAmount || strings.Contains(normal, "payable")
 		if !payable {
 			continue
@@ -480,8 +480,17 @@ func totalDisagrees(invoice string, cents int64) string {
 		if negativeFigure(line, cents) {
 			return "a total line of the invoice prints the amount as a credit"
 		}
-		// On a total line every number counts, cents or not: "Total 1,300" is a total; a total line with no figure at all
-		// ("Total: to be determined") leaves the payable amount unresolved.
+		// A payable line printing money figures is judged by those figures alone ("Amount due 2026-10-01 USD 1,100.00" says
+		// 1,100.00); one printing none is judged by every number, cents or not ("Total 1,300" is a total); one printing no
+		// figure at all ("Total: to be determined") leaves the payable amount unresolved.
+		if moneyFigures(line) > 0 {
+			for value := range distinctFigures(line) {
+				if value != cents {
+					return "a total line of the invoice prints a figure other than the cited amount"
+				}
+			}
+			continue
+		}
 		plain := strings.NewReplacer(",", "", "$", "", "€", "", "£", "").Replace(line)
 		figures := regexp.MustCompile(`\d+(\.\d{1,2})?`).FindAllString(plain, -1)
 		if len(figures) == 0 {
