@@ -93,6 +93,15 @@ func TestPlatformProblemsAlertOnceAndResolve(t *testing.T) {
 		t.Fatalf("a new stall is a new alert: %v", got)
 	}
 
+	// A claim the worker dropped before the webhook answered becomes unconfirmed, not stuck sending.
+	db.Exec(`UPDATE platform_alerts SET status='sending',claimed_at=now()-interval '5 minutes',finished_at=NULL WHERE item_id=$1 AND resolved_at IS NULL`, loop)
+	if err := deliverPlatformAlerts(ctx, db, hook.URL, "hook-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM platform_alerts WHERE item_id=$1 AND resolved_at IS NULL`, loop).Scan(&status); err != nil || status != "unknown" || len(ours()) != 2 {
+		t.Fatalf("a dropped claim: %q %v, deliveries %d", status, err, len(ours()))
+	}
+
 	// A webhook that fails leaves the delivery unconfirmed, not lost or repeated.
 	db.Exec(`UPDATE worker_heartbeats SET beat_at=now() WHERE loop=$1`, loop)
 	collectPlatformAlerts(ctx, db)

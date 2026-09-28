@@ -130,9 +130,15 @@ func collectPlatformAlerts(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
-// deliverPlatformAlerts sends each queued platform alert to the operations webhook, once, like a firm's alert.
+// deliverPlatformAlerts sends each queued platform alert to the operations webhook, once, like a firm's alert. A claim
+// the worker stopped holding before the webhook answered (a send takes at most 10 seconds) becomes unknown: it may have
+// arrived, so it is not sent again, and the Overview shows it as unconfirmed for someone to check.
 func deliverPlatformAlerts(ctx context.Context, db *sql.DB, endpoint, token string) error {
 	ctx = context.WithValue(ctx, systemKey{}, true)
+	if _, err := db.ExecContext(ctx, `UPDATE platform_alerts SET status='unknown',error='the worker stopped before the webhook answered',finished_at=now()
+ WHERE status='sending' AND claimed_at<now()-interval '2 minutes'`); err != nil {
+		return err
+	}
 	for {
 		var id int64
 		var kind, item, detail string
