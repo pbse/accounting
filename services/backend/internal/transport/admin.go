@@ -199,6 +199,7 @@ func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
 	registerAdminWorkflows(mux, db, token)
 	registerAdminFirms(mux, db, token)
 	registerAdminOperations(mux, db, token)
+	registerAdminPeople(mux, db, token)
 }
 
 // adminOverview is the platform's health at a glance.

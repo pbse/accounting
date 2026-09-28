@@ -10,6 +10,7 @@ import { Runs } from "./pages/Runs";
 import { Run } from "./pages/Run";
 import { StartRun } from "./pages/StartRun";
 import { Connections, Jobs } from "./pages/Operations";
+import { People } from "./pages/People";
 
 type Me = { subject: string; permissions: string[]; mode: string };
 
@@ -24,6 +25,7 @@ export function App() {
           <Route index element={<Overview />} />
           <Route path="firms" element={<Firms />} />
           <Route path="firms/:id" element={<Firm />} />
+          <Route path="people" element={<People />} />
           <Route path="workflows" element={<Workflows />} />
           <Route path="runs" element={<Runs />} />
           <Route path="runs/new" element={<StartRun />} />
@@ -56,6 +58,7 @@ function Layout() {
             <div className="nav-label">Platform</div>
             <NavLink className="nav-item" end to="/">Overview</NavLink>
             <NavLink className="nav-item" to="/firms">Firms</NavLink>
+            <NavLink className="nav-item" to="/people">People</NavLink>
           </div>
           <div className="nav-group">
             <div className="nav-label">Workflows</div>
