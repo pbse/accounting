@@ -111,6 +111,8 @@ Fresh Compose volumes run every migration automatically, without the ledger; to 
 
 `101_content_grants.sql` adds `content_grants`: a staff member's time-boxed access to one firm's client content in the admin panel (visible to system work and the firm). See [admin panel](../../../docs/admin-panel.md).
 
+`104_workflow_watch.sql` adds the workflow step kind `watch` (`wf.Watch`: one step for a function called every interval until it reports done). Apply it before deploying a build whose workflows watch, such as `close_goal`.
+
 `103_workflow_run_indexes.sql` indexes workflow runs for admin reads that would otherwise grow with a firm's runs: by parent run (a run's children), by firm and state (active and recently failed runs) and by firm and last update (latest activity). It builds the indexes in the migration's transaction, blocking run writes while it does; the table is small today.
 
 `102_audit_started.sql` lets a staff audit entry be `started`: an action with an effect outside the database (a WorkOS session revoke or invitation resend) records that before the effect, and its outcome after. Apply it before deploying a build that records one.

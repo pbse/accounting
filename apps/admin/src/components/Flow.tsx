@@ -53,6 +53,7 @@ function describe(step?: Step): string | undefined {
   if (!step) return undefined;
   if (step.state === "waiting" && step.waiting_on) return `waiting for ${step.waiting_on}`;
   if (step.state === "waiting" && step.retry_at) return `retrying ${new Date(step.retry_at).toLocaleString()}`;
+  if (step.kind === "watch" && step.state === "waiting" && step.wake_at) return `${step.attempts} looks, next ${new Date(step.wake_at).toLocaleTimeString()}`;
   if (step.state === "waiting" && step.wake_at) return `until ${new Date(step.wake_at).toLocaleString()}`;
   if (step.state === "unknown") return "outcome unknown: check the provider";
   if (step.attempts > 1) return `${step.attempts} attempts`;

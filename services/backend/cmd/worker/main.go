@@ -51,7 +51,6 @@ func main() {
 		"xero_backfill":      transport.BackfillXeroRows,
 		"stripe_reports":     transport.RunStripeReports,
 		"chat_expiry":        transport.RunChatExpiry,
-		"close_goals":        transport.RunCloseGoals,
 		"workflow_engine":    wf.Run,
 		"heartbeat":          func(ctx context.Context, db *sql.DB) { transport.RunHeartbeat(ctx, db, "worker") },
 	}

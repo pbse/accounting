@@ -1,6 +1,6 @@
 # Workflow engine plan
 
-**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core), W2 (composition) and W3 (activities and plans) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`. Later phases are proposals. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
+**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core), W2 (composition) and W3 (activities and plans) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`; **W5 is under way: close goals run on the engine** ([below](#w5-close-goals-on-the-engine)). W4 is a proposal. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
 
 ## Goals
 
@@ -96,6 +96,7 @@ var _ = wf.Define(wf.Spec[Input, Output]{
 | `wf.Effect(ctx, key, fn)` | For external writes (ledger, email, provider calls). Records an attempt before calling `fn`. If the worker dies mid-call, the step becomes `unknown` and the run waits for a person; it is **never** called again automatically. Mirrors [production posting](production-posting.md). |
 | `wf.Call(ctx, key, activity, input)` (W3) | Runs an activity as a step (or an effect, per the activity's class). |
 | `wf.Sleep(ctx, key, d)` / `wf.SleepUntil` | Parks the run until a time. |
+| `wf.Watch(ctx, key, every, fn)` | Calls `fn` about every interval until it reports done, as **one** step however many calls that takes (its attempts count them). For watching something that changes in its own time, without a row per look. An error is recorded on the step and cleared by the next call that works; a watch never fails its run. It ends when `fn` reports done or the run is cancelled. `fn` must be safe to repeat. |
 | `wf.WaitForEvent[T](ctx, key, eventKey, timeout)` | Parks until a matching event (see [events](#events)) or the timeout (`wf.ErrTimeout`). |
 | `wf.WaitForApproval(ctx, key, approval)` | A wait decided by `wf.Approve`, which requires the approver to hold the named permission in the run's firm and takes one decision. A rejection is a `Decision` with `Approved` false. |
 | `wf.Child(ctx, key, workflow, input)` | Starts a child run for the same firm (once: its idempotency key is the parent run and key) and waits for its result. A failed or cancelled child fails the step; cancelling the parent cancels its children. |
@@ -293,7 +294,21 @@ These proofs, which [`workers/workflows`](../workers/workflows/README.md) alread
 | **W2. Composition** (implemented) | `Child`, `WaitForApproval` and `Approve`, schedule and event triggers, `wf.EmitForClose` for client replies and sign-offs, `DB`/`Organization` for steps, and the first real workflow, `firm_health_check` (daily per firm, read-only). `month_kickoff` was dropped: sign-off already carries reviewed schedules into the next month and close routines create next month's closes, so a second path would duplicate them. Compensation hooks wait until a workflow needs one. | Proofs for each primitive in `internal/wf/engine_test.go`; reply and sign-off events in the transport tests; the health check counts only its firm's problems. |
 | **W3. Activities and plans** (implemented) | The activities directory, `wf.DefineActivity`/`Call`/`CallActivity`, the catalog with built-in JSON Schemas, the plan format and validator, the `plan` workflow, the plan lifecycle and templates, and the agent pieces (proposal only, reason required, no edits, rate limit, database check). First activities: `close_summary` and `plan_signal`. | `internal/wf/plans_test.go` covers validation rules and plan runs; `workflows/plan/workflow_test.go` covers the lifecycle, agent proposals and templates. |
 | **W4. Agent planner (low priority)** (deferred) | Model-backed proposals over the catalog; MCP `propose_plan`. Deferred as agreed: W3 provides every piece it plugs into. | Proposals appear in the admin approval queue with their reason. |
-| **W5. Migrate existing loops** (deferred) | Close goals first (already step-shaped, with an events log), then others where it simplifies. Deferred while close goals are under active development elsewhere (PRs #154–#156), to avoid rewriting a moving target. | Each migrated loop is deleted; its UI reads engine runs. |
+| **W5. Migrate existing loops** (close goals implemented) | Close goals first (already step-shaped, with an events log), then others where it simplifies. | Each migrated loop is deleted; its UI reads engine runs. |
+
+## W5: close goals on the engine
+
+The worker's `close_goals` loop is gone. It used to step up to 50 open goals a minute, and hand over newly ended months.
+- **`close_goal`** (`workflows/close_goal`). Each goal has its own run, started in the transaction that hands the close over, by a person or a monthly hand-over (idempotency key `goal:<id>`; concurrency key `close_goal:<id>`, so a goal has one active run). The run is a single `wf.Watch` that takes the goal's next step about once a minute and ends once the goal is stopped. A goal checked for a month is one run with one step row, not 43,000.
+- **`close_goal_upkeep`** (`workflows/close_goal_upkeep`, every hour, or by hand from the admin panel).
+  - It hands each client's newly ended month over under its monthly hand-over, sweep after sweep until none is left.
+  - It starts a run for any open goal of an enabled firm that has none. That covers goals handed over before this build (the first pass after a deploy takes them over) and a goal whose run staff cancelled. Cancelling a goal's run therefore pauses it until the next hour; stopping the goal is the firm's decision.
+- **The goal record stays the domain state.** `close_goals` keeps each goal's history and what it last found, which the workspace reads. The run is how the goal is executed; the admin panel shows each goal's run, its looks and its last error.
+- **Where the code lives.** A goal's step is the existing code in `transport` (`lookAtGoal`, `advanceGoal`). The workflow packages declare a function (`close_goal.Next`, `close_goal_upkeep.HandOverMonths` and `WatchGoals`) that `transport` sets when it loads. `transport` starts these runs, so it imports the workflow packages, not the other way round.
+- **Firm roles.** A firm's WorkOS roles are read at most once a minute per worker, shared by that firm's goals, as the old sweep read them once per pass.
+- **Deploys.** During a rolling deploy the old loop and the new runs may both step a goal. A step is idempotent and locks the close (`SKIP LOCKED`), so the second finds nothing to do.
+
+Next candidates are loops shaped the same way, such as standing approvals and schedule comparisons: a pass over open items each minute.
 
 ## W0 result: DBOS Transact for Go
 

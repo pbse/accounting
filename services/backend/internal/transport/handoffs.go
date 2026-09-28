@@ -10,7 +10,10 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // A document of a delegated close handed to a teammate to investigate. The teammate acts through Work with their own
@@ -157,6 +160,51 @@ func firmReviewers(ctx context.Context, org string) (map[string]reviewer, error)
 		out[m.UserID] = r
 	}
 	return out, nil
+}
+
+// recentRoles is each firm's WorkOS roles for its goals' runs, read at most once a minute per firm: every open goal looks
+// at its close about once a minute, and a firm's goals share one read.
+var recentRoles = &rolesCache{read: map[string]cachedRoles{}}
+
+type cachedRoles struct {
+	members map[string]reviewer
+	err     error
+	at      time.Time
+}
+
+type rolesCache struct {
+	sync.Mutex
+	read   map[string]cachedRoles
+	flight singleflight.Group // goals looking at once share the firm's read in flight
+}
+
+// of is sweepRoles.of, remembered for a minute. A read its caller cut short is not remembered.
+func (c *rolesCache) of(ctx context.Context, org string) (map[string]reviewer, error) {
+	c.Lock()
+	read, ok := c.read[org]
+	c.Unlock()
+	if ok && time.Since(read.at) < time.Minute {
+		return read.members, read.err
+	}
+	shared, _, _ := c.flight.Do(org, func() (any, error) {
+		// A read that finished while this caller waited to start one is recent enough.
+		c.Lock()
+		read, ok := c.read[org]
+		c.Unlock()
+		if ok && time.Since(read.at) < time.Minute {
+			return read, nil
+		}
+		read = cachedRoles{at: time.Now()}
+		read.members, read.err = sweepRoles{}.of(ctx, org)
+		if read.err == nil || ctx.Err() == nil {
+			c.Lock()
+			c.read[org] = read
+			c.Unlock()
+		}
+		return read, nil
+	})
+	read = shared.(cachedRoles)
+	return read.members, read.err
 }
 
 // sweepRoles is each firm's WorkOS roles for one sweep of background work, read at most once per firm.
