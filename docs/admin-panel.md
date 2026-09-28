@@ -1,6 +1,6 @@
 # Admin panel plan
 
-**Status:** **A0 (foundations) implemented** (2026-09-28); later phases are proposals. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
+**Status:** **A0 (foundations) and A1 (workflows) implemented** (2026-09-28); later phases are proposals. Workflow screens depend on the [workflow engine](workflow-engine.md); firm-level controls that already exist are described in [operations](operations.md#security-center).
 
 ## Purpose
 
@@ -78,8 +78,8 @@ services/backend/internal/transport/admin.go   /v1/admin/* routes, staff middlew
 The root `build` script runs the firm app, then the admin app. The admin app empties only its own `dist/admin`.
 
 ### Admin-only dependencies
-- `@xyflow/react` (React Flow) for graphs, with `elkjs` for layered layout.
-- A JSON-Schema form renderer, chosen in A1: a small in-house renderer for the subset the schema generator emits, or `@rjsf/core`.
+- `@xyflow/react` (React Flow) for graphs. Layout is computed in the page (a column for code workflows, depth from `after` for plans); `elkjs` waits until graphs outgrow that.
+- JSON-Schema forms use a small in-house renderer (`components/SchemaForm.tsx`) for the subset `wf.Schema` emits, with a JSON box for anything else.
 
 None of these reach the firm app's bundle.
 
@@ -151,7 +151,7 @@ The run detail page is the centre of the console.
 - Child and event links.
 
 ### Actions
-- **Header:** Cancel (reason); Retry step on failed steps; Resolve on `unknown` effects; Approve or Reject on approval waits; Send event on event waits. Each asks for a reason.
+- **Header:** Cancel (reason); Retry step on failed steps; Resolve on `unknown` effects; Send event on event waits. Each asks for a reason. Approval waits are decided by the firm, not staff.
 - **Controls:** disabled with an explanation when the staff member lacks the permission.
 
 ### Behaviour
@@ -175,7 +175,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 | `GET /people?query=`, `GET /people/{userId}` | `platform:read` |
 | `POST /people/{userId}/memberships/{firm}/revoke`, `POST /invitations/{id}/resend`, `POST /invitations/{id}/revoke`, `POST /people/{userId}/sessions/revoke` | `platform:operate` |
 | `GET /workflows/definitions`, `GET /workflows/activities`, `GET /workflows/runs`, `GET /workflows/runs/{id}` | `platform:read` |
-| `POST /workflows/runs`, `…/cancel`, `…/steps/{key}/retry`, `…/steps/{key}/resolve`, `POST /workflows/events` | `platform:operate` |
+| `POST /workflows/runs`, `POST /workflows/runs/{id}/cancel`, `…/retry` and `…/resolve` (step `key` in the body), `POST /workflows/events` | `platform:operate` |
 | `GET /workflows/plans`, `POST /workflows/plans`, `…/propose`, `…/approve`, `…/reject`, `…/instantiate` | `platform:plans` |
 | `GET /jobs`, `GET /connections`, `GET /audit` | `platform:read` |
 | Any response field marked content, when revealed | `platform:content` plus the `X-Access-Reason` header |
@@ -185,7 +185,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 | Phase | Depends on | Scope | Exit criteria |
 |---|---|---|---|
 | **A0. Foundations** (implemented) | none | Staff organization, roles and permissions in WorkOS (staging and production); `PLATFORM_ORGANIZATION_ID` wired through every place settings are listed; staff middleware and the `adminRead`/`adminAct` helpers; admin migration (098); `apps/admin` shell with staff sign-in; `/admin` edge routing; read-only Overview (heartbeats), Firms and firm detail. | `internal/transport/admin_test.go`: a firm token gets 401 on `/v1/admin/*` (even claiming a platform permission); a staff token gets 403 on firm routes; `adminRead` refuses writes; `adminAct` runs as the firm and audits success and refusal; the edge serves admin pages (`routes.test.ts`). |
-| **A1. Workflows** | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
+| **A1. Workflows** (implemented) | engine W1 | Catalog, runs list and saved views, run detail flow graph and inspector, start, cancel, retry, event, resolve; schema-driven start form. | On staging, a staff member starts, watches, retries a failed step in, and cancels a run for a synthetic firm; each action appears in `platform_audit`. |
 | **A2. Firm management** | A0 | Firm detail tabs, People (app and WorkOS), Activity timeline, Jobs health, Connections, suspend and resume, invitations; one extracted domain function per action. | Every action runs under the target firm's context and is audited; content reveal requires permission and reason (tested). |
 | **A3. Plans** | engine W3 | Builder with live preview, templates, proposed-plans queue, approve and reject. | A staff-built plan is approved and runs; an agent-sourced plan waits in the queue until approved. |
 | **A4. Hardening** | A0–A3 | Own hostname behind Cloudflare Access (or equivalent); time-boxed content-access grants instead of per-request reasons; audit export; alerting on stale heartbeats and stuck runs; pagination and performance for large firms. | A security review of the console is recorded in [validation](validation.md). |
@@ -205,6 +205,16 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 - **Heartbeats.** Only the worker process (`worker`) and the workflow engine loop (`workflow_engine`) report so far. Adding one per job loop means touching each loop; that comes with A2's jobs screen.
 - **One browser, one organization.** With `AUTH_SESSION=client`, AuthKit keeps one session per browser: a person who is both a firm member and staff signs in to one organization at a time, and the console offers to switch. With `AUTH_SESSION=server`, the workspace and the console have separate cookies, so both stay signed in.
 - **Local development.** Without WorkOS, the workspace token unlocks the console with every platform permission. Run it with `npm run dev:admin` (port 5174, `/admin/`), or the `admin` Compose service.
+
+## As built (A1)
+
+- **Screens.** Catalog (workflows with 7-day counts, activities), Runs (filters, the views `stuck`, `waiting_on_client`, `unknown_effects` and `failed_today`, paging), Start a run (schema form, reason, a fresh idempotency key per page), and the run page: the flow graph, the ordered step list, the step inspector (deep link `?step=<key>`), cancel, retry, resolve, send event, reveal.
+- **Starting runs.** Staff can start a workflow only if it has a manual trigger, and must name a firm when its trigger is `wf.ManualForFirm()`. The start form and catalog follow the same rule. `plan` runs start only when a plan is approved (A3).
+- **Actions.** Every write goes through `adminAct`, so it runs as the target firm and is audited with its reason, refusals included. The engine's `CancelTx`, `RetryStepTx` and `ResolveTx` take the caller's transaction for this. Staff cannot send engine events (`wf.` keys), so approvals stay with the firm: the inspector says who must decide instead of offering Approve or Reject.
+- **Masking.** Content is masked unless revealed, since a workflow may copy client content anywhere. Numbers, booleans and declared field names show; text, fields tagged `wf:"sensitive"`, and anything a schema does not describe (free-form maps, raw JSON, steps without a schema) are masked or shown only by size. Errors and notes are free text and are masked too. Approvals show their permission and decision but not their subject, prompt or note. An event key shows only its topic, the part before the first `:` (`client_request.replied:••••`), since code often builds the rest from its input; a key with no `:` is masked whole. A plan's title, node inputs, approval text and whole event keys are masked. Names of workflows and steps, states and times show, so code keeps client content out of step keys and event topics. `?reveal=1` needs `platform:content` and an `X-Access-Reason` header and is audited as `content.reveal`. The page reads a reveal once and does not poll it.
+- **Live updates.** The run page polls every 3 seconds while the run is active. The engine itself checks for work every 10 seconds when idle, so a change can take that long to show.
+- **Not yet.** Loops are not collapsed and child runs are links rather than nested groups; both wait for a workflow that needs them.
+- **Local check.** `npm run dev:admin` against a local API and worker; the run page was exercised on a staff-approved plan waiting for an event, and sending that event from the inspector completed the run.
 
 ## Later ideas (not planned)
 

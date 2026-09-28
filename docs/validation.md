@@ -2580,6 +2580,21 @@ Code review: GPT-6 Sol (reasoning high) found that the staff console (`/admin`, 
 
 Not verified: a real WorkOS sign-in, refresh and sign-out on the deployed site, which needs the activation steps in [sign-in session](auth-sandbox-staging.md#sign-in-session).
 
+## Worker loops survive a panic; pooled runtime URLs are refused (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- The worker's fifteen background loops each run under `supervise` in `cmd/worker/main.go`. A panic is logged with its stack, recorded on the `worker` heartbeat's `detail`, and the loop restarts 30 seconds later; the others keep running. A loop that returns (the Xero row backfill) stays finished. The admin overview shows the latest panic beside the worker's heartbeat. Three panics in one loop without ten clean minutes between them fail the worker's `/healthz`, which the queue Worker's cron checks every minute, for fifteen minutes.
+- `OpenTenantDB` refuses a host or fallback host containing `-pooler`, and both deploy workflows refuse such a runtime `DATABASE_URL` before migrating. The firm is a session setting (`set_config(..., false)`), which a transaction pooler could share between firms.
+
+Checks:
+- `go test ./cmd/worker`: a loop that panics once runs twice and reports one panic with its stack; after cancellation it is not restarted.
+- `TestRepeatedPanicsFailHealth`: two panics leave `/healthz` at 200; three fail it with 503.
+- `TestOpenTenantDBRefusesPooler`: a Neon `-pooler` URL, or a direct host with a `-pooler` fallback, is refused; direct hosts open.
+
+Not verified: whether production's `DATABASE_URL` is direct. The next production deploy's configuration check will fail if it is pooled; replace the secret with the direct endpoint in that case.
+
 ## Staff console on the backend-held session (2026-09-28)
 
 Request: bring the staff console (`/admin`) onto `AUTH_SESSION=server` too, so no part of the app needs WorkOS's custom authentication domain. The staff console now signs in through `/v1/auth/login?staff=1`, which asks WorkOS for the staff organization, and holds the session in its own `__Host-close_staff` cookie. The staff cookie opens only `/v1/admin/*`, verified against the staff organization; the firm cookie opens only the other `/v1` routes. `AUTH_SESSION` unset or `client` changes nothing.

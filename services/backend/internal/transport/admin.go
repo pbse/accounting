@@ -126,10 +126,6 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 	if strings.TrimSpace(a.Reason) == "" {
 		return errReasonRequired
 	}
-	request, err := json.Marshal(a.Request)
-	if err != nil || string(request) == "null" {
-		request = []byte("{}")
-	}
 	system := context.WithValue(ctx, systemKey{}, true)
 	acting := system
 	if a.Firm != "" {
@@ -138,7 +134,12 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 	record := func(ctx context.Context, q interface {
 		ExecContext(context.Context, string, ...any) (sql.Result, error)
 	}, result, failure string) error {
-		_, err := q.ExecContext(ctx, `INSERT INTO platform_audit(staff_user,action,organization_id,target_type,target_id,reason,request,result,error) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9)`,
+		// Marshalled when recorded, so fn can add what it learned, such as a new row's ID.
+		request, err := json.Marshal(a.Request)
+		if err != nil || string(request) == "null" {
+			request = []byte("{}")
+		}
+		_, err = q.ExecContext(ctx, `INSERT INTO platform_audit(staff_user,action,organization_id,target_type,target_id,reason,request,result,error) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9)`,
 			member.Subject, a.Action, a.Firm, a.TargetType, a.TargetID, a.Reason, string(request), result, failure)
 		return err
 	}
@@ -178,6 +179,7 @@ func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("GET /v1/admin/overview", read(func(w http.ResponseWriter, r *http.Request) { adminOverview(w, r, db) }))
 	mux.HandleFunc("GET /v1/admin/firms", read(func(w http.ResponseWriter, r *http.Request) { adminFirms(w, r, db) }))
 	mux.HandleFunc("GET /v1/admin/firms/{id}", read(func(w http.ResponseWriter, r *http.Request) { adminFirm(w, r, db) }))
+	registerAdminWorkflows(mux, db, token)
 }
 
 // adminOverview is the platform's health at a glance.
@@ -187,7 +189,7 @@ func adminOverview(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var unknownEffects, firms, suspended, reconnect, failedPreparation int
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT
- COALESCE((SELECT jsonb_agg(jsonb_build_object('loop',loop,'instance',instance,'beat_at',beat_at,'stale',beat_at<now()-interval '5 minutes') ORDER BY loop) FROM worker_heartbeats),'[]'::jsonb),
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('loop',loop,'instance',instance,'beat_at',beat_at,'stale',beat_at<now()-interval '5 minutes','panic',detail->>'panic','panicked_at',detail->'panicked_at') ORDER BY loop) FROM worker_heartbeats),'[]'::jsonb),
  COALESCE((SELECT jsonb_object_agg(state,n) FROM (SELECT state,count(*) AS n FROM workflow_runs WHERE state IN ('queued','running','waiting') OR finished_at>now()-interval '24 hours' GROUP BY state) s),'{}'::jsonb),
  (SELECT min(created_at) FROM workflow_runs WHERE state='queued'),
  (SELECT count(*) FROM workflow_steps WHERE state='unknown'),

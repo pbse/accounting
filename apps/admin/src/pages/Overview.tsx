@@ -1,6 +1,6 @@
 import { useResource, when } from "../api";
 
-type Heartbeat = { loop: string; instance: string; beat_at: string; stale: boolean };
+type Heartbeat = { loop: string; instance: string; beat_at: string; stale: boolean; panic: string | null; panicked_at: string | null };
 type Overview = {
   heartbeats: Heartbeat[];
   runs: Record<string, number>;
@@ -54,7 +54,10 @@ export function Overview() {
                       <td>{h.loop}</td>
                       <td>{h.instance || "—"}</td>
                       <td>{when(h.beat_at)}</td>
-                      <td><span className={`status ${h.stale ? "danger" : "ok"}`}>{h.stale ? "Silent for 5 minutes" : "Alive"}</span></td>
+                      <td>
+                        <span className={`status ${h.stale ? "danger" : "ok"}`}>{h.stale ? "Silent for 5 minutes" : "Alive"}</span>
+                        {h.panic && h.panicked_at && <div><span className="status warn">Last panic {when(h.panicked_at)}, restarted: {h.panic}</span></div>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
