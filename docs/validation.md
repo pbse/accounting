@@ -2702,3 +2702,26 @@ Accepted or still open:
 - **MFA** for the staff organization is configured in WorkOS and is still an open question in the plan.
 - **No rate limit on staff routes.** Staff are few and signed in; every write and reveal is audited.
 - **The CSP leaves `connect-src` and `style-src` open.** Client-side AuthKit talks to WorkOS, and React Flow sets inline styles.
+
+## The staff console is served only to signed-in staff (2026-09-28)
+
+Request: every admin page under `/admin`, gated so only internal employees can load it. This replaces the plan for a separate hostname behind Cloudflare Access.
+
+What changed:
+- **The gate.** The edge Worker now serves nothing under `/admin` (pages, scripts, styles) until the API accepts the request's staff session. It asks `GET /v1/admin/me` with the request's cookies alone, which needs a session in the platform staff organization with `platform:read`.
+- **Refusals.** A signed-out visitor to a page is sent to staff sign-in (`/v1/auth/login?staff=1`) and returns to that page afterwards. A file is refused with 401, and a staff member without the console's role gets 403.
+- **Failing closed.** A check that fails or cannot answer gets 503. Without `AUTH_SESSION=server`, whose cookie is the only session the edge can see, `/admin` answers 503 and the API is not asked.
+- **Caching.** What the console serves is marked `private, no-cache`, so no shared cache keeps it; refusals are `no-store`.
+- **Authorization.** The staff API's own checks are unchanged.
+
+Checks:
+- `workers/edge/src/routes.test.ts` covers the gate:
+  - a staff member the API accepts gets through, and the API is asked only about the cookies (not the caller's `Sec-Fetch-Site`);
+  - signed out, a page redirects to staff sign-in with its path and query to return to, and a file gets 401 with none of the console;
+  - 403 and 503 from the API, and an unreachable API, serve nothing;
+  - in `client` mode or with no mode, nothing is served and the API is not asked;
+  - served files are private, and refusals are not cached.
+- The edge typechecks, the JS tests pass, and the admin app builds.
+- The API side (`/v1/admin/me` accepting only a staff cookie in the staff organization, and requiring `platform:read`) is covered by `TestServerSessionKeepsWorkOSTokensOnTheServer` and `TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead`.
+
+Not verified: the gate on a deployed Worker, which needs `AUTH_SESSION=server` in that environment and a real WorkOS staff sign-in (see [sign-in session](auth-sandbox-staging.md#sign-in-session)).
