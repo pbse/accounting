@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { usePermissions } from "../App";
-import { get, post, when } from "../api";
+import { ApiError, get, post, when } from "../api";
 import { ActionForm } from "../components/ActionForm";
+import { OpenGrant, useGrantFor, useGrants } from "../components/Grants";
 import { FlowGraph, type PlanNode, type Step } from "../components/Flow";
 import { stateTone, type RunRow } from "./Runs";
 
@@ -37,16 +38,25 @@ export function Run() {
   const [detail, setDetail] = useState<Detail>();
   const [error, setError] = useState("");
   // A reveal belongs to the run it was asked for, so following a link never reveals another run.
-  const [revealed, setReveal] = useState<{ id: string; reason: string }>();
+  // An empty reason reveals under the content grant numbered grant.
+  const [revealed, setReveal] = useState<{ id: string; reason: string; grant?: number }>();
   const reveal = revealed?.id === id ? revealed.reason : undefined;
   const [params, setParams] = useSearchParams();
   const selected = params.get("step") ?? undefined;
   const setSelected = (key: string) => setParams({ step: key }, { replace: true });
   const can = usePermissions();
   const operate = can.includes("platform:operate");
+  // Hidden by the staff member while they hold a grant for the run's firm: not revealed again for this run.
+  const [hidOn, setHidOn] = useState<string>();
+  const [grantLapsed, setGrantLapsed] = useState(false);
+  // The grant this run was revealed under, or tried: one attempt per grant, and a new grant tries again.
+  const [triedWith, setTriedWith] = useState<number>();
+  const { reload: reloadGrants } = useGrants();
   useEffect(() => {
     setDetail(undefined);
     setReveal(undefined);
+    setGrantLapsed(false);
+    setTriedWith(undefined);
   }, [id]);
   // Only the latest request may update the page, so a slow revealed answer cannot reappear after
   // Hide or on another run.
@@ -54,28 +64,55 @@ export function Run() {
   const load = useCallback(async () => {
     const request = ++latest.current;
     try {
-      const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${reveal ? "?reveal=1" : ""}`;
-      const next = await get<Detail>(path, reveal ? { "X-Access-Reason": reveal } : {});
+      // An empty reason reveals under the staff member's content grant for the run's firm.
+      const path = `/v1/admin/workflows/runs/${encodeURIComponent(id)}${reveal !== undefined ? "?reveal=1" : ""}`;
+      const next = await get<Detail>(path, reveal !== undefined ? { "X-Access-Reason": reveal } : {});
       if (request !== latest.current) return;
       setDetail(next);
       setError("");
     } catch (e) {
       if (request !== latest.current) return;
+      if (reveal === "" && e instanceof ApiError && e.status === 422) {
+        // A grant that no longer holds (ended or expired elsewhere): show the run masked, not an error.
+        setGrantLapsed(true);
+        setReveal(undefined);
+        reloadGrants();
+        return;
+      }
       setError((e as Error).message);
       setDetail(undefined);
       setReveal(undefined);
     }
-  }, [id, reveal]);
+  }, [id, reveal, reloadGrants]);
   useEffect(() => {
     load();
     return () => {
       latest.current++;
     };
   }, [load]);
+  // A content grant for the run's firm reveals it without asking, until the staff member hides it.
+  // Only the run this page is for: while another run's detail is still on screen, its firm's grant does not count.
+  const current = detail && String(detail.run.id) === id ? detail : undefined;
+  const grant = useGrantFor(current?.run.organization);
+  useEffect(() => {
+    if (grant && grant.id !== triedWith && hidOn !== id && reveal === undefined && current && !current.revealed) {
+      setTriedWith(grant.id);
+      setGrantLapsed(false);
+      setReveal({ id, reason: "", grant: grant.id });
+    }
+  }, [grant, triedWith, hidOn, id, reveal, current]);
+  // A grant that ended, expired or was replaced takes back what it showed (a replacement then reveals anew).
+  useEffect(() => {
+    if (reveal === "" && revealed?.grant !== grant?.id) {
+      latest.current++;
+      setDetail(undefined);
+      setReveal(undefined);
+    }
+  }, [grant, reveal, revealed]);
   // Follow an active run every 3 seconds; a reveal is audited, so it is read once, not polled.
   const running = detail && active.includes(detail.run.state);
   useEffect(() => {
-    if (!running || reveal) return;
+    if (!running || reveal !== undefined) return;
     const timer = setInterval(load, 3000);
     return () => clearInterval(timer);
   }, [running, reveal, load]);
@@ -164,9 +201,17 @@ export function Run() {
       <section>
         <h2>Input and output</h2>
         {detail.revealed ? (
-          <p className="note">Showing client content. This view was recorded in the audit log. <button onClick={() => { latest.current++; setDetail(undefined); setReveal(undefined); }}>Hide it</button></p>
+          <p className="note">
+            {reveal === "" && grant ? `Showing client content under your grant, until ${new Date(grant.expires_at).toLocaleTimeString()}.` : "Showing client content."} This view was recorded in the audit log.{" "}
+            <button onClick={() => { latest.current++; setHidOn(id); setDetail(undefined); setReveal(undefined); }}>Hide it</button>
+          </p>
         ) : (
-          <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal({ id, reason })} />
+          <>
+            {grantLapsed && <p className="note">Your grant for this firm has ended, so the run is shown masked.</p>}
+            <ActionForm label="Reveal client content" allowed={can.includes("platform:content")} onSubmit={async (reason) => setReveal({ id, reason })} />
+            {grant && hidOn === id && <p className="muted">Hidden while you hold a grant for this firm. <button className="link" onClick={() => { setHidOn(undefined); setTriedWith(undefined); }}>Show it again</button></p>}
+            {can.includes("platform:content") && run.organization && !grant && <OpenGrant firm={run.organization} />}
+          </>
         )}
         <h3>Input</h3><Json value={detail.input} />
         <h3>Output</h3><Json value={detail.output} />

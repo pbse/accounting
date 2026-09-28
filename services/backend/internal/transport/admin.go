@@ -206,6 +206,7 @@ func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
 	registerAdminPeople(mux, db, token)
 	registerAdminPlans(mux, db, token)
 	registerAdminAudit(mux, db, token)
+	registerAdminGrants(mux, db, token)
 }
 
 // adminOverview is the platform's health at a glance.
@@ -376,6 +377,10 @@ func adminRevealOf(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, tar
 		return false
 	}
 	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	if reason == "" && firm != "" {
+		// Without a reason, a content grant the staff member holds for this firm stands in for one.
+		reason = activeGrantReason(r.Context(), db, staffOf(r.Context()).Subject, firm)
+	}
 	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.reveal", TargetType: targetType, TargetID: targetID, Reason: reason, Request: request},
 		func(context.Context, *sql.Tx) error { return nil })
 	if errors.Is(err, errReasonRequired) {
@@ -392,13 +397,18 @@ func adminRevealOf(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, tar
 
 // adminRevealAcross records one reveal per firm ("" for platform level) in a single transaction, for a read that shows
 // several firms' content at once; request says what was shown. When it refuses, it has answered and returns false.
-func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, firms []string, targetType, targetID string, request any) bool {
+// scope is the one firm the request itself is limited to (a firm filter), or "" when it can span firms: only a request
+// limited to one firm may stand on the staff member's grant for it.
+func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, scope string, firms []string, targetType, targetID string, request any) bool {
 	member := staffOf(r.Context())
 	if !slices.Contains(member.Permissions, platformContent) {
 		problem(w, 403, "Revealing client content needs platform:content.")
 		return false
 	}
 	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	if reason == "" && scope != "" {
+		reason = activeGrantReason(r.Context(), db, member.Subject, scope)
+	}
 	if reason == "" {
 		problem(w, 422, errReasonRequired.Error())
 		return false

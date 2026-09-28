@@ -112,7 +112,11 @@ func revealAudit(w http.ResponseWriter, r *http.Request, db *sql.DB, q auditQuer
 	if len(entries) > 0 {
 		shown["newest_id"], shown["oldest_id"] = entries[0].ID, entries[len(entries)-1].ID
 	}
-	return adminRevealAcross(w, r, db, firms, "audit", what, shown)
+	scope := q.firm
+	if scope == "platform" {
+		scope = ""
+	}
+	return adminRevealAcross(w, r, db, scope, firms, "audit", what, shown)
 }
 
 // adminAuditPage answers one page of an audit search.

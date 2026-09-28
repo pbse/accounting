@@ -38,7 +38,7 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
   const base = `/v1/admin/firms/${encodeURIComponent(firm)}`;
   return (
     <>
-      <Reveal reveal={people.reveal} />
+      <Reveal reveal={people.reveal} firm={firm} />
       {people.error && <p role="alert">{people.error}</p>}
       {!people.data && !people.error && <p role="status">Loading people…</p>}
       {people.data && (
@@ -121,7 +121,7 @@ export function FirmActivity({ firm }: { firm: string }) {
   return (
     <>
       <p>The firm's recorded access decisions, connections, posting grants, work agents did, and workflow runs, newest first.</p>
-      <Reveal reveal={activity.reveal} />
+      <Reveal reveal={activity.reveal} firm={firm} />
       <div className="filters">
         <label>Kind
           <select value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); }}>
@@ -164,7 +164,7 @@ export function FirmAudit({ firm }: { firm: string }) {
   return (
     <>
       <p>Everything staff did to this firm, including actions that were refused and every reveal of client content. Reasons and why a refused action failed are hidden until revealed.</p>
-      <Reveal reveal={audit.reveal} />
+      <Reveal reveal={audit.reveal} firm={firm} />
       {audit.error && <p role="alert">{audit.error}</p>}
       {!audit.data && !audit.error && <p role="status">Loading the audit…</p>}
       {audit.data && (
