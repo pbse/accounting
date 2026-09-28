@@ -703,7 +703,11 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 				invoice = s.Content
 			}
 		}
-		plan, reason := StraightThrough(proposal, invoice, procedure, profile.Currency, entity, period, id, ledger)
+		var unread bool
+		if err = finish.QueryRowContext(persist, `SELECT EXISTS(SELECT 1 FROM evidence WHERE close_id=$1 AND purpose='work' AND superseded_by IS NULL AND extraction_state<>'ready')`, closeID).Scan(&unread); err != nil {
+			return true, err
+		}
+		plan, reason := StraightThrough(proposal, invoice, procedure, profile.Currency, entity, period, id, unread, ledger)
 		straight = "Prepared without confirmation: " + reason
 		if reason == "" {
 			if err = queueStraightThrough(persist, finish, id, plan); err != nil {

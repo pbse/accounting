@@ -29,8 +29,9 @@ type Ledger struct {
 // and the current capture shows the invoice expensed: exactly one bill or purchase in the close month, from the
 // invoice's vendor or bearing its number, books the amount to the procedure's expense account, and no journal in the
 // month moves that amount on either account. The reason says why a proposal still needs a person. The draft it
-// queues cites the capture and is reviewed like any other; nothing is approved here.
-func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, entity, period, jobID string, ledger *Ledger) (Plan, string) {
+// queues cites the capture and is reviewed like any other; nothing is approved here. Evidence in the close the agent
+// did not use, or could not read, is left for a person, as the confirmation form asks.
+func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, entity, period, jobID string, unread bool, ledger *Ledger) (Plan, string) {
 	if p.Engine != "openai" || p.Kind != "prepaid" {
 		return Plan{}, "only an agent-read prepaid invoice can be prepared without confirmation"
 	}
@@ -39,6 +40,9 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 	}
 	if len(p.Unselected) > 0 {
 		return Plan{}, "evidence in the close was not used; a person confirms it is unrelated"
+	}
+	if unread {
+		return Plan{}, "evidence in the close is not extracted yet, or failed extraction"
 	}
 	if !procedure.Enabled || procedure.Kind != "prepaid" || procedure.Method != prepaids.Method || procedure.ExpenseAccount == "" || procedure.PrepaidAccount == "" {
 		return Plan{}, "no enabled prepaid procedure names equal full months and both accounts for this client"
@@ -101,14 +105,14 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 }
 
 // expensedLine finds the one bill or purchase line in the close month that books the invoice amount to the expense
-// account and belongs to the invoice: its vendor's name or its document number is printed in the invoice. A line on
-// the prepaid account, a second match, any journal on either account in the month, or a vendor credit from the vendor
-// or on either account is a question for a person.
+// account and belongs to the invoice: its vendor's name or its document number is printed in the invoice. Any prepaid
+// line on that bill, a second match, any journal on either account in the month, a vendor credit from the vendor or on
+// either account, or a line whose account is not named is a question for a person, whatever its currency.
 func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, prepaid string) (booking, reason string) {
 	text := strings.ToLower(invoice)
 	matches := 0
 	for _, row := range rows {
-		if !strings.HasPrefix(row.Date, period+"-") || (row.Currency != "" && row.Currency != currency) {
+		if !strings.HasPrefix(row.Date, period+"-") {
 			continue
 		}
 		var record struct {
@@ -133,18 +137,24 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 				name = line.JournalEntryLineDetail.AccountRef.Name
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
+			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || mine) {
+				return "", "a captured " + row.Kind + " in the close month has a line whose account is not named"
+			}
 			if row.Kind == "JournalEntry" && (onExpense || onPrepaid) {
 				return "", "a journal in the close month posts to the expense or prepaid account"
 			}
 			if row.Kind == "VendorCredit" && (mine || onExpense || onPrepaid) {
 				return "", "a vendor credit in the close month may change what this invoice expensed"
 			}
-			value, err := prepaids.Amount(line.Amount.String())
-			if (row.Kind != "Bill" && row.Kind != "Purchase") || record.Credit || err != nil || prepaids.Money(value) != amount || !(onExpense || onPrepaid) || !mine {
+			if (row.Kind != "Bill" && row.Kind != "Purchase") || !mine {
 				continue
 			}
 			if onPrepaid {
-				return "", "a captured " + row.Kind + " books this amount to the prepaid account; its balance needs a person"
+				return "", "a captured " + row.Kind + " from this vendor books to the prepaid account; its balance needs a person"
+			}
+			value, err := prepaids.Amount(line.Amount.String())
+			if record.Credit || err != nil || prepaids.Money(value) != amount || !onExpense || (row.Currency != "" && row.Currency != currency) {
+				continue
 			}
 			matches++
 			booking = fmt.Sprintf("QuickBooks %s %s dated %s, %s %s to %s", row.Kind, row.ProviderID, row.Date, currency, amount, name)
