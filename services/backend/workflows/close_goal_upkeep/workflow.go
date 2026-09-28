@@ -27,7 +27,7 @@ var _ = wf.Define(wf.Spec[struct{}, Report]{
 	Name:        "close_goal_upkeep",
 	Title:       "Monthly hand-overs and close goal upkeep",
 	Description: "Every hour: hands each client's newly ended month to the agent under its monthly hand-over, and starts a run for any open close goal that has none.",
-	Triggers:    []wf.Trigger{wf.Schedule("0 * * * *"), wf.Manual()},
+	Triggers:    []wf.Trigger{wf.Schedule("0 * * * *"), wf.ManualForPlatform()},
 	Concurrency: func(struct{}) string { return "close_goal_upkeep" },
 	Run: func(ctx wf.Context, _ struct{}) (Report, error) {
 		if HandOverMonths == nil || WatchGoals == nil {

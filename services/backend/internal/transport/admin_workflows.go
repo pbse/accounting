@@ -519,6 +519,8 @@ func adminStartRun(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				return fmt.Errorf("%w: %s is not started by hand", wf.ErrInvalidInput, in.Workflow)
 			case firmOnly && in.Organization == "":
 				return fmt.Errorf("%w: %s works on one firm; name it", wf.ErrInvalidInput, in.Workflow)
+			case d.PlatformOnly() && in.Organization != "":
+				return fmt.Errorf("%w: %s works across the platform; leave the firm empty", wf.ErrInvalidInput, in.Workflow)
 			}
 			if in.Organization != "" {
 				var enabled bool

@@ -96,7 +96,7 @@ var _ = wf.Define(wf.Spec[Input, Output]{
 | `wf.Effect(ctx, key, fn)` | For external writes (ledger, email, provider calls). Records an attempt before calling `fn`. If the worker dies mid-call, the step becomes `unknown` and the run waits for a person; it is **never** called again automatically. Mirrors [production posting](production-posting.md). |
 | `wf.Call(ctx, key, activity, input)` (W3) | Runs an activity as a step (or an effect, per the activity's class). |
 | `wf.Sleep(ctx, key, d)` / `wf.SleepUntil` | Parks the run until a time. |
-| `wf.Periodic(name, title, description, every, &fn)` | Defines a platform workflow that calls `fn` about every interval all day: a run scheduled at midnight UTC watches until the next midnight, so a periodic job is one run and one step a day. It can also be started by hand; its concurrency key keeps it to one run. The job's code sets `fn`, so the workflow's directory need not import it. |
+| `wf.Periodic(name, title, description, every, &fn)` | Defines a platform workflow that calls `fn` about every interval all day: a run scheduled at midnight UTC watches until the next midnight, so a periodic job is one run and one step a day. A pass may take up to an hour. Staff can also start it by hand, for the platform only (`wf.ManualForPlatform`: a run for one firm could overlap the platform's own); its concurrency key keeps it to one run. The job's code sets `fn`, so the workflow's directory need not import it. |
 | `wf.Watch(ctx, key, every, fn)` | Calls `fn` about every interval until it reports done, as **one** step however many calls that takes (its attempts count them). For watching something that changes in its own time, without a row per look. An error is recorded on the step and cleared by the next call that works; a watch never fails its run. It ends when `fn` reports done or the run is cancelled. `fn` must be safe to repeat. |
 | `wf.WaitForEvent[T](ctx, key, eventKey, timeout)` | Parks until a matching event (see [events](#events)) or the timeout (`wf.ErrTimeout`). |
 | `wf.WaitForApproval(ctx, key, approval)` | A wait decided by `wf.Approve`, which requires the approver to hold the named permission in the run's firm and takes one decision. A rejection is a `Decision` with `Approved` false. |
@@ -330,7 +330,8 @@ The worker's sweeps are periodic workflows (`wf.Periodic`), each in its own dire
 
 - **What changes.** Each loop ran in every worker process. Now each job is one run at a time, visible in the admin panel with its looks and its last error. A failed look is logged and tried again at the next interval, as before. A panic in a look is recorded on the step rather than restarting a loop.
 - **Cursors.** Standing approvals and comparisons keep their cursor in the worker running the day's run; another worker starts again from the beginning, which the sweeps already allow.
-- **Pausing.** Cancelling a job's run in the admin panel pauses it until the next midnight UTC, or until someone starts it by hand.
+- **Pausing.** Cancelling a job's run in the admin panel pauses it until the next midnight UTC, or until someone starts it by hand (naming no firm).
+- **Time.** A pass may take up to an hour (a Xero pass captures up to ten closes at up to three minutes each); a watch's other steps keep the five-minute default.
 
 **What stays a worker loop, and why:**
 - **Durable queues that drain back to back:** preparation and extraction, email delivery, forwarded email and QuickBooks sync. Each already claims its own jobs under a lease and works through them as fast as they arrive. The engine polls every few seconds, so it would add latency without making them simpler.

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"crypto/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,12 @@ func TestPeriodicSweepsRunOnTheEngine(t *testing.T) {
 	id, _, err := wf.Start(t.Context(), db, wf.StartRequest{Workflow: "chat_expiry", Organization: org, IdempotencyKey: "periodic-test", StartedBy: "test"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Staff start a periodic job only for the platform: one for a firm could run beside the platform's own.
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	token := strings.Repeat("z", 32)
+	if message := adminJSON(t, apiWithStore(db, token), token, "POST", "/v1/admin/workflows/runs", `{"workflow":"chat_expiry","organization":"`+org+`","input":{},"idempotency_key":"by-hand","reason":"Clearing old messages now"}`, 422)["message"].(string); !strings.Contains(message, "across the platform") {
+		t.Fatalf("a periodic job names no firm: %s", message)
 	}
 	engine := &wf.Engine{DB: db, OnlyOrganization: org, Now: func() time.Time { return time.Now() }}
 	if ran, err := engine.Tick(t.Context()); err != nil || !ran {
