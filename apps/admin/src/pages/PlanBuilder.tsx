@@ -161,7 +161,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
     const p = stored.data.plan;
     setTitle(editing ? p.plan!.title : `Copy of ${p.plan!.title}`);
     setSteps(fromPlan(p.plan!.nodes, stored.data.inputs));
-    if (!editing) setFirm(p.organization ?? "");
+    setFirm(p.organization ?? "");
     if (editing) setTemplate(p.is_template);
     setLoaded(true);
   }, [loaded, stored.data, editing]);
@@ -191,7 +191,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
       </>
     );
   }
-  if (editing && stored.data && (stored.data.plan.source === "agent" || !["draft", "rejected"].includes(stored.data.plan.state))) {
+  if (editing && stored.data && (stored.data.plan.source !== "staff" || !["draft", "rejected"].includes(stored.data.plan.state))) {
     return <p role="alert">Only a draft or rejected plan staff wrote can be edited. <Link to={`/plans/new?from=${editing}`}>Copy it into a new plan</Link> instead.</p>;
   }
 
@@ -306,7 +306,12 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
           {built.error ? <p role="alert">{built.error}</p> : !check ? <p role="status">Checking…</p> : check.problems.length > 0 ? (
             <ul>{check.problems.map((p, i) => <li key={i}>{p}</li>)}</ul>
           ) : (
-            <p>No problems. {check.staff_approvable ? "Staff can approve it." : "A step needs a firm permission, so the firm approves it, not staff."}</p>
+            <p>
+              No problems.{" "}
+              {template ? "A template is copied into plans, never approved itself."
+                : !firm.trim() ? "Name the firm it runs for."
+                : check.staff_approvable ? "Once saved and revealed, staff can approve it." : "A step needs a firm permission, so the firm approves it, not staff."}
+            </p>
           )}
           <h2>Save</h2>
           {!editing && (

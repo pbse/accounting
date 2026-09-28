@@ -398,8 +398,8 @@ func adminPlanWriteProblem(w http.ResponseWriter, err error, what string) {
 		problem(w, 422, strings.TrimPrefix(err.Error(), wf.ErrPlanInvalid.Error()+": "))
 		return
 	}
-	if errors.Is(err, wf.ErrNotAllowed) {
-		problem(w, 409, "Only a draft or rejected plan staff wrote can be edited; copy an agent's proposal into a new plan instead. Refresh and try again.")
+	if errors.Is(err, wf.ErrNotAllowed) || errors.Is(err, errNotStaffPlan) {
+		problem(w, 409, "Only a draft or rejected plan staff wrote can be edited; copy anyone else's into a new plan instead. Refresh and try again.")
 		return
 	}
 	adminPlanProblem(w, err, what)
@@ -445,7 +445,11 @@ func adminCreatePlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]int64{"plan_id": id})
 }
 
-// adminUpdatePlan replaces a draft's or rejected plan's content (staff's, never an agent's); it becomes a draft again.
+// errNotStaffPlan is an edit of a plan an agent or a firm member wrote: staff copy it into a plan of their own instead.
+var errNotStaffPlan = errors.New("only a plan staff wrote is edited in place")
+
+// adminUpdatePlan replaces the content of a draft or rejected plan staff wrote; it becomes a draft again. A plan an
+// agent or a firm member wrote keeps their words: staff copy it instead.
 func adminUpdatePlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id, ok := planID(w, r)
 	if !ok {
@@ -465,7 +469,16 @@ func adminUpdatePlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	by := "staff:" + staffOf(r.Context()).Subject
 	err = adminAct(r.Context(), db, adminAction{Firm: firm, Action: "plan.update", TargetType: "plan", TargetID: strconv.FormatInt(id, 10), Reason: strings.TrimSpace(in.Reason)},
-		func(ctx context.Context, tx *sql.Tx) error { return wf.UpdatePlanTx(ctx, tx, id, in.Plan, by) })
+		func(ctx context.Context, tx *sql.Tx) error {
+			var source string
+			if err := tx.QueryRowContext(ctx, `SELECT source FROM workflow_plans WHERE id=$1 FOR UPDATE`, id).Scan(&source); err != nil {
+				return err
+			}
+			if source != "staff" {
+				return errNotStaffPlan
+			}
+			return wf.UpdatePlanTx(ctx, tx, id, in.Plan, by)
+		})
 	if err != nil {
 		adminPlanWriteProblem(w, err, "plan save")
 		return

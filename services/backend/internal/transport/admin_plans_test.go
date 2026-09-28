@@ -201,6 +201,11 @@ func TestStaffBuildPlansAndTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 	adminJSON(t, h, token, "POST", path(proposal), body(`"plan":`+good+`,"reason":"Rewriting the agent's idea"`), 409)
+	member, err := wf.CreatePlan(context.Background(), db, wf.PlanDraft{Organization: firm, Plan: json.RawMessage(good), Source: "member", CreatedBy: "user_member"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminJSON(t, h, token, "POST", path(member), body(`"plan":`+good+`,"reason":"Rewriting the member's plan"`), 409)
 
 	// A large integer in an input stays exact through saving and the builder's revealed read.
 	exact := int64(adminJSON(t, h, token, "POST", "/v1/admin/plans", body(`"firm":"`+firm+`","plan":{"version":1,"title":"Exact","nodes":[{"id":"tell","activity":"plan_signal","input":{"name":"n","payload":{"n":9007199254740993}}}]},"reason":"Checking large numbers survive"`), 200)["plan_id"].(float64))
@@ -213,7 +218,7 @@ func TestStaffBuildPlansAndTemplates(t *testing.T) {
 
 	var created string
 	if err := db.QueryRow(`SELECT string_agg(action||':'||result||':'||COALESCE(request->>'plan_id','-'),',' ORDER BY id) FROM platform_audit WHERE organization_id=$1 AND action IN ('plan.create','plan.update')`, firm).Scan(&created); err != nil ||
-		created != "plan.create:refused:-,plan.create:ok:"+strconv.FormatInt(draft, 10)+",plan.update:ok:-,plan.update:refused:-,plan.update:refused:-,plan.create:ok:"+strconv.FormatInt(exact, 10) {
+		created != "plan.create:refused:-,plan.create:ok:"+strconv.FormatInt(draft, 10)+",plan.update:ok:-,plan.update:refused:-,plan.update:refused:-,plan.update:refused:-,plan.create:ok:"+strconv.FormatInt(exact, 10) {
 		t.Fatalf("builder audit %q %v", created, err)
 	}
 }

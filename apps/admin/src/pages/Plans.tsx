@@ -187,7 +187,7 @@ function PlanDetail({ id }: { id: string }) {
         </section>
       )}
       <p className="title-actions">
-        {p.source !== "agent" && ["draft", "rejected"].includes(p.state) && <Link className="button" to={`/plans/${p.id}/edit`}>Edit</Link>}
+        {p.source === "staff" && ["draft", "rejected"].includes(p.state) && <Link className="button" to={`/plans/${p.id}/edit`}>Edit</Link>}
         <Link className="button" to={`/plans/new?from=${p.id}`}>Copy into a new plan</Link>
       </p>
       <section>
