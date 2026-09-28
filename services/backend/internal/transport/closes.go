@@ -161,6 +161,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerRoutines(mux, db)
 	registerHandoffs(mux, db)
 	registerSetup(mux, db)
+	registerHistoricalExports(mux, db)
 	registerInvitations(mux, db)
 	registerStatements(mux, db)
 	registerCanvas(mux, db)

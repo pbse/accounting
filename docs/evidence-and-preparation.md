@@ -9,6 +9,7 @@ Uploaded evidence starts durable intake and optional OpenAI interpretation. The 
 3. Confirm the supported method and assumptions. The original job resumes and prepares a draft for review. For manually selected work, save source-linked instructions and choose **Prepare selected work**; this remains available beside agent intake.
 4. Inspect the calculation, originals and blockers; approve or request changes. Client requests and scanned/released replies can resume the affected work: [coverage requests](coverage-requests.md).
 5. Explicitly replace a changed source, then review/recalculate dependent work. Exact-byte copies reuse their evidence identity; a different new file alone does not establish supersession. [Source review](workpaper-review.md)
+6. Without a live ledger connection, label the uploaded ledger exports as historical exports so the brief, package and setup say what they are: [try a historical period](onboarding.md#try-a-historical-period).
 
 ## Storage and processing boundaries
 

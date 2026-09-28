@@ -21,6 +21,7 @@ import { Memory } from "./Memory";
 import { ProductionAccess } from "./ProductionAccess";
 import { QuickBooks } from "./QuickBooks";
 import { Xero } from "./Xero";
+import { HistoricalExports } from "./HistoricalExports";
 import { Stripe } from "./Stripe";
 import { Readiness } from "./Readiness";
 import { Recurring } from "./Recurring";
@@ -295,6 +296,7 @@ export default function ClientClose() {
           <Evidence key={`evidence-${close.id}`} closeId={close.id} onReplace={() => void reload()} />
           <QuickBooks key={`qbo-${close.id}`} closeId={close.id} entity={close.entity} />
           <Xero key={`xero-${close.id}`} closeId={close.id} entity={close.entity} />
+          <HistoricalExports key={`history-${close.id}`} closeId={close.id} />
           <Stripe key={`stripe-${close.id}`} closeId={close.id} entity={close.entity} />
         </div>
       )}
