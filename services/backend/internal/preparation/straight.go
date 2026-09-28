@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
-	"time"
 
 	"close.local/backend/internal/prepaids"
+	"close.local/backend/internal/quickbooks"
 )
 
 // A captured QuickBooks transaction, as the straight-through check reads it.
@@ -17,12 +18,19 @@ type LedgerRow struct {
 	Record                           json.RawMessage
 }
 
+// Ledger is the close's current QuickBooks capture: its evidence entry and the rows the check reads.
+type Ledger struct {
+	Source Source
+	Rows   []LedgerRow
+}
+
 // StraightThrough turns an agent proposal into a prepaid plan without a person confirming each field, when every
 // fact the calculation needs is one verified candidate, the firm's enabled procedure fixes the method and accounts,
-// and exactly one captured bill or purchase in the close month books the invoice amount to one of those accounts.
-// The reason says why a proposal still needs a person. The draft it queues is reviewed like any other; nothing is
-// approved here.
-func StraightThrough(p Proposal, procedure Procedure, currency, entity, period, jobID string, rows []LedgerRow) (Plan, string) {
+// and the current capture shows the invoice expensed: exactly one bill or purchase in the close month, from the
+// invoice's vendor or bearing its number, books the amount to the procedure's expense account, and no journal in the
+// month moves that amount on either account. The reason says why a proposal still needs a person. The draft it
+// queues cites the capture and is reviewed like any other; nothing is approved here.
+func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, entity, period, jobID string, ledger *Ledger) (Plan, string) {
 	if p.Engine != "openai" || p.Kind != "prepaid" {
 		return Plan{}, "only an agent-read prepaid invoice can be prepared without confirmation"
 	}
@@ -31,6 +39,9 @@ func StraightThrough(p Proposal, procedure Procedure, currency, entity, period, 
 	}
 	if !procedure.Enabled || procedure.Kind != "prepaid" || procedure.Method != prepaids.Method || procedure.ExpenseAccount == "" || procedure.PrepaidAccount == "" {
 		return Plan{}, "no enabled prepaid procedure names equal full months and both accounts for this client"
+	}
+	if ledger == nil {
+		return Plan{}, "the close has no current QuickBooks capture"
 	}
 	facts := map[string]string{}
 	for _, f := range p.Facts {
@@ -60,98 +71,133 @@ func StraightThrough(p Proposal, procedure Procedure, currency, entity, period, 
 	if err != nil || amount <= 0 {
 		return Plan{}, "the amount is not a positive money value"
 	}
-	booked, reference, reason := bookedLine(rows, prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
+	booking, reason := expensedLine(ledger.Rows, invoice, prepaids.Money(amount), currency, period, procedure.ExpenseAccount, procedure.PrepaidAccount)
 	if reason != "" {
 		return Plan{}, reason
 	}
-	invoice := ""
+	primary := ""
 	for _, s := range p.Sources {
 		if s.Role == "invoice" {
-			invoice = s.ID
+			primary = s.ID
 		}
 	}
-	input := prepaids.Input{Entity: entity, ClosePeriod: period, SourceReference: "Evidence #" + invoice + " · work #" + jobID, Currency: currency, Amount: prepaids.Money(amount), ServiceStart: facts["service_start"], ServiceEnd: facts["service_end"],
-		ExpenseAccount: procedure.ExpenseAccount, PrepaidAccount: procedure.PrepaidAccount, Basis: "accrual", Method: prepaids.Method,
-		MethodConfirmed: true, BookingConfirmed: true, BookedBalance: booked, BookingReference: reference, ExamplesConfirmed: booked != ""}
+	input := prepaids.Input{Entity: entity, ClosePeriod: period, SourceReference: "Evidence #" + primary + " · work #" + jobID, Currency: currency, Amount: prepaids.Money(amount), ServiceStart: facts["service_start"], ServiceEnd: facts["service_end"],
+		ExpenseAccount: procedure.ExpenseAccount, PrepaidAccount: procedure.PrepaidAccount, Basis: "accrual", Method: prepaids.Method, MethodConfirmed: true, BookingConfirmed: true}
 	raw, _ := json.Marshal(input)
-	plan := Plan{Kind: "prepaid", Input: raw, Sources: p.Sources}
+	capture := ledger.Source
+	capture.Role, capture.Location = "period_ledger", booking
+	plan := Plan{Kind: "prepaid", Input: raw, Sources: append(append([]Source{}, p.Sources...), capture)}
 	if _, err := Calculate(plan, entity, period); err != nil {
 		return Plan{}, err.Error()
 	}
 	return plan, ""
 }
 
-// bookedLine finds the one captured bill or purchase line in the close month carrying the invoice amount on the
-// expense account (the invoice was expensed: no booked balance) or the prepaid account (its booked balance is the
-// line). Any other count is a question for a person.
-func bookedLine(rows []LedgerRow, amount, currency, period, expense, prepaid string) (booked, reference, reason string) {
+// expensedLine finds the one bill or purchase line in the close month that books the invoice amount to the expense
+// account and belongs to the invoice: its vendor's name or its document number is printed in the invoice. A line on
+// the prepaid account, a second match, or a journal moving the amount on either account is a question for a person.
+func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, prepaid string) (booking, reason string) {
+	text := strings.ToLower(invoice)
 	matches := 0
 	for _, row := range rows {
-		if (row.Kind != "Bill" && row.Kind != "Purchase") || !strings.HasPrefix(row.Date, period+"-") || (row.Currency != "" && row.Currency != currency) {
+		if !strings.HasPrefix(row.Date, period+"-") || (row.Currency != "" && row.Currency != currency) {
 			continue
 		}
 		var record struct {
-			Credit bool
-			Line   []struct {
+			Credit    bool
+			DocNumber string
+			VendorRef struct{ Name string }
+			Line      []struct {
 				Amount                        json.Number
 				AccountBasedExpenseLineDetail *struct{ AccountRef struct{ Name string } }
+				JournalEntryLineDetail        *struct{ AccountRef struct{ Name string } }
 			}
 		}
-		if json.Unmarshal(row.Record, &record) != nil || record.Credit {
+		if json.Unmarshal(row.Record, &record) != nil {
 			continue
 		}
 		for _, line := range record.Line {
-			if line.AccountBasedExpenseLineDetail == nil {
-				continue
-			}
 			value, err := prepaids.Amount(line.Amount.String())
 			if err != nil || prepaids.Money(value) != amount {
 				continue
 			}
-			name := line.AccountBasedExpenseLineDetail.AccountRef.Name
-			switch {
-			case strings.EqualFold(name, expense):
-				matches++
-				booked, reference = "", ""
-			case strings.EqualFold(name, prepaid):
-				matches++
-				booked, reference = amount, fmt.Sprintf("QuickBooks %s %s dated %s, %s %s to %s", row.Kind, row.ProviderID, row.Date, currency, amount, name)
+			name := ""
+			if line.AccountBasedExpenseLineDetail != nil {
+				name = line.AccountBasedExpenseLineDetail.AccountRef.Name
+			} else if line.JournalEntryLineDetail != nil {
+				name = line.JournalEntryLineDetail.AccountRef.Name
 			}
+			if !strings.EqualFold(name, expense) && !strings.EqualFold(name, prepaid) {
+				continue
+			}
+			if row.Kind == "JournalEntry" {
+				return "", "a journal in the close month moves this amount on the procedure's accounts"
+			}
+			if (row.Kind != "Bill" && row.Kind != "Purchase") || record.Credit {
+				continue
+			}
+			if strings.EqualFold(name, prepaid) {
+				return "", "a captured " + row.Kind + " books this amount to the prepaid account; its balance needs a person"
+			}
+			if !printed(text, record.VendorRef.Name) && !printed(text, record.DocNumber) {
+				continue
+			}
+			matches++
+			booking = fmt.Sprintf("QuickBooks %s %s dated %s, %s %s to %s", row.Kind, row.ProviderID, row.Date, currency, amount, name)
 		}
 	}
 	switch matches {
 	case 0:
-		return "", "", "no captured bill or purchase in the close month books this amount to the procedure's accounts"
+		return "", "no captured bill or purchase in the close month from this vendor or with this invoice number books the amount to the expense account"
 	case 1:
-		return booked, reference, ""
+		return booking, ""
 	}
-	return "", "", "more than one captured bill or purchase in the close month books this amount"
+	return "", "more than one captured bill or purchase in the close month books this amount"
 }
 
-// CloseLedgerRows are the bills and purchases of the close's newest completed QuickBooks capture, none if it is stale.
-func CloseLedgerRows(ctx context.Context, tx *sql.Tx, closeID string) ([]LedgerRow, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT t.kind,t.provider_id,t.txn_date::text,COALESCE(t.currency,''),t.record FROM quickbooks_entity_syncs s JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL JOIN quickbooks_transaction_rows t ON t.sync_id=s.id WHERE s.close_id::text=$1 AND s.state='completed' AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.state='completed') AND t.kind IN ('Bill','Purchase')`, closeID)
+// printed reports whether the invoice prints the term as a whole word: "77" is not printed in "INV-778".
+func printed(text, term string) bool {
+	term = strings.ToLower(strings.TrimSpace(term))
+	if len(term) < 3 {
+		return false
+	}
+	return regexp.MustCompile(`(^|[^0-9a-z])` + regexp.QuoteMeta(term) + `([^0-9a-z]|$)`).MatchString(text)
+}
+
+// CloseLedger is the newest completed capture of the close month on the close's reading connection, with its
+// current evidence entry and its bill, purchase and journal rows; nil when a newer capture is still pending or failed,
+// or there is none.
+func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, error) {
+	var l Ledger
+	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
+ WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id)`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT t.kind,t.provider_id,t.txn_date::text,COALESCE(t.currency,''),t.record FROM quickbooks_transaction_rows t JOIN quickbooks_entity_syncs s ON s.id=t.sync_id WHERE s.evidence_id::text=$1 AND t.kind IN ('Bill','Purchase','JournalEntry')`, l.Source.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []LedgerRow
 	for rows.Next() {
 		var r LedgerRow
 		if err := rows.Scan(&r.Kind, &r.ProviderID, &r.Date, &r.Currency, &r.Record); err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		l.Rows = append(l.Rows, r)
 	}
-	return out, rows.Err()
+	return &l, rows.Err()
 }
 
-// queueStraightThrough queues the plan on the job as the agent's confirmation, recording why in the checkpoint.
+// queueStraightThrough queues the plan on the job as the agent's confirmation.
 func queueStraightThrough(ctx context.Context, tx *sql.Tx, jobID string, plan Plan) error {
 	plans, _ := json.Marshal([]Plan{plan})
 	if _, err := tx.ExecContext(ctx, `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans)); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=$2 WHERE job_id=$1`, jobID, time.Now())
+	_, err := tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=now() WHERE job_id=$1`, jobID)
 	return err
 }
