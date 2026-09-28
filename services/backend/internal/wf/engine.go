@@ -33,6 +33,10 @@ type Engine struct {
 	OnlyOrganization string
 
 	hook func(point, key string) error // tests: simulate a crash at a step boundary
+
+	cursorMu              sync.Mutex
+	cursors               map[string]int64 // event trigger scan position, per workflow and pattern
+	eventPage, eventPages int              // tests: smaller event scans
 }
 
 // Run executes workflow runs until ctx ends, with WF_CONCURRENCY runs at once (default 4).

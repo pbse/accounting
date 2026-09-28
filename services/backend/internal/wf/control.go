@@ -222,12 +222,16 @@ func RetryStep(ctx context.Context, db *sql.DB, runID int64, key, by, note strin
 		return errors.New("retrying a step needs who and why")
 	}
 	return inTx(ctx, db, func(tx *sql.Tx) error {
-		var runState, stepState string
-		if err := tx.QueryRowContext(ctx, `SELECT r.state,s.state FROM workflow_runs r JOIN workflow_steps s ON s.run_id=r.id AND s.key=$2 WHERE r.id=$1 FOR UPDATE OF r,s`, runID, key).Scan(&runState, &stepState); err != nil {
+		var runState, stepState, kind string
+		if err := tx.QueryRowContext(ctx, `SELECT r.state,s.state,s.kind FROM workflow_runs r JOIN workflow_steps s ON s.run_id=r.id AND s.key=$2 WHERE r.id=$1 FOR UPDATE OF r,s`, runID, key).Scan(&runState, &stepState, &kind); err != nil {
 			return notFound(err, runID)
 		}
 		if !(stepState == "failed" && (runState == "failed" || runState == "waiting")) && !(stepState == "waiting" && runState == "waiting") {
 			return ErrNotAllowed
+		}
+		if kind == "child" && stepState != "failed" {
+			// A waiting child step's child may still be working; a second child would repeat its work.
+			return fmt.Errorf("%w: a child step can be retried once its child has failed", ErrNotAllowed)
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE workflow_steps SET state='waiting',retry_at=NULL,attempts=0,error='',actor=$3,note=$4,finished_at=NULL,
  child_run_id=NULL,input=CASE WHEN kind='child' THEN jsonb_set(COALESCE(input,'{}'::jsonb),'{generation}',to_jsonb(COALESCE((input->>'generation')::int,0)+1)) ELSE input END

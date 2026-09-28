@@ -30,3 +30,6 @@ func Sweep(ctx context.Context, e *Engine) error { return e.sweep(ctx) }
 
 // Triggers runs one pass of schedule and event triggers.
 func Triggers(ctx context.Context, e *Engine) { e.triggers(ctx) }
+
+// SmallEventScans makes each trigger pass read at most pages pages of size events.
+func SmallEventScans(e *Engine, size, pages int) { e.eventPage, e.eventPages = size, pages }

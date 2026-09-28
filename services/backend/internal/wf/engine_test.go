@@ -1097,3 +1097,37 @@ func TestRetryingAFailedChildStepStartsAFreshChild(t *testing.T) {
 		t.Fatalf("the failed child stays as history and a fresh one ran: %d children", children)
 	}
 }
+
+func TestAWaitingChildStepCannotBeRetried(t *testing.T) {
+	h := setup(t)
+	parent := h.start("test_parent", ref{ID: rand.Text()})
+	h.drain()
+	if err := wf.RetryStep(h.ctx, h.db, parent, "kid", "test", "impatient"); !errors.Is(err, wf.ErrNotAllowed) {
+		t.Fatalf("retrying a child that may still be working would start a second one: %v", err)
+	}
+}
+
+func TestEventScansResumeWhereTheyStopped(t *testing.T) {
+	h := setup(t)
+	wf.SmallEventScans(h.engine, 2, 1)
+	for n := 0; n < 6; n++ {
+		if _, err := wf.Emit(h.ctx, h.db, h.org, fmt.Sprintf("test.busy:%d", n), ping{N: 1}, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	free, err := wf.Emit(h.ctx, h.db, h.org, "test.busy:free", ping{N: 1000}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := func() bool {
+		var n int
+		h.db.QueryRow(`SELECT count(*) FROM workflow_runs WHERE organization_id=$1 AND idempotency_key=$2`, h.org, fmt.Sprintf("event:%d", free)).Scan(&n)
+		return n == 1
+	}
+	for pass := 0; pass < 5 && !started(); pass++ {
+		wf.Triggers(h.ctx, h.engine)
+	}
+	if !started() {
+		t.Fatal("later events were never reached past busy ones")
+	}
+}

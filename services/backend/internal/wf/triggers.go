@@ -103,23 +103,44 @@ func (e *Engine) onEvents(ctx context.Context, w *workflow, t Trigger) error {
 	if strings.HasSuffix(t.Value, "*") {
 		like += "%"
 	}
-	// Page by event ID, so events held back by a busy concurrency key never hide later ones.
-	var after int64
-	for page := 0; page < 20; page++ {
-		n, last, err := e.onEventsPage(ctx, w, like, after)
-		if err != nil || n < 100 {
+	// Page by event ID from where the last pass stopped, wrapping to the start at the end, so events
+	// held back by a busy concurrency key never keep later ones from being reached.
+	size, pages := e.eventPage, e.eventPages
+	if size <= 0 {
+		size, pages = 100, 20
+	}
+	cursor := w.Name + "\x00" + t.Value
+	e.cursorMu.Lock()
+	after := e.cursors[cursor]
+	e.cursorMu.Unlock()
+	for page := 0; ; page++ {
+		n, last, err := e.onEventsPage(ctx, w, like, after, size)
+		if err != nil {
 			return err
 		}
+		if n < size {
+			after = 0 // reached the end: start from the oldest next time
+			break
+		}
 		after = last
+		if page+1 >= pages {
+			break
+		}
 	}
+	e.cursorMu.Lock()
+	if e.cursors == nil {
+		e.cursors = map[string]int64{}
+	}
+	e.cursors[cursor] = after
+	e.cursorMu.Unlock()
 	return nil
 }
 
-func (e *Engine) onEventsPage(ctx context.Context, w *workflow, like string, after int64) (int, int64, error) {
+func (e *Engine) onEventsPage(ctx context.Context, w *workflow, like string, after int64, size int) (int, int64, error) {
 	rows, err := e.DB.QueryContext(ctx, `SELECT e.id,COALESCE(e.organization_id,''),e.payload FROM workflow_events e LEFT JOIN organizations o ON o.id=e.organization_id
  WHERE e.id>$4 AND e.created_at>now()-interval '3 days' AND e.key LIKE $1 ESCAPE '\' AND e.key NOT LIKE 'wf.%' AND (e.organization_id IS NULL OR o.enabled) AND ($3='' OR e.organization_id=$3)
  AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE r.workflow=$2 AND coalesce(r.organization_id,'')=coalesce(e.organization_id,'') AND r.idempotency_key='event:'||e.id)
- ORDER BY e.id LIMIT 100`, like, w.Name, e.OnlyOrganization, after)
+ ORDER BY e.id LIMIT $5`, like, w.Name, e.OnlyOrganization, after, size)
 	if err != nil {
 		return 0, 0, err
 	}
