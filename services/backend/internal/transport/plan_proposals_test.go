@@ -264,7 +264,7 @@ func TestPlanProposalsPageAndStayWithinAMembersClients(t *testing.T) {
 		w := httptest.NewRecorder()
 		store.ServeHTTP(w, r)
 		var out struct {
-			Proposals []struct{ ID int64 }
+			Proposals  []struct{ ID int64 }
 			NextBefore any `json:"next_before"`
 		}
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {

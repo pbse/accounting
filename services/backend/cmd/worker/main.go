@@ -38,21 +38,13 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	loops := map[string]func(context.Context, *sql.DB){
-		"preparation":        preparation.Run,
-		"delivery":           delivery.Run,
-		"forwarded":          forwarded.Run,
-		"quickbooks_sync":    quickbooks.RunSync,
-		"alerts":             transport.RunAlerts,
-		"platform_alerts":    transport.RunPlatformAlerts,
-		"standing_approvals": transport.RunStandingApprovals,
-		"comparisons":        transport.RunComparisons,
-		"replays":            transport.RunReplays,
-		"xero_refresh":       transport.RunXeroRefresh,
-		"xero_backfill":      transport.BackfillXeroRows,
-		"stripe_reports":     transport.RunStripeReports,
-		"chat_expiry":        transport.RunChatExpiry,
-		"workflow_engine":    wf.Run,
-		"heartbeat":          func(ctx context.Context, db *sql.DB) { transport.RunHeartbeat(ctx, db, "worker") },
+		"preparation":     preparation.Run,
+		"delivery":        delivery.Run,
+		"forwarded":       forwarded.Run,
+		"quickbooks_sync": quickbooks.RunSync,
+		"platform_alerts": transport.RunPlatformAlerts,
+		"workflow_engine": wf.Run,
+		"heartbeat":       func(ctx context.Context, db *sql.DB) { transport.RunHeartbeat(ctx, db, "worker") },
 	}
 	for name, loop := range loops {
 		go supervise(ctx, name, func() { loop(ctx, db) }, recordPanic(db))

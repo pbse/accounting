@@ -258,9 +258,9 @@ const xeroRowsInsert = `INSERT INTO xero_transaction_rows(snapshot_id,kind,provi
  SELECT $1::bigint,r."Kind",r."ProviderID",r."Date"::date,NULLIF(r."Currency",''),NULLIF(r."Amount",''),r."Record" FROM jsonb_to_recordset($2::jsonb) AS r("Kind" text,"ProviderID" text,"Date" text,"Currency" text,"Amount" text,"Record" jsonb)
  ON CONFLICT DO NOTHING`
 
-// BackfillXeroRows gives each close's newest Xero capture of its month that holds transactions but was saved before
+// backfillXeroRows gives each close's newest Xero capture of its month that holds transactions but was saved before
 // ledger rows were, its rows for search. It runs once per worker start, one snapshot at a time.
-func BackfillXeroRows(ctx context.Context, db *sql.DB) {
+func backfillXeroRows(ctx context.Context, db *sql.DB) {
 	after := "0"
 	for ctx.Err() == nil {
 		var id string
@@ -502,22 +502,6 @@ func sweepXeroRefresh(ctx context.Context, db *sql.DB) error {
 		}
 	}
 	return nil
-}
-
-// RunXeroRefresh looks for due Xero captures every ten minutes.
-func RunXeroRefresh(ctx context.Context, db *sql.DB) {
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
-	for {
-		if err := sweepXeroRefresh(ctx, db); err != nil && ctx.Err() == nil {
-			log.Print("Scheduled Xero captures could not run: ", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
 
 // nativeReconciliation reports Xero's own reconciled flags per bank account from the close month's newest Xero capture on

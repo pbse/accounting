@@ -218,22 +218,6 @@ func saveStripeReport(ctx context.Context, db *sql.DB, runID, closeID, period, a
 	return tx.Commit()
 }
 
-// RunStripeReports moves report runs forward once a minute.
-func RunStripeReports(ctx context.Context, db *sql.DB) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		if err := sweepStripeReports(ctx, db); err != nil && ctx.Err() == nil {
-			log.Print("Stripe reports could not run: ", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 // registerStripe connects a client's Stripe account read-only through a restricted report-scoped key a person
 // confirms, and captures the close month's itemized payout reconciliation for the existing settlement flow.
 func registerStripe(mux *http.ServeMux, db *sql.DB) {

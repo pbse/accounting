@@ -111,6 +111,18 @@ var _ = wf.Define(wf.Spec[ref, string]{
 	},
 })
 
+// periodicLook is the test periodic job: it counts its looks and fails while periodicFails is set.
+var periodicFails bool
+var periodicLook = func(context.Context) error {
+	count("periodic")
+	if periodicFails {
+		return errors.New("the sweep could not read")
+	}
+	return nil
+}
+
+var _ = wf.Periodic("test_periodic", "Every minute", "Counts its looks.", time.Minute, &periodicLook)
+
 var _ = wf.Define(wf.Spec[ref, string]{
 	Name: "test_block", Title: "Block until cancelled",
 	Run: func(ctx wf.Context, in ref) (string, error) {
@@ -1219,5 +1231,36 @@ func TestAWatchIsOneStepThatLooksUntilDone(t *testing.T) {
 	}
 	if v := h.expect(endless, "cancelled"); v.steps["watch"] != "cancelled" {
 		t.Fatalf("cancelling ends the watch: %v", v.steps)
+	}
+}
+
+// A periodic job looks every interval as one watch step, records a failed look without stopping, and ends at midnight
+// UTC, when the next day's run takes over.
+func TestAPeriodicJobLooksAllDayAndEndsAtMidnight(t *testing.T) {
+	h := setup(t)
+	tomorrow := time.Now().UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+	h.clock.Add(tomorrow.Add(23*time.Hour + 58*time.Minute).Sub(h.clock.Now()))
+	id, _, err := wf.Start(h.ctx, h.db, wf.StartRequest{Workflow: "test_periodic", Organization: h.org, IdempotencyKey: "periodic", StartedBy: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := counted("periodic")
+	h.drain()
+	h.expect(id, "waiting")
+	periodicFails = true
+	defer func() { periodicFails = false }()
+	h.clock.Add(time.Minute)
+	h.drain()
+	var message string
+	h.db.QueryRow(`SELECT error FROM workflow_steps WHERE run_id=$1 AND key='run'`, id).Scan(&message)
+	if v := h.expect(id, "waiting"); message != "the sweep could not read" || len(v.steps) != 2 {
+		t.Fatalf("a failed look is recorded and the job goes on, in one watch step (and its saved start): %q %v", message, v.steps)
+	}
+	periodicFails = false
+	h.clock.Add(time.Minute)
+	h.drain()
+	h.expect(id, "completed")
+	if looks := counted("periodic") - before; looks != 2 {
+		t.Fatalf("two looks before midnight, none after: %d", looks)
 	}
 }

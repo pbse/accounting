@@ -203,25 +203,3 @@ func RunPlatformAlerts(ctx context.Context, db *sql.DB) {
 		}
 	}
 }
-
-func RunAlerts(ctx context.Context, db *sql.DB) {
-	endpoint, token, ok := alertWebhook()
-	if !ok {
-		return
-	}
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		if err := collectOperationsAlerts(ctx, db); err != nil && ctx.Err() == nil {
-			log.Print("Could not collect operations alerts: ", err)
-		}
-		if err := deliverOperationsAlerts(ctx, db, endpoint, token); err != nil && ctx.Err() == nil {
-			log.Print("Could not deliver operations alerts: ", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
