@@ -575,10 +575,10 @@ func ProposePlan(ctx context.Context, db *sql.DB, id int64, by string) error {
 	return inTx(ctx, db, func(tx *sql.Tx) error { return ProposePlanTx(ctx, tx, id, by) })
 }
 
-// ProposePlanTx is ProposePlan in the caller's transaction.
+// ProposePlanTx is ProposePlan in the caller's transaction. A template is never proposed: it is copied.
 func ProposePlanTx(ctx context.Context, tx *sql.Tx, id int64, by string) error {
 	return planChangeTx(ctx, tx, id, func(tx *sql.Tx, state, _ string) error {
-		if state != "draft" {
+		if state != "draft" || isTemplate(ctx, tx, id) {
 			return ErrNotAllowed
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE workflow_plans SET state='proposed',updated_at=now() WHERE id=$1`, id)
@@ -591,10 +591,10 @@ func RejectPlan(ctx context.Context, db *sql.DB, id int64, by string) error {
 	return inTx(ctx, db, func(tx *sql.Tx) error { return RejectPlanTx(ctx, tx, id, by) })
 }
 
-// RejectPlanTx is RejectPlan in the caller's transaction.
+// RejectPlanTx is RejectPlan in the caller's transaction. A template is never rejected: it is archived.
 func RejectPlanTx(ctx context.Context, tx *sql.Tx, id int64, by string) error {
 	return planChangeTx(ctx, tx, id, func(tx *sql.Tx, state, _ string) error {
-		if state != "draft" && state != "proposed" {
+		if (state != "draft" && state != "proposed") || isTemplate(ctx, tx, id) {
 			return ErrNotAllowed
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE workflow_plans SET state='rejected',updated_at=now() WHERE id=$1`, id)
@@ -687,6 +687,13 @@ func InstantiateTemplateTx(ctx context.Context, tx *sql.Tx, templateID int64, or
 
 func planChange(ctx context.Context, db *sql.DB, id int64, change func(tx *sql.Tx, state, source string) error) error {
 	return inTx(ctx, db, func(tx *sql.Tx) error { return planChangeTx(ctx, tx, id, change) })
+}
+
+// isTemplate says whether a plan the caller has locked is a template; an unreadable one counts as one, so it is refused.
+func isTemplate(ctx context.Context, tx *sql.Tx, id int64) bool {
+	template := true
+	tx.QueryRowContext(ctx, `SELECT is_template FROM workflow_plans WHERE id=$1`, id).Scan(&template)
+	return template
 }
 
 // planChangeTx locks the plan and hands its state to change.

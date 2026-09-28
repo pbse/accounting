@@ -182,7 +182,8 @@ func adminPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	if p.Organization != nil {
 		firm = *p.Organization
 	}
-	if reveal && !adminReveal(w, r, db, firm, "plan", strconv.FormatInt(id, 10)) {
+	// The reveal records the version shown: approving needs that the approver read that exact version.
+	if reveal && !adminRevealOf(w, r, db, firm, "plan", strconv.FormatInt(id, 10), map[string]string{"digest": p.Digest}) {
 		return
 	}
 	problems := []string{}
@@ -199,6 +200,9 @@ func adminPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{"plan": p, "problems": problems, "approvable": approvable, "revealed": reveal})
 }
 
+// errPlanNotReviewed is an approval of a version the staff member has not revealed, and so has not read.
+var errPlanNotReviewed = errors.New("reveal and read this version of the plan before approving it")
+
 // adminPlanProblem answers a failed plan read or action.
 func adminPlanProblem(w http.ResponseWriter, err error, what string) {
 	switch {
@@ -206,6 +210,8 @@ func adminPlanProblem(w http.ResponseWriter, err error, what string) {
 		problem(w, 422, err.Error())
 	case errors.Is(err, sql.ErrNoRows):
 		problem(w, 404, "Plan not found.")
+	case errors.Is(err, errPlanNotReviewed):
+		problem(w, 409, "Reveal and read this version of the plan before approving it.")
 	case errors.Is(err, wf.ErrPlanInvalid):
 		problem(w, 422, "The plan cannot be approved as it is. Reveal it to see why.")
 	case errors.Is(err, wf.ErrNotAllowed):
@@ -280,6 +286,15 @@ func adminApprovePlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var run int64
 	err = adminAct(r.Context(), db, adminAction{Firm: firm, Action: "plan.approve", TargetType: "plan", TargetID: strconv.FormatInt(id, 10), Reason: strings.TrimSpace(in.Reason), Request: map[string]string{"digest": in.Digest}},
 		func(ctx context.Context, tx *sql.Tx) (err error) {
+			// The approver read this exact version: they revealed it, with this digest, within the last day.
+			var read bool
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM platform_audit WHERE staff_user=$1 AND action='content.reveal' AND result='ok'
+ AND target_type='plan' AND target_id=$2 AND request->>'digest'=$3 AND created_at>now()-interval '1 day')`, member.Subject, strconv.FormatInt(id, 10), in.Digest).Scan(&read); err != nil {
+				return err
+			}
+			if !read {
+				return errPlanNotReviewed
+			}
 			// Staff hold no firm permissions: a plan whose activities need one waits for the firm.
 			run, err = wf.ApprovePlanTx(ctx, tx, id, in.Digest, "staff:"+member.Subject, []string{})
 			return err

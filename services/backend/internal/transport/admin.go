@@ -359,12 +359,17 @@ func RunHeartbeat(ctx context.Context, db *sql.DB, loop string) {
 // adminReveal lets a staff member see client content: it needs platform:content and a reason in the X-Access-Reason header,
 // and records the read as content.reveal on the firm. When it refuses, it has answered the request and returns false.
 func adminReveal(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, targetType, targetID string) bool {
+	return adminRevealOf(w, r, db, firm, targetType, targetID, nil)
+}
+
+// adminRevealOf is adminReveal recording what exactly was shown (request), such as a plan's digest.
+func adminRevealOf(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, targetType, targetID string, request any) bool {
 	if !slices.Contains(staffOf(r.Context()).Permissions, platformContent) {
 		problem(w, 403, "Revealing client content needs platform:content.")
 		return false
 	}
 	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
-	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.reveal", TargetType: targetType, TargetID: targetID, Reason: reason},
+	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.reveal", TargetType: targetType, TargetID: targetID, Reason: reason, Request: request},
 		func(context.Context, *sql.Tx) error { return nil })
 	if errors.Is(err, errReasonRequired) {
 		problem(w, 422, err.Error())

@@ -111,10 +111,15 @@ func TestStaffReviewApproveAndCopyPlans(t *testing.T) {
 		t.Fatalf("copy of %d: %d %v", template, from, err)
 	}
 	adminJSON(t, h, token, "POST", path(template, "/instantiate"), `{"firm":"org_Missing","reason":"The firm asked for the usual chase"}`, 404)
+	// A template is copied, never proposed or rejected.
+	adminJSON(t, h, token, "POST", path(template, "/propose"), `{"reason":"Proposing a template"}`, 409)
+	// Approving needs that the approver revealed, and so read, this exact version.
+	unread := create(wf.PlanDraft{Organization: firm, Plan: signal("Never opened"), Source: "staff", CreatedBy: "staff:builder"})
+	adminJSON(t, h, token, "POST", path(unread, "/approve"), `{"digest":"`+digest(unread)+`","reason":"Approving without reading it"}`, 409)
 
 	var actions string
 	if err := db.QueryRow(`SELECT string_agg(action||':'||result,',' ORDER BY id) FROM platform_audit WHERE organization_id=$1 AND action LIKE 'plan.%'`, firm).Scan(&actions); err != nil ||
-		actions != "plan.approve:refused,plan.propose:ok,plan.propose:refused,plan.reject:ok,plan.approve:refused,plan.approve:ok,plan.instantiate:ok" {
+		actions != "plan.approve:refused,plan.propose:ok,plan.propose:refused,plan.reject:ok,plan.approve:refused,plan.approve:ok,plan.instantiate:ok,plan.approve:refused" {
 		t.Fatalf("plan audit %q %v", actions, err)
 	}
 }
