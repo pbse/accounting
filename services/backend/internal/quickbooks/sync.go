@@ -1,6 +1,7 @@
 package quickbooks
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -9,8 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"slices"
-	"strings"
 	"time"
 
 	"close.local/backend/internal/secrets"
@@ -302,31 +301,37 @@ var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_
  -- Six scheduled ones at most, leaving the rest of the close's twenty for people.
  AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.actor='scheduled-quickbooks-refresh' AND s.payload ? 'period')<6`
 
-// periodBalances is a period snapshot's Trial Balance as comparable text, or "" when it cannot be read.
-func periodBalances(payload []byte) string {
+// periodContent digests a period snapshot's accounts and reports, leaving out what changes on every read (a report's
+// generation time) or with activity after the month (current balances, sync tokens); "" when it cannot be read.
+func periodContent(payload []byte) string {
 	var p struct {
-		Accounts json.RawMessage `json:"accounts"`
-		Reports  struct {
-			TrialBalance json.RawMessage
-		} `json:"reports"`
+		Accounts []map[string]any          `json:"accounts"`
+		Reports  map[string]map[string]any `json:"reports"`
 	}
-	if json.Unmarshal(payload, &p) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if decoder.Decode(&p) != nil || len(p.Reports) == 0 {
 		return ""
 	}
-	currency, balances, err := TrialBalance(p.Accounts, p.Reports.TrialBalance)
+	for _, account := range p.Accounts {
+		for _, volatile := range []string{"CurrentBalance", "CurrentBalanceWithSubAccounts", "MetaData", "SyncToken"} {
+			delete(account, volatile)
+		}
+	}
+	for _, report := range p.Reports {
+		if header, ok := report["Header"].(map[string]any); ok {
+			delete(header, "Time")
+		}
+	}
+	normalized, err := json.Marshal(p)
 	if err != nil {
 		return ""
 	}
-	lines := []string{}
-	for _, b := range balances {
-		lines = append(lines, b.ID+"="+b.Net.RatString())
-	}
-	slices.Sort(lines)
-	return currency + "\n" + strings.Join(lines, "\n")
+	return fmt.Sprintf("%x", sha256.Sum256(normalized))
 }
 
 // captureFirstPeriod saves an ended month's period snapshot and, while the scheduler's snapshot is the newest, a fresh
-// one when the Trial Balance has changed, so later entries reach the tie-out. A person's capture or refresh is never replaced.
+// one when its accounts or reports have changed, so later entries reach the tie-out. A person's capture or refresh is never replaced.
 func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environment, realm, token string) error {
 	var org, entity, company string
 	err := db.QueryRowContext(ctx, firstPeriod, job.closeID, job.connectionID, job.period).Scan(&org, &entity, &company)
@@ -374,7 +379,7 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 		if err != nil {
 			return err
 		}
-		if unchanged := periodBalances(previous); unchanged != "" && unchanged == periodBalances(fresh) {
+		if unchanged := periodContent(previous); unchanged != "" && unchanged == periodContent(fresh) {
 			return nil
 		}
 	}

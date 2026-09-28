@@ -2614,17 +2614,18 @@ Checks (local PostgreSQL):
 Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
 
 What changed:
-- **Snapshot timing.** The scheduled QuickBooks period snapshot used to be taken once, at 00:00 UTC on the 1st, which is still the afternoon of the last day in the US, and never again. It now waits until the month has ended everywhere (UTC-12), then reads again at most once every 20 hours after its last snapshot. It saves a new snapshot only when the Trial Balance differs (same currency and every account's net), so later entries reach the tie-out and, through it, sign-off.
-- **Snapshot limits.** A person's capture stops the schedule. Six scheduled period snapshots at most are kept, leaving the rest of the 20 for people. Only the first scheduled snapshot resumes waiting model intakes, as before. A refresh neither supersedes earlier evidence nor resets approvals.
-- **Throttled reads.** `ledger.DoThrottled` sends a QuickBooks or Xero GET again when it is refused with 429, after Retry-After (at most 30 seconds; 2, then 4, without one), three tries in all. It covers QuickBooks reads and readbacks and Xero reads. Writes and token exchanges are never repeated.
+- **Snapshot timing.** The scheduled QuickBooks period snapshot used to be taken once, at 00:00 UTC on the 1st, which is still the afternoon of the last day in the US, and never again. It now waits until the month has ended everywhere (UTC-12), then reads again at most once every 20 hours after its last snapshot. It saves a new snapshot only when the accounts or reports differ, ignoring each report's generation time and the accounts' current balances and sync tokens. Later entries, even ones that offset within an account, therefore reach the snapshot, the tie-out and, through it, sign-off.
+- **Snapshot limits.** A person's capture stops the schedule. Six scheduled period snapshots at most are kept, leaving the rest of the 20 for people. Only the first scheduled snapshot resumes waiting model intakes, as before. A refresh neither supersedes earlier evidence nor resets approvals, but new ledger pages can be selected only from the month's newest snapshot. A large snapshot's evidence index now carries each report's digest, so two captures whose reports have equal sizes no longer collide on the evidence digest.
+- **Throttled reads.** `ledger.DoThrottled` sends a QuickBooks or Xero GET again when it is refused with 429, after Retry-After in seconds or as a date (at most 30 seconds; 2, then 4, without one), three tries in all. It covers QuickBooks reads and readbacks and Xero reads. Writes and token exchanges are never repeated.
 
 Checks:
-- `TestPeriodBalancesChangeOnlyWithTheTrialBalance`: a re-read with only report times changed compares equal; a changed balance does not; an unreadable one never compares equal.
+- `TestPeriodContentChangesOnlyWithTheMonth`: a re-read with only report times and current balances changed compares equal; a changed balance or an added ledger row does not; an unreadable one never compares equal.
+- `TestQuickBooksScopedOAuthRefreshAndSnapshots`: after a newer capture of the month, selecting a ledger page from the older one is refused (409).
 - `TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures` (local PostgreSQL) tests the gate query:
   - due with no snapshot;
   - not due an hour after a scheduled one, but due 21 hours after;
   - not due at six scheduled snapshots;
   - never due after a person's capture.
-- `TestDoThrottledRepeatsOnlyThrottledReads`: a read throttled twice succeeds on the third try; one throttled throughout stops at three; a throttled PUT is sent once.
+- `TestDoThrottledRepeatsOnlyThrottledReads`: a read throttled twice (once with a Retry-After date) succeeds on the third try; one throttled throughout stops at three; a throttled PUT is sent once.
 
 Not verified: the capture against a live QuickBooks company. The comparison of a fresh read with the last snapshot is covered by the unit test, not by a mocked provider run.

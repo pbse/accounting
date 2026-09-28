@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestDoThrottledRepeatsOnlyThrottledReads(t *testing.T) {
@@ -12,6 +13,9 @@ func TestDoThrottledRepeatsOnlyThrottledReads(t *testing.T) {
 		calls++
 		if r.URL.Path == "/busy" || calls < 3 {
 			w.Header().Set("Retry-After", "0")
+			if calls == 2 {
+				w.Header().Set("Retry-After", time.Now().Add(-time.Second).UTC().Format(http.TimeFormat))
+			}
 			w.WriteHeader(429)
 			return
 		}

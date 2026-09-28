@@ -10,20 +10,23 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func TestPeriodBalancesChangeOnlyWithTheTrialBalance(t *testing.T) {
-	payload := func(checking, captured string) []byte {
-		return []byte(fmt.Sprintf(`{"completed_at":%q,"accounts":[{"Id":"3","Name":"Checking","AccountType":"Bank","CurrentBalance":7}],
-			"reports":{"TrialBalance":{"Header":{"Time":%q},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Debit"},{"ColTitle":"Credit"}]},"Rows":{"Row":[{"type":"Data","ColData":[{"id":"3","value":"Checking"},{"value":%q},{"value":""}]}]}}}}`, captured, captured, checking))
+func TestPeriodContentChangesOnlyWithTheMonth(t *testing.T) {
+	payload := func(checking, rows, captured string, balance int) []byte {
+		return []byte(fmt.Sprintf(`{"completed_at":%q,"accounts":[{"Id":"3","Name":"Checking","AccountType":"Bank","CurrentBalance":%d,"SyncToken":"%d"}],
+			"reports":{"TrialBalance":{"Header":{"Time":%q,"EndPeriod":"2026-08-31"},"Rows":{"Row":[{"ColData":[{"id":"3","value":"Checking"},{"value":%q}]}]}},"GeneralLedger":{"Header":{"Time":%q},"Rows":%s}}}`, captured, balance, balance, captured, checking, captured, rows))
 	}
-	before := periodBalances(payload("100.00", "2026-10-01T00:00:00Z"))
-	if before == "" || before != periodBalances(payload("100.00", "2026-10-02T00:00:00Z")) {
-		t.Fatalf("a re-read with the same balances is a change: %q", before)
+	before := periodContent(payload("100.00", `[1]`, "2026-10-01T00:00:00Z", 7))
+	if before == "" || before != periodContent(payload("100.00", `[1]`, "2026-10-02T00:00:00Z", 9)) {
+		t.Fatalf("a re-read with only its time and current balances changed is a change: %q", before)
 	}
-	if before == periodBalances(payload("125.00", "2026-10-02T00:00:00Z")) {
-		t.Fatal("a later entry did not change the balances")
+	if before == periodContent(payload("125.00", `[1]`, "2026-10-02T00:00:00Z", 7)) {
+		t.Fatal("a later entry did not change the snapshot")
 	}
-	if periodBalances([]byte(`{"reports":{}}`)) != "" {
-		t.Fatal("an unreadable Trial Balance compared equal")
+	if before == periodContent(payload("100.00", `[1,2]`, "2026-10-02T00:00:00Z", 7)) {
+		t.Fatal("offsetting ledger rows with the same balance did not change the snapshot")
+	}
+	if periodContent([]byte(`{"reports":{}}`)) != "" {
+		t.Fatal("an unreadable snapshot compared equal")
 	}
 }
 
