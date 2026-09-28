@@ -38,7 +38,7 @@ export function Audit() {
       const headers = await download(`/v1/admin/audit/export${exportQuery.size ? `?${exportQuery}` : ""}`, "staff-audit.csv", reason !== undefined ? { "X-Access-Reason": reason } : {});
       const next = headers.get("X-Next-Before");
       setNextBatch(next ? { search, before: next } : undefined);
-      setExported(next ? "Exported 5,000 entries; export the next batch for older ones." : "Exported.");
+      setExported(next ? `Exported the newest ${Number(headers.get("X-Entries")).toLocaleString()} entries; export the next batch for older ones.` : "Exported.");
     } catch (e) {
       setExported((e as Error).message);
     }
@@ -49,7 +49,7 @@ export function Audit() {
         <div><div><h1>Staff audit</h1><p>Every staff action and every reveal of client content, refusals included. Reasons, details and errors are hidden until revealed.</p></div></div>
         <div className="title-actions">
           <button onClick={() => exportBatch()}>Export CSV{reason !== undefined ? " (revealed)" : ""}</button>
-          {nextBatch?.search === search && <button onClick={() => exportBatch(nextBatch.before)}>Export the next 5,000{reason !== undefined ? " (revealed)" : ""}</button>}
+          {nextBatch?.search === search && <button onClick={() => exportBatch(nextBatch.before)}>Export the next batch{reason !== undefined ? " (revealed)" : ""}</button>}
         </div>
       </div>
       <form className="filters" onSubmit={(event) => {

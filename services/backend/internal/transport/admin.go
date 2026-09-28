@@ -135,7 +135,9 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 	if a.Firm != "" {
 		acting = auth.WithAgent(auth.WithActor(ctx, &auth.Claims{Organization: a.Firm, RegisteredClaims: jwt.RegisteredClaims{Subject: "staff:" + member.Subject}}), "staff:"+member.Subject)
 	}
-	record := func(ctx context.Context, q execer, result, failure string) error { return adminAudit(ctx, q, member, a, result, failure) }
+	record := func(ctx context.Context, q execer, result, failure string) error {
+		return adminAudit(ctx, q, member, a, result, failure)
+	}
 	tx, err := db.BeginTx(acting, nil)
 	if err == nil {
 		if err = fn(acting, tx); err == nil {

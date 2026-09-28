@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -68,8 +69,8 @@ func auditFilters(w http.ResponseWriter, r *http.Request) (auditQuery, bool) {
 	return q, true
 }
 
-// auditBytes bounds what one audit read holds, whatever its entries' sizes: a read that reaches it stops there, as one
-// reaching its limit does.
+// auditBytes bounds what one audit read returns, whatever its entries' sizes: an entry that would pass it starts the next
+// page instead, as one past the read's limit does, and one too large on its own is shown without its free text.
 var auditBytes = 32 << 20
 
 // readAudit reads entries newest first, masked unless revealed. more says it stopped at auditBytes with entries left.
@@ -83,9 +84,6 @@ func readAudit(ctx context.Context, tx *sql.Tx, q auditQuery, reveal bool) (entr
 	defer rows.Close()
 	entries, size := []adminAuditRow{}, 0
 	for rows.Next() {
-		if size >= auditBytes {
-			return entries, true, nil
-		}
 		var e adminAuditRow
 		if err = rows.Scan(&e.ID, &e.Organization, &e.StaffUser, &e.Action, &e.TargetType, &e.TargetID, &e.Reason, &e.Request, &e.Result, &e.Error, &e.CreatedAt); err != nil {
 			return nil, false, err
@@ -93,7 +91,14 @@ func readAudit(ctx context.Context, tx *sql.Tx, q auditQuery, reveal bool) (entr
 		if !reveal {
 			e.Reason, e.Request, e.Error = maskText(e.Reason), only(e.Request), maskText(e.Error)
 		}
-		size += len(e.StaffUser) + len(e.Action) + len(e.TargetType) + len(e.TargetID) + len(e.Reason) + len(e.Request) + len(e.Error) + 64
+		n := len(e.StaffUser) + len(e.Action) + len(e.TargetType) + len(e.TargetID) + len(e.Reason) + len(e.Request) + len(e.Error) + 64
+		if size+n > auditBytes {
+			if len(entries) > 0 {
+				return entries, true, nil
+			}
+			e.Reason, e.Request, e.Error = fmt.Sprintf("(too large to show here: %d bytes)", n), json.RawMessage("{}"), ""
+		}
+		size += n
 		entries = append(entries, e)
 	}
 	return entries, false, rows.Err()
@@ -195,6 +200,7 @@ func adminAuditExport(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="staff-audit.csv"`)
 	w.Header().Set("X-Truncated", strconv.FormatBool(truncated))
+	w.Header().Set("X-Entries", strconv.Itoa(len(entries)))
 	if truncated {
 		w.Header().Set("X-Next-Before", strconv.FormatInt(entries[len(entries)-1].ID, 10))
 	}

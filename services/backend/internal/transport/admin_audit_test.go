@@ -130,10 +130,14 @@ func TestStaffSearchAndExportTheAuditAcrossFirms(t *testing.T) {
 	// However large its entries, a read stops at auditBytes and pages on from there.
 	defer func(was int) { auditBytes = was }(auditBytes)
 	auditBytes = 1
-	if page := adminJSON(t, h, token, "GET", "/v1/admin/audit?staff="+staff, "", 200); len(page["entries"].([]any)) != 1 || page["next_before"] == nil {
-		t.Fatalf("a read at its byte limit pages on: %v", page)
+	if page := adminJSON(t, h, token, "GET", "/v1/admin/audit?staff="+staff+"&reveal=1", "", 200, "X-Access-Reason", "checking the byte limit"); len(page["entries"].([]any)) != 1 || page["next_before"] == nil || !strings.Contains(mustString(page), "too large to show here") {
+		t.Fatalf("a read at its byte limit pages on, an entry too large on its own without its text: %v", page)
 	}
-	if w, rows = export(""); w.Header().Get("X-Truncated") != "true" || w.Header().Get("X-Next-Before") == "" || len(rows) != 2 {
+	if w, rows = export(""); w.Header().Get("X-Truncated") != "true" || w.Header().Get("X-Next-Before") == "" || w.Header().Get("X-Entries") != "1" || len(rows) != 2 {
 		t.Fatalf("an export at its byte limit says it was truncated: %v %v", w.Header(), rows)
+	}
+	auditBytes = 1 << 20
+	if page := adminJSON(t, h, token, "GET", "/v1/admin/audit?staff="+staff, "", 200); len(page["entries"].([]any)) != 3 || page["next_before"] != nil {
+		t.Fatalf("under the limit, the whole search: %v", page)
 	}
 }
