@@ -1,11 +1,14 @@
 name: CI
+# main is checked by Deploy production, which calls this workflow before deploying.
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_call:
 permissions:
   contents: read
+# A newer push to a pull request cancels its older run; a deploy's run has a group of its own.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 jobs:
   check:
     runs-on: ubuntu-latest

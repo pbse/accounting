@@ -2563,3 +2563,7 @@ Checks, running the workflow step's commands against throwaway local databases (
 - By hand through 090 plus 094 and 096: 92 adopted, 091, 092, 093 and 095 applied; a second run is silent; the runtime role can use the new tables.
 - By hand through 090: 90 adopted, 091–096 applied.
 - All 96 by hand: all adopted, nothing applied.
+
+## CI runs once per change (2026-09-28)
+
+Request: stay within the 2,000 free Actions minutes a month. September so far: 208 pull request runs and 166 runs on `main`, about 5 minutes each. Since #167, Deploy production runs CI on every push to `main`, so CI's own `main` trigger ran the same checks twice. It is removed. A newer push to a pull request now cancels that pull request's older run; a deploy's call has a group of its own, so it is never cancelled.
