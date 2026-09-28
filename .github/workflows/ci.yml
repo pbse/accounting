@@ -30,8 +30,9 @@ jobs:
           # The commit and its parent: a pull request's merge commit, to see what the pull request changes.
           fetch-depth: 2
       - name: Start PostgreSQL and install PDF/OCR tools in the background
+        # The Go tests mostly wait on commits, so this throwaway database does not sync them to disk.
         run: |
-          (set +e; docker run -d --name postgres -p 5432:5432 -e POSTGRES_USER=close -e POSTGRES_PASSWORD=test-only -e POSTGRES_DB=close_test postgres:17-alpine) > /tmp/postgres.log 2>&1 &
+          (set +e; docker run -d --name postgres -p 5432:5432 -e POSTGRES_USER=close -e POSTGRES_PASSWORD=test-only -e POSTGRES_DB=close_test postgres:17-alpine -c fsync=off -c synchronous_commit=off -c full_page_writes=off) > /tmp/postgres.log 2>&1 &
           (set +e; sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils tesseract-ocr tesseract-ocr-eng; echo $? > /tmp/apt.status) > /tmp/apt.log 2>&1 &
       - uses: actions/setup-go@v5
         with:
