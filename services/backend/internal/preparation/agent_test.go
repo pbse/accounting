@@ -49,6 +49,13 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 	if _, err = validateInterpretation(result, "1", []IntakeSource{{Source: sources[0].Source, Content: "Insurance\nInsurance"}, sources[1]}); err == nil {
 		t.Fatal("Repeated quote was assigned a false first location")
 	}
+	// A value the quote does not print is a question, not a verified candidate.
+	json.Unmarshal([]byte(output), &result)
+	result.Facts[0].Value = "12000.00"
+	misread, err := validateInterpretation(result, "1", sources)
+	if err != nil || misread.Facts[0].Value != "" || len(misread.Facts[0].Candidates) != 0 || !strings.Contains(strings.Join(misread.Questions, "\n"), "does not show 12000.00") {
+		t.Fatal("A value its quote does not show was cited", misread, err)
+	}
 	// A completed transport response without completed model output is not a proposal.
 	client.Transport = agentRoundTrip(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"incomplete","output":[]}`)), Header: http.Header{}}, nil

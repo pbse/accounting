@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -466,4 +467,65 @@ func TestPartialClientRepliesKeepAnswersAndResumeOnlyWhenComplete(t *testing.T) 
 	answer([]clientAnswer{{1, "answered", "Actually it ends 2027-11-30"}}, 409)
 	call("POST", path+"/revoke_link", auth, map[string]any{"revision": revision(), "request_id": requestID}, 200)
 	call("GET", "/v1/client-request", token, nil, 404)
+}
+
+// readSpy records whether a handler read the request body at all.
+type readSpy struct{ read bool }
+
+func (s *readSpy) Read([]byte) (int, error) { s.read = true; return 0, io.EOF }
+
+func TestUnknownOrRevokedLinkIsRefusedBeforeItsUpload(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var closeID, draft, request string
+	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Unread upload "+rand.Text()).Scan(&closeID); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, q := range []string{`DELETE FROM client_request_links WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1)`, `DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`, `DELETE FROM request_drafts WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+			db.Exec(q, closeID)
+		}
+	}()
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, _, err := preparation.RequestContext(context.Background(), tx, closeID, nil)
+	if err == nil {
+		err = tx.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the September statement.','[]',$2,'fixture') RETURNING id::text`, closeID, digest).Scan(&draft)
+	}
+	if err == nil {
+		err = tx.QueryRow(`INSERT INTO work_requests(draft_id,revision,recipient,approved_by) VALUES($1,1,'client@example.test','fixture') RETURNING id::text`, draft).Scan(&request)
+	}
+	revoked := rand.Text()
+	if err == nil {
+		_, err = issueLink(context.Background(), tx, request, "fixture", revoked)
+	}
+	if err == nil {
+		_, err = tx.Exec(`UPDATE client_request_links SET revoked_at=now() WHERE digest=$1`, preparation.Digest([]byte(revoked)))
+	}
+	if err != nil || tx.Commit() != nil {
+		t.Fatal(err)
+	}
+	h := apiWithStore(db, strings.Repeat("p", 32))
+	for _, token := range []string{rand.Text(), revoked} {
+		for _, path := range []string{"/v1/client-request", "/v1/client-request/scan-text"} {
+			body := &readSpy{}
+			r := httptest.NewRequest("POST", path, body)
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.Header.Set("Content-Type", "multipart/form-data; boundary=x")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 404 || body.read {
+				t.Fatalf("%s: %d, body read %v", path, w.Code, body.read)
+			}
+		}
+	}
 }

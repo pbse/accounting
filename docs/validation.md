@@ -2606,3 +2606,16 @@ Tests: `TestServerSessionKeepsWorkOSTokensOnTheServer` now also signs in a firm 
 Code review: GPT-6 Sol (reasoning high) found that turning a cookie into a token did not check the row's kind, so a staff session's value placed in the firm cookie (or the reverse) became a token on the other kind's routes; it is now refused with 401 and the cookie cleared, and the test covers both directions (each fails without the fix). Its point that a cross-placed cookie lets sign-out revoke the other kind's row was not adopted: revoking needs the cookie's secret, so a person can only sign themselves out. Comments were shortened. Gemini (agy-review, on a separate copy) approved; its optional nit, clearing a sign-out error when retrying, was not adopted, since a successful sign-out leaves the page and a failed one replaces the message.
 
 Not verified: a real WorkOS staff sign-in on the deployed site, which needs the activation steps in [sign-in session](auth-sandbox-staging.md#sign-in-session).
+
+## Citations must show their values; bad links are refused unread (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- The model's extracted amounts and dates must be printed in their own quote (`documents.AmountIn`, `documents.DateIn`), not just cite a quote found once in the source. A value of 12000.00 beside a quote reading "1,200.00" no longer shows as a cited candidate; it becomes a question naming the source, field and value. Amounts compare as exact decimals, ignoring sign, currency signs and thousands separators; dates match common written forms with their year. Text fields (accounts, references, names) are not checked. Statement rows use the same helpers, which now also refuse 1200 against a printed 1,200.99 and a date running into a longer number.
+- `linkPasscode`, which both public link routes call first, now refuses an unknown, expired or revoked link, or one whose firm is suspended, before the reply or file is read. Before, an unknown 26-character token let the reply route buffer an upload of up to 21 MiB before the lookup failed.
+
+Checks:
+- `TestAmountIn`, `TestDateIn`: the examples above; a year or day inside a date is never taken for an amount; ordinal, Sept, day-first and unpadded two-digit-year dates.
+- `TestInterpretationContractAndCitationBoundary`: a 12000.00 value on the 1,200.00 quote leaves no candidate and asks about it.
+- `TestUnknownOrRevokedLinkIsRefusedBeforeItsUpload` (local PostgreSQL): an unknown and a revoked link each get 404 on both routes without the body being read.

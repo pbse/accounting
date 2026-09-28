@@ -40,17 +40,26 @@ func issueLink(ctx context.Context, tx *sql.Tx, requestID, actor, token string) 
 	return passcode, err
 }
 
-// linkPasscode checks the passcode a link may need before anything about its request is read. Each wrong try is
-// recorded on its own, and the fifth revokes the link.
+// linkPasscode checks that the link still works, and the passcode it may need, before any upload is read or anything
+// about its request is. Each wrong try is recorded on its own, and the fifth revokes the link.
 func linkPasscode(w http.ResponseWriter, r *http.Request, db *sql.DB, token string) bool {
 	var stored string
-	err := db.QueryRowContext(r.Context(), `SELECT COALESCE(passcode_digest,'') FROM client_request_links WHERE digest=$1`, preparation.Digest([]byte(token))).Scan(&stored)
-	if err == sql.ErrNoRows || err == nil && stored == "" {
-		return true
+	var valid bool
+	err := db.QueryRowContext(r.Context(), `SELECT COALESCE(l.passcode_digest,''),l.revoked_at IS NULL AND l.expires_at>now() AND o.enabled FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id JOIN organizations o ON o.id=c.organization_id WHERE l.digest=$1`, preparation.Digest([]byte(token))).Scan(&stored, &valid)
+	if err == sql.ErrNoRows {
+		problem(w, 404, "Request link unavailable. Ask the firm for a new link.")
+		return false
 	}
 	if err != nil {
 		problem(w, 503, "Request service unavailable.")
 		return false
+	}
+	if !valid {
+		problem(w, 404, "Request link expired or was revoked. Ask the firm for a new link.")
+		return false
+	}
+	if stored == "" {
+		return true
 	}
 	supplied := r.Header.Get("X-Request-Passcode")
 	if supplied == "" {
