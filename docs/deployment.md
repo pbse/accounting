@@ -33,7 +33,7 @@ Checked against provider documentation on 2026-09-26; recheck prices and entitle
 
 Create a fresh staging project in an appropriate region, then follow [migrations and runtime roles](../infra/postgres/migrations/README.md#fresh-hosted-database). Use a **direct Neon endpoint**, not the `-pooler` endpoint: current tenant isolation uses session-level `set_config` and caches the tenant on the connection. Transaction pooling is not compatible with that implementation.
 
-Use the owner credential only for reviewed migrations; run API/worker with a separate non-owner role without superuser or BYPASSRLS. Require TLS in hosted `DATABASE_URL`. Apply all numbered migrations on a fresh database; an existing database receives only unapplied migrations. CI and deployment do not maintain a migration ledger or apply hosted migrations for you. Back up before upgrades and verify readiness afterward.
+Use the owner credential only for reviewed migrations; run API/worker with a separate non-owner role without superuser or BYPASSRLS. Require TLS in hosted `DATABASE_URL`. Apply all numbered migrations on a fresh database; an existing database receives only unapplied migrations. The deploy workflows apply pending migrations with the ledger-backed runner before deploying, as the owner in `MIGRATION_DATABASE_URL` (see [migrations](../infra/postgres/migrations/README.md#existing-database-upgrades)). Back up before upgrades and verify readiness afterward.
 
 ## Configure staging
 
@@ -50,7 +50,7 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 
 | Purpose | Variables | Secrets |
 | --- | --- | --- |
-| Required hosting | `STAGING_URL`; optional `VITE_API_BASE_URL` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, runtime `DATABASE_URL` |
+| Required hosting | `STAGING_URL`; optional `VITE_API_BASE_URL` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, runtime `DATABASE_URL`, owner `MIGRATION_DATABASE_URL` (direct endpoint, TLS) |
 | Required auth | `WORKOS_CLIENT_ID`, `WORKOS_API_HOSTNAME`, `WORKOS_ISSUER`; optional single-firm `WORKOS_ORGANIZATION_ID` | — |
 | Required scanning | `UPLOAD_SCAN_HOST` (API hostname only), `TEXT_SCANNER_URL` | `UPLOAD_SCAN_KEY` (separate random secret, at least 32 characters) |
 | Encrypted connectors/email | — | `SECRETS_KEY` (32 random bytes, 64 hex characters; same on API/worker, backed up separately) |
@@ -77,11 +77,11 @@ Start client communication with [Resend](email-delivery.md), secure request link
 
 ## Production and remaining deployment work
 
-**Deploy production** (`.github/workflows/deploy-production.yml`) mirrors the staging workflow against GitHub environment `production`, using the `production` Wrangler environments (`close-production`, `close-queue-production`, `close-upload-scanner-production`). Do not rename or repoint the staging resources to production. It reads `PRODUCTION_URL` instead of `STAGING_URL`; the other settings match the table above.
+**Deploy production** (`.github/workflows/deploy-production.yml`) runs on every push to `main` (and by hand), and mirrors the staging workflow against GitHub environment `production`, using the `production` Wrangler environments (`close-production`, `close-queue-production`, `close-upload-scanner-production`). Do not rename or repoint the staging resources to production. It reads `PRODUCTION_URL` instead of `STAGING_URL`; the other settings match the table above.
 
 Until a custom hostname exists, `close-production` serves on its `workers.dev` URL. Leave `UPLOAD_SCAN_HOST` empty there: the edge then refuses every PDF scan, so client PDFs stay quarantined while TXT/CSV use the text scanner (`TEXT_SCANNER_URL` = `https://close-upload-scanner-production.<your-workers-subdomain>.workers.dev/scan`). After moving to a WAF-protected custom hostname, set `PRODUCTION_URL` and `UPLOAD_SCAN_HOST` to it and turn off `workers_dev`. Before a live release:
 
-1. Keep a reviewed migration/release procedure; the workflow only checks schema readiness. Promote a reviewed revision after staging acceptance.
+1. Every merge to `main` migrates and deploys production, so review before merging; a migration must work with the code already running.
 2. Provision a separate production database/auth environment, matching encryption-key backup, sender, connector apps and approved client grants. Keep test and real-company credentials apart.
 3. Verify runtime RLS, restore a backup into isolation with workers disabled, reconcile external outcomes, and validate alert routing and retention. See [operations](operations.md).
 4. Validate accountant-approved examples and each enabled provider write in the sandbox first, then authorize only the intended production methods/clients.

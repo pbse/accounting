@@ -29,7 +29,7 @@ A database migrated before the ledger (it has tables, but no `migrations.applied
 
 Back up before a hosted run. The script applies each file while the API and worker keep running, so they need no stop for migrations that follow the rule above. Afterwards, check `/readyz` plus a durable job.
 
-Fresh Compose volumes run every migration automatically, without the ledger; to use the script on such a volume, adopt everything it already has first. The deploy workflows do not run the script yet; they only check that the schema is ready.
+Fresh Compose volumes run every migration automatically, without the ledger; to use the script on such a volume, adopt everything it already has first. Both deploy workflows run the script before deploying, as the owner in the `MIGRATION_DATABASE_URL` secret, granting to the runtime role named in `DATABASE_URL`. Deploy production runs on every push to `main`, so a merged migration reaches production with its code. Production was migrated by hand through 090, so its workflow adopts with `infra/postgres/adopt-before-ledger.txt`.
 
 ## Historical migration notes
 
@@ -105,6 +105,6 @@ Fresh Compose volumes run every migration automatically, without the ledger; to 
 
 `072_chat_messages.sql` stores each member's assistant conversation for one close or firm-wide, read only by its author, with row-level security like 047. Apply after 071 with API/worker stopped; `/readyz` checks it.
 
-`094_workflow_engine.sql` creates the workflow engine's tables: runs, steps, events and plans, each with row-level security by firm (a `NULL` firm is platform work, visible to system work only). It is the only migration the engine needs; new workflows are directories, not schema. Apply it before deploying a build whose worker runs the engine; the deploy workflows check for it. See [workflow engine](../../../docs/workflow-engine.md).
+`094_workflow_engine.sql` creates the workflow engine's tables: runs, steps, events and plans, each with row-level security by firm (a `NULL` firm is platform work, visible to system work only). It is the only migration the engine needs; new workflows are directories, not schema. Apply it before deploying a build whose worker runs the engine. See [workflow engine](../../../docs/workflow-engine.md).
 
 `097_shared_plan_templates.sql` lets every firm read a plan template that belongs to no firm, so a firm can copy a shared template into a draft of its own. It adds reading only.
