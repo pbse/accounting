@@ -144,7 +144,7 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 			continue
 		}
 		mentioned := printed(text, record.VendorRef.Name) || printed(text, record.EntityRef.Name) || printed(text, record.DocNumber)
-		mine := printed(letterhead, record.VendorRef.Name) || printed(letterhead, record.EntityRef.Name) || printed(text, record.DocNumber)
+		mine := printed(letterhead, record.VendorRef.Name) || printed(letterhead, record.EntityRef.Name) || (numberLike(record.DocNumber) && printed(text, record.DocNumber))
 		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || (row.Kind == "VendorCredit" && mentioned) || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
@@ -164,6 +164,9 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 			}
 			if row.Kind == "VendorCredit" && (mentioned || onExpense || onPrepaid) {
 				return "", "a vendor credit in the close month may change what this invoice expensed"
+			}
+			if row.Kind == "Purchase" && record.Credit && (mentioned || onExpense || onPrepaid) {
+				return "", "a card credit in the close month may change what this invoice expensed"
 			}
 			if (row.Kind != "Bill" && row.Kind != "Purchase") || !mine {
 				continue
@@ -186,6 +189,13 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 		return booking, ""
 	}
 	return "", "more than one captured bill or purchase in the close month books this amount"
+}
+
+// numberLike keeps a bill's document number from matching a year or a short figure printed in the invoice: it must
+// carry a letter or punctuation, or be at least six characters.
+func numberLike(number string) bool {
+	number = strings.TrimSpace(number)
+	return len(number) >= 6 || strings.ContainsFunc(number, func(r rune) bool { return r < '0' || r > '9' })
 }
 
 // printed reports whether the invoice prints the term as a whole word: "77" is not printed in "INV-778".

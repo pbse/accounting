@@ -106,7 +106,7 @@ func trackRecord(db *sql.DB) http.HandlerFunc {
 		rows, err := db.QueryContext(r.Context(), shown+`SELECT c.entity,i.proposal,j.plans,
  (SELECT COALESCE(jsonb_agg(jsonb_build_object('decision',(SELECT v.decision FROM workpaper_reviews v WHERE v.workpaper_id=d.id ORDER BY v.id DESC LIMIT 1),'revised',EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=d.close_id AND n.paper->>'revises'=d.id::text))),'[]'::jsonb) FROM workpapers d WHERE d.close_id=c.id AND j.workpaper_ids @> jsonb_build_array(d.id::text))
  FROM client_closes c JOIN shown s ON s.client=lower(c.entity) JOIN preparation_jobs j ON j.close_id=c.id JOIN preparation_intakes i ON i.job_id=j.id
- WHERE `+scope+` AND i.confirmed_by IS NOT NULL AND i.proposal->>'engine'='openai' ORDER BY lower(c.entity),j.id`, organization(r), firmAccess(r), subject(r), from)
+ WHERE `+scope+` AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine'='openai' ORDER BY lower(c.entity),j.id`, organization(r), firmAccess(r), subject(r), from)
 		if err != nil {
 			problem(w, 503, "Track record is unavailable.")
 			return
