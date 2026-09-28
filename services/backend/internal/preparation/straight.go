@@ -31,7 +31,7 @@ type Ledger struct {
 // month moves that amount on either account. The reason says why a proposal still needs a person. The draft it
 // queues cites the capture and is reviewed like any other; nothing is approved here. Evidence in the close the agent
 // did not use, or could not read, is left for a person, as the confirmation form asks.
-func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, entity, period, jobID string, unread bool, ledger *Ledger) (Plan, string) {
+func StraightThrough(p Proposal, invoice string, aliases []string, procedure Procedure, currency, entity, period, jobID string, unread bool, ledger *Ledger) (Plan, string) {
 	if p.Engine != "openai" || p.Kind != "prepaid" {
 		return Plan{}, "only an agent-read prepaid invoice can be prepared without confirmation"
 	}
@@ -43,6 +43,14 @@ func StraightThrough(p Proposal, invoice string, procedure Procedure, currency, 
 	}
 	if unread {
 		return Plan{}, "evidence in the close is not extracted yet, or failed extraction"
+	}
+	// A booking in this client's ledger does not make the invoice this client's; the invoice must name the client.
+	addressed := printed(strings.ToLower(invoice), entity)
+	for _, alias := range aliases {
+		addressed = addressed || printed(strings.ToLower(invoice), alias)
+	}
+	if !addressed {
+		return Plan{}, "the invoice does not name the client or a confirmed alias"
 	}
 	if currency == "" {
 		return Plan{}, "the client's home currency is not detected from a connected ledger"
@@ -160,7 +168,7 @@ func expensedLine(rows []LedgerRow, invoice, amount, currency, period, expense, 
 				name = line.JournalEntryLineDetail.AccountRef.Name
 			}
 			onExpense, onPrepaid := strings.EqualFold(name, expense), strings.EqualFold(name, prepaid)
-			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || mentioned) {
+			if name == "" && (row.Kind == "JournalEntry" || row.Kind == "VendorCredit" || record.Credit || mentioned) {
 				return "", "a captured " + row.Kind + " in the close month has a line whose account is not named"
 			}
 			if row.Kind == "JournalEntry" && (onExpense || onPrepaid) {

@@ -14,7 +14,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	}
 	proposal := Proposal{Kind: "prepaid", Engine: "openai", Sources: []Source{{ID: "1", Digest: "d", Name: "insurance.pdf", Role: "invoice"}},
 		Facts: []Fact{fact("amount", "1200.00"), fact("service_start", "2026-09-01"), fact("service_end", "2027-08-31"), fact("currency", "USD"), {Field: "expense_account", Label: "expense account"}, {Field: "prepaid_account", Label: "prepaid account"}, {Field: "booked_balance", Label: "booked balance", Optional: true}}}
-	invoice := "Acme Insurance Co\nInvoice INV-778\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027\n\nPay online with Stripe"
+	invoice := "Acme Insurance Co\nInvoice INV-778\nBill to: Example\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027\n\nPay online with Stripe"
 	procedure := Procedure{ID: "7", Kind: "prepaid", Method: prepaids.Method, ExpenseAccount: "Insurance", PrepaidAccount: "Prepaid Expenses", Enabled: true}
 	row := func(kind, id, date, vendor, number, account, amount string) LedgerRow {
 		detail := "AccountBasedExpenseLineDetail"
@@ -38,7 +38,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	ledger := func(rows ...LedgerRow) *Ledger {
 		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Rows: rows}
 	}
-	plan, reason := StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200")))
+	plan, reason := StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200")))
 	if reason != "" || plan.Kind != "prepaid" || len(plan.Sources) != 2 || plan.Sources[1].Role != "period_ledger" || plan.Sources[1].Digest != "cap" || !strings.Contains(plan.Sources[1].Location, "Bill 41") {
 		t.Fatal("expensed invoice not prepared with the capture cited", reason, plan.Sources)
 	}
@@ -47,19 +47,25 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if input.BookedBalance != "" || !input.BookingConfirmed || input.Method != prepaids.Method || input.ExpenseAccount != "Insurance" || input.SourceReference != "Evidence #1 · work #5" {
 		t.Fatal("unexpected input", input)
 	}
-	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "53", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "53", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
 		t.Fatal("purchase bearing the invoice number not accepted", reason)
 	}
-	if _, reason = StraightThrough(proposal, "Acme Insurance Co\nInvoice #INV-778.\nUSD 1,200.00", procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "50", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
+	if _, reason = StraightThrough(proposal, "Acme Insurance Co\nInvoice #INV-778.\nBill to Example\nUSD 1,200.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "50", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
 		t.Fatal("purchase bearing the invoice number not accepted", reason)
 	}
-	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "52", "2026-09-09", "Other Vendor", "", "Prepaid Expenses", "1200"))); reason != "" {
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "52", "2026-09-09", "Other Vendor", "", "Prepaid Expenses", "1200"))); reason != "" {
 		t.Fatal("another vendor's prepaid bill blocked this invoice", reason)
 	}
-	if _, reason = StraightThrough(proposal, invoice, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "51", "2026-09-03", "Acme Insurance Co", "", "Insurance", "1200"))); reason != "" {
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "51", "2026-09-03", "Acme Insurance Co", "", "Insurance", "1200"))); reason != "" {
 		t.Fatal("purchase from the vendor not accepted", reason)
 	}
-	if _, reason = StraightThrough(proposal, invoice, procedure, "", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+	if _, reason = StraightThrough(proposal, strings.Replace(invoice, "Example", "Other Co", 1), nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+		t.Fatal("prepared an invoice addressed to another company")
+	}
+	if _, reason = StraightThrough(proposal, strings.Replace(invoice, "Example", "Example Services LLC", 1), []string{"Example Services LLC"}, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+		t.Fatal("confirmed alias not accepted", reason)
+	}
+	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared without a detected home currency")
 	}
 	for name, c := range map[string]struct {
@@ -71,6 +77,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"line-less vendor credit":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "71", Date: "2026-09-10", Record: json.RawMessage(`{"VendorRef":{"Name":"Acme Insurance Co"}}`)}), false},
 		"line-less journal":           {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "72", Date: "2026-09-10", Record: json.RawMessage(`{}`)}), false},
 		"card refund":                 {func(*Proposal, *Procedure) {}, ledger(bill, refund), false},
+		"unnamed account on a credit": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)}), false},
 		"amount cited from support":   {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
 		"line-less card credit":       {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
 		"number is a prefix":          {func(p *Proposal, _ *Procedure) {}, ledger(row("Bill", "76", "2026-09-03", "Other Vendor", "INV-77", "Insurance", "1200")), false},
@@ -119,7 +126,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 			p.Facts[i].Candidates = append([]Candidate(nil), p.Facts[i].Candidates...)
 		}
 		c.change(&p, &q)
-		if _, reason := StraightThrough(p, invoice, q, "USD", "Example", "2026-09", "5", c.unread, c.ledger); reason == "" {
+		if _, reason := StraightThrough(p, invoice, nil, q, "USD", "Example", "2026-09", "5", c.unread, c.ledger); reason == "" {
 			t.Fatal(name, "prepared without a person")
 		}
 	}

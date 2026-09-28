@@ -711,7 +711,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		if profile.State == "detected" {
 			home = profile.Currency
 		}
-		plan, reason := StraightThrough(proposal, invoice, procedure, home, entity, period, id, unread, ledger)
+		plan, reason := StraightThrough(proposal, invoice, aliases, procedure, home, entity, period, id, unread, ledger)
 		if reason == "" {
 			// The same policy check the preparation worker applies, so a draft the firm's basis or procedure refuses waits for a person instead of failing later.
 			body, _ := Calculate(plan, entity, period)
