@@ -63,7 +63,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	foreign := row("JournalEntry", "65", "2026-09-30", "", "", "Insurance", "900")
 	foreign.Currency = "CAD"
 	ledger := func(rows ...LedgerRow) *Ledger {
-		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Rows: rows, Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12"}, "prepaid expenses": {"13"}}}
+		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Chart: "31", Rows: rows, Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12"}, "prepaid expenses": {"13"}}}
 	}
 	plan, reason := StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200")))
 	if reason != "" || plan.Kind != "prepaid" || len(plan.Sources) != 2 || plan.Sources[1].Role != "period_ledger" || plan.Sources[1].Digest != "cap" || !strings.Contains(plan.Sources[1].Location, "Bill 41") {
@@ -71,7 +71,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	}
 	var input prepaids.Input
 	json.Unmarshal(plan.Input, &input)
-	if input.BookedBalance != "" || !input.BookingConfirmed || input.Method != prepaids.Method || input.ExpenseAccount != "Insurance" || input.SourceReference != "Evidence #1 · work #5" || plan.Procedure != "7" {
+	if input.BookedBalance != "" || !input.BookingConfirmed || input.Method != prepaids.Method || input.ExpenseAccount != "Insurance" || input.SourceReference != "Evidence #1 · work #5" || plan.Procedure != "7" || plan.Chart != "31" {
 		t.Fatal("unexpected input", input, plan.Procedure)
 	}
 	if ProcedurePinned(plan, procedure) != nil {
@@ -144,6 +144,10 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"line-less card credit":         {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
 		"line-less credit, other party": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "VendorCredit", ProviderID: "92", Date: "2026-09-20", Record: json.RawMessage(`{"VendorRef":{"name":"Someone Else"}}`)}), false},
 		"journal on an unlisted ID":     {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "JournalEntry", ProviderID: "93", Date: "2026-09-30", Record: json.RawMessage(`{"Line":[{"Amount":100,"JournalEntryLineDetail":{"AccountRef":{"value":"99","name":"Insurance"}}}]}`)}), false},
+		"dollar sign beside another code": {func(p *Proposal, _ *Procedure) {
+			p.Facts[0].Candidates[0].Quote = "Total CAD $1,200.00 (USD accepted)"
+			p.Facts[3].Candidates[0].Quote = "Total CAD $1,200.00 (USD accepted)"
+		}, ledger(bill), false},
 		"currency not before the figure": {func(p *Proposal, _ *Procedure) {
 			p.Facts[0].Candidates[0].Quote = "Total CAD 1,200.00 (USD accepted)"
 			p.Facts[3].Candidates[0].Quote = "Total CAD 1,200.00 (USD accepted)"

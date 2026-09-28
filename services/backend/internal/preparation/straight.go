@@ -24,6 +24,7 @@ type LedgerRow struct {
 // names by ID and IDs by name from the same connection's newest chart of accounts.
 type Ledger struct {
 	Source   Source
+	Chart    string // the quickbooks_snapshots row the accounts come from
 	Rows     []LedgerRow
 	Accounts map[string]string   // account ID → name
 	IDs      map[string][]string // lower-cased name or fully qualified name → account IDs
@@ -169,7 +170,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	raw, _ := json.Marshal(input)
 	capture := ledger.Source
 	capture.Role, capture.Location = "period_ledger", booking
-	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Input: raw, Sources: append(append([]Source{}, p.Sources...), capture)}
+	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, Input: raw, Sources: append(append([]Source{}, p.Sources...), capture)}
 	if _, err := Calculate(plan, entity, period); err != nil {
 		return Plan{}, err.Error()
 	}
@@ -340,6 +341,12 @@ func currencyBefore(quote, currency string, cents int64) bool {
 		sign = code
 	}
 	plain := strings.ReplaceAll(strings.ToLower(quote), ",", "")
+	// A quote naming another currency anywhere cannot vouch for this one by a bare sign: "CAD $1,200.00 (USD accepted)".
+	for other := range signs {
+		if strings.ToLower(other) != code && regexp.MustCompile(`(^|[^a-z])`+strings.ToLower(other)+`([^a-z]|$)`).MatchString(plain) {
+			return false
+		}
+	}
 	digits := fmt.Sprintf(`%d(\.%02d)?([^0-9]|$)`, cents/100, cents%100)
 	return regexp.MustCompile(`(` + code + `|` + sign + `)\s*` + digits).MatchString(plain)
 }
@@ -543,7 +550,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 		return nil, err
 	}
 	var catalog []byte
-	err = tx.QueryRowContext(ctx, `SELECT payload->'accounts' FROM quickbooks_snapshots WHERE close_id::text=$1 AND connection_id::text=$2 AND payload ? 'period' ORDER BY id DESC LIMIT 1`, closeID, connection).Scan(&catalog)
+	err = tx.QueryRowContext(ctx, `SELECT id::text,payload->'accounts' FROM quickbooks_snapshots WHERE close_id::text=$1 AND connection_id::text=$2 AND payload ? 'period' ORDER BY id DESC LIMIT 1`, closeID, connection).Scan(&l.Chart, &catalog)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}

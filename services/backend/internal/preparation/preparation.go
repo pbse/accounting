@@ -35,10 +35,12 @@ type Plan struct {
 	Revises          string            `json:"revises,omitempty"`
 	// Procedure is the enabled procedure version a straight-through draft was prepared under; the worker refuses the
 	// plan if that version is no longer the client's current, enabled one with the same accounts.
-	Procedure string          `json:"procedure,omitempty"`
-	Kind      string          `json:"kind"`
-	Input     json.RawMessage `json:"input"`
-	Sources   []Source        `json:"sources"`
+	Procedure string `json:"procedure,omitempty"`
+	// Chart is the chart-of-accounts snapshot a straight-through draft's booking was checked against.
+	Chart   string          `json:"chart,omitempty"`
+	Kind    string          `json:"kind"`
+	Input   json.RawMessage `json:"input"`
+	Sources []Source        `json:"sources"`
 }
 
 // WorkKind is the kind of work a plan prepares: a prepaid plan with a schedule prepares deferred revenue or depreciation.
@@ -251,10 +253,10 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return false, e
 			}
-			if ledger == nil || !slices.ContainsFunc(p.Sources, func(s Source) bool {
+			if ledger == nil || ledger.Chart != p.Chart || !slices.ContainsFunc(p.Sources, func(s Source) bool {
 				return s.Role == "period_ledger" && s.ID == ledger.Source.ID && s.Digest == ledger.Source.Digest
 			}) {
-				failure = "The QuickBooks capture this draft was prepared from is no longer the close's current one; a person confirms the facts."
+				failure = "The QuickBooks capture or chart of accounts this draft was prepared from is no longer the close's current one; a person confirms the facts."
 				break
 			}
 		}
