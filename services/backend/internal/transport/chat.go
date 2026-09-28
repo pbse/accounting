@@ -240,6 +240,8 @@ func chatIntent(text string, closeScoped, paper bool) string {
 		return ""
 	}
 	switch {
+	case slices.Contains(chatWords(text), "plan"):
+		return "plan"
 	case paper && has("draft", "workpaper"):
 		return "draft"
 	case has("block", "sign-off", "sign off", "signoff", "ready"):
@@ -289,6 +291,29 @@ func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text, pr
 		return chatReply{body: "I couldn't read " + what + " right now. Try again, or open the close.", citations: []chatCitation{{"Close overview", base}}}
 	}
 	switch intent {
+	case "plan":
+		var g struct {
+			Goal *struct {
+				State string `json:"state"`
+			} `json:"goal"`
+			Progress struct {
+				Plan []planStep `json:"plan"`
+			} `json:"progress"`
+		}
+		if !read("/goal?verify=1", &g) {
+			return unread("this close's plan")
+		}
+		reply := chatReply{body: "Here's my plan for this close, and where each step stands:", citations: []chatCitation{{"Close overview", base}}}
+		if g.Goal == nil || g.Goal.State == "stopped" {
+			reply.body = "This close isn't handed to me. Here's how I'd take it on; say “Get this close ready for review by Friday” to hand it over:"
+		}
+		for i, s := range g.Progress.Plan {
+			reply.lines = append(reply.lines, fmt.Sprintf("%d. %s (%s): %s", i+1, s.Title, planWords[s.State], s.Text))
+			for _, l := range s.Lines {
+				reply.lines = append(reply.lines, "   • "+l)
+			}
+		}
+		return reply
 	case "status", "ledger":
 		var b struct {
 			Headline string      `json:"headline"`
@@ -437,7 +462,7 @@ func closeAnswer(read func(string, any) bool, closeID, paperID, intent, text, pr
 		}
 		return reply
 	}
-	help := "I answer from this close's saved work: ask where it stands, what blocks sign-off, which balances don't tie, what changed from last month, what exceptions the ledger shows, or whether the ledger capture is certified. Say “Get this close ready for review by Friday” to hand it to me."
+	help := "I answer from this close's saved work: ask for my plan, where it stands, what blocks sign-off, which balances don't tie, what changed from last month, what exceptions the ledger shows, or whether the ledger capture is certified. Say “Get this close ready for review by Friday” to hand it to me."
 	if paperID != "" {
 		help += " Ask about this draft to see its review state, blockers and questions."
 	}

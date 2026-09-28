@@ -2333,3 +2333,30 @@ Review: GPT-6 Sol (reasoning high) reviewed the plan and then the diff.
 - The plan review asked for four changes, all adopted: fail closed for hosted firms without the key; give the worker the key everywhere it is deployed; read roles per sweep, outside row locks, rather than cache them; and use current firm-wide access instead of the recorded grant flag.
 - The code review found two timing issues. A revoked author's monthly hand-over stays listed until its next month is due, and the 50-goal sweeps can check a goal after more than a minute.
 - In both cases the worker takes no step without the check, and the ticket's gap was work done on revoked authority. The earlier "within a minute" wording was corrected to "before each step" instead of adding a pass over every record. A delta review closed both findings.
+
+## An explicit plan for each delegated close (2026-09-27)
+
+Request: the product review's third item. A close goal advanced uploaded-document preparation and said what people owed, but it laid out no plan across sources, reconciliation and verification: "give each delegated close an explicit plan spanning all required sources and dependencies." Verified in the code: the goal card listed documents, needs, a coverage line and notes. It had no ordered plan, no statement of where the books came from, and no dependencies. The Overview's brief already read the tie-out, the ledger's exceptions and QuickBooks' read agreement, but a delegated close did not use them.
+
+What changed:
+- **The plan's steps.** Every goal card, the hand-over card and "What's the plan?" in the close's assistant show the same ordered plan: read the books, prepare every document, cover every account, reconcile and verify, get every draft ready for review (for sign-off goals, approve every draft and then sign off). Each step says who it is with: done, the agent, a person, the client, waiting on an earlier step, a note, or not checked.
+- **Read the books.** This step follows the capture the ledger reads use: Xero's when newer, otherwise QuickBooks' through the client's reading connection. It counts an unchanged transaction read as a read. It says what a person must do (reconnect, capture again, or capture a month the scheduled reads do not take), and only says "I read them again each day" when the scheduled reads really take the close.
+- **Reconcile and verify.** This step is the brief's own findings: the tie-out, the ledger's questions, and, once the books are read, whether QuickBooks' reads agree. The card reads them about once a minute, not on every poll. They do not change what sign-off requires.
+- **Daily reads.** A close handed to an active goal now has its QuickBooks and Xero books read daily whatever its month, within the existing ten-per-pass limits. Reached and stopped goals are not read this way.
+- **What the card no longer repeats.** The separate needs list, coverage line and notes were folded into the plan's steps. Accounts are a note, not a need, for a review goal, whose finish covers the documents.
+
+Tests (local PostgreSQL):
+- `TestPlanSaysWhoEachStepIsWith` (pure): who has each step for documents, accounts, review and sign-off, with a person's need ahead of the agent's work; the books step's agent and person states.
+- `TestPlanReadsTheBooksTheLedgerReadsUse`: no ledger; a Xero capture; an older QuickBooks capture that stays behind Xero's; a newer one with an unchanged transaction read; a replaced source (out of date); a connection needing reconnection.
+- `TestVerifyTakesTheBriefsChecks`, `TestAssistantShowsTheClosePlan`.
+- `TestAgentClosesAreReadWhateverTheirMonth` (QuickBooks) and `TestXeroReadsAnAgentsCloseWhateverItsMonth`: an older month is read only while an active goal works on it.
+- The existing goal test reads the plan and its brief-backed checks through the endpoint.
+- Fifteen mutations each fail a test.
+- In a local browser, the card and the hand-over card showed the plan against a seeded close with a QuickBooks capture and three documents. Looking at them led to two changes: the accounts step for a review goal became a note (the headline counted one need, the plan showed two), and Xero's text says "it" rather than "them".
+
+Review: GPT-6 Sol (reasoning high) reviewed the plan, judged the work real and undone, and asked for five changes, all adopted: a reconcile-and-verify step from the existing checks; books following the ledger reads' own source rule, with connection, transaction read and capture as separate states; daily reads only for active goals; `waits` only for real prerequisites; and a concise card. Its code review found four more, all fixed and each proven by a test that fails without the fix:
+- a sign-off goal's draft awaiting approval was counted as an unprepared document;
+- accounts from an out-of-date capture asked for decisions that cannot resolve them;
+- a QuickBooks reconnection was asked for while an active Xero connection could read the books;
+- "What's the plan?" dropped each step's details.
+Two related cases were fixed at the same time: a QuickBooks capture on another connection keeps the scheduled first capture away, so the month is a person's to capture; and the database test now covers that case and an active Xero connection's precedence over a reconnection. A delta review confirmed that all four findings are closed.

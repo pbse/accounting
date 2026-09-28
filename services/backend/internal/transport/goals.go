@@ -26,19 +26,24 @@ type goalItem struct {
 	Handable bool     `json:"handable,omitempty"`
 }
 
-// goalProgress is where every current document of a close stands. Needs are close-wide things a person must do; notes
-// say what a ready result does not cover. Ready means every current document has a draft ready for review; a goal
-// that finishes at sign-off also carries what sign-off needs.
+// goalProgress is where every current document of a close stands. Needs are close-wide things a person must do. Ready
+// means every current document has a draft ready for review; a goal that finishes at sign-off also carries what sign-off
+// needs.
 type goalProgress struct {
 	Items    []goalItem    `json:"items"`
 	Needs    []string      `json:"needs"`
-	Notes    []string      `json:"notes"`
 	Ready    bool          `json:"ready"`
 	Signoff  *goalSignoff  `json:"signoff,omitempty"`
 	Coverage *goalCoverage `json:"coverage,omitempty"`
+	Plan     []planStep    `json:"plan,omitempty"`
 	// accounts is the capture's coverage when it was read, for handing accounts to teammates.
 	accounts *coverageView
+	// approve counts documents whose drafts a sign-off goal needs approved; limited, a close past coverage's limit.
+	approve int
+	limited bool
 }
+
+const coverageLimitNeed = "Account coverage and sign-off read at most 100 intake jobs, and this close has more, so it can't be signed off here."
 
 // goalCoverage counts the accounts of the close's ledger capture, and those not yet resolved or excluded.
 type goalCoverage struct {
@@ -85,7 +90,7 @@ const goalJobs = `SELECT j.id::text,e.name,j.state,j.error,e.extraction_state,CO
 // readGoalProgress classifies every current document of the close by what it waits on, from saved state; with finish
 // "signoff" it adds what sign-off needs.
 func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (goalProgress, error) {
-	p := goalProgress{Items: []goalItem{}, Needs: []string{}, Notes: []string{}}
+	p := goalProgress{Items: []goalItem{}, Needs: []string{}}
 	type draft struct {
 		state    string
 		blockers []string
@@ -240,6 +245,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 		// Before sign-off a person approves each draft, so an unapproved one is theirs to act on.
 		if finish == "signoff" && len(unapproved) > 0 {
 			item.Status, item.Text = "needs_you", "Review and approve draft "+strings.Join(unapproved, ", ")+"."
+			p.approve++
 		}
 		p.Items = append(p.Items, item)
 	}
@@ -271,26 +277,6 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	if err != nil {
 		return p, err
 	}
-	var ledger *struct {
-		Stale bool `json:"stale"`
-	}
-	if err = json.Unmarshal(coverage, &ledger); err != nil {
-		return p, err
-	}
-	var xero bool
-	if ledger == nil {
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM xero_snapshots WHERE close_id=$1)`, closeID).Scan(&xero); err != nil {
-			return p, err
-		}
-	}
-	switch {
-	case ledger == nil && xero:
-		p.Notes = append(p.Notes, "Account coverage comes from QuickBooks captures, so for this Xero close only the uploaded documents are covered.")
-	case ledger == nil:
-		p.Notes = append(p.Notes, "No ledger capture is linked, so this covers the uploaded documents only.")
-	case ledger.Stale:
-		p.Notes = append(p.Notes, "The ledger capture is out of date. Capture it again before relying on its account suggestions.")
-	}
 	p.Ready = prepared > 0 && open == 0 && len(p.Needs) == 0
 	// Sign-off comes after the documents; its readiness is read only once they are ready, or while a sign-off stands.
 	// Account coverage is read with it, or on its own while sign-off is not read.
@@ -305,14 +291,13 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	case readSignoff:
 		ready, err = closeReadiness(ctx, tx, closeID)
 		accounts = ready.coverage
-	case ledger != nil:
+	case string(coverage) != "null":
 		accounts, err = currentCoverage(ctx, tx, closeID)
 	}
 	if errors.Is(err, errCoverageLimit) {
+		p.limited = true
 		if finish == "signoff" {
-			p.Needs = append(p.Needs, "Account coverage and sign-off read at most 100 intake jobs, and this close has more, so it can't be signed off here.")
-		} else {
-			p.Notes = append(p.Notes, "This close has more than 100 intake jobs, more than account coverage reads, so its accounts are not shown.")
+			p.Needs = append(p.Needs, coverageLimitNeed)
 		}
 		return p, nil
 	}
@@ -770,6 +755,11 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 				finish = goal.Finish
 			}
 			progress, err = readGoalProgress(r.Context(), tx, closeID, finish)
+			var books booksRead
+			if err == nil {
+				books, err = readBooks(r.Context(), tx, closeID)
+			}
+			progress.Plan = goalPlan(progress, books, closeID, closeInfo.Entity, closeInfo.Period, finish)
 		}
 		if err == nil {
 			done, err = signedOff(r.Context(), tx, closeID)
@@ -781,6 +771,10 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 		if err != nil {
 			problem(w, 503, "The agent's progress is unavailable.")
 			return
+		}
+		// The checks behind the close's brief are heavier than the rest, so the card asks for them about once a minute.
+		if r.URL.Query().Get("verify") == "1" {
+			verified(mux, r, closeID, progress.Plan)
 		}
 		jsonReply(w, 200, map[string]any{"goal": goal, "progress": progress, "activity": history, "activity_total": total, "signed_off": done, "routine": routine, "close": closeInfo, "handoffs": handoffs})
 	})
