@@ -445,11 +445,11 @@ func xeroWording(items []quickbooks.Exception) []quickbooks.Exception {
 	return items
 }
 
-// xeroDue is SQL: close c's firm is enabled and the close is open, in the current or prior month, and either not attempted
-// and not captured in the past day, or its client's active connection reported a change after the last attempt and capture,
-// with no attempt in the past 30 minutes.
+// xeroDue is SQL: close c's firm is enabled and the close is open, in the current or prior month or worked on by an agent,
+// and either not attempted and not captured in the past day, or its client's active connection reported a change after
+// the last attempt and capture, with no attempt in the past 30 minutes.
 const xeroDue = `EXISTS(SELECT 1 FROM organizations o WHERE o.id=c.organization_id AND o.enabled)
- AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
+ AND (c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM') OR EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.state='active'))
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
  AND (((c.xero_refresh_at IS NULL OR c.xero_refresh_at<now()-interval '24 hours')
    AND NOT EXISTS(SELECT 1 FROM xero_snapshots s WHERE s.close_id=c.id AND s.captured_at>now()-interval '24 hours'))

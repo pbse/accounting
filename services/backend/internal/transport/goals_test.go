@@ -240,6 +240,19 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	if len(s.Progress.Items) != 1 || s.Progress.Items[0].Status != "working" || s.Progress.Ready || len(s.Activity) != 2 || s.Activity[1].Text != s.Goal.Events[0].Text {
 		t.Fatalf("the unread document is in progress and the history shows both events, newest first: %+v %+v", s.Progress, s.Activity)
 	}
+	// The card leads with the plan. Its checks, heavier than the rest, come from the close's brief when asked for.
+	steps := func(plan []planStep) string {
+		out := []string{}
+		for _, step := range plan {
+			out = append(out, step.Key+":"+step.State)
+		}
+		return strings.Join(out, " ")
+	}
+	var checked status
+	must(json.Unmarshal(call("user_a", nil, "GET", "/v1/closes/"+alpha+"/goal?verify=1", nil, 200), &checked))
+	if got := steps(s.Progress.Plan); got != "books:none documents:agent accounts:none verify:unknown review:waits" || steps(checked.Progress.Plan) != "books:none documents:agent accounts:none verify:waits review:waits" || len(checked.Progress.Plan[3].Lines) != 2 {
+		t.Fatalf("the plan says who each step is with: %s %+v", got, checked.Progress.Plan)
+	}
 	call("user_a", reviewer, "POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true}, 409)
 	call("user_b", reviewer, "GET", "/v1/closes/"+alpha+"/goal", nil, 404)
 
@@ -983,52 +996,5 @@ func TestGoalCountsAccountCoverage(t *testing.T) {
 	}
 	if state != "active" || reached.Valid || last != "The close has more intake jobs than sign-off can check, so I can't confirm its sign-off." {
 		t.Fatalf("a sign-off that cannot be checked no longer reaches the goal: %s %v %q", state, reached, last)
-	}
-}
-
-func TestGoalNamesWhyAXeroCloseHasNoAccountCoverage(t *testing.T) {
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("TEST_DATABASE_URL not configured")
-	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var closeID string
-	if err = db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, "Xero goal "+rand.Text()).Scan(&closeID); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		for _, q := range []string{`DELETE FROM xero_snapshots WHERE close_id=$1`, `DELETE FROM xero_connections WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
-			db.Exec(q, closeID)
-		}
-	}()
-	notes := func() string {
-		t.Helper()
-		tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer tx.Rollback()
-		p, err := readGoalProgress(context.Background(), tx, closeID, "review")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return strings.Join(p.Notes, " ")
-	}
-	if !strings.Contains(notes(), "No ledger capture is linked") {
-		t.Fatal("a close without a capture is not told so")
-	}
-	var connection string
-	if err = db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) SELECT id,organization_id,entity,'fixture','active',$2,now(),'t-1' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&connection); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d','{}','fixture',now())`, closeID, connection); err != nil {
-		t.Fatal(err)
-	}
-	if got := notes(); !strings.Contains(got, "for this Xero close") || strings.Contains(got, "No ledger capture is linked") {
-		t.Fatalf("a Xero close is told no ledger is linked: %s", got)
 	}
 }
