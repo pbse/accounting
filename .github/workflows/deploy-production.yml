@@ -144,15 +144,28 @@ jobs:
           DATABASE_URL="$MIGRATION_DATABASE_URL" infra/postgres/migrate.sh
       - name: Stamp the workflow code version
         run: echo "$GITHUB_SHA" > services/backend/internal/wf/version.txt
-      - name: Did the text scanner change since the last successful deploy?
+      # The scanner's key is recorded as a cache entry named by its fingerprint (a hash prefix, not the key): a key
+      # with no entry has not reached the scanner, as after a rotation, so the scanner is redeployed with it.
+      - name: Fingerprint the scanner key
+        id: key
+        run: echo "fingerprint=$(printf %s "$UPLOAD_SCAN_KEY" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - name: Has the scanner received this key?
+        id: deployed-key
+        uses: actions/cache/restore@v4
+        with:
+          path: .scanner-key
+          key: production-scanner-key-${{ steps.key.outputs.fingerprint }}
+          lookup-only: true
+      - name: Did the text scanner or its key change since the last successful deploy?
         id: scanner
         env:
           GH_TOKEN: ${{ github.token }}
+          KEY_DEPLOYED: ${{ steps.deployed-key.outputs.cache-hit }}
         # Its image holds only cmd/scanner and internal/scanning, which CI checks. A hand run always deploys it.
         run: |
           last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow deploy-production.yml --branch main --status success --limit 1 --json headSha -q '.[0].headSha' || true)
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ -n "$last" ] && git diff --quiet "$last" HEAD -- services/scanner workers/scanner services/backend/cmd/scanner services/backend/internal/scanning services/backend/go.mod services/backend/go.sum package-lock.json .github/workflows/deploy-production.yml; then
-            echo "Unchanged since $last; not redeployed."
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$KEY_DEPLOYED" = true ] && [ -n "$last" ] && git diff --quiet "$last" HEAD -- services/scanner workers/scanner services/backend/cmd/scanner services/backend/internal/scanning services/backend/go.mod services/backend/go.sum package-lock.json .github/workflows/deploy-production.yml; then
+            echo "Unchanged since $last, with the same key; not redeployed."
           else
             echo "deploy=true" >> "$GITHUB_OUTPUT"
           fi
@@ -166,6 +179,13 @@ jobs:
           writeFileSync(process.env.CLOSE_SCANNER_SECRET_FILE, JSON.stringify({UPLOAD_SCAN_KEY: process.env.UPLOAD_SCAN_KEY}), {mode: 0o600});
           JS
           npx wrangler deploy -c workers/scanner/wrangler.jsonc --env production --secrets-file "$CLOSE_SCANNER_SECRET_FILE"
+          mkdir -p .scanner-key && echo "${{ steps.key.outputs.fingerprint }}" > .scanner-key/fingerprint
+      - name: Record that the scanner has this key
+        if: steps.scanner.outputs.deploy == 'true' && steps.deployed-key.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .scanner-key
+          key: production-scanner-key-${{ steps.key.outputs.fingerprint }}
       - name: Deploy code and server secrets together
         run: |
           export CLOSE_DEPLOY_SECRET_FILE="$(mktemp)"
