@@ -2573,12 +2573,13 @@ Request: stay within the 2,000 free Actions minutes a month. September so far: 2
 Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
 
 What changed:
-- The worker's fifteen background loops each run under `supervise` in `cmd/worker/main.go`. A panic is logged with its stack, recorded on the `worker` heartbeat's `detail`, and the loop restarts 30 seconds later; the others keep running. A loop that returns (the Xero row backfill) stays finished. The admin overview shows the latest panic beside the worker's heartbeat.
-- `OpenTenantDB` refuses a host containing `-pooler`, and both deploy workflows refuse such a runtime `DATABASE_URL` before migrating. The firm is a session setting (`set_config(..., false)`), which a transaction pooler could share between firms.
+- The worker's fifteen background loops each run under `supervise` in `cmd/worker/main.go`. A panic is logged with its stack, recorded on the `worker` heartbeat's `detail`, and the loop restarts 30 seconds later; the others keep running. A loop that returns (the Xero row backfill) stays finished. The admin overview shows the latest panic beside the worker's heartbeat. Three panics in one loop without ten clean minutes between them fail the worker's `/healthz`, which the queue Worker's cron checks every minute, for fifteen minutes.
+- `OpenTenantDB` refuses a host or fallback host containing `-pooler`, and both deploy workflows refuse such a runtime `DATABASE_URL` before migrating. The firm is a session setting (`set_config(..., false)`), which a transaction pooler could share between firms.
 
 Checks:
 - `go test ./cmd/worker`: a loop that panics once runs twice and reports one panic with its stack; after cancellation it is not restarted.
-- `TestOpenTenantDBRefusesPooler`: a Neon `-pooler` URL is refused and the direct one opens.
+- `TestRepeatedPanicsFailHealth`: two panics leave `/healthz` at 200; three fail it with 503.
+- `TestOpenTenantDBRefusesPooler`: a Neon `-pooler` URL, or a direct host with a `-pooler` fallback, is refused; direct hosts open.
 
 Not verified: whether production's `DATABASE_URL` is direct. The next production deploy's configuration check will fail if it is pooled; replace the secret with the direct endpoint in that case.
 

@@ -123,7 +123,13 @@ func TestOpenTenantDBRefusesPooler(t *testing.T) {
 	if _, err := OpenTenantDB("postgres://close:x@ep-dark-frog-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require", ""); err == nil {
 		t.Fatal("a transaction-pooled URL was accepted")
 	}
-	db, err := OpenTenantDB("postgres://close:x@ep-dark-frog.us-east-2.aws.neon.tech/neondb?sslmode=require", "")
+	if _, err := OpenTenantDB("postgres://close:x@EP-DARK-FROG-POOLER.us-east-2.aws.neon.tech/neondb?sslmode=require", ""); err == nil {
+		t.Fatal("an upper-case pooled URL was accepted")
+	}
+	if _, err := OpenTenantDB("postgres://close:x@ep-dark-frog.us-east-2.aws.neon.tech,ep-dark-frog-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require", ""); err == nil {
+		t.Fatal("a pooled fallback host was accepted")
+	}
+	db, err := OpenTenantDB("postgres://close:x@ep-dark-frog.us-east-2.aws.neon.tech,ep-dark-toad.us-east-2.aws.neon.tech/neondb?sslmode=require", "")
 	if err != nil {
 		t.Fatal(err)
 	}
