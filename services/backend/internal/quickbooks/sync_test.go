@@ -52,6 +52,7 @@ func TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
+		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_connections WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
@@ -107,6 +108,18 @@ func TestScheduledPeriodSnapshotRefreshesUntilAPersonCaptures(t *testing.T) {
 	snapshot("scheduled-quickbooks-refresh", "2 days")
 	if !due() {
 		t.Fatal("the cap outlived its snapshots")
+	}
+	// A month-end read that failed on the latest capture holds sign-off until a read succeeds.
+	var syncID string
+	if err := db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,error,finished_at) VALUES($1,$2,$3,'fixture','completed','Month-end snapshot not refreshed: fixture',now()) RETURNING id::text`, closeID, connection, month).Scan(&syncID); err != nil {
+		t.Fatal(err)
+	}
+	if !stopped() {
+		t.Fatal("a failed month-end read was not reported for sign-off")
+	}
+	db.Exec(`UPDATE quickbooks_entity_syncs SET error='' WHERE id=$1`, syncID)
+	if stopped() {
+		t.Fatal("a successful read still asks for a capture")
 	}
 	// A close holding its twenty snapshots is no longer refreshed.
 	db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) SELECT $1,$2,'123',md5(random()::text),'{}',now(),'person@example.test' FROM generate_series(1,17)`, closeID, connection)

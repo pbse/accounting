@@ -215,7 +215,7 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		return out, err
 	}
 	if recapture {
-		out.Blockers = append(out.Blockers, "Capture the QuickBooks month-end again: its scheduled refreshes have stopped, so later entries may be missing.")
+		out.Blockers = append(out.Blockers, "Capture the QuickBooks month-end again: its scheduled refresh has stopped or failed, so later entries may be missing.")
 	}
 	// A signed scope must not read as tied while a supported balance differs from its support.
 	tie, err := closeTieOut(ctx, tx, id)

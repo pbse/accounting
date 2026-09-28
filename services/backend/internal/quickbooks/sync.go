@@ -269,6 +269,14 @@ func ProcessSync(ctx context.Context, db *sql.DB) (bool, error) {
 			reports, done := context.WithTimeout(ctx, 3*time.Minute)
 			if e := captureFirstPeriod(reports, db, job, environment, realm, token); e != nil {
 				log.Printf("Month-end snapshot for close %s was not captured; the next scheduled sync retries: %v", job.closeID, e)
+				// Kept on the finished capture, where RefreshStopped reads it: until a read succeeds, sign-off needs a person's capture.
+				message := "Month-end snapshot not refreshed: " + e.Error()
+				if len(message) > 400 {
+					message = message[:400]
+				}
+				if _, saveErr := db.ExecContext(ctx, `UPDATE quickbooks_entity_syncs SET error=$2 WHERE id=$1`, job.id, message); saveErr != nil && ctx.Err() == nil {
+					log.Printf("Month-end snapshot failure for close %s could not be recorded: %v", job.closeID, saveErr)
+				}
 			}
 			done()
 		}
@@ -302,11 +310,13 @@ var firstPeriod = `SELECT c.organization_id,c.entity,x.company_name FROM client_
  AND (SELECT count(*) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.actor='scheduled-quickbooks-refresh' AND s.payload ? 'period')<6`
 
 // RefreshStopped is a SQL condition: the close's newest period snapshot on its reading connection is the scheduler's,
-// and the scheduler no longer refreshes it: six are taken, the close holds its twenty snapshots, or it is past the months
-// scheduleSync reads. Later entries may then be missing, so sign-off waits for a person's capture.
+// and the scheduler no longer refreshes it: six are taken, the close holds its twenty snapshots, it is past the months
+// scheduleSync reads, or the connection's latest finished capture failed or could not refresh the month-end. Later
+// entries may then be missing, so sign-off waits for a successful read or a person's capture.
 func RefreshStopped(close string) string {
 	return `COALESCE((SELECT s.actor='scheduled-quickbooks-refresh' AND ((SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id AND z.actor='scheduled-quickbooks-refresh' AND z.payload ? 'period')>=6
  OR (SELECT count(*) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id)>=20
+ OR COALESCE((SELECT y.error<>'' FROM quickbooks_entity_syncs y WHERE y.close_id=s.close_id AND y.connection_id=s.connection_id AND y.period=sc.period AND y.state IN ('completed','unchanged','failed') ORDER BY y.id DESC LIMIT 1),false)
  OR sc.period<to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND NOT EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=sc.id AND g.state='active'))
  FROM quickbooks_snapshots s JOIN client_closes sc ON sc.id=s.close_id WHERE s.close_id=` + close + ` AND s.payload ? 'period' AND s.connection_id=` + ReadingConnection(close) + `
  ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),false)`
@@ -379,13 +389,13 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	if err != nil {
 		return err
 	}
+	// Compared with this connection's own newest, so a new reading connection always gets its first snapshot.
 	var previous []byte
-	err = tx.QueryRowContext(ctx, `SELECT payload FROM quickbooks_snapshots WHERE close_id=$1 AND payload ? 'period' ORDER BY captured_at DESC,id DESC LIMIT 1`, job.closeID).Scan(&previous)
-	first := err == sql.ErrNoRows
-	if err != nil && !first {
+	var first bool
+	if err = tx.QueryRowContext(ctx, `SELECT (SELECT payload FROM quickbooks_snapshots WHERE close_id=$1 AND connection_id=$2 AND payload ? 'period' ORDER BY captured_at DESC,id DESC LIMIT 1),NOT EXISTS(SELECT 1 FROM quickbooks_snapshots WHERE close_id=$1 AND payload ? 'period')`, job.closeID, job.connectionID).Scan(&previous, &first); err != nil {
 		return err
 	}
-	if !first {
+	if previous != nil {
 		fresh, err := json.Marshal(snapshot)
 		if err != nil {
 			return err
