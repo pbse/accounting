@@ -73,8 +73,8 @@ const adminConnectionRows = `SELECT x.*,o.name AS firm_name FROM (
  UNION ALL SELECT 'xero',c.organization_id,c.close_id::text,c.state,'',c.created_at,c.updated_at,(SELECT max(s.captured_at) FROM xero_snapshots s WHERE s.connection_id=c.id) FROM xero_connections c
  UNION ALL SELECT 'stripe',c.organization_id,c.close_id::text,c.state,CASE WHEN c.livemode THEN 'live' ELSE 'test' END,c.created_at,c.updated_at,
   (SELECT max(r.finished_at) FROM stripe_report_runs r WHERE r.connection_id=c.id AND r.state='saved') FROM stripe_connections c
- UNION ALL SELECT 'email',c.organization_id,'','active','',c.created_at,c.verified_at,(SELECT max(m.finished_at) FROM email_outbox m JOIN work_requests q ON q.id=m.request_id
-  JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes k ON k.id=d.close_id WHERE k.organization_id=c.organization_id AND m.state='accepted') FROM email_connections c WHERE c.enabled
+ UNION ALL SELECT 'email',c.organization_id,'','active','',c.created_at,c.verified_at,(SELECT max(m.finished_at) FROM email_outbox m WHERE m.connection_id=c.id AND m.state='accepted')
+  FROM email_connections c WHERE c.enabled
 ) x JOIN organizations o ON o.id=x.organization WHERE o.id<>'local-development'`
 
 // adminConnections is connections across firms: counts by provider and state, and the connections themselves, those

@@ -24,7 +24,7 @@ func TestStaffSeeStuckWorkAndConnectionsAcrossFirms(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		for _, q := range []string{`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM stripe_connections WHERE organization_id=$1`,
-			`DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`} {
+			`DELETE FROM quickbooks_connections WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, firm)
 		}
 	})

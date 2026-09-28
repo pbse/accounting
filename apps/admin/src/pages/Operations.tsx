@@ -79,9 +79,9 @@ export function Jobs() {
               </table>
             )}
           </section>
-          {jobs.data.items.length > 0 && (
-            <section>
-              <h2>Items, oldest first</h2>
+          <section>
+            <h2>Items, oldest first</h2>
+            {jobs.data.items.length === 0 ? <p>None on this page.</p> : (
               <table>
                 <thead><tr><th>Firm</th><th>Kind</th><th>Close</th><th>Item</th><th>State</th><th>Age</th></tr></thead>
                 <tbody>
@@ -97,9 +97,9 @@ export function Jobs() {
                   ))}
                 </tbody>
               </table>
-              <Pager offset={f.offset} more={jobs.data.has_more} next={jobs.data.next_offset} onPage={f.page} />
-            </section>
-          )}
+            )}
+            <Pager offset={f.offset} more={jobs.data.has_more} next={jobs.data.next_offset} onPage={f.page} />
+          </section>
         </>
       )}
     </>
