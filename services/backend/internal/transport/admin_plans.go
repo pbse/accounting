@@ -1,0 +1,323 @@
+package transport
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+
+	"close.local/backend/internal/wf"
+)
+
+// Plans in the staff console (docs/admin-panel.md, phase A3): plans staff built and plans the agent proposed, the queue
+// waiting for approval, and templates. A plan holds client content (node inputs, event keys, approval text, an agent's
+// rationale, its title), so it is masked like a run's until a staff member with platform:content reveals it. Approving
+// means reading the plan, so it needs platform:content as well as platform:plans. Staff approve with no firm
+// permissions: a plan whose activities need a firm permission waits for the firm.
+func registerAdminPlans(mux *http.ServeMux, db *sql.DB, token string) {
+	route := func(next func(http.ResponseWriter, *http.Request, *sql.DB)) http.HandlerFunc {
+		return adminGuard(token, db, platformPlans, func(w http.ResponseWriter, r *http.Request) { next(w, r, db) })
+	}
+	mux.HandleFunc("GET /v1/admin/plans", route(adminPlans))
+	mux.HandleFunc("GET /v1/admin/plans/{id}", route(adminPlan))
+	mux.HandleFunc("POST /v1/admin/plans/{id}/propose", route(func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminPlanDecision(w, r, db, "propose") }))
+	mux.HandleFunc("POST /v1/admin/plans/{id}/reject", route(func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminPlanDecision(w, r, db, "reject") }))
+	mux.HandleFunc("POST /v1/admin/plans/{id}/approve", route(adminApprovePlan))
+	mux.HandleFunc("POST /v1/admin/plans/{id}/instantiate", route(adminInstantiateTemplate))
+}
+
+// maskPlan hides a plan's client content: its title, node inputs, approval subject and prompt, and event keys (which
+// can be built from client data). Node IDs, kinds, activities, workflows, order, conditions and durations show, enough
+// to draw it.
+func maskPlan(raw []byte) json.RawMessage {
+	var p wf.Plan
+	if json.Unmarshal(raw, &p) != nil {
+		return hidden(raw)
+	}
+	p.Title = maskText(p.Title)
+	for i := range p.Nodes {
+		n := &p.Nodes[i]
+		n.Input = nil
+		if n.Approval != nil {
+			n.Approval.Subject, n.Approval.Prompt = "", ""
+		}
+		if n.Wait != nil {
+			n.Wait.Event = maskText(n.Wait.Event)
+		}
+	}
+	out, _ := json.Marshal(p)
+	return out
+}
+
+type adminPlanRow struct {
+	ID           int64           `json:"id"`
+	Organization *string         `json:"organization"`
+	FirmName     *string         `json:"firm_name"`
+	Title        string          `json:"title"`
+	State        string          `json:"state"`
+	Source       string          `json:"source"`
+	Agent        string          `json:"agent"`
+	Rationale    string          `json:"rationale"`
+	CreatedBy    string          `json:"created_by"`
+	ApprovedBy   *string         `json:"approved_by"`
+	ApprovedAt   *string         `json:"approved_at"`
+	IsTemplate   bool            `json:"is_template"`
+	TemplateID   *int64          `json:"template_id"`
+	RunID        *int64          `json:"run_id"`
+	Digest       string          `json:"digest"`
+	Nodes        int             `json:"nodes"`
+	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
+	Plan         json.RawMessage `json:"plan,omitempty"`
+}
+
+const adminPlanColumns = `p.id,p.organization_id,o.name,p.title,p.state,p.source,p.agent,p.rationale,p.created_by,p.approved_by,p.approved_at::text,
+ p.is_template,p.template_id,p.run_id,p.digest,jsonb_array_length(p.plan->'nodes'),p.created_at::text,p.updated_at::text`
+
+func scanPlan(row interface{ Scan(...any) error }, withPlan bool) (adminPlanRow, error) {
+	var p adminPlanRow
+	dest := []any{&p.ID, &p.Organization, &p.FirmName, &p.Title, &p.State, &p.Source, &p.Agent, &p.Rationale, &p.CreatedBy, &p.ApprovedBy, &p.ApprovedAt,
+		&p.IsTemplate, &p.TemplateID, &p.RunID, &p.Digest, &p.Nodes, &p.CreatedAt, &p.UpdatedAt}
+	if withPlan {
+		dest = append(dest, &p.Plan)
+	}
+	return p, row.Scan(dest...)
+}
+
+// masked hides the plan's text unless revealed: its title and an agent's rationale, and the plan itself.
+func (p *adminPlanRow) masked() {
+	p.Title, p.Rationale = maskText(p.Title), maskText(p.Rationale)
+	if p.Plan != nil {
+		p.Plan = maskPlan(p.Plan)
+	}
+}
+
+// adminPlans lists plans newest first, filtered by state, source, firm and whether they are templates.
+func adminPlans(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	filters, ok := adminFilters(w, r, "state", "source", "firm")
+	if !ok {
+		return
+	}
+	offset, ok := adminOffset(w, r)
+	if !ok {
+		return
+	}
+	reveal, templates := r.URL.Query().Get("reveal") == "1", r.URL.Query().Get("templates") == "1"
+	plans := []adminPlanRow{}
+	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT `+adminPlanColumns+` FROM workflow_plans p LEFT JOIN organizations o ON o.id=p.organization_id
+ WHERE ($1='' OR p.state=$1) AND ($2='' OR p.source=$2) AND ($3='' OR p.organization_id=$3) AND p.is_template=$4
+ ORDER BY p.id DESC LIMIT $5 OFFSET $6`, filters[0], filters[1], filters[2], templates, adminPage+1, offset)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			p, err := scanPlan(rows, false)
+			if err != nil {
+				return err
+			}
+			if !reveal {
+				p.masked()
+			}
+			plans = append(plans, p)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		adminPlanProblem(w, err, "plans read")
+		return
+	}
+	if reveal && !adminReveal(w, r, db, "", "plans", "list") {
+		return
+	}
+	more := len(plans) > adminPage
+	if more {
+		plans = plans[:adminPage]
+	}
+	jsonReply(w, 200, map[string]any{"plans": plans, "has_more": more, "next_offset": offset + len(plans), "revealed": reveal})
+}
+
+// adminPlanFirm reads which firm a plan belongs to ("" for a template shared by all firms).
+func adminPlanFirm(ctx context.Context, db *sql.DB, id int64) (string, error) {
+	var firm sql.NullString
+	err := adminRead(ctx, db, func(ctx context.Context, tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT organization_id FROM workflow_plans WHERE id=$1`, id).Scan(&firm)
+	})
+	return firm.String, err
+}
+
+func planID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		problem(w, 404, "Plan not found.")
+		return 0, false
+	}
+	return id, true
+}
+
+// adminPlan is one plan, masked unless revealed, with whether staff may approve it: a draft or proposal for a firm
+// whose activities need no firm permission. Its problems, which quote the plan, show once revealed.
+func adminPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	id, ok := planID(w, r)
+	if !ok {
+		return
+	}
+	reveal := r.URL.Query().Get("reveal") == "1"
+	var p adminPlanRow
+	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) (err error) {
+		p, err = scanPlan(tx.QueryRowContext(ctx, `SELECT `+adminPlanColumns+`,p.plan FROM workflow_plans p LEFT JOIN organizations o ON o.id=p.organization_id WHERE p.id=$1`, id), true)
+		return err
+	})
+	if err != nil {
+		adminPlanProblem(w, err, "plan read")
+		return
+	}
+	firm := ""
+	if p.Organization != nil {
+		firm = *p.Organization
+	}
+	if reveal && !adminReveal(w, r, db, firm, "plan", strconv.FormatInt(id, 10)) {
+		return
+	}
+	problems := []string{}
+	if plan, err := wf.ParsePlan(p.Plan); err != nil {
+		problems = append(problems, err.Error())
+	} else if found := plan.Problems([]string{}); found != nil { // staff hold no firm permissions
+		problems = found
+	}
+	approvable := (p.State == "draft" || p.State == "proposed") && !p.IsTemplate && p.Organization != nil && len(problems) == 0
+	if !reveal {
+		p.masked()
+		problems = slices.Repeat([]string{"••••"}, len(problems))
+	}
+	jsonReply(w, 200, map[string]any{"plan": p, "problems": problems, "approvable": approvable, "revealed": reveal})
+}
+
+// adminPlanProblem answers a failed plan read or action.
+func adminPlanProblem(w http.ResponseWriter, err error, what string) {
+	switch {
+	case errors.Is(err, errReasonRequired):
+		problem(w, 422, err.Error())
+	case errors.Is(err, sql.ErrNoRows):
+		problem(w, 404, "Plan not found.")
+	case errors.Is(err, wf.ErrPlanInvalid):
+		problem(w, 422, "The plan cannot be approved as it is. Reveal it to see why.")
+	case errors.Is(err, wf.ErrNotAllowed):
+		problem(w, 409, "The plan is not in a state that allows this, or it changed since you loaded it. Refresh and review it again.")
+	case errors.Is(err, wf.ErrUnknownWorkflow):
+		problem(w, 503, "This build cannot run plans.")
+	default:
+		log.Printf("Admin %s failed: %v", what, err)
+		problem(w, 503, "The "+what+" could not be completed. Refresh and try again.")
+	}
+}
+
+// adminPlanDecision proposes a draft for approval or rejects a draft or proposal, as the plan's firm.
+func adminPlanDecision(w http.ResponseWriter, r *http.Request, db *sql.DB, decision string) {
+	id, ok := planID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Reason }) {
+		return
+	}
+	firm, err := adminPlanFirm(r.Context(), db, id)
+	if err != nil {
+		adminPlanProblem(w, err, "plan read")
+		return
+	}
+	by := "staff:" + staffOf(r.Context()).Subject
+	err = adminAct(r.Context(), db, adminAction{Firm: firm, Action: "plan." + decision, TargetType: "plan", TargetID: strconv.FormatInt(id, 10), Reason: strings.TrimSpace(in.Reason)},
+		func(ctx context.Context, tx *sql.Tx) error {
+			if decision == "propose" {
+				return wf.ProposePlanTx(ctx, tx, id, by)
+			}
+			return wf.RejectPlanTx(ctx, tx, id, by)
+		})
+	if err != nil {
+		adminPlanProblem(w, err, "plan "+decision)
+		return
+	}
+	jsonReply(w, 200, map[string]bool{"ok": true})
+}
+
+// adminApprovePlan approves exactly the version the staff member reviewed (its digest) and starts it, as the firm.
+func adminApprovePlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	id, ok := planID(w, r)
+	if !ok {
+		return
+	}
+	member := staffOf(r.Context())
+	if !slices.Contains(member.Permissions, platformContent) {
+		problem(w, 403, "Approving a plan means reading it, so it needs platform:content as well as platform:plans.")
+		return
+	}
+	var in struct {
+		Digest string `json:"digest"`
+		Reason string `json:"reason"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Reason }) {
+		return
+	}
+	if len(in.Digest) != 64 {
+		problem(w, 422, "Approve the digest of the version you reviewed.")
+		return
+	}
+	firm, err := adminPlanFirm(r.Context(), db, id)
+	if err != nil {
+		adminPlanProblem(w, err, "plan read")
+		return
+	}
+	var run int64
+	err = adminAct(r.Context(), db, adminAction{Firm: firm, Action: "plan.approve", TargetType: "plan", TargetID: strconv.FormatInt(id, 10), Reason: strings.TrimSpace(in.Reason), Request: map[string]string{"digest": in.Digest}},
+		func(ctx context.Context, tx *sql.Tx) (err error) {
+			// Staff hold no firm permissions: a plan whose activities need one waits for the firm.
+			run, err = wf.ApprovePlanTx(ctx, tx, id, in.Digest, "staff:"+member.Subject, []string{})
+			return err
+		})
+	if err != nil {
+		adminPlanProblem(w, err, "plan approval")
+		return
+	}
+	jsonReply(w, 200, map[string]int64{"run_id": run})
+}
+
+// adminInstantiateTemplate copies a template into a new draft for a firm.
+func adminInstantiateTemplate(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	id, ok := planID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Firm   string `json:"firm"`
+		Reason string `json:"reason"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Reason }) {
+		return
+	}
+	if err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error { return adminFirmExists(ctx, tx, in.Firm) }); err != nil {
+		adminFirmProblem(w, err, "firm read")
+		return
+	}
+	by := "staff:" + staffOf(r.Context()).Subject
+	var draft int64
+	err := adminAct(r.Context(), db, adminAction{Firm: in.Firm, Action: "plan.instantiate", TargetType: "plan", TargetID: strconv.FormatInt(id, 10), Reason: strings.TrimSpace(in.Reason)},
+		func(ctx context.Context, tx *sql.Tx) (err error) {
+			draft, err = wf.InstantiateTemplateTx(ctx, tx, id, in.Firm, by)
+			return err
+		})
+	if err != nil {
+		adminPlanProblem(w, err, "template copy")
+		return
+	}
+	jsonReply(w, 200, map[string]int64{"plan_id": draft})
+}
