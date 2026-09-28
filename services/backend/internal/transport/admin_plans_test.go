@@ -135,6 +135,8 @@ func TestPlansNeedThePlansPermissionAndApprovalNeedsContent(t *testing.T) {
 	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
 	h := apiWithStore(db, strings.Repeat("x", 32))
 	adminJSON(t, h, sign(staffOrg, "platform:read", "platform:operate"), "GET", "/v1/admin/plans", "", 403)
+	// platform:read is every staff role's baseline, so plans alone open nothing.
+	adminJSON(t, h, sign(staffOrg, "platform:plans"), "GET", "/v1/admin/plans", "", 403)
 	planner := sign(staffOrg, "platform:read", "platform:plans")
 	adminJSON(t, h, planner, "GET", "/v1/admin/plans", "", 200)
 	adminJSON(t, h, planner, "POST", "/v1/admin/plans/1/approve", `{"digest":"`+strings.Repeat("0", 64)+`","reason":"Approving without reading it"}`, 403)

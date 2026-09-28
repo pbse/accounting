@@ -38,13 +38,16 @@ const outcomes: Record<Kind, string[]> = {
 };
 const kindLabel: Record<Kind, string> = { activity: "Run an activity", workflow: "Run a workflow", event: "Wait for an event", sleep: "Wait a while", approval: "Ask for approval" };
 
-// prune drops what no longer points at an earlier step (after a move or a removal): a step comes after earlier steps only,
-// and its "when" names one of them.
+// prune keeps every step consistent after any edit: a step comes after earlier steps only, and its "when" names one of
+// them with an outcome that step's kind can have.
 function prune(steps: Step[]): Step[] {
   return steps.map((s, i) => {
-    const earlier = steps.slice(0, i).map((e) => e.id);
-    const after = s.after.filter((a) => earlier.includes(a));
-    return { ...s, after, when: after.some((a) => s.when.startsWith(`${a}.`)) ? s.when : "" };
+    const earlier = steps.slice(0, i);
+    const after = s.after.filter((a) => earlier.some((e) => e.id === a));
+    const [on, outcome] = s.when.split(".");
+    const from = earlier.find((e) => e.id === on);
+    const when = from && after.includes(on) && outcomes[from.kind].includes(outcome) ? s.when : "";
+    return { ...s, after, when };
   });
 }
 
@@ -164,7 +167,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
     return <p role="alert">Only a draft or rejected plan staff wrote can be edited. <Link to={`/plans/new?from=${editing}`}>Copy it into a new plan</Link> instead.</p>;
   }
 
-  const update = (i: number, change: Partial<Step>) => setSteps(steps.map((s, j) => (j === i ? { ...s, ...change } : s)));
+  const update = (i: number, change: Partial<Step>) => setSteps(prune(steps.map((s, j) => (j === i ? { ...s, ...change } : s))));
   // Renaming a step keeps the later steps that wait for it pointing at it.
   const rename = (i: number, id: string) => {
     const old = steps[i].id;
@@ -251,16 +254,18 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
                       <legend>After</legend>
                       {earlier.map((e) => (
                         <label key={e.id} className="check">
-                          <input type="checkbox" checked={s.after.includes(e.id)} onChange={(event) => update(i, { after: event.target.checked ? [...s.after, e.id] : s.after.filter((a) => a !== e.id), when: event.target.checked || !s.when.startsWith(`${e.id}.`) ? s.when : "" })} />
+                          <input type="checkbox" checked={s.after.includes(e.id)} disabled={!!s.when} onChange={(event) => update(i, { after: event.target.checked ? [...s.after, e.id] : s.after.filter((a) => a !== e.id) })} />
                           {e.id}
                         </label>
                       ))}
                     </fieldset>
                     <label>When
-                      <select value={s.when} onChange={(event) => update(i, { when: event.target.value })}>
+                      {/* The engine checks only the step a "when" names, so the step then waits for that one step alone. */}
+                      <select value={s.when} onChange={(event) => update(i, { when: event.target.value, ...(event.target.value && { after: [event.target.value.split(".")[0]] }) })}>
                         <option value="">They all succeed</option>
                         {whenOptions.map((w) => <option key={w} value={w}>{w.replace(".", " ends ").replaceAll("_", " ")}</option>)}
                       </select>
+                      {s.when && <small>Runs only when {s.when.split(".")[0]} ends this way, so it waits for that step alone.</small>}
                     </label>
                   </div>
                 )}

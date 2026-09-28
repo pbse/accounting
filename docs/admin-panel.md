@@ -37,6 +37,7 @@ The firm-facing **Security center** stays as it is. It is a firm administrator's
   - `platform:operate`: start, cancel and retry runs, signal and approve, suspend or resume a firm, manage invitations.
   - `platform:content`: view client content, with a reason.
   - `platform:plans`: build and approve plans. Approving still requires the plan validator's per-activity permission check.
+  - `platform:read` is every role's baseline: the API requires it on every staff route, on top of the route's own permission, since the console cannot be used without it.
 - **Roles:**
   - Support: `platform:read`.
   - Operator: adds `platform:operate`.
