@@ -405,6 +405,9 @@ func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, firms
 	if string(raw) == "null" {
 		raw = []byte("{}")
 	}
+	if len(firms) == 0 {
+		firms = []string{""} // a reveal that showed nothing is still recorded, at platform level
+	}
 	system := context.WithValue(r.Context(), systemKey{}, true)
 	tx, err := db.BeginTx(system, nil)
 	if err == nil {

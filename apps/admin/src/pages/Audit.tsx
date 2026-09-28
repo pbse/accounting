@@ -15,6 +15,8 @@ export function Audit() {
   const [params, setParams] = useSearchParams();
   const [before, setBefore] = useState(0);
   const [exported, setExported] = useState("");
+  // Where the next export batch starts, for the search it came from.
+  const [nextBatch, setNextBatch] = useState<{ search: string; before: string }>();
   const query = new URLSearchParams();
   for (const name of filters) if (params.get(name)) query.set(name, params.get(name)!);
   const search = query.toString();
@@ -22,22 +24,28 @@ export function Audit() {
   // A reveal covers this search: paging keeps it, other filters are masked until revealed anew.
   const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/audit${query.size ? `?${query}` : ""}`, search);
   const reason = audit.reveal.shown ? audit.reveal.reason : undefined;
+  // Exports this search from the newest entry, or from before, as CSV.
+  const exportBatch = async (before?: string) => {
+    setExported("");
+    try {
+      const exportQuery = new URLSearchParams(search);
+      if (before) exportQuery.set("before", before);
+      if (reason) exportQuery.set("reveal", "1"); // a revealed export is its own audited read
+      const headers = await download(`/v1/admin/audit/export${exportQuery.size ? `?${exportQuery}` : ""}`, "staff-audit.csv", reason ? { "X-Access-Reason": reason } : {});
+      const next = headers.get("X-Next-Before");
+      setNextBatch(next ? { search, before: next } : undefined);
+      setExported(next ? "Exported 5,000 entries; export the next batch for older ones." : "Exported.");
+    } catch (e) {
+      setExported((e as Error).message);
+    }
+  };
   return (
     <>
       <div className="page-title">
         <div><div><h1>Staff audit</h1><p>Every staff action and every reveal of client content, refusals included. Reasons, details and errors are hidden until revealed.</p></div></div>
         <div className="title-actions">
-          <button onClick={async () => {
-            setExported("");
-            try {
-              const exportQuery = new URLSearchParams(search);
-              if (reason) exportQuery.set("reveal", "1"); // a revealed export is its own audited read
-              const truncated = await download(`/v1/admin/audit/export${exportQuery.size ? `?${exportQuery}` : ""}`, "staff-audit.csv", reason ? { "X-Access-Reason": reason } : {});
-              setExported(truncated ? "Exported the newest 5,000 entries; narrow the search for the rest." : "Exported.");
-            } catch (e) {
-              setExported((e as Error).message);
-            }
-          }}>Export CSV{reason ? " (revealed)" : ""}</button>
+          <button onClick={() => exportBatch()}>Export CSV{reason ? " (revealed)" : ""}</button>
+          {nextBatch?.search === search && <button onClick={() => exportBatch(nextBatch.before)}>Export the next 5,000{reason ? " (revealed)" : ""}</button>}
         </div>
       </div>
       <form className="filters" onSubmit={(event) => {

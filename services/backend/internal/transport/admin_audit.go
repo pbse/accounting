@@ -136,8 +136,8 @@ func adminAuditPage(w http.ResponseWriter, r *http.Request, db *sql.DB, q auditQ
 	jsonReply(w, 200, map[string]any{"entries": entries, "next_before": next, "revealed": reveal})
 }
 
-// auditExportLimit is the most entries one export holds; X-Truncated says when the search had more (export again with
-// before set to the last ID).
+// auditExportLimit is the most entries one export holds; X-Truncated says when the search had more, and X-Next-Before
+// is the before that exports the next batch.
 const auditExportLimit = 5000
 
 // spreadsheetSafe keeps a spreadsheet from running a value as a formula: text whose first character is whitespace or a
@@ -177,6 +177,9 @@ func adminAuditExport(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="staff-audit.csv"`)
 	w.Header().Set("X-Truncated", strconv.FormatBool(truncated))
+	if truncated {
+		w.Header().Set("X-Next-Before", strconv.FormatInt(entries[len(entries)-1].ID, 10))
+	}
 	out := csv.NewWriter(w)
 	out.Write([]string{"id", "created_at", "organization", "staff_user", "action", "target_type", "target_id", "result", "reason", "error", "request"})
 	for _, e := range entries {

@@ -111,4 +111,11 @@ func TestStaffSearchAndExportTheAuditAcrossFirms(t *testing.T) {
 		t.Fatalf("reveal scope %q %v", covered, err)
 	}
 	adminJSON(t, h, token, "GET", "/v1/admin/audit?before=zero", "", 422)
+	// A reveal that shows nothing is still recorded, at platform level.
+	nobody := "staff_nobody_" + strings.ToLower(rand.Text())
+	adminJSON(t, h, token, "GET", "/v1/admin/audit?staff="+nobody+"&reveal=1", "", 200, "X-Access-Reason", "checking an empty search")
+	var empty string
+	if err := db.QueryRow(`SELECT request::text FROM platform_audit WHERE organization_id IS NULL AND action='content.reveal' AND target_type='audit' AND request->>'staff'=$1`, nobody).Scan(&empty); err != nil || !strings.Contains(empty, `"entries": 0`) {
+		t.Fatalf("empty reveal %q %v", empty, err)
+	}
 }

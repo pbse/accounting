@@ -39,9 +39,9 @@ export async function post<T>(path: string, body: unknown): Promise<T> {
   return response.json();
 }
 
-// download saves what path answers as a file, with the given headers (such as a reveal's reason); it answers whether
-// the server said the file is cut short (X-Truncated).
-export async function download(path: string, filename: string, headers: Record<string, string> = {}): Promise<boolean> {
+// download saves what path answers as a file, with the given headers (such as a reveal's reason), and answers the
+// response's headers (an export says whether it was cut short, and where to go on).
+export async function download(path: string, filename: string, headers: Record<string, string> = {}): Promise<Headers> {
   const response = await fetch(path, { headers: { ...(await authorization()), ...headers } });
   if (!response.ok) {
     let message = response.statusText;
@@ -56,7 +56,7 @@ export async function download(path: string, filename: string, headers: Record<s
   const link = Object.assign(document.createElement("a"), { href: url, download: filename });
   link.click();
   URL.revokeObjectURL(url);
-  return response.headers.get("X-Truncated") === "true";
+  return response.headers;
 }
 
 // useResource loads path and reloads it on demand; a newer load always wins. Reloading the same path
