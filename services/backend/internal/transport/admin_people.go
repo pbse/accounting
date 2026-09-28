@@ -270,9 +270,10 @@ func reconcilePersonInvitations(ctx context.Context, db *sql.DB, emails, ids []s
 
 // adminRevokeSessions signs a person out everywhere, in two audited steps that outlive the request: first the app's own
 // sessions (AUTH_SESSION=server) end and commit, so nothing later can undo that; then every active WorkOS session, in
-// every organization, is revoked so none can be refreshed (sessions.revoke_workos: refused, with what ended, when WorkOS
-// fails part way). An access token a browser already holds (AUTH_SESSION=client) is checked locally and keeps working
-// until it expires, minutes later. Their memberships are untouched.
+// every organization, is revoked so none can be refreshed (sessions.revoke_workos: recorded as started before WorkOS is
+// called, with no transaction held while it is, then ok, or refused with what ended when WorkOS fails part way). An
+// access token a browser already holds (AUTH_SESSION=client) is checked locally and keeps working until it expires,
+// minutes later. Their memberships are untouched.
 func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	user := r.PathValue("user")
 	if !workosUserID.MatchString(user) {
@@ -305,44 +306,14 @@ func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		adminFirmProblem(w, err, "session revoke")
 		return
 	}
-	ended := 0
-	outcome := map[string]any{}
-	err = adminAct(ctx, db, adminAction{Action: "sessions.revoke_workos", TargetType: "user", TargetID: user, Reason: reason, Request: outcome},
-		func(ctx context.Context, _ *sql.Tx) error {
-			// Every page of sessions, revoking the active ones as each page arrives, so "all" means all however long the
-			// history; a page WorkOS cannot give is a failure, reported with what ended before it.
-			failed := func() error {
-				outcome["ended"] = ended
-				return fmt.Errorf("%w: WorkOS ended %d active session(s), then failed", errWorkOS, ended)
-			}
-			query := url.Values{"limit": {"100"}}
-			for range 10000 { // at most a million sessions: a longer history is refused, not ended in part
-				var page struct {
-					Data         []workosSession `json:"data"`
-					ListMetadata struct {
-						After string `json:"after"`
-					} `json:"list_metadata"`
-				}
-				if workos(ctx, "GET", "/user_management/users/"+url.PathEscape(user)+"/sessions?"+query.Encode(), nil, &page) != nil {
-					return failed()
-				}
-				for _, s := range page.Data {
-					if s.Status != "active" {
-						continue
-					}
-					if workos(ctx, "POST", "/user_management/sessions/revoke", map[string]string{"session_id": s.ID}, nil) != nil {
-						return failed()
-					}
-					ended++
-				}
-				if page.ListMetadata.After == "" {
-					outcome["ended"] = ended
-					return nil
-				}
-				query.Set("after", page.ListMetadata.After)
-			}
-			return failed()
-		})
+	workosStep := adminAction{Action: "sessions.revoke_workos", TargetType: "user", TargetID: user, Reason: reason}
+	if err = adminStart(ctx, db, workosStep); err != nil {
+		adminFirmProblem(w, err, "session revoke")
+		return
+	}
+	ended, revoked := endWorkOSSessions(ctx, user)
+	workosStep.Request = map[string]any{"ended": ended}
+	err = adminAct(ctx, db, workosStep, func(context.Context, *sql.Tx) error { return revoked })
 	if err != nil {
 		problem(w, 502, fmt.Sprintf("The app's own sessions for this person ended (%d). %s; end sessions again to finish.", app, strings.TrimPrefix(err.Error(), errWorkOS.Error()+": ")))
 		return
@@ -350,7 +321,43 @@ func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{"ended": ended, "app_sessions": app})
 }
 
-// adminResendInvitation asks WorkOS to send a pending invitation's email again, and keeps the new expiry.
+// endWorkOSSessions revokes every active WorkOS session of user, reading every page and revoking the active ones as
+// each arrives, so "all" means all however long the history. A page WorkOS cannot give, or a revoke it refuses, stops
+// it with an error; ended counts what ended before that.
+func endWorkOSSessions(ctx context.Context, user string) (ended int, err error) {
+	failed := func() (int, error) {
+		return ended, fmt.Errorf("%w: WorkOS ended %d active session(s), then failed", errWorkOS, ended)
+	}
+	query := url.Values{"limit": {"100"}}
+	for range 10000 { // at most a million sessions: a longer history is refused, not ended in part
+		var page struct {
+			Data         []workosSession `json:"data"`
+			ListMetadata struct {
+				After string `json:"after"`
+			} `json:"list_metadata"`
+		}
+		if workos(ctx, "GET", "/user_management/users/"+url.PathEscape(user)+"/sessions?"+query.Encode(), nil, &page) != nil {
+			return failed()
+		}
+		for _, s := range page.Data {
+			if s.Status != "active" {
+				continue
+			}
+			if workos(ctx, "POST", "/user_management/sessions/revoke", map[string]string{"session_id": s.ID}, nil) != nil {
+				return failed()
+			}
+			ended++
+		}
+		if page.ListMetadata.After == "" {
+			return ended, nil
+		}
+		query.Set("after", page.ListMetadata.After)
+	}
+	return failed()
+}
+
+// adminResendInvitation asks WorkOS to send a pending invitation's email again, and keeps the new expiry. The attempt is
+// recorded as started, and committed, before WorkOS is asked, so the audit shows it even if its outcome cannot be.
 func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	firm, invitation := r.PathValue("id"), r.PathValue("invitation")
 	if os.Getenv("WORKOS_API_KEY") == "" {
@@ -371,7 +378,12 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	sent := false // WorkOS resent it: from here on, a failure is the app's, and resending would email the person twice.
 	// Outlives the request, so a closed browser cannot leave WorkOS's answer unrecorded.
 	ctx := context.WithoutCancel(r.Context())
-	err := adminAct(ctx, db, adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason)},
+	action := adminAction{Firm: firm, Action: "invitation.resend", TargetType: "invitation", TargetID: invitation, Reason: strings.TrimSpace(in.Reason)}
+	if err := adminStart(ctx, db, action); err != nil {
+		adminFirmProblem(w, err, "invitation resend")
+		return
+	}
+	err := adminAct(ctx, db, action,
 		func(ctx context.Context, tx *sql.Tx) error {
 			var workosID string
 			err := tx.QueryRowContext(ctx, `SELECT workos_id FROM member_invitations WHERE id::text=$1 AND organization_id=$2 AND state='pending' AND workos_id IS NOT NULL AND expires_at>now() FOR UPDATE`, invitation, firm).Scan(&workosID)
@@ -406,8 +418,10 @@ func adminResendInvitation(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			if expires = current.ExpiresAt; expires.IsZero() {
 				return nil
 			}
-			_, err = tx.ExecContext(ctx, `UPDATE member_invitations SET expires_at=$3 WHERE id::text=$1 AND organization_id=$2`, invitation, firm, expires)
-			return err
+			if _, err = tx.ExecContext(ctx, `UPDATE member_invitations SET expires_at=$3 WHERE id::text=$1 AND organization_id=$2`, invitation, firm, expires); err != nil {
+				return fmt.Errorf("WorkOS sent it again, but its new expiry was not saved: %w", err)
+			}
+			return nil
 		})
 	if err != nil && sent {
 		log.Printf("Invitation %s was resent but the app could not record it: %v", invitation, err)

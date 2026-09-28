@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -106,6 +108,39 @@ func TestStaffAndFirmSessionsNeverCross(t *testing.T) {
 
 	t.Setenv("PLATFORM_ORGANIZATION_ID", "")
 	adminCall(t, apiWithStore(db, strings.Repeat("x", 32)), sign(staffOrg, "platform:read"), "GET", "/v1/admin/me", 503)
+}
+
+// Every staff route, read from the handlers' source so a new one is covered as soon as it is registered: no token, a
+// firm's session (whatever its role claims) and a staff member without platform:read are all refused before it runs.
+func TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead(t *testing.T) {
+	db := adminDB(t)
+	sign := signer(t)
+	staffOrg := "org_Staff" + rand.Text()
+	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
+	h := apiWithStore(db, strings.Repeat("x", 32))
+	firm, unread := sign("org_Firm"+rand.Text(), platformPermissions...), sign(staffOrg, platformOperate, platformContent, platformPlans)
+	route, param := regexp.MustCompile(`HandleFunc\("(GET|POST) (/v1/admin/[^"]*)"`), regexp.MustCompile(`\{[^}]*\}`)
+	files, _ := filepath.Glob("admin*.go")
+	var routes int
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range route.FindAllStringSubmatch(string(source), -1) {
+			routes++
+			path := param.ReplaceAllString(m[2], "x")
+			adminCall(t, h, "", m[1], path, 401)
+			adminCall(t, h, firm, m[1], path, 401)
+			adminCall(t, h, unread, m[1], path, 403)
+		}
+	}
+	if routes < 39 {
+		t.Fatalf("found only %d staff routes: has registration moved?", routes)
+	}
 }
 
 func TestLocalDevelopmentStaffAccessUsesTheWorkspaceToken(t *testing.T) {

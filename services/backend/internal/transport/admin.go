@@ -135,17 +135,8 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 	if a.Firm != "" {
 		acting = auth.WithAgent(auth.WithActor(ctx, &auth.Claims{Organization: a.Firm, RegisteredClaims: jwt.RegisteredClaims{Subject: "staff:" + member.Subject}}), "staff:"+member.Subject)
 	}
-	record := func(ctx context.Context, q interface {
-		ExecContext(context.Context, string, ...any) (sql.Result, error)
-	}, result, failure string) error {
-		// Marshalled when recorded, so fn can add what it learned, such as a new row's ID.
-		request, err := json.Marshal(a.Request)
-		if err != nil || string(request) == "null" {
-			request = []byte("{}")
-		}
-		_, err = q.ExecContext(ctx, `INSERT INTO platform_audit(staff_user,action,organization_id,target_type,target_id,reason,request,result,error) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9)`,
-			member.Subject, a.Action, a.Firm, a.TargetType, a.TargetID, a.Reason, string(request), result, failure)
-		return err
+	record := func(ctx context.Context, q execer, result, failure string) error {
+		return adminAudit(ctx, q, member, a, result, failure)
 	}
 	tx, err := db.BeginTx(acting, nil)
 	if err == nil {
@@ -165,6 +156,33 @@ func adminAct(ctx context.Context, db *sql.DB, a adminAction, fn func(context.Co
 		}
 	}
 	return err
+}
+
+type execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+// adminAudit inserts a platform_audit row for a staff action.
+func adminAudit(ctx context.Context, q execer, member *staffMember, a adminAction, result, failure string) error {
+	// Marshalled when recorded, so an action can add what it learned, such as a new row's ID.
+	request, err := json.Marshal(a.Request)
+	if err != nil || string(request) == "null" {
+		request = []byte("{}")
+	}
+	_, err = q.ExecContext(ctx, `INSERT INTO platform_audit(staff_user,action,organization_id,target_type,target_id,reason,request,result,error) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9)`,
+		member.Subject, a.Action, a.Firm, a.TargetType, a.TargetID, a.Reason, string(request), result, failure)
+	return err
+}
+
+// adminStart records, and commits, that a staff action with an effect outside the database (WorkOS) is starting, before
+// the effect: the audit shows the attempt even when its outcome cannot be recorded after it. The outcome (adminAct)
+// follows as its own entry.
+func adminStart(ctx context.Context, db *sql.DB, a adminAction) error {
+	member := staffOf(ctx)
+	if member == nil || strings.TrimSpace(a.Reason) == "" {
+		return errReasonRequired
+	}
+	return adminAudit(context.WithValue(ctx, systemKey{}, true), db, member, a, "started", "")
 }
 
 // adminGuard lets through staff holding permission, once a database is configured.
@@ -370,13 +388,27 @@ func adminReveal(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, targe
 	return adminRevealOf(w, r, db, firm, targetType, targetID, nil)
 }
 
+// accessReason is a reveal's X-Access-Reason; one too long to record (a reveal across firms copies it to each) answers
+// 422 and returns false.
+func accessReason(w http.ResponseWriter, r *http.Request) (string, bool) {
+	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	if len(reason) > 2000 { // as adminReason
+		problem(w, 422, "Keep the reason under 2,000 characters.")
+		return "", false
+	}
+	return reason, true
+}
+
 // adminRevealOf is adminReveal recording what exactly was shown (request), such as a plan's digest.
 func adminRevealOf(w http.ResponseWriter, r *http.Request, db *sql.DB, firm, targetType, targetID string, request any) bool {
 	if !slices.Contains(staffOf(r.Context()).Permissions, platformContent) {
 		problem(w, 403, "Revealing client content needs platform:content.")
 		return false
 	}
-	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	reason, ok := accessReason(w, r)
+	if !ok {
+		return false
+	}
 	if reason == "" && firm != "" {
 		// Without a reason, a content grant the staff member holds for this firm stands in for one.
 		reason = activeGrantReason(r.Context(), db, staffOf(r.Context()).Subject, firm)
@@ -405,7 +437,10 @@ func adminRevealAcross(w http.ResponseWriter, r *http.Request, db *sql.DB, scope
 		problem(w, 403, "Revealing client content needs platform:content.")
 		return false
 	}
-	reason := strings.TrimSpace(r.Header.Get("X-Access-Reason"))
+	reason, ok := accessReason(w, r)
+	if !ok {
+		return false
+	}
 	if reason == "" && scope != "" {
 		reason = activeGrantReason(r.Context(), db, member.Subject, scope)
 	}

@@ -274,7 +274,7 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 
 // bearer turns the staff cookie (for /v1/admin/*) or the firm cookie (other /v1 routes) into the request's Bearer token.
 // A request that already names a token keeps it, /v1/auth/* manages the cookies itself, routes outside /v1 (MCP among
-// them) never accept one, and every request other than GET or HEAD must come from this site.
+// them) never accept one, and every request other than GET or HEAD must come from this site (a staff one, any request).
 func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Handler) http.Handler {
 	staff := staffVerifier()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +289,12 @@ func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Ha
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get("Origin") != c.app {
 			problem(w, 403, "This change must come from the workspace itself.")
+			return
+		}
+		// Nor does another site's link open a staff read: under a content grant, or for an export, a GET alone reveals
+		// and records. Browsers say where a request comes from; the console's own requests are same-origin.
+		if site := r.Header.Get("Sec-Fetch-Site"); kind.staff && site != "" && site != "same-origin" && site != "none" {
+			problem(w, 403, "Open the staff console directly.")
 			return
 		}
 		token, status := c.accessToken(r.Context(), db, kind, check, cookie.Value)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -68,27 +69,39 @@ func auditFilters(w http.ResponseWriter, r *http.Request) (auditQuery, bool) {
 	return q, true
 }
 
-// readAudit reads entries newest first, masked unless revealed.
-func readAudit(ctx context.Context, tx *sql.Tx, q auditQuery, reveal bool) ([]adminAuditRow, error) {
+// auditBytes bounds what one audit read returns, whatever its entries' sizes: an entry that would pass it starts the next
+// page instead, as one past the read's limit does, and one too large on its own is shown without its free text.
+var auditBytes = 32 << 20
+
+// readAudit reads entries newest first, masked unless revealed. more says it stopped at auditBytes with entries left.
+func readAudit(ctx context.Context, tx *sql.Tx, q auditQuery, reveal bool) (entries []adminAuditRow, more bool, err error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id,organization_id,staff_user,action,target_type,target_id,reason,request,result,error,created_at::text FROM platform_audit
  WHERE ($1='' OR ($1='platform' AND organization_id IS NULL) OR organization_id=$1) AND ($2='' OR staff_user=$2) AND ($3='' OR starts_with(action,$3))
  AND ($4='' OR result=$4) AND ($5=0 OR id<$5) ORDER BY id DESC LIMIT $6`, q.firm, q.staff, q.action, q.result, q.before, q.limit)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
-	entries := []adminAuditRow{}
+	entries, size := []adminAuditRow{}, 0
 	for rows.Next() {
 		var e adminAuditRow
 		if err = rows.Scan(&e.ID, &e.Organization, &e.StaffUser, &e.Action, &e.TargetType, &e.TargetID, &e.Reason, &e.Request, &e.Result, &e.Error, &e.CreatedAt); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !reveal {
 			e.Reason, e.Request, e.Error = maskText(e.Reason), only(e.Request), maskText(e.Error)
 		}
+		n := len(e.StaffUser) + len(e.Action) + len(e.TargetType) + len(e.TargetID) + len(e.Reason) + len(e.Request) + len(e.Error) + 64
+		if size+n > auditBytes {
+			if len(entries) > 0 {
+				return entries, true, nil
+			}
+			e.Reason, e.Request, e.Error = fmt.Sprintf("(too large to show here: %d bytes)", n), json.RawMessage("{}"), ""
+		}
+		size += n
 		entries = append(entries, e)
 	}
-	return entries, rows.Err()
+	return entries, false, rows.Err()
 }
 
 // revealAudit records a reveal of these entries against every firm they belong to (entries on no firm at platform
@@ -124,8 +137,9 @@ func adminAuditPage(w http.ResponseWriter, r *http.Request, db *sql.DB, q auditQ
 	reveal := r.URL.Query().Get("reveal") == "1"
 	q.limit = adminPage + 1
 	var entries []adminAuditRow
+	var more bool
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) (err error) {
-		entries, err = readAudit(ctx, tx, q, reveal)
+		entries, more, err = readAudit(ctx, tx, q, reveal)
 		return err
 	})
 	if err != nil {
@@ -134,7 +148,9 @@ func adminAuditPage(w http.ResponseWriter, r *http.Request, db *sql.DB, q auditQ
 	}
 	next := any(nil)
 	if len(entries) > adminPage {
-		entries = entries[:adminPage]
+		entries, more = entries[:adminPage], true
+	}
+	if more {
 		next = entries[len(entries)-1].ID
 	}
 	if reveal && !revealAudit(w, r, db, q, entries, "search") {
@@ -166,17 +182,17 @@ func adminAuditExport(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	reveal := r.URL.Query().Get("reveal") == "1"
 	q.limit = auditExportLimit + 1
 	var entries []adminAuditRow
+	var truncated bool
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) (err error) {
-		entries, err = readAudit(ctx, tx, q, reveal)
+		entries, truncated, err = readAudit(ctx, tx, q, reveal)
 		return err
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "audit export")
 		return
 	}
-	truncated := len(entries) > auditExportLimit
-	if truncated {
-		entries = entries[:auditExportLimit]
+	if len(entries) > auditExportLimit {
+		entries, truncated = entries[:auditExportLimit], true
 	}
 	if reveal && !revealAudit(w, r, db, q, entries, "export") {
 		return
@@ -184,6 +200,7 @@ func adminAuditExport(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="staff-audit.csv"`)
 	w.Header().Set("X-Truncated", strconv.FormatBool(truncated))
+	w.Header().Set("X-Entries", strconv.Itoa(len(entries)))
 	if truncated {
 		w.Header().Set("X-Next-Before", strconv.FormatInt(entries[len(entries)-1].ID, 10))
 	}
