@@ -1,11 +1,14 @@
 package transport
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -35,6 +38,7 @@ type mcpTool struct {
 	required                 []string
 	readOnly, idempotent     bool
 	upload                   bool
+	zip                      bool
 }
 
 func mcpText(description string) map[string]any {
@@ -66,6 +70,8 @@ var mcpTools = []mcpTool{
 	{name: "preview_close_preparation", title: "Preview close preparation", description: "The evidence a close preparation would coordinate, with the inventory_digest prepare_close needs.", method: "GET", path: "/v1/closes/{close_id}/prepare-close", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true},
 	{name: "open_close", title: "Open a close", description: "Open or return the close for a client and month. Repeating it returns the same close.", method: "POST", path: "/v1/closes", body: []string{"entity", "period"}, props: map[string]any{"entity": mcpText("Client name."), "period": mcpText("Close month, YYYY-MM.")}, required: []string{"entity", "period"}, idempotent: true},
 	{name: "add_evidence", title: "Add a text document", description: "Upload a text or CSV document (for example a bank export) to a close. The agent reads it and proposes work; nothing is approved.", method: "POST", path: "/v1/closes/{close_id}/evidence", upload: true, props: map[string]any{"close_id": mcpCloseID, "name": mcpText("File name ending in .csv or .txt."), "text": mcpText("File contents.")}, required: []string{"close_id", "name", "text"}},
+	{name: "export_close_package", title: "Export the close package", description: "The close's review package: its manifest (scope, readiness, workpapers, evidence and postings) and each file's SHA-256, with the ZIP itself attached while it is at most 5 MB. It is not the signed-off binder.", method: "GET", path: "/v1/closes/{close_id}/export", props: map[string]any{"close_id": mcpCloseID}, required: []string{"close_id"}, readOnly: true, zip: true},
+	{name: "recheck_close", title: "Recheck failed or pending work", description: "Queue this close's failed or pending proposals, whose documents are current, to be prepared again, using recheck.digest from preview_close_preparation. Open client request links for those jobs are revoked. Nothing is approved.", method: "POST", path: "/v1/closes/{close_id}/prepare-close/recheck", body: []string{"digest", "confirmed"}, props: map[string]any{"close_id": mcpCloseID, "digest": mcpText("recheck.digest from preview_close_preparation."), "confirmed": map[string]any{"type": "boolean", "description": "True to confirm the listed work."}}, required: []string{"close_id", "digest", "confirmed"}},
 	{name: "prepare_close", title: "Prepare a close", description: "Coordinate preparation of the evidence listed by preview_close_preparation. Drafts still need a person's approval.", method: "POST", path: "/v1/closes/{close_id}/prepare-close", body: []string{"inventory_digest", "confirmed"}, props: map[string]any{"close_id": mcpCloseID, "inventory_digest": mcpText("From preview_close_preparation."), "confirmed": map[string]any{"type": "boolean", "description": "True to confirm the listed evidence scope."}}, required: []string{"close_id", "inventory_digest", "confirmed"}},
 	{name: "draft_client_request", title: "Draft client questions", description: "Save a consolidated client request draft from selected workpapers. Omit body for the suggested text; send body with context_digest to save edited text. It is not sent or approved.", method: "POST", path: "/v1/closes/{close_id}/requests", body: []string{"expected_id", "workpaper_ids", "body", "context_digest"}, props: map[string]any{"close_id": mcpCloseID, "expected_id": mcpText("Latest draft id from list_client_requests, or empty."), "workpaper_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Up to 20 workpaper IDs."}, "body": mcpText("Optional edited request text."), "context_digest": mcpText("Required with body, from list_client_requests.")}, required: []string{"close_id"}},
 	{name: "request_approval", title: "Request approval", description: "Ask a person to review a draft, saying what to check. This is not an approval; the draft appears as requested in the review queue.", method: "POST", path: "/v1/closes/{close_id}/workpapers/{workpaper_id}/approval-request", body: []string{"note"}, props: map[string]any{"close_id": mcpCloseID, "workpaper_id": mcpText("Draft awaiting review."), "note": mcpText("What the reviewer should check (5–1,000 characters).")}, required: []string{"close_id", "workpaper_id", "note"}},
@@ -125,6 +131,10 @@ func (t mcpTool) handle(store http.Handler) mcp.ToolHandler {
 		call.Header.Set("Content-Type", contentType)
 		recorder := httptest.NewRecorder()
 		store.ServeHTTP(recorder, call)
+		if t.zip && recorder.Code == http.StatusOK {
+			closeID, _ := args["close_id"].(string)
+			return mcpPackage(recorder.Body.Bytes(), closeID), nil
+		}
 		result := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: recorder.Body.String()}}, IsError: recorder.Code >= 400}
 		var value any
 		if json.Unmarshal(recorder.Body.Bytes(), &value) == nil {
@@ -148,6 +158,58 @@ func (w noStore) WriteHeader(code int) {
 func (w noStore) Write(b []byte) (int, error) {
 	w.Header().Set("Cache-Control", "no-store")
 	return w.ResponseWriter.Write(b)
+}
+
+// mcpPackage returns a close package's manifest and checksums, and the ZIP itself while it is small enough to carry;
+// a hosted agent has no other way to download it.
+func mcpPackage(archive []byte, closeID string) *mcp.CallToolResult {
+	const limit = 5 << 20
+	files, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		return toolProblem("UNAVAILABLE", "The close package could not be read.")
+	}
+	var manifest map[string]any
+	sums := []map[string]string{}
+	for _, f := range files.File {
+		if f.Name != "manifest.json" && f.Name != "checksums.sha256" {
+			continue
+		}
+		opened, err := f.Open()
+		if err != nil {
+			return toolProblem("UNAVAILABLE", "The close package could not be read.")
+		}
+		raw, err := io.ReadAll(opened)
+		opened.Close()
+		if err != nil {
+			return toolProblem("UNAVAILABLE", "The close package could not be read.")
+		}
+		if f.Name == "manifest.json" {
+			if json.Unmarshal(raw, &manifest) != nil {
+				return toolProblem("UNAVAILABLE", "The close package has no readable manifest.")
+			}
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if line == "" {
+				continue
+			}
+			sum, name, ok := strings.Cut(line, "  ")
+			if _, err := hex.DecodeString(sum); !ok || len(sum) != 64 || err != nil || name == "" {
+				return toolProblem("UNAVAILABLE", "The close package's checksums could not be read.")
+			}
+			sums = append(sums, map[string]string{"name": name, "sha256": sum})
+		}
+	}
+	if manifest == nil {
+		return toolProblem("UNAVAILABLE", "The close package has no readable manifest.")
+	}
+	included := len(archive) <= limit
+	content := []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("The close package has %d files; the ZIP (%d bytes) is over the 5 MB MCP limit, so a person downloads it from the close page.", len(sums), len(archive))}}
+	if included {
+		content = []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("The close package has %d files; the ZIP (%d bytes) is attached.", len(sums), len(archive))},
+			&mcp.EmbeddedResource{Resource: &mcp.ResourceContents{URI: "close-package://" + url.PathEscape(closeID) + ".zip", MIMEType: "application/zip", Blob: archive}}}
+	}
+	return &mcp.CallToolResult{Content: content, StructuredContent: map[string]any{"manifest": manifest, "files": sums, "archive_bytes": len(archive), "archive_attached": included}}
 }
 
 func toolProblem(code, message string) *mcp.CallToolResult {

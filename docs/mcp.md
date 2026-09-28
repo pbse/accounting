@@ -29,7 +29,7 @@ AuthKit's OAuth tokens say who the person is but carry no app permissions, so th
 3. **Agents see only the member's assigned clients** (Security center → Client access). Firm-wide access isn't extended to agents, because an OAuth token can't show that the member still has it.
 4. **Access is bound to the member's current membership.** If the member is removed and later re-added, they must ask again. A pending or declined request never changes access already approved.
 
-Read-only access lists only the read tools. Read-and-prepare adds the prepare, draft and request-approval tools; nothing beyond the tool table is reachable.
+Read-only access lists only the read tools, including `export_close_package`. Read-and-prepare adds the prepare, recheck, draft and request-approval tools; nothing beyond the tool table is reachable.
 
 ### Agent attribution
 
@@ -61,6 +61,10 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 | `add_evidence` | Upload a text or CSV document, which starts intake |
 | `preview_close_preparation`, `prepare_close` | Coordinate preparation of a close's evidence |
 | `request_approval` | Ask a person to review a draft; it shows as "Approval requested" in the review queue |
+| `export_close_package` | The close's review package: its manifest (scope, readiness, workpapers, evidence and postings) and each file's SHA-256, with the ZIP attached as an embedded resource while it is at most 5 MB (a larger one is downloaded by a person from the close page). It is not the release-gated binder |
+| `recheck_close` | Queue the close's failed or pending proposals whose documents are current to be prepared again, with `recheck.digest` from `preview_close_preparation`; open client request links for those jobs are revoked, as on the close page |
+
+PRD Appendix C's `export_close_package` is the tool of that name. Its `refresh_workpaper` has no single tool: a changed or replaced document already starts new preparation and reopens the drafts that cite it, which `workpaper_changes` and `list_close_jobs` show, and `recheck_close` retries proposals that failed or wait for confirmation. There is no route that re-prepares one draft on request.
 
 There are deliberately no tools that approve, sign off, post to QuickBooks, send client email, answer the agent's own questions, or change members, policy, procedures or retention. People keep that authority in the app (PRD Appendix C: "an agent cannot create its own authority").
 

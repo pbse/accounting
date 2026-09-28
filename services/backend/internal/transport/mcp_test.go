@@ -1,11 +1,15 @@
 package transport
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,7 +95,7 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"list_closes", "get_workpaper", "find_exceptions", "close_brief", "tie_out", "explain_changes", "agent_track_record", "morning_brief", "draft_client_request", "request_approval", "prepare_close"} {
+	for _, want := range []string{"list_closes", "get_workpaper", "find_exceptions", "close_brief", "tie_out", "explain_changes", "agent_track_record", "morning_brief", "draft_client_request", "request_approval", "export_close_package", "recheck_close", "prepare_close"} {
 		if !slices.Contains(names, want) {
 			t.Fatalf("missing tool %s in %v", want, names)
 		}
@@ -136,6 +140,54 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	if err = db.QueryRow(`SELECT count(*) FROM workpaper_reviews WHERE workpaper_id=$1`, paperID).Scan(&reviews); err != nil || reviews != 0 {
 		t.Fatalf("an approval request must not approve: %d %v", reviews, err)
 	}
+	// The review package comes back with its manifest, each file's checksum and the ZIP itself.
+	exported := call("export_close_package", map[string]any{"close_id": mine})
+	pack, _ := exported.StructuredContent.(map[string]any)
+	manifest, _ := pack["manifest"].(map[string]any)
+	if exported.IsError || manifest["version"] != "close_package_v2" || pack["archive_attached"] != true || len(exported.Content) != 2 {
+		t.Fatalf("export_close_package returns the manifest and the ZIP: %v %s", exported.IsError, text(exported))
+	}
+	attached := exported.Content[1].(*mcp.EmbeddedResource).Resource
+	archive, err := zip.NewReader(bytes.NewReader(attached.Blob), int64(len(attached.Blob)))
+	if err != nil || attached.MIMEType != "application/zip" {
+		t.Fatalf("the attachment is the package ZIP: %v %s", err, attached.MIMEType)
+	}
+	sums := map[string]string{}
+	for _, f := range pack["files"].([]any) {
+		entry := f.(map[string]any)
+		sums[entry["name"].(string)] = entry["sha256"].(string)
+	}
+	for _, f := range archive.File {
+		if f.Name != "manifest.json" {
+			continue
+		}
+		opened, _ := f.Open()
+		raw, _ := io.ReadAll(opened)
+		if sums["manifest.json"] != fmt.Sprintf("%x", sha256.Sum256(raw)) {
+			t.Fatalf("each file's checksum is the one in the ZIP: %v", sums)
+		}
+	}
+	if len(sums) < 2 || sums["manifest.json"] == "" {
+		t.Fatalf("the files and their checksums are listed: %v", sums)
+	}
+	if foreign := call("export_close_package", map[string]any{"close_id": theirs}); !foreign.IsError || !strings.Contains(text(foreign), "NOT_FOUND") {
+		t.Fatalf("another firm's package stays hidden: %s", text(foreign))
+	}
+	// A failed proposal is queued again with the preview's digest; a stale digest changes nothing.
+	if _, err = db.Exec(`UPDATE evidence SET extraction_state='ready' WHERE close_id=$1`, mine); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`UPDATE preparation_jobs SET state='failed',error='Synthetic failure' WHERE close_id=$1`, mine); err != nil {
+		t.Fatal(err)
+	}
+	preview, _ := call("preview_close_preparation", map[string]any{"close_id": mine}).StructuredContent.(map[string]any)
+	recheck, _ := preview["recheck"].(map[string]any)
+	if stale := call("recheck_close", map[string]any{"close_id": mine, "digest": "stale", "confirmed": true}); !stale.IsError || !strings.Contains(text(stale), "CONFLICT") {
+		t.Fatalf("a stale digest rechecks nothing: %s", text(stale))
+	}
+	if rechecked := call("recheck_close", map[string]any{"close_id": mine, "digest": recheck["digest"], "confirmed": true}); rechecked.IsError || !strings.Contains(text(rechecked), `"count":1`) {
+		t.Fatalf("recheck_close queues the failed proposal again: %s", text(rechecked))
+	}
 
 	post := func(body string, headers map[string]string) *http.Response {
 		t.Helper()
@@ -174,5 +226,37 @@ func TestMCPToolsUseTheSignedInPersonsAccess(t *testing.T) {
 	}
 	if foreign := post(`{"jsonrpc":"2.0","id":4,"method":"tools/list"}`, map[string]string{"Authorization": "Bearer " + token, "Origin": "https://attacker.example"}); foreign.StatusCode != 403 {
 		t.Fatalf("an untrusted browser origin must be refused: %d", foreign.StatusCode)
+	}
+}
+
+func TestMCPPackageRefusesAnUnreadablePackage(t *testing.T) {
+	pack := func(files map[string]string) []byte {
+		var buffer bytes.Buffer
+		archive := zip.NewWriter(&buffer)
+		for name, body := range files {
+			w, _ := archive.Create(name)
+			w.Write([]byte(body))
+		}
+		archive.Close()
+		return buffer.Bytes()
+	}
+	sum := strings.Repeat("a", 64)
+	if good := mcpPackage(pack(map[string]string{"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": sum + "  manifest.json\n"}), "1"); good.IsError {
+		t.Fatalf("a complete package is read: %v", good.StructuredContent)
+	}
+	for name, files := range map[string]map[string]string{
+		"a manifest that is not an object":     {"manifest.json": `"oops"`, "checksums.sha256": sum + "  manifest.json\n"},
+		"a truncated checksum line":            {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": sum + "  manifest.json\n" + sum[:20]},
+		"a whitespace-only checksum line":      {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": "   \n" + sum + "  manifest.json\n"},
+		"a carriage-return-only checksum line": {"manifest.json": `{"version":"close_package_v2"}`, "checksums.sha256": "\r\n" + sum + "  manifest.json\n"},
+		"not a ZIP":                            nil,
+	} {
+		archive := []byte("not a zip")
+		if files != nil {
+			archive = pack(files)
+		}
+		if result := mcpPackage(archive, "1"); !result.IsError {
+			t.Fatalf("%s is a tool error: %v", name, result.StructuredContent)
+		}
 	}
 }
