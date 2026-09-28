@@ -236,3 +236,19 @@ func TestExternalInputThatDoesNotFitFailsWithoutAnUnknownEffect(t *testing.T) {
 		t.Fatalf("input that never reached the provider must fail plainly, not become unknown: %v", v.steps)
 	}
 }
+
+func TestTemplatedInputIsCheckedInFullWhenTheNodeRuns(t *testing.T) {
+	h := setup(t)
+	id := h.runPlan(`{"version":1,"title":"Missing n","nodes":[{"id":"first","activity":"test_double","input":{"n":1}},
+ {"id":"second","after":["first"],"activity":"test_double","input":{"m":"{{first.n}}"}}]}`)
+	if v := h.expect(id, "failed"); v.steps["node:second"] != "failed" {
+		t.Fatalf("a filled-in input that does not fit must fail its node: %v", v.steps)
+	}
+}
+
+func TestNullInputIsRefusedWhereFieldsAreRequired(t *testing.T) {
+	h := setup(t)
+	if _, _, err := wf.Start(h.ctx, h.db, wf.StartRequest{Workflow: "test_call", Organization: h.org, Input: json.RawMessage("null"), IdempotencyKey: "null", StartedBy: "test"}); !errors.Is(err, wf.ErrInvalidInput) {
+		t.Fatalf("null input for a workflow that needs n: %v", err)
+	}
+}

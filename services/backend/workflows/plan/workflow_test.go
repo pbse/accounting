@@ -170,6 +170,25 @@ func TestTemplatesAreCopiedNeverRun(t *testing.T) {
 	}
 }
 
+var _ = wf.DefineActivity(wf.ActivitySpec[struct{}, string]{
+	Name: "test_guarded", Title: "Guarded", Description: "Needs requests:send to approve.", Permission: "requests:send", Effect: wf.Read,
+	Run: func(context.Context, struct{}) (string, error) { return "ok", nil },
+})
+
+func TestApprovalWithoutPermissionsChecksThemAnyway(t *testing.T) {
+	ctx, db, org, _ := setup(t)
+	id, err := wf.CreatePlan(ctx, db, wf.PlanDraft{Organization: org, Plan: json.RawMessage(`{"version":1,"title":"Guarded","nodes":[{"id":"g","activity":"test_guarded","input":{}}]}`), Source: "staff", CreatedBy: "staff:ops@example.com"})
+	must(t, err)
+	var digest string
+	must(t, db.QueryRow(`SELECT digest FROM workflow_plans WHERE id=$1`, id).Scan(&digest))
+	if _, err = wf.ApprovePlan(ctx, db, id, digest, "staff:lead@example.com", nil); !errors.Is(err, wf.ErrPlanInvalid) || !strings.Contains(err.Error(), "requests:send") {
+		t.Fatalf("approving with no permissions passed must still check them: %v", err)
+	}
+	if _, err = wf.ApprovePlan(ctx, db, id, digest, "staff:lead@example.com", []string{"requests:send"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func exec(db *sql.DB, query string, args ...any) error { _, err := db.Exec(query, args...); return err }
 
 func must(t *testing.T, err error) {

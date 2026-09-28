@@ -43,8 +43,7 @@ type ActivityInfo struct {
 
 type activity struct {
 	ActivityInfo
-	validate func(json.RawMessage) error // strict: unknown fields refused (plans at save time)
-	fits     func(json.RawMessage) error // as the activity will decode it at run time
+	validate func(json.RawMessage) error // strict: unknown and missing required fields refused
 	run      func(context.Context, json.RawMessage) (any, error)
 }
 
@@ -70,7 +69,6 @@ func DefineActivity[I, O any](s ActivitySpec[I, O]) *Activity[I, O] {
 	a := &activity{
 		ActivityInfo: ActivityInfo{Name: s.Name, Title: s.Title, Description: s.Description, Permission: s.Permission, Effect: s.Effect,
 			Input: Schema(reflect.TypeFor[I]()), Output: Schema(reflect.TypeFor[O]())},
-		fits: func(raw json.RawMessage) error { _, err := decode(raw, false); return err },
 		run: func(ctx context.Context, raw json.RawMessage) (any, error) {
 			in, err := decode(raw, false)
 			if err != nil {
@@ -143,8 +141,9 @@ func (x *execution) callActivity(key, name string, input json.RawMessage, option
 		kind = "effect"
 	}
 	recorded := map[string]any{"activity": name, "input": input}
-	if err := a.fits(input); err != nil {
-		// Input that cannot be decoded never reaches the provider: a plain failure, not an unknown effect.
+	if err := a.validate(input); err != nil {
+		// Input checked only now (a plan's templates are filled at run time) never reaches the provider
+		// when it does not fit: a plain failure, not an unknown effect.
 		return x.step(key, "activity", recorded, policyOf(options), func(context.Context) (any, error) { return nil, Permanent(err) })
 	}
 	return x.step(key, kind, recorded, policyOf(options), func(c context.Context) (any, error) {

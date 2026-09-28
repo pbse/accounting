@@ -2,6 +2,7 @@ package wf
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -64,6 +65,11 @@ func schemaOf(t reflect.Type, depth int) map[string]any {
 // objects and lists, or returns "".
 func missingRequired(schema map[string]any, v any, path string) string {
 	switch value := v.(type) {
+	case nil:
+		// null decodes into an empty struct; an object with required fields must be given.
+		if required, ok := schema["required"].([]string); ok && len(required) > 0 {
+			return strings.TrimSuffix(path, ".") + " (null)"
+		}
 	case map[string]any:
 		if required, ok := schema["required"].([]string); ok {
 			for _, name := range required {
@@ -106,6 +112,9 @@ func checkRequired(schema map[string]any, raw json.RawMessage) error {
 		return err
 	}
 	if missing := missingRequired(schema, v, ""); missing != "" {
+		if strings.HasPrefix(missing, " (null)") {
+			return errors.New("the input is null; it must be an object with its required fields")
+		}
 		return fmt.Errorf("missing required field %s", missing)
 	}
 	return nil

@@ -594,6 +594,9 @@ func ApprovePlan(ctx context.Context, db *sql.DB, id int64, digest, approver str
 	if strings.TrimSpace(approver) == "" {
 		return 0, errors.New("an approval needs who approved")
 	}
+	if permissions == nil {
+		permissions = []string{} // an approval always checks permissions: nil holds none
+	}
 	var runID int64
 	err := planChange(ctx, db, id, func(tx *sql.Tx, state, _ string) error {
 		var raw []byte
