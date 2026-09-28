@@ -123,6 +123,15 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			{"provider": "WorkOS", "receives": "Sign-in identity and roles. It also holds each person's Google Drive grant; files a person imports are read from Drive through it, and those grants are managed in WorkOS.", "evidence": map[bool]string{true: "Sign-in configured on this server", false: "Sign-in not configured on this server"}[set("WORKOS_CLIENT_ID")], "in_use": set("WORKOS_CLIENT_ID")},
 			{"provider": "Operations webhook", "receives": "Organization, close and item IDs, state and age of stuck work; no client names or amounts. Set on the worker.", "evidence": plural(alerts, "alert", "alerts") + " accepted in the last 30 days", "in_use": alerts > 0},
 		}
+		var evidence []byte
+		if err = tx.QueryRowContext(r.Context(), capabilityEvidence, org).Scan(&evidence); err != nil {
+			problem(w, 503, "Security center unavailable.")
+			return
+		}
+		if out["operations"], err = capabilityRegister(evidence, out["posting_grants"].(json.RawMessage), out["services"].(json.RawMessage)); err != nil {
+			problem(w, 503, "Security center unavailable.")
+			return
+		}
 		jsonReply(w, 200, out)
 	})
 }

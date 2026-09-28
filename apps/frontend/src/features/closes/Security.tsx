@@ -28,6 +28,22 @@ type Security = {
   activity: { at: string; actor: string; text: string }[];
   providers: { provider: string; receives: string; evidence: string; in_use: boolean }[];
   clients: string[];
+  operations: Operation[];
+};
+type Operation = {
+  provider: string;
+  operation: string;
+  status: string;
+  clients: string[];
+  sandbox_verified_at: string | null;
+  live_verified_at: string | null;
+  sandbox_close_id: number | null;
+  live_close_id: number | null;
+  sandbox_recorded: boolean;
+  permission: string;
+  owner: string;
+  fallback: string;
+  limitation: string;
 };
 
 const day = (at: string) => new Date(at).toLocaleDateString();
@@ -163,6 +179,51 @@ export default function SecurityCenter() {
                 ))}
               </ul>
             )}
+          </section>
+          <section aria-label="Connector operations">
+            <h2>Connector operations</h2>
+            <p className="note">
+              How far each QuickBooks, Xero and Stripe operation is proven and enabled here: documented, sandbox tested, production approved by this server, or enabled for the clients whose grant or connection covers it. Connected never means every operation is available.
+            </p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Operation</th>
+                  <th>Status</th>
+                  <th>Last verified</th>
+                  <th>Needs</th>
+                  <th>Limitation</th>
+                </tr>
+              </thead>
+              <tbody>
+                {security.operations.map((o) => (
+                  <tr key={o.provider + o.operation}>
+                    <td>
+                      {o.provider} · {o.operation}
+                    </td>
+                    <td>{o.status === "enabled" ? `Enabled for ${o.clients.join(", ")}` : o.status[0].toUpperCase() + o.status.slice(1)}</td>
+                    <td>
+                      Sandbox:{" "}
+                      {o.sandbox_verified_at ? (
+                        <Link to={`/dashboard/closes/${o.sandbox_close_id}`}>{day(o.sandbox_verified_at)}</Link>
+                      ) : o.sandbox_recorded ? (
+                        "none yet"
+                      ) : (
+                        "not recorded in the app"
+                      )}
+                      <br />
+                      Live: {o.live_verified_at ? <Link to={`/dashboard/closes/${o.live_close_id}`}>{day(o.live_verified_at)}</Link> : "none yet"}
+                    </td>
+                    <td>
+                      {o.permission}; approved by {o.owner}
+                    </td>
+                    <td>
+                      {o.limitation} Otherwise: {o.fallback}.
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </section>
           <section aria-label="What outside services receive">
             <h2>What outside services receive</h2>
