@@ -1,11 +1,18 @@
-import { BrowserRouter, Link, NavLink, Outlet, Route, Routes } from "react-router";
+import { BrowserRouter, Link, NavLink, Outlet, Route, Routes, useOutletContext } from "react-router";
 import { signOut } from "./auth";
 import { useResource } from "./api";
 import { Overview } from "./pages/Overview";
 import { Firms } from "./pages/Firms";
 import { Firm } from "./pages/Firm";
+import { Workflows } from "./pages/Workflows";
+import { Runs } from "./pages/Runs";
+import { Run } from "./pages/Run";
+import { StartRun } from "./pages/StartRun";
 
 type Me = { subject: string; permissions: string[]; mode: string };
+
+// The signed-in staff member's permissions, for disabling what they cannot do. The API decides.
+export const usePermissions = () => useOutletContext<string[]>();
 
 export function App() {
   return (
@@ -15,6 +22,10 @@ export function App() {
           <Route index element={<Overview />} />
           <Route path="firms" element={<Firms />} />
           <Route path="firms/:id" element={<Firm />} />
+          <Route path="workflows" element={<Workflows />} />
+          <Route path="runs" element={<Runs />} />
+          <Route path="runs/new" element={<StartRun />} />
+          <Route path="runs/:id" element={<Run />} />
           <Route path="*" element={<p>This page does not exist. <Link to="/">Back to the overview</Link></p>} />
         </Route>
       </Routes>
@@ -41,6 +52,11 @@ function Layout() {
             <NavLink className="nav-item" end to="/">Overview</NavLink>
             <NavLink className="nav-item" to="/firms">Firms</NavLink>
           </div>
+          <div className="nav-group">
+            <div className="nav-label">Workflows</div>
+            <NavLink className="nav-item" to="/workflows">Catalog</NavLink>
+            <NavLink className="nav-item" end to="/runs">Runs</NavLink>
+          </div>
         </nav>
         <div className="sidebar-footer">
           {me.data && (
@@ -57,7 +73,7 @@ function Layout() {
       </aside>
       <main id="main" className="app-main">
         <div className="page">
-          <Outlet />
+          <Outlet context={me.data?.permissions ?? []} />
         </div>
       </main>
     </div>

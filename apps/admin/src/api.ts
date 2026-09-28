@@ -7,8 +7,26 @@ export class ApiError extends Error {
   }
 }
 
-export async function get<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: await authorization() });
+export async function get<T>(path: string, headers: Record<string, string> = {}): Promise<T> {
+  const response = await fetch(path, { headers: { ...(await authorization()), ...headers } });
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      message = (await response.json()).message ?? message;
+    } catch {
+      // keep the status text
+    }
+    throw new ApiError(response.status, message);
+  }
+  return response.json();
+}
+
+export async function post<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { ...(await authorization()), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!response.ok) {
     let message = response.statusText;
     try {
