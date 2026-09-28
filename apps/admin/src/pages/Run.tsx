@@ -52,6 +52,7 @@ export function Run() {
   useEffect(() => {
     setDetail(undefined);
     setReveal(undefined);
+    setGrantLapsed(false);
   }, [id]);
   // Only the latest request may update the page, so a slow revealed answer cannot reappear after
   // Hide or on another run.
@@ -87,10 +88,12 @@ export function Run() {
     };
   }, [load]);
   // A content grant for the run's firm reveals it without asking, until the staff member hides it.
-  const grant = useGrantFor(detail?.run.organization);
+  // Only the run this page is for: while another run's detail is still on screen, its firm's grant does not count.
+  const current = detail && String(detail.run.id) === id ? detail : undefined;
+  const grant = useGrantFor(current?.run.organization);
   useEffect(() => {
-    if (grant && hidOn !== id && reveal === undefined && detail && !detail.revealed) setReveal({ id, reason: "" });
-  }, [grant, hidOn, id, reveal, detail]);
+    if (grant && hidOn !== id && reveal === undefined && current && !current.revealed) setReveal({ id, reason: "" });
+  }, [grant, hidOn, id, reveal, current]);
   // A grant that ended or expired takes back what it showed.
   useEffect(() => {
     if (!grant && reveal === "") {
