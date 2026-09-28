@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -30,6 +31,9 @@ func registerAdminPeople(mux *http.ServeMux, db *sql.DB, token string) {
 
 // errWorkOS is WorkOS not answering, or refusing, a call an action needed.
 var errWorkOS = errors.New("WorkOS did not confirm")
+
+// workosUserID is the form of a WorkOS user ID.
+var workosUserID = regexp.MustCompile(`^user_[A-Za-z0-9]{1,100}$`)
 
 var (
 	errInvitationNotPending = errors.New("only a pending invitation that has not expired can be resent")
@@ -124,7 +128,7 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	switch {
 	case strings.Contains(q, "@") && len(q) >= 3 && len(q) <= 254:
 		email = strings.ToLower(q)
-	case strings.HasPrefix(q, "user_") && len(q) <= 200:
+	case workosUserID.MatchString(q):
 		user = q
 	default:
 		problem(w, 422, "Search by a WorkOS user ID (user_…) or an email address.")
@@ -180,19 +184,18 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 				orgs = append(orgs, m.OrganizationID)
 			}
 		}
-		// IDs are WorkOS's (user_…, org_…), which never contain a comma. An accepted invitation belongs to whoever accepted
-		// it; only one not yet accepted is matched by address.
+		// An accepted invitation belongs to whoever accepted it; only one not yet accepted is matched by address.
 		return tx.QueryRowContext(ctx, `SELECT
  COALESCE((SELECT jsonb_agg(jsonb_build_object('subject',m.subject,'organization_id',m.organization_id,'firm_name',o.name,'firm_enabled',o.enabled,'id',m.id::text,
    'granted',m.granted,'decided_by',m.actor,'decided_at',m.created_at,
    'assignments',(SELECT count(*) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),
    'agent',(SELECT a.state FROM current_agent_access a WHERE a.organization_id=m.organization_id AND a.subject=m.subject)) ORDER BY m.granted DESC,o.name)
-  FROM current_organization_members m JOIN organizations o ON o.id=m.organization_id WHERE m.subject=ANY(string_to_array($1,','))),'[]'::jsonb),
+  FROM current_organization_members m JOIN organizations o ON o.id=m.organization_id WHERE m.subject IN (SELECT jsonb_array_elements_text($1::jsonb))),'[]'::jsonb),
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',i.id::text,'organization_id',i.organization_id,'firm_name',o.name,'email',i.email,'role',i.role_name,
    'state',CASE WHEN i.state='pending' AND i.expires_at<=now() THEN 'expired' ELSE i.state END,'invited_by',i.invited_by,'created_at',i.created_at,'expires_at',i.expires_at) ORDER BY i.id DESC)
-  FROM (SELECT * FROM member_invitations WHERE subject=ANY(string_to_array($1,',')) OR (subject IS NULL AND email IN (SELECT jsonb_array_elements_text($2::jsonb))) ORDER BY id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
- COALESCE((SELECT jsonb_object_agg(id,name) FROM organizations WHERE id=ANY(string_to_array($3,','))),'{}'::jsonb)`,
-			strings.Join(ids, ","), jsonList(emails), strings.Join(orgs, ",")).Scan(&memberships, &invitations, &firms)
+  FROM (SELECT * FROM member_invitations WHERE subject IN (SELECT jsonb_array_elements_text($1::jsonb)) OR (subject IS NULL AND email IN (SELECT jsonb_array_elements_text($2::jsonb))) ORDER BY id DESC LIMIT 50) i JOIN organizations o ON o.id=i.organization_id),'[]'::jsonb),
+ COALESCE((SELECT jsonb_object_agg(id,name) FROM organizations WHERE id IN (SELECT jsonb_array_elements_text($3::jsonb))),'{}'::jsonb)`,
+			jsonList(ids), jsonList(emails), jsonList(orgs)).Scan(&memberships, &invitations, &firms)
 	})
 	if err != nil {
 		adminFirmProblem(w, err, "people search")
@@ -241,7 +244,7 @@ func recordedIDs(ctx context.Context, db *sql.DB, email string, ids *[]string) e
 
 // reconcilePersonInvitations runs reconcileInvitations for each firm that invited this person.
 func reconcilePersonInvitations(ctx context.Context, db *sql.DB, emails, ids []string) error {
-	rows, err := db.QueryContext(ctx, `SELECT DISTINCT organization_id FROM member_invitations WHERE email IN (SELECT jsonb_array_elements_text($1::jsonb)) OR subject=ANY(string_to_array($2,','))`, jsonList(emails), strings.Join(ids, ","))
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT organization_id FROM member_invitations WHERE email IN (SELECT jsonb_array_elements_text($1::jsonb)) OR subject IN (SELECT jsonb_array_elements_text($2::jsonb))`, jsonList(emails), jsonList(ids))
 	if err != nil {
 		return err
 	}
@@ -272,7 +275,7 @@ func reconcilePersonInvitations(ctx context.Context, db *sql.DB, emails, ids []s
 // until it expires, minutes later. Their memberships are untouched.
 func adminRevokeSessions(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	user := r.PathValue("user")
-	if !strings.HasPrefix(user, "user_") || len(user) > 200 {
+	if !workosUserID.MatchString(user) {
 		problem(w, 422, "Name the person by their WorkOS user ID.")
 		return
 	}

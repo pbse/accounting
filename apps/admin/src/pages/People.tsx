@@ -27,7 +27,10 @@ export function People() {
   const q = params.get("q") ?? "";
   const found = useResource<Found>(q ? `/v1/admin/people?q=${encodeURIComponent(q)}` : null);
   const operate = usePermissions().includes("platform:operate");
-  const [said, setSaid] = useState("");
+  // What the last action said, for the search it was taken in only.
+  const [done, setDone] = useState<{ q: string; text: string }>();
+  const said = done?.q === q ? done.text : "";
+  const setSaid = (text: string) => setDone({ q, text });
   return (
     <>
       <div className="page-title"><div><div><h1>People</h1><p>Find one person across every firm by their WorkOS user ID or email address.</p></div></div></div>

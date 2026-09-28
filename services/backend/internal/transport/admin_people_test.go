@@ -151,6 +151,7 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	}
 	workosDown = false
 	adminJSON(t, h, token, "GET", "/v1/admin/people?q=ab", "", 422)
+	adminJSON(t, h, token, "GET", "/v1/admin/people?q="+person+",user_other", "", 422)
 	adminJSON(t, h, token, "GET", "/v1/admin/people?q=Acme+Payroll", "", 422)
 	if nobody := adminJSON(t, h, token, "GET", "/v1/admin/people?q=user_nobody", "", 200); len(nobody["users"].([]any)) != 0 {
 		t.Fatalf("an unknown user: %v", nobody)
