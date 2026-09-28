@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/wf"
 )
 
 type clientFile struct {
@@ -210,7 +211,11 @@ func registerAttachments(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 			if err == nil {
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,$3,'Unverified request-link holder') ON CONFLICT DO NOTHING`, rid, sid, actor)
+				var saved sql.Result
+				saved, err = tx.ExecContext(r.Context(), `INSERT INTO work_replies(request_id,source_id,recorded_by,received_from) VALUES($1,$2,$3,'Unverified request-link holder') ON CONFLICT DO NOTHING`, rid, sid, actor)
+				if n, _ := rowsAffected(saved, err); n > 0 {
+					_, err = wf.EmitForClose(r.Context(), tx, closeID, "client_request.replied:"+rid, map[string]string{"request_id": rid, "close_id": closeID, "source_id": sid}, actor)
+				}
 			}
 			// Work waiting on a partial reply stays with the firm until the client completes it or the firm resumes it.
 			var partial bool

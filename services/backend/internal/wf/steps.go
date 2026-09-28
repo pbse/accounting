@@ -31,16 +31,73 @@ func Effect[T any](ctx Context, key string, fn func(context.Context) (T, error),
 
 // StepID identifies the current run and step, for use as an idempotency key in a step's writes.
 func StepID(ctx context.Context, key string) string {
-	if x, ok := ctx.(Context); ok {
-		return fmt.Sprintf("wf:%d:%s", x.exec().run.id, key)
-	}
-	if x, ok := ctx.Value(stepKey{}).(*execution); ok {
+	if x := executionOf(ctx); x != nil {
 		return fmt.Sprintf("wf:%d:%s", x.run.id, key)
 	}
 	return ""
 }
 
+// DB is the engine's database, for use inside a workflow or step. Queries made with the step's
+// context run as the run's firm, so row-level security confines them.
+func DB(ctx context.Context) *sql.DB {
+	if x := executionOf(ctx); x != nil {
+		return x.engine.DB
+	}
+	return nil
+}
+
+// Organization is the firm the current run belongs to, or "" for a platform run.
+func Organization(ctx context.Context) string {
+	if x := executionOf(ctx); x != nil {
+		return x.run.org
+	}
+	return ""
+}
+
 type stepKey struct{}
+
+func executionOf(ctx context.Context) *execution {
+	if x, ok := ctx.(Context); ok {
+		return x.exec()
+	}
+	x, _ := ctx.Value(stepKey{}).(*execution)
+	return x
+}
+
+// Child starts workflow as a child of this run, for the same firm, and waits for its result. The
+// child starts once (its idempotency key is this run and key). A child that fails or is cancelled
+// fails this step; cancelling this run cancels the child.
+func Child[O any](ctx Context, key, workflow string, input any) (O, error) {
+	x := ctx.exec()
+	return typed[O](x)(x.child(key, workflow, input))
+}
+
+// Approval asks a person holding Permission in the run's firm to decide.
+type Approval struct {
+	Permission string // for example "requests:send"
+	Subject    string // what is being decided, shown to people
+	Prompt     string
+	Timeout    time.Duration
+}
+
+// WaitForApproval parks the run until a person decides (Approve) or Timeout passes (ErrTimeout). A
+// rejection is a Decision with Approved false, not an error.
+func WaitForApproval(ctx Context, key string, a Approval) (Decision, error) {
+	x := ctx.exec()
+	if strings.TrimSpace(a.Permission) == "" || len(key) > 150 {
+		return Decision{}, x.stop(fmt.Errorf("approval %q needs a permission and a key of at most 150 characters", key))
+	}
+	fits := func(raw json.RawMessage) error { var d Decision; return json.Unmarshal(raw, &d) }
+	raw, err := x.wait(key, "approval", approvalKey(x.run.id, key), a.Timeout, fits, map[string]string{"permission": a.Permission, "subject": a.Subject, "prompt": a.Prompt})
+	if err != nil {
+		return Decision{}, err
+	}
+	var d Decision
+	if err = json.Unmarshal(raw, &d); err != nil {
+		return Decision{}, x.stop(err)
+	}
+	return d, nil
+}
 
 // Sleep parks the run for d the first time it reaches key.
 func Sleep(ctx Context, key string, d time.Duration) error {
@@ -62,7 +119,7 @@ func SleepUntil(ctx Context, key string, t time.Time) error {
 func WaitForEvent[T any](ctx Context, key, event string, timeout time.Duration) (T, error) {
 	var zero T
 	fits := func(raw json.RawMessage) error { var payload T; return json.Unmarshal(raw, &payload) }
-	raw, err := ctx.exec().wait(key, event, timeout, fits)
+	raw, err := ctx.exec().wait(key, "event", event, timeout, fits, map[string]string{"event": event})
 	if err != nil {
 		return zero, err
 	}
@@ -394,7 +451,7 @@ type eventOutcome struct {
 	TimedOut bool            `json:"timed_out,omitempty"`
 }
 
-func (x *execution) wait(key, event string, timeout time.Duration, fits func(json.RawMessage) error) (json.RawMessage, error) {
+func (x *execution) wait(key, kind, event string, timeout time.Duration, fits func(json.RawMessage) error, input any) (json.RawMessage, error) {
 	if err := x.enter(key, false); err != nil {
 		return nil, err
 	}
@@ -407,13 +464,13 @@ func (x *execution) wait(key, event string, timeout time.Duration, fits func(jso
 			return nil, err
 		}
 		deadline := x.engine.now().Add(timeout)
-		if err := x.insert(key, "event", "waiting", &deadline, event, map[string]string{"event": event}); err != nil {
+		if err := x.insert(key, kind, "waiting", &deadline, event, input); err != nil {
 			return nil, err
 		}
 		s = x.steps[key]
 	}
-	if s.kind != "event" {
-		return nil, x.stop(fmt.Errorf("step %q was a %s and is now an event wait; give the new step its own key", key, s.kind))
+	if s.kind != kind {
+		return nil, x.stop(fmt.Errorf("step %q was a %s and is now a %s; give the new step its own key", key, s.kind, kind))
 	}
 	switch s.state {
 	case "completed":
@@ -440,7 +497,7 @@ func (x *execution) wait(key, event string, timeout time.Duration, fits func(jso
 		// An event recorded after the deadline does not count, even if the run is only now looking.
 		err := x.engine.DB.QueryRowContext(x.sys, `SELECT e.id,e.payload FROM workflow_events e WHERE e.key=$2 AND e.organization_id IS NOT DISTINCT FROM $3 AND e.created_at>=$4
  AND ($5::timestamptz IS NULL OR e.created_at<=$5::timestamptz) AND NOT e.id IN (SELECT jsonb_array_elements_text($6::jsonb)::bigint)
- AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=$1 AND s.kind='event' AND s.state='completed' AND (s.output->>'event_id')::bigint=e.id)
+ AND NOT EXISTS(SELECT 1 FROM workflow_steps s WHERE s.run_id=$1 AND s.kind IN ('event','approval') AND s.state='completed' AND (s.output->>'event_id')::bigint=e.id)
  ORDER BY e.id LIMIT 1`, x.run.id, event, org, x.run.createdAt, deadline, string(skipped)).Scan(&id, &payload)
 		if errors.Is(err, sql.ErrNoRows) {
 			break
@@ -498,4 +555,120 @@ func (x *execution) value(name string, generate func() any) (json.RawMessage, er
 	x.nextSeq++
 	x.steps[key] = &stepRow{key: key, kind: "value", state: "completed", output: raw}
 	return raw, nil
+}
+
+func (x *execution) child(key, workflow string, input any) (json.RawMessage, error) {
+	if err := x.enter(key, false); err != nil {
+		return nil, err
+	}
+	if len(key) > 150 {
+		return nil, x.stop(fmt.Errorf("child step key %q is longer than 150 characters", key))
+	}
+	s := x.steps[key]
+	if s == nil {
+		if err := x.checkpoint(); err != nil {
+			return nil, err
+		}
+		if err := x.insert(key, "child", "running", nil, "", map[string]string{"workflow": workflow}); err != nil {
+			return nil, err
+		}
+		s = x.steps[key]
+	}
+	if s.kind != "child" {
+		return nil, x.stop(fmt.Errorf("step %q was a %s and is now a child run; give the new step its own key", key, s.kind))
+	}
+	switch s.state {
+	case "completed":
+		return s.output, nil
+	case "failed":
+		return nil, &StepError{Key: key, Message: s.errMsg}
+	case "cancelled":
+		return nil, x.stop(errCancelled)
+	}
+	if s.childRunID == 0 {
+		if s.retryAt != nil && s.retryAt.After(x.engine.now()) {
+			return nil, x.parkUntil("", s.retryAt)
+		}
+		if err := x.crash("before-child-start", key); err != nil {
+			return nil, err
+		}
+		id, err := x.startChild(key, workflow, input, s.generation)
+		switch {
+		case errors.Is(err, errCancelled), errors.Is(err, errAbandoned):
+			return nil, x.stop(err)
+		case errors.Is(err, ErrBusy):
+			retry := x.engine.now().Add(time.Minute)
+			if err = x.mark(key, "running", "Another run holds the child's concurrency key; trying again in a minute.", &retry); err != nil {
+				return nil, err
+			}
+			return nil, x.parkUntil("", &retry)
+		case errors.Is(err, ErrUnknownWorkflow), errors.Is(err, ErrInvalidInput):
+			if e := x.mark(key, "failed", err.Error(), nil); e != nil {
+				return nil, e
+			}
+			return nil, &StepError{Key: key, Message: err.Error()}
+		case err != nil:
+			return nil, x.stop(errAbandoned) // a database error: hand the run back and try again
+		}
+		s.state, s.childRunID, s.retryAt, s.errMsg = "waiting", id, nil, ""
+	}
+	var state, message string
+	var output []byte
+	if err := x.engine.DB.QueryRowContext(x.sys, `SELECT state,output,error FROM workflow_runs WHERE id=$1`, s.childRunID).Scan(&state, &output, &message); err != nil {
+		return nil, x.stop(errAbandoned)
+	}
+	switch state {
+	case "completed":
+		if err := x.complete(key, output); err != nil {
+			return nil, err
+		}
+		return output, nil
+	case "failed", "cancelled":
+		message = fmt.Sprintf("Child run %d %s: %s", s.childRunID, state, message)
+		if err := x.mark(key, "failed", message, nil); err != nil {
+			return nil, err
+		}
+		return nil, &StepError{Key: key, Message: message}
+	}
+	return nil, x.parkUntil("", nil) // the child's end wakes this run
+}
+
+// startChild starts (or, after a crash, finds) the child and links it to the step in one
+// transaction that first locks this run's row and checks for a cancel request. Cancel locks the
+// parent first too, so either the child exists when Cancel looks for descendants, or the cancel is
+// seen here and no child starts.
+func (x *execution) startChild(key, workflow string, input any, generation int) (int64, error) {
+	tx, err := x.engine.DB.BeginTx(x.sys, nil)
+	if err != nil {
+		return 0, errAbandoned
+	}
+	defer tx.Rollback()
+	var cancelled bool
+	err = tx.QueryRowContext(x.sys, `SELECT cancel_requested_at IS NOT NULL FROM workflow_runs WHERE id=$1 AND claim=$2 FOR UPDATE`, x.run.id, x.run.claim).Scan(&cancelled)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		x.lost.Store(true)
+		return 0, errAbandoned
+	case err != nil:
+		return 0, errAbandoned
+	case cancelled:
+		return 0, errCancelled
+	}
+	idempotency := fmt.Sprintf("child:%d:%s", x.run.id, key)
+	if generation > 0 {
+		idempotency += fmt.Sprintf(":%d", generation)
+	}
+	// Starting again after a crash returns the child already started under this key.
+	id, _, err := start(x.sys, tx, StartRequest{Workflow: workflow, Organization: x.run.org, Input: input,
+		IdempotencyKey: idempotency, StartedBy: fmt.Sprintf("workflow:%s#%d", x.run.workflow, x.run.id), Agent: x.run.agent}, x.run.id, key)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = tx.ExecContext(x.sys, `UPDATE workflow_steps SET state='waiting',child_run_id=$3,retry_at=NULL,error='' WHERE run_id=$1 AND key=$2`, x.run.id, key, id); err != nil {
+		return 0, errAbandoned
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, errAbandoned
+	}
+	return id, nil
 }

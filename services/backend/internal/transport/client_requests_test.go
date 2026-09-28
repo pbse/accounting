@@ -136,6 +136,10 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	if err = db.QueryRow(`SELECT count(*),min(e.content),min(r.received_from) FROM work_replies r JOIN evidence e ON e.id=r.source_id WHERE r.request_id=$1`, requestID).Scan(&count, &saved, &from); err != nil || count != 1 || !strings.HasSuffix(saved, "\nAnswer: Service end: 2027-08-31\nmethod_confirmed: true\nCard [card number ending 4242 removed]\nPortal password [removed]\n") || from != "Unverified request-link holder" {
 		t.Fatal("Reply not retained exactly once", count, saved, err)
 	}
+	var replied int
+	if err = db.QueryRow(`SELECT count(*) FROM workflow_events WHERE key=$1`, "client_request.replied:"+requestID).Scan(&replied); err != nil || replied != 1 {
+		t.Fatalf("a recorded reply emits one client_request.replied event, not one per retry: %d %v", replied, err)
+	}
 	if err = db.QueryRow("SELECT state FROM preparation_jobs WHERE id=$1", job).Scan(&state); err != nil || state != "waiting_evidence" {
 		t.Fatal("Original job not resumed", state, err)
 	}
