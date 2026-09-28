@@ -30,7 +30,7 @@ export function useRevealable<T extends { revealed?: boolean }>(path: string | n
   }, [reason, resource.error]);
   return {
     ...resource,
-    reveal: { pending: reason !== undefined && !resource.data?.revealed, shown: !!resource.data?.revealed, reason, failure, show: (r: string) => { setFailure(""); setReason(r); }, hide: () => setReason(undefined) },
+    reveal: { scope, pending: reason !== undefined && !resource.data?.revealed, shown: !!resource.data?.revealed, reason, failure, show: (r: string) => { setFailure(""); setReason(r); }, hide: () => setReason(undefined) },
   };
 }
 
@@ -40,16 +40,18 @@ export function useRevealable<T extends { revealed?: boolean }>(path: string | n
 export function Reveal({ reveal, firm }: { reveal: ReturnType<typeof useRevealable>["reveal"]; firm?: string | null }) {
   const allowed = usePermissions().includes("platform:content");
   const grant = useGrantFor(firm);
-  const [hidden, setHidden] = useState(false);
-  // The grant this screen already revealed under, or tried to: one attempt per grant, so a refused one is not repeated
-  // and a new grant tries again.
-  const [triedWith, setTriedWith] = useState<number>();
+  // One automatic attempt per scope and grant: a refused one is not repeated, while a new grant, or another filter or
+  // firm, tries again. Hiding holds for the scope it was hidden in.
+  const attempt = grant ? `${reveal.scope}|${grant.id}` : undefined;
+  const [tried, setTried] = useState<string>();
+  const [hiddenIn, setHiddenIn] = useState<string | null>();
+  const hidden = hiddenIn !== undefined && hiddenIn === reveal.scope;
   useEffect(() => {
-    if (grant && grant.id !== triedWith && !hidden && !reveal.shown && !reveal.pending) {
-      setTriedWith(grant.id);
+    if (attempt && attempt !== tried && !hidden && !reveal.shown && !reveal.pending) {
+      setTried(attempt);
       reveal.show("");
     }
-  }, [grant, triedWith, hidden, reveal.shown, reveal.pending]); // reveal.show is new each render; these decide
+  }, [attempt, tried, hidden, reveal.shown, reveal.pending]); // reveal.show is new each render; these decide
   // A grant that ended or expired takes back what it showed. Only with the firm known: a screen whose
   // firm comes from its data has none while the revealed version loads.
   useEffect(() => {
@@ -59,7 +61,7 @@ export function Reveal({ reveal, firm }: { reveal: ReturnType<typeof useRevealab
     return (
       <p className="note">
         {reveal.reason === "" && grant ? `Showing client content under your grant, until ${new Date(grant.expires_at).toLocaleTimeString()}.` : "Showing client content."} This view was recorded in the audit log.{" "}
-        <button onClick={() => { setHidden(true); reveal.hide(); }}>Hide it</button>
+        <button onClick={() => { setHiddenIn(reveal.scope); reveal.hide(); }}>Hide it</button>
       </p>
     );
   }
@@ -67,7 +69,7 @@ export function Reveal({ reveal, firm }: { reveal: ReturnType<typeof useRevealab
   return (
     <>
       {reveal.failure && <p role="alert">The content was not revealed: {reveal.failure}</p>}
-      {grant && hidden && <p className="muted">Hidden while you hold a grant for this firm. <button className="link" onClick={() => { setHidden(false); setTriedWith(undefined); }}>Show it again</button></p>}
+      {grant && hidden && <p className="muted">Hidden while you hold a grant for this firm. <button className="link" onClick={() => { setHiddenIn(undefined); setTried(undefined); }}>Show it again</button></p>}
       <details>
         <summary>Reveal client content</summary>
         <ActionForm label="Reveal client content" allowed={allowed} onSubmit={async (reason) => reveal.show(reason)} />
