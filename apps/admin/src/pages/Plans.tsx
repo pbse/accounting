@@ -50,7 +50,10 @@ export function Plans() {
   const templates = params.get("templates") === "1";
   return (
     <>
-      <div className="page-title"><div><div><h1>{templates ? "Plan templates" : "Plans"}</h1><p>{templates ? "Templates never run: copy one into a draft for a firm." : "Plans staff built and plans the agent proposed. Nothing runs until a person approves the exact version they reviewed."}</p></div></div></div>
+      <div className="page-title">
+        <div><div><h1>{templates ? "Plan templates" : "Plans"}</h1><p>{templates ? "Templates never run: copy one into a draft for a firm." : "Plans staff built and plans the agent proposed. Nothing runs until a person approves the exact version they reviewed."}</p></div></div>
+        <div className="title-actions"><Link className="button primary" to={templates ? "/plans/new?template=1" : "/plans/new"}>{templates ? "New template" : "New plan"}</Link></div>
+      </div>
       <form className="filters" onSubmit={(event) => {
         event.preventDefault();
         set(Object.fromEntries([...new FormData(event.currentTarget)].map(([k, v]) => [k, String(v).trim()])));
@@ -183,6 +186,10 @@ function PlanDetail({ id }: { id: string }) {
           {!revealed && <p className="muted">Reveal the plan to read them.</p>}
         </section>
       )}
+      <p className="title-actions">
+        {p.source !== "agent" && ["draft", "rejected"].includes(p.state) && <Link className="button" to={`/plans/${p.id}/edit`}>Edit</Link>}
+        <Link className="button" to={`/plans/new?from=${p.id}`}>Copy into a new plan</Link>
+      </p>
       <section>
         <h2>Decide</h2>
         {p.is_template ? (

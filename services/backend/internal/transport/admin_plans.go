@@ -24,6 +24,9 @@ func registerAdminPlans(mux *http.ServeMux, db *sql.DB, token string) {
 		return adminGuard(token, db, platformPlans, func(w http.ResponseWriter, r *http.Request) { next(w, r, db) })
 	}
 	mux.HandleFunc("GET /v1/admin/plans", route(adminPlans))
+	mux.HandleFunc("POST /v1/admin/plans", route(adminCreatePlan))
+	mux.HandleFunc("POST /v1/admin/plans/validate", route(adminValidatePlan))
+	mux.HandleFunc("POST /v1/admin/plans/{id}", route(adminUpdatePlan))
 	mux.HandleFunc("GET /v1/admin/plans/{id}", route(adminPlan))
 	mux.HandleFunc("POST /v1/admin/plans/{id}/propose", route(func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminPlanDecision(w, r, db, "propose") }))
 	mux.HandleFunc("POST /v1/admin/plans/{id}/reject", route(func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminPlanDecision(w, r, db, "reject") }))
@@ -351,4 +354,110 @@ func adminInstantiateTemplate(w http.ResponseWriter, r *http.Request, db *sql.DB
 		return
 	}
 	jsonReply(w, 200, map[string]int64{"plan_id": draft})
+}
+
+// planProblems is what is wrong with a plan being written, in the author's own words, and whether staff could approve it
+// as it stands (its activities need no firm permission).
+func planProblems(raw json.RawMessage) (problems []string, digest string, staffApprovable bool) {
+	p, err := wf.ParsePlan(raw)
+	if err != nil {
+		return []string{strings.TrimPrefix(err.Error(), wf.ErrPlanInvalid.Error()+": ")}, "", false
+	}
+	if problems = p.Problems(nil); len(problems) > 0 {
+		return problems, "", false
+	}
+	return []string{}, p.Digest(), len(p.Problems([]string{})) == 0
+}
+
+// adminValidatePlan checks a plan as it is written, without saving it, for the builder's live problems list.
+func adminValidatePlan(w http.ResponseWriter, r *http.Request, _ *sql.DB) {
+	var in struct {
+		Plan json.RawMessage `json:"plan"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	problems, digest, staff := planProblems(in.Plan)
+	jsonReply(w, 200, map[string]any{"problems": problems, "digest": digest, "staff_approvable": staff})
+}
+
+// adminPlanWriteProblem answers a refused save: the author's own plan is quoted back to them.
+func adminPlanWriteProblem(w http.ResponseWriter, err error, what string) {
+	if errors.Is(err, wf.ErrPlanInvalid) {
+		problem(w, 422, strings.TrimPrefix(err.Error(), wf.ErrPlanInvalid.Error()+": "))
+		return
+	}
+	if errors.Is(err, wf.ErrNotAllowed) {
+		problem(w, 409, "Only a draft or rejected plan staff wrote can be edited; copy an agent's proposal into a new plan instead. Refresh and try again.")
+		return
+	}
+	adminPlanProblem(w, err, what)
+}
+
+// adminCreatePlan saves a new draft for a firm, or a template (for one firm, or shared with every firm when no firm is
+// named). Nothing runs until the draft is approved.
+func adminCreatePlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	var in struct {
+		Firm     string          `json:"firm"`
+		Template bool            `json:"template"`
+		Plan     json.RawMessage `json:"plan"`
+		Reason   string          `json:"reason"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Reason }) {
+		return
+	}
+	in.Firm = strings.TrimSpace(in.Firm)
+	if in.Firm == "" && !in.Template {
+		problem(w, 422, "A plan runs for one firm: name it. Only a template is shared by every firm.")
+		return
+	}
+	if in.Firm != "" {
+		if err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error { return adminFirmExists(ctx, tx, in.Firm) }); err != nil {
+			adminFirmProblem(w, err, "firm read")
+			return
+		}
+	}
+	by := "staff:" + staffOf(r.Context()).Subject
+	request := map[string]any{"template": in.Template}
+	var id int64
+	err := adminAct(r.Context(), db, adminAction{Firm: in.Firm, Action: "plan.create", TargetType: "plan", Reason: strings.TrimSpace(in.Reason), Request: request},
+		func(ctx context.Context, tx *sql.Tx) (err error) {
+			if id, err = wf.CreatePlanTx(ctx, tx, wf.PlanDraft{Organization: in.Firm, Plan: in.Plan, Source: "staff", CreatedBy: by, IsTemplate: in.Template}); err == nil {
+				request["plan_id"] = id
+			}
+			return err
+		})
+	if err != nil {
+		adminPlanWriteProblem(w, err, "plan save")
+		return
+	}
+	jsonReply(w, 200, map[string]int64{"plan_id": id})
+}
+
+// adminUpdatePlan replaces a draft's or rejected plan's content (staff's, never an agent's); it becomes a draft again.
+func adminUpdatePlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	id, ok := planID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Plan   json.RawMessage `json:"plan"`
+		Reason string          `json:"reason"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Reason }) {
+		return
+	}
+	firm, err := adminPlanFirm(r.Context(), db, id)
+	if err != nil {
+		adminPlanProblem(w, err, "plan read")
+		return
+	}
+	by := "staff:" + staffOf(r.Context()).Subject
+	err = adminAct(r.Context(), db, adminAction{Firm: firm, Action: "plan.update", TargetType: "plan", TargetID: strconv.FormatInt(id, 10), Reason: strings.TrimSpace(in.Reason)},
+		func(ctx context.Context, tx *sql.Tx) error { return wf.UpdatePlanTx(ctx, tx, id, in.Plan, by) })
+	if err != nil {
+		adminPlanWriteProblem(w, err, "plan save")
+		return
+	}
+	jsonReply(w, 200, map[string]int64{"plan_id": id})
 }
