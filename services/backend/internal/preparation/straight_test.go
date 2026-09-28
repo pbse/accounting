@@ -19,7 +19,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	}
 	proposal := Proposal{Kind: "prepaid", Engine: "openai", Sources: []Source{{ID: "1", Digest: "d", Name: "insurance.pdf", Role: "invoice"}},
 		Facts: []Fact{fact("amount", "1200.00"), fact("service_start", "2026-09-01"), fact("service_end", "2027-08-31"), fact("currency", "USD"), {Field: "expense_account", Label: "expense account"}, {Field: "prepaid_account", Label: "prepaid account"}, {Field: "booked_balance", Label: "booked balance", Optional: true}, optionalFact("vendor", "Acme Insurance Co"), optionalFact("billed_to", "Example")}}
-	invoice := "Acme Insurance Co\nInvoice INV-778\nBill to: Example\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027\n\nPay online with Stripe"
+	invoice := "Acme Insurance Co\nInvoice INV-778\nPO-123\nBill to: Example\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027\n\nPay online with Stripe"
 	procedure := Procedure{ID: "7", Kind: "prepaid", Method: prepaids.Method, ExpenseAccount: "Insurance", PrepaidAccount: "Prepaid Expenses", Enabled: true}
 	row := func(kind, id, date, vendor, number, account, amount string) LedgerRow {
 		detail := "AccountBasedExpenseLineDetail"
@@ -52,12 +52,6 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if input.BookedBalance != "" || !input.BookingConfirmed || input.Method != prepaids.Method || input.ExpenseAccount != "Insurance" || input.SourceReference != "Evidence #1 · work #5" {
 		t.Fatal("unexpected input", input)
 	}
-	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "53", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
-		t.Fatal("purchase bearing the invoice number not accepted", reason)
-	}
-	if _, reason = StraightThrough(proposal, "Acme Insurance Co\nInvoice #INV-778.\nBill to Example\nUSD 1,200.00", nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(row("Purchase", "50", "2026-09-03", "", "INV-778", "insurance", "1200.00"))); reason != "" {
-		t.Fatal("purchase bearing the invoice number not accepted", reason)
-	}
 	if _, reason = StraightThrough(proposal, invoice, nil, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "52", "2026-09-09", "Other Vendor", "", "Prepaid Expenses", "1200"))); reason != "" {
 		t.Fatal("another vendor's prepaid bill blocked this invoice", reason)
 	}
@@ -71,7 +65,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		t.Fatal("prepared an invoice billed to another company")
 	}
 	other.Facts[8] = optionalFact("billed_to", "Example Services LLC")
-	if _, reason = StraightThrough(other, invoice, []string{"Example Services LLC"}, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
+	if _, reason = StraightThrough(other, invoice, []string{"Example Services, LLC"}, procedure, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
 		t.Fatal("confirmed alias not accepted", reason)
 	}
 	idOnly := bill
@@ -97,6 +91,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"unnamed account on a credit": {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "78", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Someone"},"Line":[{"Amount":50,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"99"}}}]}`)}), false},
 		"amount cited from support":   {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].SourceID = "2" }, ledger(bill), false},
 		"line-less card credit":       {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "77", Date: "2026-09-10", Record: json.RawMessage(`{"Credit":true,"EntityRef":{"Name":"Stripe"}}`)}), false},
+		"purchase order number":       {func(*Proposal, *Procedure) {}, ledger(row("Bill", "80", "2026-09-03", "Other Vendor", "PO-123", "Insurance", "1200")), false},
 		"number is a prefix":          {func(p *Proposal, _ *Procedure) {}, ledger(row("Bill", "76", "2026-09-03", "Other Vendor", "INV-77", "Insurance", "1200")), false},
 		"date as document number":     {func(*Proposal, *Procedure) {}, ledger(row("Bill", "75", "2026-09-03", "Other Vendor", "2026-09", "Insurance", "1200")), false},
 		"year as document number":     {func(*Proposal, *Procedure) {}, ledger(row("Bill", "73", "2026-09-03", "Other Vendor", "2026", "Insurance", "1200")), false},

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/quickbooks"
 )
@@ -20,7 +21,7 @@ type LedgerRow struct {
 }
 
 // Ledger is the close's current QuickBooks capture: its evidence entry, the rows the check reads, and the account
-// names by ID from the close's newest chart of accounts, for a line that carries only the ID.
+// names by ID from the same connection's newest chart of accounts, for a line that carries only the ID.
 type Ledger struct {
 	Source   Source
 	Rows     []LedgerRow
@@ -93,7 +94,8 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		}
 	}
 	// A booking in this client's ledger does not make the invoice this client's; the invoice must bill the client.
-	if !strings.EqualFold(facts["billed_to"], entity) && !slices.ContainsFunc(aliases, func(alias string) bool { return strings.EqualFold(alias, facts["billed_to"]) }) {
+	billed := documents.NormalizeEntity(facts["billed_to"])
+	if billed != documents.NormalizeEntity(entity) && !slices.ContainsFunc(aliases, func(alias string) bool { return documents.NormalizeEntity(alias) == billed }) {
 		return Plan{}, "the invoice is billed to " + facts["billed_to"] + ", not the client or a confirmed alias"
 	}
 	if facts["currency"] != currency {
@@ -120,8 +122,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 }
 
 // expensedLine finds the one bill or purchase line in the close month that books the invoice amount to the expense
-// account and belongs to the invoice: its vendor is the invoice's cited vendor, or its document number is printed in
-// the invoice. Any prepaid line on that bill, a second match, any journal on either account in the month, a vendor or
+// account and belongs to the invoice: its vendor is the invoice's cited vendor. Any prepaid line on that bill, a second match, any journal on either account in the month, a vendor or
 // card credit from the vendor or on either account, or a line of a journal, credit or that vendor's record whose
 // account cannot be named is a question for a person, whatever its currency.
 func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, expense, prepaid string) (booking, reason string) {
@@ -133,7 +134,6 @@ func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, exp
 		}
 		var record struct {
 			Credit               bool
-			DocNumber            string
 			VendorRef, EntityRef struct{ Name string }
 			Line                 []struct {
 				Amount                        json.Number
@@ -148,8 +148,8 @@ func expensedLine(ledger *Ledger, invoice, vendor, amount, currency, period, exp
 		if party == "" {
 			party = record.EntityRef.Name
 		}
-		mentioned := printed(text, party) || printed(text, record.DocNumber)
-		mine := (party != "" && strings.EqualFold(party, vendor)) || (numberLike(record.DocNumber) && printedWhole(text, record.DocNumber))
+		mentioned := printed(text, party)
+		mine := party != "" && strings.EqualFold(party, vendor)
 		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || ((row.Kind == "VendorCredit" || record.Credit) && mentioned) || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
 		}
@@ -205,25 +205,6 @@ type accountRef struct {
 	Name  string `json:"name"`
 }
 
-// numberLike keeps a bill's document number from matching a year, a date fragment or a short figure printed in the
-// invoice: it must carry a letter, or be at least six digits with nothing else.
-func numberLike(number string) bool {
-	number = strings.TrimSpace(number)
-	letter := strings.ContainsFunc(number, func(r rune) bool { return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' })
-	digits := !strings.ContainsFunc(number, func(r rune) bool { return r < '0' || r > '9' })
-	return letter || (digits && len(number) >= 6)
-}
-
-// printedWhole reports whether the invoice prints the document number as a whole identifier, set off by whitespace or
-// plain punctuation: "INV-778" is not printed in "INV-778-A" or "INV-778/2".
-func printedWhole(text, number string) bool {
-	number = strings.ToLower(strings.TrimSpace(number))
-	if number == "" {
-		return false
-	}
-	return regexp.MustCompile(`(^|[\s#(:])` + regexp.QuoteMeta(number) + `([\s).,;:]|$)`).MatchString(text)
-}
-
 // printed reports whether the invoice prints the term as a whole word: "77" is not printed in "INV-778".
 func printed(text, term string) bool {
 	term = strings.ToLower(strings.TrimSpace(term))
@@ -239,8 +220,9 @@ func printed(text, term string) bool {
 // or there is none.
 func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, error) {
 	var l Ledger
-	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
- WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name)
+	var connection string
+	err := tx.QueryRowContext(ctx, `SELECT e.id::text,e.digest,e.name,s.connection_id::text FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN evidence e ON e.id=s.evidence_id AND e.close_id=s.close_id AND e.superseded_by IS NULL
+ WHERE s.close_id::text=$1 AND s.state='completed' AND s.period=c.period AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` AND s.id=(SELECT max(z.id) FROM quickbooks_entity_syncs z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.state<>'unchanged')`, closeID).Scan(&l.Source.ID, &l.Source.Digest, &l.Source.Name, &connection)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -263,7 +245,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 		return nil, err
 	}
 	var catalog []byte
-	err = tx.QueryRowContext(ctx, `SELECT payload->'accounts' FROM quickbooks_snapshots WHERE close_id::text=$1 AND payload ? 'period' ORDER BY id DESC LIMIT 1`, closeID).Scan(&catalog)
+	err = tx.QueryRowContext(ctx, `SELECT payload->'accounts' FROM quickbooks_snapshots WHERE close_id::text=$1 AND connection_id::text=$2 AND payload ? 'period' ORDER BY id DESC LIMIT 1`, closeID, connection).Scan(&catalog)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
