@@ -130,9 +130,8 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		}
 	}
 	// A booking in this client's ledger does not make the invoice this client's; the invoice must bill the client.
-	billed := documents.NormalizeEntity(facts["billed_to"])
-	if billed != documents.NormalizeEntity(entity) && !slices.ContainsFunc(aliases, func(alias string) bool { return documents.NormalizeEntity(alias) == billed }) {
-		return Plan{}, "the invoice is billed to " + facts["billed_to"] + ", not the client or a confirmed alias"
+	if err := BilledToClient(facts["billed_to"], entity, aliases); err != nil {
+		return Plan{}, err.Error()
 	}
 	if facts["currency"] != currency {
 		return Plan{}, "the invoice is not in the client's home currency"
@@ -176,7 +175,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	raw, _ := json.Marshal(input)
 	capture := ledger.Source
 	capture.Role, capture.Location = "period_ledger", booking
-	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, Input: raw, Sources: append(append([]Source{}, p.Sources...), capture)}
+	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, BilledTo: facts["billed_to"], Input: raw, Sources: append(append([]Source{}, p.Sources...), capture)}
 	if _, err := Calculate(plan, entity, period); err != nil {
 		return Plan{}, err.Error()
 	}
@@ -355,6 +354,16 @@ func currencyBefore(quote, currency string, cents int64) bool {
 	}
 	digits := fmt.Sprintf(`%d(\.%02d)?([^0-9]|$)`, cents/100, cents%100)
 	return regexp.MustCompile(`(` + code + `|` + sign + `)\s*` + digits).MatchString(plain)
+}
+
+// BilledToClient refuses a billed-to name that is not the client's name or one of its confirmed, unretired aliases,
+// compared ignoring case, punctuation and spacing.
+func BilledToClient(billed, entity string, aliases []string) error {
+	want := documents.NormalizeEntity(billed)
+	if want == "" || (want != documents.NormalizeEntity(entity) && !slices.ContainsFunc(aliases, func(alias string) bool { return documents.NormalizeEntity(alias) == want })) {
+		return fmt.Errorf("The invoice is billed to %q, not the client or a confirmed alias; a person confirms the facts", billed)
+	}
+	return nil
 }
 
 // ProcedurePinned refuses a plan prepared under a procedure version that is no longer the client's current, enabled

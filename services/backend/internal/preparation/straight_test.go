@@ -71,8 +71,14 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	}
 	var input prepaids.Input
 	json.Unmarshal(plan.Input, &input)
-	if input.BookedBalance != "" || !input.BookingConfirmed || input.Method != prepaids.Method || input.ExpenseAccount != "Insurance" || input.SourceReference != "Evidence #1 · work #5" || plan.Procedure != "7" || plan.Chart != "31" {
+	if input.BookedBalance != "" || !input.BookingConfirmed || input.Method != prepaids.Method || input.ExpenseAccount != "Insurance" || input.SourceReference != "Evidence #1 · work #5" || plan.Procedure != "7" || plan.Chart != "31" || plan.BilledTo != "Example" {
 		t.Fatal("unexpected input", input, plan.Procedure)
+	}
+	if BilledToClient(plan.BilledTo, "Example", nil) != nil || BilledToClient("Example Services LLC", "Example", []string{"Example Services, LLC"}) != nil {
+		t.Fatal("the billed-to name refused at preparation")
+	}
+	if BilledToClient("Example Services LLC", "Example", nil) == nil || BilledToClient("", "Example", nil) == nil {
+		t.Fatal("a retired alias or empty name accepted at preparation")
 	}
 	if ProcedurePinned(plan, procedure) != nil {
 		t.Fatal("the procedure it was prepared under refused")

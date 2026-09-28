@@ -37,10 +37,12 @@ type Plan struct {
 	// plan if that version is no longer the client's current, enabled one with the same accounts.
 	Procedure string `json:"procedure,omitempty"`
 	// Chart is the chart-of-accounts snapshot a straight-through draft's booking was checked against.
-	Chart   string          `json:"chart,omitempty"`
-	Kind    string          `json:"kind"`
-	Input   json.RawMessage `json:"input"`
-	Sources []Source        `json:"sources"`
+	Chart string `json:"chart,omitempty"`
+	// BilledTo is the name the invoice bills, accepted as the client or a confirmed alias; the worker checks it again.
+	BilledTo string          `json:"billed_to,omitempty"`
+	Kind     string          `json:"kind"`
+	Input    json.RawMessage `json:"input"`
+	Sources  []Source        `json:"sources"`
 }
 
 // WorkKind is the kind of work a plan prepares: a prepaid plan with a schedule prepares deferred revenue or depreciation.
@@ -245,6 +247,14 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				return false, e
 			}
 			if e := ProcedurePinned(p, current); e != nil {
+				failure = e.Error()
+				break
+			}
+			aliases, e := ClientAliases(ctx, tx, closeID)
+			if e != nil {
+				return false, e
+			}
+			if e := BilledToClient(p.BilledTo, entity, aliases); e != nil {
 				failure = e.Error()
 				break
 			}
