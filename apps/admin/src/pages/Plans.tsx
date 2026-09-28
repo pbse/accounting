@@ -37,7 +37,10 @@ export function Plans() {
   const query = new URLSearchParams();
   for (const name of ["state", "source", "firm", "templates", "offset"]) if (params.get(name)) query.set(name, params.get(name)!);
   const offset = Number(params.get("offset") ?? 0) || 0;
-  const plans = useRevealable<{ plans: PlanRow[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/plans${query.size ? `?${query}` : ""}`);
+  const scope = new URLSearchParams(query);
+  scope.delete("offset");
+  // A reveal covers these filters: paging keeps it, other filters are masked until revealed anew.
+  const plans = useRevealable<{ plans: PlanRow[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/plans${query.size ? `?${query}` : ""}`, scope.toString());
   const set = (values: Record<string, string>) => {
     const next = new URLSearchParams(params);
     for (const [k, v] of Object.entries(values)) {

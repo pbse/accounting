@@ -7,10 +7,18 @@ import { ActionForm } from "./ActionForm";
 export const masked = "••••";
 export const shown = (value: string) => (value === masked ? <span className="muted">hidden</span> : value);
 
-// useRevealable loads path, masked until someone reveals it with a reason. A reveal the server
-// refuses is dropped, with its error, so the masked view and the form come back.
-export function useRevealable<T extends { revealed?: boolean }>(path: string | null) {
-  const [reason, setReason] = useState<string>();
+// useRevealable loads path, masked until someone reveals it with a reason. A reveal belongs to its
+// scope (by default the path; a list passes its filters, so paging keeps it): a new scope is masked
+// again until revealed anew. A reveal the server refuses is dropped, with its error, so the masked
+// view and the form come back.
+export function useRevealable<T extends { revealed?: boolean }>(path: string | null, scope: string | null = path) {
+  const [revealed, setRevealed] = useState<{ scope: string | null; reason: string }>();
+  const reason = revealed?.scope === scope ? revealed.reason : undefined;
+  const setReason = (r?: string) => setRevealed(r === undefined ? undefined : { scope, reason: r });
+  // Leaving the scope ends the reveal, so coming back to it asks again.
+  useEffect(() => {
+    if (revealed && revealed.scope !== scope) setRevealed(undefined);
+  }, [scope, revealed]);
   const [failure, setFailure] = useState("");
   const resource = useResource<T>(path, reason);
   useEffect(() => {
@@ -21,7 +29,7 @@ export function useRevealable<T extends { revealed?: boolean }>(path: string | n
   }, [reason, resource.error]);
   return {
     ...resource,
-    reveal: { pending: reason !== undefined && !resource.data?.revealed, shown: !!resource.data?.revealed, failure, show: (r: string) => { setFailure(""); setReason(r); }, hide: () => setReason(undefined) },
+    reveal: { pending: reason !== undefined && !resource.data?.revealed, shown: !!resource.data?.revealed, reason, failure, show: (r: string) => { setFailure(""); setReason(r); }, hide: () => setReason(undefined) },
   };
 }
 

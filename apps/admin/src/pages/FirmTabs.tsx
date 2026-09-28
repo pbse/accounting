@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { ActionForm } from "../components/ActionForm";
 import { masked, Reveal, shown, useRevealable } from "../components/Reveal";
 import { InvitationActions } from "./People";
+import { details } from "./Audit";
 
 function Pager({ offset, more, next, onPage }: { offset: number; more: boolean; next: number; onPage: (offset: number) => void }) {
   if (!offset && !more) return null;
@@ -115,7 +116,8 @@ export function FirmActivity({ firm }: { firm: string }) {
   const query = new URLSearchParams();
   if (kind) query.set("kind", kind);
   if (offset) query.set("offset", String(offset));
-  const activity = useRevealable<{ events: Event[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/activity${query.size ? `?${query}` : ""}`);
+  // A reveal covers this firm's activity of this kind: paging keeps it.
+  const activity = useRevealable<{ events: Event[]; has_more: boolean; next_offset: number; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/activity${query.size ? `?${query}` : ""}`, `${firm} ${kind}`);
   return (
     <>
       <p>The firm's recorded access decisions, connections, posting grants, work agents did, and workflow runs, newest first.</p>
@@ -153,11 +155,12 @@ export function FirmActivity({ firm }: { firm: string }) {
   );
 }
 
-type Entry = { id: number; staff_user: string; action: string; target_type: string; target_id: string; reason: string; result: string; error: string; created_at: string };
+type Entry = { id: number; staff_user: string; action: string; target_type: string; target_id: string; reason: string; request: Record<string, unknown>; result: string; error: string; created_at: string };
 
 export function FirmAudit({ firm }: { firm: string }) {
   const [before, setBefore] = useState(0);
-  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${before ? `?before=${before}` : ""}`);
+  // A reveal covers this firm's audit: paging keeps it.
+  const audit = useRevealable<{ entries: Entry[]; next_before: number | null; revealed: boolean }>(`/v1/admin/firms/${encodeURIComponent(firm)}/audit${before ? `?before=${before}` : ""}`, firm);
   return (
     <>
       <p>Everything staff did to this firm, including actions that were refused and every reveal of client content. Reasons and why a refused action failed are hidden until revealed.</p>
@@ -168,7 +171,7 @@ export function FirmAudit({ firm }: { firm: string }) {
         <section>
           {audit.data.entries.length === 0 ? <p>Staff have not acted on this firm.</p> : (
             <table>
-              <thead><tr><th>When</th><th>Staff</th><th>Action</th><th>Target</th><th>Reason</th><th>Result</th></tr></thead>
+              <thead><tr><th>When</th><th>Staff</th><th>Action</th><th>Target</th><th>Details</th><th>Reason</th><th>Result</th></tr></thead>
               <tbody>
                 {audit.data.entries.map((e) => (
                   <tr key={e.id}>
@@ -176,6 +179,7 @@ export function FirmAudit({ firm }: { firm: string }) {
                     <td>{e.staff_user}</td>
                     <td>{e.action}</td>
                     <td>{e.target_type} {e.target_id}</td>
+                    <td>{details(e.request)}</td>
                     <td>{shown(e.reason)}</td>
                     <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
                   </tr>
