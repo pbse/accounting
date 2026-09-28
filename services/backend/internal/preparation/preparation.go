@@ -332,6 +332,12 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	state := "completed"
 	if failure != "" {
 		state = "failed"
+		// A straight-through plan the worker refuses prepared nothing; the agent's confirmation is withdrawn with it.
+		if slices.ContainsFunc(plans, func(p Plan) bool { return p.Procedure != "" }) {
+			if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by=NULL,confirmed_at=NULL WHERE job_id=$1 AND confirmed_by='agent'`, id); err != nil {
+				return false, err
+			}
+		}
 	}
 	encoded, _ := json.Marshal(ids)
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state=$2,workpaper_ids=$3,error=$4,finished_at=now() WHERE id=$1`, id, state, string(encoded), failure); err != nil {
