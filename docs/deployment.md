@@ -62,6 +62,8 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 | Optional inbound email | `EMAIL_INTAKE_ADDRESS` | `EMAIL_INTAKE_KEY` (independent secret, at least 32 characters) |
 | Optional external alerts | — | Worker-only `OPERATIONS_ALERT_WEBHOOK_URL`, optional `OPERATIONS_ALERT_WEBHOOK_TOKEN` |
 | Legacy single-firm sandbox journal | `QBO_SANDBOX_REALM_ID`, `QBO_SANDBOX_ENTITY`, `QBO_SANDBOX_PREPAID_ACCOUNT_ID`, `QBO_SANDBOX_EXPENSE_ACCOUNT_ID` | `QBO_SANDBOX_ACCESS_TOKEN` |
+| Optional hosted MCP (OAuth) | `WORKOS_AUTHKIT_DOMAIN` (HTTPS origin only) and `MCP_RESOURCE_URL` (exactly `/mcp` on the API origin), set together; optional `MCP_ALLOWED_ORIGINS` for browser-based clients | — |
+| Posting kinds (API only) | Optional `PRODUCTION_POSTING_KINDS` (default `prepaid`) and `XERO_POSTING_KINDS` (default none); enable a kind only after its sandbox check | — |
 
 The workflow derives `PUBLIC_APP_URL` and `FRONTEND_ORIGIN` from `STAGING_URL`, and frontend WorkOS values from the auth variables. API and worker receive both QBO environment credentials and Xero credentials for scheduled refresh. Resend and Stripe credentials are entered through their scoped in-app settings and stored encrypted, not as frontend/GitHub variables. Leave legacy global sandbox credentials empty for multi-firm testing; use per-client connectors.
 
@@ -84,6 +86,6 @@ Until a custom hostname exists, `close-production` serves on its `workers.dev` U
 3. Verify runtime RLS, restore a backup into isolation with workers disabled, reconcile external outcomes, and validate alert routing and retention. See [operations](operations.md).
 4. Validate accountant-approved examples and each enabled provider write in the sandbox first, then authorize only the intended production methods/clients.
 
-Two backend features need deployment wiring before they can be advertised on Cloudflare: `/mcp` currently returns 404 at the edge, OAuth discovery is not forwarded, and `WORKOS_AUTHKIT_DOMAIN`, `MCP_RESOURCE_URL`, `MCP_ALLOWED_ORIGINS` are not passed to the container. Also, `PRODUCTION_POSTING_KINDS` and `XERO_POSTING_KINDS` are read by Go but are not forwarded by Compose/edge/deployment; the deployed defaults remain prepaid-only for QuickBooks and no enabled journal kinds for Xero. These require code/configuration changes, not merely adding GitHub secrets. [MCP](mcp.md#deployment-boundary), [posting activation](production-posting.md#enabling-accrual-loan-owner-and-stripe-fee-posting)
+The edge forwards `/mcp` and OAuth discovery to the API, and Compose, the API container and both deploy workflows pass the MCP settings and `PRODUCTION_POSTING_KINDS` and `XERO_POSTING_KINDS` (see the table above). Hosted MCP still needs the WorkOS Connect configuration in [MCP](mcp.md#hosted-oauth-setup); a posting kind still needs its sandbox check in [posting activation](production-posting.md#enabling-accrual-loan-owner-and-stripe-fee-posting).
 
 Local Compose is the supported development path. `npm run dev:cloudflare` checks the edge/container adapter with separately supplied local settings; it does not emulate WAF scan entitlement, hosted identity, external providers or the complete staging deployment.
