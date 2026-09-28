@@ -184,6 +184,10 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if reason := totalDisagrees(invoice, amount); reason != "" {
 		return Plan{}, reason
 	}
+	// An invoice printing other money figures (a tax, a fee) must say which is payable: a total line printing the amount.
+	if len(distinctFigures(invoice)) > 1 && !totalLineShows(invoice, amount) {
+		return Plan{}, "the invoice prints several money figures and no total line printing the cited amount"
+	}
 	// The currency is the amount's: both quotes print the currency's code or sign immediately before the figure.
 	if !currencyBefore(quotes["amount"], currency, amount) || !currencyBefore(quotes["currency"], currency, amount) {
 		return Plan{}, "the cited currency is not printed with the cited amount"
@@ -430,6 +434,32 @@ func totalDisagrees(invoice string, cents int64) string {
 		}
 	}
 	return ""
+}
+
+// distinctFigures is the set of money figures the invoice prints, in cents, read as largestFigure reads them.
+func distinctFigures(invoice string) map[int64]bool {
+	plain := regexp.MustCompile(`(?i)(usd|eur|gbp|cad|aud|[$€£])\s*`).ReplaceAllString(invoice, "¤")
+	out := map[int64]bool{}
+	for _, figure := range regexp.MustCompile(`¤?\d[\d,]*(\.\d{2})?`).FindAllString(plain, -1) {
+		if !strings.HasPrefix(figure, "¤") && !strings.Contains(figure, ".") {
+			continue
+		}
+		if cents, err := prepaids.Amount(strings.ReplaceAll(strings.TrimPrefix(figure, "¤"), ",", "")); err == nil {
+			out[cents] = true
+		}
+	}
+	return out
+}
+
+// totalLineShows reports whether a total line of the invoice (not a subtotal) prints the amount.
+func totalLineShows(invoice string, cents int64) bool {
+	for _, line := range strings.Split(invoice, "\n") {
+		normal := documents.NormalizeEntity(line)
+		if strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total") && distinctFigures(line)[cents] {
+			return true
+		}
+	}
+	return false
 }
 
 // mentionsAny reports whether the quote, compared as text, contains any of the words.
