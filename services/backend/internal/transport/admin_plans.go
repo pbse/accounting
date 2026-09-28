@@ -138,6 +138,10 @@ func adminPlans(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	// A revealed list is recorded against every firm whose plans it shows (a shared template's at platform level), so
 	// each firm's audit has it.
+	more := len(plans) > adminPage
+	if more {
+		plans = plans[:adminPage]
+	}
 	if reveal {
 		firms, ids := []string{}, []int64{}
 		for _, p := range plans {
@@ -153,10 +157,6 @@ func adminPlans(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		if !adminRevealAcross(w, r, db, firms, "plans", "list", map[string]any{"plans": ids}) {
 			return
 		}
-	}
-	more := len(plans) > adminPage
-	if more {
-		plans = plans[:adminPage]
 	}
 	jsonReply(w, 200, map[string]any{"plans": plans, "has_more": more, "next_offset": offset + len(plans), "revealed": reveal})
 }

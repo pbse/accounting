@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { ActionForm } from "../components/ActionForm";
 import { masked, Reveal, shown, useRevealable } from "../components/Reveal";
 import { InvitationActions } from "./People";
+import { details } from "./Audit";
 
 function Pager({ offset, more, next, onPage }: { offset: number; more: boolean; next: number; onPage: (offset: number) => void }) {
   if (!offset && !more) return null;
@@ -153,7 +154,7 @@ export function FirmActivity({ firm }: { firm: string }) {
   );
 }
 
-type Entry = { id: number; staff_user: string; action: string; target_type: string; target_id: string; reason: string; result: string; error: string; created_at: string };
+type Entry = { id: number; staff_user: string; action: string; target_type: string; target_id: string; reason: string; request: Record<string, unknown>; result: string; error: string; created_at: string };
 
 export function FirmAudit({ firm }: { firm: string }) {
   const [before, setBefore] = useState(0);
@@ -168,7 +169,7 @@ export function FirmAudit({ firm }: { firm: string }) {
         <section>
           {audit.data.entries.length === 0 ? <p>Staff have not acted on this firm.</p> : (
             <table>
-              <thead><tr><th>When</th><th>Staff</th><th>Action</th><th>Target</th><th>Reason</th><th>Result</th></tr></thead>
+              <thead><tr><th>When</th><th>Staff</th><th>Action</th><th>Target</th><th>Details</th><th>Reason</th><th>Result</th></tr></thead>
               <tbody>
                 {audit.data.entries.map((e) => (
                   <tr key={e.id}>
@@ -176,6 +177,7 @@ export function FirmAudit({ firm }: { firm: string }) {
                     <td>{e.staff_user}</td>
                     <td>{e.action}</td>
                     <td>{e.target_type} {e.target_id}</td>
+                    <td>{details(e.request)}</td>
                     <td>{shown(e.reason)}</td>
                     <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
                   </tr>

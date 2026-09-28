@@ -3,7 +3,11 @@ import { Link, useSearchParams } from "react-router";
 import { download, when } from "../api";
 import { Reveal, shown, useRevealable } from "../components/Reveal";
 
-type Entry = { id: number; organization: string | null; staff_user: string; action: string; target_type: string; target_id: string; reason: string; result: string; error: string; created_at: string };
+type Entry = { id: number; organization: string | null; staff_user: string; action: string; target_type: string; target_id: string; reason: string; request: Record<string, unknown>; result: string; error: string; created_at: string };
+
+// The request's details, text masked until revealed.
+export const details = (request: Record<string, unknown>) =>
+  Object.keys(request ?? {}).length === 0 ? "—" : <small>{Object.entries(request).map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`).join(", ")}</small>;
 const filters = ["firm", "staff", "action", "result"];
 
 // Every staff action and reveal, across firms, newest first, searchable and exported as CSV.
@@ -63,7 +67,7 @@ export function Audit() {
         <section>
           {audit.data.entries.length === 0 ? <p>No entry matches.</p> : (
             <table>
-              <thead><tr><th>When</th><th>Firm</th><th>Staff</th><th>Action</th><th>Target</th><th>Reason</th><th>Result</th></tr></thead>
+              <thead><tr><th>When</th><th>Firm</th><th>Staff</th><th>Action</th><th>Target</th><th>Details</th><th>Reason</th><th>Result</th></tr></thead>
               <tbody>
                 {audit.data.entries.map((e) => (
                   <tr key={e.id}>
@@ -72,6 +76,7 @@ export function Audit() {
                     <td>{e.staff_user}</td>
                     <td>{e.action}</td>
                     <td>{e.target_type} {e.target_id}</td>
+                    <td>{details(e.request)}</td>
                     <td>{shown(e.reason)}</td>
                     <td><span className={`status ${e.result === "ok" ? "ok" : "danger"}`}>{e.result}</span>{e.error && <small> {shown(e.error)}</small>}</td>
                   </tr>
