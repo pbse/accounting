@@ -74,7 +74,7 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,agent) VALUES($1,'invoice.txt','security-agent','Invoice','user_a','claude-code') RETURNING id::text`, alpha).Scan(&evidenceID))
 	// Operation evidence: a read of Alpha's live books, a sandbox Bill recode, a verified live accrual journal, and another
 	// firm's live loan journal, which must not count here.
-	must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at) VALUES($1,$2,'2026-09','fixture','completed',now()-interval '1 hour') RETURNING id::text`, alpha, qbo).Scan(&captureID))
+	must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at) VALUES($1,$2,'2026-09','fixture','unchanged',now()-interval '1 hour') RETURNING id::text`, alpha, qbo).Scan(&captureID))
 	_, err = db.Exec(`INSERT INTO bill_corrections(close_id,capture_id,evidence_id,realm,bill_id,treatment,reason,target_account_id,target_account_name,target_line_id,before_bill,digest,state,proposed_by,verified_at) VALUES($1,$2,$3,'realm-sandbox','bill-1','inconsistent_coding','Coding rule','7','Supplies','1','{}','d','verified','user_a',now()-interval '3 days')`, alpha, captureID, evidenceID)
 	must(err)
 	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'accrual','capability-accrual','{}') RETURNING id::text`, alpha).Scan(&paperID))
@@ -159,6 +159,8 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 			SandboxAt                          *time.Time `json:"sandbox_verified_at"`
 			LiveAt                             *time.Time `json:"live_verified_at"`
 			SandboxRecorded                    bool       `json:"sandbox_recorded"`
+			SandboxClose                       *int64     `json:"sandbox_close_id"`
+			LiveClose                          *int64     `json:"live_close_id"`
 		}
 	}
 	must(json.Unmarshal([]byte(body), &got))
@@ -182,6 +184,12 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	} {
 		if operations[op] != want {
 			t.Fatalf("%s: %q, want %q\n%v", op, operations[op], want, operations)
+		}
+	}
+	// Each date links to the close that holds the record behind it.
+	for _, o := range got.Operations {
+		if (o.Operation == "Journal: accrual" && (o.LiveClose == nil || fmt.Sprint(*o.LiveClose) != alpha)) || (o.Provider == "QuickBooks" && o.Operation == "Bill line recode" && (o.SandboxClose == nil || fmt.Sprint(*o.SandboxClose) != alpha)) {
+			t.Fatalf("the evidence behind a date is its close: %+v", o)
 		}
 	}
 	if len(got.Operations) != 20 {

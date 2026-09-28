@@ -37,6 +37,8 @@ type Operation = {
   clients: string[];
   sandbox_verified_at: string | null;
   live_verified_at: string | null;
+  sandbox_close_id: number | null;
+  live_close_id: number | null;
   sandbox_recorded: boolean;
   permission: string;
   owner: string;
@@ -201,9 +203,16 @@ export default function SecurityCenter() {
                     </td>
                     <td>{o.status === "enabled" ? `Enabled for ${o.clients.join(", ")}` : o.status[0].toUpperCase() + o.status.slice(1)}</td>
                     <td>
-                      Sandbox: {o.sandbox_verified_at ? day(o.sandbox_verified_at) : o.sandbox_recorded ? "none yet" : "not recorded in the app"}
+                      Sandbox:{" "}
+                      {o.sandbox_verified_at ? (
+                        <Link to={`/dashboard/closes/${o.sandbox_close_id}`}>{day(o.sandbox_verified_at)}</Link>
+                      ) : o.sandbox_recorded ? (
+                        "none yet"
+                      ) : (
+                        "not recorded in the app"
+                      )}
                       <br />
-                      Live: {o.live_verified_at ? day(o.live_verified_at) : "none yet"}
+                      Live: {o.live_verified_at ? <Link to={`/dashboard/closes/${o.live_close_id}`}>{day(o.live_verified_at)}</Link> : "none yet"}
                     </td>
                     <td>
                       {o.permission}; approved by {o.owner}

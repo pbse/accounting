@@ -11,20 +11,22 @@ import (
 )
 
 // capabilityEvidence is each connector operation's latest verified write or successful read in this firm, split by
-// whether it reached a sandbox or a live company. A QuickBooks correction, supplier credit or credit application is live
-// when it was made under a grant; Xero does not mark demo companies, so every Xero record counts as live.
-const capabilityEvidence = `SELECT COALESCE(jsonb_agg(x),'[]'::jsonb) FROM (SELECT provider,kind,max(at) FILTER (WHERE NOT live) AS sandbox,max(at) FILTER (WHERE live) AS live FROM (
- SELECT 'QuickBooks' AS provider,w.kind,false AS live,p.verified_at AS at FROM sandbox_postings p JOIN workpapers w ON w.id=p.workpaper_id JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state='verified'
- UNION ALL SELECT 'QuickBooks',w.kind,true,p.verified_at FROM production_postings p JOIN workpapers w ON w.id=p.workpaper_id JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state='verified'
- UNION ALL SELECT 'QuickBooks',CASE b.entity WHEN 'Purchase' THEN 'purchase_correction' WHEN 'Deposit' THEN 'deposit_correction' ELSE 'bill_correction' END,b.grant_id IS NOT NULL,b.verified_at FROM bill_corrections b JOIN client_closes c ON c.id=b.close_id WHERE c.organization_id=$1 AND b.state='verified'
- UNION ALL SELECT 'QuickBooks','vendor_credit',v.grant_id IS NOT NULL,v.verified_at FROM vendor_credit_postings v JOIN client_closes c ON c.id=v.close_id WHERE c.organization_id=$1 AND v.state='verified'
- UNION ALL SELECT 'QuickBooks',CASE a.kind WHEN 'payment' THEN 'payment_application' ELSE 'credit_application' END,a.grant_id IS NOT NULL,a.verified_at FROM credit_applications a JOIN client_closes c ON c.id=a.close_id WHERE c.organization_id=$1 AND a.state='verified'
- UNION ALL SELECT 'Xero',w.kind,true,p.verified_at FROM xero_postings p JOIN workpapers w ON w.id=p.workpaper_id JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state='verified'
- UNION ALL SELECT 'Xero','bill_correction',true,x.verified_at FROM xero_corrections x JOIN client_closes c ON c.id=x.close_id WHERE c.organization_id=$1 AND x.state='verified'
- UNION ALL SELECT 'QuickBooks','read',q.environment='production',s.captured_at FROM quickbooks_snapshots s JOIN quickbooks_connections q ON q.id=s.connection_id WHERE q.organization_id=$1
- UNION ALL SELECT 'QuickBooks','read',q.environment='production',s.finished_at FROM quickbooks_entity_syncs s JOIN quickbooks_connections q ON q.id=s.connection_id WHERE q.organization_id=$1 AND s.state='completed'
- UNION ALL SELECT 'Xero','read',true,s.captured_at FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE x.organization_id=$1
- UNION ALL SELECT 'Stripe','read',k.livemode,r.finished_at FROM stripe_report_runs r JOIN stripe_connections k ON k.id=r.connection_id WHERE k.organization_id=$1 AND r.state='saved'
+// whether it reached a sandbox or a live company, with the close that holds it. A QuickBooks correction, supplier credit
+// or credit application is live when it was made under a grant; Xero does not mark demo companies, so every Xero record
+// counts as live.
+const capabilityEvidence = `SELECT COALESCE(jsonb_agg(x),'[]'::jsonb) FROM (SELECT provider,kind,max(at) FILTER (WHERE NOT live) AS sandbox,max(at) FILTER (WHERE live) AS live,
+ (array_agg(close_id ORDER BY at DESC) FILTER (WHERE NOT live))[1] AS sandbox_close,(array_agg(close_id ORDER BY at DESC) FILTER (WHERE live))[1] AS live_close FROM (
+ SELECT 'QuickBooks' AS provider,w.kind,false AS live,p.verified_at AS at,p.close_id FROM sandbox_postings p JOIN workpapers w ON w.id=p.workpaper_id JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state='verified'
+ UNION ALL SELECT 'QuickBooks',w.kind,true,p.verified_at,p.close_id FROM production_postings p JOIN workpapers w ON w.id=p.workpaper_id JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state='verified'
+ UNION ALL SELECT 'QuickBooks',CASE b.entity WHEN 'Purchase' THEN 'purchase_correction' WHEN 'Deposit' THEN 'deposit_correction' ELSE 'bill_correction' END,b.grant_id IS NOT NULL,b.verified_at,b.close_id FROM bill_corrections b JOIN client_closes c ON c.id=b.close_id WHERE c.organization_id=$1 AND b.state='verified'
+ UNION ALL SELECT 'QuickBooks','vendor_credit',v.grant_id IS NOT NULL,v.verified_at,v.close_id FROM vendor_credit_postings v JOIN client_closes c ON c.id=v.close_id WHERE c.organization_id=$1 AND v.state='verified'
+ UNION ALL SELECT 'QuickBooks',CASE a.kind WHEN 'payment' THEN 'payment_application' ELSE 'credit_application' END,a.grant_id IS NOT NULL,a.verified_at,a.close_id FROM credit_applications a JOIN client_closes c ON c.id=a.close_id WHERE c.organization_id=$1 AND a.state='verified'
+ UNION ALL SELECT 'Xero',w.kind,true,p.verified_at,p.close_id FROM xero_postings p JOIN workpapers w ON w.id=p.workpaper_id JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.state='verified'
+ UNION ALL SELECT 'Xero','bill_correction',true,x.verified_at,x.close_id FROM xero_corrections x JOIN client_closes c ON c.id=x.close_id WHERE c.organization_id=$1 AND x.state='verified'
+ UNION ALL SELECT 'QuickBooks','read',q.environment='production',s.captured_at,s.close_id FROM quickbooks_snapshots s JOIN quickbooks_connections q ON q.id=s.connection_id WHERE q.organization_id=$1
+ UNION ALL SELECT 'QuickBooks','read',q.environment='production',s.finished_at,s.close_id FROM quickbooks_entity_syncs s JOIN quickbooks_connections q ON q.id=s.connection_id WHERE q.organization_id=$1 AND s.state IN ('completed','unchanged')
+ UNION ALL SELECT 'Xero','read',true,s.captured_at,s.close_id FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE x.organization_id=$1
+ UNION ALL SELECT 'Stripe','read',k.livemode,r.finished_at,r.close_id FROM stripe_report_runs r JOIN stripe_connections k ON k.id=r.connection_id WHERE k.organization_id=$1 AND r.state='saved'
 ) e GROUP BY provider,kind) x`
 
 // capability is one connector operation: a posting kind a grant can cover, or a provider's reads ("read").
@@ -61,6 +63,8 @@ func capabilityRegister(evidence, grants, services json.RawMessage) ([]map[strin
 	var found []struct {
 		Provider, Kind string
 		Sandbox, Live  *time.Time
+		SandboxClose   *int64 `json:"sandbox_close"`
+		LiveClose      *int64 `json:"live_close"`
 	}
 	var granted []struct {
 		Provider, Client string
@@ -79,12 +83,13 @@ func capabilityRegister(evidence, grants, services json.RawMessage) ([]map[strin
 	rows := []map[string]any{}
 	for _, c := range capabilities {
 		var sandbox, live *time.Time
+		var sandboxClose, liveClose *int64
 		for _, f := range found {
 			if f.Provider == c.provider && f.Kind == c.kind {
-				sandbox, live = f.Sandbox, f.Live
+				sandbox, live, sandboxClose, liveClose = f.Sandbox, f.Live, f.SandboxClose, f.LiveClose
 			}
 		}
-		row := map[string]any{"provider": c.provider, "operation": c.operation, "limitation": c.limitation, "sandbox_verified_at": sandbox, "live_verified_at": live}
+		row := map[string]any{"provider": c.provider, "operation": c.operation, "limitation": c.limitation, "sandbox_verified_at": sandbox, "live_verified_at": live, "sandbox_close_id": sandboxClose, "live_close_id": liveClose}
 		clients := []string{}
 		add := func(client string) {
 			if !slices.ContainsFunc(clients, func(k string) bool { return strings.EqualFold(k, client) }) {
@@ -95,6 +100,9 @@ func capabilityRegister(evidence, grants, services json.RawMessage) ([]map[strin
 		if c.kind == "read" {
 			approved = c.provider == "Stripe" || (c.provider == "Xero" && xero.Configured()) || (c.provider == "QuickBooks" && quickbooks.OAuthConfiguredFor("production"))
 			row["permission"] = "An active, confirmed connection for the client"
+			if c.provider == "Xero" {
+				row["permission"] = "An active, confirmed connection for the client; transactions also need the transaction scopes, which a connection made before they were requested lacks until it reconnects"
+			}
 			row["owner"] = map[string]string{"QuickBooks": "Server operator: the production QuickBooks app", "Xero": "Server operator: the Xero app", "Stripe": "The firm: a restricted key per client"}[c.provider]
 			row["fallback"] = "Upload the " + map[string]string{"QuickBooks": "ledger reports", "Xero": "Trial Balance and reports", "Stripe": "itemized Stripe reports"}[c.provider] + " as evidence"
 			for _, s := range connected {
@@ -109,6 +117,9 @@ func capabilityRegister(evidence, grants, services json.RawMessage) ([]map[strin
 			}
 			approved = slices.Contains(kinds, c.kind)
 			row["permission"] = "A posting grant for the client that covers " + c.kind
+			if c.provider == "Xero" {
+				row["permission"] = "A posting grant for the client that covers " + c.kind + ", on a connection authorized to post journals (one made before that scope was requested must reconnect)"
+			}
 			row["owner"] = "Server operator: " + setting
 			row["fallback"] = "A person books the approved draft in " + c.provider
 			for _, g := range granted {
