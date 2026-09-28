@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -55,12 +56,27 @@ func TestContentGrantsStandInForAReasonOnOneFirmForAWhile(t *testing.T) {
 	adminJSON(t, h, token, "POST", "/v1/admin/grants/"+strconv.FormatInt(again, 10)+"/end", `{}`, 200)
 	adminJSON(t, h, token, "GET", people(firm), "", 422)
 
+	// Openings that overlap still leave one open grant.
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			adminJSON(t, h, token, "POST", "/v1/admin/firms/"+firm+"/grant", `{"minutes":15,"reason":"Opening at the same time"}`, 200)
+		}()
+	}
+	wg.Wait()
+	if db.QueryRow(`SELECT count(*) FROM content_grants WHERE organization_id=$1 AND staff_user='local-development' AND ended_at IS NULL`, firm).Scan(&open); open != 1 {
+		t.Fatalf("overlapping openings leave one open grant: %d", open)
+	}
+	db.Exec(`UPDATE content_grants SET ended_at=now() WHERE organization_id=$1 AND staff_user='local-development' AND ended_at IS NULL`, firm)
+
 	// An expired grant counts for nothing.
 	db.Exec(`INSERT INTO content_grants(staff_user,organization_id,reason,created_at,expires_at) VALUES('local-development',$1,'Long ago',now()-interval '2 hours',now()-interval '1 hour')`, firm)
 	adminJSON(t, h, token, "GET", people(firm), "", 422)
 
 	var actions string
-	if err := db.QueryRow(`SELECT string_agg(action||':'||result,',' ORDER BY id) FROM platform_audit WHERE organization_id=$1 AND action LIKE 'content.grant%'`, firm).Scan(&actions); err != nil || actions != "content.grant:ok,content.grant:ok,content.grant_end:ok" {
+	if err := db.QueryRow(`SELECT string_agg(action||':'||result,',' ORDER BY id) FROM platform_audit WHERE organization_id=$1 AND action LIKE 'content.grant%'`, firm).Scan(&actions); err != nil || actions != "content.grant:ok,content.grant:ok,content.grant_end:ok,content.grant:ok,content.grant:ok,content.grant:ok,content.grant:ok" {
 		t.Fatalf("grant audit %q %v", actions, err)
 	}
 }

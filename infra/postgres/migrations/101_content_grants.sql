@@ -13,7 +13,8 @@ CREATE TABLE content_grants (
  CHECK (expires_at > created_at AND expires_at <= created_at + interval '8 hours'),
  CHECK (ended_at IS NULL OR ended_at >= created_at)
 );
-CREATE INDEX content_grants_open ON content_grants(staff_user, organization_id) WHERE ended_at IS NULL;
+-- One open grant per staff member and firm: opening another ends the first.
+CREATE UNIQUE INDEX content_grants_one_open ON content_grants(staff_user, organization_id) WHERE ended_at IS NULL;
 ALTER TABLE content_grants ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant ON content_grants USING (current_setting('app.organization',true) IN ('*',organization_id));
 COMMIT;

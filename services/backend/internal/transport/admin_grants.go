@@ -78,7 +78,13 @@ func adminOpenGrant(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	var expires string
 	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.grant", TargetType: "firm", TargetID: firm, Reason: reason, Request: request},
 		func(ctx context.Context, tx *sql.Tx) error {
-			if _, err := tx.ExecContext(ctx, `UPDATE content_grants SET ended_at=now() WHERE staff_user=$1 AND organization_id=$2 AND ended_at IS NULL`, staff, firm); err != nil {
+			// Openings for the same staff member and firm take turns, so one always ends the other (the database also
+			// holds one open grant per pair).
+			if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('content_grant|'||$1||'|'||$2))`, staff, firm); err != nil {
+				return err
+			}
+			// clock_timestamp, not now(): a grant this opening waited behind was created after this transaction began.
+			if _, err := tx.ExecContext(ctx, `UPDATE content_grants SET ended_at=clock_timestamp() WHERE staff_user=$1 AND organization_id=$2 AND ended_at IS NULL`, staff, firm); err != nil {
 				return err
 			}
 			err := tx.QueryRowContext(ctx, `INSERT INTO content_grants(staff_user,organization_id,reason,expires_at) VALUES($1,$2,$3,now()+make_interval(mins=>$4)) RETURNING id,expires_at::text`,
@@ -117,7 +123,7 @@ func adminEndGrant(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	err = adminAct(r.Context(), db, adminAction{Firm: firm, Action: "content.grant_end", TargetType: "grant", TargetID: strconv.FormatInt(id, 10), Reason: "Ended early"},
 		func(ctx context.Context, tx *sql.Tx) error {
-			result, err := tx.ExecContext(ctx, `UPDATE content_grants SET ended_at=now() WHERE id=$1 AND staff_user=$2 AND ended_at IS NULL`, id, staff)
+			result, err := tx.ExecContext(ctx, `UPDATE content_grants SET ended_at=clock_timestamp() WHERE id=$1 AND staff_user=$2 AND ended_at IS NULL`, id, staff)
 			if err != nil {
 				return err
 			}

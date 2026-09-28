@@ -187,7 +187,7 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
         <p><Link to={`/plans/${source}`}>← Plan #{source}</Link></p>
         <div className="page-title"><div><div><h1>{editing ? `Edit plan #${source}` : `Copy plan #${source}`}</h1><p>Editing or copying a plan means reading it: reveal it first.</p></div></div></div>
         {stored.error && <p role="alert">{stored.error}</p>}
-        <Reveal reveal={stored.reveal} />
+        <Reveal reveal={stored.reveal} firm={stored.data?.plan.organization} />
       </>
     );
   }
