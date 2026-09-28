@@ -134,7 +134,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 			}
 		}
 		// The vendor is the issuer: a bare letterhead line, or one labelled as the issuer, never a processor, payee or recipient line.
-		if f.Field == "vendor" && !issuerLine(f.Candidates[0].Quote, f.Value) {
+		if f.Field == "vendor" && !issuerLine(f.Candidates[0].Quote, f.Value, invoice) {
 			return Plan{}, "the cited line does not name the vendor as the invoice's issuer"
 		}
 		if f.Field == "billed_to" && !labelledLine(f.Candidates[0].Quote, f.Value, []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}) {
@@ -409,7 +409,17 @@ func currencyBefore(quote, currency string, cents int64) bool {
 		}
 	}
 	digits := fmt.Sprintf(`%d(\.%02d)?([^0-9]|$)`, cents/100, cents%100)
-	return regexp.MustCompile(`(` + code + `|` + sign + `)\s*` + digits).MatchString(plain)
+	// The code or sign must precede the figure on its own line. A dollar sign is shared by several currencies, so it
+	// vouches for one only with the code on the same line; the euro and pound signs stand alone.
+	for _, line := range strings.Split(plain, "\n") {
+		byCode := regexp.MustCompile(code + `\s*` + digits).MatchString(line)
+		bySign := regexp.MustCompile(`(` + sign + `)\s*` + digits).MatchString(line)
+		codeOnLine := regexp.MustCompile(`(^|[^a-z])` + code + `([^a-z]|$)`).MatchString(line)
+		if byCode || (bySign && (codeOnLine || !strings.Contains(sign, `\$`))) {
+			return true
+		}
+	}
+	return false
 }
 
 // expenseIDsLabel names the chart accounts the draft was checked against.
@@ -563,10 +573,17 @@ func dateLineSays(quote, value, other string, any, none, against []string) bool 
 	return false
 }
 
-// issuerLine reports whether the quoted line ending with the vendor's name is a bare letterhead line or one whose whole
-// label names the issuer, and not one naming a payment, processor, payee, recipient or contact.
-func issuerLine(quote, value string) bool {
+// issuerLine reports whether the quoted line ending with the vendor's name is the invoice's letterhead line or one whose
+// whole label names the issuer, and not one naming a payment, processor, payee, recipient or contact.
+func issuerLine(quote, value, invoice string) bool {
 	want := documents.NormalizeEntity(value)
+	letterhead := ""
+	for _, line := range strings.Split(invoice, "\n") {
+		if strings.TrimSpace(line) != "" {
+			letterhead = documents.NormalizeEntity(line)
+			break
+		}
+	}
 	for _, line := range strings.Split(quote, "\n") {
 		normal := documents.NormalizeEntity(line)
 		if !endsWithName(normal, want) {
@@ -576,9 +593,10 @@ func issuerLine(quote, value string) bool {
 		if negated(label) {
 			continue
 		}
-		// The label is the whole of what precedes the name: an issuer label, or nothing at all (a letterhead line).
+		// The label is the whole of what precedes the name: an issuer label, or nothing at all when the line is the
+		// invoice's first, its letterhead. A bare name anywhere else (a footer, a payment line) proves nothing.
 		// "Payment from" is not "invoice from".
-		ok := label == ""
+		ok := label == "" && normal == letterhead
 		for _, l := range []string{"invoice from", "bill from", "issued by", "billed by", "invoiced by", "vendor", "vendor name", "supplier", "supplier name", "seller", "provider", "issuer", "remit to"} {
 			ok = ok || label == l
 		}

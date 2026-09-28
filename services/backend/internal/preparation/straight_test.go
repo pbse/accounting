@@ -241,6 +241,15 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		"order date beside a service word": {func(p *Proposal, _ *Procedure) {
 			p.Facts[1].Candidates[0].Quote = "Service: hosting\nOrder placed: 2026-09-01"
 		}, ledger(bill), false},
+		"bare name in the footer": {func(p *Proposal, _ *Procedure) {
+			p.Facts[7].Value = "Stripe"
+			p.Facts[7].Candidates[0].Value = "Stripe"
+			p.Facts[7].Candidates[0].Quote = "Stripe"
+		}, ledger(row("Bill", "99", "2026-09-03", "Stripe", "INV-778", "Insurance", "1200")), false},
+		"dollar sign on another line": {func(p *Proposal, _ *Procedure) {
+			p.Facts[0].Candidates[0].Quote = "Currency: USD\nTotal $1,200.00"
+			p.Facts[3].Candidates[0].Quote = "Currency: USD\nTotal $1,200.00"
+		}, ledger(bill), false},
 		"payment-from cited as vendor": {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates[0].Quote = "Payment from: Acme Insurance Co" }, ledger(bill), false},
 		"bare from cited as vendor":    {func(p *Proposal, _ *Procedure) { p.Facts[7].Candidates[0].Quote = "From: Acme Insurance Co" }, ledger(bill), false},
 		"processor cited as vendor": {func(p *Proposal, _ *Procedure) {
