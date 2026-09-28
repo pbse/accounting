@@ -62,7 +62,7 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 			`DELETE FROM close_routines WHERE organization_id=$1`,
 			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_deletion_receipts WHERE organization_id=$1`,
-			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
@@ -130,10 +130,17 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	if closeOf(month(1)) != "" {
 		t.Fatal("a month is not handed over before it ends")
 	}
-	sweepCloseRoutines(ctx, db, on(2, 1))
+	if n, err := handOverMonths(ctx, db, on(2, 1)); err != nil || n < 1 {
+		t.Fatalf("the hourly upkeep hands the ended month over: %d %v", n, err)
+	}
 	next := closeOf(month(1))
 	if next == "" || goals(next) != 1 {
 		t.Fatalf("the ended month's close is opened and handed over: %q %d", next, goals(next))
+	}
+	var by string
+	must(db.QueryRow(`SELECT r.started_by FROM workflow_runs r JOIN close_goals g ON r.idempotency_key='goal:'||g.id AND r.workflow='close_goal' WHERE g.close_id::text=$1`, next).Scan(&by))
+	if !strings.HasPrefix(by, "routine:") {
+		t.Fatalf("the routine's goal gets its run: %q", by)
 	}
 	if s = read(next); s.Goal == nil || s.Goal.Events[0].Text != "Handed over by the monthly hand-over user_a set up, to get it signed off by "+monthEnd(month(1)).AddDate(0, 0, 10).Format("Mon 2 Jan 2006") || s.Routine.Next != month(2) {
 		t.Fatalf("the goal follows the routine: %+v %+v", s.Goal, s.Routine)
@@ -226,13 +233,14 @@ func TestMonthlyHandOversTakeTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	// Fifty routines of a firm at its close limit wait on every sweep; another firm's waiting routine still gets its turn.
+	// Fifty routines of a firm at its close limit wait; another firm's waiting routine still gets its turn in the same pass,
+	// and the pass ends once each has been tried.
 	busy, free := "org_Busy"+rand.Text(), "org_Free"+rand.Text()
 	asFirm(t, map[string]string{"user_a": "partner"}, busy, free)
 	defer func() {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id IN ($1,$2))`,
 			`DELETE FROM close_routines WHERE organization_id IN ($1,$2)`, `DELETE FROM client_closes WHERE organization_id IN ($1,$2)`,
-			`DELETE FROM organization_member_access WHERE organization_id IN ($1,$2)`, `DELETE FROM organizations WHERE id IN ($1,$2)`} {
+			`DELETE FROM organization_member_access WHERE organization_id IN ($1,$2)`, `DELETE FROM workflow_runs WHERE organization_id IN ($1,$2)`, `DELETE FROM organizations WHERE id IN ($1,$2)`} {
 			db.Exec(q, busy, free)
 		}
 	}()
@@ -248,8 +256,9 @@ func TestMonthlyHandOversTakeTurns(t *testing.T) {
 	must(db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period,waiting) SELECT $1,'Client '||n,'user_a',false,'review','2026-09','Earlier' FROM generate_series(1,50) n`, busy))
 	must(db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period,waiting) VALUES($1,'Alpha','user_a',false,'review','2026-09','Earlier')`, free))
 	november := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	sweepCloseRoutines(t.Context(), db, november)
-	sweepCloseRoutines(t.Context(), db, november)
+	if handed, err := handOverMonths(t.Context(), db, november); err != nil || handed < 1 {
+		t.Fatalf("one pass reaches past the waiting routines: %d %v", handed, err)
+	}
 	var opened bool
 	if err = db.QueryRow(`SELECT EXISTS(SELECT 1 FROM client_closes WHERE organization_id=$1 AND entity='Alpha' AND period='2026-10')`, free).Scan(&opened); err != nil || !opened {
 		t.Fatalf("the other firm's routine gets its turn: %v %v", opened, err)

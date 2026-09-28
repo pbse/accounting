@@ -6,18 +6,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/wf"
+	"close.local/backend/workflows/close_goal"
+	"close.local/backend/workflows/close_goal_upkeep"
 )
 
 // A close handed to the agent. The agent keeps the close's preparation scope current, preparation the firm lets agents
 // do on their own, and says exactly what it needs from people. It never confirms facts, approves, sends, posts or signs
 // off. It stops when a person stops it, when the close is signed off, or when its owner leaves the firm.
+//
+// Each goal has a close_goal workflow run that takes its next step about once a minute (lookAtGoal); the hourly
+// close_goal_upkeep run hands newly ended months over and starts a run for any open goal without one.
+
+func init() {
+	close_goal.Next = func(ctx context.Context, goalID string) (bool, error) {
+		return lookAtGoal(ctx, wf.DB(ctx), goalID, recentRoles.of)
+	}
+	close_goal_upkeep.HandOverMonths = func(ctx context.Context) (int, error) { return handOverMonths(ctx, wf.DB(ctx), time.Now()) }
+	close_goal_upkeep.WatchGoals = func(ctx context.Context) (int, error) { return watchGoals(ctx, wf.DB(ctx)) }
+}
 
 type goalItem struct {
 	JobID    string   `json:"job_id"`
@@ -441,12 +455,22 @@ func handOver(ctx context.Context, tx *sql.Tx, g *goalRow, due, text string) *cl
 	if err == nil {
 		err = advanceGoal(ctx, tx, *g, nil)
 	}
+	if err == nil {
+		err = startGoalRun(ctx, tx, *g, "user:"+g.author)
+	}
 	if err != nil {
 		return closeRefusal(503, "The close could not be handed to the agent. Refresh and try again.")
 	}
 	return nil
 }
 
+// startGoalRun starts the close_goal run that takes goal g's next steps, in the transaction that created the goal.
+func startGoalRun(ctx context.Context, tx *sql.Tx, g goalRow, by string) error {
+	_, _, err := wf.Start(ctx, tx, wf.StartRequest{Workflow: "close_goal", Organization: g.org, Input: close_goal.Input{GoalID: g.id}, IdempotencyKey: "goal:" + g.id, StartedBy: by})
+	return err
+}
+
+// stopGoal stops goal id. Its close_goal run sees that on its next look and ends.
 func stopGoal(ctx context.Context, tx *sql.Tx, id, actor, text string) error {
 	if _, err := tx.ExecContext(ctx, `UPDATE close_goals SET state='stopped',reached_at=NULL,finished_at=now(),checked_at=now() WHERE id=$1`, id); err != nil {
 		return err
@@ -943,51 +967,81 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// RunCloseGoals takes each open goal's next step about once a minute, the longest unchecked first, then hands each
-// client's newly ended month over for its monthly hand-over.
-func RunCloseGoals(ctx context.Context, db *sql.DB) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		sweepCloseGoals(ctx, db)
-		sweepCloseRoutines(ctx, db, time.Now())
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+// lookAtGoal is one look of a goal's close_goal run, with roles read before any row is locked: done once the goal is
+// stopped (or gone), and otherwise the goal's next step. An error, including a firm whose roles cannot be read, is left
+// for the next look; the run records it.
+func lookAtGoal(ctx context.Context, db *sql.DB, goalID string, roles func(context.Context, string) (map[string]reviewer, error)) (bool, error) {
+	id, err := strconv.ParseInt(goalID, 10, 64)
+	if err != nil {
+		return true, nil // no such goal: nothing to watch
 	}
+	var org string
+	err = db.QueryRowContext(ctx, `SELECT c.organization_id FROM close_goals g JOIN client_closes c ON c.id=g.close_id WHERE g.id=$1 AND g.state<>'stopped'`, id).Scan(&org)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	members, err := roles(ctx, org)
+	if err == nil {
+		err = stepGoal(ctx, db, goalID, members)
+	}
+	if err != nil {
+		return false, err
+	}
+	var open bool
+	err = db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM close_goals WHERE id=$1 AND state<>'stopped')`, id).Scan(&open)
+	return !open, err
 }
 
-// sweepCloseGoals steps up to 50 open goals of enabled firms, each firm's roles read before any row is locked. A goal
-// whose step fails, or whose firm's roles cannot be read, is logged and moved to the back, so it cannot hold up the others.
-func sweepCloseGoals(ctx context.Context, db *sql.DB) {
-	rows, err := db.QueryContext(ctx, `SELECT g.id::text,c.organization_id FROM close_goals g JOIN client_closes c ON c.id=g.close_id JOIN organizations o ON o.id=c.organization_id WHERE g.state<>'stopped' AND o.enabled ORDER BY g.checked_at NULLS FIRST,g.id LIMIT 50`)
-	if err != nil {
-		if ctx.Err() == nil {
-			log.Print("Close goals could not be read: ", err)
+// watchGoals starts a close_goal run for each open goal of an enabled firm that no active run watches, a thousand at a
+// time until none is left, and returns how many it started.
+func watchGoals(ctx context.Context, db *sql.DB) (int, error) {
+	started := 0
+	for range 1000 {
+		n, more, err := watchSomeGoals(ctx, db, 1000)
+		started += n
+		if err != nil || !more {
+			return started, err
 		}
-		return
 	}
-	goals := [][2]string{}
+	return started, nil
+}
+
+// watchSomeGoals starts runs for up to limit unwatched goals; more says it found limit of them.
+func watchSomeGoals(ctx context.Context, db *sql.DB, limit int) (started int, more bool, err error) {
+	rows, err := db.QueryContext(ctx, `SELECT g.id::text,c.organization_id FROM close_goals g JOIN client_closes c ON c.id=g.close_id JOIN organizations o ON o.id=c.organization_id
+ WHERE g.state<>'stopped' AND o.enabled AND NOT EXISTS(SELECT 1 FROM workflow_runs r WHERE COALESCE(r.organization_id,'')=c.organization_id AND r.concurrency_key='close_goal:'||g.id AND r.state IN ('queued','running','waiting'))
+ ORDER BY g.id LIMIT $1`, limit)
+	if err != nil {
+		return 0, false, err
+	}
+	goals := []goalRow{}
 	for rows.Next() {
-		var id, org string
-		if rows.Scan(&id, &org) == nil {
-			goals = append(goals, [2]string{id, org})
+		var g goalRow
+		if err = rows.Scan(&g.id, &g.org); err != nil {
+			rows.Close()
+			return 0, false, err
 		}
+		goals = append(goals, g)
 	}
 	rows.Close()
-	roles := sweepRoles{}
+	if err = rows.Err(); err != nil {
+		return 0, false, err
+	}
 	for _, g := range goals {
-		members, err := roles.of(ctx, g[1])
-		if err == nil {
-			err = stepGoal(ctx, db, g[0], members)
-		}
-		if err != nil && ctx.Err() == nil {
-			log.Printf("Close goal #%s could not take its next step: %v", g[0], err)
-			db.ExecContext(ctx, `UPDATE close_goals SET checked_at=now() WHERE id=$1`, g[0])
+		// A key of its own for this pass: the goal's earlier runs keep theirs. The concurrency key keeps it to one run.
+		_, existing, err := wf.Start(ctx, db, wf.StartRequest{Workflow: "close_goal", Organization: g.org, Input: close_goal.Input{GoalID: g.id}, IdempotencyKey: "goal:" + g.id + "/" + wf.CurrentStepID(ctx), StartedBy: "workflow:close_goal_upkeep"})
+		switch {
+		case errors.Is(err, wf.ErrBusy):
+		case err != nil:
+			return started, false, err
+		case !existing:
+			started++
 		}
 	}
+	return started, len(goals) == limit, nil
 }
 
 func stepGoal(ctx context.Context, db *sql.DB, id string, roles map[string]reviewer) error {

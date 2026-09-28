@@ -5,6 +5,8 @@ package workflows
 import (
 	_ "close.local/backend/activities/close_summary"
 	_ "close.local/backend/activities/plan_signal"
+	_ "close.local/backend/workflows/close_goal"
+	_ "close.local/backend/workflows/close_goal_upkeep"
 	_ "close.local/backend/workflows/firm_health_check"
 	_ "close.local/backend/workflows/plan"
 )

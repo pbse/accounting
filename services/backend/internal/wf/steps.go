@@ -29,6 +29,15 @@ func Effect[T any](ctx Context, key string, fn func(context.Context) (T, error),
 	return typed[T](x)(x.step(key, "effect", nil, policyOf(options), func(c context.Context) (any, error) { return fn(c) }))
 }
 
+// Watch calls fn about every interval until it reports done, as one step under key however many calls that takes: a
+// watch over something that changes in its own time (a close handed to the agent) costs one row, not one per look. fn
+// must be safe to repeat, like a step's. An error is recorded on the step (and cleared by the next call that succeeds)
+// and fn is called again after the interval, so a watch never fails its run; it ends when fn reports done or the run
+// is cancelled. The step's attempts count the calls.
+func Watch(ctx Context, key string, every time.Duration, fn func(context.Context) (bool, error)) error {
+	return ctx.exec().watch(key, every, fn)
+}
+
 // StepID identifies the current run and step, for use as an idempotency key in a step's writes.
 func StepID(ctx context.Context, key string) string {
 	if x := executionOf(ctx); x != nil {
@@ -448,6 +457,61 @@ func (x *execution) sleep(key string, until func() time.Time) error {
 		return x.complete(key, json.RawMessage("null"))
 	}
 	return x.parkUntil("", s.wakeAt)
+}
+
+func (x *execution) watch(key string, every time.Duration, fn func(context.Context) (bool, error)) error {
+	if err := x.enter(key, false); err != nil {
+		return err
+	}
+	if every < time.Second {
+		return x.stop(fmt.Errorf("watch %q needs an interval of at least a second", key))
+	}
+	s := x.steps[key]
+	if s != nil {
+		switch {
+		case s.kind != "watch":
+			return x.stop(fmt.Errorf("step %q was a %s and is now a watch; give the new step its own key", key, s.kind))
+		case s.state == "completed":
+			return nil
+		case s.state == "cancelled":
+			return x.stop(errCancelled)
+		case s.state == "waiting" && s.wakeAt != nil && s.wakeAt.After(x.engine.now()):
+			return x.parkUntil("", s.wakeAt)
+		}
+	}
+	if err := x.checkpoint(); err != nil {
+		return err
+	}
+	if s == nil {
+		if err := x.insert(key, "watch", "running", nil, "", map[string]string{"every": every.String()}); err != nil {
+			return err
+		}
+	} else if err := x.write(`UPDATE workflow_steps SET state='running',attempts=attempts+1,wake_at=NULL WHERE run_id=$1 AND key=$3`+fence, x.run.id, x.run.claim, key); err != nil {
+		return err
+	}
+	result, callErr := x.invoke("watch", key, policyOf(nil), func(c context.Context) (any, error) { return fn(c) })
+	switch {
+	case x.lost.Load():
+		return x.stop(errAbandoned)
+	case x.cancelled.Load():
+		return x.stop(errCancelled)
+	case callErr != nil && x.Err() != nil:
+		// The worker is stopping; the call did not fail on its own account. Hand the run back.
+		return x.stop(errAbandoned)
+	case callErr == nil && result == true:
+		return x.complete(key, json.RawMessage("true"))
+	}
+	message := ""
+	if callErr != nil {
+		message = callErr.Error()
+	}
+	wake := x.engine.now().Add(every)
+	if err := x.write(`UPDATE workflow_steps SET state='waiting',wake_at=$4,error=$5 WHERE run_id=$1 AND key=$3`+fence, x.run.id, x.run.claim, key, wake, truncate(message)); err != nil {
+		return err
+	}
+	s = x.steps[key]
+	s.state, s.wakeAt, s.errMsg = "waiting", &wake, message
+	return x.parkUntil("", &wake)
 }
 
 type eventOutcome struct {
