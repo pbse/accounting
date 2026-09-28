@@ -9,6 +9,7 @@ services:
       VITE_WORKOS_CLIENT_ID: ${WORKOS_CLIENT_ID:-}
       VITE_WORKOS_API_HOSTNAME: ${WORKOS_API_HOSTNAME:-}
       VITE_PLATFORM_ORGANIZATION_ID: ${PLATFORM_ORGANIZATION_ID:-}
+      VITE_AUTH_SESSION: ${AUTH_SESSION:-}
     ports: ["127.0.0.1:5173:5173"]
     # Healthy once npm ci has finished and Vite answers, so services sharing node_modules can wait for it.
     healthcheck:
@@ -77,6 +78,7 @@ services:
       MCP_ALLOWED_ORIGINS: ${MCP_ALLOWED_ORIGINS:-}
       PRODUCTION_POSTING_KINDS: ${PRODUCTION_POSTING_KINDS:-}
       XERO_POSTING_KINDS: ${XERO_POSTING_KINDS:-}
+      AUTH_SESSION: ${AUTH_SESSION:-}
     depends_on:
       postgres:
         condition: service_healthy

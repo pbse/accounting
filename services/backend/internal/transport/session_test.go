@@ -1,0 +1,335 @@
+package transport
+
+import (
+	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"close.local/backend/internal/auth"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	// As in production: without a signed-in firm or a system mark, the database admits no rows.
+	db, err := OpenTenantDB(dsn, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	raw, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_Session" + rand.Text()
+	var alpha string
+	_, err = raw.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Session fixture')`, org)
+	must(err)
+	_, err = raw.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`, org)
+	must(err)
+	_, err = raw.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`, org)
+	must(err)
+	must(raw.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
+	defer func() {
+		for _, q := range []string{`DELETE FROM auth_sessions WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			raw.Exec(q, org)
+		}
+	}()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	must(err)
+	kid := "fixture"
+	mint := func(session string) string {
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a", Issuer: "https://auth.example", IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute))}, Organization: org, Session: session, Permissions: []string{"workpapers:review"}})
+		token.Header["kid"] = kid
+		signed, e := token.SignedString(key)
+		must(e)
+		return signed
+	}
+	// WorkOS: its signing keys, and the token exchange, answered by respond.
+	var calls []map[string]string
+	respond := func(map[string]string) (int, any) { return 500, nil }
+	reply := func(status int, v any) *http.Response {
+		body, _ := json.Marshal(v)
+		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}
+	}
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.String() {
+		case "https://api.workos.com/sso/jwks/client_fixture":
+			return reply(200, map[string]any{"keys": []any{map[string]string{"kid": "fixture", "kty": "RSA", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1})}}}), nil
+		case "https://api.workos.com/user_management/authenticate":
+			var body map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			calls = append(calls, body)
+			return reply(respond(body)), nil
+		}
+		t.Fatalf("unexpected provider call %s", r.URL)
+		return nil, nil
+	})
+	tokens := func(session, refresh string) (int, any) {
+		return 200, map[string]any{"access_token": mint(session), "refresh_token": refresh, "user": map[string]string{"id": "user_a", "email": "a@firm.test"}, "organization_id": org}
+	}
+	t.Setenv("WORKOS_CLIENT_ID", "client_fixture")
+	t.Setenv("WORKOS_ISSUER", "https://auth.example")
+	t.Setenv("WORKOS_ORGANIZATION_ID", "")
+	t.Setenv("WORKOS_API_KEY", "sk_test_fixture")
+	t.Setenv("SECRETS_KEY", strings.Repeat("ab", 32))
+	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
+	t.Setenv("AUTH_SESSION", "server")
+	t.Setenv("FRONTEND_ORIGIN", "https://app.example.test")
+	handler := apiWithStore(db, "")
+
+	send := func(h http.Handler, method, target string, cookie string, origin string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, "https://app.example.test"+target, strings.NewReader(`{"entity":"Alpha","period":"2026-10"}`))
+		r.Header.Set("Content-Type", "application/json")
+		if cookie != "" {
+			r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+		}
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	cookieOf := func(w *httptest.ResponseRecorder, name string) *http.Cookie {
+		for _, c := range w.Result().Cookies() {
+			if c.Name == name {
+				return c
+			}
+		}
+		return nil
+	}
+	// signIn runs the whole WorkOS round trip and returns the session cookie.
+	signIn := func(back, session, refresh string) (*httptest.ResponseRecorder, string) {
+		t.Helper()
+		login := send(handler, "GET", "/v1/auth/login?return="+url.QueryEscape(back), "", "")
+		location, _ := url.Parse(login.Header().Get("Location"))
+		state := location.Query().Get("state")
+		if login.Code != 302 || location.Host != "api.workos.com" || location.Path != "/user_management/authorize" || location.Query().Get("client_id") != "client_fixture" || location.Query().Get("redirect_uri") != "https://app.example.test/v1/auth/callback" || state == "" {
+			t.Fatalf("sign-in starts at WorkOS with this client and callback: %d %s", login.Code, location)
+		}
+		started := cookieOf(login, loginCookie)
+		if started == nil || !started.HttpOnly || !started.Secure {
+			t.Fatalf("the sign-in state is an HttpOnly, Secure cookie: %+v", started)
+		}
+		respond = func(map[string]string) (int, any) { return tokens(session, refresh) }
+		r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code=code-1&state="+url.QueryEscape(state), nil)
+		r.AddCookie(started)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		issued := cookieOf(w, sessionCookie)
+		if w.Code != 302 || issued == nil {
+			t.Fatalf("the callback signs the person in: %d %s", w.Code, w.Body.String())
+		}
+		return w, issued.Value
+	}
+
+	// A callback that did not start here, or has the wrong state, is refused before WorkOS is asked.
+	login := send(handler, "GET", "/v1/auth/login", "", "")
+	r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code=code-1&state=forged", nil)
+	r.AddCookie(cookieOf(login, loginCookie))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != 400 || len(calls) != 0 {
+		t.Fatalf("a forged state is refused without calling WorkOS: %d calls=%d", w.Code, len(calls))
+	}
+	if w := send(handler, "GET", "/v1/auth/callback?code=code-1&state=x", "", ""); w.Code != 400 {
+		t.Fatalf("a callback with no sign-in cookie is refused: %d", w.Code)
+	}
+
+	back := "/dashboard/closes/" + alpha
+	done, cookie := signIn(back, "session_1", "refresh-1")
+	issued := cookieOf(done, sessionCookie)
+	if done.Header().Get("Location") != back || !issued.HttpOnly || !issued.Secure || issued.SameSite != http.SameSiteLaxMode || issued.Path != "/" || issued.MaxAge != 30*24*60*60 {
+		t.Fatalf("the session cookie is HttpOnly, Secure, SameSite=Lax and returns to the workspace: %s %+v", done.Header().Get("Location"), issued)
+	}
+	if first := calls[0]; first["grant_type"] != "authorization_code" || first["code"] != "code-1" || first["client_secret"] != "sk_test_fixture" || first["client_id"] != "client_fixture" {
+		t.Fatalf("the code is exchanged with the server's WorkOS key: %v", first)
+	}
+	var idHash, email string
+	var refreshSealed []byte
+	must(raw.QueryRow(`SELECT id_hash,email,refresh_token FROM auth_sessions WHERE organization_id=$1`, org).Scan(&idHash, &email, &refreshSealed))
+	if idHash == cookie || idHash != hashToken(cookie) || email != "a@firm.test" || bytes.Contains(refreshSealed, []byte("refresh-1")) {
+		t.Fatalf("the row keeps a hash of the cookie and sealed tokens, never either in the clear: %s %s", idHash, email)
+	}
+	for _, elsewhere := range []string{"//evil.example/dashboard", "https://evil.example/dashboard", "/dashboard\\evil.example", "/v1/closes", "/dashboard/../v1/closes"} {
+		if done, _ := signIn(elsewhere, "session_x", "refresh-x"); done.Header().Get("Location") != "/dashboard" {
+			t.Fatalf("sign-in never returns to another site: %s -> %s", elsewhere, done.Header().Get("Location"))
+		}
+	}
+
+	// The cookie stands in for the Bearer token on workspace routes.
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"id":"`+alpha+`"`) {
+		t.Fatalf("the signed-in member reads their closes: %d %s", w.Code, w.Body.String())
+	}
+	if w := send(handler, "GET", "/v1/closes", "", ""); w.Code != 401 {
+		t.Fatalf("without the cookie the workspace refuses: %d", w.Code)
+	}
+	if w := send(handler, "POST", "/v1/closes", cookie, "https://evil.example"); w.Code != 403 {
+		t.Fatalf("another site cannot make a change with the cookie: %d", w.Code)
+	}
+	if w := send(handler, "POST", "/v1/closes", cookie, ""); w.Code != 403 {
+		t.Fatalf("a change with no Origin is refused: %d", w.Code)
+	}
+	if w := send(handler, "POST", "/v1/closes", cookie, "https://app.example.test"); w.Code == 401 || w.Code == 403 {
+		t.Fatalf("the workspace itself can make a change: %d %s", w.Code, w.Body.String())
+	}
+	var session struct {
+		User struct{ ID, Email string }
+	}
+	if w := send(handler, "GET", "/v1/auth/session", cookie, ""); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &session) != nil || session.User.Email != "a@firm.test" {
+		t.Fatalf("the page learns who is signed in: %d %s", w.Code, w.Body.String())
+	}
+
+	// An expiring access token is refreshed once, and the rotated refresh token is kept.
+	expire := func() {
+		t.Helper()
+		_, err := raw.Exec(`UPDATE auth_sessions SET access_expires_at=now() WHERE id_hash=$1`, hashToken(cookie))
+		must(err)
+	}
+	expire()
+	calls = nil
+	respond = func(body map[string]string) (int, any) { return tokens("session_1", "refresh-2") }
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 200 || len(calls) != 1 || calls[0]["grant_type"] != "refresh_token" || calls[0]["refresh_token"] != "refresh-1" || calls[0]["organization_id"] != org {
+		t.Fatalf("an expiring token is refreshed with the stored refresh token: %d %v", w.Code, calls)
+	}
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 200 || len(calls) != 1 {
+		t.Fatalf("a fresh token is reused, not refreshed again: %d calls=%d", w.Code, len(calls))
+	}
+	expire()
+	respond = func(body map[string]string) (int, any) {
+		if body["refresh_token"] != "refresh-2" {
+			t.Errorf("the rotated refresh token is used next: %v", body)
+		}
+		return 503, map[string]string{"error": "unavailable"}
+	}
+	var revoked bool
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 503 {
+		t.Fatalf("WorkOS being unavailable is temporary: %d", w.Code)
+	}
+	must(raw.QueryRow(`SELECT revoked_at IS NOT NULL FROM auth_sessions WHERE id_hash=$1`, hashToken(cookie)).Scan(&revoked))
+	if revoked {
+		t.Fatal("a temporary WorkOS failure does not end the session")
+	}
+	respond = func(map[string]string) (int, any) { return 429, map[string]string{"error": "rate_limited"} }
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 503 {
+		t.Fatalf("WorkOS rate limiting is temporary: %d", w.Code)
+	}
+	// A refreshed token whose signing key cannot be checked yet keeps the session and WorkOS's rotated refresh token.
+	kid = "rotated"
+	respond = func(map[string]string) (int, any) { return tokens("session_1", "refresh-3") }
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 503 {
+		t.Fatalf("an unverifiable refreshed token is temporary: %d", w.Code)
+	}
+	must(raw.QueryRow(`SELECT revoked_at IS NOT NULL FROM auth_sessions WHERE id_hash=$1`, hashToken(cookie)).Scan(&revoked))
+	if revoked {
+		t.Fatal("a key that cannot be checked yet does not end the session")
+	}
+	kid = "fixture"
+	respond = func(body map[string]string) (int, any) {
+		if body["refresh_token"] != "refresh-3" {
+			t.Errorf("the refresh token WorkOS rotated while its key was unchecked is used next: %v", body)
+		}
+		return 400, map[string]string{"error": "invalid_grant"}
+	}
+	if w := send(handler, "GET", "/v1/closes", cookie, ""); w.Code != 401 || cookieOf(w, sessionCookie) == nil || cookieOf(w, sessionCookie).MaxAge >= 0 {
+		t.Fatalf("a refused refresh ends the session and clears the cookie: %d", w.Code)
+	}
+	must(raw.QueryRow(`SELECT revoked_at IS NOT NULL FROM auth_sessions WHERE id_hash=$1`, hashToken(cookie)).Scan(&revoked))
+	if !revoked {
+		t.Fatal("a refused refresh revokes the session")
+	}
+	if w := send(handler, "GET", "/v1/auth/session", cookie, ""); w.Code != 401 || cookieOf(w, sessionCookie) == nil || cookieOf(w, sessionCookie).MaxAge >= 0 {
+		t.Fatalf("the session check clears a dead cookie: %d", w.Code)
+	}
+
+	// A refreshed token for another WorkOS session ends this one.
+	_, other := signIn(back, "session_2", "refresh-3")
+	_, err = raw.Exec(`UPDATE auth_sessions SET access_expires_at=now() WHERE id_hash=$1`, hashToken(other))
+	must(err)
+	respond = func(map[string]string) (int, any) { return tokens("session_other", "refresh-4") }
+	if w := send(handler, "GET", "/v1/closes", other, ""); w.Code != 401 {
+		t.Fatalf("a refreshed token must match the session: %d", w.Code)
+	}
+	// A refreshed token the verifier rejects for its claims (here, no WorkOS session) also ends the session.
+	_, invalid := signIn(back, "session_5", "refresh-7")
+	_, err = raw.Exec(`UPDATE auth_sessions SET access_expires_at=now() WHERE id_hash=$1`, hashToken(invalid))
+	must(err)
+	respond = func(map[string]string) (int, any) { return tokens("", "refresh-8") }
+	if w := send(handler, "GET", "/v1/closes", invalid, ""); w.Code != 401 {
+		t.Fatalf("a refreshed token with invalid claims ends the session: %d", w.Code)
+	}
+
+	// Sign-out ends the session here and at WorkOS; MCP never accepts the cookie.
+	_, last := signIn(back, "session_3", "refresh-5")
+	mcpInit := httptest.NewRequest("POST", "https://app.example.test/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`))
+	mcpInit.Header.Set("Content-Type", "application/json")
+	mcpInit.Header.Set("Accept", "application/json, text/event-stream")
+	mcpInit.Header.Set("Origin", "https://app.example.test")
+	mcpInit.AddCookie(&http.Cookie{Name: sessionCookie, Value: last})
+	if w := httptest.NewRecorder(); func() int { handler.ServeHTTP(w, mcpInit); return w.Code }() != 401 {
+		t.Fatalf("MCP ignores the session cookie: %d %s", w.Code, w.Body.String())
+	}
+	if w := send(handler, "POST", "/v1/auth/logout", last, "https://evil.example"); w.Code != 403 {
+		t.Fatalf("another site cannot sign the person out: %d", w.Code)
+	}
+	var out struct {
+		LogoutURL string `json:"logout_url"`
+	}
+	w = send(handler, "POST", "/v1/auth/logout", last, "https://app.example.test")
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || out.LogoutURL != "https://api.workos.com/user_management/sessions/logout?return_to=https%3A%2F%2Fapp.example.test%2F&session_id=session_3" {
+		t.Fatalf("sign-out returns WorkOS's logout for this session: %d %s", w.Code, w.Body.String())
+	}
+	if w := send(handler, "GET", "/v1/closes", last, ""); w.Code != 401 {
+		t.Fatalf("a signed-out cookie no longer works: %d", w.Code)
+	}
+
+	// Client mode, the default, has no session routes and ignores the cookie.
+	_, live := signIn(back, "session_4", "refresh-6")
+	t.Setenv("AUTH_SESSION", "")
+	client := apiWithStore(db, "")
+	if w := send(client, "GET", "/v1/auth/login", "", ""); w.Code != 404 {
+		t.Fatalf("client mode has no session routes: %d", w.Code)
+	}
+	if w := send(client, "GET", "/v1/closes", live, ""); w.Code != 401 {
+		t.Fatalf("client mode ignores the cookie: %d", w.Code)
+	}
+	for mode, missing := range map[string]string{"server": "WORKOS_API_KEY", "cookie": ""} {
+		t.Setenv("AUTH_SESSION", mode)
+		if missing != "" {
+			t.Setenv(missing, "")
+		}
+		if _, err := serverSessions(); err == nil {
+			t.Fatalf("AUTH_SESSION=%s without %q must stop the API", mode, missing)
+		}
+	}
+	t.Setenv("DATABASE_URL", "")
+	if _, _, err := ConfiguredAPI(); err == nil {
+		t.Fatal("an unknown mode stops the API even without a database")
+	}
+}
