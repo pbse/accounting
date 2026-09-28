@@ -17,10 +17,22 @@ func AmountIn(text, amount string) bool {
 	if !ok || strings.ContainsAny(amount, "eE/") {
 		return false
 	}
+	digitAt := func(i int) bool { return i >= 0 && i < len(text) && isDigit(text[i]) }
 	for _, at := range printedNumber.FindAllStringIndex(text, -1) {
-		token := text[at[0]:at[1]]
-		// A digit or point before it means it is the tail of a longer number; 09 is a day or month.
-		if at[0] > 0 && strings.ContainsRune("0123456789.", rune(text[at[0]-1])) || len(token) > 1 && token[0] == '0' && token[1] != '.' {
+		token, before, after := text[at[0]:at[1]], byte(0), byte(0)
+		if at[0] > 0 {
+			before = text[at[0]-1]
+		}
+		if at[1] < len(text) {
+			after = text[at[1]]
+		}
+		switch {
+		// The tail of a longer number, or a part of a date such as 2026-09-02, 9/2/26 or 02.01.2026.
+		case isDigit(before) || before == '.',
+			(before == '-' || before == '/') && digitAt(at[0]-2),
+			(after == '-' || after == '/' || after == '.') && digitAt(at[1]+1),
+			// 09 is a day or month, not an amount.
+			len(token) > 1 && token[0] == '0' && token[1] != '.':
 			continue
 		}
 		got, _ := new(big.Rat).SetString(strings.ReplaceAll(token, ",", ""))
@@ -37,7 +49,7 @@ var ordinalDay, sept = regexp.MustCompile(`(\d)(?:st|nd|rd|th)\b`), regexp.MustC
 // DateIn reports whether text prints the date (YYYY-MM-DD) or month (YYYY-MM) in a common form with
 // its year, or also without one when withoutYear is set, as statement rows print it.
 func DateIn(text, date string, withoutYear bool) bool {
-	layouts := []string{"2006-01-02", "2006/01/02", "01/02/2006", "1/2/2006", "02/01/2006", "2/1/2006", "01-02-2006", "02-01-2006", "02.01.2006", "01/02/06", "02/01/06",
+	layouts := []string{"2006-01-02", "2006/01/02", "01/02/2006", "1/2/2006", "02/01/2006", "2/1/2006", "01-02-2006", "02-01-2006", "02.01.2006", "01/02/06", "02/01/06", "1/2/06", "2/1/06",
 		"Jan 2, 2006", "Jan 02, 2006", "Jan. 2, 2006", "January 2, 2006", "January 02, 2006", "Jan 2 2006", "January 2 2006", "2 Jan 2006", "02 Jan 2006", "2 January 2006", "02-Jan-2006", "2-Jan-2006", "02-Jan-06"}
 	d, err := time.Parse("2006-01-02", date)
 	if err != nil {

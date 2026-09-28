@@ -17,6 +17,9 @@ func TestAmountIn(t *testing.T) {
 		{"Paid 2026-09-02", "2.00", false},
 		{"Rate 5.25% per annum", "5.25", true},
 		{"Items 1,2,3", "123", false},
+		{"2026-09-02 Deposit", "2026.00", false},
+		{"9/2/26 Deposit 45.00", "26", false},
+		{"Refund 120.00-", "-120.00", true},
 	} {
 		if AmountIn(c.text, c.amount) != c.want {
 			t.Errorf("AmountIn(%q, %q) = %v", c.text, c.amount, !c.want)
@@ -39,6 +42,7 @@ func TestDateIn(t *testing.T) {
 		{"Sep 2 Deposit", "2026-09-02", true, true},
 		{"Credit applies from March 2026", "2026-03", false, true},
 		{"2026-09-03 Deposit", "2026-09-02", true, false},
+		{"9/2/26 Deposit", "2026-09-02", false, true},
 	} {
 		if DateIn(c.text, c.date, c.yearless) != c.want {
 			t.Errorf("DateIn(%q, %q, %v) = %v", c.text, c.date, c.yearless, !c.want)

@@ -2592,6 +2592,6 @@ What changed:
 - `linkPasscode`, which both public link routes call first, now refuses an unknown, expired or revoked link, or one whose firm is suspended, before the reply or file is read. Before, an unknown 26-character token let the reply route buffer an upload of up to 21 MiB before the lookup failed.
 
 Checks:
-- `TestAmountIn`, `TestDateIn`: the examples above, ordinal and Sept dates, and day-first dates.
+- `TestAmountIn`, `TestDateIn`: the examples above; a year or day inside a date is never taken for an amount; ordinal, Sept, day-first and unpadded two-digit-year dates.
 - `TestInterpretationContractAndCitationBoundary`: a 12000.00 value on the 1,200.00 quote leaves no candidate and asks about it.
 - `TestUnknownOrRevokedLinkIsRefusedBeforeItsUpload` (local PostgreSQL): an unknown and a revoked link each get 404 on both routes without the body being read.
