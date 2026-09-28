@@ -31,7 +31,7 @@ Checked against provider documentation on 2026-09-26; recheck prices and entitle
 
 ## Database setup
 
-Create a fresh staging project in an appropriate region, then follow [migrations and runtime roles](../infra/postgres/migrations/README.md#fresh-hosted-database). Use a **direct Neon endpoint**, not the `-pooler` endpoint: current tenant isolation uses session-level `set_config` and caches the tenant on the connection. Transaction pooling is not compatible with that implementation.
+Create a fresh staging project in an appropriate region, then follow [migrations and runtime roles](../infra/postgres/migrations/README.md#fresh-hosted-database). Use a **direct Neon endpoint**, not the `-pooler` endpoint: current tenant isolation uses session-level `set_config` and caches the tenant on the connection. Transaction pooling is not compatible with that implementation, so the deploy workflows and the API and worker refuse a `-pooler` host.
 
 Use the owner credential only for reviewed migrations; run API/worker with a separate non-owner role without superuser or BYPASSRLS. Require TLS in hosted `DATABASE_URL`. Apply all numbered migrations on a fresh database; an existing database receives only unapplied migrations. The deploy workflows apply pending migrations with the ledger-backed runner before deploying, as the owner in `MIGRATION_DATABASE_URL` (see [migrations](../infra/postgres/migrations/README.md#existing-database-upgrades)). Back up before upgrades and verify readiness afterward.
 

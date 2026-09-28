@@ -2567,3 +2567,17 @@ Checks, running the workflow step's commands against throwaway local databases (
 ## CI runs once per change (2026-09-28)
 
 Request: stay within the 2,000 free Actions minutes a month. September so far: 208 pull request runs and 166 runs on `main`, about 5 minutes each. Since #167, Deploy production runs CI on every push to `main`, so CI's own `main` trigger ran the same checks twice. It is removed. A newer push to a pull request now cancels that pull request's older run; a deploy's call has a group of its own, so it is never cancelled.
+
+## Worker loops survive a panic; pooled runtime URLs are refused (2026-09-28)
+
+Request: Gate 0 of the [maturity review](maturity.md#gate-0--fix-correctness-and-operator-traps).
+
+What changed:
+- The worker's fifteen background loops each run under `supervise` in `cmd/worker/main.go`. A panic is logged with its stack, recorded on the `worker` heartbeat's `detail`, and the loop restarts 30 seconds later; the others keep running. A loop that returns (the Xero row backfill) stays finished. The admin overview shows the latest panic beside the worker's heartbeat.
+- `OpenTenantDB` refuses a host containing `-pooler`, and both deploy workflows refuse such a runtime `DATABASE_URL` before migrating. The firm is a session setting (`set_config(..., false)`), which a transaction pooler could share between firms.
+
+Checks:
+- `go test ./cmd/worker`: a loop that panics once runs twice and reports one panic with its stack; after cancellation it is not restarted.
+- `TestOpenTenantDBRefusesPooler`: a Neon `-pooler` URL is refused and the direct one opens.
+
+Not verified: whether production's `DATABASE_URL` is direct. The next production deploy's configuration check will fail if it is pooled; replace the secret with the direct endpoint in that case.

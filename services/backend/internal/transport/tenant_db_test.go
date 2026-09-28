@@ -118,3 +118,14 @@ func TestRowLevelSecurityIsolatesFirms(t *testing.T) {
 		t.Fatal("a superuser role must not count as enforced")
 	}
 }
+
+func TestOpenTenantDBRefusesPooler(t *testing.T) {
+	if _, err := OpenTenantDB("postgres://close:x@ep-dark-frog-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require", ""); err == nil {
+		t.Fatal("a transaction-pooled URL was accepted")
+	}
+	db, err := OpenTenantDB("postgres://close:x@ep-dark-frog.us-east-2.aws.neon.tech/neondb?sslmode=require", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+}
