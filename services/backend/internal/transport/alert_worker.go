@@ -171,17 +171,18 @@ func RunAlerts(ctx context.Context, db *sql.DB) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
-		if err := collectOperationsAlerts(ctx, db); err != nil && ctx.Err() == nil {
-			log.Print("Could not collect operations alerts: ", err)
-		}
-		if err := deliverOperationsAlerts(ctx, db, endpoint, os.Getenv("OPERATIONS_ALERT_WEBHOOK_TOKEN")); err != nil && ctx.Err() == nil {
-			log.Print("Could not deliver operations alerts: ", err)
-		}
+		// The platform's own problems go first: a backlog of firm alerts never delays them.
 		if err := collectPlatformAlerts(ctx, db); err != nil && ctx.Err() == nil {
 			log.Print("Could not collect platform alerts: ", err)
 		}
 		if err := deliverPlatformAlerts(ctx, db, endpoint, os.Getenv("OPERATIONS_ALERT_WEBHOOK_TOKEN")); err != nil && ctx.Err() == nil {
 			log.Print("Could not deliver platform alerts: ", err)
+		}
+		if err := collectOperationsAlerts(ctx, db); err != nil && ctx.Err() == nil {
+			log.Print("Could not collect operations alerts: ", err)
+		}
+		if err := deliverOperationsAlerts(ctx, db, endpoint, os.Getenv("OPERATIONS_ALERT_WEBHOOK_TOKEN")); err != nil && ctx.Err() == nil {
+			log.Print("Could not deliver operations alerts: ", err)
 		}
 		select {
 		case <-ctx.Done():
