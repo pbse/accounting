@@ -21,6 +21,8 @@ jobs:
       VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
       VITE_WORKOS_CLIENT_ID: ${{ vars.WORKOS_CLIENT_ID }}
       VITE_WORKOS_API_HOSTNAME: ${{ vars.WORKOS_API_HOSTNAME }}
+      VITE_AUTH_SESSION: ${{ vars.AUTH_SESSION }}
+      AUTH_SESSION: ${{ vars.AUTH_SESSION }}
       WORKOS_CLIENT_ID: ${{ vars.WORKOS_CLIENT_ID }}
       WORKOS_ORGANIZATION_ID: ${{ vars.WORKOS_ORGANIZATION_ID }}
       WORKOS_ISSUER: ${{ vars.WORKOS_ISSUER }}
@@ -92,6 +94,11 @@ jobs:
             if (!valid) throw new Error('Operations alert webhook must be a valid HTTPS URL without embedded credentials or fragment');
           }
           if (process.env.SECRETS_KEY && !/^[0-9a-fA-F]{64}$/.test(process.env.SECRETS_KEY)) throw new Error('SECRETS_KEY must be 32 hex-encoded random bytes');
+          const session = process.env.AUTH_SESSION || 'client';
+          if (!['client','server'].includes(session)) throw new Error('AUTH_SESSION must be client or server');
+          if (session === 'server' && (!process.env.WORKOS_API_KEY || !process.env.SECRETS_KEY)) throw new Error('AUTH_SESSION=server needs WORKOS_API_KEY and SECRETS_KEY');
+          if (session === 'server' && process.env.VITE_API_BASE_URL && new URL(process.env.VITE_API_BASE_URL).origin !== new URL(process.env.PRODUCTION_URL).origin) throw new Error('AUTH_SESSION=server needs the API on the app origin: leave VITE_API_BASE_URL empty or set it to that origin');
+          if (session === 'client' && [undefined, '', 'api.workos.com'].includes(process.env.VITE_WORKOS_API_HOSTNAME)) console.log('::warning::AUTH_SESSION=client with api.workos.com: WorkOS needs a custom authentication domain in production; set AUTH_SESSION=server or a custom WORKOS_API_HOSTNAME');
           if (!!process.env.WORKOS_AUTHKIT_DOMAIN !== !!process.env.MCP_RESOURCE_URL) throw new Error('Set WORKOS_AUTHKIT_DOMAIN and MCP_RESOURCE_URL together or neither');
           if (process.env.WORKOS_AUTHKIT_DOMAIN) {
             const authkit = new URL(process.env.WORKOS_AUTHKIT_DOMAIN);
@@ -131,7 +138,7 @@ jobs:
           trap 'rm -f "$CLOSE_DEPLOY_SECRET_FILE"' EXIT
           node --input-type=module <<'JS'
           import { writeFileSync } from 'node:fs';
-          const names = ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','UPLOAD_SCAN_KEY','EMAIL_INTAKE_ADDRESS','EMAIL_INTAKE_KEY','QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI','XERO_CLIENT_ID','XERO_CLIENT_SECRET','XERO_REDIRECT_URI','XERO_WEBHOOK_KEY','SECRETS_KEY','PUBLIC_APP_URL','DATABASE_URL','WORKOS_CLIENT_ID','WORKOS_ORGANIZATION_ID','WORKOS_ISSUER','PLATFORM_ORGANIZATION_ID','FRONTEND_ORIGIN','OPENAI_API_KEY','OPENAI_MODEL','QBO_SANDBOX_REALM_ID','QBO_SANDBOX_ENTITY','QBO_SANDBOX_PREPAID_ACCOUNT_ID','QBO_SANDBOX_EXPENSE_ACCOUNT_ID','QBO_SANDBOX_ACCESS_TOKEN','WORKOS_AUTHKIT_DOMAIN','MCP_RESOURCE_URL','MCP_ALLOWED_ORIGINS','PRODUCTION_POSTING_KINDS','XERO_POSTING_KINDS'];
+          const names = ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','UPLOAD_SCAN_KEY','EMAIL_INTAKE_ADDRESS','EMAIL_INTAKE_KEY','QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI','XERO_CLIENT_ID','XERO_CLIENT_SECRET','XERO_REDIRECT_URI','XERO_WEBHOOK_KEY','SECRETS_KEY','PUBLIC_APP_URL','DATABASE_URL','WORKOS_CLIENT_ID','WORKOS_ORGANIZATION_ID','WORKOS_ISSUER','PLATFORM_ORGANIZATION_ID','FRONTEND_ORIGIN','OPENAI_API_KEY','OPENAI_MODEL','QBO_SANDBOX_REALM_ID','QBO_SANDBOX_ENTITY','QBO_SANDBOX_PREPAID_ACCOUNT_ID','QBO_SANDBOX_EXPENSE_ACCOUNT_ID','QBO_SANDBOX_ACCESS_TOKEN','WORKOS_AUTHKIT_DOMAIN','MCP_RESOURCE_URL','MCP_ALLOWED_ORIGINS','PRODUCTION_POSTING_KINDS','XERO_POSTING_KINDS','AUTH_SESSION'];
           writeFileSync(process.env.CLOSE_DEPLOY_SECRET_FILE, JSON.stringify(Object.fromEntries(names.map(name => [name, process.env[name] || '']))), {mode: 0o600});
           JS
           npm run deploy:production -- --secrets-file "$CLOSE_DEPLOY_SECRET_FILE" ${UPLOAD_SCAN_HOST:+--route "${UPLOAD_SCAN_HOST}/*"}

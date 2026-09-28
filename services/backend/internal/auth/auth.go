@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -39,6 +40,10 @@ func Actor(ctx context.Context) *Claims { actor, _ := ctx.Value(contextKey{}).(*
 func WithActor(ctx context.Context, actor *Claims) context.Context {
 	return context.WithValue(ctx, contextKey{}, actor)
 }
+
+// ErrSigningKeys means the issuer's signing keys could not be fetched or do not yet include the token's key, which can
+// pass once they are fetched again; any other verification error is final.
+var ErrSigningKeys = errors.New("signing keys unavailable")
 
 type Verifier struct {
 	ClientID, Organization, Issuer string
@@ -72,17 +77,17 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 			}
 			response, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 			if err != nil {
-				return nil, errors.New("signing keys unavailable")
+				return nil, ErrSigningKeys
 			}
 			defer response.Body.Close()
 			if response.StatusCode != 200 {
-				return nil, errors.New("signing keys unavailable")
+				return nil, ErrSigningKeys
 			}
 			var set struct {
 				Keys []struct{ Kid, Kty, Use, Alg, N, E string }
 			}
 			if json.NewDecoder(io.LimitReader(response.Body, 128*1024)).Decode(&set) != nil {
-				return nil, errors.New("invalid signing keys")
+				return nil, fmt.Errorf("%w: invalid key set", ErrSigningKeys)
 			}
 			keys := map[string]*rsa.PublicKey{}
 			for _, key := range set.Keys {
@@ -108,10 +113,13 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 		}
 		key := v.keys[kid]
 		if key == nil {
-			return nil, errors.New("unknown signing key")
+			return nil, fmt.Errorf("%w: unknown signing key", ErrSigningKeys)
 		}
 		return key, nil
 	}, jwt.WithValidMethods([]string{"RS256"}), jwt.WithIssuer(v.Issuer), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
+	if errors.Is(err, ErrSigningKeys) {
+		return nil, ErrSigningKeys
+	}
 	if err != nil || claims.Subject == "" || claims.Session == "" || claims.Organization == "" || claims.Organization == "local-development" || (v.Organization != "" && claims.Organization != v.Organization) {
 		return nil, errors.New("invalid session or organization")
 	}
