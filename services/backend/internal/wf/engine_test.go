@@ -98,6 +98,20 @@ var _ = wf.Define(wf.Spec[ref, []string]{
 })
 
 var _ = wf.Define(wf.Spec[ref, string]{
+	Name: "test_watch", Title: "Watch until done",
+	Run: func(ctx wf.Context, in ref) (string, error) {
+		err := wf.Watch(ctx, "watch", time.Minute, func(context.Context) (bool, error) {
+			n := count(in.ID + "/watch")
+			if n == 2 {
+				return false, errors.New("not reachable")
+			}
+			return n >= in.Level, nil
+		})
+		return "done", err
+	},
+})
+
+var _ = wf.Define(wf.Spec[ref, string]{
 	Name: "test_block", Title: "Block until cancelled",
 	Run: func(ctx wf.Context, in ref) (string, error) {
 		return wf.Step(ctx, "block", func(c context.Context) (string, error) {
@@ -1156,4 +1170,54 @@ func TestADescendantMissedByACancelEndsWithItsParent(t *testing.T) {
 	h.drain()
 	h.expect(child, "cancelled")
 	h.expect(grandchild, "cancelled")
+}
+
+// A watch is one step however many times it looks: it calls again after its interval, records an error without failing
+// the run (a later success clears it), ends when done, and a cancelled run ends it.
+func TestAWatchIsOneStepThatLooksUntilDone(t *testing.T) {
+	h := setup(t)
+	in := ref{ID: rand.Text(), Level: 4}
+	id := h.start("test_watch", in)
+	step := func() (state, message string, attempts int) {
+		t.Helper()
+		if err := h.db.QueryRow(`SELECT state,error,attempts FROM workflow_steps WHERE run_id=$1 AND key='watch'`, id).Scan(&state, &message, &attempts); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	h.drain()
+	h.expect(id, "waiting")
+	if state, _, attempts := step(); state != "waiting" || attempts != 1 || counted(in.ID+"/watch") != 1 {
+		t.Fatalf("first look: %s after %d calls", state, attempts)
+	}
+	h.clock.Add(59 * time.Second)
+	if h.drain() != 0 {
+		t.Fatal("looked again before the interval")
+	}
+	h.clock.Add(time.Second)
+	h.drain()
+	h.expect(id, "waiting")
+	if state, message, attempts := step(); state != "waiting" || message != "not reachable" || attempts != 2 {
+		t.Fatalf("a failed look is recorded and the watch goes on: %s %q %d", state, message, attempts)
+	}
+	h.clock.Add(time.Minute)
+	h.drain()
+	if _, message, _ := step(); message != "" {
+		t.Fatalf("a look that works clears the error: %q", message)
+	}
+	h.clock.Add(time.Minute)
+	h.drain()
+	v := h.expect(id, "completed")
+	if state, _, attempts := step(); state != "completed" || attempts != 4 || len(v.steps) != 1 || v.output != `"done"` {
+		t.Fatalf("done after four looks, in one step: %s %d %v %s", state, attempts, v.steps, v.output)
+	}
+
+	endless := h.start("test_watch", ref{ID: rand.Text(), Level: 1000})
+	h.drain()
+	if err := wf.Cancel(h.ctx, h.db, endless, "test", "no longer needed"); err != nil {
+		t.Fatal(err)
+	}
+	if v := h.expect(endless, "cancelled"); v.steps["watch"] != "cancelled" {
+		t.Fatalf("cancelling ends the watch: %v", v.steps)
+	}
 }

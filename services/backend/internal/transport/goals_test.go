@@ -16,8 +16,30 @@ import (
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/wf"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// sweepCloseGoals takes every open goal's next step, as each goal's close_goal run does about once a minute, reading
+// each firm's roles once for the pass. Suspended firms' goals wait, as the engine leaves their runs alone.
+func sweepCloseGoals(ctx context.Context, db *sql.DB) {
+	rows, err := db.QueryContext(ctx, `SELECT g.id::text FROM close_goals g JOIN client_closes c ON c.id=g.close_id JOIN organizations o ON o.id=c.organization_id WHERE g.state<>'stopped' AND o.enabled ORDER BY g.id`)
+	if err != nil {
+		panic(err)
+	}
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	roles := sweepRoles{}
+	for _, id := range ids {
+		lookAtGoal(ctx, db, id, roles.of)
+	}
+}
 
 func TestChatDelegateIsOnlyAnAskToHandOverTheClose(t *testing.T) {
 	sunday := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)
@@ -133,7 +155,7 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`UPDATE evidence SET superseded_by=NULL WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
-			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
@@ -232,6 +254,27 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	}
 	call("user_a", reviewer, "POST", confirm, map[string]string{"due_on": card.DueOn}, 409)
 	s := read(alpha)
+	// The hand-over starts the goal's run, which takes its next step about once a minute on the workflow engine.
+	var goalRun int64
+	must(db.QueryRow(`SELECT id FROM workflow_runs WHERE organization_id=$1 AND workflow='close_goal' AND idempotency_key='goal:'||$2 AND state='queued'`, org, s.Goal.ID).Scan(&goalRun))
+	clock := time.Now()
+	engine := &wf.Engine{DB: db, OnlyOrganization: org, Now: func() time.Time { return clock }}
+	look := func() {
+		t.Helper()
+		ran, err := engine.Tick(ctx)
+		must(err)
+		if !ran {
+			t.Fatal("the goal's run did not look at the close")
+		}
+		if ran, _ = engine.Tick(ctx); ran {
+			t.Fatal("the goal's run looked again before a minute passed")
+		}
+	}
+	runState := func() (run, watch string, looks int) {
+		t.Helper()
+		must(db.QueryRow(`SELECT r.state,s.state,s.attempts FROM workflow_runs r JOIN workflow_steps s ON s.run_id=r.id AND s.key='watch' WHERE r.id=$1`, goalRun).Scan(&run, &watch, &looks))
+		return
+	}
 	var actor string
 	must(db.QueryRow(`SELECT actor FROM close_preparations WHERE close_id::text=$1`, alpha).Scan(&actor))
 	if s.Goal == nil || s.Goal.State != "active" || s.Goal.DueOn != friday.Format("2006-01-02") || s.Goal.Events[0].Text != "Handed over by user_a, to get it ready for review by "+friday.Format("Mon 2 Jan 2006") || !strings.HasPrefix(lastEvent(s), "I brought 1 document into preparation as run #") || actor != "close goal #"+s.Goal.ID+" for user_a" {
@@ -256,12 +299,16 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	call("user_a", reviewer, "POST", "/v1/closes/"+alpha+"/goal", map[string]any{"confirmed": true}, 409)
 	call("user_b", reviewer, "GET", "/v1/closes/"+alpha+"/goal", nil, 404)
 
-	// New evidence is brought into preparation once; an unchanged close records nothing more.
+	// New evidence is brought into preparation once, by the goal's run; an unchanged close records nothing more.
 	_, job2 := document(alpha, "rent.pdf")
-	sweepCloseGoals(ctx, db)
-	sweepCloseGoals(ctx, db)
+	look()
+	clock = clock.Add(time.Minute)
+	look()
 	if s = read(alpha); runs(alpha) != 2 || len(s.Goal.Events) != 3 || !strings.HasPrefix(lastEvent(s), "I brought 2 documents into preparation") {
 		t.Fatalf("the new document joins the scope once: %d runs %+v", runs(alpha), s.Goal.Events)
+	}
+	if run, watch, looks := runState(); run != "waiting" || watch != "waiting" || looks != 2 {
+		t.Fatalf("the run keeps one step for its looks: %s %s %d", run, watch, looks)
 	}
 
 	// Each document says what it waits on; a blocked draft keeps the goal open until its revision clears it.
@@ -324,6 +371,11 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	if s = read(alpha); s.Goal.State != "stopped" || lastEvent(s) != "Stopped by user_a: Reviewing it myself" {
 		t.Fatalf("the stop is recorded: %+v", s.Goal)
 	}
+	clock = clock.Add(time.Minute)
+	look()
+	if run, watch, _ := runState(); run != "completed" || watch != "completed" {
+		t.Fatalf("a stopped goal's run ends at its next look: %s %s", run, watch)
+	}
 
 	// A goal on a close that is then signed off stops; a signed-off close cannot be handed over.
 	call("user_a", reviewer, "POST", "/v1/closes/"+beta+"/goal", map[string]any{"due_on": ""}, 422)
@@ -345,6 +397,19 @@ func TestCloseGoalKeepsPreparationMovingUntilReadyForReview(t *testing.T) {
 	call("user_a", reviewer, "POST", "/v1/closes/"+beta+"/goal", map[string]any{"confirmed": true}, 409)
 	decide("reopened")
 	call("user_a", reviewer, "POST", "/v1/closes/"+beta+"/goal", map[string]any{"confirmed": true}, 200)
+	// An open goal whose run was cancelled gets a new one from the hourly upkeep; a stopped goal does not.
+	var betaGoal string
+	var betaRun int64
+	must(db.QueryRow(`SELECT g.id::text,r.id FROM close_goals g JOIN workflow_runs r ON r.idempotency_key='goal:'||g.id WHERE g.close_id::text=$1 AND g.state<>'stopped'`, beta).Scan(&betaGoal, &betaRun))
+	must(wf.Cancel(ctx, db, betaRun, "staff:fixture", "Checking the upkeep"))
+	if _, err = watchGoals(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var restarted string
+	must(db.QueryRow(`SELECT string_agg(input->>'goal_id',',') FROM workflow_runs WHERE organization_id=$1 AND workflow='close_goal' AND started_by='workflow:close_goal_upkeep' AND state='queued'`, org).Scan(&restarted))
+	if restarted != betaGoal {
+		t.Fatalf("only the open goal without a run is watched again: %q, want %q", restarted, betaGoal)
+	}
 
 	// Work waiting on the client says whether the request still needs sending or resuming.
 	source, job := document(beta, "statement.pdf")
@@ -433,7 +498,7 @@ func TestFirmWideRequestLinksTheCloseItNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
@@ -516,7 +581,7 @@ func TestSignOffGoalCarriesTheCloseThroughSignOff(t *testing.T) {
 			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
-			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
@@ -741,7 +806,7 @@ func TestWorkListsEveryDelegatedClose(t *testing.T) {
 			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
-			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
@@ -871,7 +936,7 @@ func TestGoalCountsAccountCoverage(t *testing.T) {
 			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
-			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()

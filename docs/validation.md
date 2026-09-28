@@ -2748,3 +2748,31 @@ Checks:
 - CI on this pull request, before the database change: 3:12, of which the side-by-side TypeScript and Go work competed for the runner's two cores. Runs after it could not start: the account's Actions minutes ran out.
 - The background TypeScript chain (checks, tests, both vite builds, edge dry-run) passes locally in 8 seconds and leaves `apps/frontend/dist`, with the admin app under it, as before.
 - The Actions timings come from this pull request's CI run and its deploy, recorded in the pull request.
+
+## Close goals run on the workflow engine (W5) (2026-09-28)
+
+Request: start W5 of the [workflow engine plan](workflow-engine.md#w5-close-goals-on-the-engine), close goals first.
+
+What changed:
+- **`wf.Watch`, a new engine primitive** (migration 104 adds the step kind). It calls a function about every interval until it reports done, as one step whatever the number of calls. An error is recorded on the step and cleared by the next call that works; it never fails the run.
+- **`close_goal`: one run per goal.** It is started in the transaction that hands the close over (by a person, a chat card or a monthly hand-over). It takes the goal's next step about once a minute through the existing goal code and ends once the goal is stopped.
+- **`close_goal_upkeep` runs hourly.** It hands over newly ended months, and starts a run for any open goal without one: goals handed over before this build, and a goal whose run was cancelled.
+- **The worker's `close_goals` loop is deleted.** Firm roles are read at most once a minute per firm and shared by that firm's goals.
+- **One behaviour changes for firms.** A monthly hand-over waiting at the firm's close limit now tries again each hour, not each minute, and a newly ended month is handed over within the hour.
+
+Checks (local PostgreSQL):
+- `TestAWatchIsOneStepThatLooksUntilDone`:
+  - a watch looks again only after its interval;
+  - a failed look is recorded, the run keeps going, and the next working look clears the error;
+  - it completes after four looks with one step whose attempts are 4;
+  - cancelling the run cancels the watch.
+- `TestCloseGoalKeepsPreparationMovingUntilReadyForReview`:
+  - the hand-over starts the goal's queued run;
+  - two engine looks a minute apart bring a new document into preparation once, and the run keeps one watch step with two looks;
+  - after the goal is stopped, the next look completes the run;
+  - with a goal's run cancelled, the upkeep starts a new run for that open goal only.
+- `TestMonthlyHandOverOpensAndHandsOverEachNewMonth`: the upkeep's hand-over opens the ended month and hands it over once, and the routine's goal gets its run.
+- The rest of the goal, hand-off, routine, chat and portfolio tests drive goals through the same step the run uses (`lookAtGoal`), with each firm's roles read once per pass.
+- The engine's and workflows' tests pass, including the registry check for the two new directories.
+
+Not verified: the runs on a deployed worker. The first hourly upkeep after the deploy takes over the goals already open.

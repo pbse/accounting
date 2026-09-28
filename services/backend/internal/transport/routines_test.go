@@ -62,7 +62,7 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 			`DELETE FROM close_routines WHERE organization_id=$1`,
 			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_deletion_receipts WHERE organization_id=$1`,
-			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
 	}()
@@ -130,10 +130,17 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	if closeOf(month(1)) != "" {
 		t.Fatal("a month is not handed over before it ends")
 	}
-	sweepCloseRoutines(ctx, db, on(2, 1))
+	if n, err := handOverMonths(ctx, db, on(2, 1)); err != nil || n < 1 {
+		t.Fatalf("the hourly upkeep hands the ended month over: %d %v", n, err)
+	}
 	next := closeOf(month(1))
 	if next == "" || goals(next) != 1 {
 		t.Fatalf("the ended month's close is opened and handed over: %q %d", next, goals(next))
+	}
+	var by string
+	must(db.QueryRow(`SELECT r.started_by FROM workflow_runs r JOIN close_goals g ON r.idempotency_key='goal:'||g.id AND r.workflow='close_goal' WHERE g.close_id::text=$1`, next).Scan(&by))
+	if !strings.HasPrefix(by, "routine:") {
+		t.Fatalf("the routine's goal gets its run: %q", by)
 	}
 	if s = read(next); s.Goal == nil || s.Goal.Events[0].Text != "Handed over by the monthly hand-over user_a set up, to get it signed off by "+monthEnd(month(1)).AddDate(0, 0, 10).Format("Mon 2 Jan 2006") || s.Routine.Next != month(2) {
 		t.Fatalf("the goal follows the routine: %+v %+v", s.Goal, s.Routine)
@@ -232,7 +239,7 @@ func TestMonthlyHandOversTakeTurns(t *testing.T) {
 	defer func() {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id IN ($1,$2))`,
 			`DELETE FROM close_routines WHERE organization_id IN ($1,$2)`, `DELETE FROM client_closes WHERE organization_id IN ($1,$2)`,
-			`DELETE FROM organization_member_access WHERE organization_id IN ($1,$2)`, `DELETE FROM organizations WHERE id IN ($1,$2)`} {
+			`DELETE FROM organization_member_access WHERE organization_id IN ($1,$2)`, `DELETE FROM workflow_runs WHERE organization_id IN ($1,$2)`, `DELETE FROM organizations WHERE id IN ($1,$2)`} {
 			db.Exec(q, busy, free)
 		}
 	}()

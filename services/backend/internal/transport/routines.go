@@ -99,16 +99,28 @@ func registerRoutines(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
+// handOverMonths hands every due month over, a sweep at a time, until a sweep hands none over; a month that cannot be
+// handed over yet is tried again by the next hour's pass. It returns how many months it handed over.
+func handOverMonths(ctx context.Context, db *sql.DB, now time.Time) (int, error) {
+	total := 0
+	for range 100 {
+		n, err := sweepCloseRoutines(ctx, db, now)
+		total += n
+		if err != nil || n == 0 {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
 // sweepCloseRoutines hands the next ended month to the agent for up to 50 routines of enabled firms, the least
-// recently tried first, one month per routine per sweep so no month is skipped. A routine whose step fails, or whose
-// firm's roles cannot be read, is logged and marked waiting, so it cannot hold up the others.
-func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) {
+// recently tried first, one month per routine per sweep so no month is skipped, and returns how many it handed over. A
+// routine whose step fails, or whose firm's roles cannot be read, is logged and marked waiting, so it cannot hold up the
+// others.
+func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) (int, error) {
 	rows, err := db.QueryContext(ctx, `SELECT r.id::text,r.last_period,r.organization_id FROM close_routines r JOIN organizations o ON o.id=r.organization_id WHERE r.stopped_at IS NULL AND o.enabled AND r.last_period<$1 ORDER BY r.checked_at NULLS FIRST,r.id LIMIT 50`, endedMonth(now))
 	if err != nil {
-		if ctx.Err() == nil {
-			log.Print("Monthly hand-overs could not be read: ", err)
-		}
-		return
+		return 0, err
 	}
 	due := [][3]string{}
 	for rows.Next() {
@@ -118,26 +130,34 @@ func sweepCloseRoutines(ctx context.Context, db *sql.DB, now time.Time) {
 		}
 	}
 	rows.Close()
-	roles := sweepRoles{}
+	if err = rows.Err(); err != nil {
+		return 0, err
+	}
+	roles, handed := sweepRoles{}, 0
 	for _, step := range due {
 		id, period := step[0], step[1]
 		members, err := roles.of(ctx, step[2])
+		var done bool
 		if err == nil {
-			err = stepRoutine(ctx, db, id, period, members)
+			done, err = stepRoutine(ctx, db, id, period, members)
+		}
+		if done {
+			handed++
 		}
 		if err != nil && ctx.Err() == nil {
 			log.Printf("Monthly hand-over #%s could not hand over %s: %v", id, period, err)
 			db.ExecContext(ctx, `UPDATE close_routines SET waiting=$2,checked_at=now() WHERE id=$1 AND stopped_at IS NULL AND last_period<$3`, id, "I couldn't hand over "+period+" yet. I'll try again.", period)
 		}
 	}
+	return handed, ctx.Err()
 }
 
 // stepRoutine opens the client's close for period, the month after the routine's last, if needed and hands it to
-// the agent, once.
-func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[string]reviewer) error {
+// the agent, once. done says it moved on to period.
+func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[string]reviewer) (done bool, err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 	var org, entity, author, finish, last string
@@ -145,16 +165,16 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 	var dueDays sql.NullInt64
 	err = tx.QueryRowContext(ctx, `SELECT organization_id,client_entity,author,via_grant,finish,due_days FROM close_routines WHERE id=$1 AND stopped_at IS NULL`, id).Scan(&org, &entity, &author, &viaGrant, &finish, &dueDays)
 	if err == sql.ErrNoRows {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Locks follow the goal paths: the close, then the firm, then the routine. Opening a close counts against the
 	// firm's limit, so the firm row is then held for update, as when a person opens one.
 	var closeID string
 	if err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3 FOR UPDATE`, org, entity, period).Scan(&closeID); err != nil && err != sql.ErrNoRows {
-		return err
+		return false, err
 	}
 	lock := "FOR SHARE"
 	if closeID == "" {
@@ -163,43 +183,43 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 	var enabled bool
 	var limit int
 	if err = tx.QueryRowContext(ctx, `SELECT enabled,max_closes FROM organizations WHERE id=$1 `+lock, org).Scan(&enabled, &limit); err != nil || !enabled {
-		return err
+		return false, err
 	}
 	var member, granted bool
 	if err = tx.QueryRowContext(ctx, `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted),
  EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, author, entity).Scan(&member, &granted); err != nil {
-		return err
+		return false, err
 	}
 	allowed := mayAct(roles, author, member, viaGrant, granted)
 	if err = tx.QueryRowContext(ctx, `SELECT last_period FROM close_routines WHERE id=$1 AND stopped_at IS NULL FOR UPDATE`, id).Scan(&last); err == sql.ErrNoRows || err == nil && last >= period {
-		return nil
+		return false, nil
 	} else if err != nil {
-		return err
+		return false, err
 	}
 	if !allowed {
 		if _, err = tx.ExecContext(ctx, `UPDATE close_routines SET stopped_at=now(),stopped_by='agent',stop_reason=$2 WHERE id=$1`, id, "Stopped because "+author+" can no longer act for "+entity+"."); err != nil {
-			return err
+			return false, err
 		}
-		return tx.Commit()
+		return false, tx.Commit()
 	}
 	if closeID == "" {
 		var count int
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM client_closes WHERE organization_id=$1`, org).Scan(&count); err != nil {
-			return err
+			return false, err
 		}
 		if count >= limit {
 			if _, err = tx.ExecContext(ctx, `UPDATE close_routines SET waiting=$2,checked_at=now() WHERE id=$1`, id, "The firm is at its limit of "+strconv.Itoa(limit)+" closes, so "+entity+" "+period+" is not open yet. I'll open it once there is room."); err != nil {
-				return err
+				return false, err
 			}
-			return tx.Commit()
+			return false, tx.Commit()
 		}
 		if err = tx.QueryRowContext(ctx, `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text`, entity, period, org).Scan(&closeID); err != nil {
-			return err
+			return false, err
 		}
 	}
 	signed, err := signedOff(ctx, tx, closeID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !signed {
 		g := goalRow{close: closeID, org: org, author: author, state: "active", finish: finish}
@@ -212,16 +232,19 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 		err = tx.QueryRowContext(ctx, `INSERT INTO close_goals(close_id,author,due_on,finish,routine_id,events) VALUES($1,$2,NULLIF($3,'')::date,$4,$5,jsonb_build_array(jsonb_build_object('actor','agent','text',$6::text,'at',now()))) ON CONFLICT DO NOTHING RETURNING id::text`, closeID, author, due, finish, id, text).Scan(&g.id)
 		switch err {
 		case nil:
-			err = advanceGoal(ctx, tx, g, roles)
+			if err = advanceGoal(ctx, tx, g, roles); err == nil {
+				err = startGoalRun(ctx, tx, g, "routine:"+id)
+			}
 		case sql.ErrNoRows:
 			err = nil
 		}
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE close_routines SET last_period=$2,waiting='',checked_at=now() WHERE id=$1`, id, period); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	err = tx.Commit()
+	return err == nil, err
 }

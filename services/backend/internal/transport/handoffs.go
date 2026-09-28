@@ -10,6 +10,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -157,6 +158,37 @@ func firmReviewers(ctx context.Context, org string) (map[string]reviewer, error)
 		out[m.UserID] = r
 	}
 	return out, nil
+}
+
+// recentRoles is each firm's WorkOS roles for its goals' runs, read at most once a minute per firm: every open goal looks
+// at its close about once a minute, and a firm's goals share one read.
+var recentRoles = &rolesCache{read: map[string]cachedRoles{}}
+
+type cachedRoles struct {
+	members map[string]reviewer
+	err     error
+	at      time.Time
+}
+
+type rolesCache struct {
+	sync.Mutex
+	read map[string]cachedRoles
+}
+
+// of is sweepRoles.of, remembered for a minute.
+func (c *rolesCache) of(ctx context.Context, org string) (map[string]reviewer, error) {
+	c.Lock()
+	read, ok := c.read[org]
+	c.Unlock()
+	if ok && time.Since(read.at) < time.Minute {
+		return read.members, read.err
+	}
+	read.members, read.err = sweepRoles{}.of(ctx, org)
+	read.at = time.Now()
+	c.Lock()
+	c.read[org] = read
+	c.Unlock()
+	return read.members, read.err
 }
 
 // sweepRoles is each firm's WorkOS roles for one sweep of background work, read at most once per firm.
