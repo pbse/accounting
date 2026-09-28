@@ -398,3 +398,60 @@ func TestTheFirstEndedMonthSnapshotIsCapturedOnce(t *testing.T) {
 		t.Fatal("a person's capture saved during the read wins; the schedule saves nothing")
 	}
 }
+
+func TestAgentClosesAreReadWhateverTheirMonth(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	t.Setenv("QBO_CLIENT_ID", "synthetic")
+	t.Setenv("QBO_CLIENT_SECRET", "synthetic")
+	t.Setenv("QBO_REDIRECT_URI", "https://api.example.test/v1/quickbooks/callback")
+	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
+	ctx := context.Background()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_agent" + rand.Text()
+	var closeID, connectionID string
+	_, err = db.ExecContext(ctx, `INSERT INTO organizations(id,name) VALUES($1,'Synthetic agent reads')`, org)
+	must(err)
+	must(db.QueryRowContext(ctx, `INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Older client',$2) RETURNING id::text`, org, time.Now().UTC().AddDate(0, -4, 0).Format("2006-01")).Scan(&closeID))
+	must(db.QueryRowContext(ctx, `INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,credential,environment) VALUES($1,$2,'Older client','fixture','active',$3,now(),'123','\x00','sandbox') RETURNING id::text`, closeID, org, rand.Text()).Scan(&connectionID))
+	defer func() {
+		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM quickbooks_connections WHERE id=$1`, connectionID)
+		db.Exec(`DELETE FROM close_goals WHERE close_id=$1`, closeID)
+		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
+		db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
+	}()
+	queued := func() (n int) {
+		t.Helper()
+		must(scheduleSync(ctx, db))
+		must(db.QueryRowContext(ctx, `SELECT count(*) FROM quickbooks_entity_syncs WHERE close_id=$1 AND state='queued'`, closeID).Scan(&n))
+		_, err := db.ExecContext(ctx, `DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
+		must(err)
+		return n
+	}
+	if queued() != 0 {
+		t.Fatal("an older month is not read by itself")
+	}
+	_, err = db.ExecContext(ctx, `INSERT INTO close_goals(close_id,author) VALUES($1,'user_a')`, closeID)
+	must(err)
+	if queued() != 1 {
+		t.Fatal("a close the agent works on is read whatever its month")
+	}
+	_, err = db.ExecContext(ctx, `UPDATE close_goals SET state='reached',reached_at=now() WHERE close_id=$1`, closeID)
+	must(err)
+	if queued() != 0 {
+		t.Fatal("a reached goal is not worked on")
+	}
+}

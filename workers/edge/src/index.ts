@@ -1,4 +1,5 @@
 import { Container } from "@cloudflare/containers";
+import { forwardsToAPI } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
 
 export class CapabilityAPI extends Container<Env> {
@@ -36,6 +37,11 @@ export class CapabilityAPI extends Container<Env> {
       this.env.QBO_SANDBOX_PREPAID_ACCOUNT_ID ?? "",
     QBO_SANDBOX_EXPENSE_ACCOUNT_ID:
       this.env.QBO_SANDBOX_EXPENSE_ACCOUNT_ID ?? "",
+    WORKOS_AUTHKIT_DOMAIN: this.env.WORKOS_AUTHKIT_DOMAIN ?? "",
+    MCP_RESOURCE_URL: this.env.MCP_RESOURCE_URL ?? "",
+    MCP_ALLOWED_ORIGINS: this.env.MCP_ALLOWED_ORIGINS ?? "",
+    PRODUCTION_POSTING_KINDS: this.env.PRODUCTION_POSTING_KINDS ?? "",
+    XERO_POSTING_KINDS: this.env.XERO_POSTING_KINDS ?? "",
   };
   sleepAfter = "5m";
 }
@@ -72,6 +78,11 @@ interface Env {
   QBO_SANDBOX_ENTITY?: string;
   QBO_SANDBOX_PREPAID_ACCOUNT_ID?: string;
   QBO_SANDBOX_EXPENSE_ACCOUNT_ID?: string;
+  WORKOS_AUTHKIT_DOMAIN?: string;
+  MCP_RESOURCE_URL?: string;
+  MCP_ALLOWED_ORIGINS?: string;
+  PRODUCTION_POSTING_KINDS?: string;
+  XERO_POSTING_KINDS?: string;
   API: DurableObjectNamespace<CapabilityAPI>;
   ASSETS: Fetcher;
 }
@@ -98,9 +109,9 @@ export default {
   },
   async fetch(request: Request, env: Env): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (path === "/healthz" || path === "/readyz" || path.startsWith("/v1/")) {
+    if (forwardsToAPI(path)) {
       if (
-        (path.startsWith("/v1/") || path === "/readyz") &&
+        path !== "/healthz" &&
         path !== "/v1/reference/prepaid" &&
         (!env.WORKOS_CLIENT_ID || !env.WORKOS_ISSUER)
       ) {
@@ -114,7 +125,7 @@ export default {
       if (forwarded instanceof Response) return forwarded;
       return env.API.getByName("reference-api").fetch(forwarded);
     }
-    if (path.startsWith("/internal/") || path === "/mcp") {
+    if (path.startsWith("/internal/")) {
       return new Response("Not found", { status: 404 });
     }
     return env.ASSETS.fetch(request);

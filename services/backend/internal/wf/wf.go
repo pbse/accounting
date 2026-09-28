@@ -1,5 +1,5 @@
 // Package wf runs durable workflows whose state lives in PostgreSQL beside the records they
-// coordinate (migration 092). A workflow is Go code registered with Define from its own directory
+// coordinate (migration 094). A workflow is Go code registered with Define from its own directory
 // under services/backend/workflows; a run replays that code, and every step's saved result is
 // returned instead of running the step again. Each run executes as its firm, so row-level security
 // confines what its steps can read and write. See docs/workflow-engine.md.

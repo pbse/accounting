@@ -36,7 +36,8 @@ func scheduleSync(ctx context.Context, db *sql.DB) error {
  -- A change hint after the newest capture started makes the close due before its daily refresh.
  LEFT JOIN LATERAL (SELECT s.started_at FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period ORDER BY s.id DESC LIMIT 1) latest ON true
  WHERE x.state='active' AND x.credential IS NOT NULL
- AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
+ -- A close an agent works on is read whatever its month.
+ AND (c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM') OR EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.state='active'))
  AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
  AND NOT EXISTS (SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period AND s.state IN ('queued','running'))
  AND (NOT EXISTS (SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.connection_id=x.id AND s.period=c.period AND s.created_at>now()-interval '24 hours') OR x.changed_at>COALESCE(latest.started_at,'-infinity'))

@@ -421,3 +421,20 @@ func TestFirmBlockedAnswerCountsEveryBlockedItem(t *testing.T) {
 		t.Fatalf("the blocked answer undercounts: %v", lines)
 	}
 }
+
+func TestAssistantShowsTheClosePlan(t *testing.T) {
+	if chatIntent("What's the plan?", true, false) != "plan" || chatIntent("Explain the difference on cash", true, false) == "plan" {
+		t.Fatal("only the word plan asks for the plan")
+	}
+	goal := `{"state":"active"}`
+	read := func(path string, out any) bool {
+		return path == "/goal?verify=1" && json.Unmarshal([]byte(`{"goal":`+goal+`,"progress":{"plan":[{"key":"books","title":"Read the books","state":"done","text":"Read from QuickBooks."},{"key":"documents","title":"Prepare every document","state":"you","text":"1 of 2 prepared, 1 need you.","lines":["Review 1 held email reply on the Requests tab."]}]}}`), out) == nil
+	}
+	if reply := closeAnswer(read, "7", "", "plan", "What's the plan?", ""); !strings.HasPrefix(reply.body, "Here's my plan") || len(reply.lines) != 3 || reply.lines[1] != "2. Prepare every document (needs you): 1 of 2 prepared, 1 need you." || reply.lines[2] != "   • Review 1 held email reply on the Requests tab." {
+		t.Fatalf("the plan is listed with who each step is with, and why: %+v", reply)
+	}
+	goal = "null"
+	if reply := closeAnswer(read, "7", "", "plan", "What's the plan?", ""); !strings.Contains(reply.body, "isn't handed to me") || len(reply.lines) != 3 {
+		t.Fatalf("a close not handed over gets the plan it would follow: %+v", reply)
+	}
+}

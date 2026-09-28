@@ -1,6 +1,6 @@
 # Workflow engine plan
 
-**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core) and W2 (composition) implemented** in `services/backend/internal/wf`, migration 092 and `services/backend/workflows`. Later phases are proposals. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
+**Status:** W0 decided (see [the spike](#w0-result-dbos-transact-for-go)); **W1 (engine core) and W2 (composition) implemented** in `services/backend/internal/wf`, migration 094 and `services/backend/workflows`. Later phases are proposals. The engine supersedes the Cloudflare Workflows boundary once reserved in [`workers/workflows`](../workers/workflows/README.md). The staff UI for it is planned in [admin panel](admin-panel.md).
 
 ## Goals
 
@@ -263,7 +263,7 @@ These proofs, which [`workers/workflows`](../workers/workflows/README.md) alread
 | Phase | Scope | Exit criteria |
 |---|---|---|
 | **W0. Spike (1–2 days)** | Try DBOS Transact for Go (open-source durable workflows on PostgreSQL) against this plan: per-connection tenant context with row-level security, a non-superuser runtime role, the proof list. | Go/no-go recorded here. **Go:** the engine wraps DBOS behind the `wf` API. **No-go:** build W1 as specified. |
-| **W1. Engine core** (implemented) | Migration 092; `internal/wf` (`Define`, `Step`, `Effect`, `Sleep`, `SleepUntil`, `WaitForEvent`, `Now`, `Random`, `Permanent`, `NotApplied`); `Start`, `Cancel`, `Emit`, `RetryStep`, `Resolve` as Go functions; concurrency keys; registry generator and CI check; claim loop in `cmd/worker`; version stamping. The first real workflow moved to W2, which brings the event triggers and approvals it needs. | Proofs 1–8 pass in CI (`internal/wf/engine_test.go`); a run survives a container restart in staging. |
+| **W1. Engine core** (implemented) | Migration 094; `internal/wf` (`Define`, `Step`, `Effect`, `Sleep`, `SleepUntil`, `WaitForEvent`, `Now`, `Random`, `Permanent`, `NotApplied`); `Start`, `Cancel`, `Emit`, `RetryStep`, `Resolve` as Go functions; concurrency keys; registry generator and CI check; claim loop in `cmd/worker`; version stamping. The first real workflow moved to W2, which brings the event triggers and approvals it needs. | Proofs 1–8 pass in CI (`internal/wf/engine_test.go`); a run survives a container restart in staging. |
 | **W2. Composition** (implemented) | `Child`, `WaitForApproval` and `Approve`, schedule and event triggers, `wf.EmitForClose` for client replies and sign-offs, `DB`/`Organization` for steps, and the first real workflow, `firm_health_check` (daily per firm, read-only). `month_kickoff` was dropped: sign-off already carries reviewed schedules into the next month and close routines create next month's closes, so a second path would duplicate them. Compensation hooks wait until a workflow needs one. | Proofs for each primitive in `internal/wf/engine_test.go`; reply and sign-off events in the transport tests; the health check counts only its firm's problems. |
 | **W3. Activities and plans** | Activities directory and generator, catalog API, plan format and validator, `plan` workflow, plan lifecycle and templates, agent bones (`proposed` only, attribution, rate limit). | Staff build, approve and run a plan from the admin panel; an agent-sourced plan can't run without approval (tested). |
 | **W4. Agent planner (low priority)** | Model-backed proposals over the catalog; MCP `propose_plan`. | Proposals appear in the admin approval queue with rationale. |
@@ -280,7 +280,7 @@ These proofs, which [`workers/workflows`](../workers/workflows/README.md) alread
 
 ## Operations
 
-- Apply migration 092 before deploying a build that includes the engine. The deploy workflows check for the workflow tables and stop otherwise.
+- Apply migration 094 before deploying a build that includes the engine. The deploy workflows check for the workflow tables and stop otherwise.
 - `WF_CONCURRENCY` sets how many runs a worker executes at once (default 4).
 - A run for a workflow the running build does not register (for example during a rolling deploy) is handed back every minute, with that reason in its error, until a build that knows it picks it up.
 
