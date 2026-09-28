@@ -69,9 +69,7 @@ func hashToken(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// sessionKind is the firm workspace's session or the staff console's. Each has its own cookie, return paths, WorkOS
-// organization and verifier, so a staff sign-in never replaces a firm session and neither cookie opens the other's
-// routes.
+// sessionKind is the firm workspace's session or the staff console's; neither opens the other's routes.
 type sessionKind struct {
 	staff              bool
 	cookie, root, home string
@@ -82,7 +80,6 @@ var (
 	staffSession = sessionKind{true, staffCookie, "/admin", "/admin/"}
 )
 
-// kindOf is the staff session for ?staff=1 (sign-in, the session check and sign-out), otherwise the firm session.
 func kindOf(r *http.Request) sessionKind {
 	if r.URL.Query().Get("staff") == "1" {
 		return staffSession
@@ -100,8 +97,7 @@ func (k sessionKind) returnPath(p string) bool {
 	return (u.Path == clean || u.Path == clean+"/") && (clean == k.root || strings.HasPrefix(clean, k.root+"/"))
 }
 
-// owns says whether a session row's organization belongs to this kind: the platform staff organization for staff, any
-// other organization for firms.
+// owns says whether a session row's organization belongs to this kind: staff hold the platform organization, firms never do.
 func (k sessionKind) owns(org string) bool {
 	platform := os.Getenv("PLATFORM_ORGANIZATION_ID")
 	if k.staff {
@@ -276,10 +272,9 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 	})
 }
 
-// bearer turns a session cookie into the request's Bearer token for /v1 routes: the staff cookie for /v1/admin/*, the
-// firm cookie for the rest. A request that already names a token keeps it, /v1/auth/* manages the cookies itself, and
-// routes outside /v1 (MCP among them) never accept one. A cookie cannot make a cross-site change: every request other
-// than GET or HEAD must come from this site.
+// bearer turns the staff cookie (for /v1/admin/*) or the firm cookie (other /v1 routes) into the request's Bearer token.
+// A request that already names a token keeps it, /v1/auth/* manages the cookies itself, routes outside /v1 (MCP among
+// them) never accept one, and every request other than GET or HEAD must come from this site.
 func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Handler) http.Handler {
 	staff := staffVerifier()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +291,7 @@ func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Ha
 			problem(w, 403, "This change must come from the workspace itself.")
 			return
 		}
-		token, status := c.accessToken(r.Context(), db, check, cookie.Value)
+		token, status := c.accessToken(r.Context(), db, kind, check, cookie.Value)
 		switch status {
 		case 0:
 			r.Header.Set("Authorization", "Bearer "+token)
@@ -313,12 +308,13 @@ func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Ha
 // accessToken returns the session's WorkOS access token, refreshing it when it has under a minute left. The refresh
 // runs with the row locked and checks again after the lock, so two tabs refresh once; the rotated refresh token is
 // saved. WorkOS declining the refresh, or a refreshed token for another person, session or firm, ends the session.
-func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, verifier *auth.Verifier, raw string) (string, int) {
+func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, kind sessionKind, verifier *auth.Verifier, raw string) (string, int) {
 	ctx = systemContext(ctx)
 	var sealed []byte
 	var expires time.Time
-	err := db.QueryRowContext(ctx, `SELECT access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(raw)).Scan(&sealed, &expires)
-	if err == sql.ErrNoRows {
+	var org string
+	err := db.QueryRowContext(ctx, `SELECT organization_id,access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(raw)).Scan(&org, &sealed, &expires)
+	if err == sql.ErrNoRows || (err == nil && !kind.owns(org)) {
 		return "", 401
 	}
 	if err != nil {
@@ -334,7 +330,7 @@ func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, verifier *a
 		return "", 503
 	}
 	defer tx.Rollback()
-	var subject, org, workos string
+	var subject, workos string
 	var refresh []byte
 	err = tx.QueryRowContext(ctx, `SELECT subject,organization_id,workos_session,refresh_token,access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`, hashToken(raw)).Scan(&subject, &org, &workos, &refresh, &sealed, &expires)
 	if err == sql.ErrNoRows {

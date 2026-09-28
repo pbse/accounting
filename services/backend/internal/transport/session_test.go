@@ -346,6 +346,13 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	if w := send(handler, "GET", "/v1/closes", "", "", staffCookieOf(staff)); w.Code != 401 {
 		t.Fatalf("the staff cookie does not open the workspace: %d", w.Code)
 	}
+	// A session value moved to the other kind's cookie is refused (and that cookie cleared), not turned into a token.
+	if w := send(handler, "GET", "/v1/closes", staff, ""); w.Code != 401 || cookieOf(w, sessionCookie) == nil || cookieOf(w, sessionCookie).MaxAge >= 0 {
+		t.Fatalf("a staff session under the firm cookie is refused: %d", w.Code)
+	}
+	if w := send(handler, "GET", "/v1/admin/me", "", "", staffCookieOf(firm)); w.Code != 401 || cookieOf(w, staffCookie) == nil || cookieOf(w, staffCookie).MaxAge >= 0 {
+		t.Fatalf("a firm session under the staff cookie is refused: %d", w.Code)
+	}
 	if w := send(handler, "GET", "/v1/auth/session?staff=1", "", "", staffCookieOf(staff)); w.Code != 200 {
 		t.Fatalf("the console learns staff are signed in: %d", w.Code)
 	}
