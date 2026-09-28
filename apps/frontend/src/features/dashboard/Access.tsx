@@ -1,6 +1,5 @@
-import { useAuth } from "@workos-inc/authkit-react";
 import type { ReactNode } from "react";
-import { AccountAccess, authKitClientId } from "../auth/Auth";
+import { AccountAccess, authKitClientId, useSession } from "../auth/Auth";
 import { unlock, useUnlocked } from "../closes/workspace";
 
 // Client data routes wait for access; the calculators stay usable without it.
@@ -34,7 +33,7 @@ function Unlocked({ children }: { children: ReactNode }) {
 }
 
 function SignedIn({ children }: { children: ReactNode }) {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading } = useSession();
   if (isLoading) return <p role="status">Checking your session…</p>;
   if (user) return children;
   return (
