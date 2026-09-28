@@ -15,18 +15,16 @@ export function HistoricalExports({ closeId }: { closeId: string }) {
   const [adjusted, setAdjusted] = useState(false);
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
-  useEffect(() => {
-    let live = true;
+  // Read again whenever the panel opens, so a document uploaded or replaced since shows here.
+  const load = () =>
     Promise.all([workspaceRequest(`/${closeId}/historical-exports`), workspaceRequest(`/${closeId}/evidence`)])
       .then(([data, evidence]) => {
-        if (!live) return;
         setLabel(data.label);
         setFiles((evidence as File[]).filter((f) => !f.superseded_by && f.purpose !== "procedure"));
       })
-      .catch((e) => live && setMessage(e instanceof Error ? e.message : "Historical exports are unavailable."));
-    return () => {
-      live = false;
-    };
+      .catch((e) => setMessage(e instanceof Error ? e.message : "Historical exports are unavailable."));
+  useEffect(() => {
+    void load();
   }, [closeId]);
   async function save(event: FormEvent) {
     event.preventDefault();
@@ -40,7 +38,7 @@ export function HistoricalExports({ closeId }: { closeId: string }) {
     }
   }
   return (
-    <details id="historical-exports">
+    <details id="historical-exports" onToggle={(e) => e.currentTarget.open && void load()}>
       <summary>Historical exports</summary>
       <p>
         Without a live QuickBooks or Xero connection, label the uploaded ledger exports this close uses. The label is what you report; it is shown as reported, never as a
@@ -77,7 +75,7 @@ export function HistoricalExports({ closeId }: { closeId: string }) {
           Note
           <input value={note} minLength={5} maxLength={500} onChange={(e) => setNote(e.target.value)} />
         </label>
-        <button disabled={chosen.length === 0 || !exportedOn || note.trim().length < 5}>Save label</button>
+        <button disabled={chosen.length === 0 || chosen.length > 20 || !exportedOn || note.trim().length < 5}>Save label</button>
         {message && <p role="status">{message}</p>}
       </form>
     </details>

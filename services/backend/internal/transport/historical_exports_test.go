@@ -87,6 +87,8 @@ func TestHistoricalExportsAreLabeledAsReportedNotLive(t *testing.T) {
 		must(json.Unmarshal(call("GET", "/v1/closes/"+alpha+"/readiness", nil, 200), &r))
 		return r.Digest
 	}
+	// Five characters of any script make a note.
+	call("POST", path, label([]string{trial}, "2026-09-05", true, false, "Ünïcö"), 200)
 	before := readiness()
 	must(json.Unmarshal(call("POST", path, label([]string{trial, ledger}, "2026-09-05", false, true, "Exported from the old system after year-end"), 200), &got))
 	if got.Label == nil || strings.Join(got.Label.Exports, ",") != "trial-balance.csv,general-ledger.csv" || !got.Label.Current || got.Label.Actor != "user_a" {
@@ -95,7 +97,7 @@ func TestHistoricalExportsAreLabeledAsReportedNotLive(t *testing.T) {
 	if readiness() == before {
 		t.Fatal("a label is part of what a sign-off covers")
 	}
-	sentence := "No live ledger connection: user_a reported that trial-balance.csv, general-ledger.csv, exported 2026-09-05, are partial and already include the final close adjustments; this is not verified against the books."
+	sentence := "Uploaded historical exports: user_a reported that trial-balance.csv, general-ledger.csv, exported 2026-09-05, are partial and already include the final close adjustments; this is not verified against the books."
 	var brief struct {
 		Headline string
 		Lines    []struct{ Area, State, Text string }

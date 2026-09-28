@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // exportLabel is a person's label on the uploaded exports a close uses in place of a live ledger connection.
@@ -49,7 +50,7 @@ func (l *exportLabel) sentence() string {
 	if l.FinalAdjustments {
 		adjustments = "already include"
 	}
-	text := fmt.Sprintf("No live ledger connection: %s reported that %s, exported %s, are %s and %s the final close adjustments; this is not verified against the books.", l.Actor, strings.Join(l.Exports, ", "), l.ExportedOn, coverage, adjustments)
+	text := fmt.Sprintf("Uploaded historical exports: %s reported that %s, exported %s, are %s and %s the final close adjustments; this is not verified against the books.", l.Actor, strings.Join(l.Exports, ", "), l.ExportedOn, coverage, adjustments)
 	if !l.Current {
 		text += " A labeled export was replaced, so label the current exports again."
 	}
@@ -58,15 +59,6 @@ func (l *exportLabel) sentence() string {
 
 func registerHistoricalExports(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/historical-exports", func(w http.ResponseWriter, r *http.Request) {
-		var found bool
-		if err := db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_closes WHERE id::text=$1)`, r.PathValue("id")).Scan(&found); err != nil {
-			problem(w, 503, "Historical exports are unavailable.")
-			return
-		}
-		if !found {
-			problem(w, 404, "Close not found.")
-			return
-		}
 		label, err := latestExportLabel(r.Context(), db, r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Historical exports are unavailable.")
@@ -86,14 +78,24 @@ func registerHistoricalExports(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		in.Note = strings.TrimSpace(in.Note)
+		// A date is refused only past tomorrow in UTC, so a firm ahead of UTC can label today's exports.
 		day, err := time.Parse("2006-01-02", in.ExportedOn)
-		if err != nil || day.After(time.Now()) || in.Complete == nil || in.FinalAdjustments == nil || len(in.Note) < 5 || len(in.Note) > 500 || len(in.EvidenceIDs) < 1 || len(in.EvidenceIDs) > 20 {
+		if n := utf8.RuneCountInString(in.Note); err != nil || day.After(time.Now().UTC().AddDate(0, 0, 1)) || in.Complete == nil || in.FinalAdjustments == nil || n < 5 || n > 500 || len(in.EvidenceIDs) < 1 || len(in.EvidenceIDs) > 20 {
 			problem(w, 422, "Choose 1–20 uploaded exports, the date they were exported (not in the future), whether they cover the whole month and already include the final close adjustments, and a note of 5–500 characters.")
 			return
 		}
+		// The close row is locked, as a replacement locks it, so a document cannot be replaced between the check and the save.
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "Historical exports are unavailable.")
+			return
+		}
+		defer tx.Rollback()
 		var closeID string
 		var current int
-		err = db.QueryRowContext(r.Context(), `SELECT c.id::text,(SELECT count(DISTINCT e.id) FROM evidence e WHERE e.close_id=c.id AND e.id::text=ANY($2) AND e.superseded_by IS NULL AND e.purpose='work') FROM client_closes c WHERE c.id::text=$1`, r.PathValue("id"), in.EvidenceIDs).Scan(&closeID, &current)
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID); err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT count(DISTINCT id) FROM evidence WHERE close_id=$1::bigint AND id::text=ANY($2) AND superseded_by IS NULL AND purpose='work'`, closeID, in.EvidenceIDs).Scan(&current)
+		}
 		if err == sql.ErrNoRows {
 			problem(w, 404, "Close not found.")
 			return
@@ -106,7 +108,7 @@ func registerHistoricalExports(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Label only current documents uploaded to this close, each once.")
 			return
 		}
-		if _, err = db.ExecContext(r.Context(), `INSERT INTO close_export_labels(close_id,evidence_ids,exported_on,complete,final_adjustments,note,actor) VALUES($1,$2::bigint[],$3,$4,$5,$6,$7)`, closeID, in.EvidenceIDs, in.ExportedOn, *in.Complete, *in.FinalAdjustments, in.Note, reviewerName(r)); err != nil {
+		if _, err = tx.ExecContext(r.Context(), `INSERT INTO close_export_labels(close_id,evidence_ids,exported_on,complete,final_adjustments,note,actor) VALUES($1,$2::bigint[],$3,$4,$5,$6,$7)`, closeID, in.EvidenceIDs, in.ExportedOn, *in.Complete, *in.FinalAdjustments, in.Note, reviewerName(r)); err != nil || tx.Commit() != nil {
 			problem(w, 503, "The label could not be saved.")
 			return
 		}
