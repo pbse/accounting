@@ -12,9 +12,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
+	"slices"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -53,16 +57,25 @@ func main() {
 	for name, loop := range loops {
 		go supervise(ctx, name, func() { loop(ctx, db) }, recordPanic(db))
 	}
-	transport.Run(transport.Worker())
+	transport.Run(reportFailing(transport.Worker()))
 }
 
 // restartAfter spaces restarts, so a loop that panics on every pass does not spin.
 var restartAfter = 30 * time.Second
 
+// failing holds, per loop that keeps panicking, when its last repeated panic stops counting against health.
+var failing = struct {
+	sync.Mutex
+	until map[string]time.Time
+}{until: map[string]time.Time{}}
+
 // supervise runs one background loop and restarts it after a panic, so one failing loop no
-// longer stops the others. A loop that returns is finished and is not restarted.
+// longer stops the others. A loop that returns is finished and is not restarted. Three panics
+// without ten clean minutes between them fail the worker's health check for fifteen minutes.
 func supervise(ctx context.Context, name string, loop func(), panicked func(name string, p any, stack []byte)) {
+	streak := 0
 	for {
+		started := time.Now()
 		p, stack := func() (p any, stack []byte) {
 			defer func() {
 				if p = recover(); p != nil {
@@ -74,6 +87,14 @@ func supervise(ctx context.Context, name string, loop func(), panicked func(name
 		}()
 		if p == nil {
 			return
+		}
+		if time.Since(started) > 10*time.Minute {
+			streak = 0
+		}
+		if streak++; streak >= 3 {
+			failing.Lock()
+			failing.until[name] = time.Now().Add(15 * time.Minute)
+			failing.Unlock()
 		}
 		panicked(name, p, stack)
 		select {
@@ -100,4 +121,26 @@ func recordPanic(db *sql.DB) func(string, any, []byte) {
 			log.Printf("Panic in %s could not be recorded: %v", name, err)
 		}
 	}
+}
+
+// reportFailing fails /healthz, which the queue Worker's cron checks every minute, while a loop keeps panicking.
+func reportFailing(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			failing.Lock()
+			names := []string{}
+			for name, until := range failing.until {
+				if time.Now().Before(until) {
+					names = append(names, name)
+				}
+			}
+			failing.Unlock()
+			if len(names) > 0 {
+				slices.Sort(names)
+				http.Error(w, "Worker loops keep panicking: "+strings.Join(names, ", "), http.StatusServiceUnavailable)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
