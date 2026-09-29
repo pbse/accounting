@@ -1,4 +1,6 @@
 import { Container } from "@cloudflare/containers";
+// Required entrypoint for Cloudflare container outbound service interception.
+export { ContainerProxy } from "@cloudflare/containers";
 import { deliver } from "./delivery";
 
 export class PreparationWorker extends Container<Env> {

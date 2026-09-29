@@ -1,4 +1,6 @@
 import { Container } from "@cloudflare/containers";
+// Required entrypoint for Cloudflare container outbound service interception.
+export { ContainerProxy } from "@cloudflare/containers";
 import { adminPage, adminPath, forwardsToAPI, secureAdmin, staffGate } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
 
