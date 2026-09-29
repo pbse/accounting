@@ -93,7 +93,7 @@ export function Privacy() {
           <li>Each firm’s data is separated in the database by row-level security, so one firm’s requests cannot read another’s.</li>
           <li>Ledger and email credentials are encrypted before they are stored, and are never shown back.</li>
           <li>Files clients send stay quarantined until a malware scan clears them and a person at the firm releases them.</li>
-          <li>Card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details are removed from documents, policies and assistant questions before they are sent to an AI model.</li>
+          <li>Card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details are removed from document text, policies and assistant questions before they are sent to an AI model.</li>
           <li>Sign-in is handled by WorkOS; firm administrators decide who may work on which clients.</li>
         </ul>
       </section>
@@ -128,7 +128,7 @@ const providers: { name: string; purpose: string; receives: string }[] = [
   { name: "Cloudflare", purpose: "Hosts the website and runs the application; scans client files for malware; can receive email forwarded to Close.", receives: "Every request to the site and the application, including uploaded files and the data they carry." },
   { name: "Neon (on Amazon Web Services, United States)", purpose: "The database.", receives: "Everything Close stores, including original documents." },
   { name: "WorkOS", purpose: "Sign-in, roles and invitations; holds each person’s Google Drive permission.", receives: "Names, email addresses and roles of firm members; files a person chooses to import from Google Drive pass through it." },
-  { name: "OpenAI", purpose: "AI reading of documents and, if a firm turns them on, written answers.", receives: "The text described on AI and your data, after sensitive numbers are removed. Each request asks OpenAI not to store it." },
+  { name: "OpenAI", purpose: "AI reading of documents and, if a firm turns them on, written answers.", receives: "What AI and your data describes: document and statement text, policies and assistant questions with sensitive numbers removed, and file names and Work requests as written. Each request asks OpenAI not to store it." },
   { name: "Resend", purpose: "Sends client request emails a person has approved, from the firm’s own sender. Not yet in use.", receives: "The recipient’s email address, the approved wording and the private reply link; never the client’s figures." },
 ];
 
@@ -187,6 +187,7 @@ export function AiData() {
           <li>Drafts a firm procedure from a policy the firm provides, or from its reviewers’ edits.</li>
           <li>Understands a plain-language request in Work, such as “what’s stuck for this client?”.</li>
           <li>Only if a firm administrator turns them on: writes answers to questions about a close, and investigates a close by reading its records through read-only tools.</li>
+          <li>Only for a firm with written answers on: helps our staff draft a workflow plan for one of its closes.</li>
         </ul>
       </section>
       <section>
@@ -203,8 +204,9 @@ export function AiData() {
           <li>Statement text for a statement a person asks about, and policy text or reviewer edits for a procedure draft.</li>
           <li>A plain-language request in Work, with the client names visible to the person asking.</li>
           <li>With written answers on: the question and the close’s records the answer reads, such as its sign-off blockers, tie-out, changes and exceptions.</li>
+          <li>When our staff draft a workflow plan: their instruction, with the client’s name, the month, whether the close is signed off and counts of its preparation work.</li>
         </ul>
-        <p>Before document and statement text, policies, reviewer edits and assistant questions and reads are sent, Close removes card numbers, IBANs, Social Security numbers, labelled bank account numbers and passwords or other sign-in details. A plain-language request in Work is sent as typed, so keep such details out of it.</p>
+        <p>Before document and statement text, policies, reviewer edits and assistant questions and reads are sent, Close removes card numbers, IBANs, Social Security numbers, labelled bank account numbers and passwords or other sign-in details. File names and a plain-language request in Work are sent as written, so keep such details out of them.</p>
       </section>
       <section>
         <h2>Our AI provider</h2>
