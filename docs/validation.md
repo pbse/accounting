@@ -2902,6 +2902,6 @@ Verified locally on a fresh PostgreSQL with all migrations applied: the new test
 
 Fix found by the proof: the binder listed every draft with its review state but not whether the signed scope covered it, so an uncovered, blocked reconciliation sat beside signed work without saying so. `review.html` and `workpapers.pdf` now mark each draft in or outside the declared sign-off scope; `TestPackagePreservesBothWorkpapersAndEscapesSources` checks both (the PDF through `pdftotext` in CI; locally the PDF text was read with PDFKit, since Poppler is not installed here).
 
-Review: the first Codex pass (gpt-6-sol, high) found that the scope label reached `review.html` but not the PDF, which printed no per-draft notes; each draft's PDF page now prints it under its review line.
+Review: the first Codex pass (gpt-6-sol, high) found that the scope label reached `review.html` but not the PDF, which printed no per-draft notes; each draft's PDF page now prints it under its review line. The second pass found nothing.
 
 Verified locally on a fresh PostgreSQL with all migrations applied: the new test with the sign-off, sandbox and production posting tests, `go test ./...` (the two Poppler/Tesseract tests fail on this machine for lack of the binaries, as before; the binder PDF test only checks for contained text), `go vet`, `gofmt`.
