@@ -432,8 +432,9 @@ footer {
   padding: 2rem clamp(1rem, 4vw, 4rem);
   border-top: 1px solid #d9e1d8;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 2rem;
+  gap: 1rem 2rem;
 }
 .public-footer p {
   flex: 1;
@@ -448,6 +449,39 @@ footer {
 }
 .compact-page section {
   margin-top: 2rem;
+}
+.public-legal {
+  display: flex;
+  flex-wrap: wrap;
+  flex-basis: 100%;
+  gap: 0.5rem 1.25rem;
+  font-size: 0.85rem;
+}
+.legal-updated {
+  color: #76876e;
+  font-size: 0.85rem;
+}
+.legal section p,
+.legal li {
+  line-height: 1.6;
+}
+.legal li + li {
+  margin-top: 0.5rem;
+}
+.legal-table {
+  overflow-x: auto;
+}
+.legal-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.legal-table th,
+.legal-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.75rem 0.75rem 0.75rem 0;
+  border-bottom: 1px solid #d9e1d8;
 }
 @media (max-width: 850px) {
   .hero {
