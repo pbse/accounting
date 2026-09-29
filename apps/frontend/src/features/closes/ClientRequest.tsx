@@ -232,6 +232,9 @@ export default function ClientRequest() {
           )}
         </>
       )}
+      <p className="legal-updated">
+        How Close handles what you send: <a href="/privacy">privacy notice</a> · <a href="/ai">AI and your data</a> · <a href="/data-retention">retention and deletion</a>
+      </p>
     </main>
   );
 }

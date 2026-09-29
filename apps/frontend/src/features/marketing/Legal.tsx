@@ -129,7 +129,7 @@ const providers: { name: string; purpose: string; receives: string }[] = [
   { name: "Neon (on Amazon Web Services, United States)", purpose: "The database.", receives: "Everything Close stores, including original documents." },
   { name: "WorkOS", purpose: "Sign-in, roles and invitations; holds each person’s Google Drive permission.", receives: "Names, email addresses and roles of firm members; files a person chooses to import from Google Drive pass through it." },
   { name: "OpenAI", purpose: "AI reading of documents and, if a firm turns them on, written answers.", receives: "What AI and your data describes: document and statement text, policies and assistant questions with sensitive numbers removed, and file names and Work requests as written. Each request asks OpenAI not to store it." },
-  { name: "Resend", purpose: "Sends client request emails a person has approved, from the firm’s own sender. Not yet in use.", receives: "The recipient’s email address, the approved wording and the private reply link; never the client’s figures." },
+  { name: "Resend", purpose: "Sends client request emails a person has approved, from the firm’s own sender. Not yet in use.", receives: "The recipient’s email address, a standard notice from the firm’s sender and the private reply link; never the request’s questions or the client’s figures." },
 ];
 
 export function Subprocessors() {

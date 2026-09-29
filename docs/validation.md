@@ -2921,4 +2921,8 @@ The public site gains five pages in `apps/frontend/src/features/marketing/Legal.
 
 Browser check: each page renders in the public layout; the footer keeps its tagline on one line and puts the five links on their own row, on the home page too.
 
-Verified: `npm run check`, `npm test` and `npm run build` after a clean `npm ci`.
+The client request page (`/request`), which sits outside the public layout, links the privacy, AI and retention pages. The Security center's description of what Resend receives is corrected: a standard notice from the firm's sender and the private reply link, never the request's questions or the client's figures.
+
+Review: Codex passes (gpt-6-sol, high) checked the pages against the code. They found that a Work request and file names reach the model unredacted, that deletion always waits for the retention date, that only document fact extraction requires a quote to appear exactly once, that the staff planner's inputs were missing, that Resend receives a standard notice rather than the request's wording, and that the client request page had no link to the notices; the pages now say each of these as the code does.
+
+Verified: `npm run check`, `npm test` and `npm run build` after a clean `npm ci`; the Security center tests on a fresh PostgreSQL.
