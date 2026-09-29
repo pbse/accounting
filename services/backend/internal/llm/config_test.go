@@ -7,10 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -273,5 +277,73 @@ func TestReadinessCoalescesAndCachesSuccessAndFailure(t *testing.T) {
 		if calls.Load() != 2 {
 			t.Fatal("expired readiness was not refreshed")
 		}
+	}
+}
+
+func TestReadinessRecoveryWithinDeploymentRetries(t *testing.T) {
+	for _, workflow := range []string{"deploy-production.yml", "deploy.yml"} {
+		t.Run(workflow, func(t *testing.T) {
+			raw, err := os.ReadFile("../../../../.github/workflows/" + workflow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := regexp.MustCompile(`--retry (\d+) --retry-delay (\d+)`).FindStringSubmatch(string(raw))
+			if len(args) != 3 {
+				t.Fatal("readiness retry policy missing")
+			}
+			retries, _ := strconv.Atoi(args[1])
+			seconds, _ := strconv.Atoi(args[2])
+			synctest.Test(t, func(t *testing.T) {
+				calls := 0
+				c, err := New(Config{ContextMachineToken: "private", ContextMachineModel: "codex", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+					calls++
+					status := 200
+					if calls == 1 {
+						time.Sleep(20 * time.Second)
+						status = 503
+					}
+					return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"status":"ok","agents":["codex","claude"]}`))}, nil
+				})}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx := WithClient(context.Background(), c)
+				for attempt := 0; attempt <= retries; attempt++ {
+					if CheckContextMachine(ctx) == nil {
+						if calls != 2 {
+							t.Fatal("unexpected probe count", calls)
+						}
+						return
+					}
+					if attempt < retries {
+						time.Sleep(time.Duration(seconds) * time.Second)
+					}
+				}
+				t.Fatal("deployment retries ended before cached failure could recover")
+			})
+		})
+	}
+}
+
+func TestReadinessCallerCancellationDoesNotPoisonCache(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	c, err := New(Config{ContextMachineToken: "private", ContextMachineModel: "codex", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		cancel()
+		if r.Context().Err() != nil {
+			t.Error("shared probe inherited caller cancellation")
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"ok","agents":["codex","claude"]}`))}, nil
+	})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckContextMachine(WithClient(ctx, c)); err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckContextMachine(WithClient(context.Background(), c)); err != nil || calls != 1 {
+		t.Fatal("cache poisoned", err, calls)
 	}
 }

@@ -59,7 +59,7 @@ Local development and tests use local PostgreSQL only. Never create Neon branche
 2. CI builds the actual context-machine image. A test binary inside it starts a fake provider and MCP server, runs **both installed CLIs**, and requires a read-tool invocation plus a final answer. This catches incompatible CLI flags, tool names and output formats without provider credentials.
 3. Merge after CI is green and environment settings exist. Deploy production verifies the merged PR's CI, validates configuration, applies normal migrations, and deploys the private context machine **before** API and queue Workers. Staging uses the same contract through its manual workflow.
 4. Each service receives only its required secrets. The context machine receives no application write credentials, posting keys or integration secrets. Temporary Wrangler secret files are mode 0600 and deleted after deployment.
-5. The final `${PRODUCTION_URL}/readyz` check traverses the **Go API → outbound handler → service binding → container** path. It verifies both binaries and read-only database privileges. Failure fails deployment; it does not silently disable research.
+5. The final `${PRODUCTION_URL}/readyz` check traverses the **Go API → outbound handler → service binding → container** path. It verifies both binaries and read-only database privileges. Deployment retries span 100 seconds of delays, exceeding the 60-second readiness cache so a transient cold-start failure can recover. Persistent failure fails deployment; it does not silently disable research.
 
 For an authorized manual rollout with environment settings loaded securely:
 

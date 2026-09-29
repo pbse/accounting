@@ -160,4 +160,5 @@ jobs:
           JS
           npx wrangler deploy -c workers/queue/wrangler.jsonc --secrets-file "$CLOSE_WORKER_SECRET_FILE"
       - name: Verify staging readiness
-        run: curl --fail --silent --show-error --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 "${STAGING_URL%/}/readyz"
+        # Retry past the 60-second private readiness cache, including a cold-start failure.
+        run: curl --fail --silent --show-error --retry 10 --retry-delay 10 --retry-all-errors --max-time 30 "${STAGING_URL%/}/readyz"
