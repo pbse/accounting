@@ -412,7 +412,7 @@ func paperChanges(before, after []byte) []paperChange {
 		}
 		sort.Strings(ordered)
 		for _, k := range ordered {
-			if prefix == "" && (k == "revises" || k == "status") {
+			if prefix == "" && (k == "revises" || k == "status" || k == "straight_through") {
 				continue
 			}
 			if bytes.Equal(a[k], b[k]) {
