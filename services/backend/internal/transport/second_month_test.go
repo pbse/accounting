@@ -128,9 +128,30 @@ func TestSecondMonthCarriesOrdinaryAndChangedSchedules(t *testing.T) {
 		t.Fatalf("October continues the prior schedule: closing balance %s", scheduled)
 	}
 
-	// The ordinary month: the unchanged carried drafts are approved under the standing approvals.
-	if _, approved, err := sweepStandingApprovals(ctx, db, "0"); err != nil || approved != 3 {
-		t.Fatalf("the carried October drafts are approved automatically: %d %v", approved, err)
+	// Changed terms: the vendor amends the software invoice before anyone reviews October. Replacing the carried copy
+	// of the invoice marks the carried draft changed at source, so the standing approval passes it by and no
+	// recalculation runs on its own; a person revises a carried schedule.
+	var softwareInvoice string
+	must(db.QueryRow(`SELECT s->>'id' FROM workpapers, jsonb_array_elements(paper->'sources') s WHERE id=$1 AND s->>'role'='invoice'`, octoberSoftware).Scan(&softwareInvoice))
+	var amended string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'Ledger software amended.txt',$2,'Amended: 480.00 for the same term','fixture') RETURNING id::text`, october, rand.Text()).Scan(&amended))
+	var jobsBefore int
+	must(db.QueryRow(`SELECT count(*) FROM preparation_jobs WHERE close_id=$1`, october).Scan(&jobsBefore))
+	call("POST", "/v1/closes/"+october+"/evidence/"+softwareInvoice+"/replace", map[string]any{"replacement_id": amended, "reason": "The vendor re-issued the invoice with the amended annual fee"}, 200)
+	var changed string
+	must(db.QueryRow(`SELECT review_state FROM workpaper_review_state WHERE id=$1`, octoberSoftware).Scan(&changed))
+	if changed != "source_changed" {
+		t.Fatalf("the carried draft whose invoice changed is called out as changed at source: %s", changed)
+	}
+
+	// The ordinary month: the unchanged carried drafts are approved under the standing approvals; the changed one is not.
+	if _, approved, err := sweepStandingApprovals(ctx, db, "0"); err != nil || approved != 2 {
+		t.Fatalf("the two unchanged October drafts are approved automatically: %d %v", approved, err)
+	}
+	var softwareReviews, jobsAfter, softwareRevisions int
+	must(db.QueryRow(`SELECT (SELECT count(*) FROM workpaper_reviews WHERE workpaper_id=$1),(SELECT count(*) FROM preparation_jobs WHERE close_id=$2),(SELECT count(*) FROM workpapers WHERE close_id=$2 AND paper->>'revises'=$1::text)`, octoberSoftware, october).Scan(&softwareReviews, &jobsAfter, &softwareRevisions))
+	if softwareReviews != 0 || jobsAfter != jobsBefore || softwareRevisions != 0 {
+		t.Fatalf("a carried schedule with changed terms is neither approved nor recalculated on its own: reviews %d, jobs %d→%d, revisions %d", softwareReviews, jobsBefore, jobsAfter, softwareRevisions)
 	}
 	var actor, note string
 	must(db.QueryRow(`SELECT actor,note FROM workpaper_reviews WHERE workpaper_id=$1 ORDER BY id DESC LIMIT 1`, octoberInsurance).Scan(&actor, &note))
@@ -138,28 +159,6 @@ func TestSecondMonthCarriesOrdinaryAndChangedSchedules(t *testing.T) {
 	must(db.QueryRow(`SELECT granted_by FROM standing_approvals WHERE workpaper_id=$1`, insurance).Scan(&granter))
 	if actor != granter || !strings.Contains(note, "Standing approval #") {
 		t.Fatalf("the approval is the granter's and names the standing approval: %s %s", actor, note)
-	}
-
-	// Changed terms: the vendor amends the software invoice in October. Replacing the carried copy of the invoice
-	// marks the carried draft changed at source, so its automatic approval no longer stands and a person revises it;
-	// a carried schedule is never recalculated straight through.
-	var softwareInvoice string
-	must(db.QueryRow(`SELECT s->>'id' FROM workpapers, jsonb_array_elements(paper->'sources') s WHERE id=$1 AND s->>'role'='invoice'`, octoberSoftware).Scan(&softwareInvoice))
-	var amended string
-	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'Ledger software amended.txt',$2,'Amended: 480.00 for the same term','fixture') RETURNING id::text`, october, rand.Text()).Scan(&amended))
-	call("POST", "/v1/closes/"+october+"/evidence/"+softwareInvoice+"/replace", map[string]any{"replacement_id": amended, "reason": "The vendor re-issued the invoice with the amended annual fee"}, 200)
-	var changed string
-	must(db.QueryRow(`SELECT review_state FROM workpaper_review_state WHERE id=$1`, octoberSoftware).Scan(&changed))
-	if changed != "source_changed" {
-		t.Fatalf("the carried draft whose invoice changed is called out as changed at source: %s", changed)
-	}
-	if _, approved, err := sweepStandingApprovals(ctx, db, "0"); err != nil || approved != 0 {
-		t.Fatalf("a standing approval does not re-approve a draft whose terms changed: %d %v", approved, err)
-	}
-	var recalculated bool
-	must(db.QueryRow(`SELECT EXISTS(SELECT 1 FROM preparation_jobs WHERE close_id=$1 AND state='queued')`, october).Scan(&recalculated))
-	if recalculated {
-		t.Fatal("a carried schedule with changed terms is revised by a person, not recalculated on its own")
 	}
 
 	// October's Trial Balance arrives: insurance agrees with the schedule, rent does not.
