@@ -894,19 +894,24 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 // changed at source, the new one carries the lineage, and the change review shows only what moved. Any other lineage
 // (two replaced sources, two drafts citing one) is a person's to resolve, and the reason says so.
 func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoiceID string, plan Plan) (string, error) {
-	var predecessors, candidates int
+	// A draft is revised automatically only when it cites the replaced source as its invoice and was itself prepared
+	// straight through (it cites a chart); a draft a person confirmed keeps its revision in a person's hands.
+	var predecessors, citing, eligible int
 	var revises string
 	err := tx.QueryRowContext(ctx, `WITH old AS (SELECT id FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2),
- drafts AS (SELECT w.id FROM workpapers w, old WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',old.id::text))
+ drafts AS (SELECT DISTINCT w.id, w.paper->'sources' @> '[{"role":"chart"}]'::jsonb AS straight FROM workpapers w, old
+  WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',old.id::text,'role','invoice'))
   AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
- SELECT (SELECT count(*) FROM old),(SELECT count(DISTINCT id) FROM drafts),COALESCE((SELECT max(id)::text FROM drafts),'')`, closeID, invoiceID).Scan(&predecessors, &candidates, &revises)
+ SELECT (SELECT count(*) FROM old),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID).Scan(&predecessors, &citing, &eligible, &revises)
 	if err != nil {
 		return "", err
 	}
-	if predecessors > 1 || candidates > 1 {
+	switch {
+	case predecessors > 1 || citing > 1:
 		return "the replacement stands for more than one earlier source or draft; a person chooses which draft it revises", nil
-	}
-	if predecessors == 0 || candidates == 0 {
+	case citing == 1 && eligible == 0:
+		return "the draft citing the replaced invoice was confirmed by a person; a person chooses its revision", nil
+	case predecessors == 0 || eligible == 0:
 		revises = ""
 	}
 	plan.Revises = revises
