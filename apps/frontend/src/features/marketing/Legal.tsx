@@ -106,7 +106,7 @@ export function Privacy() {
       <section>
         <h2>How long we keep it</h2>
         <p>
-          A firm decides when its client data is deleted; nothing is deleted automatically. <Link to="/data-retention">Retention and deletion</Link> has the details.
+          A firm decides when its client data is deleted; apart from trimming assistant conversations, nothing is deleted automatically. <Link to="/data-retention">Retention and deletion</Link> has the details.
         </p>
       </section>
       <section>
@@ -127,7 +127,7 @@ export function Privacy() {
 const providers: { name: string; purpose: string; receives: string }[] = [
   { name: "Cloudflare", purpose: "Hosts the website and runs the application; scans client files for malware; can receive email forwarded to Close.", receives: "Every request to the site and the application, including uploaded files and the data they carry." },
   { name: "Neon (on Amazon Web Services, United States)", purpose: "The database.", receives: "Everything Close stores, including original documents." },
-  { name: "WorkOS", purpose: "Sign-in, roles and invitations; holds each person’s Google Drive permission.", receives: "Names, email addresses and roles of firm members; files a person chooses to import from Google Drive pass through it." },
+  { name: "WorkOS", purpose: "Sign-in, roles and invitations; holds each person’s Google Drive permission.", receives: "Names, email addresses and roles of firm members, and each person’s Google Drive permission. Close uses that permission to download a file a person chooses directly from Google." },
   { name: "OpenAI", purpose: "AI reading of documents and, if a firm turns them on, written answers.", receives: "What AI and your data describes: document and statement text, policies and assistant questions with sensitive numbers removed, and file names and Work requests as written. Each request asks OpenAI not to store it." },
   { name: "Resend", purpose: "Sends client request emails a person has approved, from the firm’s own sender. Not yet in use.", receives: "The recipient’s email address, a standard notice from the firm’s sender and the private reply link; never the request’s questions or the client’s figures." },
 ];
@@ -167,7 +167,7 @@ export function Subprocessors() {
       <section>
         <h2>What is in use for your firm</h2>
         <p>
-          The <strong>Security center</strong> in the workspace lists each of these services, exactly what it receives and whether your firm is using it. We will update this page before adding a subprocessor, and tell firms in a pilot first.
+          Beyond our hosting (Cloudflare) and database (Neon), which every firm uses, the <strong>Security center</strong> in the workspace lists the services that receive your firm’s data, exactly what each receives and whether your firm is using it. We will update this page before adding a subprocessor, and tell firms in a pilot first.
         </p>
         <Contact />
       </section>
@@ -231,7 +231,7 @@ export function AiData() {
 
 export function Retention() {
   return (
-    <LegalPage eyebrow="DATA" title="Retention and deletion" intro="Your firm decides how long its client data stays in Close. Nothing is deleted automatically, and deletion is deliberate and recorded.">
+    <LegalPage eyebrow="DATA" title="Retention and deletion" intro="Your firm decides how long its client data stays in Close. Apart from trimming assistant conversations, nothing is deleted automatically, and deleting a close is deliberate and recorded.">
       <section>
         <h2>How long data is kept</h2>
         <p>
