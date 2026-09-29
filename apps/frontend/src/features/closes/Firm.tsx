@@ -7,7 +7,7 @@ import { EmailSettings } from "./Email";
 import { FirmEnrollment } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
+type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; investigations: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
 
 function IndependentReview() {
   const [policy, setPolicy] = useState<Policy>();
@@ -156,7 +156,7 @@ function WrittenAnswers() {
     };
   }, [refresh]);
   if (!policy) return message ? <p role="alert">{message}</p> : null;
-  async function change(setting: "model_answers" | "firm_answers") {
+  async function change(setting: "model_answers" | "firm_answers" | "investigations") {
     setBusy(true);
     setMessage("");
     try {
@@ -184,6 +184,12 @@ function WrittenAnswers() {
           : "Firm-wide answers are off: questions asked outside a client close are never sent."}{" "}
         When on, the question and the member's own lists of what needs a person today, the review queue and blocked work, across the clients they can open, go to OpenAI under the same removals and checks. The answer is shown once and never kept in the conversation.
       </p>
+      <p>
+        {policy.investigations
+          ? "Investigations are on: before writing a close answer, the model may first read that close's own records through the assistant's read-only tools."
+          : "Investigations are off: a written answer rests only on the close's saved status, blockers, tie-out, changes and exceptions."}{" "}
+        When on, the model may make up to six reads of this close (a document's text, a draft, the tie-out, changes, exceptions, a search), each made with your own permissions, redacted the same way and sent to OpenAI unstored; each read counts against the firm's daily model limit, the answer lists what was read, and the reads are kept with the attempt's record. It reads only; it never changes, approves, sends or posts anything. Written answers must be on.
+      </p>
       {policy.can_manage_model_answers ? (
         <>
           <label>
@@ -195,6 +201,9 @@ function WrittenAnswers() {
           </button>
           <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change("firm_answers")}>
             {policy.firm_answers ? "Stop firm-wide answers" : "Turn on firm-wide answers"}
+          </button>
+          <button type="button" disabled={busy || reason.trim().length < 5 || !policy.model_answers} onClick={() => void change("investigations")}>
+            {policy.investigations ? "Stop investigations" : "Turn on investigations"}
           </button>
         </>
       ) : (

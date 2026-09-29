@@ -754,7 +754,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	post := func(w http.ResponseWriter, r *http.Request) {
 		// A written answer streams; once its first line is out, the reply keeps its status and ends with the conversation.
 		var streamed *streamWriter
-		var attempted string
+		var attempted, trace string
 		var latency sql.NullInt64
 		var in struct {
 			Action      string `json:"action"`
@@ -921,7 +921,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				return true
 			}
 			began := time.Now()
-			written, why, outcome := writtenReply(r.Context(), db, org, readRaw, closeID, in.WorkpaperID, in.Text, emit)
+			written, why, outcome, investigated := writtenReply(r.Context(), db, org, readRaw, closeID, in.WorkpaperID, in.Text, emit)
+			trace = investigated
 			if denied {
 				problem(w, 403, "Your access changed. Nothing was saved.")
 				return
@@ -975,7 +976,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if attempted != "" {
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5)`, org, author, closeID, attempted, latency)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,NULLIF($6,'')::jsonb)`, org, author, closeID, attempted, latency, trace)
 		}
 		for _, m := range []struct {
 			role, body, citations, action, due, finish string
