@@ -3,7 +3,7 @@ import { Link } from "react-router";
 
 // The public legal and data pages. Each statement follows what the service's code does today; when the code changes,
 // change the page and its date. The workspace's Security center shows which of these services a firm is using.
-const updated = "28 September 2026";
+const updated = "29 September 2026";
 
 export const legalPages = [
   { to: "/privacy", label: "Privacy" },
