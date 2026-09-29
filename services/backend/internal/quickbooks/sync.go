@@ -500,8 +500,16 @@ func SweepCitedCharts(ctx context.Context, db *sql.DB) error {
 // one where a draft prepared without confirmation cites it as its chart, so the existing source-change review reopens
 // that draft, as a capture a person saves already does to every prior period entry. Period evidence no draft cites as
 // its chart is left alone, and so is an entry while a posting on a draft citing it is executing or unknown: the next
-// refresh supersedes it once the attempt is resolved.
+// sweep supersedes it once the attempt is resolved. Saved posting approvals on every citing draft are withdrawn at once.
 func SupersedeCitedChart(ctx context.Context, tx *sql.Tx, closeID, sourceID, connectionID, period, actor string) error {
+	// Saved posting approvals on every draft citing an older chart of this period are withdrawn first, whether or not the
+	// evidence can be superseded yet: an unsettled attempt on one draft must not keep another draft's approval live.
+	for _, table := range []string{"sandbox_postings", "vendor_credit_postings", "production_postings"} {
+		if _, err := tx.ExecContext(ctx, `UPDATE `+table+` p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id::text=$1 AND p.state='approved'
+ AND EXISTS(SELECT 1 FROM evidence e WHERE e.close_id::text=$1 AND e.id<>$2::bigint AND e.id::text IN (SELECT s.payload->>'source_id' FROM quickbooks_snapshots s WHERE s.close_id::text=$1 AND s.connection_id::text=$3 AND s.payload->>'period'=$4) AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text,'role','chart')))`, closeID, sourceID, connectionID, period); err != nil {
+			return err
+		}
+	}
 	_, err := tx.ExecContext(ctx, `UPDATE evidence e SET superseded_by=$2::bigint,replacement_reason='New QuickBooks chart of accounts capture',replaced_by=$4,replaced_at=now() WHERE e.close_id::text=$1 AND e.id<>$2::bigint AND e.superseded_by IS NULL
  AND e.id::text IN (SELECT s.payload->>'source_id' FROM quickbooks_snapshots s WHERE s.close_id::text=$1 AND s.connection_id::text=$3 AND s.payload->>'period'=$5)
  AND EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id::text=$1 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text,'role','chart')))
@@ -509,13 +517,7 @@ func SupersedeCitedChart(ctx context.Context, tx *sql.Tx, closeID, sourceID, con
 	if err != nil {
 		return err
 	}
-	// A saved posting approval on a draft whose chart was just superseded is withdrawn too, as the transaction-capture path does.
-	for _, table := range []string{"sandbox_postings", "vendor_credit_postings", "production_postings"} {
-		if _, err = tx.ExecContext(ctx, `UPDATE `+table+` p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id::text=$1 AND p.state='approved' AND EXISTS(SELECT 1 FROM evidence e WHERE e.close_id::text=$1 AND e.superseded_by::text=$2 AND e.replacement_reason='New QuickBooks chart of accounts capture' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text)))`, closeID, sourceID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return err
 }
 
 func RunSync(ctx context.Context, db *sql.DB) {
