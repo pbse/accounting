@@ -485,18 +485,22 @@ func investigate(ctx context.Context, db *sql.DB, org, key, model string, readRa
 				var value any
 				decoder := json.NewDecoder(strings.NewReader(body))
 				decoder.UseNumber()
+				// The tool decides the body's form, never its content: a document's text is redacted as one text, whatever it
+				// happens to parse as; every other read is a JSON value that must fill its body, redacted value by value.
+				var redacted []byte
+				switch {
+				case !ok:
+				case t.name == "read_evidence_text":
+					text, _ := documents.Redact(body)
+					redacted = []byte(text)
+				case decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF:
+					redacted, _ = json.Marshal(redactValues(value))
+				default:
+					ok = false
+				}
 				if !ok {
 					step.Status, output = "unavailable", "unavailable: this read could not be made"
 				} else {
-					// A JSON read is redacted value by value; a document's plain text is redacted as one text.
-					// A body is JSON only when one value fills it; anything after that value makes it a text.
-					var redacted []byte
-					if decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF {
-						redacted, _ = json.Marshal(redactValues(value))
-					} else {
-						text, _ := documents.Redact(body)
-						redacted = []byte(text)
-					}
 					if len(redacted) > 24<<10 {
 						step.Status, output = "omitted", "omitted: too large to send in full"
 					} else {

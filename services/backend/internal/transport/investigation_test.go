@@ -42,6 +42,9 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_a','Alpha',true,'Synthetic','fixture')`, org)
 	must(err)
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&closeID))
+	// A document whose whole text is a bare number would parse as JSON; it is still one text to redact.
+	var cardID string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'card.txt','card-digest','4111111111111111','fixture') RETURNING id::text`, closeID).Scan(&cardID))
 	text := "Acme Insurance Co\nInvoice INV-778\nBill to: Alpha\nAnnual premium USD 1,200.00 for coverage 2026-09-01 to 2027-08-31\nCard 4111 1111 1111 1111 on file"
 	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'insurance.txt','inv-digest',$2,'fixture') RETURNING id::text`, closeID, text).Scan(&evidenceID))
 	defer func() {
@@ -67,7 +70,7 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 			Input []map[string]any `json:"input"`
 		}
 		json.Unmarshal(raw, &sent)
-		if strings.Contains(string(raw), "4111 1111 1111 1111") {
+		if strings.Contains(string(raw), "4111 1111 1111 1111") || strings.Contains(string(raw), "4111111111111111") {
 			t.Fatalf("a card number reached the model: %s", raw)
 		}
 		if len(sent.Tools) > 0 {
@@ -83,7 +86,7 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 			}
 			var body string
 			if toolRounds == 1 {
-				body = `{"status":"completed","output":[{"type":"function_call","call_id":"c1","name":"read_evidence_text","arguments":"{\"evidence_id\":\"` + evidenceID + `\",\"close_id\":\"999\"}"},{"type":"function_call","call_id":"c2","name":"export_close_package","arguments":"{}"}]}`
+				body = `{"status":"completed","output":[{"type":"function_call","call_id":"c1","name":"read_evidence_text","arguments":"{\"evidence_id\":\"` + evidenceID + `\",\"close_id\":\"999\"}"},{"type":"function_call","call_id":"c2","name":"export_close_package","arguments":"{}"},{"type":"function_call","call_id":"c3","name":"read_evidence_text","arguments":"{\"evidence_id\":\"` + cardID + `\"}"}]}`
 			} else {
 				body = `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Read the invoice."}]}]}`
 			}
@@ -149,7 +152,7 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 	if calls != 3 || toolRounds != 2 {
 		t.Fatalf("two tool rounds then the final answer: calls=%d rounds=%d", calls, toolRounds)
 	}
-	if !strings.HasPrefix(body, "The invoice is an annual premium of USD 1,200.00.") || lines[1] != "Investigated: read_evidence_text "+evidenceID+" (ok); export_close_package (refused)" || !strings.Contains(body, "Written by the model after it read") {
+	if !strings.HasPrefix(body, "The invoice is an annual premium of USD 1,200.00.") || lines[1] != "Investigated: read_evidence_text "+evidenceID+" (ok); export_close_package (refused); read_evidence_text "+cardID+" (ok)" || !strings.Contains(body, "Written by the model after it read") {
 		t.Fatalf("the kept answer lists what was read and says it was investigated: %q", body)
 	}
 	if len(cited) != 1 || cited[0]["label"] != "Evidence #"+evidenceID || cited[0]["href"] != "/dashboard/closes/"+closeID+"?tab=evidence" {
@@ -160,7 +163,7 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 			t.Fatalf("only this close's read-only tools are offered: %v", toolsOffered)
 		}
 	}
-	if len(outputsSeen) != 2 || !strings.Contains(outputsSeen[0], "Annual premium") || !strings.HasPrefix(outputsSeen[1], "refused: not a read this assistant offers") {
+	if len(outputsSeen) != 3 || !strings.Contains(outputsSeen[0], "Annual premium") || !strings.HasPrefix(outputsSeen[1], "refused: not a read this assistant offers") || !strings.Contains(outputsSeen[2], "removed") {
 		t.Fatalf("the model is told each read's result, and why a read was refused: %v", outputsSeen)
 	}
 	// Turning written answers off turns investigations off with them, and they cannot be turned on alone.
@@ -180,7 +183,7 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 		Bytes              int
 	}
 	must(json.Unmarshal([]byte(trace), &steps))
-	if len(steps) != 2 || steps[0].Tool != "read_evidence_text" || steps[0].Args != evidenceID || steps[0].Status != "ok" || steps[0].Bytes == 0 || steps[1].Tool != "export_close_package" || steps[1].Status != "refused" {
+	if len(steps) != 3 || steps[0].Tool != "read_evidence_text" || steps[0].Args != evidenceID || steps[0].Status != "ok" || steps[0].Bytes == 0 || steps[1].Tool != "export_close_package" || steps[1].Status != "refused" || steps[2].Status != "ok" {
 		t.Fatalf("the trace keeps each read, its outcome and size, not its content: %s", trace)
 	}
 	if strings.Contains(trace, "Annual premium") {
