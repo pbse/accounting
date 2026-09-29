@@ -889,22 +889,31 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	return &l, nil
 }
 
-// queueStraightThrough queues the plan on the job as the agent's confirmation. When the invoice replaced a source a
-// current prepaid draft cites, the plan revises that draft: the old draft is already marked as changed at source, the
-// new one carries the lineage, and the change review shows only what moved.
-func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoiceID string, plan Plan) error {
+// queueStraightThrough queues the plan on the job as the agent's confirmation. When the invoice replaced exactly one
+// source that exactly one current prepaid draft cites, the plan revises that draft: the old draft is already marked as
+// changed at source, the new one carries the lineage, and the change review shows only what moved. Any other lineage
+// (two replaced sources, two drafts citing one) is a person's to resolve, and the reason says so.
+func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoiceID string, plan Plan) (string, error) {
+	var predecessors, candidates int
 	var revises string
-	err := tx.QueryRowContext(ctx, `SELECT w.id::text FROM workpapers w JOIN evidence old ON old.close_id=w.close_id AND old.superseded_by::text=$2
- WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',old.id::text))
- AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text) ORDER BY w.id DESC LIMIT 1`, closeID, invoiceID).Scan(&revises)
-	if err != nil && err != sql.ErrNoRows {
-		return err
+	err := tx.QueryRowContext(ctx, `WITH old AS (SELECT id FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2),
+ drafts AS (SELECT w.id FROM workpapers w, old WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',old.id::text))
+  AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
+ SELECT (SELECT count(*) FROM old),(SELECT count(DISTINCT id) FROM drafts),COALESCE((SELECT max(id)::text FROM drafts),'')`, closeID, invoiceID).Scan(&predecessors, &candidates, &revises)
+	if err != nil {
+		return "", err
+	}
+	if predecessors > 1 || candidates > 1 {
+		return "the replacement stands for more than one earlier source or draft; a person chooses which draft it revises", nil
+	}
+	if predecessors == 0 || candidates == 0 {
+		revises = ""
 	}
 	plan.Revises = revises
 	plans, _ := json.Marshal([]Plan{plan})
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans)); err != nil {
-		return err
+		return "", err
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=now() WHERE job_id=$1`, jobID)
-	return err
+	return "", err
 }

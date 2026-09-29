@@ -741,10 +741,15 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			straight = "Waiting for a person: " + reason + "."
 		}
 		if reason == "" {
-			if err = queueStraightThrough(persist, finish, closeID, id, primary, plan); err != nil {
+			var lineage string
+			if lineage, err = queueStraightThrough(persist, finish, closeID, id, primary, plan); err != nil {
 				return true, err
 			}
-			state = "queued"
+			if lineage != "" {
+				straight = "Waiting for a person: " + lineage + "."
+			} else {
+				state = "queued"
+			}
 		}
 	}
 	checkpointBody, _ := json.Marshal(map[string]any{"stage": state, "inventory_digest": digest, "selected_ids": selectedIDs(selected), "attempt": attempts + 1, "input_tokens": proposal.InputTokens, "output_tokens": proposal.OutputTokens, "straight_through": straight})
