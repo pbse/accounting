@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,9 +33,16 @@ type Plan struct {
 	CarryForward     *CarryForward     `json:"carry_forward,omitempty"`
 	RecurringAccrual *RecurringAccrual `json:"recurring_accrual,omitempty"`
 	Revises          string            `json:"revises,omitempty"`
-	Kind             string            `json:"kind"`
-	Input            json.RawMessage   `json:"input"`
-	Sources          []Source          `json:"sources"`
+	// Procedure is the enabled procedure version a straight-through draft was prepared under; the worker refuses the
+	// plan if that version is no longer the client's current, enabled one with the same accounts.
+	Procedure string `json:"procedure,omitempty"`
+	// Chart is the chart-of-accounts snapshot a straight-through draft's booking was checked against.
+	Chart string `json:"chart,omitempty"`
+	// BilledTo is the name the invoice bills, accepted as the client or a confirmed alias; the worker checks it again.
+	BilledTo string          `json:"billed_to,omitempty"`
+	Kind     string          `json:"kind"`
+	Input    json.RawMessage `json:"input"`
+	Sources  []Source        `json:"sources"`
 }
 
 // WorkKind is the kind of work a plan prepares: a prepaid plan with a schedule prepares deferred revenue or depreciation.
@@ -233,6 +241,42 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				break
 			}
 		}
+		if p.Procedure != "" {
+			current, e := CurrentProcedure(ctx, tx, closeID, p.Kind)
+			if e != nil && e != sql.ErrNoRows {
+				return false, e
+			}
+			if e := ProcedurePinned(p, current); e != nil {
+				failure = e.Error()
+				break
+			}
+			aliases, e := ClientAliases(ctx, tx, closeID)
+			if e != nil {
+				return false, e
+			}
+			if e := BilledToClient(p.BilledTo, entity, aliases); e != nil {
+				failure = e.Error()
+				break
+			}
+			// A reply or answer for another job, or unread evidence, arriving since the plan was queued is a person's to weigh.
+			if other, e := OtherEvidence(ctx, tx, closeID, id); e != nil {
+				return false, e
+			} else if other {
+				failure = "Evidence arrived in the close that a person must weigh before this draft is prepared."
+				break
+			}
+			// The capture the plan cites must still be the close's current one; a capture queued or failed since then is a question for a person.
+			ledger, e := CloseLedger(ctx, tx, closeID)
+			if e != nil {
+				return false, e
+			}
+			if ledger == nil || ledger.Chart != p.Chart || !slices.ContainsFunc(p.Sources, func(s Source) bool {
+				return s.Role == "period_ledger" && s.ID == ledger.Source.ID && s.Digest == ledger.Source.Digest
+			}) {
+				failure = "The QuickBooks capture or chart of accounts this draft was prepared from is no longer the close's current one; a person confirms the facts."
+				break
+			}
+		}
 		if p.Revises != "" {
 			var active bool
 			err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sandbox_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings WHERE workpaper_id::text=$1 AND state IN ('executing','unknown'))`, p.Revises).Scan(&active)
@@ -295,6 +339,12 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	state := "completed"
 	if failure != "" {
 		state = "failed"
+		// A straight-through plan the worker refuses prepared nothing; the agent's confirmation is withdrawn with it.
+		if slices.ContainsFunc(plans, func(p Plan) bool { return p.Procedure != "" }) {
+			if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by=NULL,confirmed_at=NULL,agent_checkpoint=jsonb_set(COALESCE(agent_checkpoint,'{}'::jsonb),'{straight_through}',to_jsonb($2::text)) WHERE job_id=$1 AND confirmed_by='agent'`, id, "Waiting for a person: "+failure); err != nil {
+				return false, err
+			}
+		}
 	}
 	encoded, _ := json.Marshal(ids)
 	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state=$2,workpaper_ids=$3,error=$4,finished_at=now() WHERE id=$1`, id, state, string(encoded), failure); err != nil {

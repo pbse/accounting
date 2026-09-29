@@ -403,6 +403,16 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 			return err
 		}
 		if unchanged := periodContent(previous); unchanged != "" && unchanged == periodContent(fresh) {
+			// The chart is unchanged, but a supersession deferred while a posting was unsettled is due once it settles.
+			var last struct {
+				SourceID string `json:"source_id"`
+			}
+			if json.Unmarshal(previous, &last) == nil && last.SourceID != "" {
+				if err = SupersedeCitedChart(ctx, tx, job.closeID, last.SourceID, job.connectionID, job.period, "scheduled-quickbooks-refresh"); err != nil {
+					return err
+				}
+				return tx.Commit()
+			}
 			return nil
 		}
 	}
@@ -425,6 +435,9 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	if _, err = tx.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,$3,encode(sha256(convert_to($4::jsonb::text,'UTF8')),'hex'),$4,$5,'scheduled-quickbooks-refresh')`, job.closeID, job.connectionID, realm, string(payload), started); err != nil {
 		return err
 	}
+	if err = SupersedeCitedChart(ctx, tx, job.closeID, sourceID, job.connectionID, job.period, "scheduled-quickbooks-refresh"); err != nil {
+		return err
+	}
 	if !first {
 		return tx.Commit()
 	}
@@ -434,12 +447,88 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	return tx.Commit()
 }
 
+// SweepCitedCharts runs the chart supersession for every close whose newest period snapshot is not the one a draft
+// cites as its chart, so a supersession deferred while a posting was unsettled happens once it settles, whether or not
+// another capture is ever taken.
+func SweepCitedCharts(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT s.close_id::text,s.connection_id::text,s.payload->>'period',s.payload->>'source_id' FROM quickbooks_snapshots s
+ WHERE s.payload ? 'period' AND s.id=(SELECT max(z.id) FROM quickbooks_snapshots z WHERE z.close_id=s.close_id AND z.connection_id=s.connection_id AND z.payload->>'period'=s.payload->>'period')
+ AND EXISTS(SELECT 1 FROM evidence e JOIN workpapers w ON w.close_id=e.close_id WHERE e.close_id=s.close_id AND e.superseded_by IS NULL AND e.id::text<>s.payload->>'source_id' AND e.id::text IN (SELECT o.payload->>'source_id' FROM quickbooks_snapshots o WHERE o.close_id=s.close_id AND o.connection_id=s.connection_id AND o.payload->>'period'=s.payload->>'period') AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text,'role','chart')))`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type due struct{ close, connection, period, source string }
+	var dues []due
+	for rows.Next() {
+		var d due
+		if err := rows.Scan(&d.close, &d.connection, &d.period, &d.source); err != nil {
+			return err
+		}
+		dues = append(dues, d)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, d := range dues {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		// With the close locked, the selected snapshot must still be the newest; a capture saved since is left to the next sweep.
+		var newest string
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT s.payload->>'source_id' FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.connection_id::text=$2 AND s.payload->>'period'=$3 ORDER BY s.id DESC LIMIT 1),'') FROM client_closes c WHERE c.id::text=$1 FOR UPDATE OF c`, d.close, d.connection, d.period).Scan(&newest)
+		if err != nil || newest != d.source {
+			tx.Rollback()
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			continue
+		}
+		if err := SupersedeCitedChart(ctx, tx, d.close, d.source, d.connection, d.period, "scheduled-quickbooks-refresh"); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SupersedeCitedChart marks the earlier period-snapshot evidence of a close's connection and period superseded by a new
+// one where a draft prepared without confirmation cites it as its chart, so the existing source-change review reopens
+// that draft, as a capture a person saves already does to every prior period entry. Period evidence no draft cites as
+// its chart is left alone, and so is an entry while a posting on a draft citing it is executing or unknown: the next
+// sweep supersedes it once the attempt is resolved. Saved posting approvals on every citing draft are withdrawn at once.
+func SupersedeCitedChart(ctx context.Context, tx *sql.Tx, closeID, sourceID, connectionID, period, actor string) error {
+	// Saved posting approvals on every draft citing an older chart of this period are withdrawn first, whether or not the
+	// evidence can be superseded yet: an unsettled attempt on one draft must not keep another draft's approval live.
+	for _, table := range []string{"sandbox_postings", "vendor_credit_postings", "production_postings"} {
+		if _, err := tx.ExecContext(ctx, `UPDATE `+table+` p SET state='preview',approved_by=NULL,approval_expires_at=NULL FROM workpapers w WHERE w.id=p.workpaper_id AND w.close_id::text=$1 AND p.state='approved'
+ AND EXISTS(SELECT 1 FROM evidence e WHERE e.close_id::text=$1 AND e.id<>$2::bigint AND e.id::text IN (SELECT s.payload->>'source_id' FROM quickbooks_snapshots s WHERE s.close_id::text=$1 AND s.connection_id::text=$3 AND s.payload->>'period'=$4) AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text,'role','chart')))`, closeID, sourceID, connectionID, period); err != nil {
+			return err
+		}
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE evidence e SET superseded_by=$2::bigint,replacement_reason='New QuickBooks chart of accounts capture',replaced_by=$4,replaced_at=now() WHERE e.close_id::text=$1 AND e.id<>$2::bigint AND e.superseded_by IS NULL
+ AND e.id::text IN (SELECT s.payload->>'source_id' FROM quickbooks_snapshots s WHERE s.close_id::text=$1 AND s.connection_id::text=$3 AND s.payload->>'period'=$5)
+ AND EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id::text=$1 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text,'role','chart')))
+ AND NOT EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id::text=$1 AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',e.id::text)) AND (EXISTS(SELECT 1 FROM sandbox_postings p WHERE p.workpaper_id=w.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.workpaper_id=w.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings p WHERE p.workpaper_id=w.id AND p.state IN ('executing','unknown'))))`, closeID, sourceID, connectionID, actor, period)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
 func RunSync(ctx context.Context, db *sql.DB) {
 	nextSchedule := time.Time{}
 	for ctx.Err() == nil {
 		if !time.Now().Before(nextSchedule) {
 			if err := scheduleSync(ctx, db); err != nil && ctx.Err() == nil {
 				log.Print("Transaction refresh scheduler could not queue due closes")
+			}
+			if err := SweepCitedCharts(ctx, db); err != nil && ctx.Err() == nil {
+				log.Print("Chart supersession sweep could not update durable state")
 			}
 			nextSchedule = time.Now().Add(5 * time.Minute)
 		}

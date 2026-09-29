@@ -34,7 +34,7 @@ type WorkItem = Plan & {
   blockers: string[];
   agent_started_at: string;
   agent_attempts: number;
-  agent_checkpoint: { stage?: string; input_tokens?: number; output_tokens?: number };
+  agent_checkpoint: { stage?: string; input_tokens?: number; output_tokens?: number; straight_through?: string };
   revision: number;
   stale: boolean;
   coordinated: boolean;
@@ -679,7 +679,7 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
         <>
           {needsReason && <label>Reason for stopping<textarea value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} /></label>}
           <label><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} /> {handing
-            ? `Hand the ${pending} pending close${pending === 1 ? "" : "s"} to the agent to get each ${current.finish === "signoff" ? "signed off" : "ready for review"}. The agent never confirms facts, approves, sends, posts or signs off.`
+            ? `Hand the ${pending} pending close${pending === 1 ? "" : "s"} to the agent to get each ${current.finish === "signoff" ? "signed off" : "ready for review"}. A prepaid invoice whose facts the invoice and the QuickBooks capture both prove is drafted under the firm's procedure without field-by-field confirmation; everything else waits for a person. The agent never approves, sends, posts or signs off.`
             : `${current.action[0].toUpperCase() + current.action.slice(1)} the ${pending} pending close${pending === 1 ? "" : "s"}; facts and methods still need separate review.`}</label>
           <button type="button" disabled={busy || !confirmed || (needsReason && !reason.trim())} onClick={() => void run()}>{busy ? "Running…" : `Run for ${pending} close${pending === 1 ? "" : "s"}`}</button>
         </>
@@ -937,7 +937,7 @@ function WorkDetails({
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const input: Record<string, unknown> = Object.fromEntries(
-      facts.map((f) => [f.field, String(data.get(f.field) ?? "")]),
+      facts.filter((f) => !["vendor", "billed_to", "invoice_number"].includes(f.field)).map((f) => [f.field, String(data.get(f.field) ?? "")]),
     );
     if (kind === "reconciliation") {
       Object.assign(input, {
@@ -970,6 +970,7 @@ function WorkDetails({
         Durable job #{item.id} · revision {item.revision}. Preparation does not
         approve or post a journal.
       </p>
+      {item.agent_checkpoint?.straight_through && <p>{item.agent_checkpoint.straight_through}</p>}
       {item.coordinated && <p>Agent budget: {item.agent_attempts} of 3 interpretation attempts used. Checkpoint: {item.agent_checkpoint?.stage?.replaceAll("_", " ") ?? "pending"}. Each attempt selects at most 20 sources / 128 KiB and requests at most 8,000 output tokens across selection and interpretation; a fresh client answer or reviewer recheck can reset this budget.</p>}
       {item.error && <p role="alert">{item.error}</p>}
       {item.blockers?.length > 0 && (
