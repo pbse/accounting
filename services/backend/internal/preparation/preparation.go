@@ -172,6 +172,10 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 	if p.Revises != "" {
 		object["revises"], _ = json.Marshal(p.Revises)
 	}
+	// A draft prepared without field confirmation says so, so a later replacement can revise it without a person.
+	if p.Procedure != "" {
+		object["straight_through"], _ = json.Marshal(true)
+	}
 	object["sources"], err = json.Marshal(p.Sources)
 	if err != nil {
 		return nil, err

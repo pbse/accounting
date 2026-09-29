@@ -894,18 +894,23 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 // changed at source, the new one carries the lineage, and the change review shows only what moved. Any other lineage
 // (two replaced sources, two drafts citing one) is a person's to resolve, and the reason says so.
 func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoiceID string, plan Plan) (string, error) {
-	// A draft is revised automatically only when it cites the replaced source as its invoice and was itself prepared
-	// straight through (it cites a chart); a draft a person confirmed keeps its revision in a person's hands.
-	var predecessors, citing, eligible int
+	// A draft is revised automatically only when it cites a replaced source as its invoice and was itself prepared
+	// straight through (its paper says so; a carried-forward draft never does); a draft a person confirmed keeps its
+	// revision in a person's hands. The chain of replacements is followed, so a source replaced twice before its
+	// replacement was read still leads to the current draft; two sources replaced by the same file are ambiguous.
+	var siblings, citing, eligible int
 	var revises string
-	err := tx.QueryRowContext(ctx, `WITH old AS (SELECT id FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2),
- drafts AS (SELECT DISTINCT w.id, w.paper->'sources' @> '[{"role":"chart"}]'::jsonb AS straight FROM workpapers w, old
-  WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',old.id::text,'role','invoice'))
+	err := tx.QueryRowContext(ctx, `WITH RECURSIVE chain(id, depth) AS (
+  SELECT id, 1 FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2
+  UNION ALL SELECT e.id, c.depth+1 FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE c.depth < 20),
+ drafts AS (SELECT DISTINCT w.id, COALESCE((w.paper->>'straight_through')::boolean,false) AND w.paper->'carry_forward' IS NULL AS straight FROM workpapers w, chain
+  WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role','invoice'))
   AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
- SELECT (SELECT count(*) FROM old),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID).Scan(&predecessors, &citing, &eligible, &revises)
+ SELECT (SELECT count(*) FROM chain WHERE depth=1),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID).Scan(&siblings, &citing, &eligible, &revises)
 	if err != nil {
 		return "", err
 	}
+	predecessors := siblings
 	switch {
 	case predecessors > 1 || citing > 1:
 		return "the replacement stands for more than one earlier source or draft; a person chooses which draft it revises", nil
@@ -913,6 +918,16 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 		return "the draft citing the replaced invoice was confirmed by a person; a person chooses its revision", nil
 	case predecessors == 0 || eligible == 0:
 		revises = ""
+	}
+	// A predecessor whose entry was attempted or posted needs a correction against that entry, which a person prepares.
+	if revises != "" {
+		var posted bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sandbox_postings p WHERE p.workpaper_id::text=$1 AND p.state IN ('executing','unknown','verified')) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.workpaper_id::text=$1 AND p.state IN ('executing','unknown','verified')) OR EXISTS(SELECT 1 FROM vendor_credit_postings p WHERE p.workpaper_id::text=$1 AND p.state IN ('executing','unknown','verified')) OR EXISTS(SELECT 1 FROM xero_postings p WHERE p.workpaper_id::text=$1 AND p.state IN ('executing','unknown','verified'))`, revises).Scan(&posted); err != nil {
+			return "", err
+		}
+		if posted {
+			return "the draft citing the replaced invoice was posted; a person prepares the correction against that entry", nil
+		}
 	}
 	plan.Revises = revises
 	plans, _ := json.Marshal([]Plan{plan})

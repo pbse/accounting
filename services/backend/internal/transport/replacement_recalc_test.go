@@ -41,7 +41,7 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	var closeID, connection string
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
 	defer func() {
-		for _, q := range []string{`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM preparation_jobs WHERE close_id=$1`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id=$1`, `DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+		for _, q := range []string{`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM sandbox_postings WHERE close_id=$1`, `DELETE FROM preparation_jobs WHERE close_id=$1`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id=$1`, `DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
 			db.Exec(q, closeID)
 		}
 		db.Exec(`DELETE FROM procedure_versions WHERE organization_id='local-development' AND client_entity=$1`, entity)
@@ -166,6 +166,11 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	invoices[first] = "1200.00"
 	job1, _, _ := intake(first)
 	draft1 := finish(job1)
+	var marked bool
+	must(db.QueryRow(`SELECT COALESCE((paper->>'straight_through')::boolean,false) FROM workpapers WHERE id::text=$1`, draft1).Scan(&marked))
+	if !marked {
+		t.Fatal("a straight-through draft's paper says so")
+	}
 
 	token := strings.Repeat("r", 32)
 	handler := apiWithStore(db, token)
@@ -250,15 +255,33 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	if calls != 3 {
 		t.Fatalf("one model call for the first invoice and two for the corrected one: %d", calls)
 	}
-	// When two current drafts cite the replaced source, the agent cannot know which one a correction revises.
-	twinPaper, _ := json.Marshal(map[string]any{"input": map[string]string{"amount": "1300.00"}, "sources": []map[string]string{{"id": second, "digest": preparation.Digest([]byte(invoiceText("1300.00"))), "name": "insurance-corrected.txt", "role": "invoice"}}})
-	_, err = db.Exec(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','twin-digest',$2)`, closeID, string(twinPaper))
+	// Once the recalculated draft's entry has been posted, a further correction is a person's: it must be made against that entry.
+	_, err = db.Exec(`INSERT INTO sandbox_postings(close_id,workpaper_id,source_key,realm,digest,journal,state) VALUES($1,$2,'recalc-source','test-realm','test-digest','{}','verified')`, closeID, draft2)
 	must(err)
 	third := insert("insurance-final.txt", invoiceText("1400.00"))
 	invoices[third] = "1400.00"
 	call("POST", base+"/evidence/"+second+"/replace", map[string]string{"replacement_id": third, "reason": "Final premium."}, 200)
 	capture("1400.00")
 	_, state, checkpoint = intake(third)
+	if state != "needs_confirmation" || !strings.Contains(checkpoint, "was posted") {
+		t.Fatalf("a posted predecessor leaves the correction to a person: state=%s %s", state, checkpoint)
+	}
+	// When two current drafts cite the replaced source, the agent cannot know which one a correction revises.
+	shape := func(amount string, sources []map[string]string) string {
+		paper, _ := json.Marshal(map[string]any{"input": map[string]string{"amount": amount}, "sources": sources, "straight_through": true})
+		return string(paper)
+	}
+	cite := map[string]string{"id": third, "digest": preparation.Digest([]byte(invoiceText("1400.00"))), "name": "insurance-final.txt", "role": "invoice"}
+	chart := map[string]string{"id": snapshotSource, "digest": preparation.Digest([]byte("period snapshot")), "name": "QuickBooks 2026-09 accrual period evidence.txt", "role": "chart"}
+	for _, digest := range []string{"twin-a", "twin-b"} {
+		_, err = db.Exec(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid',$2,$3)`, closeID, digest, shape("1400.00", []map[string]string{cite, chart}))
+		must(err)
+	}
+	fourth := insert("insurance-fourth.txt", invoiceText("1500.00"))
+	invoices[fourth] = "1500.00"
+	call("POST", base+"/evidence/"+third+"/replace", map[string]string{"replacement_id": fourth, "reason": "Fourth premium."}, 200)
+	capture("1500.00")
+	_, state, checkpoint = intake(fourth)
 	if state != "needs_confirmation" || !strings.Contains(checkpoint, "more than one earlier source or draft") {
 		t.Fatalf("an ambiguous lineage waits for a person: state=%s %s", state, checkpoint)
 	}

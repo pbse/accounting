@@ -8,3 +8,6 @@ dist/
 coverage/
 .DS_Store
 .remember/
+
+# GitNexus index: generated per machine, never source
+.gitnexus/
