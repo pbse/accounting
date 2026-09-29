@@ -167,7 +167,7 @@ export function Subprocessors() {
       <section>
         <h2>What is in use for your firm</h2>
         <p>
-          Beyond our hosting (Cloudflare) and database (Neon), which every firm uses, the <strong>Security center</strong> in the workspace lists the services that receive your firm’s data, exactly what each receives and whether your firm is using it. We will update this page before adding a subprocessor, and tell firms in a pilot first.
+          Beyond our hosting (Cloudflare) and database (Neon), which every firm uses, the <strong>Security center</strong> in the workspace lists the services that receive your firm’s data, what each receives and whether your firm is using it. We will update this page before adding a subprocessor, and tell firms in a pilot first.
         </p>
         <Contact />
       </section>
@@ -221,7 +221,7 @@ export function AiData() {
           <li>Written answers, firm-wide answers and investigations are off until a firm administrator turns them on, and each change is recorded with its reason.</li>
           <li>AI document reading is set for the whole service, not per firm. Without it, Close reads only exactly labelled facts, with no AI.</li>
           <li>Each firm has a daily limit on AI calls.</li>
-          <li>The workspace’s Security center shows what the AI receives and how many calls your firm made in the last 30 days.</li>
+          <li>The workspace’s Security center shows what the AI receives and how many AI calls were counted against your firm’s limit in the last 30 days.</li>
         </ul>
         <Contact />
       </section>
