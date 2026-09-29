@@ -67,6 +67,17 @@ type goalCoverage struct {
 	Open  int `json:"open"`
 }
 
+// countCoverage counts a capture's accounts and those not yet resolved or excluded.
+func countCoverage(accounts coverageView) *goalCoverage {
+	c := &goalCoverage{Total: len(accounts.Items)}
+	for _, item := range accounts.Items {
+		if item.State != "resolved" && item.State != "excluded" {
+			c.Open++
+		}
+	}
+	return c
+}
+
 // goalSignoff is what signing the close off needs, from its readiness: its needs that are not about a listed document,
 // each approved draft's proposed entry and where it stands, who signed off, and next month's close once one exists.
 type goalSignoff struct {
@@ -346,12 +357,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	}
 	if accounts.SnapshotID != "" {
 		p.accounts = &accounts
-		p.Coverage = &goalCoverage{Total: len(accounts.Items)}
-		for _, item := range accounts.Items {
-			if item.State != "resolved" && item.State != "excluded" {
-				p.Coverage.Open++
-			}
-		}
+		p.Coverage = countCoverage(accounts)
 	}
 	if !readSignoff {
 		return p, nil
@@ -549,9 +555,14 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 		if err == nil {
 			err = settleHandoffs(ctx, tx, g, goalProgress{}, true, roles)
 		}
+		// The signed-off close keeps its books and coverage in Work while it is listed.
 		var facts string
 		if err == nil {
-			facts, err = goalFacts(ctx, tx, g.close, goalProgress{})
+			var done goalProgress
+			if current.coverage.SnapshotID != "" {
+				done.Coverage = countCoverage(current.coverage)
+			}
+			facts, err = goalFacts(ctx, tx, g.close, done)
 		}
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now())||$3::jsonb WHERE id=$1`, g.id, current.State, facts)

@@ -1129,18 +1129,25 @@ func TestWorkShowsWhereEachDelegatedCloseStands(t *testing.T) {
 		}
 		must(tx.Commit())
 	}
-	// Zeta's books were captured two days ago and its transactions read an hour ago; its capture lists three accounts.
-	var zeta, beta, ledger, conn string
+	// capture connects the close's QuickBooks and captures its month two days ago, listing three accounts.
+	capture := func(closeID string) string {
+		t.Helper()
+		var ledger, conn string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt',$2,'Synthetic ledger','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&ledger))
+		must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&conn))
+		payload, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{
+			{"account_id": "a", "name": "Prepaid insurance", "kind": "prepaid", "question": "Provide the policy invoice."},
+			{"account_id": "b", "name": "Operating bank", "kind": "reconciliation", "question": "Provide the statement."},
+			{"account_id": "c", "name": "Office supplies", "kind": "accountant_review", "question": "Review activity."}}})
+		_, err := db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123',$3,$4,now()-interval '2 days',now()-interval '2 days','fixture')`, closeID, conn, rand.Text(), string(payload))
+		must(err)
+		return conn
+	}
+	// Zeta's books were captured two days ago and its transactions read an hour ago.
+	var zeta, beta string
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Zeta','2026-09') RETURNING id::text`, org).Scan(&zeta))
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Beta','2026-09') RETURNING id::text`, org).Scan(&beta))
-	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt',$2,'Synthetic ledger','fixture') RETURNING id::text`, zeta, rand.Text()).Scan(&ledger))
-	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, zeta, rand.Text()).Scan(&conn))
-	payload, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{
-		{"account_id": "a", "name": "Prepaid insurance", "kind": "prepaid", "question": "Provide the policy invoice."},
-		{"account_id": "b", "name": "Operating bank", "kind": "reconciliation", "question": "Provide the statement."},
-		{"account_id": "c", "name": "Office supplies", "kind": "accountant_review", "question": "Review activity."}}})
-	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123',$3,$4,now()-interval '2 days',now()-interval '2 days','fixture')`, zeta, conn, rand.Text(), string(payload))
-	must(err)
+	conn := capture(zeta)
 	var read time.Time
 	must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',now()-interval '1 hour','{}') RETURNING finished_at`, zeta, conn).Scan(&read))
 	document(zeta, "waiting_client")
@@ -1219,14 +1226,15 @@ func TestWorkShowsWhereEachDelegatedCloseStands(t *testing.T) {
 	// A signed-off close keeps these facts while Work lists it.
 	var gamma string
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Gamma','2026-09') RETURNING id::text`, org).Scan(&gamma))
+	capture(gamma)
 	document(gamma, "")
 	call("POST", "/v1/closes/"+gamma+"/goal", map[string]any{"confirmed": true, "finish": "signoff"})
 	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, gamma)
 	must(err)
 	step(gamma)
-	var signoff, books string
-	must(db.QueryRow(`SELECT summary->>'signoff',summary#>>'{books,state}' FROM close_goals WHERE close_id::text=$1`, gamma).Scan(&signoff, &books))
-	if signoff == "" || books != "none" {
-		t.Fatalf("a signed-off close keeps its books: %q %q", signoff, books)
+	var signoff, books, coverage string
+	must(db.QueryRow(`SELECT summary->>'signoff',summary#>>'{books,state}',summary->>'coverage' FROM close_goals WHERE close_id::text=$1`, gamma).Scan(&signoff, &books, &coverage))
+	if signoff == "" || books != "done" || coverage != `{"open": 3, "total": 3}` {
+		t.Fatalf("a signed-off close keeps its books and coverage: %q %q %s", signoff, books, coverage)
 	}
 }
