@@ -274,7 +274,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 		}
 		mentioned := printed(text, party)
 		// A Purchase's counterparty may be a customer or an employee; only a vendor's purchase is the invoice's booking.
-		fromVendor := party != "" && strings.EqualFold(party, vendor) && (row.Kind != "Purchase" || record.VendorRef.Name != "" || strings.EqualFold(record.EntityRef.Type, "Vendor"))
+		fromVendor := party != "" && sameName(party, vendor) && (row.Kind != "Purchase" || record.VendorRef.Name != "" || strings.EqualFold(record.EntityRef.Type, "Vendor"))
 		mine := fromVendor && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number))
 		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || row.Kind == "VendorCredit" || record.Credit || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
@@ -339,7 +339,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 					return "", "a captured Deposit in the close month does not name a counterparty"
 				}
 				from := line.DepositLineDetail.Entity.Name
-				mentioned, fromVendor = mentioned || printed(text, from), fromVendor || (from != "" && strings.EqualFold(from, vendor))
+				mentioned, fromVendor = mentioned || printed(text, from), fromVendor || (from != "" && sameName(from, vendor))
 			}
 			if row.Kind == "Deposit" && (mentioned || fromVendor || onExpense || onPrepaid) {
 				return "", "a deposit in the close month may refund what this invoice expensed"
@@ -560,6 +560,11 @@ func chargeLine(invoice string) bool {
 		}
 	}
 	return false
+}
+
+// sameName compares two party names ignoring case, punctuation and spacing: "Acme Insurance Co." is "Acme Insurance Co".
+func sameName(a, b string) bool {
+	return documents.NormalizeEntity(a) != "" && documents.NormalizeEntity(a) == documents.NormalizeEntity(b)
 }
 
 // mentionsAny reports whether the quote, compared as text, contains any of the words.
