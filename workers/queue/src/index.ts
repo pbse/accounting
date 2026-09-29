@@ -1,4 +1,6 @@
 import { Container } from "@cloudflare/containers";
+// Required entrypoint for Cloudflare container outbound service interception.
+export { ContainerProxy } from "@cloudflare/containers";
 import { deliver } from "./delivery";
 
 export class PreparationWorker extends Container<Env> {
@@ -7,6 +9,10 @@ export class PreparationWorker extends Container<Env> {
     SECRETS_KEY: this.env.SECRETS_KEY ?? "",
     OPENAI_API_KEY: this.env.OPENAI_API_KEY ?? "",
     OPENAI_MODEL: this.env.OPENAI_MODEL ?? "",
+    LLM_MODELS: this.env.LLM_MODELS ?? "",
+    CONTEXT_MACHINE_TOKEN: this.env.CONTEXT_MACHINE_TOKEN ?? "",
+    CONTEXT_MACHINE_MODEL: this.env.CONTEXT_MACHINE_MODEL ?? "",
+    CONTEXT_MACHINE_ENDPOINT: this.env.CONTEXT_MACHINE_TOKEN ? "http://context-machine.internal/v1/run" : "",
     OPERATIONS_ALERT_WEBHOOK_URL: this.env.OPERATIONS_ALERT_WEBHOOK_URL ?? "",
     OPERATIONS_ALERT_WEBHOOK_TOKEN: this.env.OPERATIONS_ALERT_WEBHOOK_TOKEN ?? "",
     QBO_CLIENT_ID: this.env.QBO_CLIENT_ID ?? "",
@@ -28,11 +34,20 @@ export class PreparationWorker extends Container<Env> {
   entrypoint = ["/worker"];
 }
 
+// Containers reach private Worker bindings through a fixed virtual host.
+PreparationWorker.outboundByHost = {
+  "context-machine.internal": (request, env) => (env as Env).CONTEXT_MACHINE.fetch(request),
+};
+
 interface Env {
   DATABASE_URL: string;
   SECRETS_KEY?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
+  LLM_MODELS?: string;
+  CONTEXT_MACHINE_TOKEN?: string;
+  CONTEXT_MACHINE_MODEL?: string;
+  CONTEXT_MACHINE: Fetcher;
   OPERATIONS_ALERT_WEBHOOK_URL?: string;
   OPERATIONS_ALERT_WEBHOOK_TOKEN?: string;
   QBO_CLIENT_ID?: string;

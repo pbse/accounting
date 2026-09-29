@@ -1,20 +1,18 @@
 package transport
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"close.local/backend/internal/documents"
+	"close.local/backend/internal/llm"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/wf"
 )
@@ -83,61 +81,22 @@ func toPlan(title string, nodes []plannerNode) (json.RawMessage, error) {
 var plannerTime, plannerRetry = 25 * time.Second, 8 * time.Second
 
 // askPlanner asks the model for one draft, within ctx's deadline.
-func askPlanner(ctx context.Context, key, model string, input any) (plan json.RawMessage, rationale string, err error) {
+func askPlanner(ctx context.Context, input any) (plan json.RawMessage, rationale string, err error) {
 	data, _ := json.Marshal(input)
-	payload, _ := json.Marshal(map[string]any{"model": model, "store": false, "max_output_tokens": 4000, "input": []map[string]string{
-		{"role": "system", "content": plannerInstructions}, {"role": "user", "content": string(data)}},
-		"text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "plan", "strict": true, "schema": json.RawMessage(plannerSchema)}}})
-	request, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/responses", bytes.NewReader(payload))
+	request := llm.Request{Purpose: "plan", MaxResponseBytes: 262144, MaxOutputTokens: 4000, Instructions: plannerInstructions, Data: json.RawMessage(data), Schema: &llm.OutputSchema{Name: "plan", Definition: json.RawMessage(plannerSchema)}}
+	response, err := llm.Generate(ctx, request)
 	if err != nil {
-		return nil, "", err
-	}
-	request.Header.Set("Authorization", "Bearer "+key)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, "", fmt.Errorf("%w: it ran out of time", errPlannerFailed)
 		}
-		return nil, "", fmt.Errorf("%w: the model could not be reached", errPlannerFailed)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("%w: the model answered HTTP %d", errPlannerFailed, response.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 256<<10+1))
-	if err != nil || len(raw) > 256<<10 {
-		return nil, "", fmt.Errorf("%w: its answer was too large", errPlannerFailed)
-	}
-	var envelope struct {
-		Status string `json:"status"`
-		Output []struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
-	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.Status != "completed" {
-		return nil, "", fmt.Errorf("%w: its answer was incomplete", errPlannerFailed)
-	}
-	output := ""
-	for _, item := range envelope.Output {
-		for _, content := range item.Content {
-			if content.Type == "refusal" {
-				return nil, "", fmt.Errorf("%w: it declined", errPlannerFailed)
-			}
-			if content.Type == "output_text" {
-				output += content.Text
-			}
-		}
+		return nil, "", fmt.Errorf("%w: %v", errPlannerFailed, err)
 	}
 	var draft struct {
 		Title     string        `json:"title"`
 		Rationale string        `json:"rationale"`
 		Nodes     []plannerNode `json:"nodes"`
 	}
-	if preparation.Strict([]byte(output), &draft) != nil {
+	if preparation.Strict([]byte(response.Text), &draft) != nil {
 		return nil, "", fmt.Errorf("%w: its answer did not fit the plan's shape", errPlannerFailed)
 	}
 	if plan, err = toPlan(strings.TrimSpace(draft.Title), draft.Nodes); err != nil {
@@ -165,8 +124,8 @@ func adminDraftPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		problem(w, 422, "Describe what the plan should do in 10 to 2,000 characters.")
 		return
 	}
-	key, model := os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL")
-	if key == "" || model == "" {
+	model := llm.Model(r.Context(), "plan")
+	if model == "" {
 		problem(w, 503, "The planner needs the agent model, which this server does not have.")
 		return
 	}
@@ -232,7 +191,7 @@ func adminDraftPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 			return
 		}
 		attempts++
-		plan, rationale, draftErr = askPlanner(deadline, key, model, input)
+		plan, rationale, draftErr = askPlanner(deadline, input)
 		if draftErr == nil {
 			if problems, _, _ := planProblems(plan); len(problems) > 0 {
 				draftErr = fmt.Errorf("%w: %s", wf.ErrPlanInvalid, strings.Join(problems, "; "))

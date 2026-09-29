@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"close.local/backend/internal/llm"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
 	"context"
@@ -551,12 +552,16 @@ func idempotent(db *sql.DB, next http.Handler) http.Handler {
 }
 
 func ConfiguredAPI() (http.Handler, func(), error) {
+	models, err := llm.FromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
 	if _, err := serverSessions(); err != nil {
 		return nil, nil, err
 	}
 	url := os.Getenv("DATABASE_URL")
 	if url == "" {
-		return API(), func() {}, nil
+		return models.Bind(API()), func() {}, nil
 	}
 	if os.Getenv("WORKOS_CLIENT_ID") != "" {
 		if !strings.HasPrefix(os.Getenv("WORKOS_ISSUER"), "https://") {
@@ -571,7 +576,7 @@ func ConfiguredAPI() (http.Handler, func(), error) {
 	}
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
-	return apiWithStore(db, os.Getenv("WORKSPACE_TOKEN")), func() { db.Close() }, nil
+	return models.Bind(apiWithStore(db, os.Getenv("WORKSPACE_TOKEN"))), func() { db.Close() }, nil
 }
 
 func workspaceVerifier() *auth.Verifier {

@@ -1,11 +1,11 @@
 package preparation
 
 import (
+	"close.local/backend/internal/llm"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -190,7 +190,7 @@ func IntakeSources(ctx context.Context, tx *sql.Tx, jobID string) ([]IntakeSourc
 }
 
 func ProcessIntake(ctx context.Context, db *sql.DB) (bool, error) {
-	if os.Getenv("OPENAI_API_KEY") != "" || os.Getenv("OPENAI_MODEL") != "" {
+	if llm.Model(ctx, "preparation") != "" {
 		return ProcessAgent(ctx, db)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

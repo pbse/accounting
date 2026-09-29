@@ -72,7 +72,7 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 		t.Fatal("Cannot start fixture")
 	}
 	token := strings.Repeat("a", 32)
-	h := apiWithStore(db, token)
+	h := modelHandler(t, apiWithStore(db, token))
 	base := "/v1/closes/" + closeID
 	call := func(method, path string, body any, want int) []byte {
 		t.Helper()
@@ -137,7 +137,7 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 	})
 	process := func() {
 		t.Helper()
-		if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
+		if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || !worked {
 			t.Fatal("Intake failed", e)
 		}
 	}
@@ -167,7 +167,7 @@ func TestAgentAnswersResumeAndInventoryFence(t *testing.T) {
 	if _, state := read(); state != "waiting_evidence" || attempts != 0 || !retry || !strings.Contains(message, "daily model call limit") || calls != 0 || usage() != spent {
 		t.Fatalf("a job past the limit waits without a call or an attempt: %s %d %v %q calls=%d", state, attempts, retry, message, calls)
 	}
-	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || worked {
+	if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || worked {
 		t.Fatal("a job waiting for the limit is not claimed again before its retry time", e)
 	}
 	if _, err = db.Exec(`UPDATE organizations SET max_model_calls_per_day=2000 WHERE id='local-development'`); err != nil {
@@ -307,7 +307,7 @@ func TestAgentProposedDepreciationContinuesThroughItsForm(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{"id": "mock-response", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
 	})
-	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
+	if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || !worked {
 		t.Fatal("Intake failed", e)
 	}
 	var revision int
@@ -316,7 +316,7 @@ func TestAgentProposedDepreciationContinuesThroughItsForm(t *testing.T) {
 		t.Fatalf("the agent proposes depreciation for review: %s %s %v", state, kind, err)
 	}
 	token := strings.Repeat("a", 32)
-	h := apiWithStore(db, token)
+	h := modelHandler(t, apiWithStore(db, token))
 	call := func(schedule string, want int) {
 		t.Helper()
 		input := map[string]any{"entity": "Depreciation agent fixture", "source_reference": "laptop.txt", "amount": "3600.00", "service_start": "2026-09-01", "service_end": "2029-08-31", "close_period": "2026-09", "currency": "USD", "basis": "accrual", "expense_account": "Depreciation expense", "prepaid_account": "Accumulated depreciation", "schedule": schedule, "booked_balance": "0.00", "booking_reference": "September ledger", "method": "equal_full_months_v1", "method_confirmed": true, "booking_confirmed": true, "examples_confirmed": true}
@@ -394,7 +394,7 @@ func TestHostileDocumentCannotSteerTheAgent(t *testing.T) {
 		response, _ := json.Marshal(map[string]any{"id": "mock-response", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(response))}, nil
 	})
-	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked || calls != 1 {
+	if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || !worked || calls != 1 {
 		t.Fatal("intake did not run", e, calls)
 	}
 	var state string

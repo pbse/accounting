@@ -1,15 +1,12 @@
 package transport
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -17,6 +14,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/documents"
+	"close.local/backend/internal/llm"
 	"close.local/backend/internal/preparation"
 )
 
@@ -135,7 +133,7 @@ func validateStatement(p *statementProposal, pages map[int]string, content strin
 	}
 }
 
-func extractStatement(ctx context.Context, key, model, content string) (statementProposal, string, error) {
+func extractStatement(ctx context.Context, content string) (statementProposal, string, error) {
 	var p statementProposal
 	row := `{"type":"object","additionalProperties":false,"required":["page","date","description","amount","quote","sign_certain"],"properties":{"page":{"type":"integer"},"date":{"type":"string"},"description":{"type":"string"},"amount":{"type":"string"},"quote":{"type":"string"},"sign_certain":{"type":"boolean"}}}`
 	fields := []string{"account", "account_quote", "period_start", "period_end", "period_quote", "opening_balance", "opening_quote", "closing_balance", "closing_quote", "currency"}
@@ -145,58 +143,20 @@ func extractStatement(ctx context.Context, key, model, content string) (statemen
 	}
 	required, _ := json.Marshal(append(fields, "rows", "truncated"))
 	schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":` + string(required) + `,"properties":{` + properties + `}}`)
-	payload, _ := json.Marshal(map[string]any{"model": model, "store": false, "max_output_tokens": 24000, "input": []map[string]string{{"role": "system", "content": statementInstructions}, {"role": "user", "content": content}}, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "statement_rows", "strict": true, "schema": schema}}})
+	request := llm.Request{Purpose: "statement", MaxResponseBytes: 1048576, MaxOutputTokens: 24000, Instructions: statementInstructions, Data: content, Schema: &llm.OutputSchema{Name: "statement_rows", Definition: schema}}
 	callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(callCtx, "POST", "https://api.openai.com/v1/responses", bytes.NewReader(payload))
+	response, err := llm.Generate(callCtx, request)
 	if err != nil {
-		return p, "", fmt.Errorf("The statement request could not be prepared.")
+		return p, "", err
 	}
-	request.Header.Set("Authorization", "Bearer "+key)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return p, "", fmt.Errorf("OpenAI could not read the statement. Nothing was saved; retry later.")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return p, "", fmt.Errorf("OpenAI returned HTTP %d. Check the model's credentials, access and limits.", response.StatusCode)
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20+1))
-	if err != nil || len(raw) > 1<<20 {
-		return p, "", fmt.Errorf("The statement reading exceeded its limit. Split the PDF and review each part.")
-	}
-	var envelope struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-		Output []struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
-	}
-	if json.Unmarshal(raw, &envelope) != nil || envelope.Status != "completed" {
-		return p, "", fmt.Errorf("The statement reading was incomplete. Split the PDF and review each part.")
-	}
-	output := ""
-	for _, item := range envelope.Output {
-		for _, c := range item.Content {
-			if c.Type == "refusal" {
-				return p, "", fmt.Errorf("OpenAI declined to read this statement.")
-			}
-			if c.Type == "output_text" {
-				output += c.Text
-			}
-		}
-	}
-	if preparation.Strict([]byte(strings.TrimSpace(output)), &p) != nil {
+	if preparation.Strict([]byte(strings.TrimSpace(response.Text)), &p) != nil {
 		return p, "", fmt.Errorf("OpenAI returned an unreadable statement reading. Nothing was saved.")
 	}
 	if p.Truncated || len(p.Rows) > statementRowLimit {
 		return p, "", fmt.Errorf("This statement has more rows than one review can list (%d). Split the PDF by pages and review each part.", statementRowLimit)
 	}
-	return p, envelope.ID, nil
+	return p, response.ID, nil
 }
 
 type statementChecks struct {
@@ -251,8 +211,8 @@ func registerStatements(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, fmt.Sprintf("This statement's text is over %d KiB, more than one review can read in full. Split the PDF by pages and review each part.", statementTextLimit/1024))
 			return
 		}
-		key, model := os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL")
-		if key == "" || model == "" {
+		model := llm.Model(r.Context(), "statement")
+		if model == "" {
 			problem(w, 503, "Reading statement rows needs the agent model. Upload the statement as an id,date,amount CSV instead.")
 			return
 		}
@@ -260,7 +220,7 @@ func registerStatements(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(95 * time.Second))
-		p, responseID, err := extractStatement(r.Context(), key, model, content)
+		p, responseID, err := extractStatement(r.Context(), content)
 		if err != nil {
 			problem(w, 502, err.Error())
 			return

@@ -172,7 +172,7 @@ func TestStripeReportArrivesAsRecognizedEvidence(t *testing.T) {
 		t.Fatalf("the report is saved once as evidence: %s downloads=%d", evidenceName, downloads)
 	}
 	for n := 0; ; n++ {
-		worked, e := preparation.ProcessIntake(context.Background(), db)
+		worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db)
 		if e != nil || n > 20 {
 			t.Fatal("intake did not settle", e)
 		}

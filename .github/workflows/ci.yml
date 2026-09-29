@@ -15,7 +15,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       TEST_DATABASE_URL: postgres://close:test-only@127.0.0.1:5432/close_test?sslmode=disable
       WORKSPACE_TOKEN: ci-configuration-validation-only-00000000
@@ -65,6 +65,10 @@ jobs:
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/scanner/wrangler.jsonc
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/context-machine/wrangler.jsonc
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/context-machine/wrangler.jsonc --env production
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc --env production
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc --env production
         env:
           WRANGLER_SEND_METRICS: "false"
       - run: test -z "$(gofmt -l services/backend)"
@@ -91,3 +95,10 @@ jobs:
           else
             echo "No Dockerfile or Go module change."
           fi
+      - name: Gateway and runtime race checks with coverage
+        run: cd services/backend && CGO_ENABLED=1 go test -race -cover ./internal/llm/...
+      - name: Context-machine image and real CLI protocol smoke tests
+        run: |
+          docker build -t close-context-machine -f services/context-machine/Dockerfile .
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go -C services/backend test -c -o /tmp/machine.test ./internal/llm/machine
+          docker run --rm --entrypoint /tmp/machine.test -e CONTEXT_MACHINE_CLI_SMOKE=1 -v /tmp/machine.test:/tmp/machine.test:ro close-context-machine -test.run TestInstalledCLIs -test.v

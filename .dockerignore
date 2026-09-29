@@ -1,0 +1,13 @@
+**
+!services/
+!services/backend/
+!services/backend/go.mod
+!services/backend/go.sum
+!services/backend/cmd/
+!services/backend/cmd/**
+!services/backend/internal/
+!services/backend/internal/**
+!services/scanner/
+!services/scanner/Dockerfile
+!services/context-machine/
+!services/context-machine/Dockerfile

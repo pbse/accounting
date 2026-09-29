@@ -45,7 +45,7 @@ func TestWorkInboxCoordinator(t *testing.T) {
 		}
 	}()
 	token := strings.Repeat("w", 32)
-	h := apiWithStore(db, token)
+	h := modelHandler(t, apiWithStore(db, token))
 	base := "/v1/closes/" + closeID
 	call := func(method, path string, body any, status int) []byte {
 		t.Helper()
@@ -93,7 +93,7 @@ func TestWorkInboxCoordinator(t *testing.T) {
 	process := func() {
 		t.Helper()
 		for n := 0; n < 100; n++ {
-			worked, e := preparation.ProcessIntake(context.Background(), db)
+			worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -251,7 +251,7 @@ func TestConfirmingAClientAliasRechecksBlockedWork(t *testing.T) {
 		}
 	}()
 	token := strings.Repeat("a", 32)
-	h := apiWithStore(db, token)
+	h := modelHandler(t, apiWithStore(db, token))
 	base := "/v1/closes/" + closeID
 	call := func(path string, body any, status int) {
 		t.Helper()
@@ -284,7 +284,7 @@ func TestConfirmingAClientAliasRechecksBlockedWork(t *testing.T) {
 	process := func() (int, string, preparation.Proposal) {
 		t.Helper()
 		for n := 0; n < 100; n++ {
-			worked, e := preparation.ProcessIntake(context.Background(), db)
+			worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -347,7 +347,7 @@ func TestPlainLanguageWorkRequestsBecomePreviewedCommands(t *testing.T) {
 		r := httptest.NewRequest("POST", "/v1/closes/work/interpret", bytes.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, r)
+		modelHandler(t, mux).ServeHTTP(w, r)
 		if w.Code != want {
 			t.Fatalf("%q: %d %s", text, w.Code, w.Body.String())
 		}

@@ -1,12 +1,12 @@
 package transport
 
 import (
+	"close.local/backend/internal/llm"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -66,14 +66,13 @@ func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayI
 	if err = preparation.ReserveModelCalls(ctx, db, org, calls); err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	var wg sync.WaitGroup
 	for _, it := range items {
 		if it.Error != "" {
 			continue
 		}
 		wg.Go(func() {
-			fresh, err := preparation.Replay(ctx, db, client, closeID, it.JobID)
+			fresh, err := preparation.Replay(ctx, db, closeID, it.JobID)
 			if err != nil {
 				it.Error = err.Error()
 				return
@@ -138,9 +137,9 @@ func replay(db *sql.DB) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		model := os.Getenv("OPENAI_MODEL")
-		if os.Getenv("OPENAI_API_KEY") == "" || model == "" {
-			problem(w, 503, "Set OPENAI_API_KEY and OPENAI_MODEL to replay model readings.")
+		model := llm.Model(r.Context(), "preparation")
+		if model == "" {
+			problem(w, 503, "Configure the preparation model to replay model readings.")
 			return
 		}
 		if _, running := replaying.LoadOrStore(actor, true); running {
@@ -169,8 +168,8 @@ func replay(db *sql.DB) http.HandlerFunc {
 
 // sweepReplays replays, for each firm not yet checked on the current model, the close with its newest confirmed reading. A run counts once it scores a reading.
 func sweepReplays(ctx context.Context, db *sql.DB) error {
-	model := os.Getenv("OPENAI_MODEL")
-	if os.Getenv("OPENAI_API_KEY") == "" || model == "" {
+	model := llm.Model(ctx, "preparation")
+	if model == "" {
 		return nil
 	}
 	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine'='openai' ORDER BY i.confirmed_at DESC LIMIT 1) j

@@ -74,7 +74,7 @@ func TestStatementRowsNeedEveryPageRowAndBalanceChecked(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{"id": "resp-statement", "status": "completed", "output": []any{map[string]any{"content": []any{map[string]string{"type": "output_text", "text": string(reading)}}}}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}, nil
 	})
-	store := savedCloses(db, strings.Repeat("a", 32))
+	store := modelHandler(t, savedCloses(db, strings.Repeat("a", 32)))
 	call := func(permissions []string, method, path string, body any, want int) []byte {
 		t.Helper()
 		raw, _ := json.Marshal(body)

@@ -1,4 +1,6 @@
 import { Container } from "@cloudflare/containers";
+// Required entrypoint for Cloudflare container outbound service interception.
+export { ContainerProxy } from "@cloudflare/containers";
 import { adminPage, adminPath, forwardsToAPI, secureAdmin, staffGate } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
 
@@ -11,6 +13,10 @@ export class CapabilityAPI extends Container<Env> {
     DATABASE_URL: this.env.DATABASE_URL ?? "",
     OPENAI_API_KEY: this.env.OPENAI_API_KEY ?? "",
     OPENAI_MODEL: this.env.OPENAI_MODEL ?? "",
+    LLM_MODELS: this.env.LLM_MODELS ?? "",
+    CONTEXT_MACHINE_TOKEN: this.env.CONTEXT_MACHINE_TOKEN ?? "",
+    CONTEXT_MACHINE_MODEL: this.env.CONTEXT_MACHINE_MODEL ?? "",
+    CONTEXT_MACHINE_ENDPOINT: this.env.CONTEXT_MACHINE_TOKEN ? "http://context-machine.internal/v1/run" : "",
     SECRETS_KEY: this.env.SECRETS_KEY ?? "",
     QBO_CLIENT_ID: this.env.QBO_CLIENT_ID ?? "",
     QBO_CLIENT_SECRET: this.env.QBO_CLIENT_SECRET ?? "",
@@ -48,6 +54,11 @@ export class CapabilityAPI extends Container<Env> {
   sleepAfter = "5m";
 }
 
+// Containers reach private Worker bindings through a fixed virtual host.
+CapabilityAPI.outboundByHost = {
+  "context-machine.internal": (request, env) => (env as Env).CONTEXT_MACHINE.fetch(request),
+};
+
 interface Env {
   TEXT_SCANNER_URL?: string;
   UPLOAD_SCAN_HOST?: string;
@@ -56,6 +67,10 @@ interface Env {
   DATABASE_URL?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
+  LLM_MODELS?: string;
+  CONTEXT_MACHINE_TOKEN?: string;
+  CONTEXT_MACHINE_MODEL?: string;
+  CONTEXT_MACHINE: Fetcher;
   SECRETS_KEY?: string;
   PUBLIC_APP_URL?: string;
   EMAIL_INTAKE_ADDRESS?: string;

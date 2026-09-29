@@ -109,7 +109,7 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 		lines = append(lines, `event: response.completed`+"\n"+`data: {"type":"response.completed","response":{"status":"completed"}}`)
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(strings.Join(lines, "\n\n") + "\n\n")), Header: http.Header{"Content-Type": {"text/event-stream"}}}, nil
 	})
-	store := savedCloses(db, strings.Repeat("a", 32))
+	store := modelHandler(t, savedCloses(db, strings.Repeat("a", 32)))
 	call := func(subject string, permissions []string, path string, body any, want int) []byte {
 		t.Helper()
 		raw, _ := json.Marshal(body)

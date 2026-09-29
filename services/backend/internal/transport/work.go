@@ -1,22 +1,20 @@
 package transport
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/mail"
-	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/documents"
+	"close.local/backend/internal/llm"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
@@ -209,15 +207,15 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Ask in up to 300 characters about at most 100 visible closes.")
 			return
 		}
-		key, model := os.Getenv("OPENAI_API_KEY"), os.Getenv("OPENAI_MODEL")
-		if key == "" || model == "" {
+		model := llm.Model(r.Context(), "work_command")
+		if model == "" {
 			problem(w, 503, "Plain-language requests need the agent model. Use one of the listed commands.")
 			return
 		}
 		if !modelBudget(w, r, db, 1) {
 			return
 		}
-		action, target, err := interpretWork(r.Context(), key, model, in.Text, in.Labels)
+		action, target, err := interpretWork(r.Context(), in.Text, in.Labels)
 		if err != nil {
 			problem(w, 502, err.Error())
 			return
@@ -576,7 +574,7 @@ func workCommand(action, target string, labels []string) (string, bool) {
 	return "", false
 }
 
-func interpretWork(ctx context.Context, key, model, text string, labels []string) (string, string, error) {
+func interpretWork(ctx context.Context, text string, labels []string) (string, string, error) {
 	actions := []string{"unsupported", "prepare", "recheck", "stop", "rehearse", "explain"}
 	for action := range askViews {
 		actions = append(actions, action)
@@ -586,50 +584,18 @@ func interpretWork(ctx context.Context, key, model, text string, labels []string
 	schema, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "required": []string{"action", "target"}, "properties": map[string]any{
 		"action": map[string]any{"type": "string", "enum": actions}, "target": map[string]any{"type": "string", "enum": targets}}})
 	input, _ := json.Marshal(map[string]any{"request": text, "visible_closes": labels})
-	payload, _ := json.Marshal(map[string]any{"model": model, "store": false, "max_output_tokens": 200, "input": []map[string]string{
-		{"role": "system", "content": "Map an accountant's request about their close work to one command. Actions: show_* filter the inbox (target empty); prepare, recheck or stop coordinate a close's source jobs (target one visible close, or \"all visible\"); rehearse opens a close's production journal rehearsal and explain says why a close is waiting (target one visible close). Choose a target only when the request clearly names one visible close; otherwise use unsupported. Never invent a close."},
-		{"role": "user", "content": string(input)}}, "text": map[string]any{"format": map[string]any{"type": "json_schema", "name": "work_command", "strict": true, "schema": json.RawMessage(schema)}}})
+	request := llm.Request{Purpose: "work_command", MaxResponseBytes: 32768, MaxOutputTokens: 200, Instructions: "Map an accountant's request about their close work to one command. Actions: show_* filter the inbox (target empty); prepare, recheck or stop coordinate a close's source jobs (target one visible close, or \"all visible\"); rehearse opens a close's production journal rehearsal and explain says why a close is waiting (target one visible close). Choose a target only when the request clearly names one visible close; otherwise use unsupported. Never invent a close.", Data: json.RawMessage(input), Schema: &llm.OutputSchema{Name: "work_command", Definition: json.RawMessage(schema)}}
 	callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(callCtx, "POST", "https://api.openai.com/v1/responses", bytes.NewReader(payload))
+	response, err := llm.Generate(callCtx, request)
 	if err != nil {
-		return "", "", errors.New("The request could not be interpreted")
-	}
-	request.Header.Set("Authorization", "Bearer "+key)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return "", "", errors.New("The agent model is unavailable; use one of the listed commands")
-	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 32769))
-	if err != nil || response.StatusCode != http.StatusOK || len(raw) > 32768 {
-		return "", "", errors.New("The agent model did not answer; use one of the listed commands")
-	}
-	var envelope struct {
-		Status string `json:"status"`
-		Output []struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
-	}
-	output := ""
-	if json.Unmarshal(raw, &envelope) == nil && envelope.Status == "completed" {
-		for _, item := range envelope.Output {
-			for _, content := range item.Content {
-				if content.Type == "output_text" {
-					output += content.Text
-				}
-			}
-		}
+		return "", "", err
 	}
 	var answer struct {
 		Action string `json:"action"`
 		Target string `json:"target"`
 	}
-	if preparation.Strict([]byte(output), &answer) != nil {
+	if preparation.Strict([]byte(response.Text), &answer) != nil {
 		return "", "", errors.New("The agent model's answer was incomplete; use one of the listed commands")
 	}
 	return answer.Action, answer.Target, nil

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"close.local/backend/internal/llm"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
 	"close.local/backend/internal/preparation"
@@ -38,6 +39,14 @@ func apiWithStore(db *sql.DB, token string) http.Handler {
 	mux.HandleFunc("POST /internal/email-reply", system(receiveEmailReply(db)))
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		machineCtx, machineCancel := context.WithTimeout(r.Context(), 20*time.Second)
+		err := llm.CheckContextMachine(machineCtx)
+		machineCancel()
+		if err != nil {
+			problem(w, 503, "Context machine is not ready.")
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
 		if db == nil {
