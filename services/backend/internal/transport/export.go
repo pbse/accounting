@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -570,6 +571,14 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			return nil, fmt.Errorf("unsupported workpaper kind")
 		}
 		summary.Issues = append(summary.Issues, "Current review state: "+saved.ReviewState+". Workpaper review is not posting approval or firm sign-off.")
+		// Sign-off covers only the scope's required drafts, so a draft left out of it says so rather than reading as closed.
+		if s := pack.Readiness; s != nil && s.Scope.Description != "" {
+			if slices.Contains(s.Scope.RequiredPapers, saved.ID) {
+				summary.Issues = append(summary.Issues, "In the declared sign-off scope.")
+			} else {
+				summary.Issues = append(summary.Issues, "Outside the declared sign-off scope: sign-off does not cover this draft.")
+			}
+		}
 		papers = append(papers, summary)
 	}
 	var receiptJSON bytes.Buffer
