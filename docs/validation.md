@@ -2861,3 +2861,11 @@ Checks:
 - `TestAssistantInvestigatesBeforeWriting`: with the setting off, no tools are offered; on, the model reads a document's text, a refused tool (the package export) is told so, the answer quoting the document is kept with an Investigated line and the evidence link, the trace is saved with both steps, and the three model calls are counted.
 - Review: a Codex pass found a document whose text began with JSON could be cut at that value, investigations survived written answers being turned off, and the two model budgets exceeded the handler's write deadline; a second pass found a document whose whole text was a bare number would be read as JSON and its card number left unredacted, so the tool now decides the body's form; each is fixed. The third pass found nothing.
 - Fresh local PostgreSQL, `go test ./...`, `go vet`, `gofmt`, `npm run check`, `npm test`, frontend build.
+
+## Sidebar posting copy (2026-09-28)
+
+Request: align public copy with actual activation ([maturity](maturity.md)). The sidebar said "Sandbox posting only" although controlled production posting exists behind client grants.
+
+What changed: the sidebar footer now says nothing posts on its own: a person previews, approves and executes each posting, to a sandbox or, under the client's grant, to the client's own ledger; each is attempted once and counts as posted only once its readback matches. A Codex pass found the first wording named QuickBooks for every client (Xero has its own flow), implied a grant switched the destination by itself, and called every posting read back; the wording is now provider-neutral and distinguishes the attempted readback from a verified posting. The contact page's "coming soon" line stays until the firm's contact channel exists; nothing here invents one.
+
+Checks: `npm run check`, frontend build.

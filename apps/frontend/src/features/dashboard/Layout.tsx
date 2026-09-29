@@ -99,7 +99,7 @@ export default function WorkspaceLayout() {
         </nav>
         <div className="sidebar-footer">
           <SidebarAccount />
-          <p>Sandbox posting only. Production posting requires separate client authority.</p>
+          <p>Nothing posts on its own. A person previews, approves and executes each posting, to a sandbox or, under the client's grant, to the client's own ledger; each is attempted once and counts as posted only once its readback matches.</p>
         </div>
       </aside>
       <main id="main" className="app-main">
