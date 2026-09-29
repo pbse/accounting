@@ -549,8 +549,12 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 		if err == nil {
 			err = settleHandoffs(ctx, tx, g, goalProgress{}, true, roles)
 		}
+		var facts string
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now()) WHERE id=$1`, g.id, current.State)
+			facts, err = goalFacts(ctx, tx, g.close, goalProgress{})
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now())||$3::jsonb WHERE id=$1`, g.id, current.State, facts)
 		}
 		return err
 	case g.finish == "signoff" && g.state == "reached":
@@ -654,17 +658,26 @@ func saveSummary(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress) err
 	if g.finish == "signoff" && p.Coverage != nil && p.Coverage.Open > 0 {
 		needs++
 	}
-	// Work also shows where the books stand, when they were last read, the accounts' coverage and what waits on the
-	// client, so a firm sees each close's state without opening it.
-	var entity, period string
-	if err := tx.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id=$1`, g.close).Scan(&entity, &period); err != nil {
-		return err
-	}
-	b, err := readBooks(ctx, tx, g.close)
+	facts, err := goalFacts(ctx, tx, g.close, p)
 	if err != nil {
 		return err
 	}
-	step := booksStep(b, g.close, entity, period)
+	_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now())||$5::jsonb WHERE id=$1`, g.id, needs, p.Ready, signoff, facts)
+	return err
+}
+
+// goalFacts is what else Work shows of a delegated close, so a firm sees its state without opening it: the plan's books
+// step and when the books were last read, the capture's account coverage, and how many documents wait on the client.
+func goalFacts(ctx context.Context, tx *sql.Tx, closeID string, p goalProgress) (string, error) {
+	var entity, period string
+	if err := tx.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id=$1`, closeID).Scan(&entity, &period); err != nil {
+		return "", err
+	}
+	b, err := readBooks(ctx, tx, closeID)
+	if err != nil {
+		return "", err
+	}
+	step := booksStep(b, closeID, entity, period)
 	books := map[string]any{"state": step.State, "text": step.Text}
 	if b.source != "none" {
 		read := b.captured
@@ -679,9 +692,8 @@ func saveSummary(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress) err
 			client++
 		}
 	}
-	extra, _ := json.Marshal(map[string]any{"books": books, "coverage": p.Coverage, "client": client})
-	_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now())||$5::jsonb WHERE id=$1`, g.id, needs, p.Ready, signoff, string(extra))
-	return err
+	facts, err := json.Marshal(map[string]any{"books": books, "coverage": p.Coverage, "client": client})
+	return string(facts), err
 }
 
 // goalActivity is what happened on the close since its goal started, newest first: the goal's own events (in the order
@@ -726,7 +738,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
  FROM close_goals g JOIN client_closes c ON c.id=g.close_id
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access a WHERE a.organization_id=c.organization_id AND a.subject=$3 AND lower(a.client_entity)=lower(c.entity) AND a.granted))
  AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4) AND (g.state='active' OR g.state='reached' AND g.reached_at>now()-interval '14 days')
- ORDER BY CASE WHEN (g.summary->>'needs')::int>0 OR g.summary->>'signoff'='reopen_required' OR g.summary->>'signoff'='open' AND (g.summary->>'ready')::boolean OR g.state='active' AND g.summary#>>'{books,state}'='you' THEN 0 WHEN g.state='active' THEN 1 ELSE 2 END,g.due_on NULLS LAST,lower(c.entity),c.period LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+ ORDER BY CASE WHEN (g.summary->>'needs')::int>0 OR g.summary->>'signoff'='reopen_required' OR g.summary->>'signoff'='open' AND (g.summary->>'ready')::boolean OR g.summary#>>'{books,state}'='you' AND g.summary->>'signoff'<>'signed_off' THEN 0 WHEN g.state='active' THEN 1 ELSE 2 END,g.due_on NULLS LAST,lower(c.entity),c.period LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
 		if err != nil {
 			problem(w, 503, "Delegated closes are unavailable.")
 			return

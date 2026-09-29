@@ -1090,6 +1090,7 @@ func TestWorkShowsWhereEachDelegatedCloseStands(t *testing.T) {
 	defer func() {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM quickbooks_entity_syncs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM quickbooks_connections WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
@@ -1207,5 +1208,25 @@ func TestWorkShowsWhereEachDelegatedCloseStands(t *testing.T) {
 	got = list()
 	if z := got["Zeta"].Summary; z.Books.State != "you" || z.Books.Text != "Reconnect QuickBooks for Zeta so I can read the books." || got["first"].Entity != "Zeta" {
 		t.Fatalf("books that need reconnecting come first: %+v %s", z.Books, got["first"].Entity)
+	}
+	// They still do once the review goal's documents are ready, since a finished review does not cover the books.
+	_, err = db.Exec(`UPDATE close_goals SET state='reached',reached_at=now() WHERE close_id::text=$1 AND state='active'`, zeta)
+	must(err)
+	if first := list()["first"].Entity; first != "Zeta" {
+		t.Fatalf("a finished review whose books need a person comes first: %s", first)
+	}
+
+	// A signed-off close keeps these facts while Work lists it.
+	var gamma string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Gamma','2026-09') RETURNING id::text`, org).Scan(&gamma))
+	document(gamma, "")
+	call("POST", "/v1/closes/"+gamma+"/goal", map[string]any{"confirmed": true, "finish": "signoff"})
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, gamma)
+	must(err)
+	step(gamma)
+	var signoff, books string
+	must(db.QueryRow(`SELECT summary->>'signoff',summary#>>'{books,state}' FROM close_goals WHERE close_id::text=$1`, gamma).Scan(&signoff, &books))
+	if signoff == "" || books != "none" {
+		t.Fatalf("a signed-off close keeps its books: %q %q", signoff, books)
 	}
 }

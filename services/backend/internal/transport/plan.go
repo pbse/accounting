@@ -98,10 +98,14 @@ func booksStep(b booksRead, closeID, entity, period string) planStep {
 		if b.synced.Valid {
 			s.Text += " Transactions read " + day(b.synced.Time) + "."
 		}
-		// A failed latest read is not hidden behind an earlier capture: the books are only as current as that read.
-		if b.sync == "failed" {
+		// A failed latest read is not hidden behind an earlier capture: the books are only as current as that read. Only a
+		// close the scheduled reads take is read again on its own.
+		switch {
+		case b.sync == "failed" && b.daily:
 			s.State, s.Text = "agent", strings.TrimSpace(s.Text+" My last read of QuickBooks failed: "+b.failure)+" I'll try again within a day."
-		} else if b.synced.Valid {
+		case b.sync == "failed":
+			s.State, s.Text = "you", strings.TrimSpace(s.Text+" My last read of QuickBooks failed: "+b.failure)+" Read it again in the QuickBooks panel."
+		case b.synced.Valid:
 			s.Text += again("them")
 		}
 	case b.source == "quickbooks" && b.quickbooks == "active":

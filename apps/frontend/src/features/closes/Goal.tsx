@@ -527,9 +527,10 @@ function delegatedState(g: Delegated): [string, string] {
   if (!s.as_of) return ["status info", "Updating…"];
   if (s.signoff === "reopen_required") return ["status warn", "Needs reopening"];
   if (s.signoff === "signed_off") return ["status ok", "Signed off"];
+  // Books a person must capture again or reconnect come before a finished review, which does not cover them.
+  if (s.books?.state === "you") return ["status warn", "The books need a person"];
   if (g.finish === "review" && g.state === "reached") return ["status ok", "Ready for review"];
   if (s.needs) return ["status warn", `${s.needs} thing${s.needs === 1 ? " needs" : "s need"} a person`];
-  if (s.books?.state === "you") return ["status warn", "The books need a person"];
   if (s.signoff === "open" && s.ready) return ["status warn", "Ready to sign off"];
   if (s.client) return ["status info", "Waiting on the client"];
   return ["status info", "The agent is working"];
