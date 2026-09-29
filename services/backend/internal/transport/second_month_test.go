@@ -91,11 +91,12 @@ func TestSecondMonthCarriesOrdinaryAndChangedSchedules(t *testing.T) {
 	}
 	insurance := schedule("Allianz policy", "120.00", "2026-11-30", "Insurance expense", "Prepaid insurance")
 	rent := schedule("Office lease", "240.00", "2027-02-28", "Rent expense", "Prepaid rent")
+	software := schedule("Ledger software", "360.00", "2027-08-31", "Software expense", "Prepaid software")
 
 	// Signing off September starts October: both schedules are queued for next-month preparation.
 	var state readiness
 	must(json.Unmarshal(call("GET", "/v1/closes/"+september+"/readiness", nil, 200), &state))
-	call("POST", "/v1/closes/"+september+"/scope", map[string]any{"digest": state.Digest, "scope": closeScope{Description: "Prepaid schedules only.", RequiredPapers: []string{insurance, rent}, ExternalSteps: []externalStep{}}}, 200)
+	call("POST", "/v1/closes/"+september+"/scope", map[string]any{"digest": state.Digest, "scope": closeScope{Description: "Prepaid schedules only.", RequiredPapers: []string{insurance, rent, software}, ExternalSteps: []externalStep{}}}, 200)
 	must(json.Unmarshal(call("GET", "/v1/closes/"+september+"/readiness", nil, 200), &state))
 	if len(state.Blockers) != 0 {
 		t.Fatalf("September is ready to sign: %v", state.Blockers)
@@ -105,8 +106,8 @@ func TestSecondMonthCarriesOrdinaryAndChangedSchedules(t *testing.T) {
 		CarryError string `json:"carry_error"`
 	}
 	must(json.Unmarshal(call("POST", "/v1/closes/"+september+"/signoff", map[string]any{"digest": state.Digest, "expected_decision_id": state.DecisionID, "action": "sign", "note": "September closed", "confirmed": true}, 200), &signed))
-	if signed.Carried != 2 || signed.CarryError != "" {
-		t.Fatalf("sign-off carries both reviewed schedules into October: %+v", signed)
+	if signed.Carried != 3 || signed.CarryError != "" {
+		t.Fatalf("sign-off carries all three reviewed schedules into October: %+v", signed)
 	}
 	var october string
 	must(db.QueryRow(`SELECT id::text FROM client_closes WHERE entity=$1 AND period='2026-10'`, entity).Scan(&october))
@@ -120,7 +121,7 @@ func TestSecondMonthCarriesOrdinaryAndChangedSchedules(t *testing.T) {
 		must(db.QueryRow(`SELECT id::text FROM workpapers WHERE close_id=$1 AND paper->'carry_forward'->>'paper_id'=$2`, october, predecessor).Scan(&id))
 		return id
 	}
-	octoberInsurance, octoberRent := carried(insurance), carried(rent)
+	octoberInsurance, octoberRent, octoberSoftware := carried(insurance), carried(rent), carried(software)
 	var scheduled string
 	must(db.QueryRow(`SELECT r->>'remaining' FROM workpapers, jsonb_array_elements(paper->'schedule') r WHERE id=$1 AND r->>'period'='2026-10'`, octoberInsurance).Scan(&scheduled))
 	if scheduled != "40.00" {
@@ -128,8 +129,8 @@ func TestSecondMonthCarriesOrdinaryAndChangedSchedules(t *testing.T) {
 	}
 
 	// The ordinary month: the unchanged carried drafts are approved under the standing approvals.
-	if _, approved, err := sweepStandingApprovals(ctx, db, "0"); err != nil || approved != 2 {
-		t.Fatalf("both carried October drafts are approved automatically: %d %v", approved, err)
+	if _, approved, err := sweepStandingApprovals(ctx, db, "0"); err != nil || approved != 3 {
+		t.Fatalf("the carried October drafts are approved automatically: %d %v", approved, err)
 	}
 	var actor, note string
 	must(db.QueryRow(`SELECT actor,note FROM workpaper_reviews WHERE workpaper_id=$1 ORDER BY id DESC LIMIT 1`, octoberInsurance).Scan(&actor, &note))
@@ -137,6 +138,28 @@ func TestSecondMonthCarriesOrdinaryAndChangedSchedules(t *testing.T) {
 	must(db.QueryRow(`SELECT granted_by FROM standing_approvals WHERE workpaper_id=$1`, insurance).Scan(&granter))
 	if actor != granter || !strings.Contains(note, "Standing approval #") {
 		t.Fatalf("the approval is the granter's and names the standing approval: %s %s", actor, note)
+	}
+
+	// Changed terms: the vendor amends the software invoice in October. Replacing the carried copy of the invoice
+	// marks the carried draft changed at source, so its automatic approval no longer stands and a person revises it;
+	// a carried schedule is never recalculated straight through.
+	var softwareInvoice string
+	must(db.QueryRow(`SELECT s->>'id' FROM workpapers, jsonb_array_elements(paper->'sources') s WHERE id=$1 AND s->>'role'='invoice'`, octoberSoftware).Scan(&softwareInvoice))
+	var amended string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'Ledger software amended.txt',$2,'Amended: 480.00 for the same term','fixture') RETURNING id::text`, october, rand.Text()).Scan(&amended))
+	call("POST", "/v1/closes/"+october+"/evidence/"+softwareInvoice+"/replace", map[string]any{"replacement_id": amended, "reason": "The vendor re-issued the invoice with the amended annual fee"}, 200)
+	var changed string
+	must(db.QueryRow(`SELECT review_state FROM workpaper_review_state WHERE id=$1`, octoberSoftware).Scan(&changed))
+	if changed != "source_changed" {
+		t.Fatalf("the carried draft whose invoice changed is called out as changed at source: %s", changed)
+	}
+	if _, approved, err := sweepStandingApprovals(ctx, db, "0"); err != nil || approved != 0 {
+		t.Fatalf("a standing approval does not re-approve a draft whose terms changed: %d %v", approved, err)
+	}
+	var recalculated bool
+	must(db.QueryRow(`SELECT EXISTS(SELECT 1 FROM preparation_jobs WHERE close_id=$1 AND state='queued')`, october).Scan(&recalculated))
+	if recalculated {
+		t.Fatal("a carried schedule with changed terms is revised by a person, not recalculated on its own")
 	}
 
 	// October's Trial Balance arrives: insurance agrees with the schedule, rent does not.
