@@ -895,7 +895,7 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 // (two replaced sources, two drafts citing one) is a person's to resolve, and the reason says so.
 func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoiceID string, plan Plan) (string, error) {
 	// A draft is revised automatically only when it cites a replaced source as its invoice and was itself prepared
-	// straight through (its paper says so; a carried-forward draft never does); a draft a person confirmed keeps its
+	// straight through (its paper says so, or its job's intake was confirmed by the agent; a carried-forward draft never is); a draft a person confirmed keeps its
 	// revision in a person's hands. The chain of replacements is followed, so a source replaced twice before its
 	// replacement was read still leads to the current draft; two sources replaced by the same file are ambiguous.
 	var siblings, citing, eligible int
@@ -903,7 +903,7 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 	err := tx.QueryRowContext(ctx, `WITH RECURSIVE chain(id, depth) AS (
   SELECT id, 1 FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2
   UNION ALL SELECT e.id, c.depth+1 FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE c.depth < 20),
- drafts AS (SELECT DISTINCT w.id, COALESCE((w.paper->>'straight_through')::boolean,false) AND w.paper->'carry_forward' IS NULL AS straight FROM workpapers w, chain
+ drafts AS (SELECT DISTINCT w.id, (COALESCE((w.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=w.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND i.confirmed_by='agent')) AND w.paper->'carry_forward' IS NULL AS straight FROM workpapers w, chain
   WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role','invoice'))
   AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
  SELECT (SELECT count(*) FROM chain WHERE depth=1),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID).Scan(&siblings, &citing, &eligible, &revises)
