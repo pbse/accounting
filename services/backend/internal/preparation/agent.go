@@ -35,9 +35,10 @@ func ReserveModelCalls(ctx context.Context, q interface {
 }
 
 // Inventory is always scoped by the authenticated close. Replies belonging to
-// another request are not interchangeable evidence, even inside the same close.
+// another request are not interchangeable evidence, even inside the same close. A released client document
+// is a reply to the request it answered, but the primary source of its own intake, so that job reads it as one.
 func AgentInventory(ctx context.Context, tx *sql.Tx, closeID, jobID string) ([]IntakeSource, string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT e.id::text,e.name,e.digest,e.content,e.extraction_state,COALESCE(e.superseded_by::text,''),e.procedure_id IS NOT NULL,EXISTS(SELECT 1 FROM work_replies r JOIN request_jobs q ON q.request_id=r.request_id WHERE r.source_id=e.id AND q.job_id=$2),EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id=$2) FROM evidence e WHERE e.close_id=$1 AND e.purpose='work' AND (NOT EXISTS(SELECT 1 FROM work_replies r WHERE r.source_id=e.id) OR EXISTS(SELECT 1 FROM work_replies r JOIN request_jobs q ON q.request_id=r.request_id WHERE r.source_id=e.id AND q.job_id=$2)) AND (NOT EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id) OR EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id=$2)) ORDER BY e.id`, closeID, jobID)
+	rows, err := tx.QueryContext(ctx, `SELECT e.id::text,e.name,e.digest,e.content,e.extraction_state,COALESCE(e.superseded_by::text,''),e.procedure_id IS NOT NULL,EXISTS(SELECT 1 FROM work_replies r JOIN request_jobs q ON q.request_id=r.request_id WHERE r.source_id=e.id AND q.job_id=$2 AND e.id<>i.source_id),EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id=$2) FROM preparation_intakes i, evidence e WHERE i.job_id=$2 AND e.close_id=$1 AND e.purpose='work' AND (NOT EXISTS(SELECT 1 FROM work_replies r WHERE r.source_id=e.id) OR EXISTS(SELECT 1 FROM work_replies r JOIN request_jobs q ON q.request_id=r.request_id WHERE r.source_id=e.id AND q.job_id=$2)) AND (NOT EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id) OR EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id=$2)) ORDER BY e.id`, closeID, jobID)
 	if err != nil {
 		return nil, "", err
 	}
