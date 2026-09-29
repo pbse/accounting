@@ -126,6 +126,12 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	if _, reason = StraightThrough(proposal, invoice+"\nDiscount USD 100.00\nTotal USD 1,100.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared a line item when the invoice prints a discount and a lower total")
 	}
+	if _, reason = StraightThrough(proposal, invoice+"\nBill to: Other Co", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+		t.Fatal("prepared an invoice printing two bill-to names")
+	}
+	if _, reason = StraightThrough(proposal, invoice+"\nTax 100", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
+		t.Fatal("prepared an invoice with a bare tax figure and no total")
+	}
 	if _, reason = StraightThrough(proposal, invoice+"\nTotal USD 1,200.00\nAmount due 2026-10-01 USD 1,100.00", nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason == "" {
 		t.Fatal("prepared against an amount-due line with a date and a lower figure")
 	}

@@ -156,6 +156,10 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if err := BilledToClient(facts["billed_to"], entity, aliases); err != nil {
 		return Plan{}, err.Error()
 	}
+	// An invoice that bills two names bills neither for certain.
+	if len(billToNames(invoice)) > 1 {
+		return Plan{}, "the invoice prints more than one bill-to name; a person weighs who it bills"
+	}
 	if facts["currency"] != currency {
 		return Plan{}, "the invoice is not in the client's home currency"
 	}
@@ -194,8 +198,8 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		return Plan{}, "the invoice speaks of a credit, cancellation, refund, adjustment or proration; a person weighs it"
 	}
 	// An invoice printing other money figures (a tax, a fee) must say which is payable: a total line printing the amount.
-	if moneyFigures(invoice) > 1 && !totalLineShows(invoice, amount) {
-		return Plan{}, "the invoice prints several money figures and no total line printing the cited amount"
+	if (moneyFigures(invoice) > 1 || chargeLine(invoice)) && !totalLineShows(invoice, amount) {
+		return Plan{}, "the invoice prints several money figures, or a tax or fee, and no total line printing the cited amount"
 	}
 	// The currency is the amount's: both quotes print the currency's code or sign immediately before the figure.
 	if !currencyBefore(quotes["amount"], currency, amount) || !currencyBefore(quotes["currency"], currency, amount) {
@@ -527,6 +531,31 @@ func totalLineShows(invoice string, cents int64) bool {
 	for _, line := range strings.Split(invoice, "\n") {
 		normal := documents.NormalizeEntity(line)
 		if (strings.Contains(normal, "total") && !strings.Contains(normal, "subtotal") && !strings.Contains(normal, "sub total") || (strings.Contains(normal, " due") && !strings.Contains(normal, "date")) || strings.Contains(normal, "payable")) && distinctFigures(line)[cents] {
+			return true
+		}
+	}
+	return false
+}
+
+// billToNames is the set of distinct names the invoice bills, read from lines whose label is a bill-to label.
+func billToNames(invoice string) map[string]bool {
+	names := map[string]bool{}
+	for _, line := range strings.Split(invoice, "\n") {
+		normal := documents.NormalizeEntity(line)
+		for _, label := range []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"} {
+			if name := strings.TrimSpace(strings.TrimPrefix(normal, label)); strings.HasPrefix(normal, label+" ") && name != "" {
+				names[name] = true
+			}
+		}
+	}
+	return names
+}
+
+// chargeLine reports whether the invoice prints a tax, fee or similar charge with a number on its line, cents or not.
+func chargeLine(invoice string) bool {
+	for _, line := range strings.Split(invoice, "\n") {
+		normal := documents.NormalizeEntity(line)
+		if regexp.MustCompile(`\d`).MatchString(normal) && mentionsAny(line, []string{"tax", "vat", "gst", "hst", "fee", "surcharge", "levy", "shipping", "freight", "handling", "duty"}) {
 			return true
 		}
 	}
