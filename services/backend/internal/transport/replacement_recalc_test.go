@@ -129,8 +129,8 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 		printed := amount[:len(amount)-6] + "," + amount[len(amount)-6:]
 		return "Acme Insurance Co\nInvoice INV-778\nBill to: " + entity + "\nAnnual premium USD " + printed + "\nCoverage period 2026-09-01 to 2027-08-31\n"
 	}
-	// prepare uploads an invoice and runs the intake, the agent and the preparation worker; it returns the draft.
-	prepare := func(invoiceID string) (job, draft string) {
+	// intake starts an invoice's intake and runs the agent once, returning the job and its state.
+	intake := func(invoiceID string) (job, state, checkpoint string) {
 		t.Helper()
 		tx, err := db.Begin()
 		must(err)
@@ -140,6 +140,12 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 		if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
 			t.Fatalf("the agent did not run: %v %v", worked, e)
 		}
+		must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &checkpoint))
+		return job, state, checkpoint
+	}
+	// finish runs the preparation worker on a queued job and returns its draft.
+	finish := func(job string) (draft string) {
+		t.Helper()
 		var state, checkpoint string
 		must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &checkpoint))
 		if state != "queued" {
@@ -154,11 +160,12 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 		if _, rest, ok := strings.Cut(ids, "completed  "); !ok || json.Unmarshal([]byte(rest), &papers) != nil || len(papers) != 1 {
 			t.Fatalf("the worker saved one draft: %s", ids)
 		}
-		return job, papers[0]
+		return papers[0]
 	}
 	first := insert("insurance.txt", invoiceText("1200.00"))
 	invoices[first] = "1200.00"
-	_, draft1 := prepare(first)
+	job1, _, _ := intake(first)
+	draft1 := finish(job1)
 
 	token := strings.Repeat("r", 32)
 	handler := apiWithStore(db, token)
@@ -198,15 +205,28 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	_, otherReview, otherDigest := review(other)
 	call("POST", base+"/workpapers/"+other+"/reviews", map[string]string{"decision": "approved", "note": "Unrelated", "digest": otherDigest, "expected_review_id": otherReview}, 200)
 
-	// A corrected invoice arrives with a higher premium; the books now carry the corrected bill.
+	// A corrected invoice arrives with a higher premium. Its intake runs first, while the old invoice is still current, so
+	// it waits for a person; recording the replacement resumes it, the books now carry the corrected bill, and the second
+	// pass prepares it straight through.
 	second := insert("insurance-corrected.txt", invoiceText("1300.00"))
 	invoices[second] = "1300.00"
+	job2, state, checkpoint := intake(second)
+	if state != "needs_confirmation" || !strings.Contains(checkpoint, "was not used") {
+		t.Fatalf("with the old invoice still current the corrected one waits for a person: %s %s", state, checkpoint)
+	}
 	call("POST", base+"/evidence/"+first+"/replace", map[string]string{"replacement_id": second, "reason": "Corrected premium from the carrier."}, 200)
 	capture("1300.00")
 	if state, _, _ := review(draft1); state != "source_changed" {
 		t.Fatalf("the replaced source changes the first draft's review state: %s", state)
 	}
-	_, draft2 := prepare(second)
+	must(db.QueryRow(`SELECT state FROM preparation_jobs WHERE id::text=$1`, job2).Scan(&state))
+	if state != "waiting_evidence" {
+		t.Fatalf("recording the replacement resumes the corrected invoice's interpretation: %s", state)
+	}
+	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
+		t.Fatalf("the agent did not run again: %v %v", worked, e)
+	}
+	draft2 := finish(job2)
 	var revises string
 	must(db.QueryRow(`SELECT COALESCE(paper->>'revises','') FROM workpapers WHERE id::text=$1`, draft2).Scan(&revises))
 	if revises != draft1 {
@@ -227,8 +247,8 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	if state, _, _ := review(other); state != "approved" {
 		t.Fatalf("an unrelated approval stands: %s", state)
 	}
-	if calls != 2 {
-		t.Fatalf("one model call per invoice: %d", calls)
+	if calls != 3 {
+		t.Fatalf("one model call for the first invoice and two for the corrected one: %d", calls)
 	}
 	// When two current drafts cite the replaced source, the agent cannot know which one a correction revises.
 	twinPaper, _ := json.Marshal(map[string]any{"input": map[string]string{"amount": "1300.00"}, "sources": []map[string]string{{"id": second, "digest": preparation.Digest([]byte(invoiceText("1300.00"))), "name": "insurance-corrected.txt", "role": "invoice"}}})
@@ -238,16 +258,7 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	invoices[third] = "1400.00"
 	call("POST", base+"/evidence/"+second+"/replace", map[string]string{"replacement_id": third, "reason": "Final premium."}, 200)
 	capture("1400.00")
-	tx, err = db.Begin()
-	must(err)
-	job, err := preparation.StartIntake(context.Background(), tx, closeID, third, "fixture")
-	must(err)
-	must(tx.Commit())
-	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
-		t.Fatalf("the agent did not run: %v %v", worked, e)
-	}
-	var state, checkpoint string
-	must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &checkpoint))
+	_, state, checkpoint = intake(third)
 	if state != "needs_confirmation" || !strings.Contains(checkpoint, "more than one earlier source or draft") {
 		t.Fatalf("an ambiguous lineage waits for a person: state=%s %s", state, checkpoint)
 	}
