@@ -21,9 +21,11 @@ test('deployment fails before mutation for missing credentials, unsafe DB or inv
     { CONTEXT_MACHINE_DATABASE_URL: 'postgres://reader:test@db.example/close' },
     { CONTEXT_MACHINE_PROFILES: 'null' }, { CONTEXT_MACHINE_PROFILES: '[]' },
     { CONTEXT_MACHINE_MODEL: 'shell' },
+    { CONTEXT_MACHINE_DATABASE_URL: 'invalid secret-credential' },
   ]) {
     const result = check(overrides);
     assert.notEqual(result.status, 0);
     assert.ok(!result.stderr.includes(configured.CONTEXT_MACHINE_TOKEN));
+    assert.ok(!result.stderr.includes("secret-credential"));
   }
 });

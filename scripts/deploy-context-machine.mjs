@@ -11,10 +11,12 @@ for (const name of [...names, "CONTEXT_MACHINE_MODEL"]) {
 }
 if (process.env.CONTEXT_MACHINE_TOKEN.length < 32) throw new Error("CONTEXT_MACHINE_TOKEN requires 32 random characters");
 if (!["codex", "claude"].includes(process.env.CONTEXT_MACHINE_MODEL)) throw new Error("CONTEXT_MACHINE_MODEL must be codex or claude");
-const db = new URL(process.env.CONTEXT_MACHINE_DATABASE_URL);
+let db, application;
+try { db = new URL(process.env.CONTEXT_MACHINE_DATABASE_URL); } catch { throw new Error("Invalid CONTEXT_MACHINE_DATABASE_URL"); }
+try { application = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : undefined; } catch { throw new Error("Invalid DATABASE_URL"); }
 if (!["postgres:", "postgresql:"].includes(db.protocol) || !["require", "verify-ca", "verify-full"].includes(db.searchParams.get("sslmode")))
   throw new Error("CONTEXT_MACHINE_DATABASE_URL must be PostgreSQL with TLS");
-if (process.env.DATABASE_URL && db.username === new URL(process.env.DATABASE_URL).username)
+if (application && db.username === application.username)
   throw new Error("Context machine must use a separate read-only database login");
 let profiles;
 try { profiles = JSON.parse(process.env.CONTEXT_MACHINE_PROFILES); } catch { throw new Error("Invalid CONTEXT_MACHINE_PROFILES JSON"); }

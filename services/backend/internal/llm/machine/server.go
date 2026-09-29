@@ -57,7 +57,7 @@ func New(cfg Config) (http.Handler, error) {
 	cfg.Profiles = slices.Clone(cfg.Profiles)
 	db, err := sql.Open("pgx", cfg.DatabaseURL)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("invalid context-machine database configuration")
 	}
 	db.SetMaxOpenConns(2)
 	s := &server{cfg: cfg, db: db, busy: make(chan struct{}, 1)}
