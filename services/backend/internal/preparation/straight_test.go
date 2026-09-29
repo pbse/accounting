@@ -64,7 +64,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	foreign := row("JournalEntry", "65", "2026-09-30", "", "", "Insurance", "900")
 	foreign.Currency = "CAD"
 	ledger := func(rows ...LedgerRow) *Ledger {
-		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Chart: "31", ChartSource: Source{ID: "8", Digest: "chart", Name: "QuickBooks accounts 2026-09"}, Machine: map[string]bool{"6": true, "7": true}, Rows: rows, Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12"}, "prepaid expenses": {"13"}}}
+		return &Ledger{Source: Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09"}, Chart: "31", ChartSource: Source{ID: "8", Digest: "chart", Name: "QuickBooks accounts 2026-09"}, Machine: map[string]bool{"6": true, "7": true, "4": true}, Rows: rows, Accounts: map[string]string{"12": "Insurance", "13": "Prepaid Expenses"}, IDs: map[string][]string{"insurance": {"12"}, "prepaid expenses": {"13"}}}
 	}
 	plan, reason := StraightThrough(proposal, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill, row("Bill", "42", "2026-09-04", "Other Vendor", "", "Travel", "1200")))
 	if reason != "" || plan.Kind != "prepaid" || len(plan.Sources) != 4 || plan.Sources[1].Role != "period_ledger" || plan.Sources[1].Digest != "cap" || !strings.Contains(plan.Sources[1].Location, "Bill 41") || plan.Sources[2].Role != "chart" || plan.Sources[2].ID != "8" || plan.Sources[3].Role != "procedure" || plan.Sources[3].ID != "3" {
@@ -184,10 +184,10 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	}
 	withRule := proposal
 	withRule.Sources = append([]Source{}, proposal.Sources...)
-	withRule.Sources = append(withRule.Sources, Source{ID: "3", Digest: "rule", Name: rule.Name, Role: "support"}, Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09", Role: "support"})
+	withRule.Sources = append(withRule.Sources, Source{ID: "3", Digest: "rule", Name: rule.Name, Role: "support"}, Source{ID: "4", Digest: "accrual-rule", Name: "Approved accrual procedure v2.txt", Role: "support"}, Source{ID: "9", Digest: "cap", Name: "QuickBooks transactions 2026-09", Role: "support"})
 	withRule.Unselected = []Source{{ID: "8", Digest: "chart", Name: "QuickBooks accounts 2026-09"}, {ID: "6", Digest: "old", Name: "QuickBooks accounts 2026-09 (earlier)"}, {ID: "7", Digest: "older", Name: "QuickBooks transactions 2026-09 (earlier)"}}
 	if _, reason = StraightThrough(withRule, invoice, nil, procedure, rule, "USD", "Example", "2026-09", "5", false, ledger(bill)); reason != "" {
-		t.Fatal("the procedure copy, the captures and the charts refused as selected or unselected evidence", reason)
+		t.Fatal("the procedure copies, the captures and the charts refused as selected or unselected evidence", reason)
 	}
 	idOnly := bill
 	idOnly.Record = json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"VendorRef":{"Name":"Acme Insurance Co"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"value":"12"}}}]}`)

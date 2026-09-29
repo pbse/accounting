@@ -30,7 +30,7 @@ type Ledger struct {
 	Rows        []LedgerRow
 	Accounts    map[string]string   // account ID → name
 	IDs         map[string][]string // lower-cased name or fully qualified name → account IDs
-	Machine     map[string]bool     // every capture or period-snapshot evidence entry of the close, current or older
+	Machine     map[string]bool     // every capture, period-snapshot and procedure-copy evidence entry of the close, current or older
 }
 
 // StraightThrough turns an agent proposal into a prepaid plan without a person confirming each field, when every
@@ -839,7 +839,8 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	machine, err := tx.QueryContext(ctx, `SELECT payload->>'source_id' FROM quickbooks_snapshots WHERE close_id::text=$1 AND payload ? 'source_id' UNION SELECT evidence_id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND evidence_id IS NOT NULL`, closeID)
+	// Captures, charts and every approved procedure copy attached to the close are context the check reads itself.
+	machine, err := tx.QueryContext(ctx, `SELECT payload->>'source_id' FROM quickbooks_snapshots WHERE close_id::text=$1 AND payload ? 'source_id' UNION SELECT evidence_id::text FROM quickbooks_entity_syncs WHERE close_id::text=$1 AND evidence_id IS NOT NULL UNION SELECT id::text FROM evidence WHERE close_id::text=$1 AND procedure_id IS NOT NULL`, closeID)
 	if err != nil {
 		return nil, err
 	}
