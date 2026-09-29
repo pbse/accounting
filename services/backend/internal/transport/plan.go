@@ -37,8 +37,9 @@ type booksRead struct {
 	source           string // the capture in use: quickbooks, xero or none
 	captured         time.Time
 	stale            bool
-	quickbooks, xero string // the client's connection states, "" without one
-	sync, failure    string // QuickBooks: the latest transaction read of the month and why it failed
+	quickbooks, xero string       // the client's connection states, "" without one
+	sync, failure    string       // QuickBooks: the latest transaction read of the month and why it failed
+	failed           sql.NullTime // when that read finished, if it failed
 	synced           sql.NullTime
 	ended, daily     bool
 	elsewhere        bool
@@ -48,7 +49,7 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
 	var b booksRead
 	var qbAt, xeroAt sql.NullTime
 	var qbStale, xeroStale bool
-	err := tx.QueryRowContext(ctx, `SELECT COALESCE(x.state,''),q.captured_at,COALESCE(q.stale,false),COALESCE(s.state,''),COALESCE(s.error,''),
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(x.state,''),q.captured_at,COALESCE(q.stale,false),COALESCE(s.state,''),COALESCE(s.error,''),CASE WHEN s.state='failed' THEN s.finished_at END,
  (SELECT max(z.finished_at) FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.connection_id=x.id AND z.period=c.period AND z.state IN ('completed','unchanged')),
  COALESCE(h.state,''),xs.captured_at,COALESCE(xs.stale,false),c.period<to_char(now() AT TIME ZONE 'UTC','YYYY-MM'),
  (c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM') OR EXISTS(SELECT 1 FROM close_goals g WHERE g.close_id=c.id AND g.state='active'))
@@ -58,10 +59,10 @@ func readBooks(ctx context.Context, tx *sql.Tx, closeID string) (booksRead, erro
  LEFT JOIN quickbooks_connections x ON x.id=`+quickbooks.ReadingConnection("c.id")+`
  LEFT JOIN LATERAL (SELECT s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR k.state<>'active' AS stale FROM quickbooks_snapshots s JOIN quickbooks_connections k ON k.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
   WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=COALESCE(x.id,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) q ON true
- LEFT JOIN LATERAL (SELECT z.state,z.error FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.connection_id=x.id AND z.period=c.period ORDER BY z.id DESC LIMIT 1) s ON true
+ LEFT JOIN LATERAL (SELECT z.state,z.error,z.finished_at FROM quickbooks_entity_syncs z WHERE z.close_id=c.id AND z.connection_id=x.id AND z.period=c.period ORDER BY z.id DESC LIMIT 1) s ON true
  LEFT JOIN xero_connections h ON h.organization_id=c.organization_id AND lower(h.client_entity)=lower(c.entity) AND h.state<>'disconnected'
  LEFT JOIN LATERAL (SELECT s.captured_at,k.state<>'active' AS stale FROM xero_snapshots s JOIN xero_connections k ON k.id=s.connection_id WHERE s.close_id=c.id ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) xs ON true
- WHERE c.id=$1`, closeID).Scan(&b.quickbooks, &qbAt, &qbStale, &b.sync, &b.failure, &b.synced, &b.xero, &xeroAt, &xeroStale, &b.ended, &b.daily, &b.elsewhere)
+ WHERE c.id=$1`, closeID).Scan(&b.quickbooks, &qbAt, &qbStale, &b.sync, &b.failure, &b.failed, &b.synced, &b.xero, &xeroAt, &xeroStale, &b.ended, &b.daily, &b.elsewhere)
 	b.elsewhere = b.elsewhere && !qbAt.Valid
 	switch {
 	case err != nil:
@@ -98,12 +99,13 @@ func booksStep(b booksRead, closeID, entity, period string) planStep {
 		if b.synced.Valid {
 			s.Text += " Transactions read " + day(b.synced.Time) + "."
 		}
-		// A failed latest read is not hidden behind an earlier capture: the books are only as current as that read. Only a
+		// A read that failed after the capture is not hidden behind it: the books are only as current as that read. Only a
 		// close the scheduled reads take is read again on its own.
+		failed := b.sync == "failed" && (!b.failed.Valid || b.failed.Time.After(b.captured))
 		switch {
-		case b.sync == "failed" && b.daily:
+		case failed && b.daily:
 			s.State, s.Text = "agent", strings.TrimSpace(s.Text+" My last read of QuickBooks failed: "+b.failure)+" I'll try again within a day."
-		case b.sync == "failed":
+		case failed:
 			s.State, s.Text = "you", strings.TrimSpace(s.Text+" My last read of QuickBooks failed: "+b.failure)+" Read it again in the QuickBooks panel."
 		case b.synced.Valid:
 			s.Text += again("them")
