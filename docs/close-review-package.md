@@ -12,6 +12,7 @@ The ZIP contains:
 - `evidence/{id}.txt` or `.pdf`, with extracted PDF text alongside: exact uploaded originals, names and hashes in the manifest. Workpaper source links retain role and location.
 - `ledger/snapshot-{id}.json`: every captured QuickBooks account/report payload, with snapshot ID, digest, company and capture time in the manifest. These are sequential reads, not a fresh or atomic ledger verification.
 - Current workpaper review states, append-only review decisions, and source replacement relationships/reasons in the manifest. Workpaper review is separate from firm close sign-off.
+- Once a scope is declared, each draft in `review.html` and `workpapers.pdf` says whether it is in the declared sign-off scope or outside it, so a draft the sign-off does not cover (for example a reconciliation still blocked by a missing statement page) is listed with its blockers and marked as not covered, not read as closed.
 - `checksums.sha256`: hashes of every other file in the archive. Verify the downloaded files before handoff.
 
 After extracting the ZIP, run `shasum -a 256 -c checksums.sha256` from the extracted directory. A mismatch means the package must not be released.

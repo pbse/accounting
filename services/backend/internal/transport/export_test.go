@@ -19,7 +19,7 @@ import (
 func TestPackagePreservesBothWorkpapersAndEscapesSources(t *testing.T) {
 	prepaid, _ := json.Marshal(prepaids.Workpaper{Input: prepaids.Input{SourceReference: "<script>alert(1)</script>", Method: prepaids.Method}, Schedule: []prepaids.Row{{Period: "2026-09", Expense: "50.00", Remaining: "50.00"}, {Period: "2026-10", Expense: "50.00", Remaining: "0.00"}}})
 	recon, _ := json.Marshal(reconciliation.Workpaper{Method: "exact_bank_month_v1", Blockers: []string{"Statement page 2 is missing."}, Matches: []reconciliation.Match{{StatementID: "=1+1", LedgerID: "L1", Reason: "Exact candidate"}}, UnmatchedLedger: []reconciliation.Line{{ID: "L2", Date: "2026-09-30", Amount: "-50.00"}}, Exceptions: []reconciliation.Exception{{Side: "ledger", ID: "=row", Kind: "grouped_exact", CandidateIDs: []string{"@candidate", "L3"}, CandidateCount: 2, CandidateGroups: [][]string{{"=group", "L3"}}, GroupCount: 1, SplitGroups: [][]string{{"=gross", "-fee"}}, SplitCount: 1, Question: "Check both source rows."}}})
-	data, err := buildClosePackage(closePackage{Close: savedClose{ID: "1", Entity: "Example", Period: "2026-09"}, Workpapers: []savedPaper{{ID: "1", Kind: "prepaid", Paper: prepaid}, {ID: "2", Kind: "reconciliation", Paper: recon}}, LedgerSnapshots: []packageLedger{{ID: "7", Payload: []byte(`{"period":"2026-09","accounts":[]}`)}, {ID: "8", Payload: []byte(`{"period":"2026-09","reports":{}}`)}}, SandboxPostings: json.RawMessage(`[{"state":"unknown","external_id":"123"}]`)})
+	data, err := buildClosePackage(closePackage{Close: savedClose{ID: "1", Entity: "Example", Period: "2026-09"}, Workpapers: []savedPaper{{ID: "1", Kind: "prepaid", Paper: prepaid}, {ID: "2", Kind: "reconciliation", Paper: recon}}, LedgerSnapshots: []packageLedger{{ID: "7", Payload: []byte(`{"period":"2026-09","accounts":[]}`)}, {ID: "8", Payload: []byte(`{"period":"2026-09","reports":{}}`)}}, SandboxPostings: json.RawMessage(`[{"state":"unknown","external_id":"123"}]`), Readiness: &readiness{Scope: closeScope{Description: "Prepaids only.", RequiredPapers: []string{"1"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,10 @@ func TestPackagePreservesBothWorkpapersAndEscapesSources(t *testing.T) {
 	if strings.Contains(html, "<script>") || !strings.Contains(html, "&lt;script&gt;") || !strings.Contains(html, "Statement page 2 is missing.") || !strings.Contains(html, "unknown") {
 		t.Fatal("unsafe or incomplete review summary")
 	}
+	// Each draft says whether the declared sign-off scope covers it.
+	if !strings.Contains(html, "In the declared sign-off scope.") || !strings.Contains(html, "Outside the declared sign-off scope: sign-off does not cover this draft.") {
+		t.Fatal("the review summary does not say which drafts the scope covers")
+	}
 	if !strings.Contains(files["workpapers/2-unmatched-ledger.csv"], "-50.00") {
 		t.Fatal("unmatched negative amount lost")
 	}
@@ -73,7 +77,7 @@ func TestPackagePreservesBothWorkpapersAndEscapesSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	text, err := exec.Command("pdftotext", path, "-").Output()
-	if err != nil || !strings.Contains(string(text), "Draft #1") || !strings.Contains(string(text), "Draft #2") || !strings.Contains(string(text), "Statement page 2 is missing") {
+	if err != nil || !strings.Contains(string(text), "Draft #1") || !strings.Contains(string(text), "Draft #2") || !strings.Contains(string(text), "Statement page 2 is missing") || !strings.Contains(string(text), "In the declared sign-off scope.") || !strings.Contains(string(text), "Outside the declared sign-off scope") {
 		t.Fatalf("PDF content incomplete: %s %v", text, err)
 	}
 }
