@@ -248,8 +248,9 @@ export function Retention() {
         <h2>What remains after deletion</h2>
         <ul>
           <li>A minimal receipt: the close ID, the month, who deleted it, why and when, and a one-way fingerprint instead of the client’s name.</li>
-          <li>Firm-level settings built from the close, such as an approved procedure, with its source removed.</li>
-          <li>Firm-wide records that can name the client: a request typed in Work (such as “prepare Acme’s close”), kept until the person who typed it leaves the firm, and a firm-wide assistant conversation, kept for 30 days.</li>
+          <li>
+            Records the firm keeps about the client rather than one month, which can name the client: who may work on the client and the history of those decisions; standing approvals and procedures (a procedure built from the close keeps no source); a stopped monthly hand-over; requests typed in Work, such as “prepare Acme’s close”, kept until the person who typed them leaves the firm; and firm-wide assistant conversations, kept for 30 days. The others stay while the firm’s workspace exists, unless the firm asks us to remove them.
+          </li>
           <li>Our staff audit log, which records staff access and actions.</li>
           <li>Database backups, until they expire: our database provider’s restore history currently covers six hours.</li>
           <li>Copies outside Close: exported binders, emails already delivered, and anything in the firm’s ledger or other connected accounts.</li>
