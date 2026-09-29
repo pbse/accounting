@@ -3,6 +3,7 @@ package main
 import (
 	"close.local/backend/internal/delivery"
 	"close.local/backend/internal/forwarded"
+	"close.local/backend/internal/llm"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/transport"
@@ -24,6 +25,10 @@ import (
 )
 
 func main() {
+	models, err := llm.FromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	if os.Getenv("DATABASE_URL") == "" {
 		log.Fatal("DATABASE_URL is required for durable preparation")
 	}
@@ -37,6 +42,7 @@ func main() {
 	db.SetMaxOpenConns(8)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	ctx = llm.WithClient(ctx, models)
 	loops := map[string]func(context.Context, *sql.DB){
 		"preparation":     preparation.Run,
 		"delivery":        delivery.Run,

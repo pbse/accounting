@@ -1,0 +1,128 @@
+# LLM gateway and context machine
+
+All eight existing model request paths now go through `services/backend/internal/llm`: evidence selection, preparation, procedure drafting, statement extraction, work commands, workflow planning, written answers and investigation rounds. Feature code builds a request and validates the result. The library owns HTTP, credentials on the wire, provider response parsing, streaming, refusals, timeouts and response limits.
+
+The library includes an OpenAI adapter and a context-machine client. The hosted runtime installs Codex and Claude Code in a private Cloudflare Container. See [deployment instructions](context-machine-deployment.md) for required secrets, database grants, CI and rollout. Existing product behavior remains on OpenAI; research is available to authorized server workflows through the library, with no new public research endpoint.
+
+## Routing and ownership
+
+Features call only `llm.Generate(ctx, request)`. They do not read provider environment variables, construct a client, choose an endpoint, pass credentials, or format provider-specific messages. The API composition root (`ConfiguredAPI`) and worker `main` load `llm.FromEnv()` once, validate configuration, and inject the resulting immutable client into HTTP request and background execution contexts. Context injection preserves cancellation and the existing authentication/tenant values; no package-global singleton or lazy environment loading is involved.
+
+A request declares its purpose, instructions/data, output schema or typed conversation/tool messages, and execution limits. The gateway maps its purpose to the configured model and adapter. Unknown or disabled purposes return `ErrUnavailable`; there is no fallback that could send a new workflow's data to an unintended provider. Callers may use `llm.Model(ctx, purpose)` for availability checks and configured-model provenance/replay keys. Responses also include the actual reported model, provider, run ID and usage.
+
+Existing accounting purposes remain on OpenAI because consent screens, stored `engine` values, replay selection and approval predicates depend on that identity. Only the gateway configuration knows that routing rule. The `research` purpose selects the context-machine adapter. Adding another provider requires implementing its adapter and reviewing consent/provenance changes, not editing feature call signatures.
+
+```go
+// Inside an authorized workflow, with the startup dependency already attached.
+// Reserve four model calls from the firm's budget before dispatch.
+result, err := llm.Generate(ctx, llm.Request{
+    Purpose: "research",
+    Instructions: "Investigate why these balances differ. Cite your evidence.",
+    Data: authorizedContext,
+    Scope: &llm.Scope{
+        Organization: organizationID,
+        Subject: memberID,
+        AccessProfile: provisionedReadOnlyProfile,
+    },
+    MaxModelCalls: 4,
+    MaxOutputTokens: 4000,
+    OnProgress: reportProgress, // optional func(string) bool
+    OnText: reportProvisionalText, // optional func(string) bool
+})
+// Validate the completed result and its citations; record provenance and usage.
+```
+
+### Deployment configuration
+
+| Setting | Meaning |
+| --- | --- |
+| `OPENAI_API_KEY`, `OPENAI_MODEL` | Enable existing model workflows; both or neither must be set. |
+| `LLM_MODELS` | Optional JSON object of purpose-specific model overrides, for example `{"preparation":"careful-model","work_command":"fast-model"}`. Unknown purposes and empty models fail startup. |
+| `CONTEXT_MACHINE_TOKEN`, `CONTEXT_MACHINE_MODEL` | Enable the research route; both or neither must be set. The value is `codex` or `claude`; the service selects the actual model. |
+| `CONTEXT_MACHINE_ENDPOINT` | Optional local/private infrastructure override. Cloudflare sets the fixed bridge `http://context-machine.internal/v1/run`; callers never provide a URL. |
+
+Compose and the Cloudflare API/worker container launchers forward these settings. Changes require restarting the process; a running gateway does not observe mutated environment variables. Nothing is exposed to the browser.
+
+Cloudflare's container outbound handler intercepts the exact virtual host `context-machine.internal` and forwards to the private `CONTEXT_MACHINE` Worker service binding. Staging and production target their own service. This is not public DNS or an exposed HTTP service. The service has no routes or workers.dev ingress. Configurable remote endpoints require HTTPS; loopback HTTP is allowed locally. The fixed Cloudflare bridge is the only non-loopback HTTP exception.
+
+Budgets, firm settings, member/client authorization, redaction and accounting validation stay with the existing workflows. They already know the authenticated subject and transaction context; the gateway must not reconstruct that authority from prompt text. The gateway neither executes returned tool calls nor approves, posts, sends or changes accounting records.
+
+There are no implicit retries or provider fallbacks. Each extra attempt needs another explicit budget reservation; changing providers may change consent and data handling. HTTP redirects are refused. Calls inherit shorter deadlines and otherwise stop after two minutes. Requests are capped at 2 MiB; responses default to 1 MiB with a 4 MiB ceiling. Streaming deltas remain provisional until successful completion and domain validation.
+
+## Context-machine protocol, version 1
+
+POST through the private service binding with a dedicated bearer credential. Local development may use loopback HTTP. Database credentials, executable names, shell flags and arbitrary tool definitions are never request fields.
+
+```json
+{
+  "version": 1,
+  "purpose": "research",
+  "model": "codex",
+  "instructions": "Investigate the variance and cite evidence.",
+  "data": {"close_id": "123"},
+  "scope": {
+    "organization": "firm-a",
+    "subject": "member-a",
+    "access_profile": "predefined-member-a-readonly"
+  },
+  "read_only": true,
+  "store": false,
+  "deadline": "2026-09-29T03:02:00Z",
+  "max_model_calls": 4,
+  "max_output_tokens": 4000,
+  "stream": false
+}
+```
+
+A successful response is HTTP 200:
+
+```json
+{
+  "version": 1,
+  "status": "completed",
+  "scope": {
+    "organization": "firm-a",
+    "subject": "member-a",
+    "access_profile": "predefined-member-a-readonly"
+  },
+  "id": "run-123",
+  "model": "actual-model-used",
+  "text": "Findings and evidence references…",
+  "usage": {"input_tokens": 1000, "output_tokens": 300},
+  "model_calls": 3
+}
+```
+
+`status: "refused"` maps to a refusal. Missing completion, a mismatched scope, a missing run/model identifier, unexpected executable tool calls, an exceeded call budget, malformed JSON and oversized results fail closed. Partial research is not a completed result. Non-200 responses become bounded status-only errors; service error bodies are not surfaced to users.
+
+Without callbacks, the service returns the JSON result above. With `OnProgress` or `OnText`, the adapter sets `stream: true` and requires `Content-Type: application/x-ndjson`. Each line is one event:
+
+```json
+{"type":"progress","scope":{"organization":"firm-a","subject":"member-a","access_profile":"predefined-member-a-readonly"},"text":"Reading the approved evidence"}
+{"type":"text_delta","scope":{"organization":"firm-a","subject":"member-a","access_profile":"predefined-member-a-readonly"},"text":"Findings and evidence references…"}
+{"type":"completed","scope":{"organization":"firm-a","subject":"member-a","access_profile":"predefined-member-a-readonly"},"response":{"version":1,"status":"completed","scope":{"organization":"firm-a","subject":"member-a","access_profile":"predefined-member-a-readonly"},"id":"run-123","model":"actual-model-used","text":"Findings and evidence references…","usage":{"input_tokens":1000,"output_tokens":300},"model_calls":3}}
+```
+
+Every event must carry the authorized scope; a mismatch is rejected before invoking callbacks. The terminal event contains the same validated result envelope. When deltas were sent, their concatenation must match the final text. `refused` and `error` events fail the call; unknown events, a lost connection before completion, malformed lines, scope mismatch, excessive bytes and cancellation never become completed results. Callbacks returning false close the response and cancel the request. Progress is provisional and not an accounting assertion. The service must flush events as they become available.
+
+The adapter uses streaming HTTP with ordinary connection reuse today. The public request, callbacks and final result do not depend on HTTP, SSE, NDJSON or gRPC. A later gRPC implementation can replace the private adapter without changing workflows; no unused gRPC dependency or generated protocol is included. OpenAI streaming remains SSE inside its adapter. Typed tool calls/results are translated into the provider protocol only there.
+
+Context-machine research accepts instructions plus data, not caller-defined tools, conversation history or structured-output schemas. The service's agent uses its own preconfigured read tools internally. Long-running research should later use a durable workflow with submit/status/cancel and idempotency; avoid keeping an API request or database transaction open for minutes.
+
+## Hosted runtime and database boundary
+
+`services/backend/internal/llm/machine` authenticates the caller and matches the complete scope against a preconfigured profile before launching a CLI. It checks current organization status, membership and explicit client grants on every read. Profiles never grant clients by themselves. Each task gets a fresh temporary home/workspace; the entire subprocess group is killed on cancellation or deadline. No reusable conversation crosses requests.
+
+The CLI receives a per-run loopback token, two MCP read tools and its assigned model. Provider keys and the read-only database credential remain in the parent service. Shell/file/web tools are disabled; the model proxy also strips every tool except the two scoped reads, including Codex's namespace format. The proxy pins the model, limits tokens per call and enforces the total model-call budget even if a CLI retries. Other provider paths and redirects are refused. CLI stdout and upstream response sizes are bounded. Prompts, provider error bodies and CLI stderr are not logged or returned.
+
+The database login must be separate, non-owner and read-only. Readiness refuses superuser, bypass-RLS, create-role/create-database, table-write, schema-create and role-membership privileges. Reads use fixed SQL, a read-only transaction, tenant scope, a three-second statement timeout and existing redaction. No SQL tool or database credential is available to the agent. Provision exact grants using `infra/postgres/context-machine-role.sql`, including the base tables required by security-invoker views.
+
+The tools are `list_closes` (up to 50 authorized closes) and `read_evidence` (up to five latest active, extracted evidence records for an authorized close, each truncated to 32,000 characters). Broaden the read surface only with corresponding authorization tests.
+
+The service handles one run per container and returns 429 when busy. It sends a started progress event and completed result; it does not currently forward live CLI token deltas. There are no automatic retries, queues, warm CLI sessions or gRPC dependencies. Cloudflare can stop the container after five idle minutes; the next service call starts it.
+
+## Coverage and remaining product integration
+
+Gateway tests cover immutable routing, HTTP injection, typed tools, SSE/NDJSON parsing, refusals, truncation, cancellation, limits, redirects, scope mismatches and an architectural guard against provider calls outside this library. Runtime tests cover request authorization, provider isolation, budgets, tool filtering, subprocess deadlines, read-only PostgreSQL privileges and grant revocation. CI runs the pinned CLIs inside the release image against a fake provider and real MCP server, requiring each to execute a read tool before returning its final answer. Tests use no real provider keys or paid calls.
+
+Production readiness traverses the Go API's outbound bridge, authenticates to the context machine, verifies both CLI binaries and checks database privileges. It does not prove provider billing/model availability or perform paid inference. Before enabling a user-facing research workflow, add explicit firm consent, reserve its call budget, record audit/provenance, and validate returned citations. Research results are proposals; they do not execute accounting changes.

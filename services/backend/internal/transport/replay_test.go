@@ -42,7 +42,7 @@ func TestReplayComparesTheCurrentModelWithConfirmedReadings(t *testing.T) {
 		db.Exec(`DELETE FROM client_closes WHERE id=$1`, closeID)
 	}()
 	token := strings.Repeat("x", 32)
-	handler := apiWithStore(db, token)
+	handler := modelHandler(t, apiWithStore(db, token))
 	replayOnce := func(want int) (out struct {
 		Items []struct {
 			Source  string   `json:"source_name"`
@@ -190,19 +190,19 @@ func TestReplayComparesTheCurrentModelWithConfirmedReadings(t *testing.T) {
 		return n
 	}
 	ctx := context.Background()
-	must(sweepReplays(ctx, db))
+	must(sweepReplays(modelContext(t, ctx), db))
 	if runs("synthetic-model") != 0 {
 		t.Fatal("a firm already checked on this model is not replayed again")
 	}
 	t.Setenv("OPENAI_MODEL", "synthetic-model-2")
-	must(sweepReplays(ctx, db))
+	must(sweepReplays(modelContext(t, ctx), db))
 	if runs("synthetic-model-2") != 0 {
 		t.Fatal("a run that scores no reading (the late document changed the evidence) does not count as a check")
 	}
 	_, err = db.Exec(`DELETE FROM evidence WHERE close_id=$1 AND name='late.txt'`, closeID)
 	must(err)
-	must(sweepReplays(ctx, db))
-	must(sweepReplays(ctx, db))
+	must(sweepReplays(modelContext(t, ctx), db))
+	must(sweepReplays(modelContext(t, ctx), db))
 	if runs("synthetic-model-2") != 1 {
 		t.Fatalf("a new model is checked once per firm: %d", runs("synthetic-model-2"))
 	}
@@ -227,7 +227,7 @@ func TestReplayComparesTheCurrentModelWithConfirmedReadings(t *testing.T) {
 	spent := calls
 	replayOnce(429)
 	t.Setenv("OPENAI_MODEL", "synthetic-model-3")
-	must(sweepReplays(ctx, db))
+	must(sweepReplays(modelContext(t, ctx), db))
 	if calls != spent || runs("synthetic-model-3") != 0 {
 		t.Fatalf("no model call is made past the limit: %d → %d, %d runs", spent, calls, runs("synthetic-model-3"))
 	}

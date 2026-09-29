@@ -130,7 +130,7 @@ func TestStripePayoutsAndActivityReportsAreCapturedByKind(t *testing.T) {
 		t.Fatalf("both reports are saved by name; only the Payouts report starts work: %s", saved)
 	}
 	for n := 0; ; n++ {
-		worked, e := preparation.ProcessIntake(context.Background(), db)
+		worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db)
 		if e != nil || n > 20 {
 			t.Fatal("intake did not settle", e)
 		}

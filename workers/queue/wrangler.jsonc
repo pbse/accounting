@@ -14,8 +14,10 @@
   "durable_objects": {"bindings": [{"name": "WORKER", "class_name": "PreparationWorker"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["PreparationWorker"]}],
   // Postgres holds jobs; cron wakes the container. No queue consumer is required.
+  "services": [{"binding": "CONTEXT_MACHINE", "service": "close-context-machine-staging"}],
   "env": {
     "production": {
+      "services": [{"binding": "CONTEXT_MACHINE", "service": "close-context-machine-production"}],
       "name": "close-queue-production",
       "triggers": {"crons": ["* * * * *"]},
       "containers": [{

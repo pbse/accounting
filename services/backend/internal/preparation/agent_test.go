@@ -1,6 +1,7 @@
 package preparation
 
 import (
+	"close.local/backend/internal/llm"
 	"context"
 	"encoding/json"
 	"io"
@@ -29,7 +30,7 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{"id": "response-fixture", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": output}}}}, "usage": map[string]int{"input_tokens": 100, "output_tokens": 50}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
 	})}
-	p, err := interpret(context.Background(), client, "fixture-key", "fixture-model", "Example", "2026-09", "USD", "1", sources)
+	p, err := interpret(agentModelContext(t, client), "Example", "2026-09", "USD", "1", sources)
 	if err != nil || p.Engine != "openai" || p.Facts[0].Value != "1200.00" || p.Facts[1].Candidates[0].Location != "line 2" || len(p.Sources) != 2 || p.Facts[2].Question == "" || p.InputTokens != 100 {
 		t.Fatal("Missing validated proposals or provenance", p, err)
 	}
@@ -60,7 +61,7 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 	client.Transport = agentRoundTrip(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"incomplete","output":[]}`)), Header: http.Header{}}, nil
 	})
-	if _, err = interpret(context.Background(), client, "fixture-key", "fixture-model", "Example", "2026-09", "USD", "1", sources); err == nil {
+	if _, err = interpret(agentModelContext(t, client), "Example", "2026-09", "USD", "1", sources); err == nil {
 		t.Fatal("Incomplete response accepted")
 	}
 }
@@ -122,11 +123,11 @@ func TestLargeInventorySelectionIsBoundedAndReviewable(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"selected_ids\":[\"A\",\"B\"]}"}]}]}`)), Header: http.Header{}}, nil
 	})}
-	selected, err := selectEvidence(context.Background(), client, "fixture-key", "fixture-model", "A", sources)
+	selected, err := selectEvidence(agentModelContext(t, client), "A", sources)
 	if err != nil || len(selected) != 2 || selected[0].ID != "A" || selected[1].ID != "B" {
 		t.Fatalf("selection: %d %v", len(selected), err)
 	}
-	if _, err = selectEvidence(context.Background(), client, "fixture-key", "fixture-model", "C", sources); err == nil {
+	if _, err = selectEvidence(agentModelContext(t, client), "C", sources); err == nil {
 		t.Fatal("model omitted primary without a blocker")
 	}
 }
@@ -246,4 +247,13 @@ func TestFormPreparedKindsKeepTheirFormsSources(t *testing.T) {
 			t.Errorf("%s: %v %v", c.name, p.Questions, err)
 		}
 	}
+}
+
+func agentModelContext(t *testing.T, httpClient *http.Client) context.Context {
+	t.Helper()
+	client, err := llm.New(llm.Config{HTTP: httpClient, APIKey: "fixture-key", Model: "fixture-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return llm.WithClient(context.Background(), client)
 }

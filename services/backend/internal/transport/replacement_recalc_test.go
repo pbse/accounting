@@ -137,7 +137,7 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 		job, err = preparation.StartIntake(context.Background(), tx, closeID, invoiceID, "fixture")
 		must(err)
 		must(tx.Commit())
-		if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
+		if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || !worked {
 			t.Fatalf("the agent did not run: %v %v", worked, e)
 		}
 		must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &checkpoint))
@@ -173,7 +173,7 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	}
 
 	token := strings.Repeat("r", 32)
-	handler := apiWithStore(db, token)
+	handler := modelHandler(t, apiWithStore(db, token))
 	call := func(method, path string, body any, want int) []byte {
 		t.Helper()
 		raw, _ := json.Marshal(body)
@@ -228,7 +228,7 @@ func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
 	if state != "waiting_evidence" {
 		t.Fatalf("recording the replacement resumes the corrected invoice's interpretation: %s", state)
 	}
-	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
+	if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || !worked {
 		t.Fatalf("the agent did not run again: %v %v", worked, e)
 	}
 	draft2 := finish(job2)

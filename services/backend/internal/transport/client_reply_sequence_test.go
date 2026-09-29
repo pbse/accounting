@@ -142,7 +142,7 @@ func TestClientReplyCompletesTheDraftWithoutARestart(t *testing.T) {
 	runIntake := func() {
 		t.Helper()
 		for worked := true; worked; {
-			worked, err = preparation.ProcessIntake(ctx, db)
+			worked, err = preparation.ProcessIntake(modelContext(t, ctx), db)
 			must(err)
 		}
 	}
@@ -157,7 +157,7 @@ func TestClientReplyCompletesTheDraftWithoutARestart(t *testing.T) {
 	}
 
 	auth := strings.Repeat("q", 32)
-	h := apiWithStore(db, auth)
+	h := modelHandler(t, apiWithStore(db, auth))
 	call := func(method, path, token string, body any, want int) []byte {
 		t.Helper()
 		raw, _ := json.Marshal(body)

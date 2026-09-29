@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"close.local/backend/internal/llm"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -58,29 +59,29 @@ func TestModelProcedureDraftUsesOnlySelectedSource(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"content": []any{map[string]string{"type": "output_text", "text": string(result)}}}}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: http.Header{}}, nil
 	})}
-	instructions, cited, err := modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, document, nil)
+	instructions, cited, err := modelProcedureDraft(procedureModelContext(t, client), "prepaid", prepaids.Method, document, nil)
 	if err != nil || cited != quote || !strings.Contains(instructions, "equal full months") {
 		t.Fatal("grounded proposal was lost", err)
 	}
 	output["quote"] = "A passage absent from the policy source"
-	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, document, nil); err == nil {
+	if _, _, err = modelProcedureDraft(procedureModelContext(t, client), "prepaid", prepaids.Method, document, nil); err == nil {
 		t.Fatal("fabricated citation was accepted")
 	}
 	output = map[string]string{"instructions": "Reviewer changed the expense account; confirm policy and applicability.", "quote": ""}
 	edits := []paperChange{{Field: "input.expense_account", Before: "Old, paid by card 4111-1111-1111-1111", After: "New"}}
-	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, "", edits); err != nil {
+	if _, _, err = modelProcedureDraft(procedureModelContext(t, client), "prepaid", prepaids.Method, "", edits); err != nil {
 		t.Fatal("bounded approved edits could not be drafted", err)
 	}
 	edits[0].After = strings.Repeat("A", 17000)
-	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, "", edits); err == nil || calls != 3 {
+	if _, _, err = modelProcedureDraft(procedureModelContext(t, client), "prepaid", prepaids.Method, "", edits); err == nil || calls != 3 {
 		t.Fatal("oversized edit payload reached the model")
 	}
 	escapedDocument = "Policy: " + strings.Repeat("<", 16384-len("Policy: ")-len(quote)-1) + "\n" + quote
 	output = map[string]string{"instructions": "Review annual insurance under the cited equal-month policy.", "quote": quote}
-	if _, _, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, escapedDocument, nil); err != nil || calls != 4 {
+	if _, _, err = modelProcedureDraft(procedureModelContext(t, client), "prepaid", prepaids.Method, escapedDocument, nil); err != nil || calls != 4 {
 		t.Fatal("valid 16 KiB policy was rejected after JSON escaping", err)
 	}
-	if _, cited, err = modelProcedureDraft(context.Background(), client, "synthetic-key", "synthetic-model", "prepaid", prepaids.Method, "Policy: vendors paid by card 4111-1111-1111-1111. "+quote, nil); err != nil || cited != quote || calls != 5 {
+	if _, cited, err = modelProcedureDraft(procedureModelContext(t, client), "prepaid", prepaids.Method, "Policy: vendors paid by card 4111-1111-1111-1111. "+quote, nil); err != nil || cited != quote || calls != 5 {
 		t.Fatal("a policy with a card number is drafted from its redacted text", err)
 	}
 }
@@ -153,7 +154,7 @@ func TestLearnedRuleRequiresApprovedExampleBeforeActivation(t *testing.T) {
 	registerEvidence(mux, db)
 	registerProcedures(mux, db)
 	registerProcedureLearning(mux, db)
-	h := organizationBoundary(db, mux)
+	h := modelHandler(t, organizationBoundary(db, mux))
 	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_accountant"}, Organization: org, Permissions: []string{"clients:all", "workpapers:review", "procedures:manage"}}
 	call := func(method, path string, body any, want int) []byte {
 		t.Helper()
@@ -308,4 +309,13 @@ func TestNewMethodsReplayAsLearnableProcedureMethods(t *testing.T) {
 			t.Fatalf("an approved %s example replays as a method a procedure can learn: %q %v", kind, method, err)
 		}
 	}
+}
+
+func procedureModelContext(t *testing.T, httpClient *http.Client) context.Context {
+	t.Helper()
+	client, err := llm.New(llm.Config{HTTP: httpClient, APIKey: "synthetic-key", Model: "synthetic-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return llm.WithClient(context.Background(), client)
 }

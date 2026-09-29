@@ -44,7 +44,7 @@ func TestAgentsProposePlansThroughMCP(t *testing.T) {
 		db.Exec(`DELETE FROM client_closes WHERE id::text=$1`, closeID)
 	}()
 	token := strings.Repeat("p", 32)
-	server := httptest.NewServer(apiWithStore(db, token))
+	server := httptest.NewServer(modelHandler(t, apiWithStore(db, token)))
 	defer server.Close()
 	ctx := context.Background()
 	session, err := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: server.URL + "/mcp", HTTPClient: &http.Client{Transport: bearer{token}}}, nil)
@@ -91,7 +91,7 @@ func TestAgentsProposePlansThroughMCP(t *testing.T) {
 	}
 
 	// The staff approval queue shows it, and its reason once revealed.
-	h := apiWithStore(db, token)
+	h := modelHandler(t, apiWithStore(db, token))
 	if queue := mustString(adminJSON(t, h, token, "GET", "/v1/admin/plans?state=proposed&source=agent", "", 200)); !strings.Contains(queue, `"id":`+strconv.FormatInt(proposed.PlanID, 10)) {
 		t.Fatalf("the proposal waits in the approval queue: %s", queue)
 	}
@@ -162,7 +162,7 @@ func TestThePlannerDraftsAProposalWithTheFirmsModel(t *testing.T) {
 		envelope, _ := json.Marshal(map[string]any{"status": "completed", "output": []any{map[string]any{"content": []any{map[string]any{"type": "output_text", "text": answer}}}}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(envelope))), Header: make(http.Header)}, nil
 	})
-	h := apiWithStore(db, token)
+	h := modelHandler(t, apiWithStore(db, token))
 	draft := func(want int) map[string]any {
 		t.Helper()
 		return adminJSON(t, h, token, "POST", "/v1/admin/plans/draft", `{"firm":"`+firm+`","close_id":"`+closeID+`","instruction":"Summarise Acme's September close before we chase the client","reason":"Support asked for a plan"}`, want)

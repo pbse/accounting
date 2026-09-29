@@ -44,7 +44,7 @@ func TestStripeExportIsRecognizedPreparedAndExported(t *testing.T) {
 		}
 	}()
 	token := strings.Repeat("s", 32)
-	h := apiWithStore(db, token)
+	h := modelHandler(t, apiWithStore(db, token))
 	base := "/v1/closes/" + closeID
 	send := func(method, path, contentType string, body io.Reader, status int) []byte {
 		t.Helper()
@@ -72,7 +72,7 @@ func TestStripeExportIsRecognizedPreparedAndExported(t *testing.T) {
 	report := upload("stripe-payouts-2026-09.csv", "automatic_payout_effective_at,automatic_payout_id,balance_transaction_id,currency,fee,gross,net,reporting_category\n2026-09-03 00:00:00,po_1,txn_1,usd,3.20,100.00,96.80,charge\n2026-09-03 00:00:00,po_1,txn_2,usd,0.00,-10.00,-10.00,refund\n2026-09-30 00:00:00,po_2,txn_3,usd,1.46,40.00,38.54,charge\n")
 	bank := upload("bank-2026-09.csv", "id,date,amount\nB1,2026-09-04,86.80\nB2,2026-10-01,38.54\nB3,2026-09-15,-300.00")
 	for n := 0; ; n++ {
-		worked, e := preparation.ProcessIntake(context.Background(), db)
+		worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db)
 		if e != nil || n > 20 {
 			t.Fatal("intake did not settle", e)
 		}
@@ -99,7 +99,7 @@ func TestStripeExportIsRecognizedPreparedAndExported(t *testing.T) {
 		return nil, io.ErrUnexpectedEOF
 	})
 	second := upload("stripe-payouts-copy.csv", "automatic_payout_effective_at,automatic_payout_id,balance_transaction_id,currency,fee,gross,net,reporting_category\n2026-09-10 00:00:00,po_9,txn_9,usd,0.30,10.00,9.70,charge\n")
-	if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
+	if worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db); e != nil || !worked {
 		t.Fatal("agent intake did not run", e)
 	}
 	http.DefaultTransport = originalTransport

@@ -55,11 +55,11 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	if err = tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+	if _, err = preparation.ProcessIntake(modelContext(t, context.Background()), db); err != nil {
 		t.Fatal(err)
 	}
 	auth := strings.Repeat("s", 32)
-	h := apiWithStore(db, auth)
+	h := modelHandler(t, apiWithStore(db, auth))
 	call := func(method, path, token string, body any, want int) []byte {
 		t.Helper()
 		raw, _ := json.Marshal(body)
@@ -144,7 +144,7 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	if err = db.QueryRow("SELECT state FROM preparation_jobs WHERE id=$1", job).Scan(&state); err != nil || state != "waiting_evidence" {
 		t.Fatal("Original job not resumed", state, err)
 	}
-	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+	if _, err = preparation.ProcessIntake(modelContext(t, context.Background()), db); err != nil {
 		t.Fatal(err)
 	}
 	db.QueryRow("SELECT state FROM preparation_jobs WHERE id=$1", job).Scan(&state)
@@ -160,7 +160,7 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	if err = db.QueryRow(`SELECT e.superseded_by IS NOT NULL FROM work_replies r JOIN evidence e ON e.id=r.source_id WHERE r.request_id=$1 AND e.content LIKE '%Answer: Service end%'`, requestID).Scan(&superseded); err != nil || !superseded {
 		t.Fatal("a correction replaces the earlier reply", err)
 	}
-	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+	if _, err = preparation.ProcessIntake(modelContext(t, context.Background()), db); err != nil {
 		t.Fatal(err)
 	}
 	// Withdrawing an unanswered request also invalidates its link.
@@ -170,7 +170,7 @@ func TestScopedClientReplyResumesJob(t *testing.T) {
 	call("POST", path+"/retry", auth, map[string]any{"revision": revision()}, 200)
 	call("GET", "/v1/client-request", token, nil, 404)
 	// A request approved from a draft keeps to it: other evidence leaves the request answerable, a review of the draft does not.
-	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+	if _, err = preparation.ProcessIntake(modelContext(t, context.Background()), db); err != nil {
 		t.Fatal(err)
 	}
 	var paper, draft string
@@ -241,7 +241,7 @@ func TestLinkPasscodeGuardsTheRequest(t *testing.T) {
 	must(tx.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the September statement.','[]',$2,'fixture') RETURNING id::text`, closeID, digest).Scan(&draft))
 	must(tx.QueryRow(`INSERT INTO work_requests(draft_id,revision,recipient,approved_by) VALUES($1,1,'client@example.test','fixture') RETURNING id::text`, draft).Scan(&request))
 	must(tx.Commit())
-	h := apiWithStore(db, strings.Repeat("p", 32))
+	h := modelHandler(t, apiWithStore(db, strings.Repeat("p", 32)))
 	call := func(method, path, token, passcode string, body any, want int) (out struct{ Code, Message, Status, Body string }) {
 		t.Helper()
 		raw, _ := json.Marshal(body)
@@ -347,11 +347,11 @@ func TestPartialClientRepliesKeepAnswersAndResumeOnlyWhenComplete(t *testing.T) 
 	if err != nil || tx.Commit() != nil {
 		t.Fatal(err)
 	}
-	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+	if _, err = preparation.ProcessIntake(modelContext(t, context.Background()), db); err != nil {
 		t.Fatal(err)
 	}
 	auth := strings.Repeat("s", 32)
-	h := apiWithStore(db, auth)
+	h := modelHandler(t, apiWithStore(db, auth))
 	call := func(method, path, token string, body any, want int) []byte {
 		t.Helper()
 		raw, _ := json.Marshal(body)
@@ -441,7 +441,7 @@ func TestPartialClientRepliesKeepAnswersAndResumeOnlyWhenComplete(t *testing.T) 
 	if state() != "waiting_evidence" {
 		t.Fatal("the firm can prepare from a partial reply", state())
 	}
-	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+	if _, err = preparation.ProcessIntake(modelContext(t, context.Background()), db); err != nil {
 		t.Fatal(err)
 	}
 	got = answer([]clientAnswer{{2, "answered", "The contract is attached"}}, 200)
@@ -451,7 +451,7 @@ func TestPartialClientRepliesKeepAnswersAndResumeOnlyWhenComplete(t *testing.T) 
 	if got.Questions[0].State != "answered" || got.Questions[1].State != "answered" || superseded != 1 || !complete || state() != "waiting_evidence" {
 		t.Fatalf("a later answer completes the reply, replaces the earlier one and resumes the work: %+v superseded %d %v %s", got.Questions, superseded, complete, state())
 	}
-	if _, err = preparation.ProcessIntake(context.Background(), db); err != nil {
+	if _, err = preparation.ProcessIntake(modelContext(t, context.Background()), db); err != nil {
 		t.Fatal(err)
 	}
 	correction := []clientAnswer{{1, "answered", "It ends 2027-09-30"}}
@@ -514,7 +514,7 @@ func TestUnknownOrRevokedLinkIsRefusedBeforeItsUpload(t *testing.T) {
 	if err != nil || tx.Commit() != nil {
 		t.Fatal(err)
 	}
-	h := apiWithStore(db, strings.Repeat("p", 32))
+	h := modelHandler(t, apiWithStore(db, strings.Repeat("p", 32)))
 	for _, token := range []string{rand.Text(), revoked} {
 		for _, path := range []string{"/v1/client-request", "/v1/client-request/scan-text"} {
 			body := &readSpy{}
