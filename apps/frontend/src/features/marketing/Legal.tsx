@@ -93,7 +93,7 @@ export function Privacy() {
           <li>Each firm’s data is separated in the database by row-level security, so one firm’s requests cannot read another’s.</li>
           <li>Ledger and email credentials are encrypted before they are stored, and are never shown back.</li>
           <li>Files clients send stay quarantined until a malware scan clears them and a person at the firm releases them.</li>
-          <li>Card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details are removed from text before it is sent to an AI model.</li>
+          <li>Card, IBAN and Social Security numbers, labelled bank account numbers and sign-in details are removed from documents, policies and assistant questions before they are sent to an AI model.</li>
           <li>Sign-in is handled by WorkOS; firm administrators decide who may work on which clients.</li>
         </ul>
       </section>
@@ -192,7 +192,7 @@ export function AiData() {
       <section>
         <h2>What it cannot do</h2>
         <p>
-          It cannot approve a draft, send anything to a client, write to a ledger or sign off a close; people do those, with their own permissions. Every quote the AI cites must appear exactly once in the document, and for amounts and dates the quote must show the same value, or the fact becomes a question for a person. Its answers are labelled as written by the model.
+          It cannot approve a draft, send anything to a client, write to a ledger or sign off a close; people do those, with their own permissions. When it proposes facts from a document, each quote it cites must appear exactly once in the document, and for amounts and dates the quote must show the same value, or the fact becomes a question for a person. Proposed statement rows must quote the statement, with the row’s amount and date in the quote, and written answers must cite text from the records they read. Its answers are labelled as written by the model.
         </p>
       </section>
       <section>
@@ -204,7 +204,7 @@ export function AiData() {
           <li>A plain-language request in Work, with the client names visible to the person asking.</li>
           <li>With written answers on: the question and the close’s records the answer reads, such as its sign-off blockers, tie-out, changes and exceptions.</li>
         </ul>
-        <p>Before anything is sent, Close removes card numbers, IBANs, Social Security numbers, labelled bank account numbers and passwords or other sign-in details from the text.</p>
+        <p>Before document and statement text, policies, reviewer edits and assistant questions and reads are sent, Close removes card numbers, IBANs, Social Security numbers, labelled bank account numbers and passwords or other sign-in details. A plain-language request in Work is sent as typed, so keep such details out of it.</p>
       </section>
       <section>
         <h2>Our AI provider</h2>
@@ -239,7 +239,7 @@ export function Retention() {
       <section>
         <h2>Deleting a close</h2>
         <p>
-          A firm data administrator deletes a close once its retention date has passed, at the client’s request, or when the firm’s contract with the client ends, confirming the exact client and month. Deletion waits while anything is still in flight, such as a document being read, an open request link, an email or ledger entry with an uncertain outcome, or a connected ledger. One step then removes the close’s documents, drafts, requests, replies and history. Deleting at the client’s request or at the end of a contract also stops that client’s monthly hand-over and forgets the other names its documents used.
+          A firm data administrator deletes a close once its retention date has arrived, confirming the exact client and month and recording why: the retention period ended, the client asked, or the firm’s contract with the client ended. To act on a client’s request sooner, the administrator first sets the retention date to that day, with the reason. Deletion also waits while anything is still in flight, such as a document being read, an open request link, an email or ledger entry with an uncertain outcome, or a connected ledger. One step then removes the close’s documents, drafts, requests, replies and history. Deleting at the client’s request or at the end of a contract also stops that client’s monthly hand-over and forgets the other names its documents used.
         </p>
       </section>
       <section>
