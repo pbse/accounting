@@ -258,6 +258,13 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 				failure = e.Error()
 				break
 			}
+			// A reply or answer for another job, or unread evidence, arriving since the plan was queued is a person's to weigh.
+			if other, e := OtherEvidence(ctx, tx, closeID, id); e != nil {
+				return false, e
+			} else if other {
+				failure = "Evidence arrived in the close that a person must weigh before this draft is prepared."
+				break
+			}
 			// The capture the plan cites must still be the close's current one; a capture queued or failed since then is a question for a person.
 			ledger, e := CloseLedger(ctx, tx, closeID)
 			if e != nil {

@@ -713,10 +713,8 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 			// Evidence a person must weigh that this job's inventory cannot show: anything not yet readable, and a reply or
 			// answer that belongs to another job of the same close.
-			var unread bool
-			if err = finish.QueryRowContext(persist, `SELECT EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND (e.extraction_state<>'ready'
- OR EXISTS(SELECT 1 FROM work_replies r WHERE r.source_id=e.id AND NOT EXISTS(SELECT 1 FROM request_jobs q WHERE q.request_id=r.request_id AND q.job_id::text=$2))
- OR EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id::text<>$2)))`, closeID, id).Scan(&unread); err != nil {
+			unread, err := OtherEvidence(persist, finish, closeID, id)
+			if err != nil {
 				return true, err
 			}
 			home := ""

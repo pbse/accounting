@@ -269,7 +269,8 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 			return "", "a captured " + row.Kind + " in the close month does not name its counterparty"
 		}
 		mentioned := printed(text, party)
-		fromVendor := party != "" && strings.EqualFold(party, vendor)
+		// A Purchase's counterparty may be a customer or an employee; only a vendor's purchase is the invoice's booking.
+		fromVendor := party != "" && strings.EqualFold(party, vendor) && (row.Kind != "Purchase" || record.VendorRef.Name != "" || strings.EqualFold(record.EntityRef.Type, "Vendor"))
 		mine := fromVendor && strings.EqualFold(strings.TrimSpace(record.DocNumber), strings.TrimSpace(number))
 		if len(record.Line) == 0 && (row.Kind == "JournalEntry" || row.Kind == "Deposit" || row.Kind == "VendorCredit" || record.Credit || mine) {
 			return "", "a captured " + row.Kind + " in the close month has no readable lines"
@@ -383,6 +384,7 @@ func expensedLine(ledger *Ledger, invoice, vendor, number, amount, currency, per
 type accountRef struct {
 	Value string `json:"value"`
 	Name  string `json:"name"`
+	Type  string `json:"type"`
 }
 
 // moneyFigures counts the money figures a quote prints: a number with cents, or one a currency sign or code precedes.
@@ -646,9 +648,10 @@ func labelledLine(quote, value string, labels, none []string) bool {
 		if negated(label) {
 			continue
 		}
+		// The label is the whole of what precedes the name: "Pay bill to" is not "Bill to".
 		ok := false
 		for _, l := range labels {
-			ok = ok || label == l || strings.HasSuffix(label, " "+l)
+			ok = ok || label == l
 		}
 		for _, word := range none {
 			ok = ok && !strings.Contains(label, word)
@@ -744,6 +747,18 @@ func printed(text, term string) bool {
 		return false
 	}
 	return regexp.MustCompile(`(^|[^0-9a-z])` + regexp.QuoteMeta(term) + `([^0-9a-z]|$)`).MatchString(text)
+}
+
+// OtherEvidence reports whether the close holds work evidence a person must weigh that this job's inventory cannot
+// show: anything not yet readable, and a reply or answer belonging to another job of the same close.
+func OtherEvidence(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, closeID, jobID string) (bool, error) {
+	var other bool
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM evidence e WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND (e.extraction_state<>'ready'
+ OR EXISTS(SELECT 1 FROM work_replies r WHERE r.source_id=e.id AND NOT EXISTS(SELECT 1 FROM request_jobs q WHERE q.request_id=r.request_id AND q.job_id::text=$2))
+ OR EXISTS(SELECT 1 FROM preparation_answers a WHERE a.source_id=e.id AND a.job_id::text<>$2)))`, closeID, jobID).Scan(&other)
+	return other, err
 }
 
 // ProcedureEvidence is the close's current evidence copy of a procedure version, or an empty Source when it was never

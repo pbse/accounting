@@ -44,7 +44,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 		if kind == "Purchase" {
 			who = "EntityRef"
 		}
-		record, _ := json.Marshal(map[string]any{"DocNumber": number, "TotalAmt": json.Number(amount), who: map[string]string{"Name": vendor}, "Line": []map[string]any{{"Amount": json.Number(amount), detail: map[string]any{"AccountRef": map[string]string{"Name": account}}}}})
+		record, _ := json.Marshal(map[string]any{"DocNumber": number, "TotalAmt": json.Number(amount), who: map[string]string{"Name": vendor, "type": "Vendor"}, "Line": []map[string]any{{"Amount": json.Number(amount), detail: map[string]any{"AccountRef": map[string]string{"Name": account}}}}})
 		return LedgerRow{Kind: kind, ProviderID: id, Date: date, Currency: "USD", Record: record}
 	}
 	bill := row("Bill", "41", "2026-09-03", "Acme Insurance Co", "INV-778", "Insurance", "1200")
@@ -228,10 +228,12 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 			p.Facts[0].Candidates[0].Quote = "Total CAD 1,200.00 (USD accepted)"
 			p.Facts[3].Candidates[0].Quote = "Total CAD 1,200.00 (USD accepted)"
 		}, ledger(bill), false},
-		"credit with no counterparty":  {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "91", Date: "2026-09-20", Record: json.RawMessage(`{"Credit":true,"Line":[{"Amount":100,"AccountBasedExpenseLineDetail":{"AccountRef":{"name":"Travel"}}}]}`)}), false},
-		"currency on another line":     {func(p *Proposal, _ *Procedure) { p.Facts[3].Candidates[0].Quote = "Payments accepted in USD" }, ledger(bill), false},
-		"subtotal cited":               {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Subtotal USD 1,200.00" }, ledger(bill), false},
-		"billed-to after another word": {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Bill to: Other Example" }, ledger(bill), false},
+		"credit with no counterparty":    {func(*Proposal, *Procedure) {}, ledger(bill, LedgerRow{Kind: "Purchase", ProviderID: "91", Date: "2026-09-20", Record: json.RawMessage(`{"Credit":true,"Line":[{"Amount":100,"AccountBasedExpenseLineDetail":{"AccountRef":{"name":"Travel"}}}]}`)}), false},
+		"currency on another line":       {func(p *Proposal, _ *Procedure) { p.Facts[3].Candidates[0].Quote = "Payments accepted in USD" }, ledger(bill), false},
+		"subtotal cited":                 {func(p *Proposal, _ *Procedure) { p.Facts[0].Candidates[0].Quote = "Subtotal USD 1,200.00" }, ledger(bill), false},
+		"pay-bill-to cited as billed-to": {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Pay bill to: Example" }, ledger(bill), false},
+		"purchase from a customer":       {func(*Proposal, *Procedure) {}, ledger(LedgerRow{Kind: "Purchase", ProviderID: "100", Date: "2026-09-03", Currency: "USD", Record: json.RawMessage(`{"DocNumber":"INV-778","TotalAmt":1200,"EntityRef":{"name":"Acme Insurance Co","type":"Customer"},"Line":[{"Amount":1200,"AccountBasedExpenseLineDetail":{"AccountRef":{"name":"Insurance"}}}]}`)}), false},
+		"billed-to after another word":   {func(p *Proposal, _ *Procedure) { p.Facts[8].Candidates[0].Quote = "Bill to: Other Example" }, ledger(bill), false},
 		"service began earlier": {func(p *Proposal, _ *Procedure) {
 			p.Facts[1].Value = "2026-08-01"
 			p.Facts[1].Candidates[0].Value = "2026-08-01"
