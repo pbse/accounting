@@ -249,6 +249,7 @@ export function Retention() {
         <ul>
           <li>A minimal receipt: the close ID, the month, who deleted it, why and when, and a one-way fingerprint instead of the client’s name.</li>
           <li>Firm-level settings built from the close, such as an approved procedure, with its source removed.</li>
+          <li>Firm-wide records that can name the client: a request typed in Work (such as “prepare Acme’s close”), kept until the person who typed it leaves the firm, and a firm-wide assistant conversation, kept for 30 days.</li>
           <li>Our staff audit log, which records staff access and actions.</li>
           <li>Database backups, until they expire: our database provider’s restore history currently covers six hours.</li>
           <li>Copies outside Close: exported binders, emails already delivered, and anything in the firm’s ledger or other connected accounts.</li>
