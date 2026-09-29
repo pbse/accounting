@@ -2896,3 +2896,8 @@ Fix found by the proof: `AgentInventory` marked any evidence recorded as a work 
 Review: two Codex passes (gpt-6-sol, high); both found nothing.
 
 Verified locally on a fresh PostgreSQL with all migrations applied: the new test with the coverage, client-request and agent tests, `go test ./...` (the two Poppler/Tesseract tests fail on this machine for lack of the binaries, as before), `go vet`, `gofmt`.
+## Work shows where each delegated close stands (2026-09-28)
+
+`TestWorkShowsWhereEachDelegatedCloseStands` (transport) covers demonstration step 1 of docs/maturity.md on PostgreSQL through the routes and the goal's step: two closes are handed to the agent; Work's list (`GET /v1/closes/goals`) says for the one with QuickBooks that its books were last read when its transactions were (an hour ago, later than the capture two days ago), that all three accounts of its capture still need coverage and that one document waits on the client, and for the one without a ledger that there are no books and no coverage; after a later read of the month fails, the list says the read failed and the agent will try again, where the plan had called the books read from the earlier capture; once the connection needs reconnecting, it says to reconnect and lists that close first. `TestPlanSaysWhoEachStepIsWith` adds the failed-read case to the plan's books step. Work's rows show these facts under each close, and say **The books need a person** or **Waiting on the client** where that is the close's state.
+
+Verified locally on a fresh PostgreSQL with all migrations applied: the new tests with the goal and plan tests, `go test ./...` (the two Poppler/Tesseract tests fail on this machine for lack of the binaries, as before), `go vet`, `gofmt`, `npm run check`.

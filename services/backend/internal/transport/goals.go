@@ -654,7 +654,33 @@ func saveSummary(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress) err
 	if g.finish == "signoff" && p.Coverage != nil && p.Coverage.Open > 0 {
 		needs++
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now()) WHERE id=$1`, g.id, needs, p.Ready, signoff)
+	// Work also shows where the books stand, when they were last read, the accounts' coverage and what waits on the
+	// client, so a firm sees each close's state without opening it.
+	var entity, period string
+	if err := tx.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id=$1`, g.close).Scan(&entity, &period); err != nil {
+		return err
+	}
+	b, err := readBooks(ctx, tx, g.close)
+	if err != nil {
+		return err
+	}
+	step := booksStep(b, g.close, entity, period)
+	books := map[string]any{"state": step.State, "text": step.Text}
+	if b.source != "none" {
+		read := b.captured
+		if b.source == "quickbooks" && b.synced.Valid && b.synced.Time.After(read) {
+			read = b.synced.Time
+		}
+		books["read_at"] = read
+	}
+	client := 0
+	for _, item := range p.Items {
+		if item.Status == "client" {
+			client++
+		}
+	}
+	extra, _ := json.Marshal(map[string]any{"books": books, "coverage": p.Coverage, "client": client})
+	_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now())||$5::jsonb WHERE id=$1`, g.id, needs, p.Ready, signoff, string(extra))
 	return err
 }
 
@@ -687,7 +713,8 @@ SELECT at,actor,text,count(*) OVER () FROM (
 
 func registerGoals(mux *http.ServeMux, db *sql.DB) {
 	// Every close handed to the agent that the member can access, with what the agent last found: those needing a person
-	// first, then the rest still in progress, then those finished in the past 14 days.
+	// (including books a person must capture again or reconnect) first, then the rest still in progress, then those
+	// finished in the past 14 days.
 	mux.HandleFunc("GET /v1/closes/goals", func(w http.ResponseWriter, r *http.Request) {
 		search := strings.TrimSpace(r.URL.Query().Get("client"))
 		if len(search) > 200 {
@@ -699,7 +726,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
  FROM close_goals g JOIN client_closes c ON c.id=g.close_id
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access a WHERE a.organization_id=c.organization_id AND a.subject=$3 AND lower(a.client_entity)=lower(c.entity) AND a.granted))
  AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4) AND (g.state='active' OR g.state='reached' AND g.reached_at>now()-interval '14 days')
- ORDER BY CASE WHEN (g.summary->>'needs')::int>0 OR g.summary->>'signoff'='reopen_required' OR g.summary->>'signoff'='open' AND (g.summary->>'ready')::boolean THEN 0 WHEN g.state='active' THEN 1 ELSE 2 END,g.due_on NULLS LAST,lower(c.entity),c.period LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+ ORDER BY CASE WHEN (g.summary->>'needs')::int>0 OR g.summary->>'signoff'='reopen_required' OR g.summary->>'signoff'='open' AND (g.summary->>'ready')::boolean OR g.state='active' AND g.summary#>>'{books,state}'='you' THEN 0 WHEN g.state='active' THEN 1 ELSE 2 END,g.due_on NULLS LAST,lower(c.entity),c.period LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
 		if err != nil {
 			problem(w, 503, "Delegated closes are unavailable.")
 			return

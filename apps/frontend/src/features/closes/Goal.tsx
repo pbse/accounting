@@ -508,7 +508,18 @@ function Proposal({ status, dueOn, proposed, everyMonth, onConfirm }: { status: 
   );
 }
 
-type Delegated = { id: string; close_id: string; entity: string; period: string; finish: Finish; due_on: string; state: Goal["state"]; author: string; handed: number; summary: { needs?: number; ready?: boolean; signoff?: string; as_of?: string } };
+type Delegated = {
+  id: string;
+  close_id: string;
+  entity: string;
+  period: string;
+  finish: Finish;
+  due_on: string;
+  state: Goal["state"];
+  author: string;
+  handed: number;
+  summary: { needs?: number; ready?: boolean; signoff?: string; as_of?: string; books?: { state: string; text: string; read_at?: string }; coverage?: { total: number; open: number } | null; client?: number };
+};
 
 // delegatedState words where a delegated close stands, from what the agent last found, as its card does.
 function delegatedState(g: Delegated): [string, string] {
@@ -518,8 +529,22 @@ function delegatedState(g: Delegated): [string, string] {
   if (s.signoff === "signed_off") return ["status ok", "Signed off"];
   if (g.finish === "review" && g.state === "reached") return ["status ok", "Ready for review"];
   if (s.needs) return ["status warn", `${s.needs} thing${s.needs === 1 ? " needs" : "s need"} a person`];
+  if (s.books?.state === "you") return ["status warn", "The books need a person"];
   if (s.signoff === "open" && s.ready) return ["status warn", "Ready to sign off"];
+  if (s.client) return ["status info", "Waiting on the client"];
   return ["status info", "The agent is working"];
+}
+
+// delegatedFacts says when the books were last read (or what reading them waits on), the accounts' coverage and what
+// waits on the client, from what the agent last found.
+function delegatedFacts(s: Delegated["summary"]) {
+  const facts: string[] = [];
+  if (s.books?.state === "done" && s.books.read_at) facts.push(`Books read ${new Date(s.books.read_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`);
+  else if (s.books?.state === "none") facts.push("No ledger connected: uploaded documents only");
+  else if (s.books) facts.push(s.books.text);
+  if (s.coverage) facts.push(s.coverage.open ? `${s.coverage.open} of ${s.coverage.total} accounts need coverage` : `All ${s.coverage.total} accounts covered`);
+  if (s.client) facts.push(`${s.client} waiting on the client`);
+  return facts.join(" · ");
 }
 
 // DelegatedCloses is Work's list of every close handed to the agent that you can see, those needing a person first.
@@ -572,6 +597,7 @@ export function DelegatedCloses({ refresh, client }: { refresh: number; client: 
                     {g.due_on && ` by ${new Date(`${g.due_on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}`} · handed over by {g.author}
                     {g.handed > 0 && ` · ${g.handed} with teammates`}
                   </small>
+                  {delegatedFacts(g.summary) && <small>{delegatedFacts(g.summary)}</small>}
                 </span>
               </span>
               <span className={tone}>

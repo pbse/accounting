@@ -96,7 +96,13 @@ func booksStep(b booksRead, closeID, entity, period string) planStep {
 	case b.source == "quickbooks" && !b.stale:
 		s.State, s.Text = "done", "Read from QuickBooks: "+month+" captured "+day(b.captured)+"."
 		if b.synced.Valid {
-			s.Text += " Transactions read " + day(b.synced.Time) + "." + again("them")
+			s.Text += " Transactions read " + day(b.synced.Time) + "."
+		}
+		// A failed latest read is not hidden behind an earlier capture: the books are only as current as that read.
+		if b.sync == "failed" {
+			s.State, s.Text = "agent", strings.TrimSpace(s.Text+" My last read of QuickBooks failed: "+b.failure)+" I'll try again within a day."
+		} else if b.synced.Valid {
+			s.Text += again("them")
 		}
 	case b.source == "quickbooks" && b.quickbooks == "active":
 		s.State, s.Text = "you", "The QuickBooks capture of "+month+" is out of date. Capture it again in the QuickBooks panel."
