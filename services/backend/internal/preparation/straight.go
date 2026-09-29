@@ -897,26 +897,29 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 	// A draft is revised automatically only when it cites a replaced source as its invoice and was itself prepared
 	// straight through (its paper says so, or its job's intake was confirmed by the agent; a carried-forward draft never is); a draft a person confirmed keeps its
 	// revision in a person's hands. The chain of replacements is followed, so a source replaced twice before its
-	// replacement was read still leads to the current draft; two sources replaced by the same file are ambiguous.
-	var siblings, citing, eligible int
+	// replacement was read still leads to the current draft; two sources replaced by the same file anywhere along the chain,
+	// or a chain longer than twenty replacements, are a person's to resolve.
+	var branching, truncated bool
+	var citing, eligible int
 	var revises string
-	err := tx.QueryRowContext(ctx, `WITH RECURSIVE chain(id, depth) AS (
-  SELECT id, 1 FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2
-  UNION ALL SELECT e.id, c.depth+1 FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE c.depth < 20),
+	err := tx.QueryRowContext(ctx, `WITH RECURSIVE chain(id, parent, depth) AS (
+  SELECT id, superseded_by, 1 FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2
+  UNION ALL SELECT e.id, e.superseded_by, c.depth+1 FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE c.depth < 20),
  drafts AS (SELECT DISTINCT w.id, (COALESCE((w.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=w.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND i.confirmed_by='agent')) AND w.paper->'carry_forward' IS NULL AS straight FROM workpapers w, chain
   WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role','invoice'))
   AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
- SELECT (SELECT count(*) FROM chain WHERE depth=1),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID).Scan(&siblings, &citing, &eligible, &revises)
+ SELECT EXISTS(SELECT 1 FROM chain GROUP BY parent HAVING count(*)>1),EXISTS(SELECT 1 FROM chain WHERE depth>=20),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID).Scan(&branching, &truncated, &citing, &eligible, &revises)
 	if err != nil {
 		return "", err
 	}
-	predecessors := siblings
 	switch {
-	case predecessors > 1 || citing > 1:
+	case branching || citing > 1:
 		return "the replacement stands for more than one earlier source or draft; a person chooses which draft it revises", nil
+	case truncated:
+		return "the replacement chain is too long to follow; a person chooses which draft it revises", nil
 	case citing == 1 && eligible == 0:
 		return "the draft citing the replaced invoice was confirmed by a person; a person chooses its revision", nil
-	case predecessors == 0 || eligible == 0:
+	case eligible == 0:
 		revises = ""
 	}
 	// A predecessor whose entry was attempted or posted needs a correction against that entry, which a person prepares.
