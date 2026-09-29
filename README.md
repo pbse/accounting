@@ -2,11 +2,11 @@
 
 **Client attachment requirement:** configure [Cloudflare WAF upload scanning](docs/cloudflare-upload-scanning.md) before releasing client PDFs. PDFs need Cloudflare; local TXT/CSV use the separate scanner service.
 
-A foundation for an agent-first accounting preparation workspace. React presents the decisions; Go owns capabilities and accounting; Cloudflare supplies ingress and runtime adapters. The connected ledger remains the ledger of record.
+A foundation for an agent-prepared, firm-approved accounting preparation workspace. React presents the decisions; Go owns capabilities and accounting; Cloudflare supplies ingress and runtime adapters. The connected ledger remains the ledger of record.
 
 **Implemented:** multi-firm/client access; evidence-to-preparation jobs with optional OpenAI interpretation; TXT/CSV/PDF and OCR; live Work and review queues; reviewed prepaid, accrual, loan, depreciation, owner, reconciliation and settlement methods; recurring closes and dependency re-review; QuickBooks/Xero reads, ledger certification, change hints and controlled supported writes (including Xero bill line recodes); client requests, scanned attachments, approved email/replies with a firm reminder rule; MCP access with agent attribution; procedure learning; Daily Books, aging, year-end handoff, binders and operational controls. Supported scope and activation differ by feature: [current coverage and limits](docs/implementation-backlog.md).
 
-**Start with [onboarding and the acceptance matrix](docs/onboarding.md), then [staging/production setup and costs](docs/deployment.md).** WorkOS organizations represent accounting firms; clients and monthly closes live within them. Provider accounts, hosted resources and accountant acceptance are not provisioned by this repository. The production deployment workflow, Cloudflare MCP routing/configuration and broader posting-kind forwarding still require implementation. [MCP](docs/mcp.md) describes the Go surface and current hosting boundary.
+**Start with [onboarding and the acceptance matrix](docs/onboarding.md), then [staging/production setup and costs](docs/deployment.md).** WorkOS organizations represent accounting firms; clients and monthly closes live within them. Provider accounts, hosted resources and accountant acceptance are not provisioned by this repository. A merge to `main` that changes more than documentation migrates and deploys production through **Deploy production**, once the merged pull request's CI has passed; the edge forwards `/mcp`, and hosted MCP still needs its WorkOS Connect setup ([MCP](docs/mcp.md)). Hosted `DATABASE_URL` must be a direct endpoint, not a `-pooler` one. Production posting kinds are an operator setting (`PRODUCTION_POSTING_KINDS`, prepaid when unset), not a check the app enforces: enable a kind only after its sandbox check passes ([posting activation](docs/production-posting.md)).
 
 ## Start locally
 
@@ -50,12 +50,12 @@ services/backend/            One Go module and portable container image
 services/scanner/            Isolated text-scanner image; Go entrypoint cmd/scanner
 workers/scanner/             On-demand scanner container, no cron or database
 workers/edge/                Cloudflare assets + Go API container routing
-workers/queue/               Queue delivery adapter + Go worker container
-workers/workflows/           Durable coordinator boundary and activation requirements
+workers/queue/               Go worker container, woken by a one-minute cron (no Cloudflare Queue is deployed)
+workers/workflows/           Retired boundary; durable work runs in the Go workflow engine
 packages/contracts/          Shared reference shape and future API/MCP contract rules
 infra/postgres/migrations/   Ordered SQL migrations for saved closes/workpapers
 docs/                        PRD, full review, architecture and delivery decisions
-.github/workflows/           CI and gated manual staging deployment
+.github/workflows/           CI, manual staging deployment, production deployment on merge
 ```
 
 Go business modules belong in `services/backend/internal/<domain>` as real behavior arrives. API and worker processes call those modules directly. Do not duplicate the domain in TypeScript or split Go into microservices per feature. Separate scaling roles does not require separate business implementations.
