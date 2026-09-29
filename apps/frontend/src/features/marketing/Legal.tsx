@@ -47,7 +47,7 @@ export function Privacy() {
         <h2>What we collect</h2>
         <ul>
           <li>
-            <strong>On this website:</strong> nothing beyond what your browser sends to load a page. We use no analytics, advertising or tracking, and load no outside fonts or scripts. Our hosting provider, Cloudflare, processes each request, including your IP address, to deliver the site and protect it from abuse.
+            <strong>On this website:</strong> what your browser sends to load a page, and a check of whether you are signed in to the workspace, which contacts our sign-in service (WorkOS, or Close itself) and sends any sign-in cookie you have. We use no analytics, advertising or tracking, and load no outside fonts or scripts. Our hosting provider, Cloudflare, processes each request, including your IP address, to deliver the site and protect it from abuse.
           </li>
           <li>
             <strong>Firm members:</strong> name, email address and roles, which our sign-in provider WorkOS holds for us; which clients each person may work on; and a record of what each person does in Close, such as confirming facts, approving drafts and signing off a close.
@@ -56,7 +56,7 @@ export function Privacy() {
             <strong>Client data a firm provides:</strong> documents the firm uploads, forwards or imports from Google Drive; replies and files a client sends through a private request link; ledger data read from QuickBooks or Xero and payout reports from Stripe, when the firm connects them; and the workpapers, questions, reviews and assistant conversations built from them.
           </li>
           <li>
-            <strong>Client contacts:</strong> the email address a firm approves a client request to, when the firm sends requests by email.
+            <strong>Client contacts:</strong> the email address a firm records for each client request it approves, whether Close emails the request or the firm shares its private link itself.
           </li>
         </ul>
       </section>
