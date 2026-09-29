@@ -2866,6 +2866,6 @@ Checks:
 
 Request: align public copy with actual activation ([maturity](maturity.md)). The sidebar said "Sandbox posting only" although controlled production posting exists behind client grants.
 
-What changed: the sidebar footer now says drafts post to the QuickBooks sandbox unless a client has granted production posting, and that every posting is approved by a person, attempted once and read back. The contact page's "coming soon" line stays until the firm's contact channel exists; nothing here invents one.
+What changed: the sidebar footer now says nothing posts on its own: a person previews, approves and executes each posting, to a sandbox or, under the client's grant, to the client's own ledger; each is attempted once and counts as posted only once its readback matches. A Codex pass found the first wording named QuickBooks for every client (Xero has its own flow), implied a grant switched the destination by itself, and called every posting read back; the wording is now provider-neutral and distinguishes the attempted readback from a verified posting. The contact page's "coming soon" line stays until the firm's contact channel exists; nothing here invents one.
 
 Checks: `npm run check`, frontend build.
