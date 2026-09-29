@@ -233,7 +233,19 @@ export default function ClientRequest() {
         </>
       )}
       <p className="legal-updated">
-        How Close handles what you send: <a href="/privacy">privacy notice</a> · <a href="/ai">AI and your data</a> · <a href="/data-retention">retention and deletion</a>
+        {/* A new tab keeps this request open: its link is no longer in the address bar. */}
+        How Close handles what you send:{" "}
+        <a href="/privacy" target="_blank" rel="noreferrer">
+          privacy notice
+        </a>{" "}
+        ·{" "}
+        <a href="/ai" target="_blank" rel="noreferrer">
+          AI and your data
+        </a>{" "}
+        ·{" "}
+        <a href="/data-retention" target="_blank" rel="noreferrer">
+          retention and deletion
+        </a>
       </p>
     </main>
   );
