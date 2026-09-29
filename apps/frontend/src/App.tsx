@@ -3,6 +3,7 @@ import { BrowserRouter, Link, Route, Routes, useSearchParams } from "react-route
 import { MarketingLayout } from "./features/marketing/Layout";
 import { Home } from "./features/marketing/Home";
 import { Contact } from "./features/marketing/Contact";
+import { AiData, PilotTerms, Privacy, Retention, Subprocessors } from "./features/marketing/Legal";
 import { Login } from "./features/auth/Login";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { EffortTracker } from "./features/closes/Effort";
@@ -55,6 +56,11 @@ export function App() {
           <Route element={<MarketingLayout />}>
             <Route index element={<Home />} />
             <Route path="contact" element={<Contact />} />
+            <Route path="privacy" element={<Privacy />} />
+            <Route path="subprocessors" element={<Subprocessors />} />
+            <Route path="ai" element={<AiData />} />
+            <Route path="data-retention" element={<Retention />} />
+            <Route path="pilot-terms" element={<PilotTerms />} />
             <Route path="login" element={<Login />} />
             <Route
               path="*"

@@ -1,4 +1,5 @@
 import { Link, NavLink, Outlet } from "react-router";
+import { legalPages } from "./Legal";
 
 export function MarketingLayout() {
   return (
@@ -24,6 +25,13 @@ export function MarketingLayout() {
         </Link>
         <p>More prepared work. Your firm stays in control.</p>
         <Link to="/contact">Reach out to us</Link>
+        <nav aria-label="Legal and data" className="public-legal">
+          {legalPages.map((page) => (
+            <Link key={page.to} to={page.to}>
+              {page.label}
+            </Link>
+          ))}
+        </nav>
       </footer>
     </div>
   );
