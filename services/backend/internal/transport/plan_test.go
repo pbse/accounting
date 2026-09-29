@@ -30,6 +30,12 @@ func TestPlanSaysWhoEachStepIsWith(t *testing.T) {
 		{booksRead{source: "none", xero: "active"}, "Capture September 2026 in the Xero panel."},
 		{booksRead{source: "none", quickbooks: "reconnect_required", xero: "active", daily: true}, "I'll capture September 2026 from Xero within a day."},
 		{booksRead{source: "none", quickbooks: "active", daily: true, ended: true, elsewhere: true}, "Capture September 2026 in the QuickBooks panel."},
+		// A capture does not hide a failed later read.
+		{booksRead{source: "quickbooks", captured: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), quickbooks: "active", daily: true, ended: true, sync: "failed", failure: "QuickBooks returned HTTP 500."}, "Read from QuickBooks: September 2026 captured Oct 1. My last read of QuickBooks failed: QuickBooks returned HTTP 500. I'll try again within a day."},
+		// A read that failed before the current capture is not the books' state.
+		{booksRead{source: "quickbooks", captured: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC), quickbooks: "active", ended: true, sync: "failed", failure: "QuickBooks returned HTTP 500.", failed: sql.NullTime{Time: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Valid: true}}, "Read from QuickBooks: September 2026 captured Oct 2."},
+		// A close the scheduled reads do not take is not read again on its own.
+		{booksRead{source: "quickbooks", captured: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), quickbooks: "active", ended: true, sync: "failed", failure: "QuickBooks returned HTTP 500."}, "Read from QuickBooks: September 2026 captured Oct 1. My last read of QuickBooks failed: QuickBooks returned HTTP 500. Read it again in the QuickBooks panel."},
 	} {
 		if got := booksStep(c.books, "7", "Acme", "2026-09").Text; got != c.want {
 			t.Errorf("books %+v: %q", c.books, got)
