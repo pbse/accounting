@@ -23,7 +23,7 @@ type envelope struct {
 	} `json:"output"`
 }
 
-func (c Client) openAI(ctx context.Context, route route, in Request) (Response, error) {
+func (c *Client) openAI(ctx context.Context, route route, in Request) (Response, error) {
 	if in.Scope != nil || in.OnProgress != nil {
 		return Response{}, ErrIncomplete
 	}

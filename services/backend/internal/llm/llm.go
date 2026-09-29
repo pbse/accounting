@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -33,8 +34,11 @@ type route struct {
 // Configure once before sharing it. No automatic retries or provider fallbacks:
 // either would bypass the caller's budget reservation or data consent boundary.
 type Client struct {
-	http   *http.Client
-	routes map[string]route
+	http             *http.Client
+	routes           map[string]route
+	readinessMu      sync.Mutex
+	readinessExpires time.Time
+	readinessErr     error
 }
 
 type Request struct {
@@ -120,7 +124,7 @@ var (
 )
 
 // Generate is the entry point for both API inference and hosted agent research.
-func (c Client) Generate(ctx context.Context, in Request) (Response, error) {
+func (c *Client) Generate(ctx context.Context, in Request) (Response, error) {
 	route := c.routes[in.Purpose]
 	if in.Purpose == "" || route.Token == "" || route.Model == "" {
 		return Response{}, ErrUnavailable
@@ -159,7 +163,7 @@ func (c Client) Generate(ctx context.Context, in Request) (Response, error) {
 	return result, err
 }
 
-func (c Client) post(ctx context.Context, endpoint, token string, body any) (*http.Response, error) {
+func (c *Client) post(ctx context.Context, endpoint, token string, body any) (*http.Response, error) {
 	if !validEndpoint(endpoint) {
 		return nil, errors.New("model endpoint must use HTTPS (HTTP is allowed only on loopback)")
 	}

@@ -12,7 +12,7 @@ import (
 
 // contextMachine calls an independently hosted agent. The service owns the CLI,
 // its tools and its read-only database credentials. None come from the caller.
-func (c Client) contextMachine(ctx context.Context, route route, in Request) (Response, error) {
+func (c *Client) contextMachine(ctx context.Context, route route, in Request) (Response, error) {
 	if in.Scope == nil || strings.TrimSpace(in.Scope.Organization) == "" || strings.TrimSpace(in.Scope.Subject) == "" || strings.TrimSpace(in.Scope.AccessProfile) == "" {
 		return Response{}, errors.New("context machine requires an authorized access profile, organization and subject")
 	}

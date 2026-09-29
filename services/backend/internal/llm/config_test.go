@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type roundTrip func(*http.Request) (*http.Response, error)
@@ -23,7 +26,7 @@ func TestStartupConfigurationAndInjection(t *testing.T) {
 	t.Setenv("OPENAI_MODEL", "default-model")
 	t.Setenv("LLM_MODELS", `{"preparation":"careful-model"}`)
 	t.Setenv("CONTEXT_MACHINE_TOKEN", "internal-key")
-	t.Setenv("CONTEXT_MACHINE_MODEL", "research-agent")
+	t.Setenv("CONTEXT_MACHINE_MODEL", "codex")
 	c, err := FromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +36,7 @@ func TestStartupConfigurationAndInjection(t *testing.T) {
 	}
 	ctx := WithClient(context.Background(), c)
 	t.Setenv("OPENAI_MODEL", "changed-after-start")
-	if Model(ctx, "preparation") != "careful-model" || Model(ctx, "statement") != "default-model" || Model(ctx, "research") != "research-agent" {
+	if Model(ctx, "preparation") != "careful-model" || Model(ctx, "statement") != "default-model" || Model(ctx, "research") != "codex" {
 		t.Fatal("routes changed after startup")
 	}
 	if Model(context.Background(), "preparation") != "" {
@@ -67,7 +70,8 @@ func TestInvalidConfiguration(t *testing.T) {
 		{APIKey: "key", Model: "model", Models: map[string]string{"unknown": "x"}},
 		{APIKey: "key", Model: "model", Models: map[string]string{"preparation": ""}},
 		{Models: map[string]string{"preparation": "model"}},
-		{ContextMachineToken: "key", ContextMachineModel: "model", ContextMachineEndpoint: "http://remote"},
+		{ContextMachineToken: "key", ContextMachineModel: "model"},
+		{ContextMachineToken: "key", ContextMachineModel: "codex", ContextMachineEndpoint: "http://remote"},
 	} {
 		if _, err := New(cfg); err == nil {
 			t.Fatal("invalid configuration accepted")
@@ -98,12 +102,12 @@ func TestServiceDiscoveryAndStreaming(t *testing.T) {
 	scope := Scope{Organization: "firm", Subject: "member", AccessProfile: "read-only"}
 	finished := machineResponse{Version: 1, Status: "completed", Scope: scope, Response: Response{ID: "run", Model: "actual", Text: "Finding", ModelCalls: 2}}
 	terminal, _ := json.Marshal(map[string]any{"type": "completed", "scope": scope, "response": finished})
-	cfg := Config{ContextMachineToken: "private", ContextMachineModel: "agent", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	cfg := Config{ContextMachineToken: "private", ContextMachineModel: "claude", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host != "context-machine.internal" || r.URL.Path != "/v1/run" {
 			t.Fatal("feature needed an endpoint")
 		}
 		var payload map[string]any
-		if json.NewDecoder(r.Body).Decode(&payload) != nil || payload["stream"] != true || payload["model"] != "agent" {
+		if json.NewDecoder(r.Body).Decode(&payload) != nil || payload["stream"] != true || payload["model"] != "claude" {
 			t.Fatal("stream was not requested")
 		}
 		body := `{"scope":{"organization":"firm","subject":"member","access_profile":"read-only"},"type":"progress","text":"Reading evidence"}` + "\n" + `{"scope":{"organization":"firm","subject":"member","access_profile":"read-only"},"type":"text_delta","text":"Finding"}` + "\n" + string(terminal) + "\n"
@@ -234,6 +238,40 @@ func TestPrivateMachineReadiness(t *testing.T) {
 		err = CheckContextMachine(WithClient(context.Background(), c))
 		if (err == nil) != strings.Contains(body, "claude") {
 			t.Fatal("readiness failed to verify both agents", err)
+		}
+	}
+}
+
+func TestReadinessCoalescesAndCachesSuccessAndFailure(t *testing.T) {
+	for _, status := range []int{200, 503} {
+		var calls atomic.Int32
+		c, err := New(Config{ContextMachineToken: "private", ContextMachineModel: "codex", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			time.Sleep(10 * time.Millisecond)
+			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"status":"ok","agents":["codex","claude"]}`))}, nil
+		})}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := WithClient(context.Background(), c)
+		var wg sync.WaitGroup
+		for range 20 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := CheckContextMachine(ctx); (err == nil) != (status == 200) {
+					t.Error(err)
+				}
+			}()
+		}
+		wg.Wait()
+		if calls.Load() != 1 {
+			t.Fatal("concurrent probes were not coalesced", calls.Load())
+		}
+		c.readinessExpires = time.Now().Add(-time.Second)
+		_ = CheckContextMachine(ctx)
+		if calls.Load() != 2 {
+			t.Fatal("expired readiness was not refreshed")
 		}
 	}
 }

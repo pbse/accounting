@@ -51,7 +51,7 @@ psql "$MIGRATION_DATABASE_URL" -v agent_role=context_machine_reader \
 
 The script expects the login to exist and never stores its password. Set its connection string as `CONTEXT_MACHINE_DATABASE_URL`. Readiness rejects ownership, writes, privileged role membership and schema creation. On older PostgreSQL installations granting CREATE on public to everyone, remove that PUBLIC grant as an explicit database administration change first. Never grant SELECT on all tables: connection credentials and unrelated data are outside the tool surface.
 
-Local development and tests use local PostgreSQL only. Never create Neon branches.
+Local development and tests use local PostgreSQL only. Never create Neon branches. Host-run Go processes may set `CONTEXT_MACHINE_ENDPOINT=http://127.0.0.1:8081/v1/run` for a separately started local runner. Docker Compose API/worker containers need a reachable private HTTPS endpoint: their loopback addresses refer to themselves, not the host.
 
 ## CI and rollout
 
@@ -73,7 +73,7 @@ Do not add a public context-machine route for testing. Readiness tests connectiv
 
 ## Operations and rollback
 
-`/healthz` is container liveness; authenticated `/readyz` checks the database role and both binaries. Neither contacts a provider, so billing, provider permissions and model availability still need the first authorized inference check. Errors expose no CLI stderr, secrets or prompts.
+`/healthz` is container liveness; authenticated `/readyz` checks the database role and both binaries. The API caches the private readiness result (including failures) for 60 seconds and coalesces concurrent probes; run authorization and database checks remain fresh on every execution. Neither contacts a provider, so billing, provider permissions and model availability still need the first authorized inference check. Errors expose no CLI stderr, secrets or prompts.
 
 One container accepts one run at a time, with a two-minute deadline and 1–16 model calls. Busy requests return 429; the caller decides whether a new attempt is authorized. Each run gets a fresh temporary workspace. Streaming reports start and completion, not live token output. Five idle minutes allow the container to sleep.
 

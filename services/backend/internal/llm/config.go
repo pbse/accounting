@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"time"
 )
 
 const contextMachineEndpoint = "http://context-machine.internal/v1/run"
@@ -34,6 +35,9 @@ func New(cfg Config) (*Client, error) {
 	}
 	if (cfg.ContextMachineToken == "") != (cfg.ContextMachineModel == "") {
 		return nil, errors.New("both CONTEXT_MACHINE_TOKEN and CONTEXT_MACHINE_MODEL are required, or neither")
+	}
+	if cfg.ContextMachineModel != "" && cfg.ContextMachineModel != "codex" && cfg.ContextMachineModel != "claude" {
+		return nil, errors.New("CONTEXT_MACHINE_MODEL must be codex or claude")
 	}
 	c := &Client{http: cfg.HTTP, routes: make(map[string]route)}
 	for _, purpose := range purposes {
@@ -125,6 +129,25 @@ func CheckContextMachine(ctx context.Context) error {
 	if !ok {
 		return nil
 	}
+	// Cache failures too: public readiness polling must not repeatedly wake the
+	// container and spawn CLI processes. Each client coalesces concurrent probes.
+	c.readinessMu.Lock()
+	defer c.readinessMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if time.Now().Before(c.readinessExpires) {
+		return c.readinessErr
+	}
+	// A disconnected caller must not poison the shared readiness result.
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	c.readinessErr = c.checkContextMachine(probeCtx, route)
+	c.readinessExpires = time.Now().Add(time.Minute)
+	return c.readinessErr
+}
+
+func (c *Client) checkContextMachine(ctx context.Context, route route) error {
 	endpoint, err := url.Parse(route.URL)
 	if err != nil {
 		return err

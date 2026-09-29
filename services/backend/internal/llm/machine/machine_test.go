@@ -93,9 +93,17 @@ func TestCommandsAndOutputFailClosed(t *testing.T) {
 	if err != nil || text != "done" || u.Input != 3 {
 		t.Fatal(text, u, err)
 	}
-	text, _, err = parseOutput("claude", []byte(`{"type":"result","subtype":"success","result":"done","usage":{"input_tokens":3,"output_tokens":2}}`))
-	if err != nil || text != "done" {
-		t.Fatal(text, err)
+	for _, cached := range []bool{false, true} {
+		usage := `"input_tokens":3,"output_tokens":2`
+		want := 3
+		if cached {
+			usage += `,"cache_creation_input_tokens":11,"cache_read_input_tokens":17`
+			want = 31
+		}
+		text, u, err = parseOutput("claude", []byte(`{"type":"result","subtype":"success","result":"done","usage":{`+usage+`}}`))
+		if err != nil || text != "done" || u.Input != want || u.Output != 2 {
+			t.Fatal(text, u, err)
+		}
 	}
 	cancelled := false
 	b := &limitedOutput{cancel: func() { cancelled = true }}
@@ -223,10 +231,35 @@ func TestReadOnlyDatabaseScopeAndRevocation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	must("CREATE ROLE " + role + " LOGIN PASSWORD 'test-only'")
+	// Exercise the shipped provisioning SQL as a managed-style, non-superuser
+	// owner with grant options, rather than hand-writing the reader's grants.
+	owner := role + "_owner"
+	must("CREATE ROLE " + owner + " CREATEROLE")
+	defer func() { admin.Exec("DROP OWNED BY " + owner); admin.Exec("DROP ROLE " + owner) }()
+	must("GRANT USAGE ON SCHEMA public TO " + owner + " WITH GRANT OPTION")
+	must("GRANT SELECT ON organizations,client_closes,evidence,current_organization_members,current_client_access,organization_member_access,client_access TO " + owner + " WITH GRANT OPTION")
+	conn, err := admin.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "SET ROLE "+owner); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.ExecContext(ctx, "RESET ROLE")
+	if _, err = conn.ExecContext(ctx, "CREATE ROLE "+role+" LOGIN PASSWORD 'test-only'"); err != nil {
+		t.Fatal(err)
+	}
 	defer func() { admin.Exec("DROP OWNED BY " + role); admin.Exec("DROP ROLE " + role) }()
-	must("GRANT USAGE ON SCHEMA public TO " + role)
-	must("GRANT SELECT ON organizations,client_closes,evidence,current_organization_members,current_client_access,organization_member_access,client_access TO " + role)
+	script, err := os.ReadFile("../../../../../infra/postgres/context-machine-role.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlScript := strings.ReplaceAll(string(script), `\set ON_ERROR_STOP on`, "")
+	sqlScript = strings.ReplaceAll(sqlScript, `:"agent_role"`, `"`+role+`"`)
+	if _, err = conn.ExecContext(ctx, sqlScript); err != nil {
+		t.Fatal("managed-owner provisioning failed:", err)
+	}
 	u, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatal(err)

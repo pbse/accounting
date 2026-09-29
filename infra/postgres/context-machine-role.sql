@@ -4,7 +4,8 @@
 -- This script never changes the application login or grants access to credentials.
 \set ON_ERROR_STOP on
 BEGIN;
-ALTER ROLE :"agent_role" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+-- Use a newly created, unprivileged login. Managed database owners cannot
+-- alter superuser attributes; readiness rejects privileged logins.
 ALTER ROLE :"agent_role" SET default_transaction_read_only = on;
 GRANT USAGE ON SCHEMA public TO :"agent_role";
 GRANT SELECT ON public.client_closes, public.evidence,

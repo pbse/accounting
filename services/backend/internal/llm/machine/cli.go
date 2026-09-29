@@ -48,12 +48,17 @@ func parseOutput(agent string, raw []byte) (string, llm.Usage, error) {
 		var result struct {
 			Type, Subtype, Result string
 			IsError               bool `json:"is_error"`
-			Usage                 llm.Usage
+			Usage                 struct {
+				llm.Usage
+				CacheCreation int `json:"cache_creation_input_tokens"`
+				CacheRead     int `json:"cache_read_input_tokens"`
+			}
 		}
 		if json.Unmarshal(raw, &result) != nil || result.Type != "result" || result.Subtype != "success" || result.IsError || strings.TrimSpace(result.Result) == "" {
 			return "", llm.Usage{}, llm.ErrIncomplete
 		}
-		return result.Result, result.Usage, nil
+		result.Usage.Input += result.Usage.CacheCreation + result.Usage.CacheRead
+		return result.Result, result.Usage.Usage, nil
 	}
 	scan := bufio.NewScanner(bytes.NewReader(raw))
 	scan.Buffer(make([]byte, 4096), 1<<20)
