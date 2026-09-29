@@ -33,12 +33,12 @@ Use the matching GitHub **environment** (`production` or `staging`). Do not put 
 | `LLM_REASONING_EFFORTS` | Variable, optional | JSON purpose-to-effort overrides, using the same purpose names as `LLM_MODELS`. |
 | `OPENAI_MODEL` | Variable | Approved model for existing workflows; required when `OPENAI_API_KEY` is set. |
 | `CODEX_MODEL` | Variable | Exact OpenAI model ID for enabled Codex. |
-| `CLAUDE_MODEL` | Variable | Exact Anthropic model ID for enabled Claude. |
+| `CLAUDE_MODEL` | Variable | Exact Anthropic model ID for enabled Claude; it must support adaptive thinking and `output_config.effort`. |
 | `CONTEXT_MACHINE_MODEL` | Variable | `codex` or `claude`: selects the research agent. |
 | `CONTEXT_MACHINE_PROFILES` | Variable | Nonempty JSON array of exact organization/subject/access-profile triples. |
 | `LLM_MODELS` | Variable, optional | JSON purpose-to-model overrides for existing API workflows. |
 
-Existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` deploy all services. The token/account must support Workers, Durable Objects and Containers; Containers billing must be enabled. API keys require API billing and access to the chosen models. Subscription tokens use the corresponding account's permissions and limits. Only the selected research agent must be configured; an unused Claude agent does not require a key or model. An explicitly selected auth mode with a missing credential fails startup/deployment. `auto` chooses once at startup; expired tokens, quota errors and refusals fail the run without changing credentials or repeating the request.
+Existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` deploy all services. The token/account must support Workers, Durable Objects and Containers; Containers billing must be enabled. API keys require API billing and access to the chosen models. Subscription tokens use the corresponding account's permissions and limits. Only the selected research agent must be configured; an unused agent does not require a key or model. In `auto`, a missing model leaves that research agent disabled even if its API key exists for direct workflows. An explicitly selected auth mode with a missing credential fails startup/deployment. `auto` chooses once at startup; expired tokens, quota errors and refusals fail the run without changing credentials or repeating the request.
 
 For example, these **variables** pin Codex research independently from direct API workflows:
 
@@ -80,7 +80,7 @@ Local development and tests use local PostgreSQL only. Never create Neon branche
 ## CI and rollout
 
 1. The PR's CI runs Go/TypeScript checks, local PostgreSQL isolation tests and Worker dry runs, including production bindings.
-2. CI builds the actual context-machine image. A test binary inside it starts a fake provider and MCP server, runs **both installed CLIs**, and requires a read-tool invocation plus a final answer for both API-key and subscription modes through the enforcing proxy. This catches incompatible CLI flags, tool names and output formats without provider credentials.
+2. CI builds the actual context-machine image. A test binary inside it starts a fake provider and MCP server, runs **both installed CLIs**, and requires a read-tool invocation plus a final answer for both API-key and subscription modes at every accepted CLI effort level through the enforcing proxy. This catches incompatible CLI flags, tool names and output formats without provider credentials.
 3. Merge after CI is green and environment settings exist. Deploy production verifies the merged PR's CI, validates configuration, applies normal migrations, and deploys the private context machine **before** API and queue Workers. Staging uses the same contract through its manual workflow.
 4. Each service receives only its required secrets. The context machine receives no application write credentials, posting keys or integration secrets. Temporary Wrangler secret files are mode 0600 and deleted after deployment.
 5. The final `${PRODUCTION_URL}/readyz` check traverses the **Go API → outbound handler → service binding → container** path. It verifies both binaries and read-only database privileges. Deployment retries span 100 seconds of delays, exceeding the 60-second readiness cache so a transient cold-start failure can recover. Persistent failure fails deployment; it does not silently disable research.
@@ -101,7 +101,7 @@ Do not add a public context-machine route for testing. Readiness tests connectiv
 
 Model calls return the selected `model`, `reasoning_effort`, and `auth_mode` as non-secret metadata. Unsupported model/effort combinations fail at the provider; there is no silent effort downgrade.
 
-**Token-limit capability:** API-key mode enforces the requested per-call output-token limit. Claude subscription mode retains `max_tokens`. Codex's subscription transport does not accept `max_output_tokens`, so that route cannot promise a hard per-call token ceiling. Use `CODEX_AUTH_MODE=api_key` where that ceiling is required. Both modes enforce the same model-call budget, response byte cap and execution deadline. Subscription usage is subject to account limits, not interchangeable with API dollar budgets.
+**Token-limit capability:** API-key mode enforces the requested per-call output-token limit. Claude subscription mode retains `max_tokens`. Codex's subscription transport does not accept `max_output_tokens`, so that route cannot promise a hard per-call token ceiling. The library caller must explicitly set `AllowUncappedOutputTokens: true` (wire field `allow_uncapped_output_tokens`) for this route; otherwise the service rejects the run before touching the database or provider. Use `CODEX_AUTH_MODE=api_key` where that ceiling is required. Both modes enforce the same model-call budget, response byte cap and execution deadline. The byte cap is not a token/cost ceiling and does not bound hidden reasoning work. Subscription usage is subject to account limits, not interchangeable with API dollar budgets.
 
 One container accepts one run at a time, with a two-minute deadline and 1–16 model calls. Busy requests return 429; the caller decides whether a new attempt is authorized. Each run gets a fresh temporary workspace. Streaming reports start and completion, not live token output. Five idle minutes allow the container to sleep.
 

@@ -36,6 +36,10 @@ func TestAgentCredentialSelection(t *testing.T) {
 			}
 		}
 	}
+	disabled, err := (Config{OpenAIKey: "direct-api-key"}).agent("codex")
+	if err != nil || disabled.credential != "" {
+		t.Fatal("direct API key enabled unconfigured research agent")
+	}
 	cfg := Config{CodexModel: "fixed", OpenAIKey: "key", CodexEffort: "invalid"}
 	if _, err := cfg.agent("codex"); err == nil {
 		t.Fatal("invalid effort accepted")
@@ -55,6 +59,14 @@ func TestUnconfiguredAgentRejectedBeforeDatabaseAccess(t *testing.T) {
 	if w.Code != 503 || !strings.Contains(w.Body.String(), "agent unavailable") {
 		t.Fatal(w.Code, w.Body.String())
 	}
+	r = httptest.NewRequest("POST", "/v1/run", strings.NewReader(`{"version":1,"purpose":"research","model":"codex","instructions":"read","scope":{"organization":"org_test","subject":"user_test","access_profile":"read"},"read_only":true,"store":false,"deadline":"2099-01-01T00:00:00Z","max_output_tokens":100,"max_model_calls":1}`))
+	r.Header.Set("Authorization", "Bearer "+cfg.Token)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "allow_uncapped_output_tokens") {
+		t.Fatal("subscription silently dropped token limit", w.Code, w.Body.String())
+	}
+
 }
 
 func TestProxyPinsReasoningAndSubscriptionCredentials(t *testing.T) {
@@ -69,10 +81,10 @@ func TestProxyPinsReasoningAndSubscriptionCredentials(t *testing.T) {
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)
 			if agent == "codex" {
-				if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" || body["reasoning"].(map[string]any)["effort"] != "medium" || body["max_output_tokens"] != nil {
+				if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" || body["reasoning"].(map[string]any)["effort"] != "medium" || body["reasoning"].(map[string]any)["summary"] != "auto" || body["max_output_tokens"] != nil {
 					t.Error("Codex subscription policy")
 				}
-			} else if body["output_config"].(map[string]any)["effort"] != "medium" || body["thinking"].(map[string]any)["type"] != "adaptive" || !strings.Contains(r.Header.Get("Anthropic-Beta"), "oauth-2025-04-20") {
+			} else if r.URL.Host != "api.anthropic.com" || body["output_config"].(map[string]any)["effort"] != "medium" || body["thinking"].(map[string]any)["type"] != "adaptive" || !strings.Contains(r.Header.Get("Anthropic-Beta"), "oauth-2025-04-20") {
 				t.Error("Claude subscription policy")
 			}
 			return &http.Response{StatusCode: 401, Body: io.NopCloser(strings.NewReader("private provider detail"))}, nil
@@ -81,7 +93,7 @@ func TestProxyPinsReasoningAndSubscriptionCredentials(t *testing.T) {
 		if agent == "claude" {
 			path = "/v1/messages"
 		}
-		r := httptest.NewRequest("POST", path, strings.NewReader(`{"reasoning":{"effort":"max"},"output_config":{"effort":"max"},"thinking":{"type":"enabled","budget_tokens":99999}}`))
+		r := httptest.NewRequest("POST", path, strings.NewReader(`{"reasoning":{"effort":"max","summary":"auto"},"output_config":{"effort":"max"},"thinking":{"type":"enabled","budget_tokens":99999}}`))
 		r.Header.Set("Authorization", "Bearer ephemeral")
 		w := httptest.NewRecorder()
 		p.ServeHTTP(w, r)

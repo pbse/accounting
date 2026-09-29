@@ -18,7 +18,7 @@ for (const [agent, prefix, keyName, tokenName] of [["codex", "CODEX", "OPENAI_AP
  if (!["auto", "api_key", "subscription"].includes(mode) || !levels.includes(effort)) throw new Error(`Invalid ${prefix} auth mode or effort`);
  const key = process.env[keyName], token = process.env[tokenName];
  const credential = mode === "subscription" ? token : mode === "api_key" ? key : key || token;
- if (!credential && mode === "auto") continue;
+ if (mode === "auto" && (!credential || !process.env[`${prefix}_MODEL`])) continue;
  if (!credential || !process.env[`${prefix}_MODEL`]) throw new Error(`${prefix} requires its selected credential and model`);
  enabled.add(agent);
 }

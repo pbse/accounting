@@ -31,6 +31,9 @@ func (cfg Config) agent(agent string) (agentSettings, error) {
 		return agentSettings{}, errors.New("invalid agent auth mode")
 	}
 	if mode == "auto" {
+		if model == "" {
+			return agentSettings{}, nil
+		}
 		if key != "" {
 			mode = "api_key"
 		} else if token != "" {

@@ -111,7 +111,7 @@ func TestServiceDiscoveryAndStreaming(t *testing.T) {
 			t.Fatal("feature needed an endpoint")
 		}
 		var payload map[string]any
-		if json.NewDecoder(r.Body).Decode(&payload) != nil || payload["stream"] != true || payload["model"] != "claude" {
+		if json.NewDecoder(r.Body).Decode(&payload) != nil || payload["stream"] != true || payload["model"] != "claude" || payload["allow_uncapped_output_tokens"] != true {
 			t.Fatal("stream was not requested")
 		}
 		body := `{"scope":{"organization":"firm","subject":"member","access_profile":"read-only"},"type":"progress","text":"Reading evidence"}` + "\n" + `{"scope":{"organization":"firm","subject":"member","access_profile":"read-only"},"type":"text_delta","text":"Finding"}` + "\n" + string(terminal) + "\n"
@@ -122,7 +122,7 @@ func TestServiceDiscoveryAndStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	var progress, text string
-	out, err := Generate(WithClient(context.Background(), c), Request{Purpose: "research", Instructions: "Investigate", Scope: &scope, MaxModelCalls: 3, MaxOutputTokens: 100, OnProgress: func(s string) bool { progress += s; return true }, OnText: func(s string) bool { text += s; return true }})
+	out, err := Generate(WithClient(context.Background(), c), Request{Purpose: "research", Instructions: "Investigate", AllowUncappedOutputTokens: true, Scope: &scope, MaxModelCalls: 3, MaxOutputTokens: 100, OnProgress: func(s string) bool { progress += s; return true }, OnText: func(s string) bool { text += s; return true }})
 	if err != nil || out.ID != "run" || out.Provider != ContextMachine || text != "Finding" || progress != "Reading evidence" {
 		t.Fatalf("%+v %v %q %q", out, err, text, progress)
 	}

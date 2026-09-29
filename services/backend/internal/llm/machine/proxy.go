@@ -43,13 +43,23 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body["model"] = p.model
 	if p.agent == "claude" {
 		body["max_tokens"] = p.tokens
-		body["output_config"] = map[string]any{"effort": p.effort}
+		output, _ := body["output_config"].(map[string]any)
+		if output == nil {
+			output = map[string]any{}
+		}
+		output["effort"] = p.effort
+		body["output_config"] = output
 		// Adaptive thinking respects max_tokens; a CLI's fixed thinking budget may exceed it.
 		body["thinking"] = map[string]any{"type": "adaptive"}
 	} else {
 		body["max_output_tokens"] = p.tokens
 		body["store"] = false
-		body["reasoning"] = map[string]any{"effort": p.effort}
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if reasoning == nil {
+			reasoning = map[string]any{}
+		}
+		reasoning["effort"] = p.effort
+		body["reasoning"] = reasoning
 		if p.authMode == "subscription" {
 			endpoint = "https://chatgpt.com/backend-api/codex/responses"
 			// Codex subscription transport does not accept max_output_tokens. The

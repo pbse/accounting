@@ -51,6 +51,8 @@ There are no implicit retries or provider fallbacks. Each extra attempt needs an
 
 ## Context-machine protocol, version 1
 
+For Codex subscription mode, a caller must set `AllowUncappedOutputTokens: true` (wire field `allow_uncapped_output_tokens`) to acknowledge that `max_output_tokens` cannot be enforced by that transport. Omission rejects the run before database/provider work. Byte caps do not bound hidden reasoning tokens or cost. API-key routes retain the token ceiling.
+
 POST through the private service binding with a dedicated bearer credential. Local development may use loopback HTTP. Database credentials, executable names, shell flags and arbitrary tool definitions are never request fields.
 
 ```json
@@ -133,4 +135,4 @@ Production readiness traverses the Go API's outbound bridge, authenticates to th
 
 Research selects a CLI via `CONTEXT_MACHINE_MODEL`. The service independently pins `CODEX_MODEL`/`CLAUDE_MODEL`, `CODEX_REASONING_EFFORT`/`CLAUDE_REASONING_EFFORT` (default `medium`), and each agent's `*_AUTH_MODE`. Auto prefers an API key, then its configured subscription token. Explicit modes fail if their credential is absent. Selection never changes after an upstream failure, and direct API features do not silently become research runs.
 
-Responses expose non-secret `reasoning_effort` and `auth_mode` alongside model provenance. The research access profile, read-only tools, tool filtering, deadline, byte cap and call budget apply in either credential mode. Codex subscription mode cannot enforce the API's per-call output-token ceiling; callers requiring that guarantee must use API-key mode. See [deployment configuration](context-machine-deployment.md) for supported token types, rotation and the local-versus-live validation boundary.
+Responses expose non-secret `reasoning_effort` and `auth_mode` alongside model provenance. The research access profile, read-only tools, tool filtering, deadline, byte cap and call budget apply in either credential mode. Codex subscription mode cannot enforce the API's per-call output-token ceiling; callers must explicitly opt in with `AllowUncappedOutputTokens: true`, or use API-key mode to preserve that guarantee. See [deployment configuration](context-machine-deployment.md) for supported token types, rotation and the local-versus-live validation boundary.

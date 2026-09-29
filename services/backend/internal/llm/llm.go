@@ -53,11 +53,15 @@ type Request struct {
 	Tools             []Tool
 	ToolChoice        string
 	ParallelToolCalls bool
-	MaxOutputTokens   int
-	MaxResponseBytes  int64
+	// Per-call token ceiling unless research explicitly allows an uncapped transport.
+	MaxOutputTokens  int
+	MaxResponseBytes int64
 	// MaxModelCalls bounds the agent's internal loop. The caller reserves this
 	// many calls before dispatch; the service must enforce it.
 	MaxModelCalls int
+	// Research-only opt-in for subscription transports without a provider-side
+	// output-token ceiling. Call count, deadline and byte limits still apply.
+	AllowUncappedOutputTokens bool
 	// OnText receives provisional deltas. A successful return is still required
 	// before treating the result as complete. Returning false cancels the call.
 	OnText func(string) bool

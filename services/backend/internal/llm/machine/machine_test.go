@@ -118,8 +118,21 @@ func TestInstalledCLIs(t *testing.T) {
 	if os.Getenv("CONTEXT_MACHINE_CLI_SMOKE") != "1" {
 		t.Skip("run inside context-machine image")
 	}
-	for _, testCase := range []string{"codex/api_key", "codex/subscription", "claude/api_key", "claude/subscription"} {
-		agent, mode, _ := strings.Cut(testCase, "/")
+	cases := []string{}
+	for _, agent := range []string{"codex", "claude"} {
+		levels := []string{"low", "medium", "high", "xhigh", "max"}
+		if agent == "codex" {
+			levels = append(levels, "ultra")
+		}
+		for _, mode := range []string{"api_key", "subscription"} {
+			for _, effort := range levels {
+				cases = append(cases, agent+"/"+mode+"/"+effort)
+			}
+		}
+	}
+	for _, testCase := range cases {
+		parts := strings.Split(testCase, "/")
+		agent, mode, effort := parts[0], parts[1], parts[2]
 		t.Run(testCase, func(t *testing.T) {
 			var toolCalls atomic.Int32
 			records := mcp.NewServer(&mcp.Implementation{Name: "records", Version: "1"}, nil)
@@ -193,10 +206,16 @@ func TestInstalledCLIs(t *testing.T) {
 			// Exercise the actual policy proxy, including credential substitution, not
 			// just CLI-to-fake-provider protocol compatibility.
 			upstream, _ := url.Parse(fake.URL)
-			proxy := &modelProxy{ctx: context.Background(), token: "fake-token", key: "upstream-secret", model: model, effort: "medium", authMode: mode, agent: agent, limit: 2, tokens: 4096}
+			proxy := &modelProxy{ctx: context.Background(), token: "fake-token", key: "upstream-secret", model: model, effort: effort, authMode: mode, agent: agent, limit: 2, tokens: 4096}
 			proxy.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
-				if mode == "subscription" && r.Header.Get("Authorization") != "Bearer upstream-secret" {
+				if (mode == "subscription" || agent == "codex") && r.Header.Get("Authorization") != "Bearer upstream-secret" {
 					t.Error("subscription credential missing")
+				}
+				if agent == "claude" && mode == "api_key" && r.Header.Get("X-Api-Key") != "upstream-secret" {
+					t.Error("API credential missing")
+				}
+				if agent == "claude" && r.URL.Host != "api.anthropic.com" {
+					t.Error("wrong Claude endpoint")
 				}
 				if agent == "codex" && mode == "subscription" && r.URL.Host != "chatgpt.com" {
 					t.Error("wrong subscription endpoint")
@@ -212,7 +231,7 @@ func TestInstalledCLIs(t *testing.T) {
 			frontMux.Handle("/mcp", mux)
 			front := httptest.NewServer(frontMux)
 			defer front.Close()
-			args, env := command(agent, model, front.URL, "fake-token", t.TempDir(), 2, "medium", mode)
+			args, env := command(agent, model, front.URL, "fake-token", t.TempDir(), 2, effort, mode)
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, agent, args...)

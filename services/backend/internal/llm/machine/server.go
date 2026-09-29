@@ -119,18 +119,19 @@ func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 type runRequest struct {
-	Version         int             `json:"version"`
-	Purpose         string          `json:"purpose"`
-	Model           string          `json:"model"`
-	Instructions    string          `json:"instructions"`
-	Data            json.RawMessage `json:"data"`
-	Scope           llm.Scope       `json:"scope"`
-	ReadOnly        bool            `json:"read_only"`
-	Store           bool            `json:"store"`
-	Deadline        time.Time       `json:"deadline"`
-	MaxOutputTokens int             `json:"max_output_tokens"`
-	MaxModelCalls   int             `json:"max_model_calls"`
-	Stream          bool            `json:"stream"`
+	Version                   int             `json:"version"`
+	Purpose                   string          `json:"purpose"`
+	Model                     string          `json:"model"`
+	Instructions              string          `json:"instructions"`
+	Data                      json.RawMessage `json:"data"`
+	Scope                     llm.Scope       `json:"scope"`
+	ReadOnly                  bool            `json:"read_only"`
+	Store                     bool            `json:"store"`
+	Deadline                  time.Time       `json:"deadline"`
+	MaxOutputTokens           int             `json:"max_output_tokens"`
+	MaxModelCalls             int             `json:"max_model_calls"`
+	Stream                    bool            `json:"stream"`
+	AllowUncappedOutputTokens bool            `json:"allow_uncapped_output_tokens"`
 }
 
 func (s *server) run(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +154,10 @@ func (s *server) run(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := s.agents[in.Model]; !ok {
 		http.Error(w, "agent unavailable", 503)
+		return
+	}
+	if in.Model == "codex" && s.agents[in.Model].mode == "subscription" && !in.AllowUncappedOutputTokens {
+		http.Error(w, "Codex subscription requires explicit allow_uncapped_output_tokens; use API-key mode for a token ceiling", 400)
 		return
 	}
 	// ponytail: one active run per container; shard containers when measured demand warrants it.

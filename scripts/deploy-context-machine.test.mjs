@@ -33,6 +33,7 @@ test('deployment fails before mutation for missing credentials, unsafe DB or inv
 test('deployment selects available credentials without requiring the unused provider', () => {
  for (const overrides of [
   { ANTHROPIC_API_KEY: '', CLAUDE_MODEL: '' },
+  { CONTEXT_MACHINE_MODEL: 'claude', CODEX_MODEL: '' },
   { OPENAI_API_KEY: '', CODEX_ACCESS_TOKEN: 'test-token' },
   { CONTEXT_MACHINE_MODEL: 'claude', OPENAI_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: 'test-token', CLAUDE_AUTH_MODE: 'subscription' },
  ]) assert.equal(check(overrides).status, 0);

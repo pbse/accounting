@@ -40,6 +40,7 @@ jobs:
           # A build cache would be saved per pull request and never shared: runs on main no longer compile Go.
           cache: false
       - name: Migrations, Go tests and vet in the background
+        # Packages share PostgreSQL; global worker claims can consume another package's fixtures.
         # The migration runner is applied twice: the second run must apply nothing. go test skips its own vet pass,
         # since go vet runs in full afterwards.
         run: |
@@ -48,7 +49,7 @@ jobs:
            DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh &&
            again=$(DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh) && test -z "$again" &&
            timeout 300 sh -c 'until [ -f /tmp/apt.status ]; do sleep 1; done' && test "$(cat /tmp/apt.status)" = 0 &&
-           cd services/backend && go test -vet=off ./... && go vet ./...
+           cd services/backend && go test -p 1 -vet=off ./... && go vet ./...
            echo $? > /tmp/go.status) > /tmp/go.log 2>&1 &
       - uses: actions/setup-node@v4
         with:
