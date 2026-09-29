@@ -2861,3 +2861,11 @@ Checks:
 - `TestAssistantInvestigatesBeforeWriting`: with the setting off, no tools are offered; on, the model reads a document's text, a refused tool (the package export) is told so, the answer quoting the document is kept with an Investigated line and the evidence link, the trace is saved with both steps, and the three model calls are counted.
 - Review: a Codex pass found a document whose text began with JSON could be cut at that value, investigations survived written answers being turned off, and the two model budgets exceeded the handler's write deadline; a second pass found a document whose whole text was a bare number would be read as JSON and its card number left unredacted, so the tool now decides the body's form; each is fixed. The third pass found nothing.
 - Fresh local PostgreSQL, `go test ./...`, `go vet`, `gofmt`, `npm run check`, `npm test`, frontend build.
+
+## Sidebar posting copy (2026-09-28)
+
+Request: align public copy with actual activation ([maturity](maturity.md)). The sidebar said "Sandbox posting only" although controlled production posting exists behind client grants.
+
+What changed: the sidebar footer now says drafts post to the QuickBooks sandbox unless a client has granted production posting, and that every posting is approved by a person, attempted once and read back. The contact page's "coming soon" line stays until the firm's contact channel exists; nothing here invents one.
+
+Checks: `npm run check`, frontend build.

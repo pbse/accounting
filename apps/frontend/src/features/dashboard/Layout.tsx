@@ -99,7 +99,7 @@ export default function WorkspaceLayout() {
         </nav>
         <div className="sidebar-footer">
           <SidebarAccount />
-          <p>Sandbox posting only. Production posting requires separate client authority.</p>
+          <p>Drafts post to the QuickBooks sandbox unless a client has granted production posting; every posting is approved by a person, attempted once and read back.</p>
         </div>
       </aside>
       <main id="main" className="app-main">
