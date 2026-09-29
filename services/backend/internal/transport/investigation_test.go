@@ -163,6 +163,16 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 	if len(outputsSeen) != 2 || !strings.Contains(outputsSeen[0], "Annual premium") || !strings.HasPrefix(outputsSeen[1], "refused: not a read this assistant offers") {
 		t.Fatalf("the model is told each read's result, and why a read was refused: %v", outputsSeen)
 	}
+	// Turning written answers off turns investigations off with them, and they cannot be turned on alone.
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"model_answers": false, "reason": "Pause written answers"}, 200)
+	var still bool
+	must(db.QueryRow(`SELECT assistant_investigations FROM organizations WHERE id=$1`, org).Scan(&still))
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"investigations": true, "reason": "Try investigations alone"}, 200)
+	var alone bool
+	must(db.QueryRow(`SELECT assistant_investigations FROM organizations WHERE id=$1`, org).Scan(&alone))
+	if still || alone {
+		t.Fatalf("investigations follow written answers off and cannot be on without them: still=%v alone=%v", still, alone)
+	}
 	var trace string
 	must(db.QueryRow(`SELECT trace::text FROM assistant_answers WHERE organization_id=$1 AND outcome='kept' ORDER BY id DESC LIMIT 1`, org).Scan(&trace))
 	var steps []struct {

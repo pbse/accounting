@@ -2859,4 +2859,5 @@ What changed: a third firm setting, investigations (migration 105), lets a close
 
 Checks:
 - `TestAssistantInvestigatesBeforeWriting`: with the setting off, no tools are offered; on, the model reads a document's text, a refused tool (the package export) is told so, the answer quoting the document is kept with an Investigated line and the evidence link, the trace is saved with both steps, and the three model calls are counted.
+- Review: a Codex pass found a document whose text began with JSON could be cut at that value, investigations survived written answers being turned off, and the two model budgets exceeded the handler's write deadline; each is fixed.
 - Fresh local PostgreSQL, `go test ./...`, `go vet`, `gofmt`, `npm run check`, `npm test`, frontend build.

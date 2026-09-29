@@ -411,7 +411,8 @@ func investigate(ctx context.Context, db *sql.DB, org, key, model string, readRa
 		map[string]string{"role": "user", "content": string(given)},
 	}
 	steps := []investigationStep{}
-	deadline, cancel := context.WithTimeout(ctx, 40*time.Second)
+	// The investigation and the answer together stay inside the conversation's 60-second write deadline.
+	deadline, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	for round := 0; round < 4 && len(steps) < 6; round++ {
 		if err := preparation.ReserveModelCalls(deadline, db, org, 1); errors.Is(err, preparation.ErrModelLimit) {
@@ -488,8 +489,9 @@ func investigate(ctx context.Context, db *sql.DB, org, key, model string, readRa
 					step.Status, output = "unavailable", "unavailable: this read could not be made"
 				} else {
 					// A JSON read is redacted value by value; a document's plain text is redacted as one text.
+					// A body is JSON only when one value fills it; anything after that value makes it a text.
 					var redacted []byte
-					if decoder.Decode(&value) == nil {
+					if decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF {
 						redacted, _ = json.Marshal(redactValues(value))
 					} else {
 						text, _ := documents.Redact(body)
