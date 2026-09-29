@@ -94,15 +94,16 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			out[key] = json.RawMessage(raw)
 		}
 		var calls, alerts, email int
-		var written, firmWritten bool
+		var written, firmWritten, investigations bool
 		var connected map[string]int
 		var raw []byte
 		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT sum(calls) FROM model_calls WHERE organization_id=$1 AND day>(now() AT TIME ZONE 'UTC')::date-30),0),
  (SELECT assistant_model_answers FROM organizations WHERE id=$1),
  (SELECT assistant_firm_answers FROM organizations WHERE id=$1),
+ (SELECT assistant_investigations FROM organizations WHERE id=$1),
  (SELECT count(*) FROM operations_alert_deliveries WHERE organization_id=$1 AND status='accepted' AND finished_at>now()-interval '30 days'),
  (SELECT count(*) FROM email_connections WHERE organization_id=$1 AND enabled),
- jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &written, &firmWritten, &alerts, &email, &raw)
+ jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &written, &firmWritten, &investigations, &alerts, &email, &raw)
 		if err != nil || json.Unmarshal(raw, &connected) != nil {
 			problem(w, 503, "Security center unavailable.")
 			return
@@ -111,6 +112,9 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		answers := "Written assistant answers are off."
 		if written {
 			answers = "Written assistant answers are on: a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions, and an open draft."
+		}
+		if investigations {
+			answers += " Investigations are on: before writing a close answer the model may read that close's own records through the assistant's read-only tools (documents' text, drafts, tie-out, changes, exceptions, search), each read made with the member's permissions and listed under the answer."
 		}
 		if firmWritten {
 			answers += " Firm-wide written answers are on: a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue and blocked work."

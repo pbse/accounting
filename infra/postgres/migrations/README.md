@@ -115,6 +115,8 @@ Fresh Compose volumes run every migration automatically, without the ledger; to 
 
 `103_workflow_run_indexes.sql` indexes workflow runs for admin reads that would otherwise grow with a firm's runs: by parent run (a run's children), by firm and state (active and recently failed runs) and by firm and last update (latest activity). It builds the indexes in the migration's transaction, blocking run writes while it does; the table is small today.
 
+`105_assistant_investigations.sql` adds the firm's `assistant_investigations` setting (and its policy-history column) and `assistant_answers.trace`, the reads an investigated answer made. See [assistant](../../../docs/chat.md#investigations).
+
 `102_audit_started.sql` lets a staff audit entry be `started`: an action with an effect outside the database (a WorkOS session revoke or invitation resend) records that before the effect, and its outcome after. Apply it before deploying a build that records one.
 
 `100_platform_alerts.sql` adds `platform_alerts` (system work only): the platform's own problems, one open alert per kind and item, delivered to the operations webhook. See [operations](../../../docs/operations.md).
