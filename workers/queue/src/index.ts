@@ -9,6 +9,8 @@ export class PreparationWorker extends Container<Env> {
     SECRETS_KEY: this.env.SECRETS_KEY ?? "",
     OPENAI_API_KEY: this.env.OPENAI_API_KEY ?? "",
     OPENAI_MODEL: this.env.OPENAI_MODEL ?? "",
+    OPENAI_REASONING_EFFORT: this.env.OPENAI_REASONING_EFFORT ?? "",
+    LLM_REASONING_EFFORTS: this.env.LLM_REASONING_EFFORTS ?? "",
     LLM_MODELS: this.env.LLM_MODELS ?? "",
     CONTEXT_MACHINE_TOKEN: this.env.CONTEXT_MACHINE_TOKEN ?? "",
     CONTEXT_MACHINE_MODEL: this.env.CONTEXT_MACHINE_MODEL ?? "",
@@ -44,6 +46,8 @@ interface Env {
   SECRETS_KEY?: string;
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
+  OPENAI_REASONING_EFFORT?: string;
+  LLM_REASONING_EFFORTS?: string;
   LLM_MODELS?: string;
   CONTEXT_MACHINE_TOKEN?: string;
   CONTEXT_MACHINE_MODEL?: string;

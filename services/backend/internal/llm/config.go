@@ -19,6 +19,8 @@ type Config struct {
 	APIKey                 string
 	Model                  string
 	Models                 map[string]string
+	ReasoningEffort        string
+	ReasoningEfforts       map[string]string
 	ContextMachineToken    string
 	ContextMachineModel    string
 	ContextMachineEndpoint string
@@ -39,10 +41,13 @@ func New(cfg Config) (*Client, error) {
 	if cfg.ContextMachineModel != "" && cfg.ContextMachineModel != "codex" && cfg.ContextMachineModel != "claude" {
 		return nil, errors.New("CONTEXT_MACHINE_MODEL must be codex or claude")
 	}
+	if cfg.ReasoningEffort != "" && !validEffort(cfg.ReasoningEffort) {
+		return nil, errors.New("invalid OPENAI_REASONING_EFFORT")
+	}
 	c := &Client{http: cfg.HTTP, routes: make(map[string]route)}
 	for _, purpose := range purposes {
 		if cfg.Model != "" {
-			c.routes[purpose] = route{Provider: OpenAI, Token: cfg.APIKey, Model: cfg.Model}
+			c.routes[purpose] = route{Provider: OpenAI, Token: cfg.APIKey, Model: cfg.Model, Effort: cfg.ReasoningEffort}
 		}
 	}
 	for purpose, model := range cfg.Models {
@@ -52,6 +57,14 @@ func New(cfg Config) (*Client, error) {
 		}
 		route.Model = model
 		c.routes[purpose] = route
+	}
+	for purpose, effort := range cfg.ReasoningEfforts {
+		r, ok := c.routes[purpose]
+		if !ok || !validEffort(effort) {
+			return nil, errors.New("invalid LLM_REASONING_EFFORTS")
+		}
+		r.Effort = effort
+		c.routes[purpose] = r
 	}
 	if cfg.ContextMachineToken != "" {
 		endpoint := cfg.ContextMachineEndpoint
@@ -71,6 +84,12 @@ func New(cfg Config) (*Client, error) {
 // FromEnv is called once by API/worker startup, not by model workflows.
 func FromEnv() (*Client, error) {
 	cfg := Config{APIKey: os.Getenv("OPENAI_API_KEY"), Model: os.Getenv("OPENAI_MODEL"), ContextMachineToken: os.Getenv("CONTEXT_MACHINE_TOKEN"), ContextMachineModel: os.Getenv("CONTEXT_MACHINE_MODEL"), ContextMachineEndpoint: os.Getenv("CONTEXT_MACHINE_ENDPOINT")}
+	cfg.ReasoningEffort = os.Getenv("OPENAI_REASONING_EFFORT")
+	if raw := os.Getenv("LLM_REASONING_EFFORTS"); raw != "" {
+		if json.Unmarshal([]byte(raw), &cfg.ReasoningEfforts) != nil || cfg.ReasoningEfforts == nil {
+			return nil, errors.New("LLM_REASONING_EFFORTS must be a JSON object")
+		}
+	}
 	if raw := os.Getenv("LLM_MODELS"); raw != "" {
 		if json.Unmarshal([]byte(raw), &cfg.Models) != nil || cfg.Models == nil {
 			return nil, errors.New("LLM_MODELS must be a JSON object mapping purposes to models")
@@ -180,8 +199,12 @@ func (c *Client) checkContextMachine(ctx context.Context, route route) error {
 		Status string
 		Agents []string
 	}
-	if json.Unmarshal(raw, &status) != nil || status.Status != "ok" || !slices.Contains(status.Agents, "codex") || !slices.Contains(status.Agents, "claude") {
+	if json.Unmarshal(raw, &status) != nil || status.Status != "ok" || !slices.Contains(status.Agents, route.Model) {
 		return errors.New("context machine agents not ready")
 	}
 	return nil
+}
+
+func validEffort(e string) bool {
+	return slices.Contains([]string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}, e)
 }

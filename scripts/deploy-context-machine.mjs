@@ -4,11 +4,25 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 // One required configuration contract for staging and production. Never print values.
-const names = ["CONTEXT_MACHINE_TOKEN", "CONTEXT_MACHINE_DATABASE_URL",
-  "CONTEXT_MACHINE_PROFILES", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CODEX_MODEL", "CLAUDE_MODEL"];
-for (const name of [...names, "CONTEXT_MACHINE_MODEL"]) {
-  if (!process.env[name]) throw new Error(`Missing context-machine setting: ${name}`);
+const names = ["CONTEXT_MACHINE_TOKEN", "CONTEXT_MACHINE_DATABASE_URL", "CONTEXT_MACHINE_PROFILES", "CONTEXT_MACHINE_MODEL",
+ "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CODEX_MODEL", "CLAUDE_MODEL", "CODEX_ACCESS_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+ "CODEX_AUTH_MODE", "CLAUDE_AUTH_MODE", "CODEX_REASONING_EFFORT", "CLAUDE_REASONING_EFFORT"];
+for (const name of names.slice(0, 4)) {
+ if (!process.env[name]) throw new Error(`Missing context-machine setting: ${name}`);
 }
+const enabled = new Set();
+for (const [agent, prefix, keyName, tokenName] of [["codex", "CODEX", "OPENAI_API_KEY", "CODEX_ACCESS_TOKEN"], ["claude", "CLAUDE", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]]) {
+ const mode = process.env[`${prefix}_AUTH_MODE`] || "auto";
+ const effort = process.env[`${prefix}_REASONING_EFFORT`] || "medium";
+ const levels = agent === "codex" ? ["low", "medium", "high", "xhigh", "max", "ultra"] : ["low", "medium", "high", "xhigh", "max"];
+ if (!["auto", "api_key", "subscription"].includes(mode) || !levels.includes(effort)) throw new Error(`Invalid ${prefix} auth mode or effort`);
+ const key = process.env[keyName], token = process.env[tokenName];
+ const credential = mode === "subscription" ? token : mode === "api_key" ? key : key || token;
+ if (!credential && mode === "auto") continue;
+ if (!credential || !process.env[`${prefix}_MODEL`]) throw new Error(`${prefix} requires its selected credential and model`);
+ enabled.add(agent);
+}
+if (!enabled.has(process.env.CONTEXT_MACHINE_MODEL)) throw new Error("Default context-machine agent is not configured");
 if (process.env.CONTEXT_MACHINE_TOKEN.length < 32) throw new Error("CONTEXT_MACHINE_TOKEN requires 32 random characters");
 if (!["codex", "claude"].includes(process.env.CONTEXT_MACHINE_MODEL)) throw new Error("CONTEXT_MACHINE_MODEL must be codex or claude");
 let db, application;
@@ -29,7 +43,7 @@ if (!process.argv.includes("--check")) {
   const dir = mkdtempSync(join(tmpdir(), "close-context-machine-"));
   try {
     const file = join(dir, "secrets.json");
-    writeFileSync(file, JSON.stringify(Object.fromEntries(names.map(n => [n, process.env[n]]))), { mode: 0o600 });
+    writeFileSync(file, JSON.stringify(Object.fromEntries(names.map(n => [n, process.env[n] || ""]))), { mode: 0o600 });
     const args = ["wrangler", "deploy", "-c", "workers/context-machine/wrangler.jsonc", "--secrets-file", file];
     if (process.argv.includes("--production")) args.push("--env", "production");
     const result = spawnSync("npx", args, { stdio: "inherit" });

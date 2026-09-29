@@ -76,7 +76,7 @@ func TestCommandsAndOutputFailClosed(t *testing.T) {
 	t.Setenv("DATABASE_URL", "must-not-leak")
 	t.Setenv("OPENAI_API_KEY", "must-not-leak")
 	for _, agent := range []string{"codex", "claude"} {
-		args, env := command(agent, "fixed", "http://127.0.0.1:1234", "ephemeral", "/tmp/run", 2)
+		args, env := command(agent, "fixed", "http://127.0.0.1:1234", "ephemeral", "/tmp/run", 2, "medium", "api_key")
 		if strings.Contains(strings.Join(env, " "), "must-not-leak") {
 			t.Fatal("inherited credentials")
 		}
@@ -118,8 +118,9 @@ func TestInstalledCLIs(t *testing.T) {
 	if os.Getenv("CONTEXT_MACHINE_CLI_SMOKE") != "1" {
 		t.Skip("run inside context-machine image")
 	}
-	for _, agent := range []string{"codex", "claude"} {
-		t.Run(agent, func(t *testing.T) {
+	for _, testCase := range []string{"codex/api_key", "codex/subscription", "claude/api_key", "claude/subscription"} {
+		agent, mode, _ := strings.Cut(testCase, "/")
+		t.Run(testCase, func(t *testing.T) {
 			var toolCalls atomic.Int32
 			records := mcp.NewServer(&mcp.Implementation{Name: "records", Version: "1"}, nil)
 			records.AddTool(&mcp.Tool{Name: "list_closes", Description: "List closes", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}, InputSchema: map[string]any{"type": "object", "properties": map[string]any{}}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -189,7 +190,29 @@ func TestInstalledCLIs(t *testing.T) {
 			if agent == "claude" {
 				model = "claude-sonnet-4-6"
 			}
-			args, env := command(agent, model, fake.URL, "fake-token", t.TempDir(), 2)
+			// Exercise the actual policy proxy, including credential substitution, not
+			// just CLI-to-fake-provider protocol compatibility.
+			upstream, _ := url.Parse(fake.URL)
+			proxy := &modelProxy{ctx: context.Background(), token: "fake-token", key: "upstream-secret", model: model, effort: "medium", authMode: mode, agent: agent, limit: 2, tokens: 4096}
+			proxy.client = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+				if mode == "subscription" && r.Header.Get("Authorization") != "Bearer upstream-secret" {
+					t.Error("subscription credential missing")
+				}
+				if agent == "codex" && mode == "subscription" && r.URL.Host != "chatgpt.com" {
+					t.Error("wrong subscription endpoint")
+				}
+				r.URL.Scheme, r.URL.Host = upstream.Scheme, upstream.Host
+				if agent == "codex" {
+					r.URL.Path = "/v1/responses"
+				}
+				return http.DefaultTransport.RoundTrip(r)
+			})}
+			frontMux := http.NewServeMux()
+			frontMux.Handle("/v1/", proxy)
+			frontMux.Handle("/mcp", mux)
+			front := httptest.NewServer(frontMux)
+			defer front.Close()
+			args, env := command(agent, model, front.URL, "fake-token", t.TempDir(), 2, "medium", mode)
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, agent, args...)
@@ -364,7 +387,7 @@ func TestExecutionDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-	s := &server{cfg: Config{CodexModel: "fake"}}
+	s := &server{agents: map[string]agentSettings{"codex": {model: "fake", credential: "fake", effort: "medium", mode: "api_key"}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	started := time.Now()

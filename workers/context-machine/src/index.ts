@@ -9,6 +9,14 @@ interface Env {
   ANTHROPIC_API_KEY: string;
   CODEX_MODEL: string;
   CLAUDE_MODEL: string;
+  CODEX_AUTH_MODE?: string;
+  CLAUDE_AUTH_MODE?: string;
+  CODEX_REASONING_EFFORT?: string;
+  CLAUDE_REASONING_EFFORT?: string;
+  CODEX_ACCESS_TOKEN?: string;
+  CLAUDE_CODE_OAUTH_TOKEN?: string;
+  CONTEXT_MACHINE_MODEL?: string;
+
 }
 
 export class ContextMachine extends Container<Env> {
@@ -22,6 +30,14 @@ export class ContextMachine extends Container<Env> {
     ANTHROPIC_API_KEY: this.env.ANTHROPIC_API_KEY,
     CODEX_MODEL: this.env.CODEX_MODEL,
     CLAUDE_MODEL: this.env.CLAUDE_MODEL,
+    CODEX_AUTH_MODE: this.env.CODEX_AUTH_MODE ?? "",
+    CLAUDE_AUTH_MODE: this.env.CLAUDE_AUTH_MODE ?? "",
+    CODEX_REASONING_EFFORT: this.env.CODEX_REASONING_EFFORT ?? "",
+    CLAUDE_REASONING_EFFORT: this.env.CLAUDE_REASONING_EFFORT ?? "",
+    CODEX_ACCESS_TOKEN: this.env.CODEX_ACCESS_TOKEN ?? "",
+    CLAUDE_CODE_OAUTH_TOKEN: this.env.CLAUDE_CODE_OAUTH_TOKEN ?? "",
+    CONTEXT_MACHINE_MODEL: this.env.CONTEXT_MACHINE_MODEL ?? "",
+
   };
 }
 

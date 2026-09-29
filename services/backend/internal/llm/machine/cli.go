@@ -12,16 +12,23 @@ import (
 	"close.local/backend/internal/llm"
 )
 
-func command(agent, model, base, token, dir string, budget int) ([]string, []string) {
+func command(agent, model, base, token, dir string, budget int, effort, mode string) ([]string, []string) {
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "TMPDIR=" + dir, "LANG=C.UTF-8"}
 	if agent == "claude" {
 		config, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"records": map[string]any{"type": "http", "url": base + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + token}}}})
-		return []string{"--bare", "--restricted", "-p", "--output-format", "json", "--no-session-persistence", "--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", string(config), "--allowedTools", "mcp__records__list_closes,mcp__records__read_evidence", "--max-turns", strconv.Itoa(budget), "--model", model, "--setting-sources", ""},
-			append(env, "ANTHROPIC_BASE_URL="+base, "ANTHROPIC_API_KEY="+token, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+		args := []string{"--bare", "--restricted", "-p", "--output-format", "json", "--no-session-persistence", "--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", string(config), "--allowedTools", "mcp__records__list_closes,mcp__records__read_evidence", "--max-turns", strconv.Itoa(budget), "--model", model, "--effort", effort, "--setting-sources", ""}
+		env = append(env, "ANTHROPIC_BASE_URL="+base, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+		if mode == "subscription" {
+			env = append(env, "ANTHROPIC_AUTH_TOKEN="+token)
+		} else {
+			env = append(env, "ANTHROPIC_API_KEY="+token)
+		}
+		return args, env
 	}
 	args := []string{"exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config", "--skip-git-repo-check", "--sandbox", "read-only", "-m", model}
 	for _, setting := range []string{
 		`model_provider="context_machine"`,
+		"model_reasoning_effort=" + strconv.Quote(effort),
 		`model_providers.context_machine.name="Context machine"`,
 		"model_providers.context_machine.base_url=" + strconv.Quote(base+"/v1"),
 		`model_providers.context_machine.env_key="CONTEXT_MACHINE_RUN_TOKEN"`,
@@ -39,6 +46,10 @@ func command(agent, model, base, token, dir string, budget int) ([]string, []str
 		`mcp_servers.records.tools.read_evidence.approval_mode="auto"`,
 	} {
 		args = append(args, "-c", setting)
+	}
+	if mode == "subscription" {
+		args = append(args, "-c", "model_providers.context_machine.requires_openai_auth=true", "-c", "chatgpt_base_url="+strconv.Quote(base))
+		env = append(env, "CODEX_ACCESS_TOKEN="+token)
 	}
 	return append(args, "-"), append(env, "CODEX_HOME="+dir, "CONTEXT_MACHINE_RUN_TOKEN="+token)
 }

@@ -28,6 +28,7 @@ type route struct {
 	Model    string
 	URL      string
 	Token    string
+	Effort   string
 }
 
 // Client owns immutable purpose routing configured at application startup.
@@ -108,13 +109,15 @@ type ToolCall struct {
 }
 
 type Response struct {
-	ID         string     `json:"id"`
-	Provider   Provider   `json:"provider"`
-	Model      string     `json:"model"`
-	Text       string     `json:"text"`
-	Usage      Usage      `json:"usage"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ModelCalls int        `json:"model_calls"`
+	ID              string     `json:"id"`
+	Provider        Provider   `json:"provider"`
+	Model           string     `json:"model"`
+	ReasoningEffort string     `json:"reasoning_effort,omitempty"`
+	AuthMode        string     `json:"auth_mode,omitempty"`
+	Text            string     `json:"text"`
+	Usage           Usage      `json:"usage"`
+	ToolCalls       []ToolCall `json:"tool_calls,omitempty"`
+	ModelCalls      int        `json:"model_calls"`
 }
 
 var (
