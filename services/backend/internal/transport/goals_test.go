@@ -1063,3 +1063,190 @@ func TestGoalCountsAccountCoverage(t *testing.T) {
 		t.Fatalf("a sign-off that cannot be checked no longer reaches the goal: %s %v %q", state, reached, last)
 	}
 }
+
+func TestWorkShowsWhereEachDelegatedCloseStands(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	ctx := context.Background()
+	org := "org_Stand" + rand.Text()
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Portfolio status fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_a',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	defer func() {
+		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_preparations WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_entity_syncs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM quickbooks_connections WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			db.Exec(q, org)
+		}
+	}()
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(method, path string, body any) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"workpapers:review", "clients:all"}}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s %s %v: %d %s", method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	// Each close has one document: Zeta's waits on the client, Beta's is being read.
+	document := func(closeID, state string) {
+		t.Helper()
+		tx, err := db.BeginTx(ctx, nil)
+		must(err)
+		defer tx.Rollback()
+		var source string
+		must(tx.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'invoice.txt',$2,'Invoice','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&source))
+		job, err := preparation.StartIntake(ctx, tx, closeID, source, "fixture")
+		must(err)
+		if state != "" {
+			_, err = tx.Exec(`UPDATE preparation_jobs SET state=$2 WHERE id::text=$1`, job, state)
+			must(err)
+		}
+		must(tx.Commit())
+	}
+	// capture connects the close's QuickBooks and captures its month two days ago, listing three accounts.
+	capture := func(closeID string) string {
+		t.Helper()
+		var ledger, conn string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt',$2,'Synthetic ledger','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&ledger))
+		must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&conn))
+		payload, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": ledger, "coverage": []map[string]string{
+			{"account_id": "a", "name": "Prepaid insurance", "kind": "prepaid", "question": "Provide the policy invoice."},
+			{"account_id": "b", "name": "Operating bank", "kind": "reconciliation", "question": "Provide the statement."},
+			{"account_id": "c", "name": "Office supplies", "kind": "accountant_review", "question": "Review activity."}}})
+		_, err := db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123',$3,$4,now()-interval '2 days',now()-interval '2 days','fixture')`, closeID, conn, rand.Text(), string(payload))
+		must(err)
+		return conn
+	}
+	// Zeta's books were captured two days ago and its transactions read an hour ago.
+	var zeta, beta string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Zeta','2026-09') RETURNING id::text`, org).Scan(&zeta))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Beta','2026-09') RETURNING id::text`, org).Scan(&beta))
+	conn := capture(zeta)
+	var read time.Time
+	must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',now()-interval '1 hour','{}') RETURNING finished_at`, zeta, conn).Scan(&read))
+	document(zeta, "waiting_client")
+	document(beta, "")
+	call("POST", "/v1/closes/"+zeta+"/goal", map[string]any{"confirmed": true})
+	call("POST", "/v1/closes/"+beta+"/goal", map[string]any{"confirmed": true})
+
+	type delegated struct {
+		Entity  string `json:"entity"`
+		Summary struct {
+			Books struct {
+				State  string     `json:"state"`
+				Text   string     `json:"text"`
+				ReadAt *time.Time `json:"read_at"`
+			} `json:"books"`
+			Coverage *goalCoverage `json:"coverage"`
+			Client   int           `json:"client"`
+		} `json:"summary"`
+	}
+	list := func() map[string]delegated {
+		t.Helper()
+		var out struct {
+			Goals []delegated `json:"goals"`
+		}
+		must(json.Unmarshal(call("GET", "/v1/closes/goals", nil), &out))
+		byName := map[string]delegated{}
+		for _, g := range out.Goals {
+			byName[g.Entity] = g
+		}
+		if len(out.Goals) > 0 {
+			byName["first"] = out.Goals[0]
+		}
+		return byName
+	}
+	step := func(closeID string) {
+		t.Helper()
+		var goal string
+		must(db.QueryRow(`SELECT id::text FROM close_goals WHERE close_id::text=$1 AND state<>'stopped'`, closeID).Scan(&goal))
+		must(stepGoal(ctx, db, goal, nil))
+	}
+
+	// Work says when each close's books were last read, how its accounts are covered and what waits on the client,
+	// without anyone opening the close.
+	got := list()
+	z, b := got["Zeta"].Summary, got["Beta"].Summary
+	if z.Books.State != "done" || z.Books.ReadAt == nil || !z.Books.ReadAt.Equal(read) || z.Coverage == nil || *z.Coverage != (goalCoverage{Total: 3, Open: 3}) || z.Client != 1 {
+		t.Fatalf("a close with its books read: %+v", z)
+	}
+	if b.Books.State != "none" || b.Books.ReadAt != nil || b.Coverage != nil || b.Client != 0 || got["first"].Entity != "Beta" {
+		t.Fatalf("a close without a ledger, listed first by name: %+v %s", b, got["first"].Entity)
+	}
+
+	// A failed later read is not hidden behind the earlier capture: the agent says it is trying again.
+	_, err = db.Exec(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,finished_at,error,payload) VALUES($1,$2,'2026-09','fixture','failed',now(),'QuickBooks returned HTTP 500.','{}')`, zeta, conn)
+	must(err)
+	step(zeta)
+	if z := list()["Zeta"].Summary; z.Books.State != "agent" || !strings.Contains(z.Books.Text, "My last read of QuickBooks failed: QuickBooks returned HTTP 500. I'll try again within a day.") {
+		t.Fatalf("a failed read says so: %+v", z.Books)
+	}
+
+	// Books a person must reconnect put the close first, saying what to do.
+	_, err = db.Exec(`UPDATE quickbooks_connections SET state='reconnect_required' WHERE id::text=$1`, conn)
+	must(err)
+	step(zeta)
+	got = list()
+	if z := got["Zeta"].Summary; z.Books.State != "you" || z.Books.Text != "Reconnect QuickBooks for Zeta so I can read the books." || got["first"].Entity != "Zeta" {
+		t.Fatalf("books that need reconnecting come first: %+v %s", z.Books, got["first"].Entity)
+	}
+	// Its accounts come from a capture that is out of date, so they wait on a new one rather than on decisions.
+	if c := got["Zeta"].Summary.Coverage; c == nil || !c.Stale {
+		t.Fatalf("coverage from an out-of-date capture says so: %+v", c)
+	}
+	// They still do once the review goal's documents are ready, since a finished review does not cover the books.
+	_, err = db.Exec(`UPDATE close_goals SET state='reached',reached_at=now() WHERE close_id::text=$1 AND state='active'`, zeta)
+	must(err)
+	if first := list()["first"].Entity; first != "Zeta" {
+		t.Fatalf("a finished review whose books need a person comes first: %s", first)
+	}
+
+	// A signed-off close keeps these facts while Work lists it.
+	var gamma string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Gamma','2026-09') RETURNING id::text`, org).Scan(&gamma))
+	capture(gamma)
+	document(gamma, "")
+	call("POST", "/v1/closes/"+gamma+"/goal", map[string]any{"confirmed": true, "finish": "signoff"})
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, gamma)
+	must(err)
+	step(gamma)
+	var signoff, books, coverage string
+	must(db.QueryRow(`SELECT summary->>'signoff',summary#>>'{books,state}',summary->>'coverage' FROM close_goals WHERE close_id::text=$1`, gamma).Scan(&signoff, &books, &coverage))
+	if signoff == "" || books != "done" || coverage != `{"open": 3, "total": 3}` {
+		t.Fatalf("a signed-off close keeps its books and coverage: %q %q %s", signoff, books, coverage)
+	}
+	// A document that waits on the client after the sign-off is counted.
+	document(gamma, "waiting_client")
+	step(gamma)
+	var client int
+	must(db.QueryRow(`SELECT (summary->>'client')::int FROM close_goals WHERE close_id::text=$1`, gamma).Scan(&client))
+	if client != 1 {
+		t.Fatalf("work after the sign-off still shows what waits on the client: %d", client)
+	}
+}

@@ -65,6 +65,19 @@ const coverageLimitNeed = "Account coverage and sign-off read at most 100 intake
 type goalCoverage struct {
 	Total int `json:"total"`
 	Open  int `json:"open"`
+	// Stale says the accounts come from an out-of-date capture, so they wait on a new one rather than on decisions.
+	Stale bool `json:"stale,omitempty"`
+}
+
+// countCoverage counts a capture's accounts and those not yet resolved or excluded.
+func countCoverage(accounts coverageView) *goalCoverage {
+	c := &goalCoverage{Total: len(accounts.Items), Stale: accounts.Stale}
+	for _, item := range accounts.Items {
+		if item.State != "resolved" && item.State != "excluded" {
+			c.Open++
+		}
+	}
+	return c
 }
 
 // goalSignoff is what signing the close off needs, from its readiness: its needs that are not about a listed document,
@@ -346,12 +359,7 @@ func readGoalProgress(ctx context.Context, tx *sql.Tx, closeID, finish string) (
 	}
 	if accounts.SnapshotID != "" {
 		p.accounts = &accounts
-		p.Coverage = &goalCoverage{Total: len(accounts.Items)}
-		for _, item := range accounts.Items {
-			if item.State != "resolved" && item.State != "excluded" {
-				p.Coverage.Open++
-			}
-		}
+		p.Coverage = countCoverage(accounts)
 	}
 	if !readSignoff {
 		return p, nil
@@ -549,8 +557,17 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 		if err == nil {
 			err = settleHandoffs(ctx, tx, g, goalProgress{}, true, roles)
 		}
+		// The signed-off close keeps its books, coverage and client waits in Work while it is listed, including work that
+		// arrived after the sign-off.
+		var facts string
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now()) WHERE id=$1`, g.id, current.State)
+			var progress goalProgress
+			if progress, err = readGoalProgress(ctx, tx, g.close, "review"); err == nil {
+				facts, err = goalFacts(ctx, tx, g.close, progress)
+			}
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now())||$3::jsonb WHERE id=$1`, g.id, current.State, facts)
 		}
 		return err
 	case g.finish == "signoff" && g.state == "reached":
@@ -654,8 +671,42 @@ func saveSummary(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress) err
 	if g.finish == "signoff" && p.Coverage != nil && p.Coverage.Open > 0 {
 		needs++
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now()) WHERE id=$1`, g.id, needs, p.Ready, signoff)
+	facts, err := goalFacts(ctx, tx, g.close, p)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',$2::int,'ready',$3::boolean,'signoff',$4::text,'as_of',now())||$5::jsonb WHERE id=$1`, g.id, needs, p.Ready, signoff, facts)
 	return err
+}
+
+// goalFacts is what else Work shows of a delegated close, so a firm sees its state without opening it: the plan's books
+// step and when the books were last read, the capture's account coverage, and how many documents wait on the client.
+func goalFacts(ctx context.Context, tx *sql.Tx, closeID string, p goalProgress) (string, error) {
+	var entity, period string
+	if err := tx.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id=$1`, closeID).Scan(&entity, &period); err != nil {
+		return "", err
+	}
+	b, err := readBooks(ctx, tx, closeID)
+	if err != nil {
+		return "", err
+	}
+	step := booksStep(b, closeID, entity, period)
+	books := map[string]any{"state": step.State, "text": step.Text}
+	if b.source != "none" {
+		read := b.captured
+		if b.source == "quickbooks" && b.synced.Valid && b.synced.Time.After(read) {
+			read = b.synced.Time
+		}
+		books["read_at"] = read
+	}
+	client := 0
+	for _, item := range p.Items {
+		if item.Status == "client" {
+			client++
+		}
+	}
+	facts, err := json.Marshal(map[string]any{"books": books, "coverage": p.Coverage, "client": client})
+	return string(facts), err
 }
 
 // goalActivity is what happened on the close since its goal started, newest first: the goal's own events (in the order
@@ -687,7 +738,8 @@ SELECT at,actor,text,count(*) OVER () FROM (
 
 func registerGoals(mux *http.ServeMux, db *sql.DB) {
 	// Every close handed to the agent that the member can access, with what the agent last found: those needing a person
-	// first, then the rest still in progress, then those finished in the past 14 days.
+	// (including books a person must capture again or reconnect) first, then the rest still in progress, then those
+	// finished in the past 14 days.
 	mux.HandleFunc("GET /v1/closes/goals", func(w http.ResponseWriter, r *http.Request) {
 		search := strings.TrimSpace(r.URL.Query().Get("client"))
 		if len(search) > 200 {
@@ -699,7 +751,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
  FROM close_goals g JOIN client_closes c ON c.id=g.close_id
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access a WHERE a.organization_id=c.organization_id AND a.subject=$3 AND lower(a.client_entity)=lower(c.entity) AND a.granted))
  AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4) AND (g.state='active' OR g.state='reached' AND g.reached_at>now()-interval '14 days')
- ORDER BY CASE WHEN (g.summary->>'needs')::int>0 OR g.summary->>'signoff'='reopen_required' OR g.summary->>'signoff'='open' AND (g.summary->>'ready')::boolean THEN 0 WHEN g.state='active' THEN 1 ELSE 2 END,g.due_on NULLS LAST,lower(c.entity),c.period LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
+ ORDER BY CASE WHEN (g.summary->>'needs')::int>0 OR g.summary->>'signoff'='reopen_required' OR g.summary->>'signoff'='open' AND (g.summary->>'ready')::boolean OR g.summary#>>'{books,state}'='you' AND g.summary->>'signoff'<>'signed_off' THEN 0 WHEN g.state='active' THEN 1 ELSE 2 END,g.due_on NULLS LAST,lower(c.entity),c.period LIMIT 101`, organization(r), firmAccess(r), subject(r), search)
 		if err != nil {
 			problem(w, 503, "Delegated closes are unavailable.")
 			return
