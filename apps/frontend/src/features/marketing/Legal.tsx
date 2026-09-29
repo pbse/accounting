@@ -106,7 +106,7 @@ export function Privacy() {
       <section>
         <h2>How long we keep it</h2>
         <p>
-          A firm decides when its client data is deleted; apart from trimming assistant conversations, nothing is deleted automatically. <Link to="/data-retention">Retention and deletion</Link> has the details.
+          A firm decides when its client data is deleted. The only automatic removals are trimming assistant conversations and replacing a ledger’s older transaction rows when it is read again. <Link to="/data-retention">Retention and deletion</Link> has the details.
         </p>
       </section>
       <section>
@@ -231,11 +231,11 @@ export function AiData() {
 
 export function Retention() {
   return (
-    <LegalPage eyebrow="DATA" title="Retention and deletion" intro="Your firm decides how long its client data stays in Close. Apart from trimming assistant conversations, nothing is deleted automatically, and deleting a close is deliberate and recorded.">
+    <LegalPage eyebrow="DATA" title="Retention and deletion" intro="Your firm decides how long its client data stays in Close. Deleting a close is deliberate and recorded; the few automatic removals are listed below.">
       <section>
         <h2>How long data is kept</h2>
         <p>
-          A firm keeps each client month (a close) until it deletes it. A firm data administrator records each close’s retention date and can place a legal hold. The exceptions are the assistant: firm-wide conversations are deleted after 30 days, a close’s conversation keeps its latest 200 messages, and removing a person from the firm deletes their conversations.
+          A firm keeps each client month (a close) until it deletes it. A firm data administrator records each close’s retention date and can place a legal hold. The automatic exceptions: firm-wide assistant conversations are deleted after 30 days, a close’s conversation keeps its latest 200 messages, removing a person from the firm deletes their conversations, and a newer read of a connected ledger replaces the older searchable transaction rows (the captured reports themselves are kept).
         </p>
       </section>
       <section>
