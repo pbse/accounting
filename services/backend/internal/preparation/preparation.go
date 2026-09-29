@@ -172,6 +172,10 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 	if p.Revises != "" {
 		object["revises"], _ = json.Marshal(p.Revises)
 	}
+	// A draft prepared without field confirmation says so, so a later replacement can revise it without a person.
+	if p.Procedure != "" {
+		object["straight_through"], _ = json.Marshal(true)
+	}
 	object["sources"], err = json.Marshal(p.Sources)
 	if err != nil {
 		return nil, err
@@ -257,6 +261,17 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			if e := BilledToClient(p.BilledTo, entity, aliases); e != nil {
 				failure = e.Error()
 				break
+			}
+			// The draft this plan revises must still be unrevised; a revision saved meanwhile makes this one a person's to place.
+			if p.Revises != "" {
+				var revised bool
+				if e := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id::text=$1 AND newer.paper->>'revises'=$2)`, closeID, p.Revises).Scan(&revised); e != nil {
+					return false, e
+				}
+				if revised {
+					failure = "The draft this recalculation revises has been revised since; a person confirms the facts."
+					break
+				}
 			}
 			// A reply or answer for another job, or unread evidence, arriving since the plan was queued is a person's to weigh.
 			if other, e := OtherEvidence(ctx, tx, closeID, id); e != nil {

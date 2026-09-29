@@ -370,6 +370,13 @@ func registerReview(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Could not invalidate affected supplier credit approval.")
 			return
 		}
+		// The replacement's own intake may have stopped for a person while the replaced source was still current; the agent
+		// reads it again now that it is not.
+		if _, err = tx.ExecContext(r.Context(), `WITH resumed AS (UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND i.source_id::text=$2 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai' RETURNING j.id)
+ UPDATE preparation_intakes SET agent_attempts=0,agent_retry_at=NULL WHERE job_id IN (SELECT id FROM resumed)`, closeID, input.Replacement); err != nil {
+			problem(w, 503, "Could not resume the replacement's interpretation.")
+			return
+		}
 		if err = tx.Commit(); err != nil {
 			problem(w, 503, "Replacement could not be confirmed. Reload evidence before retrying.")
 			return
@@ -405,7 +412,7 @@ func paperChanges(before, after []byte) []paperChange {
 		}
 		sort.Strings(ordered)
 		for _, k := range ordered {
-			if prefix == "" && (k == "revises" || k == "status") {
+			if prefix == "" && (k == "revises" || k == "status" || k == "straight_through") {
 				continue
 			}
 			if bytes.Equal(a[k], b[k]) {

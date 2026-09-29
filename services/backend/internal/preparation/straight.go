@@ -217,7 +217,13 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	capture.Role, capture.Location = "period_ledger", booking
 	chart.Role, chart.Location = "chart", "Accounts "+expenseIDsLabel(ledger, procedure)
 	rule.Role, rule.Location = "procedure", "Version "+procedure.ID
-	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, BilledTo: facts["billed_to"], Input: raw, Sources: append(append([]Source{}, p.Sources...), capture, chart, rule)}
+	sources := []Source{}
+	for _, s := range p.Sources {
+		if s.ID != capture.ID && s.ID != chart.ID && s.ID != rule.ID {
+			sources = append(sources, s)
+		}
+	}
+	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, BilledTo: facts["billed_to"], Input: raw, Sources: append(sources, capture, chart, rule)}
 	if _, err := Calculate(plan, entity, period); err != nil {
 		return Plan{}, err.Error()
 	}
@@ -883,12 +889,54 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	return &l, nil
 }
 
-// queueStraightThrough queues the plan on the job as the agent's confirmation.
-func queueStraightThrough(ctx context.Context, tx *sql.Tx, jobID string, plan Plan) error {
-	plans, _ := json.Marshal([]Plan{plan})
-	if _, err := tx.ExecContext(ctx, `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans)); err != nil {
-		return err
+// queueStraightThrough queues the plan on the job as the agent's confirmation. When the invoice replaced exactly one
+// source that exactly one current prepaid draft cites, the plan revises that draft: the old draft is already marked as
+// changed at source, the new one carries the lineage, and the change review shows only what moved. Any other lineage
+// (two replaced sources, two drafts citing one) is a person's to resolve, and the reason says so.
+func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoiceID string, plan Plan) (string, error) {
+	// A draft is revised automatically only when it cites a replaced source as its invoice and was itself prepared
+	// straight through (its paper says so, or its job's intake was confirmed by the agent; a carried-forward draft never is); a draft a person confirmed keeps its
+	// revision in a person's hands. The chain of replacements is followed, so a source replaced twice before its
+	// replacement was read still leads to the current draft; two sources replaced by the same file anywhere along the chain,
+	// or a chain longer than twenty replacements, are a person's to resolve.
+	var branching, truncated bool
+	var citing, eligible int
+	var revises string
+	err := tx.QueryRowContext(ctx, `WITH RECURSIVE chain(id, parent, depth) AS (
+  SELECT id, superseded_by, 1 FROM evidence WHERE close_id::text=$1 AND superseded_by::text=$2
+  UNION ALL SELECT e.id, e.superseded_by, c.depth+1 FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE c.depth < 20),
+ drafts AS (SELECT DISTINCT w.id, (COALESCE((w.paper->>'straight_through')::boolean,false) OR EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=w.close_id AND j.workpaper_ids @> jsonb_build_array(w.id::text) AND i.confirmed_by='agent')) AND w.paper->'carry_forward' IS NULL AS straight FROM workpapers w, chain
+  WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',chain.id::text,'role','invoice'))
+  AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text))
+ SELECT EXISTS(SELECT 1 FROM chain GROUP BY parent HAVING count(*)>1),EXISTS(SELECT 1 FROM chain WHERE depth>=20),(SELECT count(*) FROM drafts),(SELECT count(*) FROM drafts WHERE straight),COALESCE((SELECT max(id)::text FROM drafts WHERE straight),'')`, closeID, invoiceID).Scan(&branching, &truncated, &citing, &eligible, &revises)
+	if err != nil {
+		return "", err
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=now() WHERE job_id=$1`, jobID)
-	return err
+	switch {
+	case branching || citing > 1:
+		return "the replacement stands for more than one earlier source or draft; a person chooses which draft it revises", nil
+	case truncated:
+		return "the replacement chain is too long to follow; a person chooses which draft it revises", nil
+	case citing == 1 && eligible == 0:
+		return "the draft citing the replaced invoice was confirmed by a person; a person chooses its revision", nil
+	case eligible == 0:
+		revises = ""
+	}
+	// A predecessor whose entry was attempted or posted needs a correction against that entry, which a person prepares.
+	if revises != "" {
+		var posted bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sandbox_postings p WHERE p.workpaper_id::text=$1 AND p.state IN ('executing','unknown','verified')) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.workpaper_id::text=$1 AND p.state IN ('executing','unknown','verified')) OR EXISTS(SELECT 1 FROM vendor_credit_postings p WHERE p.workpaper_id::text=$1 AND p.state IN ('executing','unknown','verified')) OR EXISTS(SELECT 1 FROM xero_postings p WHERE p.workpaper_id::text=$1 AND p.state IN ('executing','unknown','verified'))`, revises).Scan(&posted); err != nil {
+			return "", err
+		}
+		if posted {
+			return "the draft citing the replaced invoice was posted; a person prepares the correction against that entry", nil
+		}
+	}
+	plan.Revises = revises
+	plans, _ := json.Marshal([]Plan{plan})
+	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans)); err != nil {
+		return "", err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=now() WHERE job_id=$1`, jobID)
+	return "", err
 }
