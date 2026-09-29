@@ -65,11 +65,13 @@ const coverageLimitNeed = "Account coverage and sign-off read at most 100 intake
 type goalCoverage struct {
 	Total int `json:"total"`
 	Open  int `json:"open"`
+	// Stale says the accounts come from an out-of-date capture, so they wait on a new one rather than on decisions.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // countCoverage counts a capture's accounts and those not yet resolved or excluded.
 func countCoverage(accounts coverageView) *goalCoverage {
-	c := &goalCoverage{Total: len(accounts.Items)}
+	c := &goalCoverage{Total: len(accounts.Items), Stale: accounts.Stale}
 	for _, item := range accounts.Items {
 		if item.State != "resolved" && item.State != "excluded" {
 			c.Open++
@@ -555,14 +557,14 @@ func advanceGoal(ctx context.Context, tx *sql.Tx, g goalRow, roles map[string]re
 		if err == nil {
 			err = settleHandoffs(ctx, tx, g, goalProgress{}, true, roles)
 		}
-		// The signed-off close keeps its books and coverage in Work while it is listed.
+		// The signed-off close keeps its books, coverage and client waits in Work while it is listed, including work that
+		// arrived after the sign-off.
 		var facts string
 		if err == nil {
-			var done goalProgress
-			if current.coverage.SnapshotID != "" {
-				done.Coverage = countCoverage(current.coverage)
+			var progress goalProgress
+			if progress, err = readGoalProgress(ctx, tx, g.close, "review"); err == nil {
+				facts, err = goalFacts(ctx, tx, g.close, progress)
 			}
-			facts, err = goalFacts(ctx, tx, g.close, done)
 		}
 		if err == nil {
 			_, err = tx.ExecContext(ctx, `UPDATE close_goals SET checked_at=now(),summary=jsonb_build_object('needs',0,'ready',true,'signoff',$2::text,'as_of',now())||$3::jsonb WHERE id=$1`, g.id, current.State, facts)

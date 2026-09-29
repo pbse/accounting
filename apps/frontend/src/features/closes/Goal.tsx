@@ -518,7 +518,7 @@ type Delegated = {
   state: Goal["state"];
   author: string;
   handed: number;
-  summary: { needs?: number; ready?: boolean; signoff?: string; as_of?: string; books?: { state: string; text: string; read_at?: string }; coverage?: { total: number; open: number } | null; client?: number };
+  summary: { needs?: number; ready?: boolean; signoff?: string; as_of?: string; books?: { state: string; text: string; read_at?: string }; coverage?: { total: number; open: number; stale?: boolean } | null; client?: number };
 };
 
 // delegatedState words where a delegated close stands, from what the agent last found, as its card does.
@@ -540,10 +540,12 @@ function delegatedState(g: Delegated): [string, string] {
 // waits on the client, from what the agent last found.
 function delegatedFacts(s: Delegated["summary"]) {
   const facts: string[] = [];
-  if (s.books?.state === "done" && s.books.read_at) facts.push(`Books read ${new Date(s.books.read_at).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`);
+  // In UTC, as the close's plan says it.
+  if (s.books?.state === "done" && s.books.read_at) facts.push(`Books read ${new Date(s.books.read_at).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })}`);
   else if (s.books?.state === "none") facts.push("No ledger connected: uploaded documents only");
   else if (s.books) facts.push(s.books.text);
-  if (s.coverage) facts.push(s.coverage.open ? `${s.coverage.open} of ${s.coverage.total} accounts need coverage` : `All ${s.coverage.total} accounts covered`);
+  if (s.coverage?.stale) facts.push("Account coverage waits on a new capture");
+  else if (s.coverage) facts.push(s.coverage.open ? `${s.coverage.open} of ${s.coverage.total} accounts need coverage` : `All ${s.coverage.total} accounts covered`);
   if (s.client) facts.push(`${s.client} waiting on the client`);
   return facts.join(" · ");
 }

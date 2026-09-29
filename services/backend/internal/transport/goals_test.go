@@ -1216,6 +1216,10 @@ func TestWorkShowsWhereEachDelegatedCloseStands(t *testing.T) {
 	if z := got["Zeta"].Summary; z.Books.State != "you" || z.Books.Text != "Reconnect QuickBooks for Zeta so I can read the books." || got["first"].Entity != "Zeta" {
 		t.Fatalf("books that need reconnecting come first: %+v %s", z.Books, got["first"].Entity)
 	}
+	// Its accounts come from a capture that is out of date, so they wait on a new one rather than on decisions.
+	if c := got["Zeta"].Summary.Coverage; c == nil || !c.Stale {
+		t.Fatalf("coverage from an out-of-date capture says so: %+v", c)
+	}
 	// They still do once the review goal's documents are ready, since a finished review does not cover the books.
 	_, err = db.Exec(`UPDATE close_goals SET state='reached',reached_at=now() WHERE close_id::text=$1 AND state='active'`, zeta)
 	must(err)
@@ -1236,5 +1240,13 @@ func TestWorkShowsWhereEachDelegatedCloseStands(t *testing.T) {
 	must(db.QueryRow(`SELECT summary->>'signoff',summary#>>'{books,state}',summary->>'coverage' FROM close_goals WHERE close_id::text=$1`, gamma).Scan(&signoff, &books, &coverage))
 	if signoff == "" || books != "done" || coverage != `{"open": 3, "total": 3}` {
 		t.Fatalf("a signed-off close keeps its books and coverage: %q %q %s", signoff, books, coverage)
+	}
+	// A document that waits on the client after the sign-off is counted.
+	document(gamma, "waiting_client")
+	step(gamma)
+	var client int
+	must(db.QueryRow(`SELECT (summary->>'client')::int FROM close_goals WHERE close_id::text=$1`, gamma).Scan(&client))
+	if client != 1 {
+		t.Fatalf("work after the sign-off still shows what waits on the client: %d", client)
 	}
 }
