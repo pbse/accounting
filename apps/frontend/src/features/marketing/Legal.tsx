@@ -258,7 +258,7 @@ export function Retention() {
       </section>
       <section>
         <h2>Taking your data with you</h2>
-        <p>Before deleting, a firm can download each close’s review package or signed binder, with the original documents, workpapers, calculations and full history.</p>
+        <p>Before deleting, a firm can download each close’s review package or signed binder, with the original documents, workpapers, calculations, reviews, client requests and replies, and the close’s preparation and sign-off history. The close’s assistant conversation is not included.</p>
       </section>
       <section>
         <h2>When a firm leaves</h2>
