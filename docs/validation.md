@@ -2861,3 +2861,13 @@ Checks:
 - `TestAssistantInvestigatesBeforeWriting`: with the setting off, no tools are offered; on, the model reads a document's text, a refused tool (the package export) is told so, the answer quoting the document is kept with an Investigated line and the evidence link, the trace is saved with both steps, and the three model calls are counted.
 - Review: a Codex pass found a document whose text began with JSON could be cut at that value, investigations survived written answers being turned off, and the two model budgets exceeded the handler's write deadline; a second pass found a document whose whole text was a bare number would be read as JSON and its card number left unredacted, so the tool now decides the body's form; each is fixed. The third pass found nothing.
 - Fresh local PostgreSQL, `go test ./...`, `go vet`, `gofmt`, `npm run check`, `npm test`, frontend build.
+
+## A replaced invoice is recalculated straight through (2026-09-28)
+
+Request: prove change-triggered recalculation end to end ([maturity](maturity.md), demonstration step 5).
+
+What changed: a straight-through plan whose invoice replaced a source that a current prepaid draft cites now revises that draft, so the replacement flow needs no person when the corrected invoice and the corrected capture pass the same checks: the replaced draft is marked as changed at source by the replacement itself, the new draft carries `revises`, the change review shows only what moved, posting approvals were withdrawn by the replacement, and unrelated approvals stand. A machine source the proposal already cites is cited once in the plan.
+
+Checks:
+- `TestReplacedInvoiceIsRecalculatedStraightThrough`, on PostgreSQL with a mocked model: a client procedure attached as evidence, an active QuickBooks connection, a completed capture with the vendor's bill and a chart snapshot; the first invoice is prepared straight through by the intake, agent and preparation workers and approved; an unrelated draft is approved; the corrected invoice replaces the first and a new capture carries the corrected bill; the corrected invoice is prepared straight through, revises the first draft, whose review state is changed at source, its change review shows 1,200.00 against 1,300.00 and not the unchanged dates, it starts pending review, the unrelated approval stands, and the model was called once per invoice. This is also the first PostgreSQL-backed run of the straight-through path end to end.
+- Fresh local PostgreSQL, `go test ./...`, `go vet`, `gofmt`.

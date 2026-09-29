@@ -217,7 +217,13 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	capture.Role, capture.Location = "period_ledger", booking
 	chart.Role, chart.Location = "chart", "Accounts "+expenseIDsLabel(ledger, procedure)
 	rule.Role, rule.Location = "procedure", "Version "+procedure.ID
-	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, BilledTo: facts["billed_to"], Input: raw, Sources: append(append([]Source{}, p.Sources...), capture, chart, rule)}
+	sources := []Source{}
+	for _, s := range p.Sources {
+		if s.ID != capture.ID && s.ID != chart.ID && s.ID != rule.ID {
+			sources = append(sources, s)
+		}
+	}
+	plan := Plan{Kind: "prepaid", Procedure: procedure.ID, Chart: ledger.Chart, BilledTo: facts["billed_to"], Input: raw, Sources: append(sources, capture, chart, rule)}
 	if _, err := Calculate(plan, entity, period); err != nil {
 		return Plan{}, err.Error()
 	}
@@ -883,12 +889,22 @@ func CloseLedger(ctx context.Context, tx *sql.Tx, closeID string) (*Ledger, erro
 	return &l, nil
 }
 
-// queueStraightThrough queues the plan on the job as the agent's confirmation.
-func queueStraightThrough(ctx context.Context, tx *sql.Tx, jobID string, plan Plan) error {
-	plans, _ := json.Marshal([]Plan{plan})
-	if _, err := tx.ExecContext(ctx, `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans)); err != nil {
+// queueStraightThrough queues the plan on the job as the agent's confirmation. When the invoice replaced a source a
+// current prepaid draft cites, the plan revises that draft: the old draft is already marked as changed at source, the
+// new one carries the lineage, and the change review shows only what moved.
+func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoiceID string, plan Plan) error {
+	var revises string
+	err := tx.QueryRowContext(ctx, `SELECT w.id::text FROM workpapers w JOIN evidence old ON old.close_id=w.close_id AND old.superseded_by::text=$2
+ WHERE w.close_id::text=$1 AND w.kind='prepaid' AND w.paper->'sources' @> jsonb_build_array(jsonb_build_object('id',old.id::text))
+ AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text) ORDER BY w.id DESC LIMIT 1`, closeID, invoiceID).Scan(&revises)
+	if err != nil && err != sql.ErrNoRows {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=now() WHERE job_id=$1`, jobID)
+	plan.Revises = revises
+	plans, _ := json.Marshal([]Plan{plan})
+	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans)); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=now() WHERE job_id=$1`, jobID)
 	return err
 }

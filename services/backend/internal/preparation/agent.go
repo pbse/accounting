@@ -741,7 +741,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			straight = "Waiting for a person: " + reason + "."
 		}
 		if reason == "" {
-			if err = queueStraightThrough(persist, finish, id, plan); err != nil {
+			if err = queueStraightThrough(persist, finish, closeID, id, primary, plan); err != nil {
 				return true, err
 			}
 			state = "queued"

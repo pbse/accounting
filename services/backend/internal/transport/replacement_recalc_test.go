@@ -1,0 +1,233 @@
+package transport
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	"close.local/backend/internal/preparation"
+)
+
+// A replaced invoice is prepared again without a person: the agent reads the replacement, the straight-through check
+// passes against the new capture, the new draft revises the old one, the old approval is gone, the change review shows
+// only what moved, and an unrelated approved draft stands.
+func TestReplacedInvoiceIsRecalculatedStraightThrough(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	t.Setenv("OPENAI_API_KEY", "mock-only-key")
+	t.Setenv("OPENAI_MODEL", "mock-only-model")
+	entity := "Recalc " + rand.Text()
+	var closeID, connection string
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
+	defer func() {
+		for _, q := range []string{`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, `DELETE FROM preparation_jobs WHERE close_id=$1`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id=$1`, `DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+			db.Exec(q, closeID)
+		}
+		db.Exec(`DELETE FROM procedure_versions WHERE organization_id='local-development' AND client_entity=$1`, entity)
+	}()
+	// The client's approved prepaid procedure, attached to the close as evidence, and its QuickBooks connection.
+	var procedureID string
+	must(db.QueryRow(`INSERT INTO procedure_versions(organization_id,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor) VALUES('local-development',$1,'prepaid','equal_full_months_v1','Equal full months','Insurance','Prepaid Expenses',true,'Fixture','fixture') RETURNING id::text`, entity).Scan(&procedureID))
+	tx, err := db.Begin()
+	must(err)
+	procedure, err := preparation.CurrentProcedure(context.Background(), tx, closeID, "prepaid")
+	must(err)
+	_, err = preparation.AttachProcedure(context.Background(), tx, closeID, procedure, false, "fixture")
+	must(err)
+	must(tx.Commit())
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,home_currency,fiscal_year_start) VALUES($1,'local-development',$2,'fixture','active',$3,now(),'123','USD',1) RETURNING id::text`, closeID, entity, rand.Text()).Scan(&connection))
+	insert := func(name, body string) string {
+		t.Helper()
+		var id string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,$4,'fixture') RETURNING id::text`, closeID, name, preparation.Digest([]byte(body)), body).Scan(&id))
+		return id
+	}
+	// capture saves a completed transaction capture whose one bill books the amount, superseding the previous capture.
+	var lastCapture string
+	capture := func(amount string) {
+		t.Helper()
+		evidenceID := insert("QuickBooks transactions 2026-09 "+amount, "capture "+amount)
+		if lastCapture != "" {
+			_, e := db.Exec(`UPDATE evidence SET superseded_by=$2,replacement_reason='New QuickBooks transaction capture',replaced_by='quickbooks-sync',replaced_at=now() WHERE id::text=$1`, lastCapture, evidenceID)
+			must(e)
+		}
+		lastCapture = evidenceID
+		var syncID string
+		must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,started_at,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',$3,now()-interval '1 hour',now()-interval '1 hour','{}') RETURNING id::text`, closeID, connection, evidenceID).Scan(&syncID))
+		record, _ := json.Marshal(map[string]any{"DocNumber": "INV-778", "TotalAmt": json.Number(amount), "VendorRef": map[string]string{"value": "7", "name": "Acme Insurance Co"}, "Line": []map[string]any{{"Amount": json.Number(amount), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"value": "12", "name": "Insurance"}}}}})
+		_, e := db.Exec(`INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,'Bill','41','1','2026-09-03',now(),'USD',$2,$3)`, syncID, amount, string(record))
+		must(e)
+	}
+	capture("1200.00")
+	snapshotSource := insert("QuickBooks 2026-09 accrual period evidence.txt", "period snapshot")
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123',$3,$4,now(),now(),'fixture')`, closeID, connection, rand.Text(), `{"period":"2026-09","source_id":"`+snapshotSource+`","accounts":[{"Id":"12","Name":"Insurance"},{"Id":"13","Name":"Prepaid Expenses"}],"reports":{}}`)
+	must(err)
+
+	// The model reads whichever invoice is primary; its facts quote that invoice's own lines.
+	originalTransport := http.DefaultTransport
+	defer func() { http.DefaultTransport = originalTransport }()
+	invoices := map[string]string{} // evidence id → amount
+	calls := 0
+	http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		raw, _ := io.ReadAll(r.Body)
+		var request struct {
+			Input []struct {
+				Content string `json:"content"`
+			} `json:"input"`
+		}
+		json.Unmarshal(raw, &request)
+		var given struct {
+			Primary string `json:"primary_source_id"`
+		}
+		for _, item := range request.Input {
+			json.Unmarshal([]byte(item.Content), &given)
+		}
+		amount := invoices[given.Primary]
+		if amount == "" {
+			t.Fatalf("the model was asked about an unknown primary source: %s", raw)
+		}
+		printed := amount[:len(amount)-6] + "," + amount[len(amount)-6:]
+		quote := func(field, value, line string) map[string]string {
+			return map[string]string{"field": field, "value": value, "source_id": given.Primary, "quote": line}
+		}
+		facts := []map[string]string{
+			quote("amount", amount, "Annual premium USD "+printed),
+			quote("currency", "USD", "Annual premium USD "+printed),
+			quote("service_start", "2026-09-01", "Coverage period 2026-09-01 to 2027-08-31"),
+			quote("service_end", "2027-08-31", "Coverage period 2026-09-01 to 2027-08-31"),
+			quote("vendor", "Acme Insurance Co", "Acme Insurance Co"),
+			quote("billed_to", entity, "Bill to: "+entity),
+			quote("invoice_number", "INV-778", "Invoice INV-778"),
+		}
+		output, _ := json.Marshal(map[string]any{"kind": "prepaid", "summary": "Insurance prepaid schedule", "questions": []string{}, "sources": []map[string]string{{"id": given.Primary, "role": "invoice"}}, "facts": facts})
+		body, _ := json.Marshal(map[string]any{"id": "mock-response", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
+	})
+	invoiceText := func(amount string) string {
+		printed := amount[:len(amount)-6] + "," + amount[len(amount)-6:]
+		return "Acme Insurance Co\nInvoice INV-778\nBill to: " + entity + "\nAnnual premium USD " + printed + "\nCoverage period 2026-09-01 to 2027-08-31\n"
+	}
+	// prepare uploads an invoice and runs the intake, the agent and the preparation worker; it returns the draft.
+	prepare := func(invoiceID string) (job, draft string) {
+		t.Helper()
+		tx, err := db.Begin()
+		must(err)
+		job, err = preparation.StartIntake(context.Background(), tx, closeID, invoiceID, "fixture")
+		must(err)
+		must(tx.Commit())
+		if worked, e := preparation.ProcessIntake(context.Background(), db); e != nil || !worked {
+			t.Fatalf("the agent did not run: %v %v", worked, e)
+		}
+		var state, checkpoint string
+		must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&state, &checkpoint))
+		if state != "queued" {
+			t.Fatalf("the invoice was not prepared straight through: state=%s %s", state, checkpoint)
+		}
+		if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
+			t.Fatalf("the worker did not run: %v %v", worked, e)
+		}
+		var ids string
+		must(db.QueryRow(`SELECT state||' '||error||' '||workpaper_ids::text FROM preparation_jobs WHERE id::text=$1`, job).Scan(&ids))
+		var papers []string
+		if _, rest, ok := strings.Cut(ids, "completed  "); !ok || json.Unmarshal([]byte(rest), &papers) != nil || len(papers) != 1 {
+			t.Fatalf("the worker saved one draft: %s", ids)
+		}
+		return job, papers[0]
+	}
+	first := insert("insurance.txt", invoiceText("1200.00"))
+	invoices[first] = "1200.00"
+	_, draft1 := prepare(first)
+
+	token := strings.Repeat("r", 32)
+	handler := apiWithStore(db, token)
+	call := func(method, path string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	base := "/v1/closes/" + closeID
+	review := func(paper string) (state, reviewID, digest string) {
+		t.Helper()
+		var out struct {
+			State    string `json:"state"`
+			ReviewID string `json:"review_id"`
+			Digest   string `json:"digest"`
+		}
+		must(json.Unmarshal(call("GET", base+"/workpapers/"+paper+"/reviews", nil, 200), &out))
+		return out.State, out.ReviewID, out.Digest
+	}
+	_, reviewID, digest := review(draft1)
+	call("POST", base+"/workpapers/"+draft1+"/reviews", map[string]string{"decision": "approved", "note": "Ties to the invoice", "digest": digest, "expected_review_id": reviewID}, 200)
+	if state, _, _ := review(draft1); state != "approved" {
+		t.Fatalf("the first draft is approved: %s", state)
+	}
+	// An unrelated approved draft in the same close must stand through the replacement.
+	var other string
+	otherPaper, _ := json.Marshal(map[string]any{"input": map[string]string{"amount": "600.00"}, "sources": []map[string]string{{"id": snapshotSource, "digest": preparation.Digest([]byte("period snapshot")), "name": "QuickBooks 2026-09 accrual period evidence.txt", "role": "support"}}})
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'prepaid','other-digest',$2) RETURNING id::text`, closeID, string(otherPaper)).Scan(&other))
+	_, otherReview, otherDigest := review(other)
+	call("POST", base+"/workpapers/"+other+"/reviews", map[string]string{"decision": "approved", "note": "Unrelated", "digest": otherDigest, "expected_review_id": otherReview}, 200)
+
+	// A corrected invoice arrives with a higher premium; the books now carry the corrected bill.
+	second := insert("insurance-corrected.txt", invoiceText("1300.00"))
+	invoices[second] = "1300.00"
+	call("POST", base+"/evidence/"+first+"/replace", map[string]string{"replacement_id": second, "reason": "Corrected premium from the carrier."}, 200)
+	capture("1300.00")
+	if state, _, _ := review(draft1); state != "source_changed" {
+		t.Fatalf("the replaced source changes the first draft's review state: %s", state)
+	}
+	_, draft2 := prepare(second)
+	var revises string
+	must(db.QueryRow(`SELECT COALESCE(paper->>'revises','') FROM workpapers WHERE id::text=$1`, draft2).Scan(&revises))
+	if revises != draft1 {
+		t.Fatalf("the new draft revises the replaced one: revises=%q want %s", revises, draft1)
+	}
+	var changes struct {
+		Previous string `json:"previous_id"`
+		Changes  any    `json:"changes"`
+	}
+	must(json.Unmarshal(call("GET", base+"/workpapers/"+draft2+"/changes", nil, 200), &changes))
+	raw, _ := json.Marshal(changes.Changes)
+	if changes.Previous != draft1 || !strings.Contains(string(raw), "1200.00") || !strings.Contains(string(raw), "1300.00") || strings.Contains(string(raw), "2027-08-31") {
+		t.Fatalf("the change review shows the moved amount and not the unchanged dates: %s", raw)
+	}
+	if state, _, _ := review(draft2); state != "pending" {
+		t.Fatalf("the recalculated draft starts pending review: %s", state)
+	}
+	if state, _, _ := review(other); state != "approved" {
+		t.Fatalf("an unrelated approval stands: %s", state)
+	}
+	if calls != 2 {
+		t.Fatalf("one model call per invoice: %d", calls)
+	}
+}
