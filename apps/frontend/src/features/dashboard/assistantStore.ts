@@ -18,14 +18,25 @@ export function takePending(closeId: string) {
   return question;
 }
 
+function subscribe(l: () => void) {
+  listeners.add(l);
+  return () => listeners.delete(l);
+}
+
 export function usePending() {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => pending,
-  );
+  return useSyncExternalStore(subscribe, () => pending);
+}
+
+// Opening the panel from elsewhere (the sidebar) is counted, so every click opens and focuses it.
+let openRequests = 0;
+
+export function openAssistant() {
+  openRequests += 1;
+  listeners.forEach((l) => l());
+}
+
+export function useOpenRequests() {
+  return useSyncExternalStore(subscribe, () => openRequests);
 }
 
 // nextReview is the first draft in the review queue, the target of /review.

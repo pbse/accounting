@@ -2,6 +2,7 @@ import { Suspense, useEffect, useRef } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { SidebarAccount } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
+import { openAssistant } from "./assistantStore";
 import { AttentionBadge } from "../closes/Attention";
 import { Icon, type IconName } from "../../ui/Icon";
 
@@ -94,6 +95,12 @@ export default function WorkspaceLayout() {
                   {item.to === "/dashboard/attention" && signedIn && <AttentionBadge />}
                 </NavLink>
               ))}
+              {group.label === "Essentials" && signedIn && (
+                <button type="button" className="nav-item" onClick={openAssistant}>
+                  <Icon name="agent" />
+                  Ask the agent
+                </button>
+              )}
             </div>
           ))}
         </nav>

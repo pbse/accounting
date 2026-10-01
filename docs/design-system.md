@@ -29,6 +29,9 @@ Pages build from these instead of repeating markup and class names. Each takes i
 | `Segmented` | A set of toggles (`onChange`) or page tabs (each item's `to`), with optional counts and an alert dot. |
 | `RowList`, `EntityCell` | A list of rows with optional column names; `EntityCell` is a row's first cell with the client's avatar or another leading mark. Rows themselves are `.row` links, summaries or blocks. |
 | `IconTile`, `Avatar`, `Icon` | A glossy 32px icon tile in a tone, a client's initial in its colour, and an icon by name. |
+| `AgentComposer` | The card that leads a page with the agent: title, what it can do, a large input, one-click asks and the caller's results below. |
+| `Suggestions` | One-click asks as pills. The caller asks the picked text exactly as written; a suggestion never runs an action without its preview. |
+| `AgentMark` | The agent's blue tile; with children it leads a label, such as the heading of something the agent wrote. |
 
 To add a component, put `Name.tsx` and `Name.css` in `ui/`, import the stylesheet from the component, use only tokens in it, and add a row here.
 
@@ -40,6 +43,15 @@ To add a component, put `Name.tsx` and `Name.css` in `ui/`, import the styleshee
 - **One type family.** Inter at optical size 32 at every size, weights 400 and 500 (600 for bold text and badge figures). Page titles are 20px, section titles 17px, card titles 15px, body 14px, controls and labels 13px, captions 11px.
 - **Colour means something.** `--blue` is the brand and the focus ring. `--green` and `--red` paint status dots and delta discs; words use `--positive-text` and `--negative-text`, which pass AA. Avatar and chart hues (`--teal`, `--pink`, `--orange`, `--violet`) never carry status.
 - **Light only.** There is no dark theme, by product decision.
+
+## The agent comes first
+
+The agent is how people get work done, so it is never more than one click away:
+
+- **Work opens with "Ask the agent"** (`AgentComposer`), above the numbers. Its suggestions only filter the page or show the server's exact preview; nothing runs until a person confirms.
+- **"Ask the agent" sits in the sidebar** under Essentials and opens the agent panel with the cursor in its input. The floating button says the same, in the brand blue.
+- **The panel starts the conversation**: an empty conversation offers starter questions the panel's fixed reads answer ("What needs me today?", or inside a close "What blocks sign-off?").
+- **What the agent wrote carries its mark** (`AgentMark`), as the morning brief does.
 
 ## Icons
 

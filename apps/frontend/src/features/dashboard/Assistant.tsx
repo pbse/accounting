@@ -5,10 +5,12 @@ import { GoalCard, localDate } from "../closes/Goal";
 import { useUnlocked, workspaceRequest } from "../closes/workspace";
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
 import { RequestCard } from "./RequestCard";
-import { askAssistant, nextReview, takePending, usePending } from "./assistantStore";
+import { askAssistant, nextReview, takePending, useOpenRequests, usePending } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
+import { AgentMark } from "../../ui/AgentMark";
 import { Icon } from "../../ui/Icon";
+import { Suggestions } from "../../ui/Suggestions";
 
 type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null };
 
@@ -44,6 +46,10 @@ function Panel() {
   useEffect(() => {
     if (asked && !open) toggle(true);
   }, [asked]);
+  const openRequests = useOpenRequests();
+  useEffect(() => {
+    if (openRequests && !open) toggle(true);
+  }, [openRequests]);
   // A link such as /dashboard/closes/7?ask=… asks that close's assistant once.
   const navigate = useNavigate();
   useEffect(() => {
@@ -75,14 +81,20 @@ function Panel() {
   if (!open)
     return (
       <button ref={toggleButton} type="button" className="assistant-toggle" onClick={() => toggle(true)} aria-label="Open the assistant">
-        <Icon name="agent" /> Assistant
+        <Icon name="agent" /> Ask the agent
       </button>
     );
   // A new close or draft mounts a fresh conversation, so nothing from the previous context can show.
-  return <Conversation key={`${closeId}/${paperId}`} closeId={closeId} paperId={paperId} onClose={() => toggle(false)} />;
+  return <Conversation key={`${closeId}/${paperId}`} closeId={closeId} paperId={paperId} focus={openRequests} onClose={() => toggle(false)} />;
 }
 
-function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId: string; onClose: () => void }) {
+// Read-only questions the panel's fixed reads answer; a click asks one.
+const starters = {
+  firm: ["What needs me today?", "What is ready for review?", "What is blocked?"],
+  close: ["Where does this close stand?", "What blocks sign-off?", "What changed from last month?"],
+};
+
+function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; paperId: string; focus: number; onClose: () => void }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [live, setLive] = useState<string[]>([]);
   const [liveLinks, setLiveLinks] = useState<{ label: string; href: string }[]>([]);
@@ -119,6 +131,9 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
   useEffect(() => {
     list.current?.lastElementChild?.scrollIntoView({ block: "end" });
   }, [messages, live]);
+  useEffect(() => {
+    if (focus) input.current?.focus();
+  }, [focus]);
   // Only the latest request may paint: an earlier read never overwrites a newer answer.
   async function send(body: Record<string, string>) {
     const asked = ++generation.current;
@@ -185,7 +200,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
     <aside className="assistant" aria-label="Assistant">
       <header>
         <strong>
-          <Icon name="agent" /> Assistant
+          <AgentMark size="sm">Agent</AgentMark>
         </strong>
         <button type="button" onClick={onClose} aria-label="Close the assistant">
           ×
@@ -201,6 +216,7 @@ function Conversation({ closeId, paperId, onClose }: { closeId: string; paperId:
             {closeId
               ? "Say “Get this close ready for review by Friday” to hand it to the agent, or ask where it stands, what blocks sign-off, which balances don't tie, what changed from last month or what exceptions the ledger shows."
               : "Ask what needs you today, what is ready for review or what is blocked, or name a client to hand it to the agent (“Get Acme ready for review by Friday”)."}
+            <Suggestions label="Starter questions" items={closeId ? starters.close : starters.firm} disabled={busy || !loaded} onPick={(text) => void send({ text, workpaper_id: paperId })} />
           </li>
         )}
         {messages.map((m, i) => (
