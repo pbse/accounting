@@ -111,7 +111,7 @@ func TestServiceDiscoveryAndStreaming(t *testing.T) {
 			t.Fatal("feature needed an endpoint")
 		}
 		var payload map[string]any
-		if json.NewDecoder(r.Body).Decode(&payload) != nil || payload["stream"] != true || payload["model"] != "claude" {
+		if json.NewDecoder(r.Body).Decode(&payload) != nil || payload["stream"] != true || payload["model"] != "claude" || payload["allow_uncapped_output_tokens"] != true {
 			t.Fatal("stream was not requested")
 		}
 		body := `{"scope":{"organization":"firm","subject":"member","access_profile":"read-only"},"type":"progress","text":"Reading evidence"}` + "\n" + `{"scope":{"organization":"firm","subject":"member","access_profile":"read-only"},"type":"text_delta","text":"Finding"}` + "\n" + string(terminal) + "\n"
@@ -122,7 +122,7 @@ func TestServiceDiscoveryAndStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	var progress, text string
-	out, err := Generate(WithClient(context.Background(), c), Request{Purpose: "research", Instructions: "Investigate", Scope: &scope, MaxModelCalls: 3, MaxOutputTokens: 100, OnProgress: func(s string) bool { progress += s; return true }, OnText: func(s string) bool { text += s; return true }})
+	out, err := Generate(WithClient(context.Background(), c), Request{Purpose: "research", Instructions: "Investigate", AllowUncappedOutputTokens: true, Scope: &scope, MaxModelCalls: 3, MaxOutputTokens: 100, OnProgress: func(s string) bool { progress += s; return true }, OnText: func(s string) bool { text += s; return true }})
 	if err != nil || out.ID != "run" || out.Provider != ContextMachine || text != "Finding" || progress != "Reading evidence" {
 		t.Fatalf("%+v %v %q %q", out, err, text, progress)
 	}
@@ -229,7 +229,7 @@ func TestResearchResultsFailClosed(t *testing.T) {
 }
 
 func TestPrivateMachineReadiness(t *testing.T) {
-	for _, body := range []string{`{"status":"ok","agents":["codex","claude"]}`, `{"status":"ok","agents":["codex"]}`} {
+	for _, body := range []string{`{"status":"ok","agents":["codex","claude"]}`, `{"status":"ok","agents":["claude"]}`} {
 		c, err := New(Config{ContextMachineToken: "private", ContextMachineModel: "codex", HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 			if r.URL.String() != "http://context-machine.internal/readyz" || r.Header.Get("Authorization") != "Bearer private" {
 				t.Fatal("readiness bypassed binding or authentication")
@@ -240,7 +240,7 @@ func TestPrivateMachineReadiness(t *testing.T) {
 			t.Fatal(err)
 		}
 		err = CheckContextMachine(WithClient(context.Background(), c))
-		if (err == nil) != strings.Contains(body, "claude") {
+		if (err == nil) != strings.Contains(body, "codex") {
 			t.Fatal("readiness failed to verify both agents", err)
 		}
 	}
@@ -345,5 +345,28 @@ func TestReadinessCallerCancellationDoesNotPoisonCache(t *testing.T) {
 	}
 	if err = CheckContextMachine(WithClient(context.Background(), c)); err != nil || calls != 1 {
 		t.Fatal("cache poisoned", err, calls)
+	}
+}
+
+func TestConfiguredReasoningReachesAPI(t *testing.T) {
+	c, err := New(Config{APIKey: "key", Model: "model", ReasoningEffort: "low", ReasoningEfforts: map[string]string{"preparation": "high"}, HTTP: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		if body["reasoning"].(map[string]any)["effort"] != "high" {
+			t.Error("purpose effort override missing")
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"id","status":"completed","model":"model","output":[]}`))}, nil
+	})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := c.Generate(context.Background(), Request{Purpose: "preparation", Instructions: "test", Data: "test", MaxOutputTokens: 100})
+	if err != nil || result.ReasoningEffort != "high" || result.AuthMode != "api_key" {
+		t.Fatal(result, err)
+	}
+	for _, cfg := range []Config{{ReasoningEffort: "wrong"}, {ReasoningEfforts: map[string]string{"research": "high"}}, {APIKey: "key", Model: "model", ReasoningEfforts: map[string]string{"preparation": "wrong"}}} {
+		if _, err := New(cfg); err == nil {
+			t.Fatal("invalid effort configuration accepted")
+		}
 	}
 }

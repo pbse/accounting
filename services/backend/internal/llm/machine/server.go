@@ -25,12 +25,17 @@ import (
 )
 
 type Config struct {
-	Token, DatabaseURL, OpenAIKey, AnthropicKey, CodexModel, ClaudeModel string
-	Profiles                                                             []llm.Scope
+	Token, DatabaseURL, OpenAIKey, AnthropicKey, CodexModel, ClaudeModel                    string
+	CodexToken, ClaudeToken, CodexAuth, ClaudeAuth, CodexEffort, ClaudeEffort, DefaultAgent string
+	Profiles                                                                                []llm.Scope
 }
 
 func FromEnv() (http.Handler, error) {
 	cfg := Config{Token: os.Getenv("CONTEXT_MACHINE_TOKEN"), DatabaseURL: os.Getenv("CONTEXT_MACHINE_DATABASE_URL"), OpenAIKey: os.Getenv("OPENAI_API_KEY"), AnthropicKey: os.Getenv("ANTHROPIC_API_KEY"), CodexModel: os.Getenv("CODEX_MODEL"), ClaudeModel: os.Getenv("CLAUDE_MODEL")}
+	cfg.CodexToken, cfg.ClaudeToken = os.Getenv("CODEX_ACCESS_TOKEN"), os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
+	cfg.CodexAuth, cfg.ClaudeAuth = os.Getenv("CODEX_AUTH_MODE"), os.Getenv("CLAUDE_AUTH_MODE")
+	cfg.CodexEffort, cfg.ClaudeEffort = os.Getenv("CODEX_REASONING_EFFORT"), os.Getenv("CLAUDE_REASONING_EFFORT")
+	cfg.DefaultAgent = os.Getenv("CONTEXT_MACHINE_MODEL")
 	if err := json.Unmarshal([]byte(os.Getenv("CONTEXT_MACHINE_PROFILES")), &cfg.Profiles); err != nil {
 		return nil, errors.New("CONTEXT_MACHINE_PROFILES must be a JSON array")
 	}
@@ -38,14 +43,31 @@ func FromEnv() (http.Handler, error) {
 }
 
 type server struct {
-	cfg  Config
-	db   *sql.DB
-	busy chan struct{}
+	cfg    Config
+	db     *sql.DB
+	busy   chan struct{}
+	agents map[string]agentSettings
 }
 
 func New(cfg Config) (http.Handler, error) {
-	if len(cfg.Token) < 32 || cfg.DatabaseURL == "" || cfg.OpenAIKey == "" || cfg.AnthropicKey == "" || cfg.CodexModel == "" || cfg.ClaudeModel == "" || len(cfg.Profiles) == 0 {
-		return nil, errors.New("context machine requires token, read-only database, both provider keys/models and profiles")
+	if len(cfg.Token) < 32 || cfg.DatabaseURL == "" || len(cfg.Profiles) == 0 {
+		return nil, errors.New("context machine requires token, read-only database, profiles and an enabled agent")
+	}
+	agents := map[string]agentSettings{}
+	for _, name := range []string{"codex", "claude"} {
+		settings, err := cfg.agent(name)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		if settings.credential != "" {
+			agents[name] = settings
+		}
+	}
+	if cfg.DefaultAgent == "" {
+		cfg.DefaultAgent = "codex"
+	}
+	if _, ok := agents[cfg.DefaultAgent]; !ok {
+		return nil, errors.New("default context-machine agent is not configured")
 	}
 	seen := map[string]bool{}
 	for _, p := range cfg.Profiles {
@@ -60,7 +82,7 @@ func New(cfg Config) (http.Handler, error) {
 		return nil, errors.New("invalid context-machine database configuration")
 	}
 	db.SetMaxOpenConns(2)
-	s := &server{cfg: cfg, db: db, busy: make(chan struct{}, 1)}
+	s := &server{cfg: cfg, db: db, busy: make(chan struct{}, 1), agents: agents}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /readyz", s.ready)
@@ -82,7 +104,9 @@ func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read-only database unavailable", 503)
 		return
 	}
-	for _, name := range []string{"codex", "claude"} {
+	names := []string{}
+	for name := range s.agents {
+		names = append(names, name)
 		cmd := exec.CommandContext(ctx, name, "--version")
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=/tmp"}
 		if cmd.Run() != nil {
@@ -91,22 +115,23 @@ func (s *server) ready(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	io.WriteString(w, `{"status":"ok","agents":["codex","claude"]}`)
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "agents": names})
 }
 
 type runRequest struct {
-	Version         int             `json:"version"`
-	Purpose         string          `json:"purpose"`
-	Model           string          `json:"model"`
-	Instructions    string          `json:"instructions"`
-	Data            json.RawMessage `json:"data"`
-	Scope           llm.Scope       `json:"scope"`
-	ReadOnly        bool            `json:"read_only"`
-	Store           bool            `json:"store"`
-	Deadline        time.Time       `json:"deadline"`
-	MaxOutputTokens int             `json:"max_output_tokens"`
-	MaxModelCalls   int             `json:"max_model_calls"`
-	Stream          bool            `json:"stream"`
+	Version                   int             `json:"version"`
+	Purpose                   string          `json:"purpose"`
+	Model                     string          `json:"model"`
+	Instructions              string          `json:"instructions"`
+	Data                      json.RawMessage `json:"data"`
+	Scope                     llm.Scope       `json:"scope"`
+	ReadOnly                  bool            `json:"read_only"`
+	Store                     bool            `json:"store"`
+	Deadline                  time.Time       `json:"deadline"`
+	MaxOutputTokens           int             `json:"max_output_tokens"`
+	MaxModelCalls             int             `json:"max_model_calls"`
+	Stream                    bool            `json:"stream"`
+	AllowUncappedOutputTokens bool            `json:"allow_uncapped_output_tokens"`
 }
 
 func (s *server) run(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +150,14 @@ func (s *server) run(w http.ResponseWriter, r *http.Request) {
 	}
 	if !authorized {
 		http.Error(w, "unknown access profile", 403)
+		return
+	}
+	if _, ok := s.agents[in.Model]; !ok {
+		http.Error(w, "agent unavailable", 503)
+		return
+	}
+	if in.Model == "codex" && s.agents[in.Model].mode == "subscription" && !in.AllowUncappedOutputTokens {
+		http.Error(w, "Codex subscription requires explicit allow_uncapped_output_tokens; use API-key mode for a token ceiling", 400)
 		return
 	}
 	// ponytail: one active run per container; shard containers when measured demand warrants it.
@@ -189,11 +222,11 @@ func (s *server) execute(ctx context.Context, in runRequest) (llm.Response, erro
 	}
 	defer os.RemoveAll(dir)
 	token := fmt.Sprintf("%x", rand.Text())
-	proxy := &modelProxy{ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: s.cfg.OpenAIKey, model: s.cfg.CodexModel}
-	if in.Model == "claude" {
-		proxy.key = s.cfg.AnthropicKey
-		proxy.model = s.cfg.ClaudeModel
+	settings, ok := s.agents[in.Model]
+	if !ok {
+		return llm.Response{}, errors.New("agent unavailable")
 	}
+	proxy := &modelProxy{ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: settings.credential, model: settings.model, effort: settings.effort, authMode: settings.mode}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", proxy)
 	records := recordsHandler(s.db, in.Scope)
@@ -212,7 +245,7 @@ func (s *server) execute(ctx context.Context, in runRequest) (llm.Response, erro
 	go local.Serve(listener)
 	defer local.Close()
 	base := "http://" + listener.Addr().String()
-	args, env := command(in.Model, proxy.model, base, token, dir, in.MaxModelCalls)
+	args, env := command(in.Model, proxy.model, base, token, dir, in.MaxModelCalls, settings.effort, settings.mode)
 	cmd := exec.CommandContext(ctx, in.Model, args...)
 	cmd.Dir = dir
 	cmd.Env = env
@@ -238,7 +271,7 @@ func (s *server) execute(ctx context.Context, in runRequest) (llm.Response, erro
 	if calls < 1 {
 		return llm.Response{}, errors.New("no model call")
 	}
-	return llm.Response{ID: rand.Text(), Provider: llm.ContextMachine, Model: proxy.model, Text: text, Usage: usage, ModelCalls: calls}, nil
+	return llm.Response{ID: rand.Text(), Provider: llm.ContextMachine, Model: proxy.model, ReasoningEffort: settings.effort, AuthMode: settings.mode, Text: text, Usage: usage, ModelCalls: calls}, nil
 }
 
 type limitedOutput struct {

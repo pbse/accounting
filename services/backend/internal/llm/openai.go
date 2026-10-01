@@ -53,6 +53,9 @@ func (c *Client) openAI(ctx context.Context, route route, in Request) (Response,
 		}
 	}
 	payload := map[string]any{"model": route.Model, "store": false, "max_output_tokens": in.MaxOutputTokens, "input": input}
+	if route.Effort != "" {
+		payload["reasoning"] = map[string]string{"effort": route.Effort}
+	}
 	if in.Schema != nil {
 		payload["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": in.Schema.Name, "strict": true, "schema": in.Schema.Definition}}
 	}
@@ -76,7 +79,9 @@ func (c *Client) openAI(ctx context.Context, route route, in Request) (Response,
 	}
 	defer res.Body.Close()
 	if in.OnText != nil {
-		return readStream(res.Body, route.Model, in)
+		result, err := readStream(res.Body, route.Model, in)
+		result.ReasoningEffort, result.AuthMode = route.Effort, "api_key"
+		return result, err
 	}
 	raw, err := boundedRead(res.Body, in.MaxResponseBytes)
 	if err != nil {
@@ -86,7 +91,7 @@ func (c *Client) openAI(ctx context.Context, route route, in Request) (Response,
 	if json.Unmarshal(raw, &wire) != nil || wire.Status != "completed" {
 		return Response{}, ErrIncomplete
 	}
-	result := Response{ID: wire.ID, Provider: OpenAI, Model: route.Model, Usage: wire.Usage, ModelCalls: 1}
+	result := Response{ID: wire.ID, Provider: OpenAI, Model: route.Model, ReasoningEffort: route.Effort, AuthMode: "api_key", Usage: wire.Usage, ModelCalls: 1}
 	if wire.Model != "" {
 		result.Model = wire.Model
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -14,6 +15,7 @@ import (
 type modelProxy struct {
 	ctx                      context.Context
 	token, key, model, agent string
+	effort, authMode         string
 	limit, tokens            int
 	calls                    atomic.Int32
 	client                   *http.Client
@@ -41,9 +43,30 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body["model"] = p.model
 	if p.agent == "claude" {
 		body["max_tokens"] = p.tokens
+		output, _ := body["output_config"].(map[string]any)
+		if output == nil {
+			output = map[string]any{}
+		}
+		output["effort"] = p.effort
+		body["output_config"] = output
+		// Adaptive thinking respects max_tokens; a CLI's fixed thinking budget may exceed it.
+		body["thinking"] = map[string]any{"type": "adaptive"}
 	} else {
 		body["max_output_tokens"] = p.tokens
 		body["store"] = false
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if reasoning == nil {
+			reasoning = map[string]any{}
+		}
+		reasoning["effort"] = p.effort
+		body["reasoning"] = reasoning
+		if p.authMode == "subscription" {
+			endpoint = "https://chatgpt.com/backend-api/codex/responses"
+			// Codex subscription transport does not accept max_output_tokens. The
+			// response byte cap, call count and run deadline still apply.
+			delete(body, "max_output_tokens")
+			body["stream"] = true
+		}
 		delete(body, "previous_response_id")
 	}
 	// Only our two scoped MCP tools are advertised. Built-in shell, filesystem,
@@ -67,14 +90,34 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Preserve CLI protocol negotiation/identity, never caller credentials or host.
+	for _, name := range []string{"User-Agent", "OpenAI-Beta", "X-App"} {
+		if value := r.Header.Get(name); value != "" {
+			req.Header.Set(name, value)
+		}
+	}
 	if p.agent == "claude" {
-		req.Header.Set("X-Api-Key", p.key)
+		if p.authMode == "subscription" {
+			req.Header.Set("Authorization", "Bearer "+p.key)
+		} else {
+			req.Header.Set("X-Api-Key", p.key)
+		}
 		req.Header.Set("Anthropic-Version", "2023-06-01")
-		if beta := r.Header.Get("Anthropic-Beta"); beta != "" {
+		beta := r.Header.Get("Anthropic-Beta")
+		if p.authMode == "subscription" && !strings.Contains(beta, "oauth-2025-04-20") {
+			if beta != "" {
+				beta += ","
+			}
+			beta += "oauth-2025-04-20"
+		}
+		if beta != "" {
 			req.Header.Set("Anthropic-Beta", beta)
 		}
 	} else {
 		req.Header.Set("Authorization", "Bearer "+p.key)
+		if p.authMode == "subscription" {
+			req.Header.Set("Originator", "codex_cli_rs")
+		}
 	}
 	client := *p.client
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

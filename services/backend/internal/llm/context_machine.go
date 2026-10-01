@@ -24,19 +24,20 @@ func (c *Client) contextMachine(ctx context.Context, route route, in Request) (R
 	}
 	deadline, _ := ctx.Deadline()
 	body := struct {
-		Version         int    `json:"version"`
-		Purpose         string `json:"purpose"`
-		Model           string `json:"model"`
-		Instructions    string `json:"instructions"`
-		Data            any    `json:"data"`
-		Scope           *Scope `json:"scope"`
-		ReadOnly        bool   `json:"read_only"`
-		Store           bool   `json:"store"`
-		Deadline        string `json:"deadline"`
-		MaxOutputTokens int    `json:"max_output_tokens"`
-		MaxModelCalls   int    `json:"max_model_calls"`
-		Stream          bool   `json:"stream"`
-	}{1, in.Purpose, route.Model, in.Instructions, in.Data, in.Scope, true, false, deadline.UTC().Format("2006-01-02T15:04:05.999999999Z"), in.MaxOutputTokens, in.MaxModelCalls, in.OnText != nil || in.OnProgress != nil}
+		Version                   int    `json:"version"`
+		Purpose                   string `json:"purpose"`
+		Model                     string `json:"model"`
+		Instructions              string `json:"instructions"`
+		Data                      any    `json:"data"`
+		Scope                     *Scope `json:"scope"`
+		ReadOnly                  bool   `json:"read_only"`
+		Store                     bool   `json:"store"`
+		Deadline                  string `json:"deadline"`
+		MaxOutputTokens           int    `json:"max_output_tokens"`
+		MaxModelCalls             int    `json:"max_model_calls"`
+		Stream                    bool   `json:"stream"`
+		AllowUncappedOutputTokens bool   `json:"allow_uncapped_output_tokens,omitempty"`
+	}{1, in.Purpose, route.Model, in.Instructions, in.Data, in.Scope, true, false, deadline.UTC().Format("2006-01-02T15:04:05.999999999Z"), in.MaxOutputTokens, in.MaxModelCalls, in.OnText != nil || in.OnProgress != nil, in.AllowUncappedOutputTokens}
 	res, err := c.post(ctx, route.URL, route.Token, body)
 	if err != nil {
 		return Response{}, err
