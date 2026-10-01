@@ -30,6 +30,7 @@
   /* Ink */
   --ink: #121316;
   --ink-2: #57565a;
+  /* Dots, dividers and icons only: 2.7:1 on white is too faint for text, which uses --ink-2. */
   --ink-3: #9e9e9f;
   --on-chip: #ffffff;
 

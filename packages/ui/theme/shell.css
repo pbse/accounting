@@ -1,5 +1,12 @@
 /* The Tray shell both apps share (the firm app and the staff console): layout, sidebar, page and the element
-   styles inside it. Every value comes from tokens.css; keep literal colours out of this file. */
+   styles inside it. Every value comes from tokens.css; keep literal colours out of this file. The shell depends on no
+   other stylesheet: the element rules below are everything its pages assume. */
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
@@ -10,7 +17,93 @@
   font-variation-settings: "opsz" 32;
   font-size: 14px;
   line-height: 1.43;
+  font-synthesis: none;
   -webkit-font-smoothing: antialiased;
+}
+/* Base elements, at the specificity of a bare element or class (the :where adds none), so every pattern overrides them. */
+:where(.app-shell) a,
+:where(.app-shell) button {
+  touch-action: manipulation;
+}
+:where(.app-shell) button,
+:where(.app-shell) .button {
+  display: inline-block;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+:where(.app-shell) .primary {
+  margin-top: 0;
+}
+:where(.app-shell) button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+:where(.app-shell) .skip {
+  position: absolute;
+  top: -100px;
+  left: var(--space-16);
+  z-index: 2;
+  padding: var(--space-16);
+  background: var(--surface);
+}
+:where(.app-shell) .skip:focus {
+  top: var(--space-16);
+}
+:where(.app-shell) section {
+  margin-bottom: 1.2rem;
+}
+:where(.app-shell) summary {
+  cursor: pointer;
+}
+:where(.app-shell) dl {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+:where(.app-shell) dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+:where(.app-shell) hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.5rem 0;
+}
+:where(.app-shell) table {
+  width: 100%;
+  border-collapse: collapse;
+}
+:where(.app-shell) caption {
+  text-align: left;
+  padding: var(--space-16) 0;
+}
+:where(.app-shell) th,
+:where(.app-shell) td {
+  text-align: right;
+  padding: 0.7rem 0.3rem;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+:where(.app-shell) th:first-child {
+  text-align: left;
+}
+:where(.app-shell) fieldset {
+  border: 0;
+  padding: 0;
+  margin: 1.5rem 0;
+  min-width: 0;
+}
+:where(.app-shell) legend {
+  padding: 0;
+}
+:where(.app-shell) pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+:where(.app-shell) .note {
+  padding: 0.8rem;
 }
 .app-shell h1 {
   font-family: inherit;
@@ -43,10 +136,6 @@
 .app-shell dt,
 .app-shell caption {
   color: var(--ink-2);
-}
-.app-shell .context,
-.app-shell hr {
-  border-color: var(--line);
 }
 .app-shell a {
   color: var(--ink);
@@ -144,10 +233,6 @@
   font-weight: 400;
   font-size: 11px;
 }
-.app-shell th,
-.app-shell td {
-  border-bottom-color: var(--line);
-}
 .app-shell .note {
   background: var(--tile);
   border: 0;
@@ -157,8 +242,9 @@
   font-size: 13px;
 }
 .app-shell .form-error {
+  padding: var(--space-16);
   border-radius: var(--radius-sm);
-  border-left-color: var(--red);
+  border-left: 3px solid var(--red);
   background: var(--negative-tint);
   color: var(--negative-text);
 }
@@ -431,18 +517,28 @@
 .stack > * + * {
   margin-top: var(--space-16);
 }
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+}
+/* On a phone the sidebar is one strip that scrolls sideways above the page, and a wide table scrolls inside its card
+   instead of widening the page. */
 @media (max-width: 860px) {
   .app-shell {
     grid-template-columns: 1fr;
+    align-content: start;
+  }
+  .app-shell :has(> table) {
+    overflow-x: auto;
   }
   .sidebar {
     position: static;
     height: auto;
     flex-direction: row;
-    flex-wrap: wrap;
     align-items: center;
     gap: 6px;
     padding: 8px;
+    overflow-x: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
@@ -457,23 +553,24 @@
   .sidebar > form {
     display: none;
   }
+  .sidebar nav,
   .nav-group {
+    flex: none;
     flex-direction: row;
-    flex-wrap: wrap;
     padding: 0;
+  }
+  .app-shell .nav-item {
+    white-space: nowrap;
   }
   .nav-group + .nav-group {
     border: 0;
   }
   .sidebar-footer {
+    flex: none;
     margin: 0;
     padding: 0;
     border: 0;
   }
-}
-.sidebar nav {
-  display: flex;
-  flex-direction: column;
 }
 .app-shell section.bare {
   background: none;

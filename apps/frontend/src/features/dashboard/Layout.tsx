@@ -5,6 +5,7 @@ import { Assistant, useSignedIn } from "./Assistant";
 import { openAssistant } from "./assistantStore";
 import { AttentionBadge } from "../closes/Attention";
 import { Icon, type IconName } from "@close/ui/components/Icon";
+import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
 
 const groups: { label: string; items: { to: string; label: string; icon: IconName; end?: boolean }[] }[] = [
   {
@@ -47,6 +48,7 @@ export default function WorkspaceLayout() {
   const search = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const signedIn = useSignedIn();
+  useShellThemeColor();
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;

@@ -26,7 +26,7 @@
 }
 .segmented .count {
   margin-left: 6px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   font-variant-numeric: tabular-nums;
 }
 .segmented .count.alert::after {

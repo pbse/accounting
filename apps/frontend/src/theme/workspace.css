@@ -1,5 +1,61 @@
 /* The firm app's own patterns on top of the shared shell (packages/ui/theme/shell.css): preparation
    forms, the evidence pane, Work's rows, Attention, the client request page, and the agent panel and palette. */
+
+/* Layout of the preparation and review pages, at class specificity (the :where adds none). */
+:where(.app-shell) .context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.3rem;
+  margin-bottom: var(--space-16);
+  padding: var(--space-16) 0;
+  border-top: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+:where(.app-shell) .download {
+  display: inline-block;
+  margin-top: var(--space-16);
+  font-size: 0.85rem;
+}
+:where(.app-shell) .review-grid,
+:where(.app-shell) .form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.2rem;
+}
+:where(.app-shell) .form-grid {
+  gap: var(--space-16) var(--space-24);
+  margin-top: var(--space-16);
+}
+@media (max-width: 850px) {
+  :where(.app-shell) .review-grid,
+  :where(.app-shell) .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+:where(.app-shell) .form-grid small {
+  display: block;
+  font-weight: 400;
+}
+:where(.app-shell) .checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  margin: var(--space-16) 0;
+}
+:where(.app-shell) .checkbox-label input {
+  flex-shrink: 0;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin-top: 0.3rem;
+}
+:where(.app-shell) .prepared-result {
+  margin-top: 2rem;
+}
+:where(.app-shell) .export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-16);
+}
 .app-shell .checkbox-label {
   font-size: 13px;
   font-weight: 400;
@@ -11,6 +67,7 @@
   font-weight: 500;
 }
 .app-shell .preparation-inputs {
+  background: var(--surface);
   border: 0;
   border-radius: var(--radius-md);
   padding: var(--space-16);
@@ -83,7 +140,7 @@
 }
 .source-line > span:first-child,
 .source-line > .line-number {
-  color: var(--ink-3);
+  color: var(--ink-2);
   text-align: right;
   padding-right: 0.8rem;
   user-select: none;
