@@ -8,7 +8,9 @@ import type { LoanWorkpaper } from "../../../../../packages/contracts/loan";
 import type { OwnerWorkpaper } from "../../../../../packages/contracts/owner";
 import { AccrualResult } from "../accruals/Prepare";
 import { EffortTracker } from "./Effort";
-import { Icon } from "../dashboard/Icon";
+import { Icon } from "../../ui/Icon";
+import { PageHeader } from "../../ui/PageHeader";
+import { Segmented } from "../../ui/Segmented";
 import { ReconciliationResult } from "../reconciliation/Prepare";
 import { SettlementResult } from "../settlements/Prepare";
 import { LoanResult } from "../loans/Prepare";
@@ -150,13 +152,12 @@ function EvidencePane({ closeId, sources, onPickLine }: { closeId: string; sourc
     <section className="evidence-pane" aria-label="Evidence as received">
       <header>
         <h2>Evidence · as received</h2>
-        <div className="segmented" role="group" aria-label="Linked sources">
-          {sources.map((item, index) => (
-            <button type="button" key={`${item.id}-${item.role}`} aria-pressed={index === active} onClick={() => setActive(index)}>
-              {roleLabels[item.role] ?? item.role.replaceAll("_", " ")}
-            </button>
-          ))}
-        </div>
+        <Segmented
+          label="Linked sources"
+          items={sources.map((item, index) => ({ key: String(index), label: roleLabels[item.role] ?? item.role.replaceAll("_", " ") }))}
+          value={String(active)}
+          onChange={(key) => setActive(Number(key))}
+        />
       </header>
       {original && <iframe title={`${source.name}, page ${citedPage(source.location)}`} src={`${original}#page=${citedPage(source.location)}`} style={{ width: "100%", height: "32rem", border: 0 }} />}
       {error ? (
@@ -355,39 +356,36 @@ export default function WorkpaperView() {
       <Link className="back-link" to={`/dashboard/closes/${close.id}?tab=workpapers`}>
         <Icon name="back" size={15} /> {close.entity} · {close.period}
       </Link>
-      <div className="page-title">
-        <div>
-          <span className="kpi-icon" aria-hidden="true">
-            <Icon name="file" />
-          </span>
-          <span>
-            <h1>
-              {paperLabel(saved)} · draft #{saved.id}
-            </h1>
-            <p>
-              <ReviewPill state={saved.review_state} /> Prepared {new Date(saved.created_at).toLocaleString()}
-              {saved.paper.revises ? ` · recalculated from draft #${saved.paper.revises}` : ""}
-            </p>
-          </span>
-        </div>
-        <div className="title-actions">
-          {previous && (
-            <Link className="button" to={`/dashboard/closes/${close.id}/workpapers/${previous.id}`}>
-              Previous in queue
-            </Link>
-          )}
-          {next && (
-            <Link className="button" to={`/dashboard/closes/${close.id}/workpapers/${next.id}`}>
-              Next to review{position === -1 ? "" : ` · ${queue.length - position - 1} left`}
-            </Link>
-          )}
-          {!(saved.kind === "prepaid" && saved.paper.carry_forward) && (
-            <Link className="button" to={`/dashboard/${paperPaths[saved.kind]}/new?close=${close.id}&revise=${saved.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}${saved.kind === "prepaid" && saved.paper.input.schedule ? `&schedule=${saved.paper.input.schedule}` : ""}`}>
-              Revise and recalculate
-            </Link>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        icon="file"
+        title={
+          <>
+            {paperLabel(saved)} · draft #{saved.id}
+          </>
+        }
+        actions={
+          <div className="title-actions">
+            {previous && (
+              <Link className="button" to={`/dashboard/closes/${close.id}/workpapers/${previous.id}`}>
+                Previous in queue
+              </Link>
+            )}
+            {next && (
+              <Link className="button" to={`/dashboard/closes/${close.id}/workpapers/${next.id}`}>
+                Next to review{position === -1 ? "" : ` · ${queue.length - position - 1} left`}
+              </Link>
+            )}
+            {!(saved.kind === "prepaid" && saved.paper.carry_forward) && (
+              <Link className="button" to={`/dashboard/${paperPaths[saved.kind]}/new?close=${close.id}&revise=${saved.id}&entity=${encodeURIComponent(close.entity)}&period=${close.period}${saved.kind === "prepaid" && saved.paper.input.schedule ? `&schedule=${saved.paper.input.schedule}` : ""}`}>
+                Revise and recalculate
+              </Link>
+            )}
+          </div>
+        }
+      >
+        <ReviewPill state={saved.review_state} /> Prepared {new Date(saved.created_at).toLocaleString()}
+        {saved.paper.revises ? ` · recalculated from draft #${saved.paper.revises}` : ""}
+      </PageHeader>
       {more && <p className="note">Review navigation covers the latest 100 drafts in this close.</p>}
       <div className="canvas">
         <EvidencePane key={saved.id} closeId={close.id} sources={saved.paper.sources ?? []} onPickLine={(line) => setPicked({ ...line, paper: saved.id })} />

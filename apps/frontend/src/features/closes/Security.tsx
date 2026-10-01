@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { Icon } from "../dashboard/Icon";
+import { PageHeader } from "../../ui/PageHeader";
 import { AgentAccess } from "./AgentAccess";
 import { ClientAccess } from "./ClientAccess";
 import { FirmOperations } from "./Enterprise";
@@ -102,17 +102,9 @@ export default function SecurityCenter() {
   }, []);
   return (
     <>
-      <div className="page-title">
-        <div>
-          <span className="kpi-icon" aria-hidden="true">
-            <Icon name="shield" />
-          </span>
-          <span>
-            <h1>Security center</h1>
-            <p>People, client assignments, agents, connected services, posting authority, what outside services receive, and recent changes. Firm administrators only.</p>
-          </span>
-        </div>
-      </div>
+      <PageHeader icon="shield" title="Security center">
+        People, client assignments, agents, connected services, posting authority, what outside services receive, and recent changes. Firm administrators only.
+      </PageHeader>
       {error && <p role="alert">{error}</p>}
       {security && (
         <div className="stack">

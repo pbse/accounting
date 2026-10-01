@@ -1,0 +1,18 @@
+.section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-16);
+  margin: var(--space-24) 0 var(--space-12);
+}
+.section-header h1,
+.section-header h2 {
+  margin: 0;
+}
+.section-header small {
+  color: var(--ink-2);
+  font-size: 11px;
+}
+section > .section-header:first-child {
+  margin-top: 0;
+}

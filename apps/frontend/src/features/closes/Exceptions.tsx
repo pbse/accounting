@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 import { LedgerSelection } from "./Coverage";
+import { RowList } from "../../ui/RowList";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Found = {
   type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding" | "past_due_receivable" | "past_due_payable" | "unapplied_payment" | "open_customer_credit" | "open_supplier_credit" | "unscheduled_prepaid" | "unscheduled_fixed_asset" | "unscheduled_deferred_revenue";
@@ -75,8 +77,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
   }
   return (
     <section aria-label="Exceptions the agent found">
-      <div className="section-title">
-        <h2>Exceptions the agent found</h2>
+      <SectionHeader title="Exceptions the agent found">
         {questions.length > 0 && (
           <span>
             <button type="button" onClick={() => void copy(questions)}>
@@ -85,7 +86,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
             <Link to="?tab=requests#client-request">Draft a client request</Link>
           </span>
         )}
-      </div>
+      </SectionHeader>
       {copied && <p role="status">{copied}</p>}
       {!scan.capture ? (
         <p className="empty">
@@ -121,13 +122,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
           {scan.items.length === 0 ? (
             <p className="empty">No possible duplicates, holding-account postings, payments without a payee, inconsistent coding or overdue items in this capture.</p>
           ) : (
-            <div className="rows">
-              <div className="rows-head">
-                <span>What the agent found</span>
-                <span>Question for the client</span>
-                <span>{ledger}</span>
-                <span />
-              </div>
+            <RowList columns={["What the agent found", "Question for the client", ledger, ""]}>
               {scan.items.map((item) => (
                 <div className="row" key={item.type + item.provider_ids.join() + (item.account ?? "")}>
                   <div>
@@ -147,7 +142,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
                   </span>
                 </div>
               ))}
-            </div>
+            </RowList>
           )}
         </>
       )}
@@ -172,13 +167,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
           ) : balances.items.length === 0 ? (
             <p className="empty">Every classified account in this Trial Balance sits on its normal side, and no holding or clearing account carries a balance.</p>
           ) : (
-            <div className="rows">
-              <div className="rows-head">
-                <span>What the agent found</span>
-                <span>Question for the client</span>
-                <span>Balance</span>
-                <span />
-              </div>
+            <RowList columns={["What the agent found", "Question for the client", "Balance", ""]}>
               {balances.items.map((item) => (
                 <div className="row" key={item.account_id}>
                   <div>
@@ -199,7 +188,7 @@ export function Exceptions({ closeId }: { closeId: string }) {
                   <span />
                 </div>
               ))}
-            </div>
+            </RowList>
           )}
         </>
       )}

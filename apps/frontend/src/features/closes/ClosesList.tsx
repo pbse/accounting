@@ -1,7 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { authKitClientId } from "../auth/Auth";
-import { Avatar, Icon } from "../dashboard/Icon";
+import { Icon } from "../../ui/Icon";
+import { PageHeader } from "../../ui/PageHeader";
+import { EntityCell, RowList } from "../../ui/RowList";
+import { SectionHeader } from "../../ui/SectionHeader";
 import { FirmEnrollment } from "./Enterprise";
 import { PlanChips } from "./Planning";
 import { workspaceRequest } from "./workspace";
@@ -53,17 +56,9 @@ export default function ClosesList() {
   }
   return (
     <>
-      <div className="page-title">
-        <div>
-          <span className="kpi-icon" aria-hidden="true">
-            <Icon name="clients" />
-          </span>
-          <span>
-            <h1>Client closes</h1>
-            <p>One place per client and month for evidence, prepared work, requests and sign-off.</p>
-          </span>
-        </div>
-      </div>
+      <PageHeader icon="clients" title="Client closes">
+        One place per client and month for evidence, prepared work, requests and sign-off.
+      </PageHeader>
       {error && <p role="alert">{error}</p>}
       {isEnrollmentError(error) && <FirmEnrollment onEnrolled={() => setRefresh((n) => n + 1)} />}
       <section>
@@ -84,37 +79,27 @@ export default function ClosesList() {
           </fieldset>
         </form>
       </section>
-      <div className="section-title">
-        <h2>{query ? `Closes matching “${query}”` : "Recent closes"}</h2>
+      <SectionHeader title={query ? `Closes matching “${query}”` : "Recent closes"}>
         {query && (
           <button type="button" onClick={() => setParams({})}>
             Clear search
           </button>
         )}
-      </div>
-      <div className="rows">
-        <div className="rows-head">
-          <span>Client</span>
-          <span>Close month</span>
-          <span>Plan</span>
-          <span />
-        </div>
+      </SectionHeader>
+      <RowList columns={["Client", "Close month", "Plan", ""]}>
         {loading && <p role="status" className="empty">Loading closes…</p>}
         {!loading && items.length === 0 && <p className="empty">{query ? "No closes match this search." : "No closes yet. Create your first client close above."}</p>}
         {items.map((item) => (
           <Link className="row" key={item.id} to={`/dashboard/closes/${item.id}`}>
-            <span className="row-main">
-              <Avatar label={item.entity} />
-              <strong>{item.entity}</strong>
-            </span>
+            <EntityCell name={item.entity} title={item.entity} />
             <span className="chip">{item.period}</span>
             <span>
               <PlanChips plan={item} />
             </span>
-            <Icon name="arrow" size={16} />
+            <Icon name="arrow" />
           </Link>
         ))}
-      </div>
+      </RowList>
       {more && <p className="note">Showing the 100 most recent matches. Search by client or YYYY-MM to narrow the list.</p>}
     </>
   );

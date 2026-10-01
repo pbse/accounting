@@ -3,7 +3,7 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router";
 import { SidebarAccount } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
 import { AttentionBadge } from "../closes/Attention";
-import { Icon, type IconName } from "./Icon";
+import { Icon, type IconName } from "../../ui/Icon";
 
 const groups: { label: string; items: { to: string; label: string; icon: IconName; end?: boolean }[] }[] = [
   {
@@ -78,7 +78,7 @@ export default function WorkspaceLayout() {
           }}
         >
           <label className="sidebar-search">
-            <Icon name="search" size={16} />
+            <Icon name="search" />
             <input ref={search} name="q" aria-label="Search clients" placeholder="Search clients" maxLength={200} autoComplete="off" />
             <kbd aria-hidden="true">/</kbd>
           </label>

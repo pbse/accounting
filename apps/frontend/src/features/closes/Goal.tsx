@@ -1,8 +1,10 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { askAssistant } from "../dashboard/assistantStore";
-import { Avatar, Icon } from "../dashboard/Icon";
+import { Icon } from "../../ui/Icon";
 import { workspaceRequest } from "./workspace";
+import { EntityCell, RowList } from "../../ui/RowList";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
 type Handoff = { id: string; job_id: string; account_id?: string; name: string; note: string; by: string; at: string; mine: boolean; handed: string };
@@ -577,11 +579,10 @@ export function DelegatedCloses({ refresh, client }: { refresh: number; client: 
   if (!list?.goals.length) return null;
   return (
     <section aria-label="Handed to the agent">
-      <div className="section-title">
-        <h2>Handed to the agent</h2>
+      <SectionHeader title="Handed to the agent">
         {list.more && <small>Showing {list.goals.length}. Filter by client or month to see the rest.</small>}
-      </div>
-      <div className="rows">
+      </SectionHeader>
+      <RowList>
         {list.goals.map((g) => {
           const [tone, state] = delegatedState(g);
           // Progress older than ten minutes says when the agent last looked, so it is not taken as current.
@@ -589,29 +590,28 @@ export function DelegatedCloses({ refresh, client }: { refresh: number; client: 
           const stale = asOf && Date.now() - asOf.getTime() > 600_000 ? asOf : undefined;
           return (
             <Link className="row" key={g.id} to={`/dashboard/closes/${g.close_id}`}>
-              <span className="row-main">
-                <Avatar label={g.entity} />
-                <span>
-                  <strong>
-                    {g.entity} · {monthName(g.period)}
-                  </strong>
-                  <small>
+              <EntityCell
+                name={g.entity}
+                title={`${g.entity} · ${monthName(g.period)}`}
+                detail={
+                  <>
                     To get it {finishes[g.finish]}
                     {g.due_on && ` by ${new Date(`${g.due_on}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}`} · handed over by {g.author}
                     {g.handed > 0 && ` · ${g.handed} with teammates`}
-                  </small>
-                  {delegatedFacts(g.summary) && <small>{delegatedFacts(g.summary)}</small>}
-                </span>
-              </span>
+                  </>
+                }
+              >
+                {delegatedFacts(g.summary) && <small>{delegatedFacts(g.summary)}</small>}
+              </EntityCell>
               <span className={tone}>
                 {state}
                 {stale && ` · as of ${stale.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`}
               </span>
-              <Icon name="arrow" size={16} />
+              <Icon name="arrow" />
             </Link>
           );
         })}
-      </div>
+      </RowList>
     </section>
   );
 }

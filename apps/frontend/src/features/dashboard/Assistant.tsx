@@ -8,7 +8,7 @@ import { RequestCard } from "./RequestCard";
 import { askAssistant, nextReview, takePending, usePending } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
-import { Icon } from "./Icon";
+import { Icon } from "../../ui/Icon";
 
 type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null };
 

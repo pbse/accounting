@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Morning = {
   overnight: { month_end_snapshots: number; drafts_prepared: number; standing_approvals: number };
@@ -36,9 +37,7 @@ export function MorningBrief({ refresh }: { refresh: number }) {
   const done = brief.overnight;
   return (
     <section aria-label="Morning brief">
-      <div className="section-title">
-        <h2>Good morning</h2>
-      </div>
+      <SectionHeader title="Good morning" />
       <p>
         In the past 24 hours the agent captured {count(done.month_end_snapshots, "month-end snapshot", "month-end snapshots")}, prepared{" "}
         {count(done.drafts_prepared, "draft", "drafts")} and approved {count(done.standing_approvals, "later-month draft", "later-month drafts")} under standing
