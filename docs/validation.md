@@ -2994,3 +2994,13 @@ Browser check, with the API and both apps running locally on a fresh PostgreSQL,
 Review: the first Codex pass (gpt-6-sol, high) found that a stat's date dropped the year, so an old moment could read as recent; the year now shows unless it is this year. The second pass found nothing.
 
 Verified: `npm run check` (both apps), `npm test` (22 pass) and `npm run build` (both apps) after a clean `npm ci`.
+
+## A close's overview leads with the agent (2026-10-01)
+
+A close that is not handed over opens its Overview with the shared `AgentComposer` instead of a sentence and a "Hand it over" button: a question typed there, the hand-over or one of the agent panel's close starter questions opens the panel on that close and asks it there. A hand-over still shows its proposal card and waits for the person to confirm; once handed over, the same place shows the agent's progress as before. The starter questions move to `assistantStore` so the panel and the page offer the same ones.
+
+Browser check, with the API and the firm app running locally on a fresh PostgreSQL and synthetic clients: the composer leads the close's Overview; "What blocks sign-off?" opens the panel and is answered from the close's saved status; a typed question is asked and the input clears; "Get this close ready for review" shows the hand-over proposal card, unconfirmed; no page errors.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check` after a clean `npm ci`.
