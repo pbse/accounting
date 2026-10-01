@@ -21,6 +21,7 @@ Use the matching GitHub **environment** (`production` or `staging`). Do not put 
 
 | GitHub setting | Kind | Purpose |
 | --- | --- | --- |
+| `CONTEXT_MACHINE_ENABLED` | Variable | `true` (default) requires and deploys research; explicit `false` deploys the app without research or its service bindings. |
 | `CONTEXT_MACHINE_TOKEN` | Secret | At least 32 random characters, shared only by the API, queue and context-machine services. |
 | `CONTEXT_MACHINE_DATABASE_URL` | Secret | Dedicated non-owner, read-only PostgreSQL login with TLS, on the same database as that environment. Never reuse the application or migration login. |
 | `OPENAI_API_KEY` | Secret | API credential for Codex and existing OpenAI workflows. Required for direct API workflows; optional for subscription-only research. |
@@ -48,11 +49,13 @@ CODEX_MODEL=gpt-5.5
 CODEX_REASONING_EFFORT=medium
 CODEX_AUTH_MODE=auto
 OPENAI_MODEL=gpt-5.5
-OPENAI_REASONING_EFFORT=medium
-LLM_REASONING_EFFORTS={"investigation":"low"}
+OPENAI_REASONING_EFFORT=low
+LLM_REASONING_EFFORTS={"work_command":"none","investigation":"none","written_answer":"none"}
 ```
 
-Use model IDs available to your account; omit `OPENAI_MODEL` when no OpenAI API key is installed. Setting `CODEX_AUTH_MODE=subscription` explicitly chooses the account token even when an API key exists. Direct API workflows still need an API key: their structured output, tool and consent contracts are not interchangeable with research runs.
+These small-budget overrides use GPT-5.5’s supported `none` effort; revalidate them if you choose a different model. Claude can be pinned separately with `CLAUDE_MODEL=claude-opus-5-5` and `CLAUDE_REASONING_EFFORT=medium`.
+
+Use model IDs available to your account. Model/effort variables can be staged before credentials: the deployment preparation step clears direct-API route metadata from the step environment when `OPENAI_API_KEY` is absent, while preserving the GitHub variables. Installing the key activates that saved policy on the next deployment. Setting `CODEX_AUTH_MODE=subscription` explicitly chooses the account token even when an API key exists. Direct API workflows still need an API key: their structured output, tool and consent contracts are not interchangeable with research runs.
 
 Upload credentials through GitHub's production environment secrets UI or an interactive `gh secret set NAME --env production` prompt. Never put token values into chat, shell command arguments or repository files. [Codex access tokens](https://learn.chatgpt.com/docs/enterprise/access-tokens) are intended for trusted automation; [Claude Code tokens](https://code.claude.com/docs/en/env-vars#claude_code_oauth_token) can be generated using `claude setup-token`. This service accepts those static token secrets; it does not import a desktop keychain, refresh `auth.json`, accept browser cookies, or perform interactive login. Rotate expired/revoked tokens in GitHub and redeploy. Codex token availability depends on workspace permissions.
 
@@ -79,9 +82,9 @@ Local development and tests use local PostgreSQL only. Never create Neon branche
 
 ## CI and rollout
 
-1. The PR's CI runs Go/TypeScript checks, local PostgreSQL isolation tests and Worker dry runs, including production bindings.
-2. CI builds the actual context-machine image. A test binary inside it starts a fake provider and MCP server, runs **both installed CLIs**, and requires a read-tool invocation plus a final answer for both API-key and subscription modes at every accepted CLI effort level through the enforcing proxy. This catches incompatible CLI flags, tool names and output formats without provider credentials.
-3. Merge after CI is green and environment settings exist. Deploy production verifies the merged PR's CI, validates configuration, applies normal migrations, and deploys the private context machine **before** API and queue Workers. Staging uses the same contract through its manual workflow.
+1. The PR's CI runs Go/TypeScript checks, local PostgreSQL isolation tests and Worker dry runs, including production bindings. Go compilation is cached between pushes to the same PR, while `-count=1` forces tests to execute against the freshly migrated database. New pushes cancel superseded CI runs.
+2. When backend sources, database migrations, the deployment script, the runtime image/Worker, the package lock, Docker context or CI workflow change, CI also runs the gateway/runtime race checks and builds the actual context-machine image. Reusable CI calls always run these checks. Unrelated frontend-only changes skip this additional stage, while retaining the full Go suite and gateway boundary test. A test binary inside it starts a fake provider and MCP server, runs **both installed CLIs**, and requires a read-tool invocation plus a final answer for both API-key and subscription modes at every accepted CLI effort level through the enforcing proxy. This catches incompatible CLI flags, tool names and output formats without provider credentials.
+3. Merge after CI is green and environment settings exist. Both deployment jobs validate configuration before `npm ci`, migrations or builds. Context-machine preflight reports all missing required and selected-agent settings together without exposing values. Deploy production verifies the merged PR's CI, validates configuration, applies normal migrations, and deploys the private context machine **before** API and queue Workers. Staging uses the same contract through its manual workflow.
 4. Each service receives only its required secrets. The context machine receives no application write credentials, posting keys or integration secrets. Temporary Wrangler secret files are mode 0600 and deleted after deployment.
 5. The final `${PRODUCTION_URL}/readyz` check traverses the **Go API → outbound handler → service binding → container** path. It verifies both binaries and read-only database privileges. Deployment retries span 100 seconds of delays, exceeding the 60-second readiness cache so a transient cold-start failure can recover. Persistent failure fails deployment; it does not silently disable research.
 
@@ -122,3 +125,15 @@ Before calling the AI layer ready:
 - Run an authorized context-machine research call through the main service's private binding for every credential mode that will be used. Confirm the response model, effort, auth mode, call count and evidence references. Confirm revoked client/member access is denied. Codex subscription calls require the explicit uncapped-output acknowledgement described in the gateway contract.
 
 Fake-provider tests and `/readyz` do not prove live provider authentication, account entitlement, model capability or output quality. Keep those live acceptance checks as release prerequisites when credentials or model policy change.
+
+### Missing configuration is not repaired by retrying deployment
+
+A GitHub variable stores a non-secret setting; a GitHub secret stores a credential. `CONTEXT_MACHINE_DATABASE_URL` is a **secret containing a real, provisioned read-only login**, not a service URL and not a copy of `DATABASE_URL`. `CONTEXT_MACHINE_PROFILES` must name existing authorized platform members; a provider subscription token cannot replace that identity.
+
+The minimum provider secret for all existing accounting features plus Codex research is `OPENAI_API_KEY`. `CODEX_ACCESS_TOKEN` can additionally enable Codex subscription mode, and `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` enables Claude. Install these with GitHub's environment secrets UI or `gh secret set NAME --env production`, which prompts securely. API credentials cannot be generated by this repository, and GitHub does not return stored secret values.
+
+With research enabled, do not rerun deployment until the required secrets and profile have been provisioned. Validation remains strict for enabled research.
+
+To deploy the main app while research is being provisioned, explicitly set `CONTEXT_MACHINE_ENABLED=false` in the GitHub environment. Deployment then skips the context-machine build/deploy, removes its bindings from the disposable API/queue Wrangler configuration, and clears the caller token/model from the deployed secrets. Existing GitHub credentials and variables are retained. No context-machine Worker needs to exist, and readiness does not depend on research. Direct API features are independently available only when their API key is installed.
+
+To enable research later, install the credentials, read-only login and access profile; set `CONTEXT_MACHINE_ENABLED=true`; then deploy from a fresh checkout. The committed configs restore the bindings and deployment creates the context machine before its callers. This switch does not delete an existing private context-machine service.

@@ -51,6 +51,7 @@ jobs:
       PUBLIC_APP_URL: ${{ vars.STAGING_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      CONTEXT_MACHINE_ENABLED: ${{ vars.CONTEXT_MACHINE_ENABLED || 'true' }}
       CONTEXT_MACHINE_MODEL: ${{ vars.CONTEXT_MACHINE_MODEL }}
       CONTEXT_MACHINE_PROFILES: ${{ vars.CONTEXT_MACHINE_PROFILES }}
       CODEX_MODEL: ${{ vars.CODEX_MODEL }}
@@ -88,7 +89,8 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
+      - name: Prepare optional AI routes and service bindings
+        run: node scripts/deploy-context-machine.mjs --prepare-callers
       - name: Validate context-machine configuration
         run: node scripts/deploy-context-machine.mjs --check
       - name: Check staging configuration without exposing secrets
@@ -132,6 +134,7 @@ jobs:
           const migration = new URL(process.env.MIGRATION_DATABASE_URL);
           if (!['require','verify-ca','verify-full'].includes(migration.searchParams.get('sslmode')) || migration.hostname.toLowerCase().includes('-pooler')) throw new Error('MIGRATION_DATABASE_URL must be the owner on the direct endpoint and require TLS');
           JS
+      - run: npm ci
       - name: Apply pending migrations as the database owner
         run: |
           export MIGRATION_GRANT_TO="$(node -p 'decodeURIComponent(new URL(process.env.DATABASE_URL).username)')"

@@ -29,6 +29,14 @@ jobs:
         with:
           # The commit and its parent: a pull request's merge commit, to see what the pull request changes.
           fetch-depth: 2
+      - name: Select context-machine integration checks
+        id: context
+        # Keep the full Go suite on every PR. Only skip the CLI/image check when
+        # the changed sources cannot affect the hosted runtime or its dependencies.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- services/backend services/context-machine workers/context-machine infra/postgres scripts/deploy-context-machine.mjs scripts/deploy-context-machine.test.mjs .dockerignore package-lock.json .github/workflows/ci.yml; then
+            echo "check=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Start PostgreSQL and install PDF/OCR tools in the background
         # The Go tests mostly wait on commits, so this throwaway database does not sync them to disk.
         run: |
@@ -37,8 +45,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: services/backend/go.mod
-          # A build cache would be saved per pull request and never shared: runs on main no longer compile Go.
-          cache: false
+          # PR-scoped caches still reuse compilation on later pushes to the same PR.
+          cache: true
+          cache-dependency-path: services/backend/go.sum
       - name: Migrations, Go tests and vet in the background
         # Packages share PostgreSQL; global worker claims can consume another package's fixtures.
         # The migration runner is applied twice: the second run must apply nothing. go test skips its own vet pass,
@@ -49,7 +58,7 @@ jobs:
            DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh &&
            again=$(DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh) && test -z "$again" &&
            timeout 300 sh -c 'until [ -f /tmp/apt.status ]; do sleep 1; done' && test "$(cat /tmp/apt.status)" = 0 &&
-           cd services/backend && go test -p 1 -vet=off ./... && go vet ./...
+           cd services/backend && go test -count=1 -p 1 -vet=off ./... && go vet ./...
            echo $? > /tmp/go.status) > /tmp/go.log 2>&1 &
       - uses: actions/setup-node@v4
         with:
@@ -68,6 +77,9 @@ jobs:
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/scanner/wrangler.jsonc
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/context-machine/wrangler.jsonc
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/context-machine/wrangler.jsonc --env production
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc --env production
+          npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc --env production
+          CONTEXT_MACHINE_ENABLED=false node scripts/deploy-context-machine.mjs --prepare-callers
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/edge/wrangler.jsonc --env production
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc --env production
         env:
@@ -97,8 +109,10 @@ jobs:
             echo "No Dockerfile or Go module change."
           fi
       - name: Gateway and runtime race checks with coverage
-        run: cd services/backend && CGO_ENABLED=1 go test -race -cover ./internal/llm/...
+        if: steps.context.outputs.check == 'true'
+        run: cd services/backend && CGO_ENABLED=1 go test -count=1 -race -cover ./internal/llm/...
       - name: Context-machine image and real CLI protocol smoke tests
+        if: steps.context.outputs.check == 'true'
         run: |
           docker build -t close-context-machine -f services/context-machine/Dockerfile .
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go -C services/backend test -c -o /tmp/machine.test ./internal/llm/machine
