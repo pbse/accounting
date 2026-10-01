@@ -76,39 +76,9 @@ header {
   margin-left: 0.5rem;
   color: #576b60;
 }
-.mode,
 .source-label {
   font-size: 0.8rem;
   color: #53665a;
-}
-.workspace {
-  display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
-  min-height: 90vh;
-}
-.workspace nav {
-  padding: 2rem 1rem;
-  border-right: 1px solid #d9e1d8;
-}
-.workspace nav a {
-  text-decoration: none;
-  padding: 0.65rem 1rem;
-  border-radius: 7px;
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  margin-bottom: 0.5rem;
-}
-.workspace nav a[aria-current] {
-  background: #e0eae1;
-  font-weight: 650;
-}
-.workspace nav p {
-  font-size: 0.8rem;
-  color: #627367;
-  margin: 4rem 1rem;
 }
 main {
   max-width: 1280px;
@@ -137,10 +107,6 @@ h3 {
   font-weight: 650;
   color: #64785e;
 }
-.intro {
-  color: #53665a;
-  margin-bottom: 2rem;
-}
 .context {
   display: flex;
   flex-wrap: wrap;
@@ -150,7 +116,6 @@ h3 {
   border-top: 1px solid #d9e1d8;
   margin-bottom: 1rem;
 }
-.cards,
 .review-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -242,35 +207,15 @@ footer {
   margin-top: 2rem;
 }
 @media (max-width: 850px) {
-  .workspace {
-    grid-template-columns: 1fr;
-  }
-  .workspace nav {
-    display: flex;
-    padding: 0.6rem;
-    border-right: 0;
-    border-bottom: 1px solid #d9e1d8;
-    gap: 0.5rem;
-  }
-  .workspace nav a {
-    width: auto;
-    margin: 0;
-  }
-  .workspace nav p,
   .brand span {
     display: none;
   }
-  .cards,
   .review-grid {
     grid-template-columns: 1fr;
   }
   header {
     padding: 1rem;
     align-items: flex-start;
-  }
-  .mode {
-    max-width: 160px;
-    text-align: right;
   }
   main {
     padding: 1.5rem 1rem;
@@ -517,17 +462,6 @@ footer {
     flex-basis: 70%;
   }
 }
-
-.start-preparation {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1.5rem;
-  background: #e8eee3;
-}
-.start-preparation .button {
-  flex-shrink: 0;
-}
 .preparation-inputs {
   background: white;
   border: 1px solid #dce3d9;
@@ -618,12 +552,6 @@ input:focus-visible {
 @media (max-width: 850px) {
   .form-grid {
     grid-template-columns: 1fr;
-  }
-  .start-preparation {
-    display: block;
-  }
-  .workspace nav {
-    flex-wrap: wrap;
   }
 }
 

@@ -45,6 +45,7 @@ To add a component, put `Name.tsx` and `Name.css` in `ui/`, import the styleshee
 - **Light only.** There is no dark theme, by product decision.
 - **No inline styles.** A one-off need becomes a class: `.pre-line` keeps a message's line breaks, `.block` puts a line on its own, `.scroll-text` lets long source text scroll in its box (a `pre` already wraps), `.evidence-frame` sizes an embedded PDF. Anything used on more than one page becomes a component.
 - **Every page opens with `PageHeader`**, titled as the sidebar names the page. A form or panel placed straight on a page is a white card.
+- **No dead code.** The frontend's type-check fails on unused locals and parameters (`noUnusedLocals`, `noUnusedParameters`); when a class stops being used, delete its rule in the same change.
 
 ## The agent comes first
 
