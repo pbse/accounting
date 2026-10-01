@@ -2946,3 +2946,13 @@ Visual check: with the API and frontend running locally on a fresh PostgreSQL an
 Review: the first Codex pass (gpt-6-sol, high) found nothing.
 
 Verified: `npm run check`, `npm test` (15 pass) and `npm run build` after a clean `npm ci`.
+
+## The agent leads the workspace (2026-10-01)
+
+Work opens with "Ask the agent" (`AgentComposer`): a large input with one-click asks. "Show decisions", "Show blockers" and "Show everything waiting on clients" only filter Work; "Prepare my clients due Friday" shows the server's exact preview and runs nothing until confirmed. The longer guidance sits under "What you can ask". "Ask the agent" also sits in the sidebar under Essentials and opens the panel with the cursor in its input; the floating button says the same in the brand blue; an empty conversation offers starter questions the panel's fixed reads answer ("What needs me today?", or in a close "What blocks sign-off?"); the morning brief carries the agent's mark (`AgentMark`). `Suggestions` serves both the composer and the panel. The composer's old row styles, which nothing else used, are removed.
+
+Browser check, with the API and frontend running locally on a fresh PostgreSQL and four synthetic clients: "Show decisions" switched Work's view to Decisions; the sidebar's "Ask the agent" opened the panel with focus in its input; after clearing the conversation, "What needs me today?" was asked and answered ("3 closes need a person"); no console errors.
+
+Review: the first Codex pass (gpt-6-sol, high) found that the composer's input row overflowed narrow screens, and that a sidebar request outlived the panel, so remounting it after signing back in would reopen a panel the person had closed; the row now wraps and the panel only answers requests made while it is mounted. The second pass found nothing.
+
+Verified: `npm run check`, `npm test` (15 pass) and `npm run build` after a clean `npm ci`.
