@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
+import { HexMap } from "@close/ui/components/HexMap";
 import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { minutes } from "./Effort";
 import { workspaceRequest } from "./workspace";
@@ -125,8 +126,40 @@ function TrackRecord() {
     };
   }, []);
   if (!data) return error ? <p role="alert">{error}</p> : null;
+  // Firm-wide, how people treated the agent's work: each whole splits into two parts that never overlap.
+  const sum = (pick: (c: TrackRow) => number) => data.clients.reduce((total, c) => total + pick(c), 0);
+  const proposals = { confirmed: sum((c) => c.proposals_confirmed), kept: sum((c) => c.proposals_kept) };
+  const drafts = { judged: sum((c) => c.drafts_reviewed), approved: sum((c) => c.drafts_approved_unrevised) };
   return (
     <section aria-label="Agent track record by client">
+      {(proposals.confirmed > 0 || drafts.judged > 0) && (
+        <div className="track-split">
+          {proposals.confirmed > 0 && (
+            <section aria-label="Model proposals people confirmed">
+              <h3>Model proposals people confirmed</h3>
+              <HexMap
+                label="Model proposals people confirmed"
+                parts={[
+                  { label: "Kept as proposed", value: proposals.kept, tone: "blue" },
+                  { label: "Changed by a person", value: proposals.confirmed - proposals.kept, tone: "teal" },
+                ]}
+              />
+            </section>
+          )}
+          {drafts.judged > 0 && (
+            <section aria-label="Agent drafts people judged">
+              <h3>Agent drafts people judged</h3>
+              <HexMap
+                label="Agent drafts people judged"
+                parts={[
+                  { label: "Approved as prepared", value: drafts.approved, tone: "blue" },
+                  { label: "Revised or sent back", value: drafts.judged - drafts.approved, tone: "teal" },
+                ]}
+              />
+            </section>
+          )}
+        </div>
+      )}
       <SectionHeader title="Agent track record by client" />
       <p className="note">
         Closes from {data.window_from} on. Proposals are the model's readings of client documents that a person confirmed; kept means the person

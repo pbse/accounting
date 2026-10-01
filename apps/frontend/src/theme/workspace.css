@@ -98,6 +98,19 @@
   background: var(--hover);
   box-shadow: var(--shadow-tile-hover);
 }
+/* Measure: the firm-wide splits of the agent's work, side by side, stacking when there is no room. */
+.track-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: var(--space-16);
+  margin-bottom: var(--space-24);
+}
+.app-shell .track-split > section {
+  margin: 0;
+}
+.track-split h3 {
+  margin: 0 0 var(--space-12);
+}
 .canvas {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
