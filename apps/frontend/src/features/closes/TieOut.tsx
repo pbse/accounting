@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
-import { RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Status = "ties" | "ties_after_entries" | "within_materiality" | "differs" | "posting_unknown" | "unsupported";
 type Row = {

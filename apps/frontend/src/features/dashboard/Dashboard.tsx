@@ -4,7 +4,7 @@ import { Link } from "react-router";
 import { referenceWorkpaperUrl } from "../../lib/api";
 import type { ReferenceWorkpaper } from "../../../../../packages/contracts/reference";
 import { Review } from "../review/Review";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 export default function Dashboard({
   view,

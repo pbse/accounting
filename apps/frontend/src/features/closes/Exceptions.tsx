@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
 import { LedgerSelection } from "./Coverage";
-import { RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Found = {
   type: "possible_duplicate" | "uncategorized" | "no_payee" | "inconsistent_coding" | "past_due_receivable" | "past_due_payable" | "unapplied_payment" | "open_customer_credit" | "open_supplier_credit" | "unscheduled_prepaid" | "unscheduled_fixed_asset" | "unscheduled_deferred_revenue";

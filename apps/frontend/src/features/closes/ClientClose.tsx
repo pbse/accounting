@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
-import { Icon } from "../../ui/Icon";
-import { IconTile } from "../../ui/IconTile";
-import { PageHeader } from "../../ui/PageHeader";
-import { Segmented } from "../../ui/Segmented";
-import { StatGroup, StatTile } from "../../ui/StatTile";
+import { Icon } from "@close/ui/components/Icon";
+import { IconTile } from "@close/ui/components/IconTile";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { Segmented } from "@close/ui/components/Segmented";
+import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { BillCorrection } from "./BillCorrection";
 import { CreditApplications } from "./CreditApplications";
 import { Brief } from "./Brief";
@@ -37,7 +37,7 @@ import { PlanChips, PlanningControls } from "./Planning";
 import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
 import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
-import { EntityCell, RowList } from "../../ui/RowList";
+import { EntityCell, RowList } from "@close/ui/components/RowList";
 
 const tabs = [
   ["overview", "Overview"],

@@ -7,7 +7,7 @@ import { money, useCurrency, workspaceRequest } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { LoanFee, LoanInput, LoanIssuanceCosts, LoanPayment, LoanRateChange, LoanWorkpaper } from "../../../../../packages/contracts/loan";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 const dayCounts = { actual_360: "Actual/360", actual_365: "Actual/365 (fixed)", "30_360_bond": "30/360 bond basis (US, no February rule)", "30e_360": "30E/360 (Eurobond)" };
 

@@ -3,20 +3,20 @@ import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
-import { AgentComposer } from "../../ui/AgentComposer";
-import { Avatar } from "../../ui/Avatar";
-import { Icon } from "../../ui/Icon";
-import { PageHeader } from "../../ui/PageHeader";
-import { Segmented } from "../../ui/Segmented";
-import { StatGroup, StatTile } from "../../ui/StatTile";
+import { AgentComposer } from "@close/ui/components/AgentComposer";
+import { Avatar } from "@close/ui/components/Avatar";
+import { Icon } from "@close/ui/components/Icon";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { Segmented } from "@close/ui/components/Segmented";
+import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
 import { MorningBrief } from "./Morning";
 import { DelegatedCloses } from "./Goal";
 import { Setup } from "./Setup";
-import { EntityCell, RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { EntityCell, RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Fact = {
  optional?: boolean;

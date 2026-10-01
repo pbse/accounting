@@ -11,7 +11,7 @@ import type {
   SettlementPayout,
   SettlementWorkpaper,
 } from "../../../../../packages/contracts/settlement";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 type Chosen = { name: string; text: string; id?: string };
 

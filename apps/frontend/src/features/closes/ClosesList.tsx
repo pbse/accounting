@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { authKitClientId } from "../auth/Auth";
-import { Icon } from "../../ui/Icon";
-import { PageHeader } from "../../ui/PageHeader";
-import { EntityCell, RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { Icon } from "@close/ui/components/Icon";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { EntityCell, RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { FirmEnrollment } from "./Enterprise";
 import { PlanChips } from "./Planning";
 import { workspaceRequest } from "./workspace";

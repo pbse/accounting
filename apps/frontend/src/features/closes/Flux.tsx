@@ -2,8 +2,8 @@ import { type FormEvent, useEffect, useState } from "react";
 import { clientAsk, type CoverageStatus } from "./ask";
 import { PasscodeNotice, SendRequestEmail } from "./Email";
 import { workspaceRequest } from "./workspace";
-import { RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Payee = { name: string; this_month: string; last_month: string };
 type Change = {

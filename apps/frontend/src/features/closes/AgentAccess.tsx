@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
-import { RowList } from "../../ui/RowList";
+import { RowList } from "@close/ui/components/RowList";
 
 type Grant = { id: number; subject: string; state: "requested" | "approved" | "declined" | "revoked"; scope: "read" | "prepare"; reason: string; actor: string; created_at: string; effective_scope?: "read" | "prepare" | null };
 type Access = { mine: Grant | null; members: Grant[] };

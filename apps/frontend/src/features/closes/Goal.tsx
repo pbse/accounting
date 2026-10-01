@@ -1,10 +1,10 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { askAssistant } from "../dashboard/assistantStore";
-import { Icon } from "../../ui/Icon";
+import { Icon } from "@close/ui/components/Icon";
 import { workspaceRequest } from "./workspace";
-import { EntityCell, RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { EntityCell, RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Item = { job_id: string; name: string; status: "prepared" | "needs_you" | "client" | "working" | "unsupported" | "stopped"; text: string; drafts: string[]; handable?: boolean };
 type Handoff = { id: string; job_id: string; account_id?: string; name: string; note: string; by: string; at: string; mine: boolean; handed: string };

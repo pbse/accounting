@@ -4,7 +4,7 @@ import { SidebarAccount } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
 import { openAssistant } from "./assistantStore";
 import { AttentionBadge } from "../closes/Attention";
-import { Icon, type IconName } from "../../ui/Icon";
+import { Icon, type IconName } from "@close/ui/components/Icon";
 
 const groups: { label: string; items: { to: string; label: string; icon: IconName; end?: boolean }[] }[] = [
   {

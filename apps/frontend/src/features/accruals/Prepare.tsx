@@ -7,7 +7,7 @@ import { money, useCurrency } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { AccrualInput, AccrualWorkpaper } from "../../../../../packages/contracts/accrual";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 export function AccrualConfirmations({ proRata = true }: { proRata?: boolean }) {
  return <>

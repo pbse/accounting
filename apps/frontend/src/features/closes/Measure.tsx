@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { PageHeader } from "../../ui/PageHeader";
-import { EntityCell, RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
-import { StatGroup, StatTile } from "../../ui/StatTile";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { EntityCell, RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
+import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { minutes } from "./Effort";
 import { workspaceRequest } from "./workspace";
 

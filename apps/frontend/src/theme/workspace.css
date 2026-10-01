@@ -1,170 +1,8 @@
-/* The product shell in Tray: layout, sidebar, page header and the shared patterns pages use.
-   Every value comes from tokens.css; keep literal colours out of this file. */
-.app-shell {
-  display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
-  min-height: 100vh;
-  background: var(--bg);
-  color: var(--ink);
-  font-family: var(--font-sans);
-  font-variation-settings: "opsz" 32;
-  font-size: 14px;
-  line-height: 1.43;
-  -webkit-font-smoothing: antialiased;
-}
-.app-shell h1 {
-  font-family: inherit;
-  font-size: 20px;
-  line-height: 24px;
-  font-weight: 500;
-  letter-spacing: 0;
-  margin: 0;
-}
-.app-shell h2 {
-  font-family: inherit;
-  font-size: 17px;
-  line-height: 20px;
-  font-weight: 500;
-}
-.app-shell h3,
-.app-shell section h2 {
-  font-family: inherit;
-  font-size: 15px;
-  line-height: 20px;
-  font-weight: 500;
-}
-.app-shell .eyebrow {
-  color: var(--ink-2);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  margin: 0 0 0.3rem;
-}
-.app-shell dt,
-.app-shell caption {
-  color: var(--ink-2);
-}
-.app-shell .context,
-.app-shell hr {
-  border-color: var(--line);
-}
-.app-shell a {
-  color: var(--ink);
-}
-.app-shell strong,
-.app-shell b {
-  font-weight: 600;
-}
-.app-shell summary {
-  font-weight: 500;
-}
-.app-shell legend {
-  font-size: 15px;
-  font-weight: 500;
-}
-.app-shell a:focus-visible,
-.app-shell button:focus-visible,
-.app-shell summary:focus-visible,
-.app-shell input:focus-visible,
-.app-shell select:focus-visible,
-.app-shell textarea:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 2px;
-}
-.app-shell section {
-  background: var(--surface);
-  border: 0;
-  border-radius: var(--radius-md);
-  padding: var(--space-16);
-  box-shadow: none;
-}
-.app-shell section section {
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-tile);
-}
-.app-shell button,
-.app-shell .button {
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
-  color: var(--ink);
-  padding: var(--space-8) var(--space-12);
-  font-weight: 500;
-  font-size: 13px;
-  line-height: 16px;
-}
-.app-shell button:hover:not(:disabled),
-.app-shell .button:hover {
-  background: var(--hover);
-}
-.app-shell .primary,
-.app-shell button.primary {
-  background: var(--graphite-gloss);
-  box-shadow: var(--shadow-chip);
-  color: var(--on-chip);
-  padding: 9px var(--space-12);
-}
-.app-shell .primary:hover:not(:disabled),
-.app-shell .button.primary:hover {
-  background: var(--graphite-gloss-hover);
-}
-.app-shell label {
-  display: block;
-  margin: 0.7rem 0;
-  font-size: 13px;
-  font-weight: 500;
-}
-.app-shell input:not([type="checkbox"], [type="radio"]),
-.app-shell select,
-.app-shell textarea {
-  display: block;
-  width: 100%;
-  max-width: 44rem;
-  margin-top: 6px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  padding: var(--space-8) var(--space-10);
-  font: inherit;
-  font-size: 14px;
-  color: inherit;
-  background: var(--surface);
-}
-.app-shell input[type="checkbox"],
-.app-shell input[type="radio"] {
-  accent-color: var(--blue);
-  margin-right: 0.45rem;
-}
+/* The firm app's own patterns on top of the shared shell (packages/ui/theme/shell.css): preparation
+   forms, the evidence pane, Work's rows, Attention, the client request page, and the agent panel and palette. */
 .app-shell .checkbox-label {
   font-size: 13px;
   font-weight: 400;
-}
-.app-shell table {
-  font-size: 13px;
-}
-.app-shell thead th {
-  color: var(--ink-2);
-  font-weight: 400;
-  font-size: 11px;
-}
-.app-shell th,
-.app-shell td {
-  border-bottom-color: var(--line);
-}
-.app-shell .note {
-  background: var(--tile);
-  border: 0;
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-tile);
-  color: var(--ink-2);
-  font-size: 13px;
-}
-.app-shell .form-error {
-  border-radius: var(--radius-sm);
-  border-left-color: var(--red);
-  background: var(--negative-tint);
-  color: var(--negative-text);
 }
 .app-shell .prepared-result > h2 {
   font-family: inherit;
@@ -193,293 +31,15 @@
 .app-shell .checkbox-label input {
   accent-color: var(--blue);
 }
-.app-shell .pill {
-  display: inline-block;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) 6px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 16px;
-  background: var(--positive-tint);
-  color: var(--positive-text);
-}
-.app-shell .pill.muted {
-  background: var(--attention-tint);
-  color: var(--attention-text);
-}
-.app-shell .pill.danger {
-  background: var(--negative-tint);
-  color: var(--negative-text);
-}
-.app-shell .pill.neutral {
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
-  color: var(--ink-2);
-}
-
-.sidebar {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  padding: 0;
-  background: var(--bg);
-  border-right: 1px solid var(--line);
-}
-.sidebar-brand {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--space-10);
-  height: var(--header-height);
-  padding: 0 var(--space-16);
-  border-bottom: 1px solid var(--line);
-  text-decoration: none;
-}
-.sidebar-brand .logo {
-  width: var(--avatar);
-  height: var(--avatar);
-  border-radius: var(--radius-md);
-  display: grid;
-  place-items: center;
-  background: var(--gloss), var(--blue);
-  box-shadow: var(--shadow-chip);
-  color: var(--on-chip);
-  font-size: 15px;
-  font-weight: 600;
-}
-.sidebar-brand strong {
-  display: block;
-  font-size: 14px;
-  line-height: 18px;
-  font-weight: 500;
-}
-.sidebar-brand small {
-  display: block;
-  color: var(--ink-2);
-  font-size: 11px;
-  line-height: 16px;
-}
-.sidebar > form {
-  padding: var(--space-16) var(--space-16) var(--space-4);
-}
-.app-shell .sidebar-search {
-  position: relative;
-  margin: 0;
-}
-.app-shell .sidebar-search input {
-  margin: 0;
-  height: var(--nav-item-height);
-  padding: 0 34px;
-  background: var(--fill);
-  border: 0;
-  border-radius: var(--radius-md);
-}
-.app-shell .sidebar-search input::placeholder {
-  color: var(--ink-2);
-}
-.sidebar-search svg {
-  position: absolute;
-  left: var(--space-10);
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--ink-2);
-}
-.sidebar-search kbd {
-  position: absolute;
-  right: var(--space-10);
-  top: 50%;
-  transform: translateY(-50%);
-  display: grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 var(--space-4);
-  font: inherit;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--ink-2);
-  border-radius: 5px;
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
-}
-.nav-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-8) var(--space-16) var(--space-16);
-}
-.nav-group + .nav-group {
-  border-top: 1px solid var(--line);
-}
-.nav-label {
-  display: flex;
-  align-items: center;
-  height: 30px;
-  padding-left: var(--space-10);
-  color: var(--ink-2);
-  font-size: 13px;
-}
-.app-shell .nav-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-10);
-  height: var(--nav-item-height);
-  padding: 0 var(--space-10);
-  border-radius: var(--radius-md);
-  color: var(--ink-2);
-  text-decoration: none;
-  font-size: 14px;
-}
-.nav-item svg {
-  color: var(--ink-2);
-  flex-shrink: 0;
-}
-.app-shell .nav-item:hover {
-  background: var(--fill);
-}
-.app-shell .nav-item[aria-current="page"] {
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
-  color: var(--ink);
-}
-.nav-item[aria-current="page"] svg {
-  color: var(--ink);
-}
-/* "Ask the agent" in the sidebar is a button that looks like its neighbours. */
-.app-shell button.nav-item {
-  width: 100%;
-  background: none;
-  box-shadow: none;
-  font-weight: 400;
-  line-height: 20px;
-  text-align: left;
-}
-.app-shell button.nav-item:hover:not(:disabled) {
-  background: var(--fill);
-}
-.app-shell .nav-item .pill {
-  margin-left: auto;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-full);
-  background: var(--gloss), var(--blue);
-  box-shadow: var(--shadow-chip);
-  color: var(--on-chip);
-  font-weight: 600;
-  line-height: 1;
-}
-.sidebar-footer {
-  margin-top: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-8);
-  padding: var(--space-16);
-  border-top: 1px solid var(--line);
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--ink-2);
-}
-.sidebar-footer p {
-  margin: 0;
-}
-.app-shell .app-main {
-  min-width: 0;
-  max-width: none;
-  padding: 0;
-}
 /* On a wide screen the open assistant sits beside the page instead of over it. */
 @media (min-width: 1100px) {
   body.assistant-open .app-main {
     padding-right: min(400px, 100vw);
   }
 }
-.page {
-  padding: 0 var(--space-16) 48px;
-}
-.page > :not(.page-header) {
-  max-width: 1288px;
-}
-.page > :first-child:not(.page-header) {
-  margin-top: var(--space-16);
-}
-.title-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-8);
-}
-.app-shell .back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  color: var(--ink-2);
-  font-size: 13px;
-  text-decoration: none;
-  margin-bottom: var(--space-4);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-8);
-  margin: 0 0 var(--space-16);
-}
 .work-item:not([open]) > summary.row:hover {
   background: var(--hover);
   box-shadow: var(--shadow-tile-hover);
-}
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-}
-.status::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ink-3);
-  flex-shrink: 0;
-}
-.status.ok::before {
-  background: var(--green);
-}
-.status.warn::before {
-  background: var(--orange);
-}
-.status.danger::before {
-  background: var(--red);
-}
-.status.info::before {
-  background: var(--blue);
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 18px;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) 6px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 16px;
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
-  white-space: nowrap;
-}
-.empty {
-  padding: var(--space-24) var(--space-16);
-  color: var(--ink-2);
-  font-size: 13px;
-  text-align: center;
-}
-.stack > * + * {
-  margin-top: var(--space-16);
 }
 .canvas {
   display: grid;
@@ -551,82 +111,6 @@
     max-height: 32rem;
   }
 }
-@media (max-width: 860px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
-  .sidebar {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    padding: 8px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .sidebar-brand {
-    height: auto;
-    padding: 0;
-    border: 0;
-  }
-  .sidebar-brand small,
-  .nav-label,
-  .sidebar-footer p,
-  .sidebar > form {
-    display: none;
-  }
-  .nav-group {
-    flex-direction: row;
-    flex-wrap: wrap;
-    padding: 0;
-  }
-  .nav-group + .nav-group {
-    border: 0;
-  }
-  .sidebar-footer {
-    margin: 0;
-    padding: 0;
-    border: 0;
-  }
-}
-.sidebar nav {
-  display: flex;
-  flex-direction: column;
-}
-.app-shell section.bare {
-  background: none;
-  border: 0;
-  padding: 0;
-  box-shadow: none;
-}
-/* A bare wrapper does not count as a level: its sections are cards, theirs are tiles. */
-.app-shell section.bare section {
-  background: var(--surface);
-  border-radius: var(--radius-md);
-  box-shadow: none;
-}
-.app-shell section.bare section section {
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-tile);
-}
-.app-shell .gate {
-  max-width: 34rem;
-  margin: 48px auto;
-}
-.gate h1 {
-  margin-bottom: var(--space-8);
-}
-.app-shell .title-actions {
-  align-items: center;
-}
-.app-shell .title-actions input {
-  display: inline-block;
-  width: 14rem;
-  margin: 0;
-}
 .work-item > summary {
   font-weight: 400;
 }
@@ -665,14 +149,6 @@
   padding: var(--space-10) var(--space-16) var(--space-16);
   border-top: 1px solid var(--line);
 }
-.app-shell .stack > details {
-  background: var(--surface);
-  border-radius: var(--radius-md);
-  padding: var(--space-12) var(--space-16);
-}
-.app-shell .stack > details[open] > summary {
-  margin-bottom: var(--space-10);
-}
 .plan-chips {
   display: inline-flex;
   flex-wrap: wrap;
@@ -694,17 +170,12 @@
 .app-shell .planning select {
   width: 11rem;
 }
-/* A page outside the workspace (the client request link) in one centred column. */
-.app-shell.standalone {
-  display: block;
-}
 .app-shell .request-page {
   max-width: 720px;
   margin: 0 auto;
   padding: 0 var(--space-16) 48px;
 }
 /* A form or panel placed straight on the page is a card, like a section. */
-.app-shell .page > form,
 .app-shell .attention > details {
   padding: var(--space-16);
   border-radius: var(--radius-md);
@@ -720,32 +191,10 @@
 .attention > article h2 {
   margin-top: 0;
 }
-/* Text helpers that replace one-off inline styles. */
-.pre-line {
-  white-space: pre-line;
-}
-.block {
-  display: block;
-}
-/* Long source text (documents, emails, replies) scrolls inside its own box. */
-.scroll-text {
-  max-height: 24rem;
-  overflow: auto;
-}
-.app-shell td .scroll-text {
-  max-width: 28rem;
-  max-height: 16rem;
-}
 .evidence-frame {
   width: 100%;
   height: 32rem;
   border: 0;
-}
-.table-scroll {
-  overflow-x: auto;
-}
-.table-scroll td {
-  white-space: nowrap;
 }
 
 /* The assistant panel and the command palette. */
