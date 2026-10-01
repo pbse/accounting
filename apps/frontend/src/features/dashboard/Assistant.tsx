@@ -46,9 +46,13 @@ function Panel() {
   useEffect(() => {
     if (asked && !open) toggle(true);
   }, [asked]);
+  // Only a request made while this panel is mounted opens it, so an old one never overrides a closed panel.
   const openRequests = useOpenRequests();
+  const handledRequests = useRef(openRequests);
   useEffect(() => {
-    if (openRequests && !open) toggle(true);
+    if (openRequests === handledRequests.current) return;
+    handledRequests.current = openRequests;
+    if (!open) toggle(true);
   }, [openRequests]);
   // A link such as /dashboard/closes/7?ask=… asks that close's assistant once.
   const navigate = useNavigate();

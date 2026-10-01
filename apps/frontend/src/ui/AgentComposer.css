@@ -20,10 +20,12 @@
 }
 .agent-composer-ask {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-8);
 }
 .app-shell .agent-composer-ask input {
-  flex: 1;
+  flex: 1 1 14rem;
+  min-width: 0;
   max-width: none;
   height: 44px;
   margin: 0;
