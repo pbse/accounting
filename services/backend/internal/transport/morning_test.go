@@ -129,8 +129,9 @@ func TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson(t *testing.T) {
 		}
 		Needing, Quiet int
 		Check          *struct {
-			Model        string
-			Kept, Scored int
+			Model           string
+			ReasoningEffort *string `json:"reasoning_effort"`
+			Kept, Scored    int
 		} `json:"model_check"`
 	}) {
 		t.Helper()
@@ -149,6 +150,15 @@ func TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson(t *testing.T) {
 	}
 	if got.Check == nil || got.Check.Model != "model-b" || got.Check.Kept != 1 || got.Check.Scored != 2 {
 		t.Errorf("the latest automatic model check counts the readings it scored: %+v", got.Check)
+	}
+	if got.Check == nil || got.Check.ReasoningEffort != nil {
+		t.Fatalf("legacy effort must remain unknown: %+v", got.Check)
+	}
+	_, err = db.Exec(`UPDATE replay_runs SET reasoning_effort='high' WHERE organization_id=$1`, org)
+	must(err)
+	got = read("user_partner", "clients:all")
+	if got.Check == nil || got.Check.ReasoningEffort == nil || *got.Check.ReasoningEffort != "high" {
+		t.Fatalf("the morning brief must expose the recorded effort: %+v", got.Check)
 	}
 	if got.Needing != 2 || got.Quiet != 2 || len(got.Closes) != 2 || got.Closes[0].CloseID != harbor || got.Closes[1].CloseID != dental {
 		t.Fatalf("closes needing a person are listed most first; the quiet one is counted: %+v", got)

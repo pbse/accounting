@@ -9,18 +9,11 @@ import (
 )
 
 type envelope struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Model  string `json:"model"`
-	Usage  Usage  `json:"usage"`
-	Output []struct {
-		ToolCall
-		Type    string `json:"type"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	} `json:"output"`
+	ID     string            `json:"id"`
+	Status string            `json:"status"`
+	Model  string            `json:"model"`
+	Usage  Usage             `json:"usage"`
+	Output []json.RawMessage `json:"output"`
 }
 
 func (c *Client) openAI(ctx context.Context, route route, in Request) (Response, error) {
@@ -40,6 +33,13 @@ func (c *Client) openAI(ctx context.Context, route route, in Request) (Response,
 		input = append(input, map[string]string{"role": "system", "content": in.Instructions}, map[string]string{"role": "user", "content": content})
 	} else {
 		for _, m := range in.Messages {
+			if m.providerItem != nil {
+				if m.Call != nil || m.Result != nil || m.Role != "" || m.Content != "" {
+					return Response{}, ErrIncomplete
+				}
+				input = append(input, m.providerItem)
+				continue
+			}
 			switch {
 			case m.Call != nil && m.Result == nil && m.Role == "" && m.Content == "":
 				input = append(input, map[string]string{"type": "function_call", "call_id": m.Call.CallID, "name": m.Call.Name, "arguments": m.Call.Arguments})
@@ -95,7 +95,19 @@ func (c *Client) openAI(ctx context.Context, route route, in Request) (Response,
 	if wire.Model != "" {
 		result.Model = wire.Model
 	}
-	for _, item := range wire.Output {
+	for _, raw := range wire.Output {
+		var item struct {
+			ToolCall
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(raw, &item) != nil {
+			return Response{}, ErrIncomplete
+		}
+		result.Continuation = append(result.Continuation, Message{providerItem: raw})
 		if item.Type == "function_call" {
 			result.ToolCalls = append(result.ToolCalls, item.ToolCall)
 		}

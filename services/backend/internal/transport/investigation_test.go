@@ -86,8 +86,11 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 			}
 			var body string
 			if toolRounds == 1 {
-				body = `{"status":"completed","output":[{"type":"function_call","call_id":"c1","name":"read_evidence_text","arguments":"{\"evidence_id\":\"` + evidenceID + `\",\"close_id\":\"999\"}"},{"type":"function_call","call_id":"c2","name":"export_close_package","arguments":"{}"},{"type":"function_call","call_id":"c3","name":"read_evidence_text","arguments":"{\"evidence_id\":\"` + cardID + `\"}"}]}`
+				body = `{"status":"completed","output":[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque-reasoning","summary":[]},{"type":"message","id":"msg_1","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Reading evidence."}]},{"type":"function_call","id":"fc_1","call_id":"c1","name":"read_evidence_text","arguments":"{\"evidence_id\":\"` + evidenceID + `\",\"close_id\":\"999\"}"},{"type":"function_call","call_id":"c2","name":"export_close_package","arguments":"{}"},{"type":"function_call","call_id":"c3","name":"read_evidence_text","arguments":"{\"evidence_id\":\"` + cardID + `\"}"}]}`
 			} else {
+				if len(sent.Input) != 10 || sent.Input[2]["encrypted_content"] != "opaque-reasoning" || sent.Input[3]["phase"] != "commentary" || sent.Input[4]["id"] != "fc_1" || sent.Input[6]["call_id"] != "c3" || sent.Input[7]["type"] != "function_call_output" {
+					t.Fatalf("investigation lost or reordered continuation: %v", sent.Input)
+				}
 				body = `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Read the invoice."}]}]}`
 			}
 			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": {"application/json"}}}, nil
