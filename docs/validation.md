@@ -2936,3 +2936,13 @@ Browser check: with the API and frontend running locally on a fresh PostgreSQL a
 Review: the first Codex pass (gpt-6-sol, high) found nothing; a read of the converted stylesheet found that the page header's negative side margins had become an invalid value, which is fixed. The second pass found nothing.
 
 Verified: `npm run check`, `npm test` (15 pass) and `npm run build` after a clean `npm ci`.
+
+## Workspace page patterns as shared components (2026-10-01)
+
+The page header, section headers, stat tiles, segmented controls, row lists and a row's first cell move into `apps/frontend/src/ui` as components, each with its stylesheet beside it (docs/design-system.md lists them). Every workspace page uses them: the page header on seven pages, section headers and row lists on eleven each; the stat tile, which existed twice, exists once. `Icon` and `Avatar` move into `ui`. The rules that moved leave `theme/workspace.css`, with a class nothing styled.
+
+Visual check: with the API and frontend running locally on a fresh PostgreSQL and four synthetic clients, screenshots of Work, Client closes, a close's overview, Attention, Firm settings, Human effort, the prepaid form, the example review and the open assistant were compared pixel by pixel with the previous build. Eight are unchanged; on a close's overview the header's action buttons now sit 8px apart, as the design sets, instead of 10px from a broad selector.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check`, `npm test` (15 pass) and `npm run build` after a clean `npm ci`.
