@@ -2974,3 +2974,13 @@ A scan of every class in `styles.css`, `theme/workspace.css` and `ui/*.css` agai
 Review: the first Codex pass (gpt-6-sol, high) found nothing.
 
 Verified: `npm run check`, `npm test` (19 pass) and `npm run build` after a clean `npm ci`; the class scan finds no unreferenced class.
+
+## Design system shared with the staff console (2026-10-01)
+
+The staff console (`apps/admin`) borrows the firm app's stylesheet and uses the same shell classes; after the Tray restyle moved the shell's rules out of `styles.css`, the console had no layout styles and its colour variables were undefined (not deployed). The tokens, fonts, components and the shell the two apps share now live in `packages/ui`, imported as `@close/ui` through an alias in each app's `vite.config.ts` and `tsconfig.json` (the console's dev server may now read from the repository root). The firm app keeps its own patterns in `theme/workspace.css`; the console imports the tokens and the shell, and `admin.css` uses the tokens' names.
+
+Visual check, with the API and both apps running locally on a fresh PostgreSQL and four synthetic clients: the firm app's Work, Client closes, Attention, Firm settings, Human effort, the prepaid form and the example review are pixel-identical to the previous build (a close's overview differs only in its "As of" time, and the open assistant in its conversation, which starts empty here); the console's Overview, Firms, People, Staff audit, Workflows, Runs, Start a run, Plans, Stuck work and Connections render in Tray with no console errors.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check` (both apps), `npm test` (19 pass) and `npm run build` (both apps, with the fonts in each) after a clean `npm ci`.
