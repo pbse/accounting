@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { Authentication } from "./features/auth/Auth";
 import { App } from "./App";
 import "./styles.css";
+import "./theme/tokens.css";
+import "./theme/workspace.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
