@@ -9,7 +9,7 @@ import { useRevision } from "../closes/useRevision";
 import type { EntityType, OwnerInput, OwnerWorkpaper } from "../../../../../packages/contracts/owner";
 import { PageHeader } from "../../ui/PageHeader";
 
-export const entityTypes: Record<EntityType, string> = { sole_proprietor: "Sole proprietor / single-member LLC", partnership: "Partnership / multi-member LLC", s_corp: "S corporation", c_corp: "C corporation" };
+const entityTypes: Record<EntityType, string> = { sole_proprietor: "Sole proprietor / single-member LLC", partnership: "Partnership / multi-member LLC", s_corp: "S corporation", c_corp: "C corporation" };
 const treatments = {
   personal_paid_by_business: { distribution: "Owner draw or distribution", due_from_owner: "Due from owner (will be repaid)" },
   business_paid_personally: { contribution: "Owner contribution", due_to_owner: "Due to owner (business will reimburse)" },

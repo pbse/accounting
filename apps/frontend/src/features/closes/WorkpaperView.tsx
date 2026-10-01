@@ -38,9 +38,9 @@ export type Paper = { id: string; created_at: string; review_state: string } & (
   | Saved<"owner", OwnerWorkpaper>
 );
 
-export const paperLabels = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", loan: "Loan schedule", owner: "Owner reclassification" };
+const paperLabels = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", loan: "Loan schedule", owner: "Owner reclassification" };
 export const paperLabel = (p: Paper) => (p.kind === "prepaid" && p.paper.input.schedule ? `${scheduleTerms[p.paper.input.schedule].name} schedule` : paperLabels[p.kind]);
-export const paperPaths = { prepaid: "prepaids", accrual: "accruals", reconciliation: "reconciliations", settlement: "settlements", loan: "loans", owner: "owners" };
+const paperPaths = { prepaid: "prepaids", accrual: "accruals", reconciliation: "reconciliations", settlement: "settlements", loan: "loans", owner: "owners" };
 const reviewLabels: Record<string, [string, string]> = {
   pending: ["Awaiting review", "pill muted"],
   approved: ["Approved", "pill"],
@@ -248,7 +248,7 @@ function NativeFlags({ closeId, account }: { closeId: string; account: string })
   return text ? <p className="note">{text}</p> : null;
 }
 
-export function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
+function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
   const posting = (
     <>
       <ProductionPosting closeId={close.id} paperId={saved.id} />
