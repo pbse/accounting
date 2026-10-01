@@ -5,7 +5,7 @@ import { GoalCard, localDate } from "../closes/Goal";
 import { useUnlocked, workspaceRequest } from "../closes/workspace";
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
 import { RequestCard } from "./RequestCard";
-import { askAssistant, nextReview, takePending, useOpenRequests, usePending } from "./assistantStore";
+import { askAssistant, nextReview, starters, takePending, useOpenRequests, usePending } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
 import { AgentMark } from "@close/ui/components/AgentMark";
@@ -91,12 +91,6 @@ function Panel() {
   // A new close or draft mounts a fresh conversation, so nothing from the previous context can show.
   return <Conversation key={`${closeId}/${paperId}`} closeId={closeId} paperId={paperId} focus={openRequests} onClose={() => toggle(false)} />;
 }
-
-// Read-only questions the panel's fixed reads answer; a click asks one.
-const starters = {
-  firm: ["What needs me today?", "What is ready for review?", "What is blocked?"],
-  close: ["Where does this close stand?", "What blocks sign-off?", "What changed from last month?"],
-};
 
 function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; paperId: string; focus: number; onClose: () => void }) {
   const [messages, setMessages] = useState<Message[]>([]);

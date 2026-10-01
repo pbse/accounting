@@ -1,7 +1,13 @@
 import { useSyncExternalStore } from "react";
 import { workspaceRequest } from "../closes/workspace";
 
-// A question asked from outside the panel (the command palette) waits for the conversation of its close.
+// Read-only questions the panel's fixed reads answer; a click asks one. A close's page offers the same ones.
+export const starters = {
+  firm: ["What needs me today?", "What is ready for review?", "What is blocked?"],
+  close: ["Where does this close stand?", "What blocks sign-off?", "What changed from last month?"],
+};
+
+// A question asked from outside the panel (the command palette, a close's page) waits for the conversation of its close.
 let pending: { question: string; closeId: string } | null = null;
 const listeners = new Set<() => void>();
 
