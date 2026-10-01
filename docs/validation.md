@@ -3014,3 +3014,13 @@ Also: segmented counts and source line numbers move from `--ink-3` (2.7:1) to `-
 Review: the first Codex pass (gpt-6-sol, high) found nothing; a stale comment in the console's `vite.config.ts` was corrected afterwards.
 
 Verified: `npm run check`, `npm test` (22 pass) and `npm run build` after a clean `npm ci`; the console's built CSS contains no public-site styles.
+
+## The agent's track record as hex maps (2026-10-01)
+
+The design system's hex map comes into the product as a shared `HexMap` component (the design system's geometry and clustering, a legend of counts and shares that add up to 100, an accessible label stating every share). Measure's track record now opens, after its header and explanation, with two splits that never overlap: model proposals people confirmed (kept as proposed, changed by a person) and agent drafts people judged (approved as prepared, revised or sent back). Each shows only once there is something to split; when the track record stops at 200 clients, a note and the labels say the charts cover those 200. The percent rounding lives in `percents.ts`, with a test in `npm test`. The design system's dot chart stays out until a page has a series over time.
+
+Browser check, with the firm app running locally and the track record's response replaced in the browser by a realistic one: both maps render side by side at 1440px and stacked at 320px, legend rows grow when a label wraps, no page scrolls sideways, no page errors; the accessible label reads "Model proposals people confirmed: Kept as proposed 99 (80%), Changed by a person 24 (20%)".
+
+Review: Codex (gpt-6-sol, high) pass 1 found the sums could pass 200 clients off as firm-wide (now labelled); pass 2 found the charts' headings came before the section's and that legend rows could overflow on a 320px phone (both fixed); pass 3 found nothing. Several review runs were interrupted by the machine sleeping and were rerun.
+
+Verified: `npm run check`, `npm test` (23 pass) and `npm run build` after a clean `npm ci`.
