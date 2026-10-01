@@ -23,8 +23,6 @@
     "production": {
       "services": [{"binding": "CONTEXT_MACHINE", "service": "close-context-machine-production"}],
       "name": "close-production",
-      // Until a custom hostname exists, workers.dev is the only ingress. With no
-      // UPLOAD_SCAN_HOST the edge refuses every PDF scan, so no clean receipt is issued.
       "workers_dev": true,
       "containers": [{
         "class_name": "CapabilityAPI",

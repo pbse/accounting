@@ -58,7 +58,7 @@ export class CapabilityAPI extends Container<Env> {
 
 // Containers reach private Worker bindings through a fixed virtual host.
 CapabilityAPI.outboundByHost = {
-  "context-machine.internal": (request, env) => (env as Env).CONTEXT_MACHINE.fetch(request),
+  "context-machine.internal": async (request, env) => (env as Env).CONTEXT_MACHINE?.fetch(request) ?? new Response(null, { status: 503 }),
 };
 
 interface Env {
@@ -74,7 +74,7 @@ interface Env {
   LLM_MODELS?: string;
   CONTEXT_MACHINE_TOKEN?: string;
   CONTEXT_MACHINE_MODEL?: string;
-  CONTEXT_MACHINE: Fetcher;
+  CONTEXT_MACHINE?: Fetcher;
   SECRETS_KEY?: string;
   PUBLIC_APP_URL?: string;
   EMAIL_INTAKE_ADDRESS?: string;

@@ -38,7 +38,7 @@ export class PreparationWorker extends Container<Env> {
 
 // Containers reach private Worker bindings through a fixed virtual host.
 PreparationWorker.outboundByHost = {
-  "context-machine.internal": (request, env) => (env as Env).CONTEXT_MACHINE.fetch(request),
+  "context-machine.internal": async (request, env) => (env as Env).CONTEXT_MACHINE?.fetch(request) ?? new Response(null, { status: 503 }),
 };
 
 interface Env {
@@ -51,7 +51,7 @@ interface Env {
   LLM_MODELS?: string;
   CONTEXT_MACHINE_TOKEN?: string;
   CONTEXT_MACHINE_MODEL?: string;
-  CONTEXT_MACHINE: Fetcher;
+  CONTEXT_MACHINE?: Fetcher;
   OPERATIONS_ALERT_WEBHOOK_URL?: string;
   OPERATIONS_ALERT_WEBHOOK_TOKEN?: string;
   QBO_CLIENT_ID?: string;

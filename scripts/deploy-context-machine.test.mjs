@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
 
 const configured = {
   CONTEXT_MACHINE_TOKEN: 'test-only-0000000000000000000000000000',
@@ -42,4 +45,72 @@ test('deployment selects available credentials without requiring the unused prov
   { CODEX_REASONING_EFFORT: 'unknown' }, { CLAUDE_REASONING_EFFORT: 'ultra' },
   { CODEX_MODEL: '' }, { CODEX_AUTH_MODE: 'api_key', OPENAI_API_KEY: '', CODEX_ACCESS_TOKEN: 'test-token' },
  ]) assert.notEqual(check(overrides).status, 0);
+});
+
+
+test('preflight reports missing selected-agent settings together without credentials', () => {
+  const result = check({ CONTEXT_MACHINE_DATABASE_URL: '', CONTEXT_MACHINE_PROFILES: '', CODEX_MODEL: '', OPENAI_API_KEY: '' });
+  assert.notEqual(result.status, 0);
+  for (const name of ['CONTEXT_MACHINE_DATABASE_URL', 'CONTEXT_MACHINE_PROFILES', 'CODEX_MODEL', 'OPENAI_API_KEY or CODEX_ACCESS_TOKEN']) assert.ok(result.stderr.includes(name), name);
+  assert.ok(!result.stderr.includes(configured.CONTEXT_MACHINE_TOKEN));
+});
+
+
+test('CI retains runtime checks for dependencies and skips unrelated frontend changes', () => {
+  const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
+  const block = workflow.split('      - name: Select context-machine integration checks\n')[1].split('      - name:')[0];
+  const shell = block.split('        run: |\n')[1].replace(/^          /gm, '');
+  const dir = mkdtempSync(join(tmpdir(), 'close-ci-selection-'));
+  const env = { ...process.env, GITHUB_EVENT_NAME: 'pull_request', GITHUB_OUTPUT: join(dir, 'output'), GIT_AUTHOR_NAME: 'Test', GIT_COMMITTER_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_EMAIL: 'test@example.invalid' };
+  const git = (...args) => assert.equal(spawnSync('git', args, { cwd: dir, env }).status, 0);
+  try {
+    git('init', '-q');
+    git('commit', '-qm', 'base', '--allow-empty');
+    for (const [path, expected] of [['apps/frontend/example.tsx', false], ['services/backend/internal/documents/example.go', true], ['infra/postgres/migrations/999_test.sql', true], ['services/context-machine/Dockerfile', true], ['workers/context-machine/src/index.ts', true], ['scripts/deploy-context-machine.mjs', true], ['package-lock.json', true], ['.github/workflows/ci.yml', true]]) {
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), 'test');
+      git('add', path); git('commit', '-qm', path);
+      writeFileSync(env.GITHUB_OUTPUT, '');
+      assert.equal(spawnSync('bash', ['-e', '-c', shell], { cwd: dir, env }).status, 0);
+      assert.equal(readFileSync(env.GITHUB_OUTPUT, 'utf8').includes('check=true'), expected, path);
+    }
+    // Reusable calls always run the checks, even without a readable PR diff.
+    writeFileSync(env.GITHUB_OUTPUT, '');
+    assert.equal(spawnSync('bash', ['-e', '-c', shell], { cwd: dir, env: { ...env, GITHUB_EVENT_NAME: 'workflow_call' } }).status, 0);
+    assert.match(readFileSync(env.GITHUB_OUTPUT, 'utf8'), /check=true/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('disabled research needs no credentials and invalid switches fail closed', () => {
+  assert.equal(check({ CONTEXT_MACHINE_ENABLED: 'false', CONTEXT_MACHINE_TOKEN: '', CONTEXT_MACHINE_DATABASE_URL: '', CONTEXT_MACHINE_PROFILES: '', OPENAI_API_KEY: '' }).status, 0);
+  assert.notEqual(check({ CONTEXT_MACHINE_ENABLED: 'no' }).status, 0);
+});
+
+test('disabled deployment removes only research bindings and clears inactive route metadata', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'close-disabled-deploy-'));
+  const script = join(process.cwd(), 'scripts/deploy-context-machine.mjs');
+  const envFile = join(dir, 'step-env');
+  try {
+    for (const app of ['edge', 'queue']) {
+      const path = `workers/${app}/wrangler.jsonc`;
+      const config = JSON.parse(readFileSync(path, 'utf8'));
+      config.services.push({ binding: 'OTHER', service: 'other-service' });
+      mkdirSync(dirname(join(dir, path)), { recursive: true });
+      writeFileSync(join(dir, path), JSON.stringify(config));
+    }
+    const result = spawnSync(process.execPath, [script, '--prepare-callers'], { cwd: dir, env: { ...configured, CONTEXT_MACHINE_ENABLED: 'false', OPENAI_API_KEY: '', GITHUB_ENV: envFile }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    for (const app of ['edge', 'queue']) {
+      const config = JSON.parse(readFileSync(join(dir, `workers/${app}/wrangler.jsonc`), 'utf8'));
+      assert.deepEqual(config.services, [{ binding: 'OTHER', service: 'other-service' }]);
+      assert.deepEqual(config.env.production.services, []);
+      assert.equal(config.containers.length, 1);
+      assert.equal(config.env.production.containers.length, 1);
+    }
+    assert.equal(readFileSync(envFile, 'utf8'), 'CONTEXT_MACHINE_TOKEN=\nCONTEXT_MACHINE_MODEL=\nOPENAI_MODEL=\nOPENAI_REASONING_EFFORT=\nLLM_MODELS=\nLLM_REASONING_EFFORTS=\n');
+    writeFileSync(envFile, '');
+    const active = spawnSync(process.execPath, [script, '--prepare-callers'], { cwd: dir, env: { ...configured, GITHUB_ENV: envFile }, encoding: 'utf8' });
+    assert.equal(active.status, 0, active.stderr);
+    assert.equal(readFileSync(envFile, 'utf8'), '');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
