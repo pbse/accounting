@@ -2956,3 +2956,13 @@ Browser check, with the API and frontend running locally on a fresh PostgreSQL a
 Review: the first Codex pass (gpt-6-sol, high) found that the composer's input row overflowed narrow screens, and that a sidebar request outlived the panel, so remounting it after signing back in would reopen a panel the person had closed; the row now wraps and the panel only answers requests made while it is mounted. The second pass found nothing.
 
 Verified: `npm run check`, `npm test` (15 pass) and `npm run build` after a clean `npm ci`.
+
+## Remaining pages and the client request in Tray (2026-10-01)
+
+Attention gets the page header, a segmented control for its views and a card per client. The example close and review, and the six preparation pages, open with `PageHeader`, titled as the sidebar names them (Prepaid schedule, Accrued expense, Loan schedule, Owner items, Statement reconciliation, Stripe payouts) with their explanation as the description. A form or panel placed straight on a page becomes a card. The client request page (`/request`) renders in Tray as one centred column (`.app-shell.standalone`) with its request in a card; its notice links are unchanged. All 17 inline styles in the product are gone: most repeated what the base `pre` rule already does, and the rest became `.pre-line`, `.block`, `.scroll-text`, `.evidence-frame` or a component rule.
+
+Browser check, with the API and frontend running locally on a fresh PostgreSQL and four synthetic clients: Attention, the example close and review, the six preparation pages and the client request page render with their headers and cards and no console errors.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check`, `npm test` (19 pass) and `npm run build` after a clean `npm ci`.
