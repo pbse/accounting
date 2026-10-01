@@ -114,3 +114,12 @@ test('disabled deployment removes only research bindings and clears inactive rou
     assert.equal(readFileSync(envFile, 'utf8'), '');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('standby provisioning needs only a strong service token and explicit disabled mode', () => {
+  const provision = (env) => spawnSync(process.execPath, ['scripts/deploy-context-machine.mjs', '--provision-disabled', '--check'], { env, encoding: 'utf8' });
+  const standby = { CONTEXT_MACHINE_ENABLED: 'false', CONTEXT_MACHINE_TOKEN: configured.CONTEXT_MACHINE_TOKEN };
+  assert.equal(provision(standby).status, 0);
+  for (const env of [{ ...standby, CONTEXT_MACHINE_TOKEN: '' }, { ...standby, CONTEXT_MACHINE_TOKEN: 'short' }, { ...configured, CONTEXT_MACHINE_ENABLED: 'true' }, { CONTEXT_MACHINE_TOKEN: configured.CONTEXT_MACHINE_TOKEN }]) {
+    assert.notEqual(provision(env).status, 0);
+  }
+});
