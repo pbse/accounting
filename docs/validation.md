@@ -2995,6 +2995,16 @@ Review: the first Codex pass (gpt-6-sol, high) found that a stat's date dropped 
 
 Verified: `npm run check` (both apps), `npm test` (22 pass) and `npm run build` (both apps) after a clean `npm ci`.
 
+## A close's overview leads with the agent (2026-10-01)
+
+A close that is not handed over opens its Overview with the shared `AgentComposer` instead of a sentence and a "Hand it over" button: a question typed there, the hand-over or one of the agent panel's close starter questions opens the panel on that close and asks it there. A hand-over still shows its proposal card and waits for the person to confirm; once handed over, the same place shows the agent's progress as before. The starter questions move to `assistantStore` so the panel and the page offer the same ones.
+
+Browser check, with the API and the firm app running locally on a fresh PostgreSQL and synthetic clients: the composer leads the close's Overview; "What blocks sign-off?" opens the panel and is answered from the close's saved status; a typed question is asked and the input clears; "Get this close ready for review" shows the hand-over proposal card, unconfirmed; no page errors.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check` after a clean `npm ci`.
+
 ## The shell stands alone; contrast, toolbar colour and phones (2026-10-01)
 
 The shared shell now sets every element style its pages rely on, at the specificity of a bare element (`:where(.app-shell)`), so every pattern still overrides it. The staff console stops loading the public site's `styles.css`, and the firm app's product-only rules move from `styles.css` into `workspace.css`. Measured, not assumed: on every page of both apps, every element's computed style was compared with and without `styles.css`, and nothing inside the shell changes any more (before, the shell took box sizing, button fonts, table cells, fieldsets, the skip link and more from it). Against `main`, the only differences are the intended ones: the public site's top margin on primary buttons is gone (it pushed header actions and a close's first preparation chip 6px below their neighbours), segmented counts are darker, and colours change on zero-width borders.
