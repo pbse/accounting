@@ -3024,3 +3024,15 @@ Browser check, with the firm app running locally and the track record's response
 Review: Codex (gpt-6-sol, high) pass 1 found the sums could pass 200 clients off as firm-wide (now labelled); pass 2 found the charts' headings came before the section's and that legend rows could overflow on a 320px phone (both fixed); pass 3 found nothing. Several review runs were interrupted by the machine sleeping and were rerun.
 
 Verified: `npm run check`, `npm test` (23 pass) and `npm run build` after a clean `npm ci`.
+
+## Both apps' layout checked in a browser (2026-10-01)
+
+`scripts/layout-check.mjs` (`npm run check:layout`) opens every page of the firm app, the client request page and the staff console in Chrome at 1440px and 390px (58 page views; a firm's page, a plan and the plan editor need a firm, which only the sign-in provider creates), and fails when a page has no `PageHeader`, the sidebar is not 296px with the page column after it, the phone sidebar is more than one strip, a standalone page shows the sidebar, a page is wider than the screen, a page throws, or the shell takes any style from the public site's `styles.css` (read with, without and again with it, at both widths). It seeds a close, a prepaid draft and a workflow run through the API and reuses them on later runs. CI runs it in the existing job when `apps/`, `packages/`, the script or the dependencies change: a database of its own beside the Go tests', the API built from the commit, both dev servers and the runner's Chrome through `playwright-core` (added to the lockfile by hand, 14 lines, confirmed by `npm ci`).
+
+It found two more leaks, now fixed: product headers took the public site's header flex rules (that rule now applies only inside `.marketing`, at the same specificity; the public pages are pixel-identical at 1440px and 390px), and the client request page's privacy footer used the legal pages' class in the old green (it has its own class in `--ink-2`).
+
+Shown to fail when it should: against `main` as it stood before #215 it reports the leaks, the 424px phone sidebar and the overflowing loan schedule.
+
+Review: Codex (gpt-6-sol, high) pass 1 found routes could be measured before rendering, CI not waiting for the dev servers, and missing detail pages (all fixed or documented); pass 2 claimed Vite names the stylesheet `/src/styles.css`, disproved by reading `data-vite-dev-id` (the absolute file path) and by the check finding the sheet; pass 3 asked for the request page and phone-width isolation (both added); pass 4 found nothing. Several review runs were interrupted by the machine sleeping and were rerun.
+
+Verified: `npm run check`, `npm test` (23 pass), `npm run build` and `npm run check:layout` (58 page views) after a clean `npm ci`.
