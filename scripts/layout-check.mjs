@@ -49,6 +49,7 @@ const apps = [
     start: `${frontend}/dashboard/closes`,
     unlock: "Unlock workspace",
     prefix: "",
+    // Matched against the end of Vite's data-vite-dev-id, which is the stylesheet's absolute file path.
     stylesheet: "/apps/frontend/src/styles.css",
     routes: [
       "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, "/dashboard/firm",
