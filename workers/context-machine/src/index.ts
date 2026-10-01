@@ -3,6 +3,7 @@ import { Container } from "@cloudflare/containers";
 interface Env {
   MACHINE: DurableObjectNamespace<ContextMachine>;
   CONTEXT_MACHINE_TOKEN: string;
+  CONTEXT_MACHINE_ENABLED?: string;
   CONTEXT_MACHINE_DATABASE_URL: string;
   CONTEXT_MACHINE_PROFILES: string;
   OPENAI_API_KEY: string;
@@ -46,8 +47,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (!["/v1/run", "/readyz"].includes(path)) return new Response(null, { status: 404 });
-    if (request.headers.get("Authorization") !== `Bearer ${env.CONTEXT_MACHINE_TOKEN}`)
+    if (!env.CONTEXT_MACHINE_TOKEN || env.CONTEXT_MACHINE_TOKEN.length < 32 || request.headers.get("Authorization") !== `Bearer ${env.CONTEXT_MACHINE_TOKEN}`)
       return new Response(null, { status: 401 });
+    if (env.CONTEXT_MACHINE_ENABLED !== "true")
+      return Response.json({ status: "disabled" }, { status: 503, headers: { "Cache-Control": "no-store" } });
     return env.MACHINE.getByName("context-machine").fetch(request);
   },
 } satisfies ExportedHandler<Env>;

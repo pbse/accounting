@@ -114,3 +114,43 @@ test('disabled deployment removes only research bindings and clears inactive rou
     assert.equal(readFileSync(envFile, 'utf8'), '');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('standby provisioning needs only a strong service token and explicit disabled mode', () => {
+  const provision = (env) => spawnSync(process.execPath, ['scripts/deploy-context-machine.mjs', '--provision-disabled', '--check'], { env, encoding: 'utf8' });
+  const standby = { CONTEXT_MACHINE_ENABLED: 'false', CONTEXT_MACHINE_TOKEN: configured.CONTEXT_MACHINE_TOKEN };
+  assert.equal(provision(standby).status, 0);
+  for (const env of [{ ...standby, CONTEXT_MACHINE_TOKEN: '' }, { ...standby, CONTEXT_MACHINE_TOKEN: 'short' }, { ...configured, CONTEXT_MACHINE_ENABLED: 'true' }, { CONTEXT_MACHINE_TOKEN: configured.CONTEXT_MACHINE_TOKEN }]) {
+    assert.notEqual(provision(env).status, 0);
+  }
+});
+
+test('deployment uploads the enabled flag with scoped secrets in both modes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'close-deploy-secrets-'));
+  const captured = join(dir, 'captured.json');
+  try {
+    writeFileSync(join(dir, 'npx'), `#!${process.execPath}
+const fs = require('node:fs');
+const file = process.argv[process.argv.indexOf('--secrets-file') + 1];
+fs.writeFileSync(process.env.CAPTURED, JSON.stringify({ args: process.argv.slice(2), secrets: JSON.parse(fs.readFileSync(file)), mode: fs.statSync(file).mode & 0o777 }));
+`, { mode: 0o755 });
+    for (const enabled of ['true', 'false']) {
+      const env = enabled === 'true' ? configured : { CONTEXT_MACHINE_TOKEN: configured.CONTEXT_MACHINE_TOKEN };
+      const result = spawnSync(process.execPath, ['scripts/deploy-context-machine.mjs', '--production', ...(enabled === 'false' ? ['--provision-disabled'] : [])], {
+        env: { ...env, CONTEXT_MACHINE_ENABLED: enabled, PATH: `${dir}:${process.env.PATH}`, CAPTURED: captured }, encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const upload = JSON.parse(readFileSync(captured, 'utf8'));
+      assert.equal(upload.secrets.CONTEXT_MACHINE_ENABLED, enabled);
+      assert.equal(upload.secrets.CONTEXT_MACHINE_TOKEN, configured.CONTEXT_MACHINE_TOKEN);
+      assert.equal(upload.mode, 0o600);
+      assert.deepEqual(upload.args.slice(-2), ['--env', 'production']);
+      assert.equal(upload.secrets.DATABASE_URL, undefined);
+      if (enabled === 'false') {
+        for (const [name, value] of Object.entries(upload.secrets)) {
+          if (!['CONTEXT_MACHINE_ENABLED', 'CONTEXT_MACHINE_TOKEN'].includes(name)) assert.equal(value, '', name);
+        }
+      } else assert.equal(upload.secrets.OPENAI_API_KEY, configured.OPENAI_API_KEY);
+      assert.throws(() => readFileSync(upload.args[upload.args.indexOf('--secrets-file') + 1]), { code: 'ENOENT' });
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

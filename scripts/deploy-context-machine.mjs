@@ -26,7 +26,9 @@ if (process.argv.includes("--prepare-callers")) {
  appendFileSync(process.env.GITHUB_ENV, clear.map(name => `${name}=\n`).join(""));
  process.exit(0);
 }
-if (enabled === "false") {
+const provisionDisabled = process.argv.includes("--provision-disabled");
+if (provisionDisabled && enabled !== "false") throw new Error("Standby provisioning requires CONTEXT_MACHINE_ENABLED=false");
+if (enabled === "false" && !provisionDisabled) {
  console.log("Context-machine research is explicitly disabled; no service deployment is needed.");
  process.exit(0);
 }
@@ -35,6 +37,8 @@ if (enabled === "false") {
 const names = ["CONTEXT_MACHINE_TOKEN", "CONTEXT_MACHINE_DATABASE_URL", "CONTEXT_MACHINE_PROFILES", "CONTEXT_MACHINE_MODEL",
  "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CODEX_MODEL", "CLAUDE_MODEL", "CODEX_ACCESS_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
  "CODEX_AUTH_MODE", "CLAUDE_AUTH_MODE", "CODEX_REASONING_EFFORT", "CLAUDE_REASONING_EFFORT"];
+if ((process.env.CONTEXT_MACHINE_TOKEN || "").length < 32) throw new Error("CONTEXT_MACHINE_TOKEN requires 32 random characters");
+if (enabled === "true") {
 const missing = names.slice(0, 4).filter(name => !process.env[name]);
 const selected = process.env.CONTEXT_MACHINE_MODEL;
 if (["codex", "claude"].includes(selected)) {
@@ -61,7 +65,6 @@ for (const [agent, prefix, keyName, tokenName] of [["codex", "CODEX", "OPENAI_AP
  agents.add(agent);
 }
 if (!agents.has(process.env.CONTEXT_MACHINE_MODEL)) throw new Error("Default context-machine agent is not configured");
-if (process.env.CONTEXT_MACHINE_TOKEN.length < 32) throw new Error("CONTEXT_MACHINE_TOKEN requires 32 random characters");
 if (!["codex", "claude"].includes(process.env.CONTEXT_MACHINE_MODEL)) throw new Error("CONTEXT_MACHINE_MODEL must be codex or claude");
 let db, application;
 try { db = new URL(process.env.CONTEXT_MACHINE_DATABASE_URL); } catch { throw new Error("Invalid CONTEXT_MACHINE_DATABASE_URL"); }
@@ -77,11 +80,13 @@ if (!Array.isArray(profiles) || !profiles.length ||
     new Set(profiles.map(p => p.access_profile)).size !== profiles.length)
   throw new Error("CONTEXT_MACHINE_PROFILES requires unique named organization/subject profiles");
 
+}
+
 if (!process.argv.includes("--check")) {
   const dir = mkdtempSync(join(tmpdir(), "close-context-machine-"));
   try {
     const file = join(dir, "secrets.json");
-    writeFileSync(file, JSON.stringify(Object.fromEntries(names.map(n => [n, process.env[n] || ""]))), { mode: 0o600 });
+    writeFileSync(file, JSON.stringify({ ...Object.fromEntries(names.map(n => [n, process.env[n] || ""])), CONTEXT_MACHINE_ENABLED: enabled }), { mode: 0o600 });
     const args = ["wrangler", "deploy", "-c", "workers/context-machine/wrangler.jsonc", "--secrets-file", file];
     if (process.argv.includes("--production")) args.push("--env", "production");
     const result = spawnSync("npx", args, { stdio: "inherit" });
