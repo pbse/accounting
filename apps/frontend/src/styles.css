@@ -116,11 +116,6 @@ h3 {
   border-top: 1px solid #d9e1d8;
   margin-bottom: 1rem;
 }
-.review-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.2rem;
-}
 section {
   background: #fff;
   border: 1px solid #dce3d9;
@@ -209,9 +204,6 @@ footer {
 @media (max-width: 850px) {
   .brand span {
     display: none;
-  }
-  .review-grid {
-    grid-template-columns: 1fr;
   }
   header {
     padding: 1rem;
@@ -462,98 +454,3 @@ footer {
     flex-basis: 70%;
   }
 }
-.preparation-inputs {
-  background: white;
-  border: 1px solid #dce3d9;
-  border-radius: 10px;
-  padding: 1.5rem;
-  margin: 1.5rem 0;
-}
-.preparation-inputs > summary {
-  font-size: 1.1rem;
-}
-fieldset {
-  border: 0;
-  padding: 0;
-  margin: 1.5rem 0;
-  min-width: 0;
-}
-legend {
-  font-weight: 650;
-  padding: 0;
-  font-size: 1rem;
-}
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem 1.5rem;
-  margin-top: 1rem;
-}
-.form-grid label {
-  font-size: 0.85rem;
-  font-weight: 550;
-}
-.form-grid input {
-  display: block;
-  width: 100%;
-  border: 1px solid #91a59b;
-  border-radius: 6px;
-  padding: 0.65rem;
-  font: inherit;
-  color: inherit;
-  background: white;
-  margin-top: 0.35rem;
-}
-.form-grid small {
-  display: block;
-  color: #53665a;
-  font-weight: 400;
-}
-input:focus-visible {
-  outline: 3px solid #a65c16;
-  outline-offset: 2px;
-}
-.checkbox-label {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.7rem;
-  margin: 1rem 0;
-  font-size: 0.9rem;
-}
-.checkbox-label input {
-  margin-top: 0.3rem;
-  width: 1.1rem;
-  height: 1.1rem;
-  flex-shrink: 0;
-  accent-color: #153e35;
-}
-.form-error {
-  border-left: 3px solid #9c3c28;
-  background: #fff1eb;
-  color: #792c1d;
-  padding: 1rem;
-}
-.example-button {
-  font-size: 0.85rem;
-}
-.prepared-result {
-  margin-top: 2rem;
-}
-.prepared-result > h2 {
-  font-family: Georgia, serif;
-  font-size: 2rem;
-  font-weight: 400;
-}
-.export-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-@media (max-width: 850px) {
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-textarea { width: 100%; font: inherit; padding: .7rem; border: 1px solid #acb5aa; border-radius: .4rem; box-sizing: border-box; }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -15,9 +15,10 @@ The reference for every value is the Tray design system: tokens, type scale, com
 | Icons | `packages/ui/components/Icon.tsx` | An icon is added or replaced. |
 | The firm app's own patterns (preparation forms, evidence pane, Work's rows, Attention, the agent panel) | `apps/frontend/src/theme/workspace.css` | One of those changes. |
 | The staff console's own patterns (workflow flow, inspector, schema forms) | `apps/admin/src/admin.css` | One of those changes. |
-| Public and legacy element styles | `apps/frontend/src/styles.css` | Marketing or legal pages change. |
+| The browser toolbar colour on shell pages | `packages/ui/theme/useShellThemeColor.ts` | A new shell page opens outside the firm app's workspace layout. |
+| The public site's styles | `apps/frontend/src/styles.css` | Marketing or legal pages change. |
 
-Both apps import the design system as `@close/ui/...`, an alias to `packages/ui` set in each app's `vite.config.ts` and `tsconfig.json`. Each `main.tsx` imports the base `styles.css`, then `@close/ui/theme/tokens.css`, `@close/ui/theme/shell.css` and finally its own stylesheet, so the shell overrides the public element styles and each app can add its own patterns. Each component imports its own stylesheet, which loads with the page that uses it.
+Both apps import the design system as `@close/ui/...`, an alias to `packages/ui` set in each app's `vite.config.ts` and `tsconfig.json`. Each `main.tsx` imports `@close/ui/theme/tokens.css`, `@close/ui/theme/shell.css` and then its own stylesheet; the firm app imports the public site's `styles.css` first, for its marketing pages. Each component imports its own stylesheet, which loads with the page that uses it.
 
 ## Components
 
@@ -46,6 +47,8 @@ To add a component, put `Name.tsx` and `Name.css` in `packages/ui/components/`, 
 - **One type family.** Inter at optical size 32 at every size, weights 400 and 500 (600 for bold text and badge figures). Page titles are 20px, section titles 17px, card titles 15px, body 14px, controls and labels 13px, captions 11px.
 - **Colour means something.** `--blue` is the brand and the focus ring. `--green` and `--red` paint status dots and delta discs; words use `--positive-text` and `--negative-text`, which pass AA. Avatar and chart hues (`--teal`, `--pink`, `--orange`, `--violet`) never carry status.
 - **Light only.** There is no dark theme, by product decision.
+- **Text passes AA.** Text is `--ink` or `--ink-2` (7:1 on white); `--ink-3` is for dots, dividers and icons, never words or numbers.
+- **The shell stands alone.** `shell.css` sets every element style its pages rely on, so the public site's `styles.css` can change without touching the product: the staff console doesn't load it at all, and the firm app's product rules live in `workspace.css`.
 - **No inline styles.** A one-off need becomes a class: `.pre-line` keeps a message's line breaks, `.block` puts a line on its own, `.scroll-text` lets long source text scroll in its box (a `pre` already wraps), `.evidence-frame` sizes an embedded PDF. Anything used on more than one page becomes a component.
 - **Every page opens with `PageHeader`**, titled as the sidebar names the page. A form or panel placed straight on a page is a white card.
 - **No dead code.** Both apps' type-checks fail on unused locals and parameters (`noUnusedLocals`, `noUnusedParameters`); when a class stops being used, delete its rule in the same change.

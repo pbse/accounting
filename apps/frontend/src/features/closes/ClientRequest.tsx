@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../../lib/api";
 import { PageHeader } from "@close/ui/components/PageHeader";
+import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
 
 type Question = { position: number; text: string; state: string; answer: string };
 type Request = {
@@ -17,6 +18,7 @@ type Request = {
 const stateLabels: Record<string, string> = { answered: "Answered", awaiting_document: "Waiting for your document", "": "Not answered yet" };
 
 export default function ClientRequest() {
+  useShellThemeColor();
   const [token] = useState(() => window.location.hash.slice(1));
   const [request, setRequest] = useState<Request>();
   const [error, setError] = useState("");
