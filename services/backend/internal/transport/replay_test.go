@@ -201,6 +201,9 @@ func TestReplayComparesTheCurrentModelWithConfirmedReadings(t *testing.T) {
 	}
 	_, err = db.Exec(`DELETE FROM evidence WHERE close_id=$1 AND name='late.txt'`, closeID)
 	must(err)
+	// A historical run with unknown effort must not suppress the new check.
+	_, err = db.Exec(`INSERT INTO replay_runs(organization_id,close_id,model,actor,items) SELECT organization_id,id,'synthetic-model-2','historical-replay','[]' FROM client_closes WHERE id=$1`, closeID)
+	must(err)
 	must(sweepReplays(modelContext(t, ctx), db))
 	must(sweepReplays(modelContext(t, ctx), db))
 	if runs("synthetic-model-2") != 1 {

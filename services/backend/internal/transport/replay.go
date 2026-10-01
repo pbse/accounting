@@ -117,7 +117,7 @@ func replay(db *sql.DB) http.HandlerFunc {
 		if r.Method == "GET" {
 			var run struct {
 				Model           string          `json:"model"`
-				ReasoningEffort string          `json:"reasoning_effort"`
+				ReasoningEffort *string         `json:"reasoning_effort"`
 				Actor           string          `json:"actor"`
 				Items           json.RawMessage `json:"items"`
 				CreatedAt       time.Time       `json:"created_at"`

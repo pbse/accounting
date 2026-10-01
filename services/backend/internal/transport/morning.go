@@ -89,10 +89,11 @@ func morning(db *sql.DB) http.HandlerFunc {
 		// The latest automatic check of the current agent on a close this person can open; counts only, no client names.
 		var check map[string]any
 		var model, checkedClose string
+		var effort *string
 		var items []byte
 		var checked time.Time
-		err = db.QueryRowContext(ctx, `SELECT r.model,r.close_id::text,r.items,r.created_at FROM replay_runs r JOIN client_closes c ON c.id=r.close_id
- WHERE r.organization_id=$1 AND r.actor='scheduled-replay' AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) ORDER BY r.id DESC LIMIT 1`, args...).Scan(&model, &checkedClose, &items, &checked)
+		err = db.QueryRowContext(ctx, `SELECT r.model,r.close_id::text,r.items,r.created_at,r.reasoning_effort FROM replay_runs r JOIN client_closes c ON c.id=r.close_id
+ WHERE r.organization_id=$1 AND r.actor='scheduled-replay' AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) ORDER BY r.id DESC LIMIT 1`, args...).Scan(&model, &checkedClose, &items, &checked, &effort)
 		if err != nil && err != sql.ErrNoRows {
 			problem(w, 503, "Morning brief unavailable.")
 			return
@@ -112,7 +113,7 @@ func morning(db *sql.DB) http.HandlerFunc {
 					}
 				}
 			}
-			check = map[string]any{"model": model, "close_id": checkedClose, "kept": kept, "scored": scored, "checked_at": checked}
+			check = map[string]any{"model": model, "reasoning_effort": effort, "close_id": checkedClose, "kept": kept, "scored": scored, "checked_at": checked}
 		}
 		daily, err := dailyFindings(ctx, db, organization(r), firmAccess(r), subject(r))
 		if err != nil {
