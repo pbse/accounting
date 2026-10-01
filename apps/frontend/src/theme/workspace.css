@@ -349,6 +349,18 @@
 .nav-item[aria-current="page"] svg {
   color: var(--ink);
 }
+/* "Ask the agent" in the sidebar is a button that looks like its neighbours. */
+.app-shell button.nav-item {
+  width: 100%;
+  background: none;
+  box-shadow: none;
+  font-weight: 400;
+  line-height: 20px;
+  text-align: left;
+}
+.app-shell button.nav-item:hover:not(:disabled) {
+  background: var(--fill);
+}
 .app-shell .nav-item .pill {
   margin-left: auto;
   min-width: 20px;
@@ -619,16 +631,6 @@
 .work-item > summary {
   font-weight: 400;
 }
-.ask-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: var(--space-8);
-}
-.app-shell .ask-row label {
-  flex: 1 1 22rem;
-  margin: 0;
-}
 .agent-card {
   background: var(--surface);
   border-radius: var(--radius-md);
@@ -663,9 +665,6 @@
 .work-body {
   padding: var(--space-10) var(--space-16) var(--space-16);
   border-top: 1px solid var(--line);
-}
-.app-shell .ask-row input {
-  max-width: none;
 }
 .app-shell .stack > details {
   background: var(--surface);
@@ -714,7 +713,12 @@
   gap: var(--space-8);
   padding: var(--space-10) var(--space-16);
   border-radius: var(--radius-full);
-  box-shadow: var(--shadow-raised), 0 8px 24px rgb(0 0 0 / 8%);
+  background: var(--gloss), var(--blue);
+  color: var(--on-chip);
+  box-shadow: var(--shadow-chip), 0 8px 24px rgb(31 98 166 / 28%);
+}
+.app-shell .assistant-toggle:hover:not(:disabled) {
+  background: var(--gloss-hover), var(--blue);
 }
 aside.assistant {
   position: fixed;
@@ -791,6 +795,9 @@ aside.assistant {
   background: none;
   color: var(--ink-2);
   font-size: 13px;
+}
+.assistant-hint .suggestions {
+  margin-top: var(--space-12);
 }
 .assistant-messages > li p {
   margin: 0;

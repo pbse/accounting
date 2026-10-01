@@ -3,6 +3,7 @@ import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
+import { AgentComposer } from "../../ui/AgentComposer";
 import { Avatar } from "../../ui/Avatar";
 import { Icon } from "../../ui/Icon";
 import { PageHeader } from "../../ui/PageHeader";
@@ -254,6 +255,7 @@ export function Work({
           >
             What needs you, what the agent is handling, and what can finish next.
           </PageHeader>
+          <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} view={filter} client={clientSearch} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />
           <StatGroup>
             <StatTile icon="decision" tone="orange" label="Needs your decision" value={counts.needs_confirmation} caption="Proposed facts and questions to confirm" onClick={() => show("needs_confirmation")} />
             <StatTile icon="review" label="Ready for review" value={queue?.count} caption="Prepared drafts with evidence and no blockers" onClick={() => document.getElementById("review-queue")?.scrollIntoView({ block: "start" })} />
@@ -272,7 +274,6 @@ export function Work({
         <>
           {!closeId && <MorningBrief refresh={refresh} />}
           {!closeId && <DelegatedCloses refresh={refresh} client={clientSearch} />}
-          {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} view={filter} client={clientSearch} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />}
           {!closeId && (
             <>
               <SectionHeader title="Ready for your review" id="review-queue">
@@ -645,6 +646,9 @@ function PortfolioGoal({ goal, onChange }: { goal: Goal; onChange: () => void })
   );
 }
 
+// One-click asks: the first three only filter this page; preparing shows the server's exact preview first.
+const suggestions = ["Show decisions", "Show blockers", "Show everything waiting on clients", "Prepare my clients due Friday"];
+
 function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem[];view:string;client:string;onFilter:(view:string)=>void;onChange:()=>void}) {
   const [mode,setMode] = useState<"prepare"|"stop"|"recheck">("prepare");
   const [params] = useSearchParams();
@@ -752,10 +756,22 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
     }
     setOutcomes(results);setPreview(undefined);setSelected([]);setBusy(false);onChange();
   }
-  return <details open className="agent-card"><summary><Icon name="agent" /> Ask the agent · find, explain and preview actions</summary>
+  return <AgentComposer
+    title="Ask the agent"
+    description="Find, explain or prepare work across your clients. Actions always need a preview and confirmation."
+    value={command}
+    onChange={setCommand}
+    onSubmit={() => interpret()}
+    busy={busy}
+    placeholder="Ask in your own words, such as “prepare my clients due Friday”"
+    submitLabel="Find and preview"
+    suggestions={suggestions}
+    onSuggestion={(text) => { setCommand(text); interpret(text); }}
+  >
+    <details><summary>What you can ask</summary>
     <p>Ask for a goal such as “prepare my clients due Friday”, “recheck failed work” or “stop work waiting on the client”: the server lists exactly which closes it selects before anything runs. Each close is checked again when it runs and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
-    <div className="ask-row"><label>Ask Work<input value={command} readOnly={busy} onChange={e=>setCommand(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();if(!busy) interpret();}}} placeholder="show blockers · prepare my clients due Friday · rehearse Client · YYYY-MM" maxLength={220} /></label><button type="button" className="primary" disabled={busy || !command.trim()} onClick={()=>interpret()}>Find and preview</button></div>
-    <p>Ask in your own words, or try “show decisions”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, “prepare my clients due Friday” or “stop all visible”. Actions always need a preview and confirmation.</p>
+    <p>Ask in your own words, or try “show decisions”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, “prepare my clients due Friday” or “stop all visible”.</p>
+    </details>
     {answer && <p role="status" style={{whiteSpace:"pre-line"}}>{answer}</p>}
     {answerClose && <Link to={`/dashboard/closes/${answerClose}`}>Open close rehearsal</Link>}
     <details><summary>Choose closes for a portfolio action</summary>
@@ -767,7 +783,7 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
     {goals.map(goal=><PortfolioGoal key={goal.id || goal.goal} goal={goal} onChange={onChange} />)}
     {outcomes.length>0 && <div role="status"><h3>Result by close</h3><ul>{outcomes.map((result,i)=><li key={i}>{result}</li>)}</ul></div>}
     {error && <p role="alert">{error}</p>}
-  </details>;
+  </AgentComposer>;
 }
 
 type Hint = {
