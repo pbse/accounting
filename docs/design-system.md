@@ -1,6 +1,6 @@
 # Workspace design system (Tray)
 
-The product workspace (everything under `/dashboard`) uses **Tray**: a light-only look with a grey ground, white cards and grey fills inside them, Inter Display type and Hugeicons. Marketing pages and the client request page keep their own styles; Tray is scoped to `.app-shell`, the workspace layout's root.
+The product (everything under `/dashboard`, and the client request page at `/request`) uses **Tray**: a light-only look with a grey ground, white cards and grey fills inside them, Inter Display type and Hugeicons. Marketing and legal pages keep their own styles; Tray is scoped to `.app-shell`, the workspace layout's root. The client request page uses `.app-shell.standalone`, a single centred column without the sidebar.
 
 The reference for every value is the Tray design system: tokens, type scale, components and icon guidance were measured from the dashboard the product is modelled on.
 
@@ -13,7 +13,7 @@ The reference for every value is the Tray design system: tokens, type scale, com
 | Font files (Inter, OFL) | `apps/frontend/src/theme/fonts/` | Inter is upgraded. Keep the Latin and Latin Extended subsets with their `unicode-range`s. |
 | Shared components, each with its stylesheet beside it | `apps/frontend/src/ui/` | A pattern used on more than one page changes. |
 | Icons | `apps/frontend/src/ui/Icon.tsx` | An icon is added or replaced. |
-| Public and legacy element styles | `apps/frontend/src/styles.css` | Marketing, legal or client request pages change. |
+| Public and legacy element styles | `apps/frontend/src/styles.css` | Marketing or legal pages change. |
 
 `main.tsx` imports `styles.css`, then `theme/tokens.css`, then `theme/workspace.css`, so workspace rules override the public element styles inside the shell. Each component imports its own stylesheet, which loads with the page that uses it.
 
@@ -43,6 +43,8 @@ To add a component, put `Name.tsx` and `Name.css` in `ui/`, import the styleshee
 - **One type family.** Inter at optical size 32 at every size, weights 400 and 500 (600 for bold text and badge figures). Page titles are 20px, section titles 17px, card titles 15px, body 14px, controls and labels 13px, captions 11px.
 - **Colour means something.** `--blue` is the brand and the focus ring. `--green` and `--red` paint status dots and delta discs; words use `--positive-text` and `--negative-text`, which pass AA. Avatar and chart hues (`--teal`, `--pink`, `--orange`, `--violet`) never carry status.
 - **Light only.** There is no dark theme, by product decision.
+- **No inline styles.** A one-off need becomes a class: `.pre-line` keeps a message's line breaks, `.block` puts a line on its own, `.scroll-text` lets long source text scroll in its box (a `pre` already wraps), `.evidence-frame` sizes an embedded PDF. Anything used on more than one page becomes a component.
+- **Every page opens with `PageHeader`**, titled as the sidebar names the page. A form or panel placed straight on a page is a white card.
 
 ## The agent comes first
 

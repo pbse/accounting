@@ -7,6 +7,7 @@ import { money, useCurrency, workspaceRequest } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { LoanFee, LoanInput, LoanIssuanceCosts, LoanPayment, LoanRateChange, LoanWorkpaper } from "../../../../../packages/contracts/loan";
+import { PageHeader } from "../../ui/PageHeader";
 
 const dayCounts = { actual_360: "Actual/360", actual_365: "Actual/365 (fixed)", "30_360_bond": "30/360 bond basis (US, no February rule)", "30e_360": "30E/360 (Eurobond)" };
 
@@ -172,8 +173,10 @@ export default function PrepareLoan() {
   );
   return (
     <>
-      <h1>Prepare a loan schedule</h1>
-      <p>Check a month of loan activity against the lender's statement. The lender's principal/interest split is used as stated; interest recomputed from the note only raises questions. Needs the firm's approved loan procedure for this client to save.</p>
+      <PageHeader icon="loan" title="Loan schedule">
+        Check a month of loan activity against the lender's statement. The lender's principal/interest split is used as stated; interest recomputed from
+        the note only raises questions. Needs the firm's approved loan procedure for this client to save.
+      </PageHeader>
       {revision.close && <SourceReview closeId={revision.close} sources={revision.sources} />}
       {revision.error && <p role="alert">{revision.error}</p>}
       <form ref={form} onSubmit={(e) => void prepare(e)} onChange={() => setResult(undefined)}>

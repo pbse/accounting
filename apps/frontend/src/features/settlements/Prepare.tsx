@@ -11,6 +11,7 @@ import type {
   SettlementPayout,
   SettlementWorkpaper,
 } from "../../../../../packages/contracts/settlement";
+import { PageHeader } from "../../ui/PageHeader";
 
 type Chosen = { name: string; text: string; id?: string };
 
@@ -683,13 +684,10 @@ export default function Prepare() {
   };
   return (
     <>
-      <p className="eyebrow">STRIPE SETTLEMENT / PREPARATION</p>
-      <h1>Every Stripe payout, traced to the bank.</h1>
-      <p className="intro">
-        Stripe deposits charges, refunds, disputes and fees as one net payout.
-        Bring Stripe's itemized payout export and the bank account's CSV; each
+      <PageHeader icon="stripe" title="Stripe payouts">
+        Stripe deposits charges, refunds, disputes and fees as one net payout. Bring Stripe's itemized payout export and the bank account's CSV; each
         payout is matched to its deposit, and anything unresolved stays visible.
-      </p>
+      </PageHeader>
       {revision.paper && (
         <p role="status">
           {revision.error ||

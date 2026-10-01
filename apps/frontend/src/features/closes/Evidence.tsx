@@ -106,14 +106,7 @@ export function SourceReview({
         <div>
           <h4>{opened.name}</h4>
           <button onClick={() => setOpened(undefined)}>Close source</button>
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              overflowWrap: "anywhere",
-              maxHeight: "30rem",
-              overflow: "auto",
-            }}
-          >
+          <pre className="scroll-text">
             {opened.text}
           </pre>
         </div>
@@ -298,27 +291,13 @@ export function Evidence({
           <div className="form-grid">
             <div>
               <h4>Before · #{oldId}</h4>
-              <pre
-                style={{
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                  maxHeight: "25rem",
-                  overflow: "auto",
-                }}
-              >
+              <pre className="scroll-text">
                 {comparison.before}
               </pre>
             </div>
             <div>
               <h4>After · #{newId}</h4>
-              <pre
-                style={{
-                  whiteSpace: "pre-wrap",
-                  overflowWrap: "anywhere",
-                  maxHeight: "25rem",
-                  overflow: "auto",
-                }}
-              >
+              <pre className="scroll-text">
                 {comparison.after}
               </pre>
             </div>

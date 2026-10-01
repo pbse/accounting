@@ -74,7 +74,7 @@ export function RequestCard({ closeId, outcome, live, onConfirm }: { closeId: st
       </ul>
       {shown.more > 0 && <p>And {shown.more} more; select them in Requests.</p>}
       <p>The wording it would save:</p>
-      <blockquote style={{ whiteSpace: "pre-line" }}>{shown.body}</blockquote>
+      <blockquote className="pre-line">{shown.body}</blockquote>
       <label>
         <input type="checkbox" checked={checked === shown.digest} onChange={(e) => setChecked(e.target.checked ? shown.digest : "")} /> Save this wording as a request draft. Nothing is approved or sent.
       </label>

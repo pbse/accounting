@@ -95,7 +95,7 @@ export function Coverage({ closeId }: { closeId: string }) {
     {link && <label>Copy this private reply link now<input readOnly value={link} onFocus={e => e.currentTarget.select()} /></label>}
     <PasscodeNotice passcode={passcode} />
     {!!status?.requests.length && <details><summary>Approved consolidated requests ({status.requests.length})</summary>{status.requests.map(q => <article key={q.id}>
-      <h4>Request #{q.id} · {q.recipient}</h4><pre style={{ whiteSpace: "pre-wrap" }}>{q.body}</pre>
+      <h4>Request #{q.id} · {q.recipient}</h4><pre>{q.body}</pre>
       <p>{q.link?.revoked_at ? "Link revoked" : q.link && !q.live ? `${q.replied ? "Reply received; the link expired" : "Link expired"} ${new Date(q.link.expires_at).toLocaleString()}` : q.replied ? (q.open ? "Reply received; the client can add to it until the link expires" : "Reply received. It takes no more answers now that its work or coverage moved on; send a new request for anything still missing.") : q.stale ? `The client can no longer answer it: ${q.stale}` : q.link ? `Expires ${new Date(q.link.expires_at).toLocaleString()}` : "No current link"}</p>
       {!!q.emails?.length && <EmailHistory emails={q.emails} />}
       {!q.replied && q.live && !q.stale && (!q.email || (q.email.state==="accepted" && q.email.delivery==="delivered") || (q.reminder?.left ?? 1) <= 0) && <SendRequestEmail key={q.email?.id ?? "initial"} closeId={closeId} requestId={q.id} recipient={q.recipient} previousId={q.email?.id} reminder={q.reminder} onQueued={(p)=>{if(!q.email){setLink("");setPasscode(p);}setVersion(v=>v+1);}} />}

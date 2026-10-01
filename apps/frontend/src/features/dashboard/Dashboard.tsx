@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { referenceWorkpaperUrl } from "../../lib/api";
 import type { ReferenceWorkpaper } from "../../../../../packages/contracts/reference";
 import { Review } from "../review/Review";
+import { PageHeader } from "../../ui/PageHeader";
 
 export default function Dashboard({
   view,
@@ -33,16 +34,13 @@ export default function Dashboard({
 
   return (
     <>
-      <p className="eyebrow">SYNTHETIC REFERENCE / SEPTEMBER 2026</p>
-      <h1>
-        {view === "close"
-          ? "Acme Services · September"
-          : "Review the work, with the evidence."}
-      </h1>
-      <p className="intro">
-        Preparation, approval, verified posting, and firm sign-off remain
-        separate.
-      </p>
+      <PageHeader
+        icon="book"
+        title={view === "close" ? "Example close: Acme Services · September" : "Example review"}
+        actions={<span className="pill neutral">Synthetic reference · September 2026</span>}
+      >
+        Preparation, approval, verified posting, and firm sign-off remain separate.
+      </PageHeader>
       {error ? (
         <section role="alert">
           <h2>We couldn’t load the reference workpaper.</h2>

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { workspaceRequest } from "./workspace";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { PageHeader } from "../../ui/PageHeader";
+import { Segmented } from "../../ui/Segmented";
 
 type Event = { key: string; kind: string; text: string; at: string; workpaper_id?: string; job_id?: string; account_id?: string; read: boolean; snoozed_until?: string };
 type Group = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: Event[] };
@@ -128,22 +129,20 @@ export default function Attention() {
   const later = (days: number) => new Date(Date.now() + days * 86400000).toISOString();
   const groups = inbox?.groups ?? [];
   return (
-    <section aria-label="Attention">
-      <SectionHeader title={<>Attention{inbox && inbox.unread > 0 ? ` · ${inbox.unread} unread` : ""}</>} level={1} />
-      <p>What needs a person across your clients: replies, confirmations, failures, drafts to approve or fix, changed sources, files to release and requests not delivered. Running work is left out.</p>
-      <div role="group" aria-label="Show">
-        {(Object.keys(views) as (keyof typeof views)[]).map((v) => (
-          <button
-            key={v}
-            aria-pressed={view === v}
-            onClick={() => {
-              setView(v);
-              setPage(0);
-            }}
-          >
-            {views[v]}
-          </button>
-        ))}
+    <section className="bare attention" aria-label="Attention">
+      <PageHeader icon="decision" title={<>Attention{inbox && inbox.unread > 0 ? ` · ${inbox.unread} unread` : ""}</>}>
+        What needs a person across your clients: replies, confirmations, failures, drafts to approve or fix, changed sources, files to release and requests not delivered. Running work is left out.
+      </PageHeader>
+      <div className="toolbar">
+        <Segmented
+          label="Show"
+          items={(Object.keys(views) as (keyof typeof views)[]).map((key) => ({ key, label: views[key] }))}
+          value={view}
+          onChange={(key) => {
+            setView(key as keyof typeof views);
+            setPage(0);
+          }}
+        />
       </div>
       {error && <p role="alert">{error}</p>}
       {inbox && groups.length === 0 && <p className="empty">Nothing needs you here.</p>}
