@@ -57,6 +57,15 @@ const apps = [
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],
   },
+  // A client's request page stands alone, without the sidebar. An unknown link still renders its shell and header; the
+  // questions themselves need a request really sent to a client contact, which the check cannot create.
+  {
+    name: "client request page",
+    start: `${frontend}/request#layout-check-unknown-link`,
+    standalone: true,
+    stylesheet: "/apps/frontend/src/styles.css",
+    routes: [""],
+  },
   {
     name: "staff console",
     start: `${admin}/`,
@@ -92,12 +101,12 @@ for (const app of apps) {
       await page.waitForSelector(".app-shell .sidebar");
     };
     await page.goto(app.start);
-    await unlock();
+    if (app.unlock) await unlock();
     for (const route of app.routes) {
       const where = `${app.name} ${route} (${width.name})`;
       const fail = (message) => failures.push(`${where}: ${message}`);
       // The route counts as rendered once its header replaces the previous page's (a new element or a new title).
-      await page.evaluate((path) => {
+      if (!app.standalone) await page.evaluate((path) => {
         const target = new URL(path, location.href);
         const same = target.pathname + target.search === location.pathname + location.search;
         const previous = same ? null : document.querySelector(".page-header h1");
@@ -132,7 +141,9 @@ for (const app of apps) {
         return { sidebar: rect(".sidebar"), main: rect(".app-main"), scrollWidth: document.documentElement.scrollWidth };
       });
       if (box.scrollWidth > width.viewport.width) fail(`the page is ${box.scrollWidth}px wide, wider than the ${width.viewport.width}px screen`);
-      if (width.name === "desktop") {
+      if (app.standalone) {
+        if (box.sidebar) fail("a standalone page shows the sidebar");
+      } else if (width.name === "desktop") {
         if (box.sidebar?.width !== 296) fail(`the sidebar is ${box.sidebar?.width}px wide, not 296px`);
         if (box.main?.left !== 296) fail(`the page column starts at ${box.main?.left}px, not after the sidebar`);
       } else {
@@ -142,7 +153,7 @@ for (const app of apps) {
       // The shell stands alone: emptying the public site's stylesheet changes nothing inside it. Styles are read with
       // the sheet, without it and with it again; only what both readings with it agree on counts, so a page still
       // loading is not taken for a leak, and a page that keeps changing is read again.
-      if (app.stylesheet && width.name === "desktop") {
+      if (app.stylesheet) {
         const toggle = (path) => {
           const sheet = [...document.querySelectorAll("style[data-vite-dev-id]")].find((style) => style.dataset.viteDevId.endsWith(path));
           if (!sheet) return false;
