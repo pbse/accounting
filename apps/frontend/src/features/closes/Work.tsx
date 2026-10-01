@@ -3,13 +3,19 @@ import { AccrualConfirmations } from "../accruals/Prepare";
 import { EmailHistory, PasscodeNotice, SendRequestEmail, type EmailRecord, type ReminderStatus } from "./Email";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
-import { Avatar, Icon, type IconName } from "../dashboard/Icon";
+import { Avatar } from "../../ui/Avatar";
+import { Icon } from "../../ui/Icon";
+import { PageHeader } from "../../ui/PageHeader";
+import { Segmented } from "../../ui/Segmented";
+import { StatGroup, StatTile } from "../../ui/StatTile";
 import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
 import { MorningBrief } from "./Morning";
 import { DelegatedCloses } from "./Goal";
 import { Setup } from "./Setup";
+import { EntityCell, RowList } from "../../ui/RowList";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Fact = {
  optional?: boolean;
@@ -127,23 +133,6 @@ const formFor: Record<string, [string, string]> = {
   owner: ["owners/new", ""],
 };
 
-function Kpi({ icon, tone, label, value, caption, onClick }: { icon: IconName; tone: string; label: string; value?: number; caption: string; onClick: () => void }) {
-  return (
-    <button type="button" className="kpi" onClick={onClick}>
-      <span className="kpi-head">
-        <span className={`kpi-icon ${tone}`}>
-          <Icon name={icon} size={16} />
-        </span>
-        {label}
-      </span>
-      <span className="kpi-body">
-        <span className="kpi-value">{value ?? "–"}</span>
-        <span className="kpi-caption">{caption}</span>
-      </span>
-    </button>
-  );
-}
-
 export function Work({
   closeId,
   onPrepared,
@@ -243,38 +232,35 @@ export function Work({
         </>
       ) : (
         <>
-          <div className="page-title">
-            <div>
-              <span className="kpi-icon" aria-hidden="true">
-                <Icon name="work" />
-              </span>
-              <span>
-                <h1>Work</h1>
-                <p>What needs you, what the agent is handling, and what can finish next.</p>
-              </span>
-            </div>
-            <form
-              className="title-actions"
-              role="search"
-              onSubmit={(e) => {
-                e.preventDefault();
-                setClientSearch(String(new FormData(e.currentTarget).get("client") ?? ""));
-              }}
-            >
-              <input name="client" aria-label="Filter by client or close month" placeholder="Client or YYYY-MM" maxLength={200} />
-              <button>Filter</button>
-              <Link className="button primary" to="/dashboard/closes">
-                Open a client close
-              </Link>
-            </form>
-          </div>
-          <div className="kpis">
-            <Kpi icon="decision" tone="amber" label="Needs your decision" value={counts.needs_confirmation} caption="Proposed facts and questions to confirm" onClick={() => show("needs_confirmation")} />
-            <Kpi icon="review" tone="" label="Ready for review" value={queue?.count} caption="Prepared drafts with evidence and no blockers" onClick={() => document.getElementById("review-queue")?.scrollIntoView({ block: "start" })} />
-            <Kpi icon="waiting" tone="green" label="Waiting on clients" value={counts.waiting_client} caption="Approved requests awaiting a reply" onClick={() => show("waiting_client")} />
-            <Kpi icon="accrual" tone="gray" label="Due in 7 days" value={counts.due_soon} caption="Closes due within a week, including overdue" onClick={() => show("active")} />
-            <Kpi icon="blocked" tone="red" label="Blocked" value={counts.blocked} caption="Failed, replaced or unsupported work" onClick={() => show("blocked")} />
-          </div>
+          <PageHeader
+            icon="work"
+            title="Work"
+            actions={
+              <form
+                className="title-actions"
+                role="search"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setClientSearch(String(new FormData(e.currentTarget).get("client") ?? ""));
+                }}
+              >
+                <input name="client" aria-label="Filter by client or close month" placeholder="Client or YYYY-MM" maxLength={200} />
+                <button>Filter</button>
+                <Link className="button primary" to="/dashboard/closes">
+                  Open a client close
+                </Link>
+              </form>
+            }
+          >
+            What needs you, what the agent is handling, and what can finish next.
+          </PageHeader>
+          <StatGroup>
+            <StatTile icon="decision" tone="orange" label="Needs your decision" value={counts.needs_confirmation} caption="Proposed facts and questions to confirm" onClick={() => show("needs_confirmation")} />
+            <StatTile icon="review" label="Ready for review" value={queue?.count} caption="Prepared drafts with evidence and no blockers" onClick={() => document.getElementById("review-queue")?.scrollIntoView({ block: "start" })} />
+            <StatTile icon="waiting" tone="teal" label="Waiting on clients" value={counts.waiting_client} caption="Approved requests awaiting a reply" onClick={() => show("waiting_client")} />
+            <StatTile icon="accrual" tone="gray" label="Due in 7 days" value={counts.due_soon} caption="Closes due within a week, including overdue" onClick={() => show("active")} />
+            <StatTile icon="blocked" tone="red" label="Blocked" value={counts.blocked} caption="Failed, replaced or unsupported work" onClick={() => show("blocked")} />
+          </StatGroup>
         </>
       )}
       {!closeId && <Setup onEnrolled={() => setRefresh((n) => n + 1)} />}
@@ -289,67 +275,51 @@ export function Work({
           {!closeId && <PortfolioCommands key={`${filter}:${clientSearch}`} items={items} view={filter} client={clientSearch} onFilter={show} onChange={() => setRefresh((n) => n + 1)} />}
           {!closeId && (
             <>
-              <div className="section-title" id="review-queue">
-                <h2>Ready for your review</h2>
+              <SectionHeader title="Ready for your review" id="review-queue">
                 {queue && queue.count > queue.items.length && <small>Showing {queue.items.length} of {queue.count}</small>}
-              </div>
+              </SectionHeader>
               <BulkReview items={queue?.items} onDone={() => setRefresh((n) => n + 1)} />
-              <div className="section-title" id="dependency-review">
-                <h2>Work needing re-review</h2>
+              <SectionHeader title="Work needing re-review" id="dependency-review">
                 <small>Source revisions and inherited schedules reopen review; earlier approvals are not reused.</small>
-              </div>
-              <div className="rows" aria-label="Portfolio dependency review">
+              </SectionHeader>
+              <RowList label="Portfolio dependency review">
                 {!dependencyLoaded && <p role="status" className="empty">Checking dependencies…</p>}
                 {dependencyError && <p role="alert" className="empty">{dependencyError}</p>}
                 {dependencyLoaded && !dependencyError && dependencies.length === 0 && <p className="empty">No current workpapers have a changed dependency in this client filter.</p>}
                 {dependencies.map(item => (
                   <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
-                    <span className="row-main">
-                      <Avatar label={item.entity} />
-                      <span>
-                        <strong>{item.entity} · {item.period}</strong>
-                        <small>{kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}</small>
-                      </span>
-                    </span>
+                    <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}`} />
                     <span className="status danger">Evidence changed</span>
                     <small>{item.upstream_workpaper_id ? `Linked to prior draft #${item.upstream_workpaper_id}` : "Linked source changed"}</small>
-                    <Icon name="arrow" size={16} />
+                    <Icon name="arrow" />
                   </Link>
                 ))}
-              </div>
+              </RowList>
               {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
               {predicted.items.length > 0 && (
-                <div className="rows" aria-label="Predicted re-review">
+                <RowList label="Predicted re-review">
                   <p><strong>May need re-review</strong> · approved drafts in open closes whose account had a transaction updated in QuickBooks after the approval. The update may not change the balance; the approval stands until you review again.</p>
                   {predicted.items.map(item => (
                     <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
-                      <span className="row-main">
-                        <Avatar label={item.entity} />
-                        <span>
-                          <strong>{item.entity} · {item.period}</strong>
-                          <small>{kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}</small>
-                        </span>
-                      </span>
+                      <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}`} />
                       <span className="status">May be affected</span>
                       <small>{item.transaction} on {item.account} updated {new Date(item.updated_at).toLocaleString()}, after approval on {new Date(item.approved_at).toLocaleString()}{item.count > 1 ? ` (${item.count} such transactions)` : ""}</small>
-                      <Icon name="arrow" size={16} />
+                      <Icon name="arrow" />
                     </Link>
                   ))}
                   {predicted.more && <p>Showing 100 drafts. Filter by client or month to see more.</p>}
-                </div>
+                </RowList>
               )}
               <DailyBooks refresh={refresh} onReviewed={() => setRefresh((n) => n + 1)} />
             </>
           )}
           <div className="toolbar" id="work-list">
-            <div className="segmented" role="group" aria-label="Work view">
-              {views.map(([key, label]) => (
-                <button key={key} type="button" aria-pressed={filter === key} onClick={() => setFilter(key)}>
-                  {label}
-                  {counts[key] !== undefined && <span className={key === "needs_confirmation" && counts[key] > 0 ? "count alert" : "count"}>{counts[key]}</span>}
-                </button>
-              ))}
-            </div>
+            <Segmented
+              label="Work view"
+              items={views.map(([key, label]) => ({ key, label, count: counts[key], alert: key === "needs_confirmation" && counts[key] > 0 }))}
+              value={filter}
+              onChange={setFilter}
+            />
             <button type="button" onClick={() => setRefresh((n) => n + 1)}>Refresh</button>
           </div>
           {job && (
@@ -363,7 +333,7 @@ export function Work({
               in a client close.
             </p>
           )}
-          <fieldset disabled={!!error} className="rows work-rows">
+          <fieldset disabled={!!error} className="row-list">
             {items.map((item) => (
               <details
                 key={item.id}
@@ -371,13 +341,7 @@ export function Work({
                 className="work-item"
               >
                 <summary className="row">
-                  <span className="row-main">
-                    <Avatar label={item.entity} />
-                    <span>
-                      <strong>{item.entity} · {item.period}</strong>
-                      <small>{item.source_name} · #{item.id}</small>
-                    </span>
-                  </span>
+                  <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${item.source_name} · #${item.id}`} />
                   <span className={item.stale || item.blockers.length > 0 ? "status danger" : (tones[item.state] ?? "status")}>
                     {item.stale
                       ? "Source replaced"
@@ -448,38 +412,30 @@ function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () =
   const unchecked = items?.filter((item) => item.unchecked) ?? [];
   return (
     <>
-      <div className="section-title" id="daily-books">
-        <h2>Daily books</h2>
+      <SectionHeader title="Daily books" id="daily-books">
         <small>New since each client's last review. QuickBooks and Xero captures refresh daily, and QuickBooks sandbox companies also after a change.</small>
-      </div>
-      <div className="rows" aria-label="Daily books">
+      </SectionHeader>
+      <RowList label="Daily books">
         {!items && !error && <p role="status" className="empty">Checking captures…</p>}
         {error && <p role="alert" className="empty">{error}</p>}
         {items && open.length === 0 && unchecked.length === 0 && <p className="empty">No new exceptions since the last review.</p>}
         {unchecked.map((item) => (
           <div className="row" key={`unchecked-${item.close_id}`}>
-            <span className="row-main">
-              <Avatar label={item.entity} />
-              <span>
-                <strong>{item.entity} · {item.period}</strong>
-                <small>Transaction check incomplete in the {item.source === "xero" ? "Xero" : "QuickBooks"} capture of {new Date(item.captured_at).toLocaleString()}: {item.unchecked}</small>
-              </span>
-            </span>
+            <EntityCell
+              name={item.entity}
+              title={`${item.entity} · ${item.period}`}
+              detail={`Transaction check incomplete in the ${item.source === "xero" ? "Xero" : "QuickBooks"} capture of ${new Date(item.captured_at).toLocaleString()}: ${item.unchecked}`}
+            />
             <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open the close</Link>
           </div>
         ))}
         {open.map((item) => (
           <div className="row" key={item.close_id}>
-            <span className="row-main">
-              <Avatar label={item.entity} />
-              <span>
-                <strong>{item.entity} · {item.period}</strong>
-                <small>
-                  {item.new.length} new of {item.total} · captured {new Date(item.captured_at).toLocaleString()}
-                  {item.requested_by === "quickbooks-change-hint" ? " after a QuickBooks change" : ""}
-                </small>
-              </span>
-            </span>
+            <EntityCell
+              name={item.entity}
+              title={`${item.entity} · ${item.period}`}
+              detail={`${item.new.length} new of ${item.total} · captured ${new Date(item.captured_at).toLocaleString()}${item.requested_by === "quickbooks-change-hint" ? " after a QuickBooks change" : ""}`}
+            />
             <small>{item.new.slice(0, 2).map((e) => e.question).join(" ")}</small>
             <Link to={`/dashboard/closes/${item.close_id}?tab=overview`}>Open exceptions</Link>
             <button type="button" disabled={busy === item.close_id} onClick={() => void reviewed(item)}>
@@ -487,7 +443,7 @@ function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () =
             </button>
           </div>
         ))}
-      </div>
+      </RowList>
     </>
   );
 }
@@ -522,32 +478,32 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
   }
   return (
     <>
-      <div className="rows">
+      <RowList>
         {!items && <p className="empty">Review queue unavailable. Open a close to review its drafts.</p>}
         {items && items.length === 0 && <p className="empty">Nothing is waiting for review in this filter.</p>}
         {items?.map((item) => (
           <div className="row" key={item.workpaper_id}>
-            <span className="row-main">
-              <input
-                type="checkbox"
-                aria-label={`Select ${label(item)} for bulk approval`}
-                disabled={!!item.bulk_reason || busy || (!selected.includes(item.workpaper_id) && selected.length >= 20)}
-                checked={selected.includes(item.workpaper_id)}
-                onChange={(e) => {
-                  setConfirming(undefined);
-                  setSelected((current) => (e.target.checked ? [...current, item.workpaper_id] : current.filter((id) => id !== item.workpaper_id)));
-                }}
-              />
-              <Avatar label={item.entity} />
-              <span>
-                <strong>{item.entity} · {item.period}</strong>
-                <small>
-                  {kindLabels[item.kind] ?? item.kind} · draft #{item.workpaper_id}
-                  {item.bulk_reason ? ` · review individually: ${item.bulk_reason.toLowerCase()}` : ""}
-                </small>
-                {item.approval_note && <small title={item.approval_note}>Approval requested{item.approval_requested_by ? ` by ${item.approval_requested_by}` : ""}{item.approval_agent ? ` via ${item.approval_agent}` : ""}: {item.approval_note}</small>}
-              </span>
-            </span>
+            <EntityCell
+              leading={
+                <>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${label(item)} for bulk approval`}
+                    disabled={!!item.bulk_reason || busy || (!selected.includes(item.workpaper_id) && selected.length >= 20)}
+                    checked={selected.includes(item.workpaper_id)}
+                    onChange={(e) => {
+                      setConfirming(undefined);
+                      setSelected((current) => (e.target.checked ? [...current, item.workpaper_id] : current.filter((id) => id !== item.workpaper_id)));
+                    }}
+                  />
+                  <Avatar label={item.entity} />
+                </>
+              }
+              title={`${item.entity} · ${item.period}`}
+              detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}${item.bulk_reason ? ` · review individually: ${item.bulk_reason.toLowerCase()}` : ""}`}
+            >
+              {item.approval_note && <small title={item.approval_note}>Approval requested{item.approval_requested_by ? ` by ${item.approval_requested_by}` : ""}{item.approval_agent ? ` via ${item.approval_agent}` : ""}: {item.approval_note}</small>}
+            </EntityCell>
             <span className="status warn">{item.approval_note ? "Approval requested" : "Awaiting review"}</span>
             <PlanChips plan={item} />
             <Link className="button" to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
@@ -555,7 +511,7 @@ function BulkReview({ items, onDone }: { items?: QueueItem[]; onDone: () => void
             </Link>
           </div>
         ))}
-      </div>
+      </RowList>
       {selected.length > 0 && !confirming && (
         <div className="toolbar">
           <button type="button" className="primary" onClick={() => setConfirming((items ?? []).filter((item) => selected.includes(item.workpaper_id)))}>

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
+import { RowList } from "../../ui/RowList";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Item = { job_id: string; source_name: string; confirmed_kind: string; replay_kind?: string; kept: boolean; changed_fields: string[]; error?: string };
 
@@ -25,12 +27,11 @@ export function Replay({ closeId }: { closeId: string }) {
   }
   return (
     <section aria-label="Check the current agent">
-      <div className="section-title">
-        <h2>Check the current agent</h2>
+      <SectionHeader title="Check the current agent">
         <button type="button" disabled={busy} onClick={() => void run()}>
           {busy ? "Replaying…" : "Replay confirmed readings"}
         </button>
-      </div>
+      </SectionHeader>
       <p className="note">
         Reads up to 3 of this close's most recently confirmed documents again with the current model (up to 3 model calls), on the evidence the
         agent originally selected, and compares each reading with what was confirmed. Only the comparison is saved; no reading or workpaper changes.
@@ -43,13 +44,14 @@ export function Replay({ closeId }: { closeId: string }) {
         </p>
       )}
       {result && (
-        <div className="rows">
-          <div className="rows-head">
-            <span>Document</span>
-            <span>Agent ({result.model}; {result.reasoning_effort == null ? "reasoning effort not recorded" : `${result.reasoning_effort || "provider default"} reasoning effort`})</span>
-            <span />
-            <span />
-          </div>
+        <RowList
+          columns={[
+            "Document",
+            <>Agent ({result.model}; {result.reasoning_effort == null ? "reasoning effort not recorded" : `${result.reasoning_effort || "provider default"} reasoning effort`})</>,
+            "",
+            "",
+          ]}
+        >
           {result.items.length === 0 && <p className="empty">No model readings have been confirmed in this close yet.</p>}
           {result.items.map((item) => (
             <div className="row" key={item.job_id}>
@@ -70,7 +72,7 @@ export function Replay({ closeId }: { closeId: string }) {
               <span />
             </div>
           ))}
-        </div>
+        </RowList>
       )}
     </section>
   );

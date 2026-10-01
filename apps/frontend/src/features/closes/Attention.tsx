@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { workspaceRequest } from "./workspace";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Event = { key: string; kind: string; text: string; at: string; workpaper_id?: string; job_id?: string; account_id?: string; read: boolean; snoozed_until?: string };
 type Group = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: Event[] };
@@ -128,9 +129,7 @@ export default function Attention() {
   const groups = inbox?.groups ?? [];
   return (
     <section aria-label="Attention">
-      <div className="section-title">
-        <h1>Attention{inbox && inbox.unread > 0 ? ` · ${inbox.unread} unread` : ""}</h1>
-      </div>
+      <SectionHeader title={<>Attention{inbox && inbox.unread > 0 ? ` · ${inbox.unread} unread` : ""}</>} level={1} />
       <p>What needs a person across your clients: replies, confirmations, failures, drafts to approve or fix, changed sources, files to release and requests not delivered. Running work is left out.</p>
       <div role="group" aria-label="Show">
         {(Object.keys(views) as (keyof typeof views)[]).map((v) => (

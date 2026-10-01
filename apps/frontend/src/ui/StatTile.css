@@ -1,0 +1,58 @@
+/* White tiles with a hairline ring in a white tray, 4px apart; a tile you can open tints on hover. */
+.stat-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  gap: var(--space-4);
+  padding: var(--space-4);
+  margin-bottom: var(--space-24);
+  background: var(--surface);
+  border-radius: var(--radius-md);
+}
+.app-shell .stat-tile {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-tile);
+  color: var(--ink);
+  text-align: left;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+.app-shell a.stat-tile:hover,
+.app-shell button.stat-tile:hover:not(:disabled) {
+  background: var(--hover);
+  box-shadow: var(--shadow-tile-hover);
+}
+.stat-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  padding: var(--space-12);
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+  font-weight: 500;
+}
+.stat-body {
+  display: block;
+  padding: var(--space-16) var(--space-12);
+}
+.stat-value {
+  display: block;
+  font-size: 28px;
+  line-height: 32px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.stat-caption {
+  display: block;
+  margin-top: var(--space-8);
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 16px;
+}

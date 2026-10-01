@@ -1,0 +1,75 @@
+.row-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  margin-bottom: var(--space-24);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.app-shell fieldset.row-list {
+  margin: 0 0 var(--space-24);
+}
+.row-list-head,
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12) 14px;
+}
+.row-list-head {
+  padding: 9px 14px;
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 16px;
+}
+.row {
+  min-height: 62px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-tile);
+  color: inherit;
+  text-decoration: none;
+}
+a.row:hover {
+  background: var(--hover);
+  box-shadow: var(--shadow-tile-hover);
+}
+.row small {
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 16px;
+}
+.row > .chip,
+.row > .status {
+  justify-self: start;
+}
+.entity-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  min-width: 0;
+}
+.entity-cell > span {
+  min-width: 0;
+}
+.entity-cell strong,
+.entity-cell small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-shell .entity-cell strong {
+  font-weight: 500;
+}
+@media (max-width: 860px) {
+  .row-list-head {
+    display: none;
+  }
+  .row {
+    grid-template-columns: 1fr auto;
+  }
+}

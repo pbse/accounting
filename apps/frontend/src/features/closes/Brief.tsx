@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
+import { RowList } from "../../ui/RowList";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Line = { area: string; state: "done" | "attention" | "waiting" | "info" | "unknown"; text: string; tab?: string };
 const tones: Record<Line["state"], string> = { done: "ok", attention: "warn", waiting: "info", info: "info", unknown: "danger" };
@@ -26,20 +28,19 @@ export function Brief({ closeId }: { closeId: string }) {
   if (!brief) return error ? <p role="alert">{error}</p> : null;
   return (
     <section aria-label="Where this close stands">
-      <div className="section-title">
-        <h2>Where this close stands</h2>
+      <SectionHeader title="Where this close stands">
         <span>
           <small>As of {brief.at.toLocaleTimeString()}</small>{" "}
           <button type="button" onClick={() => setAsked((n) => n + 1)}>
             Refresh
           </button>
         </span>
-      </div>
+      </SectionHeader>
       {error && <p role="alert">{error}</p>}
       <p>
         <strong>{brief.headline}</strong>
       </p>
-      <div className="rows">
+      <RowList>
         {brief.lines.map((line) => (
           <div className="row" key={line.area}>
             <span>
@@ -50,7 +51,7 @@ export function Brief({ closeId }: { closeId: string }) {
             {line.tab ? <Link to={`?tab=${line.tab}`}>Open</Link> : <span />}
           </div>
         ))}
-      </div>
+      </RowList>
     </section>
   );
 }

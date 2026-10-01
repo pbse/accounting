@@ -1,0 +1,25 @@
+.icon-tile {
+  width: var(--icon-tile);
+  height: var(--icon-tile);
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-chip);
+  color: var(--on-chip);
+}
+.icon-tile-blue {
+  background: var(--gloss), var(--blue);
+}
+.icon-tile-orange {
+  background: var(--gloss), var(--orange);
+}
+.icon-tile-teal {
+  background: var(--gloss), var(--teal);
+}
+.icon-tile-red {
+  background: var(--gloss), var(--red);
+}
+.icon-tile-gray {
+  background: var(--gloss), var(--gray);
+}

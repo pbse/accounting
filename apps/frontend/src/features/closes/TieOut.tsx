@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
+import { RowList } from "../../ui/RowList";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Status = "ties" | "ties_after_entries" | "within_materiality" | "differs" | "posting_unknown" | "unsupported";
 type Row = {
@@ -62,9 +64,7 @@ export function TieOut({ closeId }: { closeId: string }) {
   ].filter(Boolean);
   return (
     <section aria-label="Balance sheet tie-out">
-      <div className="section-title">
-        <h2>Balance sheet tie-out</h2>
-      </div>
+      <SectionHeader title="Balance sheet tie-out" />
       {!board.snapshot ? (
         <p className="empty">
           Capture a period snapshot on the <Link to="?tab=evidence">Evidence</Link> tab. The agent then compares every balance-sheet account
@@ -91,13 +91,7 @@ export function TieOut({ closeId }: { closeId: string }) {
                   this board may be incomplete: {board.unclassified.map((a) => `${a.account} ${side(a.balance)}`).join(", ")}.
                 </p>
               )}
-              <div className="rows">
-                <div className="rows-head">
-                  <span>Account</span>
-                  <span>Trial Balance</span>
-                  <span>Supported</span>
-                  <span />
-                </div>
+              <RowList columns={["Account", "Trial Balance", "Supported", ""]}>
                 {board.rows.map((row) => (
                   <div className="row" key={row.account_id + row.account}>
                     <div>
@@ -129,7 +123,7 @@ export function TieOut({ closeId }: { closeId: string }) {
                     <span />
                   </div>
                 ))}
-              </div>
+              </RowList>
               {board.unmatched.length > 0 && (
                 <>
                   <h3>Support not compared</h3>

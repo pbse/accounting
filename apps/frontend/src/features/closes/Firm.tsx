@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { Icon } from "../dashboard/Icon";
+import { PageHeader } from "../../ui/PageHeader";
 import { AgentAccess } from "./AgentAccess";
 import { isEnrollmentError } from "./ClosesList";
 import { EmailSettings } from "./Email";
@@ -360,17 +360,9 @@ export default function Firm() {
   }, [refresh]);
   return (
     <>
-      <div className="page-title">
-        <div>
-          <span className="kpi-icon" aria-hidden="true">
-            <Icon name="firm" />
-          </span>
-          <span>
-            <h1>Firm settings</h1>
-            <p>Review policies, client link and reminder rules, your agent access and approved email delivery for the whole firm.</p>
-          </span>
-        </div>
-      </div>
+      <PageHeader icon="firm" title="Firm settings">
+        Review policies, client link and reminder rules, your agent access and approved email delivery for the whole firm.
+      </PageHeader>
       {error && <p role="alert">{error}</p>}
       {isEnrollmentError(error) && <FirmEnrollment onEnrolled={() => setRefresh((n) => n + 1)} />}
       {loaded && !error && (

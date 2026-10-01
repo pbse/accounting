@@ -2,6 +2,8 @@ import { type FormEvent, useEffect, useState } from "react";
 import { clientAsk, type CoverageStatus } from "./ask";
 import { PasscodeNotice, SendRequestEmail } from "./Email";
 import { workspaceRequest } from "./workspace";
+import { RowList } from "../../ui/RowList";
+import { SectionHeader } from "../../ui/SectionHeader";
 
 type Payee = { name: string; this_month: string; last_month: string };
 type Change = {
@@ -81,14 +83,13 @@ export function Flux({ closeId }: { closeId: string }) {
   }
   return (
     <section aria-label="Changes from last month">
-      <div className="section-title">
-        <h2>Changes from last month</h2>
+      <SectionHeader title="Changes from last month">
         {questions.length > 0 && (
           <button type="button" onClick={() => void copy()}>
             Copy client questions
           </button>
         )}
-      </div>
+      </SectionHeader>
       {copied && <p role="status">{copied}</p>}
       {flux.state === "waiting" ? (
         <p className="empty">{flux.reason}</p>
@@ -101,7 +102,7 @@ export function Flux({ closeId }: { closeId: string }) {
           </p>
           {(flux.this!.stale || flux.last!.stale) && <p role="status">A snapshot's source was replaced or its connection is inactive; capture again before relying on these figures.</p>}
           {flux.changes!.length === 0 && <p className="empty">No account moved between the two months.</p>}
-          <div className="rows">
+          <RowList>
             {flux.changes!.map((c) => (
               <div className="row" key={c.account_id}>
                 <div>
@@ -158,7 +159,7 @@ export function Flux({ closeId }: { closeId: string }) {
                 </div>
               </div>
             ))}
-          </div>
+          </RowList>
           {sent && (
             <div>
               <p role="status">

@@ -1,0 +1,26 @@
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-8) var(--space-16);
+  min-height: var(--header-height);
+  padding: var(--space-10) var(--space-16);
+  margin: 0 calc(-1 * var(--space-16)) var(--space-16);
+  border-bottom: 1px solid var(--line);
+}
+.page-header-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+}
+.page-header-main p {
+  margin: 2px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 16px;
+}
+.page-header-icon {
+  display: grid;
+  color: var(--ink);
+}

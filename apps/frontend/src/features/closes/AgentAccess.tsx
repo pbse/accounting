@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
+import { RowList } from "../../ui/RowList";
 
 type Grant = { id: number; subject: string; state: "requested" | "approved" | "declined" | "revoked"; scope: "read" | "prepare"; reason: string; actor: string; created_at: string; effective_scope?: "read" | "prepare" | null };
 type Access = { mine: Grant | null; members: Grant[] };
@@ -73,7 +74,7 @@ export function AgentAccess() {
           {access.members.length > 0 && (
             <>
               <h3>Members</h3>
-              <div className="rows">
+              <RowList>
                 {access.members.map((grant) => {
                   const choice = decision[grant.id] ?? { scope: grant.scope, reason: "" };
                   const set = (patch: Partial<typeof choice>) => setDecision({ ...decision, [grant.id]: { ...choice, ...patch } });
@@ -117,7 +118,7 @@ export function AgentAccess() {
                     </div>
                   );
                 })}
-              </div>
+              </RowList>
             </>
           )}
         </>

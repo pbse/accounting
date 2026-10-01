@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router";
-import { Avatar, Icon, type IconName } from "../dashboard/Icon";
+import { Icon } from "../../ui/Icon";
+import { IconTile } from "../../ui/IconTile";
+import { PageHeader } from "../../ui/PageHeader";
+import { Segmented } from "../../ui/Segmented";
+import { StatGroup, StatTile } from "../../ui/StatTile";
 import { BillCorrection } from "./BillCorrection";
 import { CreditApplications } from "./CreditApplications";
 import { Brief } from "./Brief";
@@ -33,6 +37,7 @@ import { PlanChips, PlanningControls } from "./Planning";
 import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
 import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
+import { EntityCell, RowList } from "../../ui/RowList";
 
 const tabs = [
   ["overview", "Overview"],
@@ -51,22 +56,6 @@ const filters: Record<string, [string, (paper: Paper) => boolean]> = {
   approved: ["Approved", (paper) => paper.review_state === "approved"],
 };
 
-function Kpi({ icon, tone, label, value, caption, to }: { icon: IconName; tone: string; label: string; value: number; caption: string; to: string }) {
-  return (
-    <Link className="kpi" to={to}>
-      <span className="kpi-head">
-        <span className={`kpi-icon ${tone}`}>
-          <Icon name={icon} size={16} />
-        </span>
-        {label}
-      </span>
-      <span className="kpi-body">
-        <span className="kpi-value">{value}</span>
-        <span className="kpi-caption">{caption}</span>
-      </span>
-    </Link>
-  );
-}
 
 const basisLabels = { cash: "Cash basis", modified_cash: "Modified cash basis", accrual: "Accrual basis" };
 
@@ -192,35 +181,20 @@ export default function ClientClose() {
       <Link className="back-link" to="/dashboard/closes">
         <Icon name="back" size={15} /> Client closes
       </Link>
-      <div className="page-title">
-        <div>
-          <Avatar label={close.entity} />
-          <span>
-            <h1>{close.entity}</h1>
-            <p>
-              Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
-              {close.basis && <span className="chip" style={{ marginLeft: "0.5rem" }} title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
-              {close.profile && close.profile.state !== "none" && <span className="chip" style={{ marginLeft: "0.5rem" }} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
-            </p>
-          </span>
-        </div>
-        <PrepareActions close={close} />
-      </div>
+      <PageHeader avatar={close.entity} title={close.entity} actions={<PrepareActions close={close} />}>
+        Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
+        {close.basis && <span className="chip" style={{ marginLeft: "0.5rem" }} title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
+        {close.profile && close.profile.state !== "none" && <span className="chip" style={{ marginLeft: "0.5rem" }} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
+      </PageHeader>
       <PlanningControls key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}`} closeId={close.id} plan={close} onSaved={() => void reload()} />
-      <div className="kpis">
-        <Kpi icon="review" tone="" label="Ready for review" value={ready.length} caption={`Current drafts with evidence and no blockers${latest}`} to={`${base}?tab=workpapers&filter=ready`} />
-        <Kpi icon="blocked" tone="red" label="Needs attention" value={attention.length} caption={`Blockers, changes requested or evidence changed${latest}`} to={`${base}?tab=workpapers&filter=attention`} />
-        <Kpi icon="decision" tone="green" label="Approved" value={approved.length} caption="Approval is not posting or sign-off" to={`${base}?tab=workpapers&filter=approved`} />
-        <Kpi icon="file" tone="gray" label="Saved drafts" value={papers.length} caption={more ? "Latest 100 shown" : "All versions in this close"} to={`${base}?tab=workpapers`} />
-      </div>
+      <StatGroup>
+        <StatTile icon="review" label="Ready for review" value={ready.length} caption={`Current drafts with evidence and no blockers${latest}`} to={`${base}?tab=workpapers&filter=ready`} />
+        <StatTile icon="blocked" tone="red" label="Needs attention" value={attention.length} caption={`Blockers, changes requested or evidence changed${latest}`} to={`${base}?tab=workpapers&filter=attention`} />
+        <StatTile icon="decision" tone="teal" label="Approved" value={approved.length} caption="Approval is not posting or sign-off" to={`${base}?tab=workpapers&filter=approved`} />
+        <StatTile icon="file" tone="gray" label="Saved drafts" value={papers.length} caption={more ? "Latest 100 shown" : "All versions in this close"} to={`${base}?tab=workpapers`} />
+      </StatGroup>
       <nav className="toolbar" aria-label="Close sections">
-        <div className="segmented">
-          {tabs.map(([key, label]) => (
-            <Link key={key} to={`${base}?tab=${key}`} aria-current={tab === key ? "page" : undefined}>
-              {label}
-            </Link>
-          ))}
-        </div>
+        <Segmented items={tabs.map(([key, label]) => ({ key, label, to: `${base}?tab=${key}` }))} value={tab} />
       </nav>
       {tab === "overview" && (
         <div className="stack">
@@ -240,46 +214,30 @@ export default function ClientClose() {
       {tab === "workpapers" && (
         <div className="stack">
           <div className="toolbar">
-            <div className="segmented" role="group" aria-label="Filter drafts">
-              {Object.entries(filters).map(([key, [label, test]]) => (
-                <button key={key} type="button" aria-pressed={filter === key} onClick={() => setParams({ tab: "workpapers", filter: key })}>
-                  {label}
-                  <span className="count">{papers.filter(test).length}</span>
-                </button>
-              ))}
-            </div>
+            <Segmented
+              label="Filter drafts"
+              items={Object.entries(filters).map(([key, [label, test]]) => ({ key, label, count: papers.filter(test).length }))}
+              value={filter}
+              onChange={(key) => setParams({ tab: "workpapers", filter: key })}
+            />
           </div>
-          <div className="rows">
-            <div className="rows-head">
-              <span>Workpaper</span>
-              <span>Review</span>
-              <span>Prepared</span>
-              <span />
-            </div>
+          <RowList columns={["Workpaper", "Review", "Prepared", ""]}>
             {shown.length === 0 && <p className="empty">No drafts match this view. Prepare work from evidence or change the filter.</p>}
             {shown.map((paper) => (
               <Link className="row" key={paper.id} to={`${base}/workpapers/${paper.id}`}>
-                <span className="row-main">
-                  <span className="kpi-icon gray" aria-hidden="true">
-                    <Icon name="file" size={16} />
-                  </span>
-                  <span>
-                    <strong>{paperLabel(paper)}</strong>
-                    <small>
-                      Draft #{paper.id}
-                      {paper.paper.revises ? ` · revises #${paper.paper.revises}` : ""}
-                      {(paper.paper.blockers?.length ?? 0) > 0 ? ` · ${paper.paper.blockers!.length} blocker${paper.paper.blockers!.length === 1 ? "" : "s"}` : ""}
-                    </small>
-                  </span>
-                </span>
+                <EntityCell
+                  leading={<IconTile icon="file" tone="gray" />}
+                  title={paperLabel(paper)}
+                  detail={`Draft #${paper.id}${paper.paper.revises ? ` · revises #${paper.paper.revises}` : ""}${(paper.paper.blockers?.length ?? 0) > 0 ? ` · ${paper.paper.blockers!.length} blocker${paper.paper.blockers!.length === 1 ? "" : "s"}` : ""}`}
+                />
                 <span>
                   <ReviewPill state={paper.review_state} />
                 </span>
                 <small>{new Date(paper.created_at).toLocaleString()}</small>
-                <Icon name="arrow" size={16} />
+                <Icon name="arrow" />
               </Link>
             ))}
-          </div>
+          </RowList>
           {more && <p className="note">Showing the 100 most recent drafts. Older records remain saved.</p>}
           <Recurring key={`recurring-${close.id}`} closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />
           <RecurringAccruals closeId={close.id} currency={close.profile?.currency ?? "USD"} onPrepared={() => void reload()} />

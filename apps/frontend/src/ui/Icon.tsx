@@ -34,16 +34,3 @@ export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
     </svg>
   );
 }
-
-// Each label keeps its colour everywhere it appears; the classes are in theme/workspace.css.
-const tones = ["teal", "pink", "blue", "orange", "violet"];
-
-export function Avatar({ label }: { label: string }) {
-  let hash = 0;
-  for (const character of label) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  return (
-    <span className={`avatar avatar-${tones[hash % tones.length]}`} aria-hidden="true">
-      {label.trim().charAt(0).toUpperCase() || "?"}
-    </span>
-  );
-}
