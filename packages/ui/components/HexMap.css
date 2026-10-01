@@ -1,0 +1,88 @@
+/* The hex map: empty cells in the ground's grey, each part in its hue under the chip gloss; below, a legend tile of
+   40px rows split by hairlines. */
+.hex-map {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  margin: 0;
+}
+.hex-map svg {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+  margin: 0 auto;
+}
+.hex-map polygon {
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.hex-map .empty {
+  fill: var(--bg);
+  stroke: var(--bg);
+}
+.hex-map g > polygon:first-child {
+  fill: currentColor;
+  stroke: currentColor;
+}
+.hex-map .gloss {
+  stroke: none;
+}
+.hex-map .gloss-light {
+  stop-color: var(--surface);
+  stop-opacity: 0.16;
+}
+.hex-map .gloss-clear {
+  stop-color: var(--surface);
+  stop-opacity: 0;
+}
+.hex-map .gloss-shade {
+  stop-color: var(--ink);
+  stop-opacity: 0.07;
+}
+.hex-map .blue {
+  color: var(--blue);
+}
+.hex-map .teal {
+  color: var(--teal);
+}
+.hex-map .orange {
+  color: var(--orange);
+}
+.hex-map .violet {
+  color: var(--violet);
+}
+.hex-legend {
+  margin: 0;
+  padding: 0 var(--space-12);
+  list-style: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-tile);
+}
+.hex-legend li {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-12);
+  min-height: 40px;
+  padding: var(--space-8) 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.hex-legend li + li {
+  border-top: 1px solid var(--line);
+}
+.hex-legend .swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+.hex-legend strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
