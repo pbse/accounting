@@ -134,6 +134,12 @@ function TrackRecord() {
   const drafts = { judged: sum((c) => c.drafts_reviewed), approved: sum((c) => c.drafts_approved_unrevised) };
   return (
     <section aria-label="Agent track record by client">
+      <SectionHeader title="Agent track record by client" />
+      <p className="note">
+        Closes from {data.window_from} on. Proposals are the model's readings of client documents that a person confirmed; kept means the person
+        confirmed every value the model gave. Drafts count once a person has judged them, by a recorded review decision or a revision. Rule-based readings,
+        carried-forward and recurring work, and {data.unlinked_human_drafts} drafts people saved directly are not counted.
+      </p>
       {data.has_more && (proposals.confirmed > 0 || drafts.judged > 0) && <p className="note">The charts cover the first 200 clients, the ones listed below.</p>}
       {(proposals.confirmed > 0 || drafts.judged > 0) && (
         <div className="track-split">
@@ -163,12 +169,6 @@ function TrackRecord() {
           )}
         </div>
       )}
-      <SectionHeader title="Agent track record by client" />
-      <p className="note">
-        Closes from {data.window_from} on. Proposals are the model's readings of client documents that a person confirmed; kept means the person
-        confirmed every value the model gave. Drafts count once a person has judged them, by a recorded review decision or a revision. Rule-based readings,
-        carried-forward and recurring work, and {data.unlinked_human_drafts} drafts people saved directly are not counted.
-      </p>
       {data.assistant && data.assistant.asked > 0 && (
         <p>
           Written assistant answers in the last 30 days, on closes you can open: {data.assistant.asked} asked, {data.assistant.kept} kept
