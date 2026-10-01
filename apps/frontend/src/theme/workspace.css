@@ -405,7 +405,7 @@
   gap: var(--space-8) var(--space-16);
   min-height: var(--header-height);
   padding: var(--space-10) var(--space-16);
-  margin: 0 -var(--space-16) var(--space-16);
+  margin: 0 calc(-1 * var(--space-16)) var(--space-16);
   border-bottom: 1px solid var(--line);
 }
 .page-title > div {
