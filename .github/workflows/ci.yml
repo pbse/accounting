@@ -37,6 +37,13 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- services/backend services/context-machine workers/context-machine infra/postgres scripts/deploy-context-machine.mjs scripts/deploy-context-machine.test.mjs .dockerignore package-lock.json .github/workflows/ci.yml; then
             echo "check=true" >> "$GITHUB_OUTPUT"
           fi
+      - name: Select the browser layout check
+        id: layout
+        # Both apps in a browser costs a minute or two, so it runs when what the pages are made of changes.
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] || ! git diff --quiet HEAD^1 HEAD -- apps packages scripts/layout-check.mjs package.json package-lock.json .github/workflows/ci.yml; then
+            echo "check=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Start PostgreSQL and install PDF/OCR tools in the background
         # The Go tests mostly wait on commits, so this throwaway database does not sync them to disk.
         run: |
@@ -84,6 +91,23 @@ jobs:
           npx wrangler deploy --dry-run --containers-rollout=none -c workers/queue/wrangler.jsonc --env production
         env:
           WRANGLER_SEND_METRICS: "false"
+      - name: Both apps in a browser, when the front end changes
+        if: steps.layout.outputs.check == 'true'
+        # A database of its own beside the Go tests', the API built from this commit and both apps' dev servers; then
+        # scripts/layout-check.mjs walks every page in the runner's Chrome (docs/design-system.md).
+        env:
+          DATABASE_URL: postgres://close:test-only@127.0.0.1:5432/close_layout?sslmode=disable
+        run: |
+          trap 'kill $(jobs -p) 2> /dev/null' EXIT
+          timeout 120 sh -c 'until pg_isready -q -h 127.0.0.1 -U close -d close_test; do sleep 1; done'
+          docker exec postgres createdb -U close close_layout
+          infra/postgres/migrate.sh > /dev/null
+          (cd services/backend && go build -o /tmp/api ./cmd/api)
+          HTTP_ADDR=127.0.0.1:8080 /tmp/api > /tmp/api.log 2>&1 &
+          npm run dev -w @close/frontend > /tmp/frontend.log 2>&1 &
+          npm run dev -w @close/admin > /tmp/admin.log 2>&1 &
+          timeout 120 sh -c 'until curl -sf http://127.0.0.1:8080/readyz > /dev/null; do sleep 1; done'
+          npm run check:layout || { tail -n 40 /tmp/api.log /tmp/frontend.log /tmp/admin.log; exit 1; }
       - run: test -z "$(gofmt -l services/backend)"
       - run: docker compose config --quiet
       - name: Migrations, Go tests and vet passed

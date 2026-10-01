@@ -54,6 +54,10 @@ To add a component, put `Name.tsx` and `Name.css` in `packages/ui/components/`, 
 - **No dead code.** Both apps' type-checks fail on unused locals and parameters (`noUnusedLocals`, `noUnusedParameters`); when a class stops being used, delete its rule in the same change.
 - **The staff console follows the same rules.** Its pages open with `PageHeader` and use the shared components; its navigation carries icons like the firm app's; only patterns no firm page has (the workflow flow and inspector, schema forms, filter rows, grants) live in `apps/admin/src/admin.css`.
 
+## Checking the layout
+
+`scripts/layout-check.mjs` opens every page of both apps in Chrome, at desktop and phone width, and fails when a page has no `PageHeader`, the sidebar is not 296px with the page column after it, the sidebar on a phone is more than one strip, a page is wider than a phone's screen, a page throws, or the firm app's shell takes any style from the public site's `styles.css`. CI runs it whenever `apps/`, `packages/` or the dependencies change. Locally, start the API and both apps' dev servers, then run `WORKSPACE_TOKEN=… npm run check:layout` (`CHROME_PATH` picks another Chromium browser, `FRONTEND_URL`, `ADMIN_URL` and `API_URL` other ports). A new page joins the check by adding its route to the script.
+
 ## The agent comes first
 
 The agent is how people get work done, so it is never more than one click away:
