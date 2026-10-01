@@ -89,12 +89,13 @@ type Usage struct {
 	Output int `json:"output_tokens"`
 }
 
-// Message contains exactly one of role/content, Call, or Result.
+// Message contains role/content, a Call, a Result, or opaque gateway continuation state.
 type Message struct {
-	Role    string
-	Content string
-	Call    *ToolCall
-	Result  *ToolResult
+	Role         string
+	Content      string
+	Call         *ToolCall
+	Result       *ToolResult
+	providerItem json.RawMessage
 }
 
 type ToolResult struct{ CallID, Output string }
@@ -113,6 +114,9 @@ type ToolCall struct {
 }
 
 type Response struct {
+	// Continuation must be appended unchanged before tool results on the next round.
+	// It carries provider state in memory only; it must not be sent to users or persisted.
+	Continuation    []Message  `json:"-"`
 	ID              string     `json:"id"`
 	Provider        Provider   `json:"provider"`
 	Model           string     `json:"model"`

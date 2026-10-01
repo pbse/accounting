@@ -49,7 +49,7 @@ CODEX_REASONING_EFFORT=medium
 CODEX_AUTH_MODE=auto
 OPENAI_MODEL=gpt-5.5
 OPENAI_REASONING_EFFORT=medium
-LLM_REASONING_EFFORTS={"investigation":"high"}
+LLM_REASONING_EFFORTS={"investigation":"low"}
 ```
 
 Use model IDs available to your account; omit `OPENAI_MODEL` when no OpenAI API key is installed. Setting `CODEX_AUTH_MODE=subscription` explicitly chooses the account token even when an API key exists. Direct API workflows still need an API key: their structured output, tool and consent contracts are not interchangeable with research runs.
@@ -108,3 +108,17 @@ One container accepts one run at a time, with a two-minute deadline and 1–16 m
 Pin upgrades in `services/context-machine/Dockerfile` and rerun CI's actual-CLI smoke tests. Roll back by redeploying the last known-good commit of **all three Workers** with matching configuration. Update a rotated service token on all three in the same deployment. Failed later steps do not automatically undo earlier Worker deployments.
 
 Provision the selected agent credentials/models, read-only service database credential and authorized profiles before deploying. A PR or dry run is not evidence of a live deployment.
+
+## Launch acceptance checks
+
+Starting the context machine enables the `research` route only. The eight existing accounting purposes still require `OPENAI_API_KEY` and `OPENAI_MODEL`; subscription credentials alone do not enable them. Research currently has no production feature caller. Integrate it into an authorized workflow with consent, budget reservation, provenance and citation validation before exposing it to users.
+
+Before calling the AI layer ready:
+
+- Require a passing PR CI run, then a successful production deploy and `/readyz`. If Actions was blocked by billing, resolve billing and rerun CI before retrying deployment; merging does not bypass this gate.
+- Install the selected credentials, exact model IDs, efforts, read-only database login and profile using the settings above. `auto` uses API keys first; test subscription mode explicitly if it will be used, since successful API inference does not verify subscription entitlement.
+- On synthetic, authorized accounting records, exercise evidence selection/preparation, statement extraction, procedure drafting, work commands, workflow planning, written-answer streaming and multi-round investigations. Verify strict JSON, final citations, tool continuation and the configured model/effort. Keep normal firm consent and approval gates enabled.
+- Check token budgets against the chosen model and effort. These ceilings include reasoning: work commands have 200 output tokens, investigation rounds 600 and written answers 1,200. Higher effort can consume the ceiling before any usable answer. Select a supported low/no-reasoning setting for small tasks or deliberately change and retest their budgets; do not assume one global medium/high effort suits every purpose.
+- Run an authorized context-machine research call through the main service's private binding for every credential mode that will be used. Confirm the response model, effort, auth mode, call count and evidence references. Confirm revoked client/member access is denied. Codex subscription calls require the explicit uncapped-output acknowledgement described in the gateway contract.
+
+Fake-provider tests and `/readyz` do not prove live provider authentication, account entitlement, model capability or output quality. Keep those live acceptance checks as release prerequisites when credentials or model policy change.

@@ -207,6 +207,16 @@ func TestReplayComparesTheCurrentModelWithConfirmedReadings(t *testing.T) {
 		t.Fatalf("a new model is checked once per firm: %d", runs("synthetic-model-2"))
 	}
 
+	// The same model with a different per-purpose effort needs one fresh check.
+	t.Setenv("LLM_REASONING_EFFORTS", `{"preparation":"high"}`)
+	must(sweepReplays(modelContext(t, ctx), db))
+	must(sweepReplays(modelContext(t, ctx), db))
+	var highRuns int
+	must(db.QueryRow(`SELECT count(*) FROM replay_runs WHERE close_id=$1 AND model='synthetic-model-2' AND reasoning_effort='high' AND actor='scheduled-replay'`, closeID).Scan(&highRuns))
+	if runs("synthetic-model-2") != 2 || highRuns != 1 {
+		t.Fatalf("a changed effort is checked once: total=%d high=%d", runs("synthetic-model-2"), highRuns)
+	}
+
 	// A confirmation that is not one readable plan is never sent to the model, so it cannot count as scored.
 	_, err = db.Exec(`UPDATE preparation_jobs SET plans='[{}]' WHERE id=(SELECT job_id FROM preparation_intakes WHERE source_id=$1)`, hiscox)
 	must(err)

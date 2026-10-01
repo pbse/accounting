@@ -387,10 +387,10 @@ func investigate(ctx context.Context, db *sql.DB, org string, readRaw func(strin
 		if err != nil {
 			return sources, reads, sent, steps, false
 		}
+		input = append(input, result.Continuation...)
 		called := false
 		for _, item := range result.ToolCalls {
 			called = true
-			input = append(input, llm.Message{Call: &item})
 			began := time.Now()
 			step := investigationStep{Tool: item.Name}
 			output := ""
