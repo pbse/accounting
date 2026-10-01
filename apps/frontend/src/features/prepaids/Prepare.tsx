@@ -11,7 +11,7 @@ import { SaveDraft } from "../closes/SaveDraft";
 import { money, useCurrency } from "../closes/workspace";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 function download(contents: string, name: string, type: string) {
   const url = URL.createObjectURL(new Blob([contents], { type }));

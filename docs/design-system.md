@@ -8,14 +8,16 @@ The reference for every value is the Tray design system: tokens, type scale, com
 
 | What | File | Change it when |
 | --- | --- | --- |
-| Tokens: colours, radii, spacing, sizes, shadows, fonts | `apps/frontend/src/theme/tokens.css` | A colour, radius or spacing step changes for the whole workspace. |
-| Workspace layout and shared patterns | `apps/frontend/src/theme/workspace.css` | The shell, the sidebar, the page header or a shared pattern (cards, stat tiles, rows, pills, the assistant) changes. |
-| Font files (Inter, OFL) | `apps/frontend/src/theme/fonts/` | Inter is upgraded. Keep the Latin and Latin Extended subsets with their `unicode-range`s. |
-| Shared components, each with its stylesheet beside it | `apps/frontend/src/ui/` | A pattern used on more than one page changes. |
-| Icons | `apps/frontend/src/ui/Icon.tsx` | An icon is added or replaced. |
+| Tokens: colours, radii, spacing, sizes, shadows, fonts | `packages/ui/theme/tokens.css` | A colour, radius or spacing step changes for both apps. |
+| The shell both apps share: layout, sidebar, page, element styles | `packages/ui/theme/shell.css` | The shell, the sidebar or a shared element style (cards, buttons, fields, tables, pills) changes. |
+| Font files (Inter, OFL) | `packages/ui/theme/fonts/` | Inter is upgraded. Keep the Latin and Latin Extended subsets with their `unicode-range`s. |
+| Shared components, each with its stylesheet beside it | `packages/ui/components/` | A pattern used on more than one page or app changes. |
+| Icons | `packages/ui/components/Icon.tsx` | An icon is added or replaced. |
+| The firm app's own patterns (preparation forms, evidence pane, Work's rows, Attention, the agent panel) | `apps/frontend/src/theme/workspace.css` | One of those changes. |
+| The staff console's own patterns (workflow flow, inspector, schema forms) | `apps/admin/src/admin.css` | One of those changes. |
 | Public and legacy element styles | `apps/frontend/src/styles.css` | Marketing or legal pages change. |
 
-`main.tsx` imports `styles.css`, then `theme/tokens.css`, then `theme/workspace.css`, so workspace rules override the public element styles inside the shell. Each component imports its own stylesheet, which loads with the page that uses it.
+Both apps import the design system as `@close/ui/...`, an alias to `packages/ui` set in each app's `vite.config.ts` and `tsconfig.json`. Each `main.tsx` imports the base `styles.css`, then `@close/ui/theme/tokens.css`, `@close/ui/theme/shell.css` and finally its own stylesheet, so the shell overrides the public element styles and each app can add its own patterns. Each component imports its own stylesheet, which loads with the page that uses it.
 
 ## Components
 
@@ -33,7 +35,7 @@ Pages build from these instead of repeating markup and class names. Each takes i
 | `Suggestions` | One-click asks as pills. The caller asks the picked text exactly as written; a suggestion never runs an action without its preview. |
 | `AgentMark` | The agent's blue tile; with children it leads a label, such as the heading of something the agent wrote. |
 
-To add a component, put `Name.tsx` and `Name.css` in `ui/`, import the stylesheet from the component, use only tokens in it, and add a row here.
+To add a component, put `Name.tsx` and `Name.css` in `packages/ui/components/`, import the stylesheet from the component, use only tokens in it, and add a row here. Import it as `@close/ui/components/Name`.
 
 ## Rules
 
@@ -58,10 +60,10 @@ The agent is how people get work done, so it is never more than one click away:
 
 ## Icons
 
-Icons come from Hugeicons free, Stroke Rounded (MIT), copied from `@hugeicons/core-free-icons`. Each entry in `ui/Icon.tsx` is the icon's element list as published, so it can be compared with the package. To add one:
+Icons come from Hugeicons free, Stroke Rounded (MIT), copied from `@hugeicons/core-free-icons`. Each entry in `packages/ui/components/Icon.tsx` is the icon's element list as published, so it can be compared with the package. To add one:
 
 1. Find the icon at hugeicons.com (free set, Stroke Rounded) and note its name, for example `CalendarCheck01`.
-2. Copy its element list from `@hugeicons/core-free-icons/dist/esm/<Name>Icon.js` into `icons` in `ui/Icon.tsx` under a short product name (`calendar-check`), dropping each element's `key`.
+2. Copy its element list from `@hugeicons/core-free-icons/dist/esm/<Name>Icon.js` into `icons` in `packages/ui/components/Icon.tsx` under a short product name (`calendar-check`), dropping each element's `key`.
 3. Use it as `<Icon name="calendar-check" />`. Icons are 16px in navigation, controls and card headers and 24px beside a page title.
 
 ## Rollout
@@ -69,7 +71,9 @@ Icons come from Hugeicons free, Stroke Rounded (MIT), copied from `@hugeicons/co
 The workspace moves to Tray in small pull requests:
 
 1. **Foundation**: tokens, fonts, icons and the restyle of the shell and shared patterns.
-2. **Shared components**: page header, stat tiles, segmented control, section header and row list as React components in `apps/frontend/src/ui/`, replacing the copies on each page.
+2. **Shared components**: page header, stat tiles, segmented control, section header and row list as React components, replacing the copies on each page.
 3. **Agent first**: the agent leads Work, sits in the sidebar and offers starter questions in its panel.
 4. **Remaining pages**: example pages, the client request page and the last inline colours.
 5. **Clean-up**: remove styles and code no page uses.
+6. **Shared package**: the tokens, shell and components move to `packages/ui` so the staff console uses the same design system.
+7. **Staff console**: every admin page uses the shared components.

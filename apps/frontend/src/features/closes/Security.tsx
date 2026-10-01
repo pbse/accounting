@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 import { AgentAccess } from "./AgentAccess";
 import { ClientAccess } from "./ClientAccess";
 import { FirmOperations } from "./Enterprise";

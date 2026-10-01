@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { workspaceRequest } from "./workspace";
-import { PageHeader } from "../../ui/PageHeader";
-import { Segmented } from "../../ui/Segmented";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { Segmented } from "@close/ui/components/Segmented";
 
 type Event = { key: string; kind: string; text: string; at: string; workpaper_id?: string; job_id?: string; account_id?: string; read: boolean; snoozed_until?: string };
 type Group = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: Event[] };

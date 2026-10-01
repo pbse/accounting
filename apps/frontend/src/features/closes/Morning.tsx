@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
-import { AgentMark } from "../../ui/AgentMark";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { AgentMark } from "@close/ui/components/AgentMark";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Morning = {
   overnight: { month_end_snapshots: number; drafts_prepared: number; standing_approvals: number };

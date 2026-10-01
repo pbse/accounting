@@ -13,7 +13,7 @@ import type {
   ReconciliationLine,
   ReviewedMatch,
 } from "../../../../../packages/contracts/reconciliation";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 type PriorOutstanding = NonNullable<ReconciliationInput["prior_outstanding"]>[number];
 

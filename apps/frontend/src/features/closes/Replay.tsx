@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
-import { RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Item = { job_id: string; source_name: string; confirmed_kind: string; replay_kind?: string; kept: boolean; changed_fields: string[]; error?: string };
 

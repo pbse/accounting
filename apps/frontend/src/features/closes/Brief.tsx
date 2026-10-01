@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "./workspace";
-import { RowList } from "../../ui/RowList";
-import { SectionHeader } from "../../ui/SectionHeader";
+import { RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Line = { area: string; state: "done" | "attention" | "waiting" | "info" | "unknown"; text: string; tab?: string };
 const tones: Record<Line["state"], string> = { done: "ok", attention: "warn", waiting: "info", info: "info", unknown: "danger" };

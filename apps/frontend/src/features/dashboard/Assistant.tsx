@@ -8,9 +8,9 @@ import { RequestCard } from "./RequestCard";
 import { askAssistant, nextReview, takePending, useOpenRequests, usePending } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand } from "./commands";
-import { AgentMark } from "../../ui/AgentMark";
-import { Icon } from "../../ui/Icon";
-import { Suggestions } from "../../ui/Suggestions";
+import { AgentMark } from "@close/ui/components/AgentMark";
+import { Icon } from "@close/ui/components/Icon";
+import { Suggestions } from "@close/ui/components/Suggestions";
 
 type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null };
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 import { AgentAccess } from "./AgentAccess";
 import { isEnrollmentError } from "./ClosesList";
 import { EmailSettings } from "./Email";

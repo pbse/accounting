@@ -7,7 +7,7 @@ import { money, useCurrency } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { EntityType, OwnerInput, OwnerWorkpaper } from "../../../../../packages/contracts/owner";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 const entityTypes: Record<EntityType, string> = { sole_proprietor: "Sole proprietor / single-member LLC", partnership: "Partnership / multi-member LLC", s_corp: "S corporation", c_corp: "C corporation" };
 const treatments = {

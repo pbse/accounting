@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../../lib/api";
-import { PageHeader } from "../../ui/PageHeader";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 type Question = { position: number; text: string; state: string; answer: string };
 type Request = {
