@@ -15,6 +15,7 @@ import { People } from "./pages/People";
 import { Audit } from "./pages/Audit";
 import { Plan, Plans } from "./pages/Plans";
 import { PlanBuilder } from "./pages/PlanBuilder";
+import { Icon } from "@close/ui/components/Icon";
 
 type Me = { subject: string; permissions: string[]; mode: string };
 
@@ -66,21 +67,21 @@ function Layout() {
         <nav aria-label="Staff console">
           <div className="nav-group">
             <div className="nav-label">Platform</div>
-            <NavLink className="nav-item" end to="/">Overview</NavLink>
-            <NavLink className="nav-item" to="/firms">Firms</NavLink>
-            <NavLink className="nav-item" to="/people">People</NavLink>
-            <NavLink className="nav-item" to="/audit">Staff audit</NavLink>
+            <NavLink className="nav-item" end to="/"><Icon name="work" />Overview</NavLink>
+            <NavLink className="nav-item" to="/firms"><Icon name="firm" />Firms</NavLink>
+            <NavLink className="nav-item" to="/people"><Icon name="clients" />People</NavLink>
+            <NavLink className="nav-item" to="/audit"><Icon name="shield" />Staff audit</NavLink>
           </div>
           <div className="nav-group">
             <div className="nav-label">Workflows</div>
-            <NavLink className="nav-item" to="/workflows">Catalog</NavLink>
-            <NavLink className="nav-item" end to="/runs">Runs</NavLink>
-            {me.data?.permissions.includes("platform:plans") && <NavLink className="nav-item" to="/plans">Plans</NavLink>}
+            <NavLink className="nav-item" to="/workflows"><Icon name="book" />Catalog</NavLink>
+            <NavLink className="nav-item" end to="/runs"><Icon name="run" />Runs</NavLink>
+            {me.data?.permissions.includes("platform:plans") && <NavLink className="nav-item" to="/plans"><Icon name="file" />Plans</NavLink>}
           </div>
           <div className="nav-group">
             <div className="nav-label">Operations</div>
-            <NavLink className="nav-item" to="/jobs">Stuck work</NavLink>
-            <NavLink className="nav-item" to="/connections">Connections</NavLink>
+            <NavLink className="nav-item" to="/jobs"><Icon name="blocked" />Stuck work</NavLink>
+            <NavLink className="nav-item" to="/connections"><Icon name="link" />Connections</NavLink>
           </div>
         </nav>
         <div className="sidebar-footer">

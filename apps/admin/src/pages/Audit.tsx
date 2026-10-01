@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { download, when } from "../api";
 import { Reveal, shown, useRevealable } from "../components/Reveal";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 type Entry = { id: number; organization: string | null; staff_user: string; action: string; target_type: string; target_id: string; reason: string; request: Record<string, unknown>; result: string; error: string; created_at: string };
 
@@ -45,13 +46,18 @@ export function Audit() {
   };
   return (
     <>
-      <div className="page-title">
-        <div><div><h1>Staff audit</h1><p>Every staff action and every reveal of client content, refusals included. Reasons, details and errors are hidden until revealed.</p></div></div>
-        <div className="title-actions">
-          <button onClick={() => exportBatch()}>Export CSV{reason !== undefined ? " (revealed)" : ""}</button>
-          {nextBatch?.search === search && <button onClick={() => exportBatch(nextBatch.before)}>Export the next batch{reason !== undefined ? " (revealed)" : ""}</button>}
-        </div>
-      </div>
+      <PageHeader
+        icon="shield"
+        title="Staff audit"
+        actions={
+          <div className="title-actions">
+            <button onClick={() => exportBatch()}>Export CSV{reason !== undefined ? " (revealed)" : ""}</button>
+            {nextBatch?.search === search && <button onClick={() => exportBatch(nextBatch.before)}>Export the next batch{reason !== undefined ? " (revealed)" : ""}</button>}
+          </div>
+        }
+      >
+        Every staff action and every reveal of client content, refusals included. Reasons, details and errors are hidden until revealed.
+      </PageHeader>
       <form className="filters" onSubmit={(event) => {
         event.preventDefault();
         setBefore(0);

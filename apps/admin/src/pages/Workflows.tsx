@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import { useResource } from "../api";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 type Definition = {
   name: string;
@@ -28,10 +29,15 @@ export function Workflows() {
   const activities = useResource<{ activities: Activity[] }>("/v1/admin/workflows/activities");
   return (
     <>
-      <div className="page-title">
-        <div><div><h1>Workflows</h1><p>What this build can run, and the building blocks plans use.</p></div></div>
-        <div className="title-actions"><Link className="button primary" to="/runs/new">Start a run</Link></div>
-      </div>
+      <PageHeader
+        icon="book"
+        title="Workflows"
+        actions={
+          <div className="title-actions"><Link className="button primary" to="/runs/new">Start a run</Link></div>
+        }
+      >
+        What this build can run, and the building blocks plans use.
+      </PageHeader>
       {workflows.error && <p role="alert">{workflows.error}</p>}
       {workflows.data && (
         <section>

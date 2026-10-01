@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useResource, when } from "../api";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 export type RunRow = {
   id: number;
@@ -44,13 +45,18 @@ export function Runs() {
   const runs = useResource<{ runs: RunRow[]; has_more: boolean; next_offset: number }>(`/v1/admin/workflows/runs?${params}`);
   return (
     <>
-      <div className="page-title">
-        <div><div><h1>Runs</h1><p>Workflow runs across every firm, newest first.</p></div></div>
-        <div className="title-actions">
-          <button onClick={runs.reload} disabled={runs.loading}>Refresh</button>
-          <Link className="button primary" to="/runs/new">Start a run</Link>
-        </div>
-      </div>
+      <PageHeader
+        icon="run"
+        title="Runs"
+        actions={
+          <div className="title-actions">
+            <button onClick={runs.reload} disabled={runs.loading}>Refresh</button>
+            <Link className="button primary" to="/runs/new">Start a run</Link>
+          </div>
+        }
+      >
+        Workflow runs across every firm, newest first.
+      </PageHeader>
       <form className="filters" onSubmit={(event) => { event.preventDefault(); set("firm", firm.trim()); }}>
         <label>View
           <select value={params.get("view") ?? ""} onChange={(event) => set("view", event.target.value)}>

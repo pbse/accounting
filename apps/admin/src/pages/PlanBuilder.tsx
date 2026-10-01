@@ -5,6 +5,8 @@ import { ActionForm } from "../components/ActionForm";
 import { FlowGraph, type PlanNode } from "../components/Flow";
 import { Reveal, useRevealable } from "../components/Reveal";
 import { useGrantFor } from "../components/Grants";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { BackLink } from "@close/ui/components/BackLink";
 
 type Kind = "activity" | "workflow" | "event" | "sleep" | "approval";
 // One step as the form edits it; toPlan turns the list into plan JSON. Steps refer to each other by key, which never
@@ -200,8 +202,13 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
   if (source && !loaded) {
     return (
       <>
-        <p><Link to={`/plans/${source}`}>← Plan #{source}</Link></p>
-        <div className="page-title"><div><div><h1>{editing ? `Edit plan #${source}` : `Copy plan #${source}`}</h1><p>Editing or copying a plan means reading it: reveal it first.</p></div></div></div>
+        <BackLink to={`/plans/${source}`}>Plan #{source}</BackLink>
+        <PageHeader
+          icon="file"
+          title={editing ? `Edit plan #${source}` : `Copy plan #${source}`}
+        >
+          Editing or copying a plan means reading it: reveal it first.
+        </PageHeader>
         {stored.error && <p role="alert">{stored.error}</p>}
         {lapsed && <p role="alert">Your grant for this firm ended, so the plan was closed. Reveal it again to go on.</p>}
         <Reveal reveal={stored.reveal} firm={stored.data?.plan.organization} />
@@ -221,8 +228,13 @@ function Builder({ editing, source, template: startAsTemplate, firm: startFirm }
   const workflows = (definitions.data?.workflows ?? []).filter((w) => w.name !== "plan");
   return (
     <>
-      <p><Link to={editing ? `/plans/${editing}` : "/plans"}>← {editing ? `Plan #${editing}` : "Plans"}</Link></p>
-      <div className="page-title"><div><div><h1>{editing ? `Edit plan #${editing}` : template ? "New template" : "New plan"}</h1><p>Steps run in order; a step waits for the steps it comes after, and a “when” runs it only on that outcome.</p></div></div></div>
+      <BackLink to={editing ? `/plans/${editing}` : "/plans"}>{editing ? `Plan #${editing}` : "Plans"}</BackLink>
+      <PageHeader
+        icon="file"
+        title={editing ? `Edit plan #${editing}` : template ? "New template" : "New plan"}
+      >
+        Steps run in order; a step waits for the steps it comes after, and a “when” runs it only on that outcome.
+      </PageHeader>
       <div className="run-layout">
         <section>
           <label className="stack">Title<input value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} placeholder="What this plan does" /></label>

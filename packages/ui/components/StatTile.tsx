@@ -11,8 +11,8 @@ export function StatGroup({ children }: { children: ReactNode }) {
   return <div className="stat-group">{children}</div>;
 }
 
-// One number with its label and a caption that says what it covers. A tile with `to` or `onClick`
-// is a link or a button; without either it only reads.
+// One number with its label and a caption that says what it covers, led by an icon tile when given.
+// A tile with `to` or `onClick` is a link or a button; without either it only reads.
 export function StatTile({
   icon,
   tone,
@@ -21,21 +21,21 @@ export function StatTile({
   caption,
   ...action
 }: {
-  icon: IconName;
+  icon?: IconName;
   tone?: Tone;
   label: ReactNode;
   value?: ReactNode;
-  caption: ReactNode;
+  caption?: ReactNode;
 } & Action) {
   const content = (
     <>
       <span className="stat-head">
-        <IconTile icon={icon} tone={tone} />
+        {icon && <IconTile icon={icon} tone={tone} />}
         {label}
       </span>
       <span className="stat-body">
         <span className="stat-value">{value ?? "–"}</span>
-        <span className="stat-caption">{caption}</span>
+        {caption !== undefined && <span className="stat-caption">{caption}</span>}
       </span>
     </>
   );

@@ -8,7 +8,6 @@ import type { LoanWorkpaper } from "../../../../../packages/contracts/loan";
 import type { OwnerWorkpaper } from "../../../../../packages/contracts/owner";
 import { AccrualResult } from "../accruals/Prepare";
 import { EffortTracker } from "./Effort";
-import { Icon } from "@close/ui/components/Icon";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { Segmented } from "@close/ui/components/Segmented";
 import { ReconciliationResult } from "../reconciliation/Prepare";
@@ -25,6 +24,7 @@ import { scheduleTerms } from "../prepaids/MethodFields";
 import { money, workspaceRequest } from "./workspace";
 import { citedLines, citedPage } from "./citation";
 import { Comments, type PickedLine } from "./Comments";
+import { BackLink } from "@close/ui/components/BackLink";
 
 export type Profile = { currency: string; fiscal_year_start: number; state: "detected" | "none" | "unknown" | "conflict" };
 export type Close = { id: string; entity: string; period: string; basis?: "cash" | "modified_cash" | "accrual"; basis_scope?: "client" | "firm"; profile?: Profile } & Plan;
@@ -353,9 +353,9 @@ export default function WorkpaperView() {
   return (
     <>
       <EffortTracker closeId={close.id} activity="review" />
-      <Link className="back-link" to={`/dashboard/closes/${close.id}?tab=workpapers`}>
-        <Icon name="back" size={15} /> {close.entity} · {close.period}
-      </Link>
+      <BackLink to={`/dashboard/closes/${close.id}?tab=workpapers`}>
+        {close.entity} · {close.period}
+      </BackLink>
       <PageHeader
         icon="file"
         title={

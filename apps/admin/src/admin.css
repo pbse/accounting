@@ -1,117 +1,111 @@
-/* Staff console additions to the firm app's stylesheet. */
-.stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
-  gap: 0.9rem;
-  margin-bottom: 1.2rem;
-}
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 0.9rem 1rem;
-}
-.stat-label,
-.stat-note {
-  color: var(--ink-2);
-  font-size: 0.82rem;
-}
-.stat strong {
-  font-size: 1.35rem;
-  line-height: 1.3;
-}
+/* The staff console's own patterns on top of the shared Tray shell (packages/ui/theme/shell.css):
+   filter rows and stacked forms, workflow actions and schema forms, the run inspector and flow, and grants.
+   Every value comes from the tokens. */
 .app-main td small {
   color: var(--ink-2);
 }
 .app-main td:first-child {
   text-align: left;
 }
-.app-main .title-actions input {
-  font: inherit;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--line-strong, #c9c9c3);
-  border-radius: 7px;
+td details summary {
+  font-weight: 400;
+}
+.muted {
+  color: var(--ink-2);
 }
 
-/* Workflow screens. */
+/* Filter rows above a list, and forms stacked one field per line. */
 .filters,
 .stack {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.8rem 1rem;
+  gap: var(--space-12) var(--space-16);
   align-items: end;
-  margin-bottom: 1.2rem;
+  margin-bottom: var(--space-16);
 }
 .stack {
   flex-direction: column;
   align-items: stretch;
   max-width: 40rem;
 }
-.filters label,
-.stack label,
-.action label,
-.schema-form label {
+.app-shell .filters label,
+.app-shell .stack label,
+.app-shell .action label,
+.app-shell .schema-form label {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.88rem;
+  gap: var(--space-4);
+  margin: 0;
 }
-.filters input,
-.filters select,
-.stack input,
-.stack select,
-.action input,
-.schema-form input,
-.schema-form textarea,
-.action textarea {
-  font: inherit;
-  padding: 0.5rem 0.65rem;
-  border: 1px solid var(--line-strong, #c9c9c3);
-  border-radius: 7px;
+.app-shell .filters input,
+.app-shell .filters select,
+.app-shell .stack input,
+.app-shell .stack select,
+.app-shell .action input,
+.app-shell .action textarea,
+.app-shell .schema-form input,
+.app-shell .schema-form textarea {
+  margin-top: 0;
 }
-.schema-form,
-.action fieldset {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-  padding: 0.8rem 1rem;
-}
-.check {
-  flex-direction: row !important;
+.app-shell label.check {
+  flex-direction: row;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-8);
+  font-weight: 400;
 }
+
+/* A workflow action and a step's input form. */
 .action {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
-  margin-top: 0.8rem;
+  gap: var(--space-10);
+  margin-top: var(--space-12);
   max-width: 34rem;
 }
-button.danger {
-  background: #9a2e20;
-  border-color: #9a2e20;
-  color: #fff;
-}
-button.link {
+.app-shell .schema-form,
+.app-shell .action fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  margin: 0;
+  padding: var(--space-12) var(--space-16);
   border: 0;
-  background: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-tile);
+}
+
+/* A destructive action, and an action that reads as a link. */
+.app-shell button.danger {
+  background: var(--gloss), var(--red);
+  box-shadow: var(--shadow-chip);
+  color: var(--on-chip);
+}
+.app-shell button.danger:hover:not(:disabled) {
+  background: var(--gloss-hover), var(--red);
+}
+.app-shell button.link {
   padding: 0;
-  color: #153e35;
+  background: none;
+  box-shadow: none;
+  color: var(--blue);
+  font-weight: 400;
   text-decoration: underline;
 }
-button.link.selected {
-  font-weight: 700;
+.app-shell button.link:hover:not(:disabled) {
+  background: none;
+  color: var(--ink);
 }
+.app-shell button.link.selected {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* A run: the flow and the steps beside the inspector of the selected step. */
 .run-layout {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(18rem, 1fr);
-  gap: 1.2rem;
+  gap: var(--space-16);
   align-items: start;
 }
 @media (max-width: 960px) {
@@ -121,17 +115,16 @@ button.link.selected {
 }
 .inspector {
   position: sticky;
-  top: 1rem;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 1.1rem 1.2rem;
+  top: var(--space-16);
+  padding: var(--space-16);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 .inspector dl {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.2rem 0.8rem;
-  font-size: 0.86rem;
+  gap: var(--space-4) var(--space-12);
+  font-size: 13px;
 }
 .inspector dt {
   color: var(--ink-2);
@@ -143,38 +136,35 @@ button.link.selected {
 pre.json {
   max-height: 18rem;
   overflow: auto;
-  background: #f5f5f2;
-  border-radius: 7px;
-  padding: 0.7rem;
-  font-size: 0.8rem;
-}
-.muted {
-  color: var(--ink-2);
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-sm);
+  background: var(--tile);
+  font: 12px/1.55 var(--font-mono);
 }
 .steps li {
-  margin: 0.2rem 0;
+  margin: var(--space-4) 0;
 }
 .flow {
   height: 460px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fbfbf9;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-tile);
 }
 .flow-node {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 2px;
   min-width: 190px;
   max-width: 240px;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--line-strong, #c9c9c3);
-  border-left: 5px solid var(--ink-3, #b9b9b2);
-  border-radius: 8px;
-  background: #fff;
-  font-size: 0.78rem;
+  padding: var(--space-8) var(--space-10);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+  font-size: 12px;
 }
 .flow-node strong {
-  font-size: 0.85rem;
+  font-size: 13px;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 .flow-node small,
@@ -182,50 +172,50 @@ pre.json {
   color: var(--ink-2);
   overflow-wrap: anywhere;
 }
-.flow-node.selected {
-  outline: 3px solid #a65c16;
-  outline-offset: 2px;
+/* A step's state reads as a status dot, in the colour of what it means. */
+.flow-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-.flow-node.state-completed { border-left-color: var(--green, #2f7d4f); }
-.flow-node.state-failed,
-.flow-node.state-unknown { border-left-color: var(--red, #b3261e); }
-.flow-node.state-waiting,
-.flow-node.state-running { border-left-color: var(--blue, #2f5f9e); }
+.flow-state::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--ink-3);
+}
+.flow-node.state-completed .flow-state::before {
+  background: var(--green);
+}
+.flow-node.state-failed .flow-state::before,
+.flow-node.state-unknown .flow-state::before {
+  background: var(--red);
+}
+.flow-node.state-waiting .flow-state::before,
+.flow-node.state-running .flow-state::before {
+  background: var(--blue);
+}
 .flow-node.state-cancelled,
 .flow-node.state-skipped,
-.flow-node.state-not_reached { opacity: 0.55; }
-
-/* Firm tabs. */
-.tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  margin: 0 0 1.2rem;
-  border-bottom: 1px solid var(--line);
+.flow-node.state-not_reached {
+  opacity: 0.55;
 }
-.tabs a {
-  padding: 0.55rem 0.85rem;
-  color: inherit;
-  text-decoration: none;
-  border-bottom: 3px solid transparent;
-}
-.tabs a[aria-current="page"] {
-  border-bottom-color: #153e35;
-  font-weight: 700;
-}
-td details summary {
-  font-weight: 400;
+.flow-node.selected {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }
 
 /* Open content grants, in the sidebar. */
 .grants {
-  margin-bottom: 0.8rem;
-  padding: 0.6rem 0.7rem;
-  border: 1px solid #d9b26b;
-  border-radius: 8px;
-  background: #fbf5e8;
-  font-size: 0.8rem;
+  margin-bottom: var(--space-12);
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-sm);
+  background: var(--attention-tint);
+  color: var(--attention-text);
+  font-size: 11px;
+  line-height: 16px;
 }
 .grants p {
-  margin: 0.3rem 0 0;
+  margin: var(--space-4) 0 0;
 }
