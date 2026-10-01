@@ -245,6 +245,10 @@
   margin: 0 auto;
   padding: 0 var(--space-16) 48px;
 }
+.request-legal {
+  color: var(--ink-2);
+  font-size: 13px;
+}
 /* A form or panel placed straight on the page is a card, like a section. */
 .app-shell .attention > details {
   padding: var(--space-16);
@@ -304,6 +308,7 @@ aside.assistant {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: var(--space-16);
   padding: 0 0 var(--space-12);
   border-bottom: 1px solid var(--line);
   background: none;

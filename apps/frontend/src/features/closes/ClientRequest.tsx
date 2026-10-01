@@ -235,7 +235,7 @@ export default function ClientRequest() {
             </>
           )}
         </section>
-        <p className="legal-updated">
+        <p className="request-legal">
           {/* A new tab keeps this request open: its link is no longer in the address bar. */}
           How Close handles what you send:{" "}
           <a href="/privacy" target="_blank" rel="noreferrer">
