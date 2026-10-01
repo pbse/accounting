@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useResource, when } from "../api";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 export type FirmRow = {
   id: string;
@@ -28,25 +29,25 @@ export function Firms() {
   const page = (next: number) => setParams({ ...(query ? { q: query } : {}), ...(next ? { offset: String(next) } : {}) });
   return (
     <>
-      <div className="page-title">
-        <div>
-          <div>
-            <h1>Firms</h1>
-            <p>Every firm, newest first.</p>
-          </div>
-        </div>
-        <form
-          role="search"
-          className="title-actions"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setParams(draft.trim() ? { q: draft.trim() } : {});
-          }}
-        >
-          <input aria-label="Search firms by name or ID" placeholder="Name or ID" value={draft} maxLength={200} onChange={(event) => setDraft(event.target.value)} />
-          <button>Search</button>
-        </form>
-      </div>
+      <PageHeader
+        icon="firm"
+        title="Firms"
+        actions={
+          <form
+            role="search"
+            className="title-actions"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setParams(draft.trim() ? { q: draft.trim() } : {});
+            }}
+          >
+            <input aria-label="Search firms by name or ID" placeholder="Name or ID" value={draft} maxLength={200} onChange={(event) => setDraft(event.target.value)} />
+            <button>Search</button>
+          </form>
+        }
+      >
+        Every firm, newest first.
+      </PageHeader>
       {firms.error && <p role="alert">{firms.error}</p>}
       {firms.data && (
         <section>

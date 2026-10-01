@@ -26,8 +26,9 @@ Pages build from these instead of repeating markup and class names. Each takes i
 | Component | Use it for |
 | --- | --- |
 | `PageHeader` | The 68px bar at the top of a page: `icon` or a client's `avatar`, `title`, a one-line description as children, and `actions` on the right. |
+| `BackLink` | The way back to the page this one belongs to, above its header. |
 | `SectionHeader` | A heading above a block, with an optional aside (a count, a note or actions) as children. `level={1}` when it is the page's only heading. |
-| `StatGroup`, `StatTile` | A row of numbers. A tile with `to` is a link, with `onClick` a button, with neither it only reads. |
+| `StatGroup`, `StatTile` | A row of numbers. A tile with `to` is a link, with `onClick` a button, with neither it only reads; the icon and caption are optional. |
 | `Segmented` | A set of toggles (`onChange`) or page tabs (each item's `to`), with optional counts and an alert dot. |
 | `RowList`, `EntityCell` | A list of rows with optional column names; `EntityCell` is a row's first cell with the client's avatar or another leading mark. Rows themselves are `.row` links, summaries or blocks. |
 | `IconTile`, `Avatar`, `Icon` | A glossy 32px icon tile in a tone, a client's initial in its colour, and an icon by name. |
@@ -47,7 +48,8 @@ To add a component, put `Name.tsx` and `Name.css` in `packages/ui/components/`, 
 - **Light only.** There is no dark theme, by product decision.
 - **No inline styles.** A one-off need becomes a class: `.pre-line` keeps a message's line breaks, `.block` puts a line on its own, `.scroll-text` lets long source text scroll in its box (a `pre` already wraps), `.evidence-frame` sizes an embedded PDF. Anything used on more than one page becomes a component.
 - **Every page opens with `PageHeader`**, titled as the sidebar names the page. A form or panel placed straight on a page is a white card.
-- **No dead code.** The frontend's type-check fails on unused locals and parameters (`noUnusedLocals`, `noUnusedParameters`); when a class stops being used, delete its rule in the same change.
+- **No dead code.** Both apps' type-checks fail on unused locals and parameters (`noUnusedLocals`, `noUnusedParameters`); when a class stops being used, delete its rule in the same change.
+- **The staff console follows the same rules.** Its pages open with `PageHeader` and use the shared components; its navigation carries icons like the firm app's; only patterns no firm page has (the workflow flow and inspector, schema forms, filter rows, grants) live in `apps/admin/src/admin.css`.
 
 ## The agent comes first
 

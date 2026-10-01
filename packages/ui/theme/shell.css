@@ -376,15 +376,6 @@
   flex-wrap: wrap;
   gap: var(--space-8);
 }
-.app-shell .back-link {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-4);
-  color: var(--ink-2);
-  font-size: 13px;
-  text-decoration: none;
-  margin-bottom: var(--space-4);
-}
 .toolbar {
   display: flex;
   flex-wrap: wrap;

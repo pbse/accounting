@@ -97,3 +97,13 @@ export function when(value?: string | null): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
+
+// A moment split for a stat tile: the short date as the number and the time as its caption.
+export function whenParts(value?: string | null): { day: string; time?: string } {
+  const date = value ? new Date(value) : undefined;
+  if (!date || Number.isNaN(date.getTime())) return { day: value || "—" };
+  return {
+    day: date.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    time: date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+  };
+}

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { post, useResource } from "../api";
 import { SchemaForm } from "../components/SchemaForm";
 import { usePermissions } from "../App";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 type Definition = { name: string; title: string; input_schema: Record<string, unknown>; triggers: { Kind: string; Value: string }[] };
 
@@ -27,7 +28,12 @@ export function StartRun() {
   const noFirm = !!chosen && manual(chosen).every((t) => t.Value === "platform");
   return (
     <>
-      <div className="page-title"><div><div><h1>Start a run</h1><p>Runs as the firm you name, recorded with your reason.</p></div></div></div>
+      <PageHeader
+        icon="run"
+        title="Start a run"
+      >
+        Runs as the firm you name, recorded with your reason.
+      </PageHeader>
       {definitions.error && <p role="alert">{definitions.error}</p>}
       <section>
         <form className="stack" onSubmit={async (event) => {

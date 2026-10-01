@@ -6,6 +6,8 @@ import { ActionForm } from "../components/ActionForm";
 import { OpenGrant, useGrantFor, useGrants } from "../components/Grants";
 import { FlowGraph, type PlanNode, type Step } from "../components/Flow";
 import { stateTone, type RunRow } from "./Runs";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { BackLink } from "@close/ui/components/BackLink";
 
 type Detail = {
   run: RunRow;
@@ -126,28 +128,26 @@ export function Run() {
     return () => clearInterval(timer);
   }, [running, reveal, load]);
 
-  if (error) return <><p><Link to="/runs">← Runs</Link></p><p role="alert">{error}</p></>;
+  if (error) return <><BackLink to="/runs">Runs</BackLink><p role="alert">{error}</p></>;
   if (!detail) return <p role="status">Loading run…</p>;
   const { run } = detail;
   const step = detail.steps.find((s) => s.key === selected);
   const act = (path: string, body: object) => post(`/v1/admin/workflows/runs/${run.id}/${path}`, body).then(load);
   return (
     <>
-      <p><Link to="/runs">← Runs</Link></p>
-      <div className="page-title">
-        <div>
-          <div>
-            <h1>#{run.id} {run.workflow}</h1>
-            <p>
-              {run.organization ? <Link to={`/firms/${encodeURIComponent(run.organization)}`}>{run.firm_name ?? run.organization}</Link> : "Platform work"}
-              {" · started by "}{run.started_by} {when(run.created_at)}
-              {run.finished_at && <> · finished {when(run.finished_at)}</>}
-              {run.parent_run_id && <> · child of <Link to={`/runs/${run.parent_run_id}`}>#{run.parent_run_id}</Link></>}
-            </p>
-          </div>
-        </div>
-        <span className={`status ${stateTone[run.state] ?? ""}`}>{run.state}{run.waiting_on && ` · ${run.waiting_on}`}</span>
-      </div>
+      <BackLink to="/runs">Runs</BackLink>
+      <PageHeader
+        icon="run"
+        title={<>#{run.id} {run.workflow}</>}
+        actions={
+          <span className={`status ${stateTone[run.state] ?? ""}`}>{run.state}{run.waiting_on && ` · ${run.waiting_on}`}</span>
+        }
+      >
+        {run.organization ? <Link to={`/firms/${encodeURIComponent(run.organization)}`}>{run.firm_name ?? run.organization}</Link> : "Platform work"}
+        {" · started by "}{run.started_by} {when(run.created_at)}
+        {run.finished_at && <> · finished {when(run.finished_at)}</>}
+        {run.parent_run_id && <> · child of <Link to={`/runs/${run.parent_run_id}`}>#{run.parent_run_id}</Link></>}
+      </PageHeader>
       {!detail.registered && <p className="note">This build does not register the workflow {run.workflow}; a build that does will pick the run up.</p>}
       {run.error && <p role="alert">{text(run.error)}</p>}
       {detail.plan && (

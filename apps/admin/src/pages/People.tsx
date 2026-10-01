@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router";
 import { post, useResource, when } from "../api";
 import { usePermissions } from "../App";
 import { ActionForm } from "../components/ActionForm";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 type Session = { id: string; organization_id: string; status: string; auth_method: string; created_at: string; expires_at: string; ended_at: string | null };
 type WorkOSUser = {
@@ -33,7 +34,12 @@ export function People() {
   const setSaid = (text: string) => setDone({ q, text });
   return (
     <>
-      <div className="page-title"><div><div><h1>People</h1><p>Find one person across every firm by their WorkOS user ID or email address.</p></div></div></div>
+      <PageHeader
+        icon="clients"
+        title="People"
+      >
+        Find one person across every firm by their WorkOS user ID or email address.
+      </PageHeader>
       <form className="filters" onSubmit={(event) => {
         event.preventDefault();
         setSaid("");

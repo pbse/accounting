@@ -5,6 +5,8 @@ import { usePermissions } from "../App";
 import { ActionForm } from "../components/ActionForm";
 import { FlowGraph, type PlanNode } from "../components/Flow";
 import { Reveal, shown, useRevealable } from "../components/Reveal";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { BackLink } from "@close/ui/components/BackLink";
 
 type PlanRow = {
   id: number;
@@ -53,10 +55,15 @@ export function Plans() {
   const templates = params.get("templates") === "1";
   return (
     <>
-      <div className="page-title">
-        <div><div><h1>{templates ? "Plan templates" : "Plans"}</h1><p>{templates ? "Templates never run: copy one into a draft for a firm." : "Plans staff built and plans the agent proposed. Nothing runs until a person approves the exact version they reviewed."}</p></div></div>
-        <div className="title-actions"><Link className="button primary" to={templates ? "/plans/new?template=1" : "/plans/new"}>{templates ? "New template" : "New plan"}</Link></div>
-      </div>
+      <PageHeader
+        icon="file"
+        title={templates ? "Plan templates" : "Plans"}
+        actions={
+          <div className="title-actions"><Link className="button primary" to={templates ? "/plans/new?template=1" : "/plans/new"}>{templates ? "New template" : "New plan"}</Link></div>
+        }
+      >
+        {templates ? "Templates never run: copy one into a draft for a firm." : "Plans staff built and plans the agent proposed. Nothing runs until a person approves the exact version they reviewed."}
+      </PageHeader>
       <form className="filters" onSubmit={(event) => {
         event.preventDefault();
         set(Object.fromEntries([...new FormData(event.currentTarget)].map(([k, v]) => [k, String(v).trim()])));
@@ -173,26 +180,24 @@ function PlanDetail({ id }: { id: string }) {
   const plan = useRevealable<{ plan: PlanRow; problems: string[]; approvable: boolean; revealed: boolean }>(`/v1/admin/plans/${encodeURIComponent(id)}`);
   const [firm, setFirm] = useState("");
   const base = `/v1/admin/plans/${encodeURIComponent(id)}`;
-  if (plan.error) return <><p><Link to="/plans">← Plans</Link></p><p role="alert">{plan.error}</p></>;
-  if (!plan.data) return <><p><Link to="/plans">← Plans</Link></p><p role="status">Loading the plan…</p></>;
+  if (plan.error) return <><BackLink to="/plans">Plans</BackLink><p role="alert">{plan.error}</p></>;
+  if (!plan.data) return <><BackLink to="/plans">Plans</BackLink><p role="status">Loading the plan…</p></>;
   const { plan: p, problems, approvable, revealed } = plan.data;
   const nodes = p.plan?.nodes ?? [];
   return (
     <>
-      <p><Link to={p.is_template ? "/plans?templates=1" : "/plans"}>← {p.is_template ? "Templates" : "Plans"}</Link></p>
-      <div className="page-title">
-        <div>
-          <div>
-            <h1>{p.is_template ? "Template" : "Plan"} #{p.id} {shown(p.title)}</h1>
-            <p>
-              {firmOf(p)} · {p.source}-built by {p.created_by}{p.agent && ` (${p.agent})`} · updated {when(p.updated_at)}
-              {p.template_id && <> · from <Link to={`/plans/${p.template_id}`}>template #{p.template_id}</Link></>}
-              {p.run_id && <> · <Link to={`/runs/${p.run_id}`}>run #{p.run_id}</Link></>}
-            </p>
-          </div>
-        </div>
-        <span className={`status ${tone[p.state] ?? ""}`}>{p.state}</span>
-      </div>
+      <BackLink to={p.is_template ? "/plans?templates=1" : "/plans"}>{p.is_template ? "Templates" : "Plans"}</BackLink>
+      <PageHeader
+        icon="file"
+        title={<>{p.is_template ? "Template" : "Plan"} #{p.id} {shown(p.title)}</>}
+        actions={
+          <span className={`status ${tone[p.state] ?? ""}`}>{p.state}</span>
+        }
+      >
+        {firmOf(p)} · {p.source}-built by {p.created_by}{p.agent && ` (${p.agent})`} · updated {when(p.updated_at)}
+        {p.template_id && <> · from <Link to={`/plans/${p.template_id}`}>template #{p.template_id}</Link></>}
+        {p.run_id && <> · <Link to={`/runs/${p.run_id}`}>run #{p.run_id}</Link></>}
+      </PageHeader>
       <Reveal reveal={plan.reveal} firm={p.organization} />
       {p.source === "agent" && <p className="note">The agent's reason: {shown(p.rationale)}</p>}
       {p.approved_by && <p className="note">Approved by {p.approved_by} {when(p.approved_at)}.</p>}

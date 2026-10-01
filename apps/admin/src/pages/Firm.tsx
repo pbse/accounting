@@ -1,12 +1,16 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
-import { post, useResource, when } from "../api";
+import { post, useResource, when, whenParts } from "../api";
 import { usePermissions } from "../App";
 import { ActionForm } from "../components/ActionForm";
 import type { FirmRow } from "./Firms";
 import { FirmActivity, FirmAudit, FirmPeople } from "./FirmTabs";
-import { Stat } from "./Overview";
 import { stateTone } from "./Runs";
+import { BackLink } from "@close/ui/components/BackLink";
+import { PageHeader } from "@close/ui/components/PageHeader";
+import { Segmented } from "@close/ui/components/Segmented";
+import { StatGroup } from "@close/ui/components/StatTile";
+import { Stat } from "../components/Stat";
 
 type Run = { id: number; workflow: string; state: string; started_by: string; created_at: string; finished_at: string | null };
 type Health = { run_id: number; finished_at: string; report: Record<string, number> } | null;
@@ -22,23 +26,21 @@ export function Firm() {
   const f = firm.data?.firm;
   return (
     <>
-      <p><Link to="/firms">← Firms</Link></p>
+      <BackLink to="/firms">Firms</BackLink>
       {firm.error && <p role="alert">{firm.error}</p>}
       {f && firm.data && (
         <>
-          <div className="page-title">
-            <div>
-              <div>
-                <h1>{f.name}</h1>
-                <p>{f.id} · created {when(f.created_at)}</p>
-              </div>
-            </div>
-            <span className={`status ${f.enabled ? "ok" : "danger"}`}>{f.enabled ? "Active" : "Suspended"}</span>
-          </div>
-          <nav className="tabs" aria-label="Firm">
-            {tabs.map(([value, label]) => (
-              <Link key={value} to={value ? `?tab=${value}` : "?"} aria-current={tab === value ? "page" : undefined}>{label}</Link>
-            ))}
+          <PageHeader
+            icon="firm"
+            title={f.name}
+            actions={
+              <span className={`status ${f.enabled ? "ok" : "danger"}`}>{f.enabled ? "Active" : "Suspended"}</span>
+            }
+          >
+            {f.id} · created {when(f.created_at)}
+          </PageHeader>
+          <nav className="toolbar" aria-label="Firm">
+            <Segmented items={tabs.map(([value, label]) => ({ key: value, label, to: value ? `?tab=${value}` : "?" }))} value={tab} />
           </nav>
           {/* Keyed by firm, so a reveal never carries over to another firm. */}
           {tab === "" && <Overview key={id} detail={firm.data} reload={firm.reload} />}
@@ -55,14 +57,14 @@ function Overview({ detail, reload }: { detail: Detail; reload: () => void }) {
   const { firm: f, runs, health, last_suspension } = detail;
   return (
     <>
-      <div className="stats">
+      <StatGroup>
         <Stat label="Members" value={f.members} />
         <Stat label="Clients" value={f.clients} />
         <Stat label="Closes" value={f.closes} />
         <Stat label="Active runs" value={f.active_runs} />
         <Stat label="Failed runs" value={f.failed_runs_7d} note="in 7 days" tone={f.failed_runs_7d ? "warn" : "ok"} />
-        <Stat label="Last activity" value={when(f.last_activity)} />
-      </div>
+        <Stat label="Last activity" value={whenParts(f.last_activity).day} note={whenParts(f.last_activity).time} />
+      </StatGroup>
       {last_suspension && (
         <p className="note">
           {f.enabled ? "Last suspended" : "Suspended"} {when(last_suspension.at)} by {last_suspension.by}. The reason is in the <Link to="?tab=activity">activity</Link>.

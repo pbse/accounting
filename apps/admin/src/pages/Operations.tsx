@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from "react-router";
 import { useResource, when } from "../api";
+import { PageHeader } from "@close/ui/components/PageHeader";
 
 // Filters kept in the URL, so a view can be shared and reloaded; changing one goes back to the first page.
 function useFilters(names: string[]) {
@@ -51,7 +52,12 @@ export function Jobs() {
   const jobs = useResource<{ kinds: Kind[]; items: Item[]; has_more: boolean; next_offset: number }>(`/v1/admin/jobs${f.query}`);
   return (
     <>
-      <div className="page-title"><div><div><h1>Stuck work</h1><p>Background work that failed or has waited too long, across firms: what each firm's operations screen shows. Firms act on it from there.</p></div></div></div>
+      <PageHeader
+        icon="blocked"
+        title="Stuck work"
+      >
+        Background work that failed or has waited too long, across firms: what each firm's operations screen shows. Firms act on it from there.
+      </PageHeader>
       <form className="filters" onSubmit={f.submit}>
         <label>Firm ID<input name="firm" key={f.params.get("firm")} defaultValue={f.params.get("firm") ?? ""} placeholder="Any" /></label>
         <button>Filter</button>
@@ -116,7 +122,12 @@ export function Connections() {
   const connections = useResource<{ counts: Count[]; connections: Connection[]; has_more: boolean; next_offset: number }>(`/v1/admin/connections${f.query}`);
   return (
     <>
-      <div className="page-title"><div><div><h1>Connections</h1><p>QuickBooks, Xero, Stripe and email sending across firms, and when each last brought data in. Reconnecting stays with the firm.</p></div></div></div>
+      <PageHeader
+        icon="link"
+        title="Connections"
+      >
+        QuickBooks, Xero, Stripe and email sending across firms, and when each last brought data in. Reconnecting stays with the firm.
+      </PageHeader>
       <form className="filters" onSubmit={f.submit}>
         <label>Provider
           <select name="provider" key={f.params.get("provider")} defaultValue={f.params.get("provider") ?? ""}>

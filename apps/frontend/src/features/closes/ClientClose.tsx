@@ -38,6 +38,7 @@ import { Work } from "./Work";
 import { workspaceRequest } from "./workspace";
 import { needsAttention, paperLabel, readyForReview, ReviewPill, useClose, type Close, type Paper, type Profile } from "./WorkpaperView";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
+import { BackLink } from "@close/ui/components/BackLink";
 
 const tabs = [
   ["overview", "Overview"],
@@ -178,9 +179,7 @@ export default function ClientClose() {
   return (
     <>
       <EffortTracker closeId={close.id} activity={tabActivity[tab]} />
-      <Link className="back-link" to="/dashboard/closes">
-        <Icon name="back" size={15} /> Client closes
-      </Link>
+      <BackLink to="/dashboard/closes">Client closes</BackLink>
       <PageHeader avatar={close.entity} title={close.entity} actions={<PrepareActions close={close} />}>
         Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
         {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
