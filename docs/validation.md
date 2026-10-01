@@ -2984,3 +2984,13 @@ Visual check, with the API and both apps running locally on a fresh PostgreSQL a
 Review: the first Codex pass (gpt-6-sol, high) found nothing.
 
 Verified: `npm run check` (both apps), `npm test` (19 pass) and `npm run build` (both apps, with the fonts in each) after a clean `npm ci`.
+
+## Staff console on the shared components (2026-10-01)
+
+Every console page opens with `PageHeader` and an icon; the sidebar's items carry icons; stats are `StatTile`s in a `StatGroup` (a date shows the day, with the year unless it is this year, and the time as the caption); a firm's tabs are a `Segmented` control; the way back is a shared `BackLink`, which the firm app's two back links use too. `admin.css` keeps only the console's own patterns on the tokens: a flow step's state is a status dot, a destructive action a red chip; the old stat and tab styles are removed. `StatTile`'s icon and caption become optional, the icon set gains `run` and `link`, and the console's type-check fails on unused locals and parameters.
+
+Browser check, with the API and both apps running locally on a fresh PostgreSQL, synthetic clients and one queued platform run: the console's Overview, Firms, People, Staff audit, Workflows, Runs, a run, Start a run, Plans, Stuck work and Connections render with their headers, icons and tiles and no console errors; the firm app's close overview and Client closes are pixel-identical to the previous build apart from the overview's "As of" time.
+
+Review: the first Codex pass (gpt-6-sol, high) found that a stat's date dropped the year, so an old moment could read as recent; the year now shows unless it is this year. The second pass found nothing.
+
+Verified: `npm run check` (both apps), `npm test` (22 pass) and `npm run build` (both apps) after a clean `npm ci`.
