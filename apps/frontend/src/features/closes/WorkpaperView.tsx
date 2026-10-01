@@ -159,7 +159,7 @@ function EvidencePane({ closeId, sources, onPickLine }: { closeId: string; sourc
           onChange={(key) => setActive(Number(key))}
         />
       </header>
-      {original && <iframe title={`${source.name}, page ${citedPage(source.location)}`} src={`${original}#page=${citedPage(source.location)}`} style={{ width: "100%", height: "32rem", border: 0 }} />}
+      {original && <iframe title={`${source.name}, page ${citedPage(source.location)}`} src={`${original}#page=${citedPage(source.location)}`} className="evidence-frame" />}
       {error ? (
         <p role="alert" className="empty">{error}</p>
       ) : text === undefined ? (

@@ -169,11 +169,7 @@ export function Requests({
                   {d.created_by} · workpapers{" "}
                   {d.workpaper_ids.join(", ") || "none selected"}
                 </p>
-                <pre
-                  style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
-                >
-                  {d.body}
-                </pre>
+                <pre>{d.body}</pre>
               </article>
             ))}
           </details>

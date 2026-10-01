@@ -11,6 +11,7 @@ import { SaveDraft } from "../closes/SaveDraft";
 import { money, useCurrency } from "../closes/workspace";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
+import { PageHeader } from "../../ui/PageHeader";
 
 function download(contents: string, name: string, type: string) {
   const url = URL.createObjectURL(new Blob([contents], { type }));
@@ -134,13 +135,10 @@ export default function Prepare() {
 
   return (
     <>
-      <p className="eyebrow">{terms.name.toUpperCase()} / DRAFT PREPARATION</p>
-      <h1>From invoice to review-ready calculation.</h1>
-      <p className="intro">
-        Enter the source terms and confirm the method. We’ll calculate the
-        schedule and a proposed adjustment. Save the draft to a client close
-        when ready; nothing is posted.
-      </p>
+      <PageHeader icon="prepaid" title={`${terms.name} schedule`}>
+        Enter the source terms and confirm the method. We’ll calculate the schedule and a proposed adjustment. Save the draft to a client close when
+        ready; nothing is posted.
+      </PageHeader>
       <details className="preparation-inputs" open={!result}>
         <summary>
           {result

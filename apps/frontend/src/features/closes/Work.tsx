@@ -772,7 +772,7 @@ function PortfolioCommands({items,view,client,onFilter,onChange}:{items:WorkItem
     <p>Ask for a goal such as “prepare my clients due Friday”, “recheck failed work” or “stop work waiting on the client”: the server lists exactly which closes it selects before anything runs. Each close is checked again when it runs and reports its own result. Preparing coordinates existing source jobs; facts and methods still need separate review.</p>
     <p>Ask in your own words, or try “show decisions”, “why is Client · YYYY-MM waiting?”, “rehearse Client · YYYY-MM”, “prepare my clients due Friday” or “stop all visible”.</p>
     </details>
-    {answer && <p role="status" style={{whiteSpace:"pre-line"}}>{answer}</p>}
+    {answer && <p role="status" className="pre-line">{answer}</p>}
     {answerClose && <Link to={`/dashboard/closes/${answerClose}`}>Open close rehearsal</Link>}
     <details><summary>Choose closes for a portfolio action</summary>
     <label>Command<select value={mode} onChange={e=>{setMode(e.target.value as "prepare"|"stop"|"recheck");setSelected([]);setPreview(undefined);setOutcomes([]);}}><option value="prepare">Prepare selected closes</option><option value="recheck">Recheck failed or pending proposals</option><option value="stop">Stop unresolved work</option></select></label>
@@ -1085,7 +1085,7 @@ function WorkDetails({
           {formFor[kind] && (
             <p>
               {facts.filter((f) => f.candidates.length > 0).map((f) => (
-                <span key={f.field} style={{ display: "block" }}>
+                <span key={f.field} className="block">
                   {f.label}: {f.value || f.question} · source #{f.candidates[0].source_id}, {f.candidates[0].location}
                 </span>
               ))}

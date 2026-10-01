@@ -7,6 +7,7 @@ import { money, useCurrency } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { AccrualInput, AccrualWorkpaper } from "../../../../../packages/contracts/accrual";
+import { PageHeader } from "../../ui/PageHeader";
 
 export function AccrualConfirmations({ proRata = true }: { proRata?: boolean }) {
  return <>
@@ -52,7 +53,7 @@ export default function PrepareAccrual() {
   const input={...Object.fromEntries(["entity","source_reference","close_period","service_start","service_end","amount","booked_balance","booking_reference","estimation_basis","expense_account","liability_account","method","estimate_amount","estimate_reference","actual_reference","accountant_rule_reference"].map(k=>[k,text(k)])),...(text("method")==="pro_rata_service_days_v1" && {contract_amount:text("contract_amount"),invoiced_to_date:text("invoiced_to_date")}),currency,basis:"accrual",method_confirmed:data.has("method_confirmed"),booking_confirmed:data.has("booking_confirmed"),examples_confirmed:data.has("examples_confirmed"),reverse_next_month:text("reverse_next_month")==="true"} as AccrualInput;
   try {const response=await fetch(`${apiBaseUrl}/v1/accruals:prepare`,{method:"POST",headers:{"Content-Type":"application/json",...await authenticationHeaders()},body:JSON.stringify(input)});const value=await response.json();if(!response.ok)throw new Error(value.message??"Preparation unavailable.");setResult(value);}catch(e){setError(e instanceof Error?e.message:"Preparation failed.");}finally{setBusy(false);}
  }
- return <><h1>Prepare an accrued expense</h1><p>Confirm incurred services, an evidence-based closing amount and the actual booked liability. Only the difference is proposed.</p>
+ return <><PageHeader icon="accrual" title="Accrued expense">Confirm incurred services, an evidence-based closing amount and the actual booked liability. Only the difference is proposed.</PageHeader>
   {revision.close && <SourceReview closeId={revision.close} sources={revision.sources} />}
   {revision.error && <p role="alert">{revision.error}</p>}
   <form ref={form} onSubmit={e=>void prepare(e)} onChange={()=>setResult(undefined)}><fieldset disabled={busy||!revision.ready}><legend>Incurred service and ledger evidence</legend><button type="button" onClick={example}>Use synthetic accrual example</button>

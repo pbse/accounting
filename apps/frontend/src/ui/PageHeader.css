@@ -20,6 +20,9 @@
   font-size: 13px;
   line-height: 16px;
 }
+.page-header-main p .chip {
+  margin-left: var(--space-8);
+}
 .page-header-icon {
   display: grid;
   color: var(--ink);

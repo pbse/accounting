@@ -7,6 +7,7 @@ import { money, useCurrency } from "../closes/workspace";
 import { SourceReview } from "../closes/Evidence";
 import { useRevision } from "../closes/useRevision";
 import type { EntityType, OwnerInput, OwnerWorkpaper } from "../../../../../packages/contracts/owner";
+import { PageHeader } from "../../ui/PageHeader";
 
 export const entityTypes: Record<EntityType, string> = { sole_proprietor: "Sole proprietor / single-member LLC", partnership: "Partnership / multi-member LLC", s_corp: "S corporation", c_corp: "C corporation" };
 const treatments = {
@@ -138,8 +139,10 @@ export default function PrepareOwner() {
   const reset = () => setResult(undefined);
   return (
     <>
-      <h1>Owner reclassification</h1>
-      <p>Move one owner-related transaction once the client has told you its purpose. If they haven't answered yet, save the question instead; nothing is proposed until they do.</p>
+      <PageHeader icon="owner" title="Owner items">
+        Move one owner-related transaction once the client has told you its purpose. If they haven't answered yet, save the question instead; nothing is
+        proposed until they do.
+      </PageHeader>
       {revision.close && <SourceReview closeId={revision.close} sources={revision.sources} />}
       {revision.error && <p role="alert">{revision.error}</p>}
       <form ref={form} onSubmit={(e) => void prepare(e)} onChange={reset}>

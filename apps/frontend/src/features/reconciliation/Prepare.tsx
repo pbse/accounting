@@ -13,6 +13,7 @@ import type {
   ReconciliationLine,
   ReviewedMatch,
 } from "../../../../../packages/contracts/reconciliation";
+import { PageHeader } from "../../ui/PageHeader";
 
 type PriorOutstanding = NonNullable<ReconciliationInput["prior_outstanding"]>[number];
 
@@ -305,13 +306,10 @@ export default function Prepare() {
   }
   return (
     <>
-      <p className="eyebrow">STATEMENT RECONCILIATION / PREPARATION</p>
-      <h1>See what ties. Investigate what doesn’t.</h1>
-      <p>
-        Import one full month of a {currency} bank or credit-card account. Bank deposits increase cash;
-        card charges increase the liability. Bank withdrawals, card payments and card credits decrease it.
-        Normalize both CSVs to the selected sign convention before review.
-      </p>
+      <PageHeader icon="reconcile" title="Statement reconciliation">
+        Import one full month of a {currency} bank or credit-card account. Bank deposits increase cash; card charges increase the liability. Bank
+        withdrawals, card payments and card credits decrease it. Normalize both CSVs to the selected sign convention before review.
+      </PageHeader>
       <details open={!result}>
         <summary>
           {result

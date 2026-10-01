@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../../lib/api";
+import { PageHeader } from "../../ui/PageHeader";
 
 type Question = { position: number; text: string; state: string; answer: string };
 type Request = {
@@ -126,127 +127,128 @@ export default function ClientRequest() {
     }
   }
   return (
-    <main id="main" className="public-page">
-      <p className="eyebrow">PRIVATE CLIENT REQUEST</p>
-      <h1>
-        {request?.status === "received"
-          ? "Your reply has been received."
-          : "Help complete your close"}
-      </h1>
-      {error && <p role="alert">{error}</p>}
-      {scanStatus && <p role="status">{scanStatus}</p>}
-      {!request && !error && <p role="status">Opening your request…</p>}
-      {!request && needsPasscode && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setPasscode(String(new FormData(e.currentTarget).get("passcode") ?? "").replace(/\s/g, ""));
-            setRefresh((n) => n + 1);
-          }}
-        >
-          <label>
-            Passcode from your accounting team
-            <input name="passcode" inputMode="numeric" autoComplete="one-time-code" maxLength={9} required />
-          </label>
-          <button>Open request</button>
-          <p className="note">Your accounting team gives you this passcode by phone or in person; it is never in the email. Five wrong tries close the link.</p>
-        </form>
-      )}
-      {!request && error && !needsPasscode && (
-        <button onClick={() => setRefresh((n) => n + 1)}>
-          Retry opening request
-        </button>
-      )}
-      {(request?.status === "open" || request?.status === "received") && (
-        <>
-          <h2>
-            {request.entity} · {request.period}
-          </h2>
-          {(request.removed?.length ?? 0) > 0 && (
-            <p role="status">
-              For your security we removed the {request.removed!.join(", ")} from your reply before saving it. Please never send card or bank
-              account numbers, identity numbers or passwords; the firm will ask another way if it needs them.
-            </p>
-          )}
-          {request.status === "received" && (
-            <p role="status">
-              {request.open
-                ? "Your reply is saved. You can answer more questions, send documents or correct an answer until this link expires. Work continues once every question is answered, or when the firm decides to go ahead."
-                : "Your reply is saved, and this request takes no more answers. Contact the firm if something needs to change."}{" "}
-              Attachments stay quarantined until automated scanning and the firm's release.
-            </p>
-          )}
-          <details>
-            <summary>The request as sent</summary>
-            <pre style={{ whiteSpace: "pre-wrap" }}>{request.body}</pre>
-          </details>
-          {request.open !== false && (
-            <p>
-              Please respond only for this client and period. Do not include passwords or information about other clients. This link expires{" "}
-              {new Date(request.expires_at!).toLocaleString()}. Keep it private.
-            </p>
-          )}
-          <form onSubmit={submit}>
-            <fieldset disabled={busy || request.open === false}>
-              <ol className="stack">
-                {(request.questions ?? []).map((q) => {
-                  const d = drafts[q.position] ?? { answer: "", later: false };
-                  return (
-                    <li key={q.position}>
-                      <p>
-                        {q.text} <span className="pill">{stateLabels[q.state] ?? q.state}</span>
-                      </p>
-                      <label>
-                        {d.later ? "Note about the document (optional)" : "Your answer"}
-                        <textarea rows={3} value={d.answer} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, answer: e.target.value } })} />
-                      </label>
-                      <label>
-                        <input type="checkbox" checked={d.later} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, later: e.target.checked } })} /> I'll send the document later
-                      </label>
-                    </li>
-                  );
-                })}
-              </ol>
-              <label>Supporting documents<input name="files" type="file" accept=".pdf,.txt,.csv" multiple /></label>
-              {(request.questions ?? []).some((q) => q.state === "awaiting_document") && (
-                <p className="note">Sending a document you said would follow? Untick “I'll send the document later” on its question and say which file it is.</p>
-              )}
-              <p>Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total. Files stay quarantined until automated scanning and the firm's release.</p>
+    <div className="app-shell standalone">
+      <main id="main" className="page request-page">
+        <PageHeader icon="file" title={request?.status === "received" ? "Your reply has been received." : "Help complete your close"}>
+          Private client request
+        </PageHeader>
+        <section>
+          {error && <p role="alert">{error}</p>}
+          {scanStatus && <p role="status">{scanStatus}</p>}
+          {!request && !error && <p role="status">Opening your request…</p>}
+          {!request && needsPasscode && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setPasscode(String(new FormData(e.currentTarget).get("passcode") ?? "").replace(/\s/g, ""));
+                setRefresh((n) => n + 1);
+              }}
+            >
               <label>
-                <input type="checkbox" name="confirmed" required /> This reply concerns {request.entity} for {request.period}. I understand it will be reviewed by the firm.
+                Passcode from your accounting team
+                <input name="passcode" inputMode="numeric" autoComplete="one-time-code" maxLength={9} required />
               </label>
-              <button>{busy ? "Saving your reply…" : request.status === "received" ? "Send the update to the firm" : "Send to the firm"}</button>
-            </fieldset>
-          </form>
-          {request.status === "received" && request.rescan && (
-            <details>
-              <summary>Retry attachment scanning</summary>
-              <p>Select the same original files if scanning was interrupted or the firm needs a fresh scan. This cannot add new documents or change your reply.</p>
-              <form onSubmit={retryScans}>
-                <fieldset disabled={busy}>
-                  <label>Original documents<input type="file" name="files" accept=".pdf,.txt,.csv" multiple required /></label>
-                  <button>Retry malware scanning</button>
+              <button>Open request</button>
+              <p className="note">Your accounting team gives you this passcode by phone or in person; it is never in the email. Five wrong tries close the link.</p>
+            </form>
+          )}
+          {!request && error && !needsPasscode && (
+            <button onClick={() => setRefresh((n) => n + 1)}>
+              Retry opening request
+            </button>
+          )}
+          {(request?.status === "open" || request?.status === "received") && (
+            <>
+              <h2>
+                {request.entity} · {request.period}
+              </h2>
+              {(request.removed?.length ?? 0) > 0 && (
+                <p role="status">
+                  For your security we removed the {request.removed!.join(", ")} from your reply before saving it. Please never send card or bank
+                  account numbers, identity numbers or passwords; the firm will ask another way if it needs them.
+                </p>
+              )}
+              {request.status === "received" && (
+                <p role="status">
+                  {request.open
+                    ? "Your reply is saved. You can answer more questions, send documents or correct an answer until this link expires. Work continues once every question is answered, or when the firm decides to go ahead."
+                    : "Your reply is saved, and this request takes no more answers. Contact the firm if something needs to change."}{" "}
+                  Attachments stay quarantined until automated scanning and the firm's release.
+                </p>
+              )}
+              <details>
+                <summary>The request as sent</summary>
+                <pre>{request.body}</pre>
+              </details>
+              {request.open !== false && (
+                <p>
+                  Please respond only for this client and period. Do not include passwords or information about other clients. This link expires{" "}
+                  {new Date(request.expires_at!).toLocaleString()}. Keep it private.
+                </p>
+              )}
+              <form onSubmit={submit}>
+                <fieldset disabled={busy || request.open === false}>
+                  <ol className="stack">
+                    {(request.questions ?? []).map((q) => {
+                      const d = drafts[q.position] ?? { answer: "", later: false };
+                      return (
+                        <li key={q.position}>
+                          <p>
+                            {q.text} <span className="pill">{stateLabels[q.state] ?? q.state}</span>
+                          </p>
+                          <label>
+                            {d.later ? "Note about the document (optional)" : "Your answer"}
+                            <textarea rows={3} value={d.answer} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, answer: e.target.value } })} />
+                          </label>
+                          <label>
+                            <input type="checkbox" checked={d.later} onChange={(e) => setDrafts({ ...drafts, [q.position]: { ...d, later: e.target.checked } })} /> I'll send the document later
+                          </label>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                  <label>Supporting documents<input name="files" type="file" accept=".pdf,.txt,.csv" multiple /></label>
+                  {(request.questions ?? []).some((q) => q.state === "awaiting_document") && (
+                    <p className="note">Sending a document you said would follow? Untick “I'll send the document later” on its question and say which file it is.</p>
+                  )}
+                  <p>Up to five distinct files: PDF up to 5 MiB, TXT/CSV up to 512 KiB; 20 MiB total. Files stay quarantined until automated scanning and the firm's release.</p>
+                  <label>
+                    <input type="checkbox" name="confirmed" required /> This reply concerns {request.entity} for {request.period}. I understand it will be reviewed by the firm.
+                  </label>
+                  <button>{busy ? "Saving your reply…" : request.status === "received" ? "Send the update to the firm" : "Send to the firm"}</button>
                 </fieldset>
               </form>
-            </details>
+              {request.status === "received" && request.rescan && (
+                <details>
+                  <summary>Retry attachment scanning</summary>
+                  <p>Select the same original files if scanning was interrupted or the firm needs a fresh scan. This cannot add new documents or change your reply.</p>
+                  <form onSubmit={retryScans}>
+                    <fieldset disabled={busy}>
+                      <label>Original documents<input type="file" name="files" accept=".pdf,.txt,.csv" multiple required /></label>
+                      <button>Retry malware scanning</button>
+                    </fieldset>
+                  </form>
+                </details>
+              )}
+            </>
           )}
-        </>
-      )}
-      <p className="legal-updated">
-        {/* A new tab keeps this request open: its link is no longer in the address bar. */}
-        How Close handles what you send:{" "}
-        <a href="/privacy" target="_blank" rel="noreferrer">
-          privacy notice
-        </a>{" "}
-        ·{" "}
-        <a href="/ai" target="_blank" rel="noreferrer">
-          AI and your data
-        </a>{" "}
-        ·{" "}
-        <a href="/data-retention" target="_blank" rel="noreferrer">
-          retention and deletion
-        </a>
-      </p>
-    </main>
+        </section>
+        <p className="legal-updated">
+          {/* A new tab keeps this request open: its link is no longer in the address bar. */}
+          How Close handles what you send:{" "}
+          <a href="/privacy" target="_blank" rel="noreferrer">
+            privacy notice
+          </a>{" "}
+          ·{" "}
+          <a href="/ai" target="_blank" rel="noreferrer">
+            AI and your data
+          </a>{" "}
+          ·{" "}
+          <a href="/data-retention" target="_blank" rel="noreferrer">
+            retention and deletion
+          </a>
+        </p>
+      </main>
+    </div>
   );
 }

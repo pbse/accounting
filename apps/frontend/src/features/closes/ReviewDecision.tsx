@@ -173,15 +173,7 @@ export function ReviewDecision({
                         </th>
                         {[c.before, c.after].map((value, i) => (
                           <td key={i}>
-                            <pre
-                              style={{
-                                whiteSpace: "pre-wrap",
-                                overflowWrap: "anywhere",
-                                maxHeight: "16rem",
-                                maxWidth: "28rem",
-                                overflow: "auto",
-                              }}
-                            >
+                            <pre className="scroll-text">
                               {value}
                             </pre>
                           </td>

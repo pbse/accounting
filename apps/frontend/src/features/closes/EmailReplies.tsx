@@ -33,7 +33,7 @@ export function EmailReplies({ closeId, onReleased }: { closeId: string; onRelea
     {items.map(item => <article key={item.id}>
       <h3>Request #{item.request_id} · {item.state}</h3>
       <p>Received {new Date(item.received_at).toLocaleString()} from {item.envelope_from}. Message From: {item.header_from}. {item.addresses_match ? "Addresses match the approved recipient; identity still needs review." : "Sender differs from the approved recipient. Keep held and use the secure link."}</p>
-      <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{item.body}</pre>
+      <pre>{item.body}</pre>
       {item.state === "held" && <form onSubmit={e => { e.preventDefault(); const data = new FormData(e.currentTarget); void decide(item.id, String(data.get("action")) as "release" | "reject", String(data.get("reason")), String(data.get("verification_reference") ?? "")); }}>
         <label>Decision reason<input name="reason" required minLength={5} maxLength={2000} /></label>
         {item.addresses_match && <label><input type="radio" name="action" value="release" required onChange={() => setReleasing(current => ({...current, [item.id]: true}))} /> Release into the original preparation job</label>}

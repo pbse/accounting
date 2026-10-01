@@ -130,7 +130,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
       <h4>Proposal #{selected.id}</h4>
       <p>{selected.engine==="openai"?`AI draft · ${selected.model}`:"Local review prompt"} · {selected.activated_version_id?"activated after accountant approval":"inactive until accountant approval"}</p>
       <p>Source: {selected.source_id?<><a href={"/dashboard/closes/"+selected.source_close_id}>Document #{selected.source_id} in its close</a> <button type="button" onClick={()=>void inspectSource()}>Inspect extracted source</button></>:<>Reviewer drafts {selected.source_edits.map(edit=><a key={edit.id} href={"/dashboard/closes/"+edit.close_id}>#{edit.id} </a>)}</>}. {selected.source_quote&&<>Cited passage: “{selected.source_quote}”</>}</p>
-      {sourceText&&<pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:"20rem",overflow:"auto"}}>{sourceText}</pre>}
+      {sourceText&&<pre className="scroll-text">{sourceText}</pre>}
       <p>Method boundary: {selected.method}. {selected.example_count} approved example(s).</p>
       <form key={selected.revision} onSubmit={e=>void revise(e)}><fieldset disabled={busy||!!selected.activated_version_id||selected.example_count>0}><legend>Accountant edits before example approval</legend>
         <label>Reviewed instructions <textarea name="instructions" required maxLength={4000} defaultValue={selected.instructions}/></label>

@@ -183,8 +183,8 @@ export default function ClientClose() {
       </Link>
       <PageHeader avatar={close.entity} title={close.entity} actions={<PrepareActions close={close} />}>
         Close month {close.period} · prepared work stays a draft until an accountant approves it <PlanChips plan={close} />
-        {close.basis && <span className="chip" style={{ marginLeft: "0.5rem" }} title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
-        {close.profile && close.profile.state !== "none" && <span className="chip" style={{ marginLeft: "0.5rem" }} role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
+        {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
+        {close.profile && close.profile.state !== "none" && <span className="chip" role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
       </PageHeader>
       <PlanningControls key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}`} closeId={close.id} plan={close} onSaved={() => void reload()} />
       <StatGroup>
