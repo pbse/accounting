@@ -3,8 +3,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // The staff admin panel (docs/admin-panel.md). The edge Worker serves it under /admin from the same
-// assets as the firm app, so it builds into that app's dist. It borrows the firm app's base stylesheet and
-// shares the Tray design system with it (packages/ui, docs/design-system.md).
+// assets as the firm app, so it builds into that app's dist. It shares the Tray design system with it
+// (packages/ui, docs/design-system.md) and loads none of the public site's styles.
 export default defineConfig({
   base: "/admin/",
   plugins: [react()],

@@ -2994,3 +2994,13 @@ Browser check, with the API and both apps running locally on a fresh PostgreSQL,
 Review: the first Codex pass (gpt-6-sol, high) found that a stat's date dropped the year, so an old moment could read as recent; the year now shows unless it is this year. The second pass found nothing.
 
 Verified: `npm run check` (both apps), `npm test` (22 pass) and `npm run build` (both apps) after a clean `npm ci`.
+
+## The shell stands alone; contrast, toolbar colour and phones (2026-10-01)
+
+The shared shell now sets every element style its pages rely on, at the specificity of a bare element (`:where(.app-shell)`), so every pattern still overrides it. The staff console stops loading the public site's `styles.css`, and the firm app's product-only rules move from `styles.css` into `workspace.css`. Measured, not assumed: on every page of both apps, every element's computed style was compared with and without `styles.css`, and nothing inside the shell changes any more (before, the shell took box sizing, button fonts, table cells, fieldsets, the skip link and more from it). Against `main`, the only differences are the intended ones: the public site's top margin on primary buttons is gone (it pushed header actions and a close's first preparation chip 6px below their neighbours), segmented counts are darker, and colours change on zero-width borders.
+
+Also: segmented counts and source line numbers move from `--ink-3` (2.7:1) to `--ink-2`; shell pages set the browser toolbar colour to the shell's ground while open and restore the public colour on leaving (checked on the workspace, the client request page, the console and back on a public page); on a phone the sidebar is one strip that scrolls sideways, short pages no longer stretch it, and a wide table scrolls inside its card. At 390px no page of either app scrolls sideways (the loan schedule, staff audit and runs pages did).
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing; a stale comment in the console's `vite.config.ts` was corrected afterwards.
+
+Verified: `npm run check`, `npm test` (22 pass) and `npm run build` after a clean `npm ci`; the console's built CSS contains no public-site styles.
