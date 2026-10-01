@@ -23,8 +23,22 @@ async function call(path, body) {
   return response.json();
 }
 
-// Synthetic data so the pages that show a close or a run have one, reusing what an earlier check created.
+// Synthetic data so the pages that show a close, a workpaper or a run have one, reusing what an earlier check
+// created. A firm (and so a firm's page, a plan and the plan editor) only comes from the sign-in provider, so those
+// pages are not checked.
 const close = (await call("/v1/closes", { entity: "Harbor Dental Group", period: "2026-09" })).id;
+const paper =
+  (await call(`/v1/closes/${close}`)).workpapers.find((p) => p.kind === "prepaid")?.id ??
+  (
+    await call(`/v1/closes/${close}/workpapers`, {
+      kind: "prepaid",
+      input: {
+        entity: "Harbor Dental Group", source_reference: "Synthetic invoice 001, page 1", amount: "12000.00", currency: "USD", basis: "accrual",
+        service_start: "2026-09-01", service_end: "2027-08-31", close_period: "2026-09", expense_account: "Software expense",
+        prepaid_account: "Prepaid expense", method: "equal_full_months_v1", method_confirmed: true, booking_confirmed: true, examples_confirmed: true,
+      },
+    })
+  ).id;
 const run =
   (await call("/v1/admin/workflows/runs")).runs[0]?.id ??
   (await call("/v1/admin/workflows/runs", { workflow: "chat_expiry", organization: "", input: {}, reason: "Layout check" })).id;
@@ -37,7 +51,7 @@ const apps = [
     prefix: "",
     stylesheet: "/apps/frontend/src/styles.css",
     routes: [
-      "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, "/dashboard/firm",
+      "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, "/dashboard/firm",
       "/dashboard/measure", "/dashboard/security", "/dashboard/close", "/dashboard/review",
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],
@@ -81,12 +95,26 @@ for (const app of apps) {
     for (const route of app.routes) {
       const where = `${app.name} ${route} (${width.name})`;
       const fail = (message) => failures.push(`${where}: ${message}`);
+      // The route counts as rendered once its header replaces the previous page's (a new element or a new title).
       await page.evaluate((path) => {
+        const target = new URL(path, location.href);
+        const same = target.pathname + target.search === location.pathname + location.search;
+        const previous = same ? null : document.querySelector(".page-header h1");
+        window.__layoutPrevious = previous && { element: previous, title: previous.textContent };
         history.pushState({}, "", path);
         dispatchEvent(new PopStateEvent("popstate"));
       }, app.prefix + route);
       try {
-        const header = () => page.waitForFunction(() => document.querySelector(".page-header h1")?.textContent?.trim(), null, { timeout: 15000 });
+        const header = () =>
+          page.waitForFunction(
+            () => {
+              const h1 = document.querySelector(".page-header h1");
+              const previous = window.__layoutPrevious;
+              return h1?.textContent?.trim() && (!previous || h1 !== previous.element || h1.textContent !== previous.title);
+            },
+            null,
+            { timeout: 15000 },
+          );
         await Promise.race([header(), page.waitForSelector('input[name="token"]', { timeout: 15000 })]);
         if (await page.locator('input[name="token"]').count()) {
           await unlock();

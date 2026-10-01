@@ -106,7 +106,7 @@ jobs:
           HTTP_ADDR=127.0.0.1:8080 /tmp/api > /tmp/api.log 2>&1 &
           npm run dev -w @close/frontend > /tmp/frontend.log 2>&1 &
           npm run dev -w @close/admin > /tmp/admin.log 2>&1 &
-          timeout 120 sh -c 'until curl -sf http://127.0.0.1:8080/readyz > /dev/null; do sleep 1; done'
+          timeout 120 sh -c 'until curl -sf http://127.0.0.1:8080/readyz > /dev/null && curl -sf http://127.0.0.1:5173/ > /dev/null && curl -sf http://127.0.0.1:5174/admin/ > /dev/null; do sleep 1; done'
           npm run check:layout || { tail -n 40 /tmp/api.log /tmp/frontend.log /tmp/admin.log; exit 1; }
       - run: test -z "$(gofmt -l services/backend)"
       - run: docker compose config --quiet

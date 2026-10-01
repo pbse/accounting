@@ -54,7 +54,8 @@ summary:focus-visible {
 .skip:focus {
   top: 1rem;
 }
-header {
+/* The public site's header only: product headers take nothing from this file. */
+:where(.marketing) header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -205,7 +206,7 @@ footer {
   .brand span {
     display: none;
   }
-  header {
+  :where(.marketing) header {
     padding: 1rem;
     align-items: flex-start;
   }
