@@ -2966,3 +2966,11 @@ Browser check, with the API and frontend running locally on a fresh PostgreSQL a
 Review: the first Codex pass (gpt-6-sol, high) found nothing.
 
 Verified: `npm run check`, `npm test` (19 pass) and `npm run build` after a clean `npm ci`.
+
+## Frontend dead code removed (2026-10-01)
+
+A scan of every class in `styles.css`, `theme/workspace.css` and `ui/*.css` against the class names the frontend's source writes found five unused: the rules for the layout before the workspace shell (`.workspace` and its nav, including their narrow-screen variants), `.cards`, `.intro` (and its workspace override), `.mode` and `.start-preparation`; they are removed. Four exports used only in their own file (`paperLabels`, `paperPaths`, `WorkpaperResult`, `entityTypes`) stop being exported. Every icon in `ui/Icon.tsx` is used. The frontend's `tsconfig.json` now sets `noUnusedLocals` and `noUnusedParameters`, so the type-check fails on dead locals and parameters; it passes.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check`, `npm test` (19 pass) and `npm run build` after a clean `npm ci`; the class scan finds no unreferenced class.
