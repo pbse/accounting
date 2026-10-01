@@ -107,7 +107,7 @@ func modelBudget(w http.ResponseWriter, r *http.Request, db *sql.DB, n int) bool
 
 func saveReplay(ctx context.Context, db *sql.DB, org, closeID, model, actor string, items []*replayItem) error {
 	raw, _ := json.Marshal(items)
-	_, err := db.ExecContext(ctx, `INSERT INTO replay_runs(organization_id,close_id,model,actor,items) VALUES($1,$2::bigint,$3,$4,$5)`, org, closeID, model, actor, string(raw))
+	_, err := db.ExecContext(ctx, `INSERT INTO replay_runs(organization_id,close_id,model,actor,items,reasoning_effort) VALUES($1,$2::bigint,$3,$4,$5,$6)`, org, closeID, model, actor, string(raw), llm.ReasoningEffort(ctx, "preparation"))
 	return err
 }
 
@@ -116,12 +116,13 @@ func replay(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			var run struct {
-				Model     string          `json:"model"`
-				Actor     string          `json:"actor"`
-				Items     json.RawMessage `json:"items"`
-				CreatedAt time.Time       `json:"created_at"`
+				Model           string          `json:"model"`
+				ReasoningEffort *string         `json:"reasoning_effort"`
+				Actor           string          `json:"actor"`
+				Items           json.RawMessage `json:"items"`
+				CreatedAt       time.Time       `json:"created_at"`
 			}
-			err := db.QueryRowContext(r.Context(), `SELECT model,actor,items,created_at FROM replay_runs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, r.PathValue("id")).Scan(&run.Model, &run.Actor, &run.Items, &run.CreatedAt)
+			err := db.QueryRowContext(r.Context(), `SELECT model,actor,items,created_at,reasoning_effort FROM replay_runs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, r.PathValue("id")).Scan(&run.Model, &run.Actor, &run.Items, &run.CreatedAt, &run.ReasoningEffort)
 			if err == sql.ErrNoRows {
 				jsonReply(w, 200, map[string]any{"run": nil})
 				return
@@ -162,18 +163,18 @@ func replay(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Confirmed readings could not be replayed or saved.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"model": model, "items": items})
+		jsonReply(w, 200, map[string]any{"model": model, "reasoning_effort": llm.ReasoningEffort(ctx, "preparation"), "items": items})
 	}
 }
 
-// sweepReplays replays, for each firm not yet checked on the current model, the close with its newest confirmed reading. A run counts once it scores a reading.
+// sweepReplays replays, for each firm not yet checked on the current model and reasoning effort, the close with its newest confirmed reading. A run counts once it scores a reading.
 func sweepReplays(ctx context.Context, db *sql.DB) error {
 	model := llm.Model(ctx, "preparation")
 	if model == "" {
 		return nil
 	}
 	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine'='openai' ORDER BY i.confirmed_at DESC LIMIT 1) j
- WHERE o.enabled AND NOT EXISTS(SELECT 1 FROM replay_runs r WHERE r.organization_id=o.id AND r.model=$1) ORDER BY o.id LIMIT 20`, model)
+ WHERE o.enabled AND NOT EXISTS(SELECT 1 FROM replay_runs r WHERE r.organization_id=o.id AND r.model=$1 AND r.reasoning_effort=$2) ORDER BY o.id LIMIT 20`, model, llm.ReasoningEffort(ctx, "preparation"))
 	if err != nil {
 		return err
 	}

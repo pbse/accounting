@@ -112,7 +112,7 @@ func (c *Client) Bind(next http.Handler) http.Handler {
 	})
 }
 
-// Model returns non-secret route metadata for provenance, replay keys and gates.
+// Model returns non-secret route metadata for provenance and availability gates.
 func Model(ctx context.Context, purpose string) string {
 	c, _ := ctx.Value(clientKey{}).(*Client)
 	if c == nil {
@@ -123,6 +123,15 @@ func Model(ctx context.Context, purpose string) string {
 		return ""
 	}
 	return route.Model
+}
+
+// ReasoningEffort returns the configured effort; empty means the provider default.
+func ReasoningEffort(ctx context.Context, purpose string) string {
+	c, _ := ctx.Value(clientKey{}).(*Client)
+	if c == nil {
+		return ""
+	}
+	return c.routes[purpose].Effort
 }
 
 var ErrUnavailable = errors.New("model route is not configured")

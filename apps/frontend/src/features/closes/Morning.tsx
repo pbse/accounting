@@ -7,7 +7,7 @@ type Morning = {
   closes: { close_id: string; entity: string; period: string; needs: string[] }[];
   needing: number;
   quiet: number;
-  model_check: { model: string; close_id: string; kept: number; scored: number; checked_at: string } | null;
+  model_check: { model: string; reasoning_effort?: string | null; close_id: string; kept: number; scored: number; checked_at: string } | null;
 };
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -46,7 +46,7 @@ export function MorningBrief({ refresh }: { refresh: number }) {
       </p>
       {brief.model_check && (
         <p className={brief.model_check.kept === brief.model_check.scored ? "note" : undefined} role={brief.model_check.kept === brief.model_check.scored ? undefined : "status"}>
-          After the model changed to {brief.model_check.model}, {brief.model_check.kept} of {brief.model_check.scored} past confirmed readings came out the same
+          Using {brief.model_check.model} ({brief.model_check.reasoning_effort == null ? "reasoning effort not recorded" : `${brief.model_check.reasoning_effort || "provider default"} reasoning effort`}), {brief.model_check.kept} of {brief.model_check.scored} past confirmed readings came out the same
           ({new Date(brief.model_check.checked_at).toLocaleDateString()}). <Link to={`/dashboard/closes/${brief.model_check.close_id}`}>See the readings</Link>.
         </p>
       )}

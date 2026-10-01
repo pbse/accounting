@@ -40,7 +40,7 @@ func TestOpenAIFailuresAndStreaming(t *testing.T) {
 		limit      int64
 		want       error
 	}{
-		{"refused", `{"status":"completed","output":[{"content":[{"type":"refusal"}]}]}`, false, 1024, ErrRefused},
+		{"refused", `{"status":"completed","output":[{"type":"message","content":[{"type":"refusal"}]}]}`, false, 1024, ErrRefused},
 		{"partial", `{"status":"incomplete"}`, false, 1024, ErrIncomplete},
 		{"oversized", strings.Repeat("x", 65), false, 64, ErrLimit},
 		{"trailing JSON", `{"status":"completed"} {}`, false, 1024, ErrIncomplete},
@@ -147,23 +147,27 @@ func TestStreamConsumerCancellation(t *testing.T) {
 
 // Keep provider endpoints out of feature code. Provider additions belong here.
 func TestModelEndpointsStayInGateway(t *testing.T) {
-	root, err := filepath.Abs("../..")
+	root, err := filepath.Abs("../../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
 	gateway, _ := os.Getwd()
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() && filepath.Clean(path) == filepath.Clean(gateway) {
+		if d.IsDir() && (filepath.Clean(path) == filepath.Clean(gateway) || strings.HasPrefix(d.Name(), ".") || d.Name() == "node_modules" || d.Name() == "dist") && path != root {
 			return filepath.SkipDir
 		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		ext := filepath.Ext(path)
+		if d.IsDir() || (ext != ".go" && ext != ".ts" && ext != ".tsx" && ext != ".js" && ext != ".mjs") || strings.HasSuffix(path, "_test.go") || strings.Contains(filepath.Base(path), ".test.") {
 			return nil
 		}
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		for _, endpoint := range []string{"api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com", `os.Getenv("OPENAI_`, `os.Getenv("CONTEXT_MACHINE_`, "GenerateOpenAI"} {
+		for _, endpoint := range []string{"api.openai.com", "api.anthropic.com", "generativelanguage.googleapis.com", "chatgpt.com/backend-api/codex", `os.Getenv("OPENAI_`, `os.Getenv("CONTEXT_MACHINE_`, "GenerateOpenAI"} {
 			if strings.Contains(string(raw), endpoint) {
 				t.Errorf("direct model endpoint in %s", path)
 			}
@@ -172,5 +176,54 @@ func TestModelEndpointsStayInGateway(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestToolContinuationPreservesProviderItems(t *testing.T) {
+	output := json.RawMessage(`[{"type":"reasoning","id":"rs_1","encrypted_content":"opaque","summary":[]},{"type":"message","id":"msg_1","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Checking."}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{}"}]`)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 2 {
+			var sent struct {
+				Input []json.RawMessage `json:"input"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+				t.Error(err)
+				return
+			}
+			var expected []json.RawMessage
+			json.Unmarshal(output, &expected)
+			if len(sent.Input) != 5 {
+				t.Errorf("lost history: %s", sent.Input)
+				return
+			}
+			for i, item := range expected {
+				if string(sent.Input[i+1]) != string(item) {
+					t.Errorf("changed output item: %s", sent.Input[i+1])
+				}
+			}
+		}
+		fmt.Fprintf(w, `{"status":"completed","output":%s}`, output)
+	}))
+	defer server.Close()
+	c := Client{routes: map[string]route{"test": {Provider: OpenAI, URL: server.URL, Token: "key", Model: "model"}}}
+	in := Request{Purpose: "test", Messages: []Message{{Role: "user", Content: "Read"}}, MaxOutputTokens: 100}
+	out, err := c.Generate(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(out)
+	if strings.Contains(string(raw), "opaque") || len(out.ToolCalls) != 1 {
+		t.Fatalf("invalid public response: %s", raw)
+	}
+	in.Messages = append(in.Messages, out.Continuation...)
+	in.Messages = append(in.Messages, Message{Result: &ToolResult{CallID: "call_1", Output: "data"}})
+	if _, err = c.Generate(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	in.Messages[1].Role = "user"
+	if _, err = c.Generate(t.Context(), in); !errors.Is(err, ErrIncomplete) || calls != 2 {
+		t.Fatalf("mixed message accepted: %v calls=%d", err, calls)
 	}
 }
