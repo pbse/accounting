@@ -3036,3 +3036,13 @@ Shown to fail when it should: against `main` as it stood before #215 it reports 
 Review: Codex (gpt-6-sol, high) pass 1 found routes could be measured before rendering, CI not waiting for the dev servers, and missing detail pages (all fixed or documented); pass 2 claimed Vite names the stylesheet `/src/styles.css`, disproved by reading `data-vite-dev-id` (the absolute file path) and by the check finding the sheet; pass 3 asked for the request page and phone-width isolation (both added); pass 4 found nothing. Several review runs were interrupted by the machine sleeping and were rerun.
 
 Verified: `npm run check`, `npm test` (23 pass), `npm run build` and `npm run check:layout` (58 page views) after a clean `npm ci`.
+
+## The north star's trend on Measure (2026-10-02)
+
+`GET /v1/closes/effort` gains `trend`: the twelve months up to the chosen one, oldest first, each with its measured closes and their median human minutes, computed like the month's own median in one grouped query (a close's minutes now come from one shared SQL expression). A month without measured closes reports none, not zero. The design system's dot chart comes into the product as `DotChart` (dot columns at the design system's pitch over a full grid of empty dots, scale above, first and last months below, an accessible label stating every month), and Measure shows the trend under its north-star tiles once any month has measured closes.
+
+Browser check, with Measure's report answered in the browser by a realistic year: the trend reads at a glance at 1440px and 390px, the month without measured closes stays empty, no page scrolls sideways, no page errors. `TestEffortCapsCreditAndSeparatesWaiting` now also checks the trend's length, order and that its last month matches the report, run against a fresh PostgreSQL.
+
+Review: Codex (gpt-6-sol, high) pass 1 found sub-minute medians written as "1 min" (the chart now uses the page's own minutes format); pass 2 found a small positive month could round to no dots and read as empty (any positive value now fills at least one); pass 3 found nothing.
+
+Verified: `npm run check`, `npm test` (23 pass), `npm run build`, gofmt, `go vet` and `go test -run TestEffort` against PostgreSQL, and `npm run check:layout` (58 page views) after a clean `npm ci`.
