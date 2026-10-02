@@ -12,7 +12,7 @@ import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
-import { MorningBrief } from "./Morning";
+import { MorningBrief, type Morning } from "./Morning";
 import { DelegatedCloses } from "./Goal";
 import { Setup } from "./Setup";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
@@ -155,6 +155,8 @@ export function Work({
   const [dependencyLoaded, setDependencyLoaded] = useState(false);
   const [predicted, setPredicted] = useState<{ items: Predicted[]; more: boolean }>({ items: [], more: false });
   const [queue, setQueue] = useState<{ items: QueueItem[]; count: number }>();
+  const [morning, setMorning] = useState<Morning>();
+  const [morningError, setMorningError] = useState("");
   // A link to one document of this close shows only that document, open.
   const [params] = useSearchParams();
   const job = closeId ? (params.get("job") ?? "") : "";
@@ -213,6 +215,19 @@ export function Work({
     workspaceRequest(`/review-queue?client=${encodeURIComponent(clientSearch)}`).then(data => live && setQueue(data)).catch(() => live && setQueue(undefined));
     return () => { live = false; };
   }, [closeId, clientSearch, refresh]);
+  useEffect(() => {
+    if (closeId) return;
+    let live = true;
+    workspaceRequest(`/morning?client=${encodeURIComponent(clientSearch)}`)
+      .then((data) => {
+        if (live) { setMorning(data); setMorningError(""); }
+      })
+      .catch((e) => {
+        if (live) { setMorning(undefined); setMorningError(e instanceof Error ? e.message : "The morning brief is unavailable."); }
+      });
+    return () => { live = false; };
+  }, [closeId, clientSearch, refresh]);
+  const dueCounts = morning?.due_counts;
   const show = (view: string) => {
     setFilter(view);
     document.getElementById("work-list")?.scrollIntoView({ block: "start" });
@@ -260,7 +275,14 @@ export function Work({
             <StatTile icon="decision" tone="orange" label="Needs your decision" value={counts.needs_confirmation} caption="Proposed facts and questions to confirm" onClick={() => show("needs_confirmation")} />
             <StatTile icon="review" label="Ready for review" value={queue?.count} caption="Prepared drafts with evidence and no blockers" onClick={() => document.getElementById("review-queue")?.scrollIntoView({ block: "start" })} />
             <StatTile icon="waiting" tone="teal" label="Waiting on clients" value={counts.waiting_client} caption="Approved requests awaiting a reply" onClick={() => show("waiting_client")} />
-            <StatTile icon="accrual" tone="gray" label="Due in 7 days" value={counts.due_soon} caption="Closes due within a week, including overdue" onClick={() => show("active")} />
+            <StatTile
+              icon="accrual"
+              tone={dueCounts?.overdue ? "red" : "gray"}
+              label="Due in 7 days"
+              value={dueCounts && dueCounts.overdue + dueCounts.upcoming}
+              caption={dueCounts ? `${dueCounts.overdue} overdue · ${dueCounts.upcoming} upcoming · ${dueCounts.no_due_date} without a due date` : "Closes not yet signed off, or changed since sign-off"}
+              onClick={() => document.getElementById("due-closes")?.scrollIntoView({ block: "start" })}
+            />
             <StatTile icon="blocked" tone="red" label="Blocked" value={counts.blocked} caption="Failed, replaced or unsupported work" onClick={() => show("blocked")} />
           </StatGroup>
         </>
@@ -270,9 +292,27 @@ export function Work({
         <p role="alert">{error} Updates paused; refresh to reconnect.</p>
       )}
       {!loaded && !error && <p role="status">Loading work…</p>}
+      {!closeId && <MorningBrief brief={morning} error={morningError} />}
+      {!closeId && morning && (
+        <>
+          <SectionHeader title="Due in 7 days" id="due-closes">
+            <small>Overdue or due within a week and not signed off, or changed since sign-off. {morning.due_counts.no_due_date > 0 && `${morning.due_counts.no_due_date} outstanding ${morning.due_counts.no_due_date === 1 ? "close has" : "closes have"} no due date.`}</small>
+          </SectionHeader>
+          <RowList label="Due closes">
+            {morning.due.length === 0 && <p className="empty">No outstanding close is overdue or due within 7 days.</p>}
+            {morning.due.map((item) => (
+              <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
+                <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`Due ${item.due_on}`} />
+                {item.due_on < morning.as_of.slice(0, 10) ? <span className="status danger">Overdue</span> : <span className="status warn">Due soon</span>}
+                <small>{{ open: "Not signed off", reopen_required: "Changed since sign-off", unknown: "Sign-off could not be rechecked" }[item.state]}</small>
+                <Icon name="arrow" />
+              </Link>
+            ))}
+          </RowList>
+        </>
+      )}
       {loaded && (
         <>
-          {!closeId && <MorningBrief refresh={refresh} />}
           {!closeId && <DelegatedCloses refresh={refresh} client={clientSearch} />}
           {!closeId && (
             <>

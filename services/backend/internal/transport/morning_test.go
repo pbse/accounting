@@ -1,12 +1,14 @@
 package transport
 
 import (
+	"bytes"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -171,5 +173,120 @@ func TestMorningBriefSaysWhatTheAgentDidAndWhoNeedsAPerson(t *testing.T) {
 	}
 	if member := read("user_member"); member.Needing != 0 || member.Quiet != 0 || member.Overnight.Drafts != 0 || member.Overnight.Snapshots != 0 || member.Overnight.Standing != 0 || member.Check != nil {
 		t.Fatalf("a member without client grants sees nothing: %+v", member)
+	}
+}
+
+func TestMorningKeepsEveryOutstandingObligation(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_Obligations" + rand.Text()
+	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Obligations fixture')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_partner',true,'Synthetic enrollment','fixture')`, org)
+	must(err)
+	now := time.Now().UTC()
+	day := func(days int) string { return now.AddDate(0, 0, days).Format("2006-01-02") }
+	closes := []string{}
+	open := func(entity, period, due string) string {
+		t.Helper()
+		var id string
+		must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period,due_on) VALUES($1,$2,$3,NULLIF($4,'')::date) RETURNING id::text`, org, entity, period, due).Scan(&id))
+		closes = append(closes, id)
+		return id
+	}
+	current := now.Format("2006-01")
+	signed, changed := open("Signed", current, day(3)), open("Changed", current, day(2))
+	old, late := open("Old", shiftMonth(current, -4), ""), open("Late", shiftMonth(current, -1), day(-1))
+	defer func() {
+		for _, id := range closes {
+			db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM close_scopes WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM evidence WHERE close_id=$1`, id)
+			db.Exec(`DELETE FROM client_closes WHERE id=$1`, id)
+		}
+		db.Exec(`DELETE FROM organization_member_access WHERE organization_id=$1`, org)
+		db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
+	}()
+	mux := http.NewServeMux()
+	registerEffort(mux, db)
+	registerReadiness(mux, db)
+	h := organizationBoundary(db, mux)
+	actor := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_partner"}, Organization: org, Permissions: []string{"clients:all", "workpapers:review", "close:signoff"}}
+	call := func(method, path string, body any) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), actor))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	signOff := func(id string) {
+		t.Helper()
+		var current readiness
+		must(json.Unmarshal(call("GET", "/v1/closes/"+id+"/readiness", nil), &current))
+		call("POST", "/v1/closes/"+id+"/scope", map[string]any{"digest": current.Digest, "scope": closeScope{Description: "Nothing required", RequiredPapers: []string{}, ExternalSteps: []externalStep{{Name: "Bank tie-out", Complete: true, Reference: "Statement 1"}}}})
+		must(json.Unmarshal(call("GET", "/v1/closes/"+id+"/readiness", nil), &current))
+		call("POST", "/v1/closes/"+id+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "sign", "note": "Synthetic sign-off", "confirmed": true})
+	}
+	signOff(signed)
+	signOff(changed)
+	_, err = db.Exec(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'late.txt',$2,'Late invoice','fixture')`, changed, rand.Text())
+	must(err)
+
+	var got struct {
+		Closes []struct {
+			CloseID string `json:"close_id"`
+			Needs   []string
+		}
+		Due []struct {
+			CloseID string `json:"close_id"`
+			State   string
+		}
+		DueCounts map[string]int `json:"due_counts"`
+	}
+	must(json.Unmarshal(call("GET", "/v1/closes/morning", nil), &got))
+	if len(got.Due) != 2 || got.Due[0].CloseID != late || got.Due[1].CloseID != changed || got.Due[1].State != "reopen_required" {
+		t.Fatalf("due lists the overdue close, then the close changed since its sign-off, never the valid sign-off: %+v", got.Due)
+	}
+	if got.DueCounts["overdue"] != 1 || got.DueCounts["upcoming"] != 1 || got.DueCounts["no_due_date"] != 1 {
+		t.Fatalf("due counts split overdue, upcoming and undated outstanding closes: %v", got.DueCounts)
+	}
+	needs := map[string][]string{}
+	for _, c := range got.Closes {
+		needs[c.CloseID] = c.Needs
+	}
+	if _, ok := needs[signed]; ok {
+		t.Errorf("a sign-off that still stands needs no one: %v", needs[signed])
+	}
+	if !slices.Contains(needs[changed], "changed since its sign-off: reopen and review") {
+		t.Errorf("a close changed after its sign-off returns to the summary: %v", needs[changed])
+	}
+	if !slices.Contains(needs[late], "overdue since "+day(-1)) {
+		t.Errorf("an overdue close says so: %v", needs[late])
+	}
+	if !slices.Contains(needs[old], "not signed off") {
+		t.Errorf("an unsigned close older than last month stays visible: %v", needs[old])
+	}
+	got.Due = nil
+	must(json.Unmarshal(call("GET", "/v1/closes/morning?client=Late", nil), &got))
+	if len(got.Due) != 1 || got.Due[0].CloseID != late || got.DueCounts["no_due_date"] != 0 {
+		t.Fatalf("Work's client filter narrows the due cohort: %+v %v", got.Due, got.DueCounts)
 	}
 }

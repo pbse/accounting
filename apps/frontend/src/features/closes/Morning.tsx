@@ -1,39 +1,24 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { workspaceRequest } from "./workspace";
 import { AgentMark } from "@close/ui/components/AgentMark";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
-type Morning = {
+export type Obligation = { close_id: string; entity: string; period: string; due_on: string; state: "open" | "reopen_required" | "unknown" };
+
+export type Morning = {
   overnight: { month_end_snapshots: number; drafts_prepared: number; standing_approvals: number };
   closes: { close_id: string; entity: string; period: string; needs: string[] }[];
   needing: number;
   quiet: number;
   model_check: { model: string; reasoning_effort?: string | null; close_id: string; kept: number; scored: number; checked_at: string } | null;
+  as_of: string;
+  due: Obligation[];
+  due_counts: { overdue: number; upcoming: number; no_due_date: number };
 };
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-export function MorningBrief({ refresh }: { refresh: number }) {
-  const [brief, setBrief] = useState<Morning>();
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let live = true;
-    workspaceRequest("/morning")
-      .then((data) => {
-        if (!live) return;
-        setBrief(data);
-        setError("");
-      })
-      .catch((e) => {
-        if (!live) return;
-        setBrief(undefined);
-        setError(e instanceof Error ? e.message : "The morning brief is unavailable.");
-      });
-    return () => {
-      live = false;
-    };
-  }, [refresh]);
+// The brief comes from Work, which also counts its due closes from the same read.
+export function MorningBrief({ brief, error }: { brief?: Morning; error: string }) {
   if (!brief) return error ? <p role="alert">{error}</p> : null;
   const done = brief.overnight;
   return (
@@ -51,7 +36,7 @@ export function MorningBrief({ refresh }: { refresh: number }) {
         </p>
       )}
       {brief.needing === 0 ? (
-        <p className="empty">No open close has drafts, confirmations, failed documents, missing snapshots or new client questions waiting. Each close still shows its own tie-out and changes.</p>
+        <p className="empty">No outstanding close has drafts, confirmations, failed documents, missing snapshots, new client questions, overdue dates or changes since its sign-off waiting. Each close still shows its own tie-out and changes.</p>
       ) : (
         <>
           <p>
@@ -70,7 +55,7 @@ export function MorningBrief({ refresh }: { refresh: number }) {
           </ul>
           {brief.quiet > 0 && (
             <p className="note">
-              {count(brief.quiet, "other open close has", "other open closes have")} none of these waiting; its tie-out and changes are on the close page.
+              {count(brief.quiet, "other outstanding close has", "other outstanding closes have")} none of these waiting; its tie-out and changes are on the close page.
             </p>
           )}
         </>
