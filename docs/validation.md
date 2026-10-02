@@ -3046,3 +3046,11 @@ Browser check, with Measure's report answered in the browser by a realistic year
 Review: Codex (gpt-6-sol, high) pass 1 found sub-minute medians written as "1 min" (the chart now uses the page's own minutes format); pass 2 found a small positive month could round to no dots and read as empty (any positive value now fills at least one); pass 3 found nothing.
 
 Verified: `npm run check`, `npm test` (23 pass), `npm run build`, gofmt, `go vet` and `go test -run TestEffort` against PostgreSQL, and `npm run check:layout` (58 page views) after a clean `npm ci`.
+
+## A green pill's words pass AA (2026-10-02)
+
+`--positive-text` was 4.46:1 on `--positive-tint`, the ground of every green pill, just under the 4.5:1 that AA needs for their 11px words (found while syncing the design-system artifact). A hair darker, `#1d7c3b` is 4.64:1 there, 5.25:1 on white and 4.7:1 on the grey ground; the other pills already passed (attention 5.24:1, negative 4.63:1, neutral 7.28:1). Contrast computed with the WCAG relative-luminance formula.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check`, `npm test` and `npm run build` after a clean `npm ci`.
