@@ -27,7 +27,7 @@ func (cfg Config) agent(agent string) (agentSettings, error) {
 	if mode == "" {
 		mode = "auto"
 	}
-	if !slices.Contains([]string{"auto", "api_key", "subscription"}, mode) {
+	if !slices.Contains([]string{"auto", "api_key", "subscription", "chatgpt"}, mode) {
 		return agentSettings{}, errors.New("invalid agent auth mode")
 	}
 	if mode == "auto" {
@@ -36,6 +36,8 @@ func (cfg Config) agent(agent string) (agentSettings, error) {
 		}
 		if key != "" {
 			mode = "api_key"
+		} else if agent == "codex" && cfg.CodexAuthJSON != "" {
+			mode = "chatgpt"
 		} else if token != "" {
 			mode = "subscription"
 		} else {
@@ -43,6 +45,15 @@ func (cfg Config) agent(agent string) (agentSettings, error) {
 		}
 	}
 	credential := key
+	if mode == "chatgpt" {
+		if agent != "codex" {
+			return agentSettings{}, errors.New("chatgpt auth is only supported by Codex")
+		}
+		if _, err := parseCodexAuth([]byte(cfg.CodexAuthJSON)); err != nil {
+			return agentSettings{}, err
+		}
+		credential = cfg.CodexAuthJSON
+	}
 	if mode == "subscription" {
 		credential = token
 	}

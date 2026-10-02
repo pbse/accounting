@@ -1,4 +1,6 @@
 import { Container } from "@cloudflare/containers";
+export { ContainerProxy } from "@cloudflare/containers";
+import { credentialRequest } from "./auth.ts";
 
 interface Env {
   MACHINE: DurableObjectNamespace<ContextMachine>;
@@ -15,12 +17,16 @@ interface Env {
   CODEX_REASONING_EFFORT?: string;
   CLAUDE_REASONING_EFFORT?: string;
   CODEX_ACCESS_TOKEN?: string;
+  CODEX_AUTH_JSON?: string;
   CLAUDE_CODE_OAUTH_TOKEN?: string;
   CONTEXT_MACHINE_MODEL?: string;
 
 }
 
 export class ContextMachine extends Container<Env> {
+  async credentials(request: Request): Promise<Response> {
+    return credentialRequest(request, this.env.CONTEXT_MACHINE_TOKEN, this.env.CODEX_AUTH_JSON ?? "", this.ctx.storage);
+  }
   defaultPort = 8080;
   sleepAfter = "5m";
   envVars = {
@@ -36,11 +42,18 @@ export class ContextMachine extends Container<Env> {
     CODEX_REASONING_EFFORT: this.env.CODEX_REASONING_EFFORT ?? "",
     CLAUDE_REASONING_EFFORT: this.env.CLAUDE_REASONING_EFFORT ?? "",
     CODEX_ACCESS_TOKEN: this.env.CODEX_ACCESS_TOKEN ?? "",
+    CODEX_AUTH_JSON: this.env.CODEX_AUTH_JSON ?? "",
+    CODEX_AUTH_STATE_URL: "http://context-machine-auth.internal/codex",
     CLAUDE_CODE_OAUTH_TOKEN: this.env.CLAUDE_CODE_OAUTH_TOKEN ?? "",
     CONTEXT_MACHINE_MODEL: this.env.CONTEXT_MACHINE_MODEL ?? "",
 
   };
 }
+
+ContextMachine.outboundByHost = {
+  "context-machine-auth.internal": async (request, env) =>
+    (env as Env).MACHINE.getByName("context-machine").credentials(request),
+};
 
 // No public route or workers.dev hostname: only a Worker service binding.
 export default {

@@ -27,6 +27,7 @@ import (
 type Config struct {
 	Token, DatabaseURL, OpenAIKey, AnthropicKey, CodexModel, ClaudeModel                    string
 	CodexToken, ClaudeToken, CodexAuth, ClaudeAuth, CodexEffort, ClaudeEffort, DefaultAgent string
+	CodexAuthJSON, CodexAuthStateURL                                                        string
 	Profiles                                                                                []llm.Scope
 }
 
@@ -36,6 +37,7 @@ func FromEnv() (http.Handler, error) {
 	cfg.CodexAuth, cfg.ClaudeAuth = os.Getenv("CODEX_AUTH_MODE"), os.Getenv("CLAUDE_AUTH_MODE")
 	cfg.CodexEffort, cfg.ClaudeEffort = os.Getenv("CODEX_REASONING_EFFORT"), os.Getenv("CLAUDE_REASONING_EFFORT")
 	cfg.DefaultAgent = os.Getenv("CONTEXT_MACHINE_MODEL")
+	cfg.CodexAuthJSON, cfg.CodexAuthStateURL = os.Getenv("CODEX_AUTH_JSON"), os.Getenv("CODEX_AUTH_STATE_URL")
 	if err := json.Unmarshal([]byte(os.Getenv("CONTEXT_MACHINE_PROFILES")), &cfg.Profiles); err != nil {
 		return nil, errors.New("CONTEXT_MACHINE_PROFILES must be a JSON array")
 	}
@@ -75,6 +77,17 @@ func New(cfg Config) (http.Handler, error) {
 			return nil, errors.New("invalid or duplicate access profile")
 		}
 		seen[p.AccessProfile] = true
+	}
+	if (agents["codex"].mode == "chatgpt" || agents["claude"].mode == "subscription") && len(cfg.Profiles) != 1 {
+		return nil, errors.New("personal subscriptions require exactly one owner access profile")
+	}
+	if a := agents["codex"]; a.mode == "chatgpt" {
+		if len(cfg.Profiles) != 1 {
+			return nil, errors.New("personal ChatGPT auth requires exactly one owner access profile")
+		}
+		if cfg.CodexAuthStateURL != "http://context-machine-auth.internal/codex" {
+			return nil, errors.New("personal ChatGPT auth requires durable private credential storage")
+		}
 	}
 	cfg.Profiles = slices.Clone(cfg.Profiles)
 	db, err := sql.Open("pgx", cfg.DatabaseURL)
@@ -156,7 +169,7 @@ func (s *server) run(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent unavailable", 503)
 		return
 	}
-	if in.Model == "codex" && s.agents[in.Model].mode == "subscription" && !in.AllowUncappedOutputTokens {
+	if in.Model == "codex" && (s.agents[in.Model].mode == "subscription" || s.agents[in.Model].mode == "chatgpt") && !in.AllowUncappedOutputTokens {
 		http.Error(w, "Codex subscription requires explicit allow_uncapped_output_tokens; use API-key mode for a token ceiling", 400)
 		return
 	}
@@ -213,7 +226,7 @@ func (s *server) run(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) execute(ctx context.Context, in runRequest) (llm.Response, error) {
+func (s *server) execute(ctx context.Context, in runRequest) (result llm.Response, runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	dir, err := os.MkdirTemp("", "context-machine-")
@@ -227,6 +240,19 @@ func (s *server) execute(ctx context.Context, in runRequest) (llm.Response, erro
 		return llm.Response{}, errors.New("agent unavailable")
 	}
 	proxy := &modelProxy{ctx: ctx, token: token, agent: in.Model, limit: in.MaxModelCalls, tokens: in.MaxOutputTokens, client: http.DefaultClient, key: settings.credential, model: settings.model, effort: settings.effort, authMode: settings.mode}
+	if settings.mode == "chatgpt" {
+		auth, err := restoreCodexAuth(ctx, s.cfg, dir)
+		if err != nil {
+			return llm.Response{}, err
+		}
+		proxy.personal = auth
+		// Persist even after a failed/cancelled run: the CLI may have rotated its refresh token.
+		defer func() {
+			if err := auth.save(true); err != nil {
+				result, runErr = llm.Response{}, err
+			}
+		}()
+	}
 	mux := http.NewServeMux()
 	mux.Handle("/v1/", proxy)
 	records := recordsHandler(s.db, in.Scope)

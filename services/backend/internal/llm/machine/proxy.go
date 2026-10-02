@@ -19,6 +19,7 @@ type modelProxy struct {
 	limit, tokens            int
 	calls                    atomic.Int32
 	client                   *http.Client
+	personal                 *codexAuthSession
 }
 
 func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +31,11 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Header.Get("Authorization") != "Bearer "+p.token && r.Header.Get("X-Api-Key") != p.token {
+	authorized := r.Header.Get("Authorization") == "Bearer "+p.token || r.Header.Get("X-Api-Key") == p.token
+	if p.personal != nil {
+		authorized = r.Header.Get("X-Context-Machine-Run") == p.token
+	}
+	if !authorized {
 		http.Error(w, "unauthorized", 401)
 		return
 	}
@@ -60,7 +65,7 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reasoning["effort"] = p.effort
 		body["reasoning"] = reasoning
-		if p.authMode == "subscription" {
+		if p.authMode == "subscription" || p.authMode == "chatgpt" {
 			endpoint = "https://chatgpt.com/backend-api/codex/responses"
 			// Codex subscription transport does not accept max_output_tokens. The
 			// response byte cap, call count and run deadline still apply.
@@ -115,7 +120,16 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		req.Header.Set("Authorization", "Bearer "+p.key)
-		if p.authMode == "subscription" {
+		if p.personal != nil {
+			auth, err := p.personal.read()
+			if err != nil || p.personal.save(false) != nil {
+				http.Error(w, "credential storage unavailable", 503)
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+auth.Tokens.Access)
+			req.Header.Set("ChatGPT-Account-Id", auth.Tokens.Account)
+		}
+		if p.authMode == "subscription" || p.authMode == "chatgpt" {
 			req.Header.Set("Originator", "codex_cli_rs")
 		}
 	}

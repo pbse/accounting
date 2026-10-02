@@ -92,6 +92,8 @@ jobs:
       - name: Prepare optional AI routes and service bindings
         run: node scripts/deploy-context-machine.mjs --prepare-callers
       - name: Validate context-machine configuration
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
         run: node scripts/deploy-context-machine.mjs --check
       - name: Check staging configuration without exposing secrets
         run: |
@@ -151,6 +153,8 @@ jobs:
           JS
           npx wrangler deploy -c workers/scanner/wrangler.jsonc --secrets-file "$CLOSE_SCANNER_SECRET_FILE"
       - name: Deploy private context machine before its callers
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
         run: node scripts/deploy-context-machine.mjs
       - name: Deploy code and server secrets together
         run: |
