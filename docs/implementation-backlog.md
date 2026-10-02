@@ -2,7 +2,7 @@
 
 Current setup: [onboarding](onboarding.md) and [deployment gaps](deployment.md#production-and-remaining-deployment-work).
 
-This is the current delivery plan; the PRD remains the product requirements. Code, local validation, deployed operation and accountant acceptance are separate states. No release is certified enterprise-ready yet.
+This document records implementation progress. The [agent-first product completion plan](agent-first-build-plan.md) defines the remaining build packages, connected experience and mandatory launch gates, extending the PRD for both accounting firms and business users. Code, local validation, deployed operation and accountant acceptance are separate states. No release is certified enterprise-ready yet.
 
 ## Working agreement
 
