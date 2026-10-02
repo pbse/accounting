@@ -3068,3 +3068,13 @@ The check reuses the synthetic firm's editable staff draft (read from the same d
 Review: Codex (gpt-6-sol, high) pass 1 found the editor route measured the reveal prompt (fixed); pass 2 found nothing; pass 3 asked for the request form to be required and the plan reused (both done); pass 4 claimed `org_layoutcheck` breaks the id rule `^org_[A-Za-z0-9]+$`, which it doesn't (the inserts succeed), and that an approved plan would be reused (now only an editable draft is); pass 5 found nothing.
 
 Verified: `npm run check`, `npm test` (27 pass), `npm run build` and `npm run check:layout` (64 page views) after a clean `npm ci`.
+
+## Attention and Client closes lead with the agent (2026-10-02)
+
+Attention and Client closes now open with "Ask the agent", offering the agent panel's firm starter questions ("What needs me today?", "What is ready for review?", "What is blocked?"). A question typed there or picked opens the panel's firm-wide conversation and asks it there, so nothing runs from the page itself. These two pages and a close's Overview share one `AskAgent` wrapper around `AgentComposer` (`apps/frontend/src/features/dashboard/AskAgent.tsx`), which keeps the question and hands it to the panel.
+
+Browser check, with the API and the firm app running locally on a fresh PostgreSQL: both pages lead with the composer; "What is blocked?" on Attention opens the panel's firm-wide conversation and is answered from saved work; the close's Overview composer still works through the wrapper; no page errors. `npm run check:layout` passes all 64 page views.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check`, `npm test` (27 pass), `npm run build` and `npm run check:layout` after a clean `npm ci`.
