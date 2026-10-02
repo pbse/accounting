@@ -94,7 +94,8 @@ jobs:
       - name: Both apps in a browser, when the front end changes
         if: steps.layout.outputs.check == 'true'
         # A database of its own beside the Go tests', the API built from this commit and both apps' dev servers; then
-        # scripts/layout-check.mjs walks every page in the runner's Chrome (docs/design-system.md).
+        # scripts/layout-check.mjs walks every page in the runner's Chrome (docs/design-system.md), adding its synthetic
+        # firm to that database (DATABASE_URL).
         env:
           DATABASE_URL: postgres://close:test-only@127.0.0.1:5432/close_layout?sslmode=disable
         run: |

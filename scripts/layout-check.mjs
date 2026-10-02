@@ -3,8 +3,9 @@
 // phone, and the firm app's shell takes no style from the public site's stylesheet (docs/design-system.md).
 //
 // CI runs it when the front end changes. Locally: run the API and both apps' dev servers, then
-//   WORKSPACE_TOKEN=… node scripts/layout-check.mjs
+//   WORKSPACE_TOKEN=… DATABASE_URL=<the API's database> node scripts/layout-check.mjs
 // FRONTEND_URL, ADMIN_URL and API_URL default to the dev servers' ports; CHROME_PATH picks a browser other than Chrome.
+import { execFileSync } from "node:child_process";
 import { chromium } from "playwright-core";
 
 const frontend = process.env.FRONTEND_URL ?? "http://127.0.0.1:5173";
@@ -23,9 +24,24 @@ async function call(path, body) {
   return response.json();
 }
 
-// Synthetic data so the pages that show a close, a workpaper or a run have one, reusing what an earlier check
-// created. A firm (and so a firm's page, a plan and the plan editor) only comes from the sign-in provider, so those
-// pages are not checked.
+// Synthetic data so the pages that show a close, a workpaper, a firm, a plan or a run have one, reusing what an earlier
+// check created. A firm otherwise only comes from the sign-in provider, so the check adds one straight to the database.
+const database = process.env.DATABASE_URL;
+if (!database) throw new Error("Set DATABASE_URL to the API's database, where the check adds a synthetic firm");
+const firm = "org_layoutcheck";
+const sql = (statement) => execFileSync("psql", [database, "-qAt", "-v", "ON_ERROR_STOP=1", "-c", statement], { encoding: "utf8" }).trim();
+sql(`INSERT INTO organizations(id,name) VALUES('${firm}','Layout check firm') ON CONFLICT (id) DO NOTHING`);
+const plan =
+  // Only a staff draft (or a rejected one) opens in the editor, so only such a plan is reused.
+  sql(`SELECT id FROM workflow_plans WHERE organization_id='${firm}' AND source='staff' AND state IN ('draft','rejected') AND NOT is_template ORDER BY id LIMIT 1`) ||
+  (
+    await call("/v1/admin/plans", {
+      firm,
+      template: false,
+      reason: "A plan for the browser layout check",
+      plan: { version: 1, title: "Layout check", nodes: [{ id: "tell", activity: "plan_signal", input: { name: "layout_check" } }] },
+    })
+  ).plan_id;
 const close = (await call("/v1/closes", { entity: "Harbor Dental Group", period: "2026-09" })).id;
 const paper =
   (await call(`/v1/closes/${close}`)).workpapers.find((p) => p.kind === "prepaid")?.id ??
@@ -57,13 +73,30 @@ const apps = [
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],
   },
-  // A client's request page stands alone, without the sidebar. An unknown link still renders its shell and header; the
-  // questions themselves need a request really sent to a client contact, which the check cannot create.
+  // A client's request page stands alone, without the sidebar. A request really sent needs a client's preparation work
+  // behind it, so the page's one read is answered in the browser with an open request: its questions, form and footer.
   {
     name: "client request page",
-    start: `${frontend}/request#layout-check-unknown-link`,
+    start: `${frontend}/request#LAYOUTCHECKREQUESTLINKAAAAAAAA`,
     standalone: true,
+    // The page counts as the request only once the answer form shows, not an error or an empty state.
+    ready: ".request-page textarea",
     stylesheet: "/apps/frontend/src/styles.css",
+    fixtures: {
+      "**/v1/client-request": {
+        status: "open",
+        open: true,
+        entity: "Harbor Dental Group",
+        period: "2026-09",
+        expires_at: new Date(Date.now() + 7 * 86400000).toISOString(),
+        body: "Hello,\n\nWe are closing September and need two things from you. Thank you.",
+        questions: [
+          { position: 1, text: "What was the $4,800 payment to Northwind Supplies on September 14 for?", state: "", answer: "" },
+          { position: 2, text: "Please send the September statement for the operating account ending 4421.", state: "awaiting_document", answer: "" },
+          { position: 3, text: "Did the new lease start on September 1?", state: "answered", answer: "Yes, the lease started on September 1." },
+        ],
+      },
+    },
     routes: [""],
   },
   {
@@ -71,7 +104,10 @@ const apps = [
     start: `${admin}/`,
     unlock: "Unlock",
     prefix: new URL(admin).pathname,
-    routes: ["/", "/firms", "/people", "/audit", "/workflows", "/runs", `/runs/${run}`, "/runs/new", "/plans", "/plans/new", "/jobs", "/connections"],
+    routes: [
+      "/", "/firms", `/firms/${firm}`, "/people", "/audit", "/workflows", "/runs", `/runs/${run}`, "/runs/new",
+      "/plans", `/plans/${plan}`, `/plans/${plan}/edit`, "/plans/new", "/jobs", "/connections",
+    ],
   },
 ];
 const widths = [
@@ -86,6 +122,27 @@ const styles = () =>
     return [element.tagName.toLowerCase() + (element.className && typeof element.className === "string" ? "." + element.className.trim().replace(/\s+/g, ".") : ""), [...style].map((name) => `${name}: ${style.getPropertyValue(name)}`)];
   });
 
+// A plan's editor shows only under a content grant for the firm (or once the plan is revealed), so the check opens a
+// grant as a person would, reveals the plan if the page still asks, and waits for the editor itself.
+async function revealPlan(page) {
+  const reason = "Browser layout check of the plan editor";
+  const asking = (text) => page.evaluate((text) => [...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes(text)), text);
+  if (await asking("Open a content grant")) {
+    const grant = page.locator(".app-main details", { hasText: "Open a content grant" });
+    await grant.evaluate((details) => (details.open = true));
+    await grant.locator("input").fill(reason);
+    await grant.locator('button:has-text("Open grant")').click();
+    await page.waitForFunction(() => ![...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes("Open a content grant")), null, { timeout: 15000 });
+  }
+  if (await asking("Reveal client content")) {
+    const reveal = page.locator(".app-main details", { hasText: "Reveal client content" });
+    await reveal.evaluate((details) => (details.open = true));
+    await reveal.locator("input").fill(reason);
+    await reveal.locator('button:has-text("Reveal client content")').click();
+  }
+  await page.waitForSelector('.app-main button:has-text("Add a step")', { timeout: 15000 });
+}
+
 const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chrome" });
 const failures = [];
 let pages = 0;
@@ -94,6 +151,7 @@ for (const app of apps) {
     const page = await browser.newPage(width);
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
+    for (const [pattern, json] of Object.entries(app.fixtures ?? {})) await page.route(pattern, (route) => route.fulfill({ json }));
     // The token lives in the tab's memory, so a reload (the dev server's first dependency optimisation) asks again.
     const unlock = async () => {
       await page.fill('input[name="token"]', token);
@@ -133,6 +191,22 @@ for (const app of apps) {
       } catch {
         fail("no page header");
         continue;
+      }
+      if (app.ready) {
+        try {
+          await page.waitForSelector(app.ready, { timeout: 15000 });
+        } catch {
+          fail(`the page never showed ${app.ready}`);
+          continue;
+        }
+      }
+      if (route.endsWith("/edit")) {
+        try {
+          await revealPlan(page);
+        } catch {
+          fail("the plan editor did not open after a content grant and a reveal");
+          continue;
+        }
       }
       await page.waitForLoadState("networkidle");
       await page.mouse.move(0, width.viewport.height - 1);
