@@ -20,6 +20,7 @@ const kindLabels: Record<string, string> = {
   release: "Client files and emails to release",
   send: "Approved requests with no delivery",
   email: "Undelivered request emails",
+  unanswered: "Unanswered requests to follow up",
   goal: "Delegated closes that need you",
   handoff: "Documents handed to you",
 };
@@ -176,7 +177,7 @@ export default function Attention() {
               {g.events.map((e) => (
                 <li key={e.key}>
                   {!e.read && <span className="pill">New</span>}{" "}
-                  <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : e.account_id ? "#coverage-work" : ""}`}>{e.text}</Link> · {new Date(e.at).toLocaleString()}
+                  <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : e.account_id || e.kind === "unanswered" ? "#coverage-work" : ""}`}>{e.text}</Link> · {new Date(e.at).toLocaleString()}
                   {e.snoozed_until && ` · snoozed until ${new Date(e.snoozed_until).toLocaleString()}`}{" "}
                   <button disabled={busy} onClick={() => mark(e.read ? "unread" : "read", [e.key])}>
                     {e.read ? "Mark unread" : "Mark read"}
