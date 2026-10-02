@@ -116,6 +116,27 @@ const styles = () =>
     return [element.tagName.toLowerCase() + (element.className && typeof element.className === "string" ? "." + element.className.trim().replace(/\s+/g, ".") : ""), [...style].map((name) => `${name}: ${style.getPropertyValue(name)}`)];
   });
 
+// A plan's editor shows only under a content grant for the firm (or once the plan is revealed), so the check opens a
+// grant as a person would, reveals the plan if the page still asks, and waits for the editor itself.
+async function revealPlan(page) {
+  const reason = "Browser layout check of the plan editor";
+  const asking = (text) => page.evaluate((text) => [...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes(text)), text);
+  if (await asking("Open a content grant")) {
+    const grant = page.locator(".app-main details", { hasText: "Open a content grant" });
+    await grant.evaluate((details) => (details.open = true));
+    await grant.locator("input").fill(reason);
+    await grant.locator('button:has-text("Open grant")').click();
+    await page.waitForFunction(() => ![...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes("Open a content grant")), null, { timeout: 15000 });
+  }
+  if (await asking("Reveal client content")) {
+    const reveal = page.locator(".app-main details", { hasText: "Reveal client content" });
+    await reveal.evaluate((details) => (details.open = true));
+    await reveal.locator("input").fill(reason);
+    await reveal.locator('button:has-text("Reveal client content")').click();
+  }
+  await page.waitForSelector('.app-main button:has-text("Add a step")', { timeout: 15000 });
+}
+
 const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chrome" });
 const failures = [];
 let pages = 0;
@@ -164,6 +185,14 @@ for (const app of apps) {
       } catch {
         fail("no page header");
         continue;
+      }
+      if (route.endsWith("/edit")) {
+        try {
+          await revealPlan(page);
+        } catch {
+          fail("the plan editor did not open after a content grant and a reveal");
+          continue;
+        }
       }
       await page.waitForLoadState("networkidle");
       await page.mouse.move(0, width.viewport.height - 1);
