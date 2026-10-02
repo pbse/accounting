@@ -1,5 +1,7 @@
 # Close preparation
 
+**Documentation:** start with the [repository index](INDEX.md) for the governing build plan, B01–B12 pointers, feature contracts and validation evidence.
+
 **Client attachment requirement:** configure [Cloudflare WAF upload scanning](docs/cloudflare-upload-scanning.md) before releasing client PDFs. PDFs need Cloudflare; local TXT/CSV use the separate scanner service.
 
 A foundation for an agent-prepared, firm-approved accounting preparation workspace. React presents the decisions; Go owns capabilities and accounting; Cloudflare supplies ingress and runtime adapters. The connected ledger remains the ledger of record.
