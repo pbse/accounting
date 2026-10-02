@@ -32,7 +32,8 @@ const firm = "org_layoutcheck";
 const sql = (statement) => execFileSync("psql", [database, "-qAt", "-v", "ON_ERROR_STOP=1", "-c", statement], { encoding: "utf8" }).trim();
 sql(`INSERT INTO organizations(id,name) VALUES('${firm}','Layout check firm') ON CONFLICT (id) DO NOTHING`);
 const plan =
-  sql(`SELECT id FROM workflow_plans WHERE organization_id='${firm}' ORDER BY id LIMIT 1`) ||
+  // Only a staff draft (or a rejected one) opens in the editor, so only such a plan is reused.
+  sql(`SELECT id FROM workflow_plans WHERE organization_id='${firm}' AND source='staff' AND state IN ('draft','rejected') AND NOT is_template ORDER BY id LIMIT 1`) ||
   (
     await call("/v1/admin/plans", {
       firm,
