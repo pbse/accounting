@@ -3,7 +3,6 @@ import { AskAgent } from "../dashboard/AskAgent";
 import { LedgerSelection } from "./Coverage";
 import { money, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
-import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 
 type Line = { account_id?: string; name: string; amount: string; prior: string | null; change: string | null };
 type Section = { name: string; lines: Line[]; total: Line };
@@ -52,7 +51,12 @@ export function Reports({ closeId }: { closeId: string }) {
   }, [closeId]);
   if (!pack) return error ? <p role="alert">{error}</p> : <p role="status">Preparing the management pack…</p>;
   if (pack.state === "waiting") return <p className="empty">{pack.reason}</p>;
-  const show = (amount: string | null) => (amount === null ? "–" : money(amount, pack.currency));
+  // Thousands separators and a true minus on the exact decimal string; no float conversion.
+  const show = (amount: string | null) => {
+    if (amount === null) return "–";
+    const [whole, cents] = amount.replace("-", "").split(".");
+    return (amount.startsWith("-") ? "−" : "") + money(`${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${cents}`, pack.currency);
+  };
   const compared = !!pack.prior;
   // Xero captures have no ledger-row reader yet, so their figures are not drillable.
   const drill = pack.source === "quickbooks";
@@ -60,16 +64,19 @@ export function Reports({ closeId }: { closeId: string }) {
     <tr key={key}>
       <th scope="row" style={{ textAlign: "left", fontWeight: strong ? 600 : 400 }}>
         {drill && line.account_id ? (
-          <button type="button" className="cell-link" aria-expanded={account === line.account_id} onClick={() => setAccount(account === line.account_id ? "" : line.account_id!)}>
+          <button type="button" className="cell-link" aria-expanded={account === line.account_id} onClick={() => {
+              setAccount(account === line.account_id ? "" : line.account_id!);
+              setTimeout(() => document.getElementById("figure-ledger")?.scrollIntoView({ block: "start" }));
+            }}>
             {line.name}
           </button>
         ) : (
           line.name
         )}
       </th>
-      <td>{show(line.amount)}</td>
-      {compared && <td>{show(line.prior)}</td>}
-      {compared && <td>{show(line.change)}</td>}
+      <td style={{ whiteSpace: "nowrap" }}>{show(line.amount)}</td>
+      {compared && <td style={{ whiteSpace: "nowrap" }}>{show(line.prior)}</td>}
+      {compared && <td style={{ whiteSpace: "nowrap" }}>{show(line.change)}</td>}
     </tr>
   );
   const table = (caption: string, sections: Section[], after: Line[]) => (
@@ -132,14 +139,11 @@ export function Reports({ closeId }: { closeId: string }) {
         )}
       </p>
       {pack.reclassified.length > 0 && <p className="note">Shown under this month's classification, which differs from last month's: {pack.reclassified.join(", ")}.</p>}
+      <SectionHeader title="Working capital" />
       {"unavailable" in wc ? (
         <p className="note">{wc.unavailable}</p>
       ) : (
-        <StatGroup>
-          {(["book_cash", "receivables", "payables", "working_capital"] as const).map((key) => (
-            <StatTile key={key} label={wc[key].name} value={show(wc[key].amount)} caption={wc[key].change === null ? undefined : `${show(wc[key].change)} since ${pack.prior!.period}`} />
-          ))}
-        </StatGroup>
+        table(`At the end of ${pack.period}`, [], [wc.book_cash, wc.receivables, wc.payables, wc.current_assets, wc.current_liabilities, wc.working_capital])
       )}
       <SectionHeader title="Profit and loss" />
       {table(`Activity in ${pack.period}`, pack.profit_and_loss.sections, pack.profit_and_loss.measures)}
@@ -150,7 +154,7 @@ export function Reports({ closeId }: { closeId: string }) {
       <p className="note">{pack.cash_flow.unavailable}</p>
       {drill && account && (
         <>
-          <SectionHeader title={`Ledger rows behind this figure, ${pack.period}`} />
+          <SectionHeader id="figure-ledger" title={`Ledger rows behind this figure, ${pack.period}`} />
           <LedgerSelection key={`this-${account}`} closeId={closeId} snapshotId={pack.snapshot_id} accountId={account} stale={pack.stale} suggestions={[]} />
           {prior && (
             <>
