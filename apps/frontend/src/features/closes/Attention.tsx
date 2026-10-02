@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { workspaceRequest } from "./workspace";
 import { PageHeader } from "@close/ui/components/PageHeader";
+import { AskAgent } from "../dashboard/AskAgent";
+import { starters } from "../dashboard/assistantStore";
 import { Segmented } from "@close/ui/components/Segmented";
 
 type Event = { key: string; kind: string; text: string; at: string; workpaper_id?: string; job_id?: string; account_id?: string; read: boolean; snoozed_until?: string };
@@ -133,6 +135,11 @@ export default function Attention() {
       <PageHeader icon="decision" title={<>Attention{inbox && inbox.unread > 0 ? ` · ${inbox.unread} unread` : ""}</>}>
         What needs a person across your clients: replies, confirmations, failures, drafts to approve or fix, changed sources, files to release and requests not delivered. Running work is left out.
       </PageHeader>
+      <AskAgent
+        description="Ask what needs you first, or about any client: the agent answers from your workspace and shows anything it would do for you to confirm."
+        placeholder="Ask about what needs you, such as “what is blocked?”"
+        suggestions={starters.firm}
+      />
       <div className="toolbar">
         <Segmented
           label="Show"
