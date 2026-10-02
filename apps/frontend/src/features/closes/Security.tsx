@@ -30,8 +30,10 @@ type Security = {
   clients: string[];
   operations: Operation[];
 };
+type Recorded = { accepted: boolean; evidence: string; by: string; at: string } | null;
 type Operation = {
   provider: string;
+  kind: string;
   operation: string;
   status: string;
   clients: string[];
@@ -40,6 +42,8 @@ type Operation = {
   sandbox_close_id: number | null;
   live_close_id: number | null;
   sandbox_recorded: boolean;
+  sandbox_checked: Recorded;
+  accountant_accepted: Recorded;
   permission: string;
   owner: string;
   fallback: string;
@@ -47,6 +51,67 @@ type Operation = {
 };
 
 const day = (at: string) => new Date(at).toLocaleDateString();
+
+function OperationRecord({ operation, stage, onSaved }: { operation: Operation; stage: "sandbox_checked" | "accountant_accepted"; onSaved: () => void }) {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState("");
+  const current = operation[stage];
+  const label = stage === "sandbox_checked" ? "Sandbox check outside the app" : "Accountant acceptance";
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const element = event.currentTarget;
+    const form = new FormData(element);
+    const accepted = form.get("accepted") === "yes";
+    setBusy(true);
+    setError("");
+    setSaved("");
+    try {
+      await workspaceRequest("/security/operations", { provider: operation.provider, kind: operation.kind, stage, accepted, evidence: form.get("evidence") });
+      element.reset();
+      element.closest("details")?.removeAttribute("open");
+      setSaved(`${label} ${accepted ? "recorded" : "withdrawn"} for ${operation.provider} ${operation.operation}.`);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The record could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div>
+      {label}:{" "}
+      {current ? (
+        <>
+          {current.accepted ? "recorded" : "withdrawn"} by {current.by} on {day(current.at)} <small>({current.evidence})</small>
+        </>
+      ) : (
+        "none recorded"
+      )}
+      {saved && <p role="status">{saved}</p>}
+      <details>
+        <summary aria-label={`Record ${label.toLowerCase()} for ${operation.provider} ${operation.operation}`}>Record</summary>
+        <form onSubmit={(e) => void save(e)}>
+          <fieldset disabled={busy}>
+            <label>
+              Decision
+              <select name="accepted" defaultValue="yes">
+                <option value="yes">{stage === "sandbox_checked" ? "Checked and passed" : "Accept for this firm's use"}</option>
+                <option value="no">Withdraw</option>
+              </select>
+            </label>
+            <label>
+              Evidence: what was checked, where, and its result or reference
+              <textarea name="evidence" required minLength={5} maxLength={2000} />
+            </label>
+            {error && <p role="alert">{error}</p>}
+            <button>Record</button>
+          </fieldset>
+        </form>
+      </details>
+    </div>
+  );
+}
 const settings = (closeId: string) => `/dashboard/closes/${closeId}?tab=settings`;
 
 function SuspendFirm({ organizationId }: { organizationId: string }) {
@@ -95,11 +160,16 @@ function SuspendFirm({ organizationId }: { organizationId: string }) {
 export default function SecurityCenter() {
   const [security, setSecurity] = useState<Security>();
   const [error, setError] = useState("");
+  const [version, setVersion] = useState(0);
   useEffect(() => {
+    let live = true;
     workspaceRequest("/security")
-      .then(setSecurity)
-      .catch((e) => setError(e instanceof Error ? e.message : "The security center is unavailable."));
-  }, []);
+      .then((data) => live && (setSecurity(data), setError("")))
+      .catch((e) => live && setError(e instanceof Error ? e.message : "The security center is unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [version]);
   return (
     <>
       <PageHeader icon="shield" title="Security center">
@@ -175,7 +245,7 @@ export default function SecurityCenter() {
           <section aria-label="Connector operations">
             <h2>Connector operations</h2>
             <p className="note">
-              How far each QuickBooks, Xero and Stripe operation is proven and enabled here: documented, sandbox tested, production approved by this server, or enabled for the clients whose grant or connection covers it. Connected never means every operation is available.
+              How far each QuickBooks, Xero and Stripe operation is proven and enabled here: documented, sandbox tested, production approved by this server, or enabled for the clients whose grant or connection covers it. Connected never means every operation is available. Checks done outside the app and the firm's accountant acceptance are dated records with their evidence; they never enable an operation, and an operation enabled without acceptance says so.
             </p>
             <table>
               <thead>
@@ -185,6 +255,7 @@ export default function SecurityCenter() {
                   <th>Last verified</th>
                   <th>Needs</th>
                   <th>Limitation</th>
+                  <th>Outside checks and acceptance</th>
                 </tr>
               </thead>
               <tbody>
@@ -211,6 +282,11 @@ export default function SecurityCenter() {
                     </td>
                     <td>
                       {o.limitation} Otherwise: {o.fallback}.
+                    </td>
+                    <td>
+                      {o.status === "enabled" && !o.accountant_accepted?.accepted && <p role="status">Enabled without the accountant's acceptance.</p>}
+                      <OperationRecord operation={o} stage="sandbox_checked" onSaved={() => setVersion((n) => n + 1)} />
+                      <OperationRecord operation={o} stage="accountant_accepted" onSaved={() => setVersion((n) => n + 1)} />
                     </td>
                   </tr>
                 ))}

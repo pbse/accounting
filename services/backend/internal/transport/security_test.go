@@ -195,6 +195,51 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	if len(got.Operations) != 20 {
 		t.Fatalf("every write kind and each provider's reads are listed: %d", len(got.Operations))
 	}
+	defer db.Exec(`DELETE FROM operation_acceptances WHERE organization_id=$1`, org)
+	record := func(permissions []string, body map[string]any, want int) {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest("POST", "/v1/closes/security/operations", strings.NewReader(string(raw))).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: org, Permissions: permissions}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%v %v: %d %s", permissions, body, w.Code, w.Body.String())
+		}
+	}
+	admin, accountant := []string{"clients:all", "members:manage"}, []string{"clients:all", "members:manage", "workpapers:review"}
+	check := map[string]any{"provider": "QuickBooks", "kind": "accrual", "stage": "sandbox_checked", "accepted": true, "evidence": "Sandbox company 9341: accrual journal JE-77 posted and read back on 2026-10-01"}
+	record([]string{"clients:all"}, check, 403)
+	record(admin, map[string]any{"provider": "QuickBooks", "kind": "payroll", "stage": "sandbox_checked", "accepted": true, "evidence": "Not an operation"}, 422)
+	record(admin, map[string]any{"provider": "QuickBooks", "kind": "accrual", "stage": "sandbox_checked", "accepted": true, "evidence": strings.Repeat("審", 1500)}, 200)
+	record(admin, check, 200)
+	accept := map[string]any{"provider": "QuickBooks", "kind": "accrual", "stage": "accountant_accepted", "accepted": true, "evidence": "Reviewed the sandbox journal and the method examples"}
+	record(admin, accept, 403)
+	record(accountant, accept, 200)
+	accept["accepted"], accept["evidence"] = false, "Withdrawn until the reversal entry is checked too"
+	record(accountant, accept, 200)
+	var after struct {
+		Operations []struct {
+			Provider, Kind, Status string
+			Checked                *struct {
+				Accepted bool
+				Evidence string
+			} `json:"sandbox_checked"`
+			Accepted *struct {
+				Accepted bool
+				By       string
+			} `json:"accountant_accepted"`
+		}
+	}
+	must(json.Unmarshal([]byte(call("user_admin", admin, 200)), &after))
+	for _, o := range after.Operations {
+		if o.Provider == "QuickBooks" && o.Kind == "accrual" && (o.Status != "enabled" || o.Checked == nil || !o.Checked.Accepted || !strings.Contains(o.Checked.Evidence, "JE-77") || o.Accepted == nil || o.Accepted.Accepted || o.Accepted.By != "user_admin") {
+			t.Fatalf("the accrual journal shows its outside sandbox check and its withdrawn acceptance, with its status unchanged: %+v", o)
+		}
+		if o.Provider == "QuickBooks" && o.Kind == "prepaid" && (o.Checked != nil || o.Accepted != nil) {
+			t.Fatalf("an operation with no record shows none: %+v", o)
+		}
+	}
 	people := map[string]int{}
 	for i, p := range got.People {
 		people[p.Subject] = i
