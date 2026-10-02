@@ -18,6 +18,8 @@ func command(agent, model, base, token, dir string, budget int, effort, mode str
 		config, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{"records": map[string]any{"type": "http", "url": base + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + token}}}})
 		args := []string{"--bare", "--restricted", "-p", "--output-format", "json", "--no-session-persistence", "--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", string(config), "--allowedTools", "mcp__records__list_closes,mcp__records__read_evidence", "--max-turns", strconv.Itoa(budget), "--model", model, "--effort", effort, "--setting-sources", ""}
 		env = append(env, "ANTHROPIC_BASE_URL="+base, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1")
+		// Bare mode uses the local proxy bearer, not native account discovery.
+		// The parent substitutes the real setup-token credential upstream.
 		if mode == "subscription" {
 			env = append(env, "ANTHROPIC_AUTH_TOKEN="+token)
 		} else {
@@ -47,9 +49,14 @@ func command(agent, model, base, token, dir string, budget int, effort, mode str
 	} {
 		args = append(args, "-c", setting)
 	}
-	if mode == "subscription" {
+	if mode == "subscription" || mode == "chatgpt" {
 		args = append(args, "-c", "model_providers.context_machine.requires_openai_auth=true", "-c", "chatgpt_base_url="+strconv.Quote(base))
-		env = append(env, "CODEX_ACCESS_TOKEN="+token)
+		if mode == "subscription" {
+			env = append(env, "CODEX_ACCESS_TOKEN="+token)
+		}
+		if mode == "chatgpt" {
+			args = append(args, "-c", `cli_auth_credentials_store="file"`, "-c", "model_providers.context_machine.http_headers={X-Context-Machine-Run="+strconv.Quote(token)+"}")
+		}
 	}
 	return append(args, "-"), append(env, "CODEX_HOME="+dir, "CONTEXT_MACHINE_RUN_TOKEN="+token)
 }
