@@ -62,7 +62,10 @@ func ClientProfile(ctx context.Context, q interface {
 	case known < total:
 		p.State = "unknown"
 	default:
-		p.State, p.Currency, p.FiscalStart = "detected", currency.String, int(start.Int64)
+		p.State, p.Currency = "detected", currency.String
+		if start.Valid {
+			p.FiscalStart = int(start.Int64)
+		}
 	}
 	return p, nil
 }

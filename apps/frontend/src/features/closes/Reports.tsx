@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { AskAgent } from "../dashboard/AskAgent";
 import { LedgerSelection } from "./Coverage";
-import { money, workspaceRequest } from "./workspace";
+import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Line = { account_id?: string; name: string; amount: string; prior: string | null; change: string | null };
@@ -51,12 +51,7 @@ export function Reports({ closeId }: { closeId: string }) {
   }, [closeId]);
   if (!pack) return error ? <p role="alert">{error}</p> : <p role="status">Preparing the management pack…</p>;
   if (pack.state === "waiting") return <p className="empty">{pack.reason}</p>;
-  // Thousands separators and a true minus on the exact decimal string; no float conversion.
-  const show = (amount: string | null) => {
-    if (amount === null) return "–";
-    const [whole, cents] = amount.replace("-", "").split(".");
-    return (amount.startsWith("-") ? "−" : "") + money(`${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${cents}`, pack.currency);
-  };
+  const show = (value: string | null) => (value === null ? "–" : amount(value, pack.currency));
   const compared = !!pack.prior;
   // Xero captures have no ledger-row reader yet, so their figures are not drillable.
   const drill = pack.source === "quickbooks";
