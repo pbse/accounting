@@ -155,6 +155,12 @@ export function Work({
   const [dependencyLoaded, setDependencyLoaded] = useState(false);
   const [predicted, setPredicted] = useState<{ items: Predicted[]; more: boolean }>({ items: [], more: false });
   const [queue, setQueue] = useState<{ items: QueueItem[]; count: number }>();
+  const [queueError, setQueueError] = useState("");
+  const [asOf, setAsOf] = useState<Date>();
+  const [sectionsAt, setSectionsAt] = useState<Date>();
+  // Bumped every 30 seconds, on a changed job and on a recovered poll: every section but the job list reads again.
+  const [cycle, setCycle] = useState(0);
+  const seen = useRef("");
   const [morning, setMorning] = useState<Morning>();
   const [morningError, setMorningError] = useState("");
   // A link to one document of this close shows only that document, open.
@@ -176,6 +182,8 @@ export function Work({
   useEffect(() => {
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
+    let failures = 0;
+    seen.current = "";
     async function load() {
       try {
         const data = await workspaceRequest(
@@ -187,10 +195,17 @@ export function Work({
         setMore(data.has_more);
         setError("");
         setLoaded(true);
+        setAsOf(new Date());
+        const state = JSON.stringify([data.items.map((i: WorkItem) => [i.id, i.state, i.revision]), data.counts]);
+        if (!closeId && seen.current && (seen.current !== state || failures > 0)) setCycle((n) => n + 1);
+        seen.current = state;
+        failures = 0;
         timer = setTimeout(load, 3000);
       } catch (e) {
-        if (live)
-          setError(e instanceof Error ? e.message : "Inbox unavailable.");
+        if (!live) return;
+        setError(e instanceof Error ? e.message : "Inbox unavailable.");
+        failures++;
+        timer = setTimeout(load, Math.min(30_000, 3000 * 2 ** failures));
       }
     }
     void load();
@@ -201,32 +216,42 @@ export function Work({
   }, [closeId, refresh, filter, clientSearch, job]);
   useEffect(() => {
     if (closeId) return;
+    const timer = setInterval(() => setCycle((n) => n + 1), 30_000);
+    return () => clearInterval(timer);
+  }, [closeId]);
+  // A failed read keeps its section's last good result beside the error until a later read succeeds.
+  useEffect(() => {
+    if (closeId) return;
     let live = true;
+    const dependencies = workspaceRequest(`/dependencies?client=${encodeURIComponent(clientSearch)}`).then(data => {
+      if (live) { setDependencies(data.items); setDependencyMore(data.has_more); setPredicted({ items: data.predicted ?? [], more: data.predicted_more }); setDependencyError(""); setDependencyLoaded(true); }
+    }).catch(e => {
+      if (live) { setDependencyError(e instanceof Error ? e.message : "Dependency review unavailable."); setDependencyLoaded(true); }
+    });
+    const queue = workspaceRequest(`/review-queue?client=${encodeURIComponent(clientSearch)}`).then(data => {
+      if (live) { setQueue(data); setQueueError(""); }
+    }).catch(e => live && setQueueError(e instanceof Error ? e.message : "The review queue is unavailable."));
+    const brief = workspaceRequest(`/morning?client=${encodeURIComponent(clientSearch)}`)
+      .then((data) => {
+        if (live) { setMorning(data); setMorningError(""); }
+      })
+      .catch((e) => live && setMorningError(e instanceof Error ? e.message : "The morning brief is unavailable."));
+    void Promise.all([dependencies, queue, brief]).then(() => live && setSectionsAt(new Date()));
+    return () => { live = false; };
+  }, [closeId, clientSearch, refresh, cycle]);
+  const filterClients = (value: string) => {
+    if (value === clientSearch) return setRefresh((n) => n + 1);
+    setClientSearch(value);
     setDependencyLoaded(false);
     setDependencies([]);
     setDependencyMore(false);
     setPredicted({ items: [], more: false });
     setDependencyError("");
-    workspaceRequest(`/dependencies?client=${encodeURIComponent(clientSearch)}`).then(data => {
-      if (live) { setDependencies(data.items); setDependencyMore(data.has_more); setPredicted({ items: data.predicted ?? [], more: data.predicted_more }); setDependencyError(""); setDependencyLoaded(true); }
-    }).catch(e => {
-      if (live) { setDependencyError(e instanceof Error ? e.message : "Dependency review unavailable."); setDependencyLoaded(true); }
-    });
-    workspaceRequest(`/review-queue?client=${encodeURIComponent(clientSearch)}`).then(data => live && setQueue(data)).catch(() => live && setQueue(undefined));
-    return () => { live = false; };
-  }, [closeId, clientSearch, refresh]);
-  useEffect(() => {
-    if (closeId) return;
-    let live = true;
-    workspaceRequest(`/morning?client=${encodeURIComponent(clientSearch)}`)
-      .then((data) => {
-        if (live) { setMorning(data); setMorningError(""); }
-      })
-      .catch((e) => {
-        if (live) { setMorning(undefined); setMorningError(e instanceof Error ? e.message : "The morning brief is unavailable."); }
-      });
-    return () => { live = false; };
-  }, [closeId, clientSearch, refresh]);
+    setQueue(undefined);
+    setQueueError("");
+    setMorning(undefined);
+    setMorningError("");
+  };
   const dueCounts = morning?.due_counts;
   const show = (view: string) => {
     setFilter(view);
@@ -257,7 +282,7 @@ export function Work({
                 role="search"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  setClientSearch(String(new FormData(e.currentTarget).get("client") ?? ""));
+                  filterClients(String(new FormData(e.currentTarget).get("client") ?? ""));
                 }}
               >
                 <input name="client" aria-label="Filter by client or close month" placeholder="Client or YYYY-MM" maxLength={200} />
@@ -289,9 +314,16 @@ export function Work({
       )}
       {!closeId && <Setup onEnrolled={() => setRefresh((n) => n + 1)} />}
       {error && (
-        <p role="alert">{error} Updates paused; refresh to reconnect.</p>
+        <p role="alert">{error} Retrying automatically{asOf ? `; last updated ${asOf.toLocaleTimeString()}` : ""}.</p>
+      )}
+      {asOf && !error && (
+        <p className="note">
+          Jobs updated {asOf.toLocaleTimeString()}
+          {!closeId && sectionsAt && `; the brief, review queue and dependencies ${sectionsAt.toLocaleTimeString()}, read again every 30 seconds and whenever work changes`}.
+        </p>
       )}
       {!loaded && !error && <p role="status">Loading work…</p>}
+      {!closeId && morning && morningError && <p role="alert">{morningError} Showing the last brief read.</p>}
       {!closeId && <MorningBrief brief={morning} error={morningError} />}
       {!closeId && morning && (
         <>
@@ -313,12 +345,13 @@ export function Work({
       )}
       {loaded && (
         <>
-          {!closeId && <DelegatedCloses refresh={refresh} client={clientSearch} />}
+          {!closeId && <DelegatedCloses key={clientSearch} refresh={refresh + cycle} client={clientSearch} />}
           {!closeId && (
             <>
               <SectionHeader title="Ready for your review" id="review-queue">
                 {queue && queue.count > queue.items.length && <small>Showing {queue.items.length} of {queue.count}</small>}
               </SectionHeader>
+              {queueError && <p role="alert">{queueError}{queue ? " Showing the last queue read." : ""}</p>}
               <BulkReview items={queue?.items} onDone={() => setRefresh((n) => n + 1)} />
               <SectionHeader title="Work needing re-review" id="dependency-review">
                 <small>Source revisions and inherited schedules reopen review; earlier approvals are not reused.</small>
@@ -351,7 +384,7 @@ export function Work({
                   {predicted.more && <p>Showing 100 drafts. Filter by client or month to see more.</p>}
                 </RowList>
               )}
-              <DailyBooks refresh={refresh} onReviewed={() => setRefresh((n) => n + 1)} />
+              <DailyBooks refresh={refresh + cycle} onReviewed={() => setRefresh((n) => n + 1)} />
             </>
           )}
           <div className="toolbar" id="work-list">
@@ -426,16 +459,16 @@ function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () =
   const [items, setItems] = useState<Daily[]>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  async function load() {
-    try {
-      setItems((await workspaceRequest("/daily")).items);
-      setError("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Daily books are unavailable.");
-    }
-  }
   useEffect(() => {
-    void load();
+    let live = true;
+    workspaceRequest("/daily")
+      .then((data) => {
+        if (live) { setItems(data.items); setError(""); }
+      })
+      .catch((e) => live && setError(e instanceof Error ? e.message : "Daily books are unavailable."));
+    return () => {
+      live = false;
+    };
   }, [refresh]);
   async function reviewed(item: Daily) {
     setBusy(item.close_id);
@@ -444,7 +477,6 @@ function DailyBooks({ refresh, onReviewed }: { refresh: number; onReviewed: () =
       onReviewed();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The review could not be saved.");
-      await load();
     } finally {
       setBusy("");
     }

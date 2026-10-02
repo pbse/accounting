@@ -557,32 +557,27 @@ function delegatedFacts(s: Delegated["summary"]) {
 export function DelegatedCloses({ refresh, client }: { refresh: number; client: string }) {
   const [list, setList] = useState<{ goals: Delegated[]; more: boolean }>();
   const [error, setError] = useState("");
-  // The agent updates each close about once a minute, so the list reads it again as often.
   useEffect(() => {
     let live = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const load = () =>
-      workspaceRequest(`/goals?client=${encodeURIComponent(client)}`)
-        .then((data: { goals: Delegated[]; more: boolean }) => {
-          if (!live) return;
-          setList(data);
-          setError("");
-        })
-        .catch((e) => live && setError(e instanceof Error ? e.message : "Delegated closes are unavailable."))
-        .finally(() => live && (timer = setTimeout(load, 60_000)));
-    void load();
+    workspaceRequest(`/goals?client=${encodeURIComponent(client)}`)
+      .then((data: { goals: Delegated[]; more: boolean }) => {
+        if (!live) return;
+        setList(data);
+        setError("");
+      })
+      .catch((e) => live && setError(e instanceof Error ? e.message : "Delegated closes are unavailable."));
     return () => {
       live = false;
-      clearTimeout(timer);
     };
   }, [refresh, client]);
-  if (error) return <p role="alert">{error}</p>;
+  if (error && !list?.goals.length) return <p role="alert">{error}</p>;
   if (!list?.goals.length) return null;
   return (
     <section aria-label="Handed to the agent">
       <SectionHeader title="Handed to the agent">
         {list.more && <small>Showing {list.goals.length}. Filter by client or month to see the rest.</small>}
       </SectionHeader>
+      {error && <p role="alert">{error} Showing the last list read.</p>}
       <RowList>
         {list.goals.map((g) => {
           const [tone, state] = delegatedState(g);
