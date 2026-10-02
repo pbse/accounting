@@ -19,6 +19,9 @@ const reviewsAfterApproval = `(SELECT count(*) FROM workpaper_reviews v JOIN wor
  WITH RECURSIVE earlier(id) AS (SELECT d.paper->>'revises' UNION SELECT p.paper->>'revises' FROM workpapers p JOIN earlier ON p.id::text=earlier.id WHERE p.close_id=c.id)
  SELECT 1 FROM earlier JOIN workpapers a ON a.id::text=earlier.id AND a.close_id=c.id JOIN workpaper_reviews x ON x.workpaper_id=a.id AND x.decision='approved'))`
 
+// closeMinutes is a close's human minutes (alias c): tracked seconds as minutes plus recorded minutes.
+const closeMinutes = `COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0)/60.0+COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id),0)`
+
 func registerEffort(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /v1/closes/{id}/effort", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -177,7 +180,7 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 		// The cohort figures cover every accessible measured close, not just the rows shown.
 		var measured int
 		var median sql.NullFloat64
-		if err := db.QueryRowContext(r.Context(), `SELECT count(*),percentile_cont(0.5) WITHIN GROUP (ORDER BY total) FROM (SELECT COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0)/60.0+COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id),0) AS total FROM client_closes c WHERE `+scope+` AND c.period=$4) totals WHERE total>0`, organization(r), firmAccess(r), subject(r), period).Scan(&measured, &median); err != nil {
+		if err := db.QueryRowContext(r.Context(), `SELECT count(*),percentile_cont(0.5) WITHIN GROUP (ORDER BY total) FROM (SELECT `+closeMinutes+` AS total FROM client_closes c WHERE `+scope+` AND c.period=$4) totals WHERE total>0`, organization(r), firmAccess(r), subject(r), period).Scan(&measured, &median); err != nil {
 			problem(w, 503, "Effort is unavailable.")
 			return
 		}
@@ -187,7 +190,39 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Effort is unavailable.")
 			return
 		}
-		out := map[string]any{"period": period, "items": items, "measured": measured, "has_more": more, "reviews": reviews, "reviews_after_approval": afterApproval}
+		// The trend: the twelve months up to this one, oldest first, each with its measured closes and their median.
+		trend := []map[string]any{}
+		if month, err := time.Parse("2006-01", period); err == nil {
+			rows, err := db.QueryContext(r.Context(), `SELECT period,count(*),percentile_cont(0.5) WITHIN GROUP (ORDER BY total) FROM (SELECT c.period,`+closeMinutes+` AS total FROM client_closes c WHERE `+scope+` AND c.period BETWEEN $5 AND $4) totals WHERE total>0 GROUP BY period`, organization(r), firmAccess(r), subject(r), period, month.AddDate(0, -11, 0).Format("2006-01"))
+			if err != nil {
+				problem(w, 503, "Effort is unavailable.")
+				return
+			}
+			defer rows.Close()
+			months := map[string]map[string]any{}
+			for rows.Next() {
+				var p string
+				var n int
+				var m float64
+				if err := rows.Scan(&p, &n, &m); err != nil {
+					problem(w, 503, "Effort is unavailable.")
+					return
+				}
+				months[p] = map[string]any{"period": p, "measured": n, "median_minutes": m}
+			}
+			if rows.Err() != nil {
+				problem(w, 503, "Effort is unavailable.")
+				return
+			}
+			for i := -11; i <= 0; i++ {
+				p := month.AddDate(0, i, 0).Format("2006-01")
+				if months[p] == nil {
+					months[p] = map[string]any{"period": p, "measured": 0}
+				}
+				trend = append(trend, months[p])
+			}
+		}
+		out := map[string]any{"period": period, "items": items, "measured": measured, "has_more": more, "reviews": reviews, "reviews_after_approval": afterApproval, "trend": trend}
 		if median.Valid {
 			out["median_minutes"] = median.Float64
 		}

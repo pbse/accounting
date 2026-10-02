@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"close.local/backend/internal/preparation"
 )
@@ -162,10 +163,21 @@ func TestEffortCapsCreditAndSeparatesWaiting(t *testing.T) {
 		Median        *float64         `json:"median_minutes"`
 		Reviews       int              `json:"reviews"`
 		AfterApproval int              `json:"reviews_after_approval"`
+		Trend         []struct {
+			Period   string   `json:"period"`
+			Measured int      `json:"measured"`
+			Median   *float64 `json:"median_minutes"`
+		} `json:"trend"`
 	}
 	json.Unmarshal(call("GET", "/v1/closes/effort?period="+period, nil, 200), &report)
 	if len(report.Items) != 2 || report.Measured != 1 || report.Median == nil || *report.Median < 16.4 || *report.Median > 17.1 {
 		t.Fatalf("median must use measured closes only and never count the quiet close as zero: %+v", report)
+	}
+	if len(report.Trend) != 12 || report.Trend[11].Period != period || report.Trend[11].Measured != 1 || report.Trend[11].Median == nil || *report.Trend[11].Median != *report.Median {
+		t.Fatalf("the trend ends with this month's measured closes and median: %+v", report.Trend)
+	}
+	if first, _ := time.Parse("2006-01", period); report.Trend[0].Period != first.AddDate(0, -11, 0).Format("2006-01") {
+		t.Fatalf("the trend starts eleven months earlier, oldest first: %+v", report.Trend)
 	}
 	if report.Reviews != 6 || report.AfterApproval != 2 {
 		t.Fatalf("the month counts every accessible close's reviews and those after an approved earlier version: %+v", report)

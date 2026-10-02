@@ -1,0 +1,32 @@
+/* Dot columns: empty dots in the ground's grey, filled ones in the brand blue; the scale above and the first and last
+   points below in 11px secondary ink. */
+.dot-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+}
+.dot-chart svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.dot-chart circle {
+  fill: var(--bg);
+}
+.dot-chart circle.on {
+  fill: var(--blue);
+}
+.dot-chart-scale,
+.dot-chart-axis {
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.dot-chart-axis {
+  display: flex;
+  justify-content: space-between;
+}
