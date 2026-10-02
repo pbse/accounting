@@ -13,6 +13,7 @@ import { Coordinator } from "./Coordinator";
 import { GoalPanel } from "./Goal";
 import { EmailReplies } from "./EmailReplies";
 import { Aging } from "./Aging";
+import { OpenItems } from "./OpenItems";
 import { Matching } from "./Matching";
 import { Exceptions } from "./Exceptions";
 import { Flux } from "./Flux";
@@ -205,6 +206,7 @@ export default function ClientClose() {
           <Work key={`work-${close.id}`} closeId={close.id} onPrepared={() => void reload()} />
           <Exceptions key={`exceptions-${close.id}`} closeId={close.id} />
           <Aging key={`aging-${close.id}`} closeId={close.id} />
+          <OpenItems key={`open-items-${close.id}`} closeId={close.id} />
           <Matching key={`matching-${close.id}`} closeId={close.id} />
           <TieOut key={`tie-out-${close.id}`} closeId={close.id} />
           <Flux key={`flux-${close.id}`} closeId={close.id} />

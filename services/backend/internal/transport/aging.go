@@ -38,12 +38,12 @@ func latestAging(r *http.Request, db *sql.DB) (receivables, payables []quickbook
 		for _, party := range append(slices.Clone(receivables), payables...) {
 			unreadable += party.Unresolved
 		}
-		return receivables, payables, map[string]any{"captured_at": books.CapturedAt, "month_end": books.MonthEnd, "complete": unreadable == 0, "completeness": "", "note": agingNote, "buckets": quickbooks.AgingBuckets}, nil
+		return receivables, payables, map[string]any{"source": "xero", "company": "xero:" + books.Tenant, "capture_id": books.ID, "captured_at": books.CapturedAt, "month_end": books.MonthEnd, "complete": unreadable == 0, "completeness": "", "note": agingNote, "buckets": quickbooks.AgingBuckets}, nil
 	}
 	var raw []byte
-	var captured, completeness, period, home string
-	err = db.QueryRowContext(r.Context(), `SELECT COALESCE(s.payload->'open_items','{}'::jsonb),COALESCE(s.payload->>'finished_at',''),COALESCE(s.payload->>'completeness',''),c.period,COALESCE((SELECT home_currency FROM quickbooks_connections WHERE id=s.connection_id),'') FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id
- WHERE s.close_id::text=$1 AND s.period=c.period AND s.state IN ('completed','unchanged') AND s.payload ? 'open_items' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` ORDER BY s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw, &captured, &completeness, &period, &home)
+	var captured, completeness, period, home, captureID, company string
+	err = db.QueryRowContext(r.Context(), `SELECT COALESCE(s.payload->'open_items','{}'::jsonb),COALESCE(s.payload->>'finished_at',''),COALESCE(s.payload->>'completeness',''),c.period,COALESCE(x.home_currency,''),s.id::text,'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_entity_syncs s JOIN client_closes c ON c.id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id
+ WHERE s.close_id::text=$1 AND s.period=c.period AND s.state IN ('completed','unchanged') AND s.payload ? 'open_items' AND s.connection_id=`+quickbooks.ReadingConnection("c.id")+` ORDER BY s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&raw, &captured, &completeness, &period, &home, &captureID, &company)
 	if err == sql.ErrNoRows {
 		return nil, nil, nil, waiting("Capture this month's QuickBooks transactions or Xero books first; the aging uses the open items that capture reads.")
 	}
@@ -60,7 +60,7 @@ func latestAging(r *http.Request, db *sql.DB) (receivables, payables []quickbook
 		unreadable += party.Unresolved
 	}
 	complete := !strings.Contains(completeness, "Open items were not fully read") && unreadable == 0
-	return receivables, payables, map[string]any{"captured_at": captured, "month_end": monthEnd.Format("2006-01-02"), "complete": complete, "completeness": completeness, "note": agingNote, "buckets": quickbooks.AgingBuckets}, nil
+	return receivables, payables, map[string]any{"source": "quickbooks", "company": company, "capture_id": captureID, "captured_at": captured, "month_end": monthEnd.Format("2006-01-02"), "complete": complete, "completeness": completeness, "note": agingNote, "buckets": quickbooks.AgingBuckets}, nil
 }
 
 func registerAging(mux *http.ServeMux, db *sql.DB) {

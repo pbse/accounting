@@ -403,7 +403,7 @@ func xeroAccess(ctx context.Context, db *sql.DB, org, id string) (string, string
 
 // xeroBooks is a close's Xero transactions and open items in the QuickBooks shapes the checks read.
 type xeroBooks struct {
-	ID, CapturedAt, MonthEnd, Home string
+	ID, Tenant, CapturedAt, MonthEnd, Home string
 	// Unread says why the newest snapshot has no transactions; an older snapshot's are never shown in its place.
 	Unread   string
 	Rows     []quickbooks.TransactionRow
@@ -417,10 +417,10 @@ func latestXeroBooks(ctx context.Context, db *sql.DB, closeID string) (*xeroBook
 	var b xeroBooks
 	var captured time.Time
 	var payload []byte
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,s.payload FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id AND c.period=s.period
  JOIN xero_connections x ON x.id=s.connection_id AND x.organization_id=c.organization_id AND lower(x.client_entity)=lower(c.entity) AND x.state<>'disconnected'
  WHERE s.close_id::text=$1 AND NOT EXISTS(SELECT 1 FROM quickbooks_entity_syncs q JOIN evidence e ON e.id=q.evidence_id AND e.close_id=q.close_id AND e.superseded_by IS NULL WHERE q.close_id=s.close_id AND q.state IN ('completed','unchanged') AND q.finished_at>s.captured_at AND q.connection_id=`+quickbooks.ReadingConnection("s.close_id")+`)
- ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&b.ID, &captured, &payload)
+ ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&b.ID, &b.Tenant, &captured, &payload)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
