@@ -20,12 +20,16 @@ type Row = {
   reviews: number;
   reviews_after_approval: number;
   review_minutes: number;
+  signed_off: boolean;
+  assistance_minutes: number;
 };
+type Cohort = { eligible: number; measured: number; median_minutes?: number; tracked_minutes: number; recorded_minutes: number; assistance_minutes: number };
 type Report = {
   period: string;
   items: Row[];
-  measured: number;
-  median_minutes?: number;
+  completed: Cohort;
+  in_progress: Cohort;
+  unchecked: number;
   has_more: boolean;
   reviews: number;
   reviews_after_approval: number;
@@ -69,29 +73,40 @@ export default function Measure() {
           <StatGroup>
             <StatTile
               icon="measure"
-              label="Median human minutes"
-              value={report.median_minutes === undefined ? undefined : minutes(report.median_minutes)}
-              caption="Across measured closes only"
+              label="Median minutes per signed-off close"
+              value={report.completed.median_minutes === undefined ? undefined : minutes(report.completed.median_minutes)}
+              caption={`${report.completed.measured} of ${report.completed.eligible} signed-off closes measured`}
             />
-            <StatTile icon="clients" tone="teal" label="Measured closes" value={report.measured} caption="Closes with tracked or recorded time; others are not counted as zero" />
+            <StatTile
+              icon="clients"
+              tone="teal"
+              label="Median minutes so far, open closes"
+              value={report.in_progress.median_minutes === undefined ? undefined : minutes(report.in_progress.median_minutes)}
+              caption={`${report.in_progress.measured} of ${report.in_progress.eligible} open closes measured; not a time to finish`}
+            />
           </StatGroup>
           {report.trend.some((month) => month.measured > 0) && (
             <section aria-labelledby="effort-trend">
-              <h2 id="effort-trend">Median human minutes per close, by month</h2>
+              <h2 id="effort-trend">Median human minutes per signed-off close, by month</h2>
               <DotChart
-                label="Median human minutes per measured close, by month"
+                label="Median human minutes per measured signed-off close, by month"
                 format={minutes}
                 points={report.trend.map((month) => ({
                   label: monthLabel(month.period),
                   value: month.median_minutes ?? null,
-                  note: month.measured ? `${month.measured} measured close${month.measured === 1 ? "" : "s"}` : "no measured closes",
+                  note: month.measured ? `${month.measured} measured signed-off close${month.measured === 1 ? "" : "s"}` : "no measured signed-off closes",
                 }))}
               />
             </section>
           )}
           <p className="note">
-            Tracked activity counts visible, interactive workspace time; off-screen minutes are whatever the team records on each close. Neither includes
-            our own team's assistance, which is recorded separately.
+            Signed off means the close's sign-off still stands: a close changed since its sign-off counts as open
+            {report.unchecked > 0 ? `, and ${report.unchecked} whose sign-off could not be rechecked count as open too` : ""}. Closes with no time are not
+            counted as zero. Signed-off closes logged {minutes(report.completed.tracked_minutes)} of tracked workspace time,{" "}
+            {minutes(report.completed.recorded_minutes)} recorded off-screen and {minutes(report.completed.assistance_minutes)} of our team's help; open closes{" "}
+            {minutes(report.in_progress.tracked_minutes)}, {minutes(report.in_progress.recorded_minutes)} and {minutes(report.in_progress.assistance_minutes)}. Each
+            close's minutes include all three. Tracked activity counts visible, interactive workspace time; off-screen minutes and our team's help are whatever is
+            recorded on each close, so these are not total labour.
           </p>
           <p className="note">
             Reviews this month: {report.reviews}, of which {report.reviews_after_approval} came after an earlier version was approved (any reason, not only a
@@ -102,9 +117,9 @@ export default function Measure() {
             {report.items.length === 0 && <p className="empty">No closes in {report.period || "this month"}.</p>}
             {report.items.map((row) => (
               <Link className="row" key={row.close_id} to={`/dashboard/closes/${row.close_id}?tab=signoff`}>
-                <EntityCell name={row.entity} title={row.entity} />
+                <EntityCell name={row.entity} title={row.entity} detail={row.signed_off ? "Signed off" : "Open: effort so far"} />
                 <span>{row.total_minutes === undefined ? <span className="status">Not measured</span> : <strong>{minutes(row.total_minutes)}</strong>}</span>
-                <small>{row.measured ? `${minutes(row.tracked_seconds / 60)} · ${minutes(row.recorded_minutes)}` : "—"}</small>
+                <small>{row.measured ? `${minutes(row.tracked_seconds / 60)} · ${minutes(row.recorded_minutes)}${row.assistance_minutes ? ` · ${minutes(row.assistance_minutes)} our help` : ""}` : "—"}</small>
                 <span>
                   <span className="chip">{row.approved_drafts}</span>
                   {row.reviews > 0 && (
@@ -140,7 +155,15 @@ type TrackRow = {
 const share = (part: number, whole: number) => (whole === 0 ? "—" : `${part} of ${whole} (${Math.round((100 * part) / whole)}%)`);
 
 function TrackRecord() {
-  const [data, setData] = useState<{ window_from: string; clients: TrackRow[]; unlinked_human_drafts: number; has_more: boolean; assistant?: { asked: number; kept: number; median_seconds: number | null } }>();
+  const [data, setData] = useState<{
+    window_from: string;
+    clients: TrackRow[];
+    unlinked_human_drafts: number;
+    has_more: boolean;
+    window_to: string;
+    coverage: Record<"straight_through" | "person_confirmed" | "carried" | "other_agent" | "people" | "straight_judged" | "straight_approved" | "straight_revised" | "straight_sent_back" | "straight_refreshed" | "failed_jobs" | "unsupported_intakes", number>;
+    assistant?: { asked: number; kept: number; median_seconds: number | null };
+  }>();
   const [error, setError] = useState("");
   useEffect(() => {
     let live = true;
@@ -158,8 +181,34 @@ function TrackRecord() {
   const scope = data.has_more ? ", first 200 clients" : "";
   const proposals = { confirmed: sum((c) => c.proposals_confirmed), kept: sum((c) => c.proposals_kept) };
   const drafts = { judged: sum((c) => c.drafts_reviewed), approved: sum((c) => c.drafts_approved_unrevised) };
+  const work = data.coverage;
+  const items = work.straight_through + work.person_confirmed + work.carried + work.other_agent + work.people;
   return (
     <section aria-label="Agent track record by client">
+      <SectionHeader title="Where the work came from" />
+      <p className="note">
+        Every client's work in closes from {data.window_from} to {data.window_to}, each item counted once by its first draft (revisions are not new items).
+      </p>
+      {items > 0 && (
+        <HexMap
+          label="Where the work came from"
+          parts={[
+            { label: "Prepared straight through by the agent", value: work.straight_through, tone: "blue" },
+            { label: "Agent drafts after a person confirmed the facts", value: work.person_confirmed, tone: "teal" },
+            { label: "Other agent work (carried, recurring, rule-based)", value: work.carried + work.other_agent, tone: "violet" },
+            { label: "Built by people", value: work.people, tone: "orange" },
+          ]}
+        />
+      )}
+      <p>
+        {items} work items: {work.straight_through} straight through, {work.person_confirmed} after a person confirmed the facts, {work.carried} carried or
+        recurring, {work.other_agent} other agent drafts and {work.people} built by people. {work.failed_jobs} preparation jobs failed and{" "}
+        {work.unsupported_intakes} documents were unsupported; they need a person, whether or not one has handled them yet.
+        {work.straight_judged > 0 &&
+          ` Of ${work.straight_judged} straight-through drafts a person has judged, ${work.straight_approved} were approved as prepared, ${work.straight_revised} revised and ${work.straight_sent_back} sent back (a draft can be both).`}
+        {work.straight_refreshed > 0 && ` ${work.straight_refreshed} straight-through drafts were refreshed by the agent for a changed source, which is not a judgment.`} Approval
+        is not proof a draft was correct.
+      </p>
       <SectionHeader title="Agent track record by client" />
       <p className="note">
         Closes from {data.window_from} on. Proposals are the model's readings of client documents that a person confirmed; kept means the person

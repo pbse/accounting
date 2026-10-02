@@ -10,6 +10,9 @@ import (
 
 var effortActivities = []string{"prepare", "review", "evidence", "requests", "signoff", "configuration"}
 
+// Recorded entries may also be our own team's setup or support help, which the workspace never tracks.
+var effortEntryActivities = append(slices.Clone(effortActivities), "assistance")
+
 // Tracked activity is capped at 60 seconds per person per close per minute; it
 // measures visible, interactive workspace time, not every minute worked.
 // closeReviews counts a close's recorded review decisions; reviewsAfterApproval counts those on a draft some earlier
@@ -18,6 +21,9 @@ const closeReviews = `(SELECT count(*) FROM workpaper_reviews v JOIN workpapers 
 const reviewsAfterApproval = `(SELECT count(*) FROM workpaper_reviews v JOIN workpapers d ON d.id=v.workpaper_id WHERE d.close_id=c.id AND EXISTS(
  WITH RECURSIVE earlier(id) AS (SELECT d.paper->>'revises' UNION SELECT p.paper->>'revises' FROM workpapers p JOIN earlier ON p.id::text=earlier.id WHERE p.close_id=c.id)
  SELECT 1 FROM earlier JOIN workpapers a ON a.id::text=earlier.id AND a.close_id=c.id JOIN workpaper_reviews x ON x.workpaper_id=a.id AND x.decision='approved'))`
+
+// closeSignedOff is SQL: close c's latest recorded decision is a sign-off; readiness decides whether it still stands.
+const closeSignedOff = `COALESCE((SELECT s.decision FROM close_signoffs s WHERE s.close_id=c.id ORDER BY s.id DESC LIMIT 1),'')='signed_off'`
 
 // closeMinutes is a close's human minutes (alias c): tracked seconds as minutes plus recorded minutes.
 const closeMinutes = `COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0)/60.0+COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id),0)`
@@ -57,7 +63,7 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		input.Note = strings.TrimSpace(input.Note)
-		if !slices.Contains(effortActivities, input.Activity) || input.Minutes < 1 || input.Minutes > 480 || len(input.Note) < 5 || len(input.Note) > 500 {
+		if !slices.Contains(effortEntryActivities, input.Activity) || input.Minutes < 1 || input.Minutes > 480 || len(input.Note) < 5 || len(input.Note) > 500 {
 			problem(w, 422, "Record 1–480 minutes for a known activity with a 5–500 character note.")
 			return
 		}
@@ -130,6 +136,7 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/track-record", trackRecord(db))
 	mux.HandleFunc("GET /v1/closes/morning", morning(db))
 	mux.HandleFunc("GET /v1/closes/effort", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		period := r.URL.Query().Get("period")
 		if period != "" {
 			if _, err := time.Parse("2006-01", period); err != nil {
@@ -137,95 +144,154 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		fail := func() { problem(w, 503, "Effort is unavailable.") }
+		tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if err != nil {
+			fail()
+			return
+		}
+		defer tx.Rollback()
+		args := []any{organization(r), firmAccess(r), subject(r)}
 		scope := `c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))`
 		if period == "" {
-			if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(max(c.period),'') FROM client_closes c WHERE `+scope, organization(r), firmAccess(r), subject(r)).Scan(&period); err != nil {
-				problem(w, 503, "Effort is unavailable.")
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(max(c.period),'') FROM client_closes c WHERE `+scope, args...).Scan(&period); err != nil {
+				fail()
 				return
 			}
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0),COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id),0),(SELECT count(*) FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'),`+closeReviews+`,`+reviewsAfterApproval+`,
- COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id AND e.activity='review'),0)/60.0+COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id AND x.activity='review'),0) FROM client_closes c WHERE `+scope+` AND c.period=$4 ORDER BY c.entity LIMIT 201`, organization(r), firmAccess(r), subject(r), period)
+		month, _ := time.Parse("2006-01", period)
+		from := month.AddDate(0, -11, 0).Format("2006-01")
+		// Every accessible close of the twelve months up to this one: a recorded sign-off counts only while readiness
+		// still says it stands, read in this snapshot.
+		// ponytail: rechecks each signed-off close of the year per read; keep each sign-off's last recheck if this slows.
+		type closeEffort struct {
+			id, period               string
+			total, tracked, recorded float64
+			assistance               int
+			signed                   bool
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT c.id::text,c.period,`+closeMinutes+`,COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0)/60.0,
+ COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id AND x.activity<>'assistance'),0),COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id AND x.activity='assistance'),0),`+closeSignedOff+`
+ FROM client_closes c WHERE `+scope+` AND c.period BETWEEN $4 AND $5`, append(args, from, period)...)
 		if err != nil {
-			problem(w, 503, "Effort is unavailable.")
+			fail()
 			return
 		}
-		defer rows.Close()
+		closes := []closeEffort{}
+		for rows.Next() {
+			var c closeEffort
+			if err := rows.Scan(&c.id, &c.period, &c.total, &c.tracked, &c.recorded, &c.assistance, &c.signed); err != nil {
+				rows.Close()
+				fail()
+				return
+			}
+			closes = append(closes, c)
+		}
+		rows.Close()
+		if rows.Err() != nil {
+			fail()
+			return
+		}
+		signed, unchecked := map[string]bool{}, 0
+		for i, c := range closes {
+			if !c.signed {
+				continue
+			}
+			state, err := recheckSignOff(ctx, tx, c.id)
+			if err != nil {
+				fail()
+				return
+			}
+			closes[i].signed = state == "signed_off"
+			signed[c.id] = closes[i].signed
+			if state == "unknown" && c.period == period {
+				unchecked++
+			}
+		}
+		median := func(values []float64) any {
+			if len(values) == 0 {
+				return nil
+			}
+			slices.Sort(values)
+			n := len(values)
+			return (values[(n-1)/2] + values[n/2]) / 2
+		}
+		// Signed-off closes give final effort; open closes give effort so far, which is not a time to finish. Each
+		// cohort counts the month's accessible closes (eligible) and those with any time (measured).
+		cohort := func(completed bool) map[string]any {
+			eligible, totals, tracked, recorded, assistance := 0, []float64{}, 0.0, 0.0, 0
+			for _, c := range closes {
+				if c.period != period || c.signed != completed {
+					continue
+				}
+				eligible++
+				tracked, recorded, assistance = tracked+c.tracked, recorded+c.recorded, assistance+c.assistance
+				if c.total > 0 {
+					totals = append(totals, c.total)
+				}
+			}
+			out := map[string]any{"eligible": eligible, "measured": len(totals), "tracked_minutes": tracked, "recorded_minutes": recorded, "assistance_minutes": assistance}
+			if m := median(totals); m != nil {
+				out["median_minutes"] = m
+			}
+			return out
+		}
+		trend := []map[string]any{}
+		for i := -11; i <= 0; i++ {
+			p := month.AddDate(0, i, 0).Format("2006-01")
+			totals := []float64{}
+			for _, c := range closes {
+				if c.period == p && c.signed && c.total > 0 {
+					totals = append(totals, c.total)
+				}
+			}
+			point := map[string]any{"period": p, "measured": len(totals)}
+			if m := median(totals); m != nil {
+				point["median_minutes"] = m
+			}
+			trend = append(trend, point)
+		}
+
 		items := []map[string]any{}
 		more := false
-		for rows.Next() {
+		list, err := tx.QueryContext(ctx, `SELECT c.id::text,c.entity,COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id),0),COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id AND x.activity<>'assistance'),0),COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id AND x.activity='assistance'),0),(SELECT count(*) FROM workpaper_review_state w WHERE w.close_id=c.id AND w.review_state='approved'),`+closeReviews+`,`+reviewsAfterApproval+`,
+ COALESCE((SELECT sum(seconds) FROM close_effort e WHERE e.close_id=c.id AND e.activity='review'),0)/60.0+COALESCE((SELECT sum(minutes) FROM close_effort_entries x WHERE x.close_id=c.id AND x.activity='review'),0) FROM client_closes c WHERE `+scope+` AND c.period=$4 ORDER BY c.entity LIMIT 201`, append(args, period)...)
+		if err != nil {
+			fail()
+			return
+		}
+		defer list.Close()
+		for list.Next() {
 			if len(items) == 200 {
 				more = true
 				break
 			}
 			var id, entity string
-			var tracked, recorded int64
+			var tracked, recorded, assistance int64
 			var approved, reviews, afterApproval int
 			var reviewMinutes float64
-			if err := rows.Scan(&id, &entity, &tracked, &recorded, &approved, &reviews, &afterApproval, &reviewMinutes); err != nil {
-				problem(w, 503, "Effort is unavailable.")
+			if err := list.Scan(&id, &entity, &tracked, &recorded, &assistance, &approved, &reviews, &afterApproval, &reviewMinutes); err != nil {
+				fail()
 				return
 			}
-			item := map[string]any{"close_id": id, "entity": entity, "tracked_seconds": tracked, "recorded_minutes": recorded, "approved_drafts": approved, "measured": tracked > 0 || recorded > 0,
-				"reviews": reviews, "reviews_after_approval": afterApproval, "review_minutes": reviewMinutes}
-			if tracked > 0 || recorded > 0 {
-				item["total_minutes"] = float64(tracked)/60 + float64(recorded)
+			total := float64(tracked)/60 + float64(recorded+assistance)
+			item := map[string]any{"close_id": id, "entity": entity, "tracked_seconds": tracked, "recorded_minutes": recorded, "assistance_minutes": assistance, "approved_drafts": approved, "measured": total > 0,
+				"reviews": reviews, "reviews_after_approval": afterApproval, "review_minutes": reviewMinutes, "signed_off": signed[id]}
+			if total > 0 {
+				item["total_minutes"] = total
 			}
 			items = append(items, item)
 		}
-		if rows.Err() != nil {
-			problem(w, 503, "Effort is unavailable.")
-			return
-		}
-		// The cohort figures cover every accessible measured close, not just the rows shown.
-		var measured int
-		var median sql.NullFloat64
-		if err := db.QueryRowContext(r.Context(), `SELECT count(*),percentile_cont(0.5) WITHIN GROUP (ORDER BY total) FROM (SELECT `+closeMinutes+` AS total FROM client_closes c WHERE `+scope+` AND c.period=$4) totals WHERE total>0`, organization(r), firmAccess(r), subject(r), period).Scan(&measured, &median); err != nil {
-			problem(w, 503, "Effort is unavailable.")
+		if list.Close() != nil || list.Err() != nil {
+			fail()
 			return
 		}
 		// Review counts cover every accessible close in the month, measured or not.
 		var reviews, afterApproval int
-		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE(sum(r),0),COALESCE(sum(a),0) FROM (SELECT `+closeReviews+` AS r,`+reviewsAfterApproval+` AS a FROM client_closes c WHERE `+scope+` AND c.period=$4) counts`, organization(r), firmAccess(r), subject(r), period).Scan(&reviews, &afterApproval); err != nil {
-			problem(w, 503, "Effort is unavailable.")
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(sum(r),0),COALESCE(sum(a),0) FROM (SELECT `+closeReviews+` AS r,`+reviewsAfterApproval+` AS a FROM client_closes c WHERE `+scope+` AND c.period=$4) counts`, append(args, period)...).Scan(&reviews, &afterApproval); err != nil {
+			fail()
 			return
 		}
-		// The trend: the twelve months up to this one, oldest first, each with its measured closes and their median.
-		trend := []map[string]any{}
-		if month, err := time.Parse("2006-01", period); err == nil {
-			rows, err := db.QueryContext(r.Context(), `SELECT period,count(*),percentile_cont(0.5) WITHIN GROUP (ORDER BY total) FROM (SELECT c.period,`+closeMinutes+` AS total FROM client_closes c WHERE `+scope+` AND c.period BETWEEN $5 AND $4) totals WHERE total>0 GROUP BY period`, organization(r), firmAccess(r), subject(r), period, month.AddDate(0, -11, 0).Format("2006-01"))
-			if err != nil {
-				problem(w, 503, "Effort is unavailable.")
-				return
-			}
-			defer rows.Close()
-			months := map[string]map[string]any{}
-			for rows.Next() {
-				var p string
-				var n int
-				var m float64
-				if err := rows.Scan(&p, &n, &m); err != nil {
-					problem(w, 503, "Effort is unavailable.")
-					return
-				}
-				months[p] = map[string]any{"period": p, "measured": n, "median_minutes": m}
-			}
-			if rows.Err() != nil {
-				problem(w, 503, "Effort is unavailable.")
-				return
-			}
-			for i := -11; i <= 0; i++ {
-				p := month.AddDate(0, i, 0).Format("2006-01")
-				if months[p] == nil {
-					months[p] = map[string]any{"period": p, "measured": 0}
-				}
-				trend = append(trend, months[p])
-			}
-		}
-		out := map[string]any{"period": period, "items": items, "measured": measured, "has_more": more, "reviews": reviews, "reviews_after_approval": afterApproval, "trend": trend}
-		if median.Valid {
-			out["median_minutes"] = median.Float64
-		}
-		jsonReply(w, 200, out)
+		jsonReply(w, 200, map[string]any{"period": period, "items": items, "completed": cohort(true), "in_progress": cohort(false), "unchecked": unchecked, "has_more": more, "reviews": reviews, "reviews_after_approval": afterApproval, "trend": trend})
 	})
 }
