@@ -3046,3 +3046,15 @@ Browser check, with Measure's report answered in the browser by a realistic year
 Review: Codex (gpt-6-sol, high) pass 1 found sub-minute medians written as "1 min" (the chart now uses the page's own minutes format); pass 2 found a small positive month could round to no dots and read as empty (any positive value now fills at least one); pass 3 found nothing.
 
 Verified: `npm run check`, `npm test` (23 pass), `npm run build`, gofmt, `go vet` and `go test -run TestEffort` against PostgreSQL, and `npm run check:layout` (58 page views) after a clean `npm ci`.
+
+## The layout check covers every page (2026-10-02)
+
+`scripts/layout-check.mjs` now also checks the staff console's firm page, plan page and plan editor, and the client request page with its questions: 64 page views. It adds a synthetic firm (`org_layoutcheck`) straight to its database, since only the sign-in provider creates real ones (`DATABASE_URL` is now required; CI's step already sets it), and creates a plan for that firm through `POST /v1/admin/plans` with the real `plan_signal` activity. The plan editor shows only under a content grant, so the check opens one as staff would, reveals if the page still asks, and waits for the editor's own controls before measuring. The client request page's one read (`GET /v1/client-request`) is answered in the browser with an open request of three questions, since a request really sent needs a client's preparation work behind it.
+
+The new coverage showed the request page's question states were all green pills; green now means answered only, a document still to come asks for attention, and an open question is neutral.
+
+Browser check: screenshots of the four new pages show the firm overview, the plan's flow, the editor with its step and save form, and the request with its questions and upload form; `npm run check:layout` passes 64 page views.
+
+Review: Codex (gpt-6-sol, high) pass 1 found the editor route measured the reveal prompt, not the editor (fixed as above); pass 2 found nothing.
+
+Verified: `npm run check`, `npm test` (27 pass), `npm run build` and `npm run check:layout` (64 page views) after a clean `npm ci`.
