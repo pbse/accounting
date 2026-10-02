@@ -80,7 +80,7 @@ export default function Measure() {
               <h2 id="effort-trend">Median human minutes per close, by month</h2>
               <DotChart
                 label="Median human minutes per measured close, by month"
-                unit="min"
+                format={minutes}
                 points={report.trend.map((month) => ({
                   label: monthLabel(month.period),
                   value: month.median_minutes ?? null,

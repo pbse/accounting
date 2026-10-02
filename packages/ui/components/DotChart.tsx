@@ -4,20 +4,21 @@ export type DotPoint = { label: string; value: number | null; note?: string };
 
 // The design system's dot columns: one series over time as 6px dots on a 7.2px pitch, each point a few columns wide,
 // filled from the bottom against the largest value, over a full grid of empty dots (the empty dots are the grid, so
-// there are no gridlines). A point with no value stays empty. Its label states every point for screen readers.
+// there are no gridlines). A point with no value stays empty. Values are written with the caller's format, the same one
+// its numbers use elsewhere on the page; the label states every point for screen readers.
 const PITCH = 7.2;
 const ROWS = 20;
 const COLUMNS_PER_POINT = 5;
 
-export function DotChart({ label, points, unit }: { label: string; points: DotPoint[]; unit: string }) {
+export function DotChart({ label, points, format }: { label: string; points: DotPoint[]; format: (value: number) => string }) {
   const max = Math.max(0, ...points.map((p) => p.value ?? 0));
   const width = points.length * COLUMNS_PER_POINT * PITCH;
   const height = ROWS * PITCH;
-  const described = points.map((p) => `${p.label} ${p.value === null ? "none" : `${Math.round(p.value)} ${unit}`}${p.note ? ` (${p.note})` : ""}`).join(", ");
+  const described = points.map((p) => `${p.label} ${p.value === null ? "none" : format(p.value)}${p.note ? ` (${p.note})` : ""}`).join(", ");
   return (
     <figure className="dot-chart">
       <span className="dot-chart-scale" aria-hidden="true">
-        {Math.round(max)} {unit}
+        {format(max)}
       </span>
       <svg viewBox={`0 0 ${width.toFixed(1)} ${height.toFixed(1)}`} width={width.toFixed(1)} height={height.toFixed(1)} role="img" aria-label={`${label}: ${described}`}>
         {points.flatMap((point, i) => {
