@@ -3051,10 +3051,12 @@ Verified: `npm run check`, `npm test` (23 pass), `npm run build`, gofmt, `go vet
 
 `scripts/layout-check.mjs` now also checks the staff console's firm page, plan page and plan editor, and the client request page with its questions: 64 page views. It adds a synthetic firm (`org_layoutcheck`) straight to its database, since only the sign-in provider creates real ones (`DATABASE_URL` is now required; CI's step already sets it), and creates a plan for that firm through `POST /v1/admin/plans` with the real `plan_signal` activity. The plan editor shows only under a content grant, so the check opens one as staff would, reveals if the page still asks, and waits for the editor's own controls before measuring. The client request page's one read (`GET /v1/client-request`) is answered in the browser with an open request of three questions, since a request really sent needs a client's preparation work behind it.
 
-The new coverage showed the request page's question states were all green pills; green now means answered only, a document still to come asks for attention, and an open question is neutral.
+The new coverage showed two product problems, both fixed here. The request page's question states were all green pills; green now means answered only, a document still to come asks for attention, and an open question is neutral. And CI's first run of the extended check found that once a content grant is open, the console's phone sidebar stacked the grant box over Sign out (a 105px strip) while the shell's phone rule hid the grant's own rows, End included; on a phone the footer is now a row and the grant shows on one line (firm, until, End) inside the strip.
 
 Browser check: screenshots of the four new pages show the firm overview, the plan's flow, the editor with its step and save form, and the request with its questions and upload form; `npm run check:layout` passes 64 page views.
 
-Review: Codex (gpt-6-sol, high) pass 1 found the editor route measured the reveal prompt, not the editor (fixed as above); pass 2 found nothing.
+The check reuses the synthetic firm's editable staff draft (read from the same database) instead of adding a plan on every local run, and counts the request page only once its answer form shows; two consecutive runs on one database pass and leave one plan.
+
+Review: Codex (gpt-6-sol, high) pass 1 found the editor route measured the reveal prompt (fixed); pass 2 found nothing; pass 3 asked for the request form to be required and the plan reused (both done); pass 4 claimed `org_layoutcheck` breaks the id rule `^org_[A-Za-z0-9]+$`, which it doesn't (the inserts succeed), and that an approved plan would be reused (now only an editable draft is); pass 5 found nothing.
 
 Verified: `npm run check`, `npm test` (27 pass), `npm run build` and `npm run check:layout` (64 page views) after a clean `npm ci`.
