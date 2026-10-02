@@ -3047,6 +3047,14 @@ Review: Codex (gpt-6-sol, high) pass 1 found sub-minute medians written as "1 mi
 
 Verified: `npm run check`, `npm test` (23 pass), `npm run build`, gofmt, `go vet` and `go test -run TestEffort` against PostgreSQL, and `npm run check:layout` (58 page views) after a clean `npm ci`.
 
+## A green pill's words pass AA (2026-10-02)
+
+`--positive-text` was 4.46:1 on `--positive-tint`, the ground of every green pill, just under the 4.5:1 that AA needs for their 11px words (found while syncing the design-system artifact). A hair darker, `#1d7c3b` is 4.64:1 there, 5.25:1 on white and 4.7:1 on the grey ground; the other pills already passed (attention 5.24:1, negative 4.63:1, neutral 7.28:1). Contrast computed with the WCAG relative-luminance formula.
+
+Review: the first Codex pass (gpt-6-sol, high) found nothing.
+
+Verified: `npm run check`, `npm test` and `npm run build` after a clean `npm ci`.
+
 ## The layout check covers every page (2026-10-02)
 
 `scripts/layout-check.mjs` now also checks the staff console's firm page, plan page and plan editor, and the client request page with its questions: 64 page views. It adds a synthetic firm (`org_layoutcheck`) straight to its database, since only the sign-in provider creates real ones (`DATABASE_URL` is now required; CI's step already sets it), and creates a plan for that firm through `POST /v1/admin/plans` with the real `plan_signal` activity. The plan editor shows only under a content grant, so the check opens one as staff would, reveals if the page still asks, and waits for the editor's own controls before measuring. The client request page's one read (`GET /v1/client-request`) is answered in the browser with an open request of three questions, since a request really sent needs a client's preparation work behind it.
