@@ -585,12 +585,18 @@ func WrongSide(payload json.RawMessage) (string, []ledger.BalanceException, erro
 	out := []ledger.BalanceException{}
 	for _, row := range rows {
 		class, lower := classes[row.Class], strings.ToLower(row.Name)
+		net, err := ledger.Net(row.YTDDebit, row.YTDCredit)
+		if err != nil && class != "" {
+			return "", nil, fmt.Errorf("Xero Trial Balance %v for %s", err, row.Name)
+		}
+		if row.System != "RETAINEDEARNINGS" && err == nil {
+			if item := ledger.OpeningEquity(row.AccountID, row.Name, "", net, currency, "balance"); item != nil {
+				out = append(out, *item)
+				continue
+			}
+		}
 		if class == "" || row.System == "RETAINEDEARNINGS" || strings.Contains(lower, "accumulated") || class == "Equity" && (strings.Contains(lower, "draw") || strings.Contains(lower, "distribution")) {
 			continue
-		}
-		net, err := ledger.Net(row.YTDDebit, row.YTDCredit)
-		if err != nil {
-			return "", nil, fmt.Errorf("Xero Trial Balance %v for %s", err, row.Name)
 		}
 		basis := "balance"
 		if class == "Revenue" || class == "Expense" {

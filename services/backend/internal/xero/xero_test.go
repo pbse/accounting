@@ -1,7 +1,9 @@
 package xero
 
 import (
+	"close.local/backend/internal/ledger"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -67,6 +69,7 @@ func TestWrongSideReadsYTDColumnsWithXeroRules(t *testing.T) {
 	add("091", "Petty Cash", "ASSET", "", "70.00", "70.00")
 	add("850", "Suspense", "LIABILITY", "", "", "80.00")
 	add("999", "Not in chart", "", "", "10.00", "")
+	add("970", "Opening Balance Equity", "", "", "", "1,500.00")
 	payload := func(header ...string) json.RawMessage {
 		cells := []any{}
 		for _, h := range header {
@@ -77,9 +80,14 @@ func TestWrongSideReadsYTDColumnsWithXeroRules(t *testing.T) {
 		return raw
 	}
 	_, found, err := WrongSide(payload("Account", "Debit", "Credit", "YTD Debit", "YTD Credit"))
-	if err != nil || len(found) != 3 {
-		t.Fatalf("only the overdrawn bank, the expense credit and the suspense balance are candidates: %v %+v", err, found)
+	if err != nil || len(found) != 4 {
+		t.Fatalf("only the overdrawn bank, the expense credit, the suspense balance and Opening Balance Equity are candidates: %v %+v", err, found)
 	}
+	obe := slices.IndexFunc(found, func(e ledger.BalanceException) bool { return e.Type == "opening_balance_equity" })
+	if obe < 0 || found[obe].Account != "Opening Balance Equity" || found[obe].Side != "credit" || found[obe].Amount != "1500.00" {
+		t.Fatalf("Opening Balance Equity is flagged by its name even outside the chart's classes: %+v", found)
+	}
+	found = slices.Delete(found, obe, obe+1)
 	if found[2].Account != "Suspense" || found[2].Type != "holding_balance" || !strings.Contains(found[2].Finding, "$80.00 credit balance at month-end") {
 		t.Fatalf("a suspense account with a balance needs reconciliation: %+v", found[2])
 	}

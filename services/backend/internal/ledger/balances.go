@@ -77,6 +77,24 @@ func Holding(accountID, name, class string, net *big.Rat, currency, basis string
 		Question: fmt.Sprintf("Our records show %s still sitting in %s at month-end. Which deposits, payments or purchases make up this amount?", shown, name)}
 }
 
+var openingEquity = regexp.MustCompile(`(?i)^\s*opening\s+balance\s+equity\s*$`)
+
+func OpeningEquity(accountID, name, subtype string, net *big.Rat, currency, basis string) *BalanceException {
+	if net.Sign() == 0 || (subtype != "OpeningBalanceEquity" && !openingEquity.MatchString(name)) {
+		return nil
+	}
+	side := "credit"
+	if net.Sign() > 0 {
+		side = "debit"
+	}
+	amount := new(big.Rat).Abs(net).FloatString(2)
+	shown := Show(amount, currency)
+	return &BalanceException{Type: "opening_balance_equity", AccountID: accountID, Account: name, Side: side, Amount: amount, Currency: currency,
+		Finding:  fmt.Sprintf("%s holds a %s %s %s. The ledger posts opening balances against it, and it is usually zero once they are settled; the cause of this balance is not verified.", name, shown, side, basis),
+		NextStep: "Compare the entries in this account with the opening entries and the prior accountant's closing trial balance: an opening balance entered wrongly needs correcting, while supported opening equity is placed where the accountant decides. Amounts in a closed year need an accountant-approved treatment and date. Nothing is changed.",
+		Question: fmt.Sprintf("Our records show %s in %s, which usually comes from setting up opening balances. Can you send the prior accountant's closing balances or year-end trial balance, so we can confirm where it belongs?", shown, name)}
+}
+
 // Net returns debit minus credit from report cells; a blank cell counts as zero.
 func Net(debit, credit string) (*big.Rat, error) {
 	net := new(big.Rat)
