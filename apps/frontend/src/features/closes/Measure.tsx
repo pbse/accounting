@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
+import { DotChart } from "@close/ui/components/DotChart";
 import { HexMap } from "@close/ui/components/HexMap";
 import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { minutes } from "./Effort";
@@ -20,7 +21,18 @@ type Row = {
   reviews_after_approval: number;
   review_minutes: number;
 };
-type Report = { period: string; items: Row[]; measured: number; median_minutes?: number; has_more: boolean; reviews: number; reviews_after_approval: number };
+type Report = {
+  period: string;
+  items: Row[];
+  measured: number;
+  median_minutes?: number;
+  has_more: boolean;
+  reviews: number;
+  reviews_after_approval: number;
+  trend: { period: string; measured: number; median_minutes?: number }[];
+};
+
+const monthLabel = (period: string) => new Date(`${period}-01T00:00:00`).toLocaleDateString(undefined, { month: "short", year: "numeric" });
 
 export default function Measure() {
   const [params, setParams] = useSearchParams();
@@ -63,6 +75,20 @@ export default function Measure() {
             />
             <StatTile icon="clients" tone="teal" label="Measured closes" value={report.measured} caption="Closes with tracked or recorded time; others are not counted as zero" />
           </StatGroup>
+          {report.trend.some((month) => month.measured > 0) && (
+            <section aria-labelledby="effort-trend">
+              <h2 id="effort-trend">Median human minutes per close, by month</h2>
+              <DotChart
+                label="Median human minutes per measured close, by month"
+                format={minutes}
+                points={report.trend.map((month) => ({
+                  label: monthLabel(month.period),
+                  value: month.median_minutes ?? null,
+                  note: month.measured ? `${month.measured} measured close${month.measured === 1 ? "" : "s"}` : "no measured closes",
+                }))}
+              />
+            </section>
+          )}
           <p className="note">
             Tracked activity counts visible, interactive workspace time; off-screen minutes are whatever the team records on each close. Neither includes
             our own team's assistance, which is recorded separately.
