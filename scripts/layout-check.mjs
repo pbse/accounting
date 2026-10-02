@@ -29,15 +29,18 @@ async function call(path, body) {
 const database = process.env.DATABASE_URL;
 if (!database) throw new Error("Set DATABASE_URL to the API's database, where the check adds a synthetic firm");
 const firm = "org_layoutcheck";
-execFileSync("psql", [database, "-q", "-v", "ON_ERROR_STOP=1", "-c", `INSERT INTO organizations(id,name) VALUES('${firm}','Layout check firm') ON CONFLICT (id) DO NOTHING`]);
-const plan = (
-  await call("/v1/admin/plans", {
-    firm,
-    template: false,
-    reason: "A plan for the browser layout check",
-    plan: { version: 1, title: "Layout check", nodes: [{ id: "tell", activity: "plan_signal", input: { name: "layout_check" } }] },
-  })
-).plan_id;
+const sql = (statement) => execFileSync("psql", [database, "-qAt", "-v", "ON_ERROR_STOP=1", "-c", statement], { encoding: "utf8" }).trim();
+sql(`INSERT INTO organizations(id,name) VALUES('${firm}','Layout check firm') ON CONFLICT (id) DO NOTHING`);
+const plan =
+  sql(`SELECT id FROM workflow_plans WHERE organization_id='${firm}' ORDER BY id LIMIT 1`) ||
+  (
+    await call("/v1/admin/plans", {
+      firm,
+      template: false,
+      reason: "A plan for the browser layout check",
+      plan: { version: 1, title: "Layout check", nodes: [{ id: "tell", activity: "plan_signal", input: { name: "layout_check" } }] },
+    })
+  ).plan_id;
 const close = (await call("/v1/closes", { entity: "Harbor Dental Group", period: "2026-09" })).id;
 const paper =
   (await call(`/v1/closes/${close}`)).workpapers.find((p) => p.kind === "prepaid")?.id ??
@@ -75,6 +78,8 @@ const apps = [
     name: "client request page",
     start: `${frontend}/request#LAYOUTCHECKREQUESTLINKAAAAAAAA`,
     standalone: true,
+    // The page counts as the request only once the answer form shows, not an error or an empty state.
+    ready: ".request-page textarea",
     stylesheet: "/apps/frontend/src/styles.css",
     fixtures: {
       "**/v1/client-request": {
@@ -185,6 +190,14 @@ for (const app of apps) {
       } catch {
         fail("no page header");
         continue;
+      }
+      if (app.ready) {
+        try {
+          await page.waitForSelector(app.ready, { timeout: 15000 });
+        } catch {
+          fail(`the page never showed ${app.ready}`);
+          continue;
+        }
       }
       if (route.endsWith("/edit")) {
         try {
