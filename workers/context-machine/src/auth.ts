@@ -13,7 +13,7 @@ type StoredAuth = { seed: string; json: string; lease?: string; expires?: number
 export async function credentialRequest(request: Request, token: string, seedJSON: string, storage: DurableObjectStorage): Promise<Response> {
   const reply = (status: number, body = "") => new Response(body, { status, headers: { "Cache-Control": "no-store" } });
   if (token.length < 32 || request.headers.get("Authorization") !== `Bearer ${token}`) return reply(401);
-  if (new URL(request.url).pathname !== "/codex" || !["POST", "PUT"].includes(request.method)) return reply(404);
+  if (new URL(request.url).pathname !== "/codex" || !["POST", "PUT", "DELETE"].includes(request.method)) return reply(404);
   if (!validAuth(seedJSON)) return reply(503);
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seedJSON));
   const seed = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, "0")).join("");
@@ -51,7 +51,14 @@ export async function credentialRequest(request: Request, token: string, seedJSO
       await tx.put("codex-auth", state);
       return reply(200, state.json);
     }
-    if (!state || state.seed !== seed || state.lease !== lease || (state.expires ?? 0) <= Date.now()) return reply(409);
+    if (!state || state.seed !== seed || state.lease !== lease) return reply(409);
+    // Restore failed before launching a CLI, so the saved credential is unchanged.
+    if (request.method === "DELETE") {
+      delete state.lease; delete state.expires;
+      await tx.put("codex-auth", state);
+      return reply(200);
+    }
+    if ((state.expires ?? 0) <= Date.now()) return reply(409);
     state.json = json;
     if (request.headers.get("X-Auth-Release") === "true") { delete state.lease; delete state.expires; }
     await tx.put("codex-auth", state);

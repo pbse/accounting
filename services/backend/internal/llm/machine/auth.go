@@ -47,7 +47,17 @@ type codexAuthSession struct {
 func restoreCodexAuth(ctx context.Context, cfg Config, dir string) (*codexAuthSession, error) {
 	sum := sha256.Sum256([]byte(cfg.CodexAuthJSON))
 	a := &codexAuthSession{file: filepath.Join(dir, "auth.json"), endpoint: cfg.CodexAuthStateURL, token: cfg.Token, seed: hex.EncodeToString(sum[:]), lease: rand.Text(), client: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	raw, err := a.request(ctx, "POST", nil, false)
+	// Restore is bounded independently of a caller disconnect. If it fails,
+	// release only this lease without touching the stored login: no CLI ran yet.
+	restored := false
+	defer func() {
+		if !restored {
+			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, _ = a.request(cleanup, "DELETE", nil, false)
+		}
+	}()
+	raw, err := a.request(context.WithoutCancel(ctx), "POST", nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -57,6 +67,7 @@ func restoreCodexAuth(ctx context.Context, cfg Config, dir string) (*codexAuthSe
 	if err = os.WriteFile(a.file, raw, 0600); err != nil {
 		return nil, errCodexAuth
 	}
+	restored = true
 	return a, nil
 }
 

@@ -108,3 +108,57 @@ func TestPersonalProxyDoesNotSendInferenceWhenCredentialSaveFails(t *testing.T) 
 		}
 	}
 }
+
+func TestFailedCLIStillPersistsRefreshedLogin(t *testing.T) {
+	seed := fakeCodexAuth()
+	rotated := strings.Replace(seed, "fake-refresh", "rotated-refresh", 1)
+	saved, released := "", false
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" {
+			io.WriteString(w, seed)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		saved = string(raw)
+		released = r.Header.Get("X-Auth-Release") == "true"
+	}))
+	defer store.Close()
+	bin := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s' '" + rotated + "' > \"$CODEX_HOME/auth.json\"\nexit 1\n"
+	if err := os.WriteFile(bin+"/codex", []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	s := &server{cfg: Config{CodexAuthJSON: seed, CodexAuthStateURL: store.URL}, agents: map[string]agentSettings{"codex": {model: "fixed", mode: "chatgpt", effort: "medium"}}}
+	if _, err := s.execute(context.Background(), runRequest{Model: "codex"}); err == nil {
+		t.Fatal("failed CLI succeeded")
+	}
+	if saved != rotated || !released {
+		t.Fatal("failed run lost refreshed login or retained its lease")
+	}
+}
+
+func TestRestoreFailureReleasesLeaseWithoutChangingCredentials(t *testing.T) {
+	for _, lostResponse := range []bool{false, true} {
+		released := false
+		store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "DELETE" {
+				released = true
+				w.WriteHeader(200)
+				return
+			}
+			if lostResponse {
+				conn, _, _ := w.(http.Hijacker).Hijack()
+				conn.Close()
+				return
+			}
+			io.WriteString(w, fakeCodexAuth())
+		}))
+		// Missing directory makes the file write fail after an otherwise good restore.
+		_, err := restoreCodexAuth(context.Background(), Config{CodexAuthJSON: fakeCodexAuth(), CodexAuthStateURL: store.URL}, t.TempDir()+"/missing")
+		store.Close()
+		if err == nil || !released {
+			t.Fatal("restore failure did not release its lease")
+		}
+	}
+}

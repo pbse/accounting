@@ -76,3 +76,19 @@ test('private auth store serializes refresh and survives restarts without exposi
   const env = { CONTEXT_MACHINE_TOKEN: token, CONTEXT_MACHINE_ENABLED: 'true', MACHINE: { getByName: () => { throw Error('must not forward auth requests'); } } };
   assert.equal((await worker.fetch(request('POST'), env)).status, 404);
 });
+
+test('aborting a restore releases only its own lease without modifying the stored credential', async () => {
+ const { credentialRequest } = await import('../workers/context-machine/src/auth.ts');
+ const raw = JSON.stringify({ auth_mode:'chatgpt', tokens:{ access_token:'fake',refresh_token:'fake',id_token:'fake',account_id:'owner' } });
+ const seed = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw))).toString('hex');
+ const token = 'service-only-0000000000000000000000000';
+ let state;
+ const storage = { transaction: async fn => fn({ get: async () => structuredClone(state), put: async (_key,v) => { state=structuredClone(v); } }) };
+ const req = (method,lease='lease-00000000000000000000001') => new Request('http://context-machine-auth.internal/codex',{method,headers:{Authorization:`Bearer ${token}`,'X-Auth-Seed':seed,'X-Auth-Lease':lease}});
+ const call = r => credentialRequest(r,token,raw,storage);
+ assert.equal((await call(req('POST'))).status,200);
+ assert.equal((await call(req('DELETE','lease-00000000000000000000002'))).status,409);
+ assert.equal((await call(req('DELETE'))).status,200);
+ assert.equal(state.json,raw);
+ assert.equal((await call(req('POST'))).status,200);
+});

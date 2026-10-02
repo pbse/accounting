@@ -40,11 +40,14 @@ const names = ["CONTEXT_MACHINE_TOKEN", "CONTEXT_MACHINE_DATABASE_URL", "CONTEXT
 if ((process.env.CONTEXT_MACHINE_TOKEN || "").length < 32) throw new Error("CONTEXT_MACHINE_TOKEN requires 32 random characters");
 if (enabled === "true") {
 const missing = names.slice(0, 4).filter(name => !process.env[name]);
-const personal = process.env.CODEX_AUTH_JSON;
+let personal = process.env.CODEX_AUTH_JSON;
 if (personal) {
  let a;
  try { a = JSON.parse(personal); } catch { throw new Error("Invalid CODEX_AUTH_JSON"); }
- if (Buffer.byteLength(personal) > 32768 || a?.auth_mode !== "chatgpt" || ["access_token", "refresh_token", "id_token", "account_id"].some(k => typeof a.tokens?.[k] !== "string" || !a.tokens[k])) throw new Error("CODEX_AUTH_JSON requires a complete managed ChatGPT login");
+ if (a?.auth_mode !== "chatgpt" || ["access_token", "refresh_token", "id_token", "account_id"].some(k => typeof a.tokens?.[k] !== "string" || !a.tokens[k])) throw new Error("CODEX_AUTH_JSON requires a complete managed ChatGPT login");
+ personal = JSON.stringify(a);
+ if (Buffer.byteLength(personal) > 5000) throw new Error("CODEX_AUTH_JSON exceeds the Cloudflare 5 KB secret limit after JSON compaction");
+ process.env.CODEX_AUTH_JSON = personal;
 }
 const selected = process.env.CONTEXT_MACHINE_MODEL;
 if (["codex", "claude"].includes(selected)) {
