@@ -36,10 +36,16 @@ if (enabled === "false" && !provisionDisabled) {
 // One required configuration contract for staging and production. Never print values.
 const names = ["CONTEXT_MACHINE_TOKEN", "CONTEXT_MACHINE_DATABASE_URL", "CONTEXT_MACHINE_PROFILES", "CONTEXT_MACHINE_MODEL",
  "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CODEX_MODEL", "CLAUDE_MODEL", "CODEX_ACCESS_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
- "CODEX_AUTH_MODE", "CLAUDE_AUTH_MODE", "CODEX_REASONING_EFFORT", "CLAUDE_REASONING_EFFORT"];
+ "CODEX_AUTH_MODE", "CLAUDE_AUTH_MODE", "CODEX_REASONING_EFFORT", "CLAUDE_REASONING_EFFORT", "CODEX_AUTH_JSON"];
 if ((process.env.CONTEXT_MACHINE_TOKEN || "").length < 32) throw new Error("CONTEXT_MACHINE_TOKEN requires 32 random characters");
 if (enabled === "true") {
 const missing = names.slice(0, 4).filter(name => !process.env[name]);
+const personal = process.env.CODEX_AUTH_JSON;
+if (personal) {
+ let a;
+ try { a = JSON.parse(personal); } catch { throw new Error("Invalid CODEX_AUTH_JSON"); }
+ if (Buffer.byteLength(personal) > 32768 || a?.auth_mode !== "chatgpt" || ["access_token", "refresh_token", "id_token", "account_id"].some(k => typeof a.tokens?.[k] !== "string" || !a.tokens[k])) throw new Error("CODEX_AUTH_JSON requires a complete managed ChatGPT login");
+}
 const selected = process.env.CONTEXT_MACHINE_MODEL;
 if (["codex", "claude"].includes(selected)) {
  const prefix = selected.toUpperCase();
@@ -49,7 +55,8 @@ if (["codex", "claude"].includes(selected)) {
  if (!process.env[`${prefix}_MODEL`]) missing.push(`${prefix}_MODEL`);
  if (mode === "api_key" && !process.env[key]) missing.push(key);
  if (mode === "subscription" && !process.env[token]) missing.push(token);
- if (mode === "auto" && !process.env[key] && !process.env[token]) missing.push(`${key} or ${token}`);
+ if (mode === "chatgpt" && !personal) missing.push("CODEX_AUTH_JSON");
+ if (mode === "auto" && !process.env[key] && !process.env[token] && !(selected === "codex" && personal)) missing.push(`${key} or ${token}`);
 }
 if (missing.length) throw new Error(`Missing context-machine settings: ${missing.join(", ")}`);
 const agents = new Set();
@@ -57,9 +64,9 @@ for (const [agent, prefix, keyName, tokenName] of [["codex", "CODEX", "OPENAI_AP
  const mode = process.env[`${prefix}_AUTH_MODE`] || "auto";
  const effort = process.env[`${prefix}_REASONING_EFFORT`] || "medium";
  const levels = agent === "codex" ? ["low", "medium", "high", "xhigh", "max", "ultra"] : ["low", "medium", "high", "xhigh", "max"];
- if (!["auto", "api_key", "subscription"].includes(mode) || !levels.includes(effort)) throw new Error(`Invalid ${prefix} auth mode or effort`);
+ if (!(agent === "codex" ? ["auto", "api_key", "subscription", "chatgpt"] : ["auto", "api_key", "subscription"]).includes(mode) || !levels.includes(effort)) throw new Error(`Invalid ${prefix} auth mode or effort`);
  const key = process.env[keyName], token = process.env[tokenName];
- const credential = mode === "subscription" ? token : mode === "api_key" ? key : key || token;
+ const credential = mode === "chatgpt" ? personal : mode === "subscription" ? token : mode === "api_key" ? key : key || (agent === "codex" && personal) || token;
  if (mode === "auto" && (!credential || !process.env[`${prefix}_MODEL`])) continue;
  if (!credential || !process.env[`${prefix}_MODEL`]) throw new Error(`${prefix} requires its selected credential and model`);
  agents.add(agent);
@@ -75,6 +82,9 @@ if (application && db.username === application.username)
   throw new Error("Context machine must use a separate read-only database login");
 let profiles;
 try { profiles = JSON.parse(process.env.CONTEXT_MACHINE_PROFILES); } catch { throw new Error("Invalid CONTEXT_MACHINE_PROFILES JSON"); }
+const codexMode = process.env.CODEX_AUTH_MODE || "auto", claudeMode = process.env.CLAUDE_AUTH_MODE || "auto";
+const personalSelected = codexMode === "chatgpt" || (codexMode === "auto" && personal && !process.env.OPENAI_API_KEY && process.env.CODEX_MODEL) || claudeMode === "subscription" || (claudeMode === "auto" && !process.env.ANTHROPIC_API_KEY && process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.CLAUDE_MODEL);
+if (personalSelected && (!Array.isArray(profiles) || profiles.length !== 1)) throw new Error("Personal subscriptions require exactly one owner access profile");
 if (!Array.isArray(profiles) || !profiles.length ||
     profiles.some(p => !p || ["organization", "subject", "access_profile"].some(k => typeof p[k] !== "string" || !p[k].trim())) ||
     new Set(profiles.map(p => p.access_profile)).size !== profiles.length)

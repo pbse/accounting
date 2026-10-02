@@ -26,9 +26,10 @@ Use the matching GitHub **environment** (`production` or `staging`). Do not put 
 | `CONTEXT_MACHINE_DATABASE_URL` | Secret | Dedicated non-owner, read-only PostgreSQL login with TLS, on the same database as that environment. Never reuse the application or migration login. |
 | `OPENAI_API_KEY` | Secret | API credential for Codex and existing OpenAI workflows. Required for direct API workflows; optional for subscription-only research. |
 | `ANTHROPIC_API_KEY` | Secret | Optional API credential for Claude Code. |
+| `CODEX_AUTH_JSON` | Secret | Personal ChatGPT Pro managed login produced by `codex login` in an isolated file-backed home; never a browser cookie. Refreshed credentials persist privately in the context-machine Durable Object. |
 | `CODEX_ACCESS_TOKEN` | Secret | Codex workspace access token for subscription/account-backed automation. Not a general OpenAI API key. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Secret | Claude Code token generated with `claude setup-token`. |
-| `CODEX_AUTH_MODE`, `CLAUDE_AUTH_MODE` | Variable | `auto` (default), `api_key`, or `subscription`. Auto prefers the API key when both are present. |
+| `CODEX_AUTH_MODE`, `CLAUDE_AUTH_MODE` | Variable | `auto` (default), `api_key`, or `subscription`; Codex also accepts `chatgpt` for personal managed login. Auto prefers an API key, then Codex managed login if present, then the static subscription token. |
 | `CODEX_REASONING_EFFORT`, `CLAUDE_REASONING_EFFORT` | Variable | Explicit agent effort; defaults to `medium`. Use a level supported by the selected model. |
 | `OPENAI_REASONING_EFFORT` | Variable, optional | Default effort for direct Responses calls; unset preserves provider behavior. |
 | `LLM_REASONING_EFFORTS` | Variable, optional | JSON purpose-to-effort overrides, using the same purpose names as `LLM_MODELS`. |
@@ -57,9 +58,9 @@ These small-budget overrides use GPT-5.5’s supported `none` effort; revalidate
 
 Use model IDs available to your account. Model/effort variables can be staged before credentials: the deployment preparation step clears direct-API route metadata from the step environment when `OPENAI_API_KEY` is absent, while preserving the GitHub variables. Installing the key activates that saved policy on the next deployment. Setting `CODEX_AUTH_MODE=subscription` explicitly chooses the account token even when an API key exists. Direct API workflows still need an API key: their structured output, tool and consent contracts are not interchangeable with research runs.
 
-Upload credentials through GitHub's production environment secrets UI or an interactive `gh secret set NAME --env production` prompt. Never put token values into chat, shell command arguments or repository files. [Codex access tokens](https://learn.chatgpt.com/docs/enterprise/access-tokens) are intended for trusted automation; [Claude Code tokens](https://code.claude.com/docs/en/env-vars#claude_code_oauth_token) can be generated using `claude setup-token`. This service accepts those static token secrets; it does not import a desktop keychain, refresh `auth.json`, accept browser cookies, or perform interactive login. Rotate expired/revoked tokens in GitHub and redeploy. Codex token availability depends on workspace permissions.
+Upload credentials through GitHub's production environment secrets UI or an interactive `gh secret set NAME --env production` prompt. Never put token values into chat, shell command arguments or repository files. [Codex access tokens](https://learn.chatgpt.com/docs/enterprise/access-tokens) are intended for trusted automation; [Claude Code tokens](https://code.claude.com/docs/en/env-vars#claude_code_oauth_token) can be generated using `claude setup-token`. The static-token modes do not import desktop keychains, accept browser cookies, or refresh those tokens. The separate Codex `chatgpt` mode below lets the unmodified CLI refresh its own managed login. Rotate expired/revoked tokens in GitHub and redeploy. Codex token availability depends on workspace permissions.
 
-The CLI receives an ephemeral local proxy token, never the real subscription/API credential. The parent selects the fixed provider endpoint, substitutes the selected credential, pins the model and effort on every inference, strips unsupported tools, and counts all attempts against the run budget. Codex subscription inference goes to the Codex account endpoint rather than the general Responses API. Claude subscription inference uses bearer authentication with the OAuth protocol header. Real account entitlement and token validity require a paid/account-authorized smoke run after deployment; local protocol tests cannot prove these.
+Static-token and API-key modes give the CLI only an ephemeral proxy token. Personal Codex managed-login mode additionally needs its own `auth.json` for native refresh; shell/file tools remain disabled and the proxy still enforces model, effort, tool and call limits. The parent selects the fixed provider endpoint, substitutes the selected credential, pins the model and effort on every inference, strips unsupported tools, and counts all attempts against the run budget. Codex subscription inference goes to the Codex account endpoint rather than the general Responses API. Claude subscription inference uses bearer authentication with the OAuth protocol header. Real account entitlement and token validity require a paid/account-authorized smoke run after deployment; local protocol tests cannot prove these.
 
 Example profile shape (replace both IDs with existing members):
 
@@ -143,3 +144,38 @@ To enable research later, install the credentials, read-only login and access pr
 With `CONTEXT_MACHINE_ENABLED=false` and `CONTEXT_MACHINE_TOKEN` installed in the production GitHub environment, run **Provision context machine in standby** (`provision-context-machine.yml`) on `main`. This deploys `close-context-machine-production` and the real container image with pinned Codex and Claude CLIs. It does not rebuild the main app, run migrations, require provider/database credentials, or enable research. The private Worker authenticates requests, then returns HTTP 503 with `{"status":"disabled"}` without starting a container. The image stays available on demand; no CLI process runs while disabled. Find it under Workers & Pages and Containers in the deployment account, not at a public URL.
 
 The equivalent local command is `node scripts/deploy-context-machine.mjs --provision-disabled --production`. It refuses to run unless research is explicitly disabled. Routine app deployments still skip this service while disabled, avoiding repeated image builds. To activate it, supply the provider credentials, read-only database login and access profile, set `CONTEXT_MACHINE_ENABLED=true`, and run the normal production deployment so the service and caller bindings are configured together. Readiness remains unavailable until then.
+
+### Personal subscriptions: your own research only
+
+Use one owner access profile in `CONTEXT_MACHINE_PROFILES`; personal Codex login and Claude subscription mode reject multiple profiles. These credentials must not serve other platform users. Existing accounting workflows still need `OPENAI_API_KEY`; the personal login enables the research agent only.
+
+**Codex / ChatGPT Pro:** create a separate managed session for this service using the official CLI. Do not upload the auth file actively used by your desktop: concurrent refreshes of the same session can invalidate each other. On your trusted computer:
+
+```sh
+# Use an isolated home, so this does not replace your usual Codex login.
+auth_dir="$(mktemp -d)"
+chmod 700 "$auth_dir"
+CODEX_HOME="$auth_dir" codex -c 'cli_auth_credentials_store="file"' login
+# After the browser login succeeds, upload privately; never print the file.
+gh secret set CODEX_AUTH_JSON --env production --repo pbse/accounting < "$auth_dir/auth.json"
+gh variable set CODEX_AUTH_MODE --body chatgpt --env production --repo pbse/accounting
+# Delete this disposable login copy after a successful upload.
+rm -f "$auth_dir/auth.json"
+```
+
+The seed must contain `auth_mode: "chatgpt"` plus access, refresh, ID and account tokens. The service restores the current login into a mode-0600 file in each temporary CLI home. Codex performs its own refresh. Before inference and after completion, failure or cancellation, the service saves the updated file in the existing private Durable Object. The fixed `context-machine-auth.internal` outbound handler reaches an authenticated RPC method; no public or caller-facing route exposes credentials. No application/migration DB or new bucket is involved. Only the credential file persists, never conversations or task workspaces.
+
+Storage holds sensitive access/refresh tokens under Cloudflare's storage protections and account access controls. Compromise of the context-machine service or Cloudflare account could expose them. One durable lease serializes use across container restarts/rollouts. An expired unfinished lease fails closed because the process may have refreshed without saving: reseed with a new isolated login. Storage failures reject the run; they never fall back to a stale seed or another billing method. Routine deployments of the same seed preserve refreshed state. A newly generated seed replaces it; an old container cannot write back over that new seed. Removing `CODEX_AUTH_JSON` disables access to the stored login; revoke the session with the provider when retiring it.
+
+**Claude Pro/Max:** run `claude setup-token` locally and complete Anthropic's browser authorization. Paste the generated token into the secure prompt from:
+
+```sh
+gh secret set CLAUDE_CODE_OAUTH_TOKEN --env production --repo pbse/accounting
+gh variable set CLAUDE_AUTH_MODE --body subscription --env production --repo pbse/accounting
+```
+
+Claude's setup token is already supported by the service. Its real value stays in the parent; the restricted CLI receives a per-run proxy bearer. This static setup token is not automatically refreshed: generate and install a replacement when it expires or is revoked, then redeploy. Do not copy browser cookies or macOS Keychain data. Use this mode only for the subscription owner's research, with the published Claude Code binary; serving other users needs the appropriate API/provider arrangement.
+
+Keep `CONTEXT_MACHINE_ENABLED=false` until the read-only database login and owner profile are configured. Then enable research and run the normal production deployment to install the credentials and restore caller bindings. Do not rerun the standby-only provisioning workflow to install credentials: it intentionally has no provider secrets. Validate one authorized run in each selected mode after activation; fake-provider CLI tests cannot prove real entitlement or token validity.
+
+Sources: [OpenAI managed auth on trusted runners](https://learn.chatgpt.com/docs/auth/ci-cd-auth), [Claude token lifecycle](https://code.claude.com/docs/en/env-vars#claude_code_oauth_token), and [Claude hosted-use requirements](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).

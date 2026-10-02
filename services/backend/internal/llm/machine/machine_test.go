@@ -124,7 +124,11 @@ func TestInstalledCLIs(t *testing.T) {
 		if agent == "codex" {
 			levels = append(levels, "ultra")
 		}
-		for _, mode := range []string{"api_key", "subscription"} {
+		modes := []string{"api_key", "subscription"}
+		if agent == "codex" {
+			modes = append(modes, "chatgpt")
+		}
+		for _, mode := range modes {
 			for _, effort := range levels {
 				cases = append(cases, agent+"/"+mode+"/"+effort)
 			}
@@ -217,7 +221,7 @@ func TestInstalledCLIs(t *testing.T) {
 				if agent == "claude" && r.URL.Host != "api.anthropic.com" {
 					t.Error("wrong Claude endpoint")
 				}
-				if agent == "codex" && mode == "subscription" && r.URL.Host != "chatgpt.com" {
+				if agent == "codex" && (mode == "subscription" || mode == "chatgpt") && r.URL.Host != "chatgpt.com" {
 					t.Error("wrong subscription endpoint")
 				}
 				r.URL.Scheme, r.URL.Host = upstream.Scheme, upstream.Host
@@ -231,7 +235,17 @@ func TestInstalledCLIs(t *testing.T) {
 			frontMux.Handle("/mcp", mux)
 			front := httptest.NewServer(frontMux)
 			defer front.Close()
-			args, env := command(agent, model, front.URL, "fake-token", t.TempDir(), 2, effort, mode)
+			home := t.TempDir()
+			if mode == "chatgpt" {
+				if err := os.WriteFile(home+"/auth.json", []byte(fakeCodexAuth()), 0600); err != nil {
+					t.Fatal(err)
+				}
+				// A local store verifies that CLI-owned credentials are saved before inference.
+				store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+				defer store.Close()
+				proxy.personal = &codexAuthSession{file: home + "/auth.json", endpoint: store.URL, client: store.Client()}
+			}
+			args, env := command(agent, model, front.URL, "fake-token", home, 2, effort, mode)
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, agent, args...)

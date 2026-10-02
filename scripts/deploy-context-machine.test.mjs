@@ -154,3 +154,17 @@ fs.writeFileSync(process.env.CAPTURED, JSON.stringify({ args: process.argv.slice
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('personal Codex managed login and Claude subscriptions require one owner profile', () => {
+  const auth = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'fake', refresh_token: 'fake', id_token: 'fake', account_id: 'owner' } });
+  assert.equal(check({ OPENAI_API_KEY: '', CODEX_AUTH_JSON: auth, CODEX_AUTH_MODE: 'chatgpt' }).status, 0);
+  assert.equal(check({ OPENAI_API_KEY: '', CODEX_AUTH_JSON: auth }).status, 0);
+  for (const overrides of [
+    { CODEX_AUTH_MODE: 'chatgpt' },
+    { CODEX_AUTH_MODE: 'chatgpt', CODEX_AUTH_JSON: '{}' },
+    { CODEX_AUTH_JSON: auth.replace('chatgpt', 'api_key') },
+    { CLAUDE_AUTH_MODE: 'chatgpt', CODEX_AUTH_JSON: auth },
+    { CODEX_AUTH_MODE: 'chatgpt', CODEX_AUTH_JSON: auth, CONTEXT_MACHINE_PROFILES: JSON.stringify([{ organization:'one',subject:'owner',access_profile:'one' }, { organization:'two',subject:'other',access_profile:'two' }]) },
+    { CLAUDE_AUTH_MODE: 'subscription', CLAUDE_CODE_OAUTH_TOKEN: 'fake', CONTEXT_MACHINE_PROFILES: JSON.stringify([{ organization:'one',subject:'owner',access_profile:'one' }, { organization:'two',subject:'other',access_profile:'two' }]) },
+  ]) assert.notEqual(check(overrides).status, 0);
+});
