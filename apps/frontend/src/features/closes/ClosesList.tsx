@@ -3,6 +3,8 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { authKitClientId } from "../auth/Auth";
 import { Icon } from "@close/ui/components/Icon";
 import { PageHeader } from "@close/ui/components/PageHeader";
+import { AskAgent } from "../dashboard/AskAgent";
+import { starters } from "../dashboard/assistantStore";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { FirmEnrollment } from "./Enterprise";
@@ -59,6 +61,11 @@ export default function ClosesList() {
       <PageHeader icon="clients" title="Client closes">
         One place per client and month for evidence, prepared work, requests and sign-off.
       </PageHeader>
+      <AskAgent
+        description="Ask which closes need you, are ready for review or are blocked: the agent answers from your workspace and shows anything it would do for you to confirm."
+        placeholder="Ask about your clients' closes, such as “what is ready for review?”"
+        suggestions={starters.firm}
+      />
       {error && <p role="alert">{error}</p>}
       {isEnrollmentError(error) && <FirmEnrollment onEnrolled={() => setRefresh((n) => n + 1)} />}
       <section>

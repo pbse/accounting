@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { askAssistant, starters } from "../dashboard/assistantStore";
-import { AgentComposer } from "@close/ui/components/AgentComposer";
+import { AskAgent } from "../dashboard/AskAgent";
 import { Icon } from "@close/ui/components/Icon";
 import { workspaceRequest } from "./workspace";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
@@ -637,34 +637,21 @@ export function GoalCard({ closeId, dueOn, finish, everyMonth = false, outcome, 
 // GoalPanel shows the close's goal at the top of its Overview, or offers to hand the close to the agent.
 export function GoalPanel({ closeId }: { closeId: string }) {
   const { status, error, refresh } = useGoal(closeId, true, 10000);
-  const [question, setQuestion] = useState("");
   if (!status) return error ? <p role="alert">{error}</p> : null;
   if (!status.goal && status.signed_off && !status.routine) return null;
-  if (!status.goal && !status.signed_off) {
-    // Not handed over yet: the close leads with the agent, as Work does. A question opens the agent panel on this
-    // close, where handing over still shows its proposal and waits for the person to confirm.
-    const ask = (text: string) => {
-      askAssistant(text, closeId);
-      setQuestion("");
-    };
+  // Not handed over yet: the close leads with the agent, as Work does; handing over still waits for a confirmation.
+  if (!status.goal && !status.signed_off)
     return (
-      <AgentComposer
-        title="Ask the agent"
+      <AskAgent
+        closeId={closeId}
         description="Ask about this close, or hand it over: the agent keeps preparation moving and tells you only what needs you. Nothing runs until you confirm."
-        value={question}
-        onChange={setQuestion}
-        onSubmit={() => ask(question.trim())}
-        busy={false}
         placeholder="Ask about this close, such as “what blocks sign-off?”"
-        submitLabel="Ask"
         suggestions={[handOver, ...starters.close]}
-        onSuggestion={ask}
       >
         <RoutineLine closeId={closeId} status={status} refresh={refresh} />
         {error && <p role="alert">{error}</p>}
-      </AgentComposer>
+      </AskAgent>
     );
-  }
   return (
     <section className="panel" aria-labelledby="goal-title">
       <h2 id="goal-title">{status.goal && status.goal.state !== "stopped" ? "Handed to the agent" : status.signed_off ? "Monthly hand-over" : "Hand this close to the agent"}</h2>

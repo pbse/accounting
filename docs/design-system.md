@@ -65,6 +65,7 @@ The agent is how people get work done, so it is never more than one click away:
 
 - **Work opens with "Ask the agent"** (`AgentComposer`), above the numbers. Its suggestions only filter the page or show the server's exact preview; nothing runs until a person confirms.
 - **A close's Overview opens with "Ask the agent"** until the close is handed over: the hand-over and the panel's close starter questions as suggestions, and any question opens the agent panel on that close. Once handed over, the same place shows the agent's progress.
+- **Attention and Client closes open with "Ask the agent" too**, with the panel's firm starter questions; a question opens the panel's firm-wide conversation. These pages and the close's Overview share `AskAgent` (`apps/frontend/src/features/dashboard/AskAgent.tsx`), which hands every question to the panel, so nothing runs from the page itself.
 - **"Ask the agent" sits in the sidebar** under Essentials and opens the agent panel with the cursor in its input. The floating button says the same, in the brand blue.
 - **The panel starts the conversation**: an empty conversation offers starter questions the panel's fixed reads answer ("What needs me today?", or inside a close "What blocks sign-off?").
 - **What the agent wrote carries its mark** (`AgentMark`), as the morning brief does.
