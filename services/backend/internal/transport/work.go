@@ -595,7 +595,7 @@ func interpretWork(ctx context.Context, text string, labels []string) (string, s
 	return answer.Action, answer.Target, nil
 }
 
-var predictedAccounts = map[string][]string{"prepaid": {"prepaid_account"}, "accrual": {"liability_account"}, "loan": {"loan_account", "accrued_interest_account", "current_portion_account"}, "owner": {"owner_account"}, "settlement": {"bank_account"}, "reconciliation": {"account"}}
+var predictedAccounts = map[string][]string{"prepaid": {"prepaid_account"}, "accrual": {"liability_account"}, "payroll": {"clearing_account", "liability_account"}, "loan": {"loan_account", "accrued_interest_account", "current_portion_account"}, "owner": {"owner_account"}, "settlement": {"bank_account"}, "reconciliation": {"account"}}
 
 func predictedReviews(r *http.Request, db *sql.DB, search string) ([]map[string]any, bool, error) {
 	rows, err := db.QueryContext(r.Context(), `SELECT w.id::text,c.id::text,c.entity,c.period,w.kind,w.paper->'input',v.created_at,t.kind,t.provider_id,t.provider_updated_at,t.record

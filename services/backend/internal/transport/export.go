@@ -6,6 +6,7 @@ import (
 	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"close.local/backend/internal/payroll"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -476,6 +477,17 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 			}
 			if paper.Proposal != nil {
 				summary.Issues = append(summary.Issues, fmt.Sprintf("Proposed %s: Dr %s / Cr %s %s", paper.Proposal.Date, paper.Proposal.DebitAccount, paper.Proposal.CreditAccount, ledger.Show(paper.Proposal.Amount, paper.Input.Currency)))
+			}
+		case "payroll":
+			var paper payroll.Workpaper
+			if err = json.Unmarshal(saved.Paper, &paper); err != nil {
+				return nil, err
+			}
+			summary.Source = paper.Input.SourceReference + " / " + paper.Input.LedgerReference
+			summary.Method = paper.Method + " · " + paper.Input.Provider
+			summary.Issues = append([]string{"Records the provider's payroll summary; payroll is not run here. Nothing is posted."}, paper.Blockers...)
+			for _, p := range paper.Proposals {
+				summary.Issues = append(summary.Issues, fmt.Sprintf("Proposed %s: Dr %s / Cr %s %s", p.Date, p.DebitAccount, p.CreditAccount, ledger.Show(p.Amount, paper.Input.Currency)))
 			}
 		case "loan":
 			var paper loans.Workpaper

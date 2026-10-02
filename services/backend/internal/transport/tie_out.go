@@ -15,6 +15,7 @@ import (
 	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"close.local/backend/internal/payroll"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/reconciliation"
@@ -175,7 +176,7 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 	}
 	latest := map[string]paper{}
 	order := []string{}
-	rows, err = tx.QueryContext(ctx, `SELECT id::text,kind,review_state,review_state='approved' AND (jsonb_typeof(paper->'blockers') IS DISTINCT FROM 'array' OR paper->'blockers'='[]'::jsonb),paper FROM workpaper_review_state WHERE close_id::text=$1 AND kind IN ('prepaid','accrual','loan','owner','reconciliation','settlement') ORDER BY workpaper_review_state.id`, id)
+	rows, err = tx.QueryContext(ctx, `SELECT id::text,kind,review_state,review_state='approved' AND (jsonb_typeof(paper->'blockers') IS DISTINCT FROM 'array' OR paper->'blockers'='[]'::jsonb),paper FROM workpaper_review_state WHERE close_id::text=$1 AND kind IN ('prepaid','accrual','loan','owner','payroll','reconciliation','settlement') ORDER BY workpaper_review_state.id`, id)
 	if err != nil {
 		return tieOutcome{}, tieRefusal{503, "Could not read saved workpapers."}
 	}
@@ -321,6 +322,13 @@ func closeTieOut(ctx context.Context, tx *sql.Tx, id string) (tieOutcome, error)
 			var wp owners.Workpaper
 			if decodeErr = json.Unmarshal(p.raw, &wp); decodeErr == nil {
 				propose(wp.Proposal)
+			}
+		case "payroll":
+			var wp payroll.Workpaper
+			if decodeErr = json.Unmarshal(p.raw, &wp); decodeErr == nil {
+				for i := range wp.Proposals {
+					propose(&wp.Proposals[i])
+				}
 			}
 		case "settlement":
 			var wp reconciliation.SettlementWorkpaper

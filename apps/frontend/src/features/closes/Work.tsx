@@ -125,13 +125,14 @@ const tones: Record<string, string> = {
   completed: "status ok",
 };
 type QueueItem = Plan & { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; created_at: string; digest: string; review_id: string; bulk_reason: string; approval_note?: string; approval_requested_by?: string; approval_agent?: string };
-const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", deferred_revenue: "Deferred revenue", depreciation: "Depreciation", loan: "Loan schedule", owner: "Owner item" };
+const kindLabels: Record<string, string> = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", deferred_revenue: "Deferred revenue", depreciation: "Depreciation", loan: "Loan schedule", owner: "Owner item", payroll: "Payroll" };
 
 const formFor: Record<string, [string, string]> = {
   deferred_revenue: ["prepaids/new", "schedule=deferred_revenue&"],
   depreciation: ["prepaids/new", "schedule=depreciation&"],
   loan: ["loans/new", ""],
   owner: ["owners/new", ""],
+  payroll: ["payroll/new", ""],
 };
 
 export function Work({

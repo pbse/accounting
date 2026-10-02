@@ -92,7 +92,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		rules := []string{}
-		for _, kind := range []string{"prepaid", "accrual", "reconciliation", "loan", "basis", "owner"} {
+		for _, kind := range []string{"prepaid", "accrual", "reconciliation", "loan", "basis", "owner", "payroll"} {
 			if closeID == "" || err != nil {
 				break
 			}

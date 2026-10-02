@@ -2,6 +2,7 @@ package preparation
 
 import (
 	"close.local/backend/internal/loans"
+	"close.local/backend/internal/payroll"
 	"close.local/backend/internal/prepaids"
 	"cmp"
 	"context"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -150,6 +152,8 @@ func BasisIssue(ctx context.Context, q interface {
 	return "", nil
 }
 
+var requiredMethods = map[string][]string{"loan": {loans.Method, loans.VariableMethod, loans.CostsMethod}, "payroll": {payroll.Method}}
+
 // PolicyRequired refuses work because an accountant-approved procedure is missing or contradicted.
 type PolicyRequired string
 
@@ -187,15 +191,15 @@ func CheckProcedureMethod(ctx context.Context, q interface {
 		}
 		return nil
 	}
-	if kind == "loan" {
+	if methods := requiredMethods[kind]; methods != nil {
 		var enabled bool
 		var approved string
-		err := q.QueryRowContext(ctx, `SELECT p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind='loan' AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID).Scan(&enabled, &approved)
+		err := q.QueryRowContext(ctx, `SELECT p.enabled,p.method FROM procedure_versions p JOIN client_closes c ON c.organization_id=p.organization_id WHERE c.id::text=$1 AND p.kind=$2 AND (p.client_entity='' OR lower(p.client_entity)=lower(c.entity)) ORDER BY (p.client_entity<>'') DESC,p.id DESC LIMIT 1`, closeID, kind).Scan(&enabled, &approved)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
-		if err == sql.ErrNoRows || !enabled || (approved != loans.Method && approved != loans.VariableMethod && approved != loans.CostsMethod) {
-			return PolicyRequired("Loan schedules need the firm's approved loan procedure for this client (a firm default or client override) before drafts are saved")
+		if err == sql.ErrNoRows || !enabled || !slices.Contains(methods, approved) {
+			return PolicyRequired(map[string]string{"loan": "Loan schedules", "payroll": "Payroll entries"}[kind] + " need the firm's approved " + kind + " procedure for this client (a firm default or client override) before drafts are saved")
 		}
 	}
 	var method string

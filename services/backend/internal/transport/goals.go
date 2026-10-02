@@ -102,7 +102,7 @@ type goalRow struct {
 
 var goalFinishes = map[string]string{"review": "ready for review", "signoff": "signed off"}
 
-var goalForms = map[string]string{"deferred_revenue": "Deferred revenue", "depreciation": "Depreciation", "loan": "Loan schedule", "owner": "Owner items", "settlement": "Settlement"}
+var goalForms = map[string]string{"deferred_revenue": "Deferred revenue", "depreciation": "Depreciation", "loan": "Loan schedule", "owner": "Owner items", "payroll": "Payroll", "settlement": "Settlement"}
 
 // goalJobs is each current document's job with its proposal, the drafts it made and its latest client request.
 const goalJobs = `SELECT j.id::text,e.name,j.state,j.error,e.extraction_state,COALESCE(i.proposal->>'kind',''),COALESCE(i.proposal->>'summary',''),
