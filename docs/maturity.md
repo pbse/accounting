@@ -1,5 +1,7 @@
 # Product maturity and design-partner readiness
 
+**Launch-scope update, October 2, 2026:** the [agent-first product completion plan](agent-first-build-plan.md) governs remaining builds and partner-operated access. All twelve packages—including management reporting, budget comparison, cash planning and AR/AP actions—must be complete before signup. This older assessment remains historical implementation evidence; its discovery/shadow-access suggestions do not waive the new gates.
+
 **Status:** working handoff, 2026-09-28. This document records the product judgment and build priorities from the maturity review. It is not a claim that a hosted environment or a real client close has been validated. Before acting on any item, recheck the current code, [delivery backlog](implementation-backlog.md), [validation history](validation.md), and [deployment guide](deployment.md); these change faster than this assessment.
 
 ## The objective
