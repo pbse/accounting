@@ -184,12 +184,6 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		for i, name := range workViews {
 			counts[name] = *totals[i].(*int)
 		}
-		var due int
-		if err = db.QueryRowContext(r.Context(), `SELECT count(*) FROM client_closes c WHERE c.organization_id=$3 AND ($4 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$5 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($1='' OR c.id::text=$1) AND ($2='' OR c.entity ILIKE '%'||$2||'%' OR c.period=$2) AND c.due_on<=current_date+7`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r)).Scan(&due); err != nil {
-			problem(w, 503, "Could not count due closes.")
-			return
-		}
-		counts["due_soon"] = due
 		jsonReply(w, 200, map[string]any{"items": items, "has_more": more, "counts": counts})
 	}
 	mux.HandleFunc("GET /v1/closes/work", read)

@@ -86,8 +86,8 @@ func TestClosePlanningRanksWorkAndBulkApprovalChecksEachDraft(t *testing.T) {
 	if len(page.Items) != 2 || page.Items[0]["close_id"] != soon || page.Items[0]["owned_by_me"] != true || page.Items[0]["due_on"] != due {
 		t.Fatalf("my due-soon close should rank first in its bucket: %+v", page.Items)
 	}
-	if page.Counts["mine"] != 1 || page.Counts["due_soon"] != 1 {
-		t.Fatalf("mine and due counts: %v", page.Counts)
+	if page.Counts["mine"] != 1 {
+		t.Fatalf("mine count: %v", page.Counts)
 	}
 
 	insertEvidence := func(closeID string) string {
