@@ -219,3 +219,18 @@ pre.json {
 .grants p {
   margin: var(--space-4) 0 0;
 }
+/* On a phone an open grant stays in view, on one line of the sidebar strip, with its End. */
+@media (max-width: 860px) {
+  .grants {
+    display: flex;
+    align-items: center;
+    gap: var(--space-8);
+    margin: 0;
+    padding: var(--space-4) var(--space-8);
+    white-space: nowrap;
+  }
+  .sidebar-footer .grants p {
+    display: block;
+    margin: 0;
+  }
+}
