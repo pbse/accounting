@@ -102,3 +102,11 @@ func TestProxyPinsReasoningAndSubscriptionCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeSubscriptionKeepsProviderTokenInParent(t *testing.T) {
+	_, env := command("claude", "fixed", "http://127.0.0.1:1234", "per-run-only", "/tmp/test-home", 2, "medium", "subscription")
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "ANTHROPIC_AUTH_TOKEN=per-run-only") || strings.Contains(joined, "CLAUDE_CODE_OAUTH_TOKEN=") || strings.Contains(joined, "ANTHROPIC_API_KEY=") {
+		t.Fatal("subscription must use only the per-run proxy bearer in the child, without API-key fallback")
+	}
+}
