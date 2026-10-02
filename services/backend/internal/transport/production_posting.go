@@ -5,6 +5,7 @@ import (
 	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"close.local/backend/internal/payroll"
 	"close.local/backend/internal/preparation"
 	"context"
 	"crypto/sha256"
@@ -178,7 +179,7 @@ func postingKinds() []string {
 	return kinds
 }
 
-var postableKinds = []string{"prepaid", "accrual", "loan", "owner", "settlement"}
+var postableKinds = []string{"prepaid", "accrual", "loan", "owner", "payroll", "settlement"}
 
 // A grant may also cover native QuickBooks corrections, which are not journals.
 var grantKinds = append(slices.Clone(postableKinds), "bill_correction", "vendor_credit", "purchase_correction", "deposit_correction", "payment_application", "credit_application")
@@ -207,6 +208,12 @@ func postable(kind string, raw []byte, period string) ([]prepaids.Adjustment, st
 			return nil, "", fmt.Errorf("This owner item proposes no entry to post; an open question is never posted")
 		}
 		entries, source = []prepaids.Adjustment{*paper.Proposal}, paper.Input.TransactionReference
+	case "payroll":
+		var paper payroll.Workpaper
+		if json.Unmarshal(raw, &paper) != nil || len(paper.Blockers) > 0 || len(paper.Proposals) == 0 {
+			return nil, "", fmt.Errorf("This payroll draft proposes no entry to post")
+		}
+		entries, source = paper.Proposals, paper.Input.SourceReference
 	case "settlement":
 		var paper reconciliation.SettlementWorkpaper
 		if json.Unmarshal(raw, &paper) != nil || len(paper.Blockers) > 0 || paper.Proposal == nil {
@@ -230,7 +237,7 @@ func postable(kind string, raw []byte, period string) ([]prepaids.Adjustment, st
 
 // postingSource returns the key that identifies a draft's source across drafts and ledgers, refusing when a newer
 // draft of the same source, of any kind, supersedes this one. A settlement's report reference includes an editable
-// location, so its report file identifies the source.
+// location, so its report file identifies the source; payroll is one per provider and month, whatever the summary's title.
 func postingSource(ctx context.Context, db querier, closeID, paperID, kind string, paperRaw []byte, source string) (string, error) {
 	var report string
 	if kind == "settlement" {
@@ -246,8 +253,15 @@ func postingSource(ctx context.Context, db querier, closeID, paperID, kind strin
 	if report != "" {
 		key = "stripe report evidence " + report
 	}
+	var provider string
+	if kind == "payroll" {
+		var paper payroll.Workpaper
+		json.Unmarshal(paperRaw, &paper)
+		provider = strings.ToLower(strings.TrimSpace(paper.Input.Provider))
+		key = "payroll " + provider
+	}
 	var newer bool
-	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND id>$2 AND (lower(trim(COALESCE(paper->'input'->>'source_reference',paper->'input'->>'transaction_reference',paper->'input'->>'report_reference')))=$3 OR ($4<>'' AND paper->'sources' @> jsonb_build_array(jsonb_build_object('role','processor_report','id',$4::text)))))`, closeID, paperID, strings.ToLower(strings.TrimSpace(source)), report).Scan(&newer)
+	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM workpapers WHERE close_id::text=$1 AND id>$2 AND (($5='' AND lower(trim(COALESCE(paper->'input'->>'source_reference',paper->'input'->>'transaction_reference',paper->'input'->>'report_reference')))=$3) OR ($4<>'' AND paper->'sources' @> jsonb_build_array(jsonb_build_object('role','processor_report','id',$4::text))) OR ($5<>'' AND kind='payroll' AND lower(trim(paper->'input'->>'provider'))=$5)))`, closeID, paperID, strings.ToLower(strings.TrimSpace(source)), report, provider).Scan(&newer)
 	if err != nil || newer {
 		return "", refusal{409, "A newer source draft exists or source freshness could not be checked."}
 	}
@@ -674,7 +688,7 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		}
 		var paperRaw []byte
 		var paperDigest, period, kind string
-		err = db.QueryRowContext(r.Context(), `SELECT w.paper,w.digest,w.kind,c.period FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind IN ('prepaid','accrual','loan','owner','settlement') AND c.organization_id=$3`, r.PathValue("paper"), r.PathValue("id"), a.Organization).Scan(&paperRaw, &paperDigest, &kind, &period)
+		err = db.QueryRowContext(r.Context(), `SELECT w.paper,w.digest,w.kind,c.period FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE w.id::text=$1 AND w.close_id::text=$2 AND w.kind IN ('prepaid','accrual','loan','owner','payroll','settlement') AND c.organization_id=$3`, r.PathValue("paper"), r.PathValue("id"), a.Organization).Scan(&paperRaw, &paperDigest, &kind, &period)
 		if err != nil {
 			problem(w, 404, "Saved workpaper with postable entries not found.")
 			return

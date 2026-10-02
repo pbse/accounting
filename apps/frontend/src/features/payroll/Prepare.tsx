@@ -33,7 +33,7 @@ export function PayrollResult({ result }: { result: PayrollWorkpaper }) {
           ))}
         </ul>
       )}
-      <p>Draft only. This records the provider's summary; it never runs payroll, and nothing is posted.</p>
+      <p>Draft only. This records the provider's summary and never runs payroll; the entry posts only after approval, under a posting grant.</p>
     </section>
   );
 }

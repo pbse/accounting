@@ -117,7 +117,7 @@ The local agent recognizes exact labeled facts. To propose an accrual locally, p
 
 ## Payroll recording
 
-**Payroll** (`/dashboard/payroll/new`, method `payroll_summary_v1`) records one month's payroll from the provider's approved summary (Gusto, ADP and similar) for pay dates in the close month (B04). It never runs payroll, and nothing is posted.
+**Payroll** (`/dashboard/payroll/new`, method `payroll_summary_v1`) records one month's payroll from the provider's approved summary (Gusto, ADP and similar) for pay dates in the close month (B04). It never runs payroll. An approved, unblocked draft posts as one journal under a production grant that names payroll, once `PRODUCTION_POSTING_KINDS` (or `XERO_POSTING_KINDS`) enables it; see [production posting](production-posting.md).
 
 - **It needs the firm's payroll procedure.** Publish **Payroll recording** under Procedures (a firm default or client override, enabled) before a draft can be saved, like loan schedules.
 - **The preparer confirms the run.** The summary must be the provider's final, approved payroll for these pay dates (not a preview), and the ledger must show its bank debits in the clearing account with this payroll not yet recorded. A source-linked draft needs both the summary (support) and the clearing account's ledger page (ledger). A corrected summary for the same provider replaces the month's payroll whatever its title.

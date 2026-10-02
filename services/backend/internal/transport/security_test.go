@@ -192,7 +192,7 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 			t.Fatalf("the evidence behind a date is its close: %+v", o)
 		}
 	}
-	if len(got.Operations) != 20 {
+	if len(got.Operations) != 22 {
 		t.Fatalf("every write kind and each provider's reads are listed: %d", len(got.Operations))
 	}
 	defer db.Exec(`DELETE FROM operation_acceptances WHERE organization_id=$1`, org)
@@ -210,7 +210,7 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	admin, accountant := []string{"clients:all", "members:manage"}, []string{"clients:all", "members:manage", "workpapers:review"}
 	check := map[string]any{"provider": "QuickBooks", "kind": "accrual", "stage": "sandbox_checked", "accepted": true, "evidence": "Sandbox company 9341: accrual journal JE-77 posted and read back on 2026-10-01"}
 	record([]string{"clients:all"}, check, 403)
-	record(admin, map[string]any{"provider": "QuickBooks", "kind": "payroll", "stage": "sandbox_checked", "accepted": true, "evidence": "Not an operation"}, 422)
+	record(admin, map[string]any{"provider": "QuickBooks", "kind": "payment_run", "stage": "sandbox_checked", "accepted": true, "evidence": "Not an operation"}, 422)
 	record(admin, map[string]any{"provider": "QuickBooks", "kind": "accrual", "stage": "sandbox_checked", "accepted": true, "evidence": strings.Repeat("審", 1500)}, 200)
 	record(admin, check, 200)
 	accept := map[string]any{"provider": "QuickBooks", "kind": "accrual", "stage": "accountant_accepted", "accepted": true, "evidence": "Reviewed the sandbox journal and the method examples"}
