@@ -16,6 +16,8 @@ type Request = {
   rescan?: boolean;
 };
 const stateLabels: Record<string, string> = { answered: "Answered", awaiting_document: "Waiting for your document", "": "Not answered yet" };
+// Green only for what is done; a document still to come asks for attention, an open question stays neutral.
+const statePills: Record<string, string> = { answered: "pill", awaiting_document: "pill muted", "": "pill neutral" };
 
 export default function ClientRequest() {
   useShellThemeColor();
@@ -196,7 +198,7 @@ export default function ClientRequest() {
                       return (
                         <li key={q.position}>
                           <p>
-                            {q.text} <span className="pill">{stateLabels[q.state] ?? q.state}</span>
+                            {q.text} <span className={statePills[q.state] ?? "pill neutral"}>{stateLabels[q.state] ?? q.state}</span>
                           </p>
                           <label>
                             {d.later ? "Note about the document (optional)" : "Your answer"}
