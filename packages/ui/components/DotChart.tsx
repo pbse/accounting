@@ -22,7 +22,8 @@ export function DotChart({ label, points, format }: { label: string; points: Dot
       </span>
       <svg viewBox={`0 0 ${width.toFixed(1)} ${height.toFixed(1)}`} width={width.toFixed(1)} height={height.toFixed(1)} role="img" aria-label={`${label}: ${described}`}>
         {points.flatMap((point, i) => {
-          const on = max > 0 && point.value !== null ? Math.round((point.value / max) * ROWS) : 0;
+          // Any positive value fills at least one row, so a small month never looks like one without a value.
+          const on = max > 0 && point.value !== null && point.value > 0 ? Math.max(1, Math.round((point.value / max) * ROWS)) : 0;
           return Array.from({ length: COLUMNS_PER_POINT * ROWS }, (_, k) => {
             const column = i * COLUMNS_PER_POINT + Math.floor(k / ROWS);
             const row = k % ROWS;
