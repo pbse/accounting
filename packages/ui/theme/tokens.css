@@ -45,7 +45,8 @@
   /* Status: the hues paint discs and dots, the -text shades carry words at AA. */
   --green: #2ba14f;
   --red: #d2403f;
-  --positive-text: #1e7f3c;
+  /* 4.6:1 on --positive-tint (a pill's ground) and 5.2:1 on white, so a green pill's 11px words pass AA. */
+  --positive-text: #1d7c3b;
   --negative-text: #c0392f;
   --positive-tint: #e7f4ec;
   --negative-tint: #fbe9e8;
