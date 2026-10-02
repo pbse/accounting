@@ -2,6 +2,7 @@ package transport
 
 import (
 	"cmp"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -24,7 +25,7 @@ type fluxMonth struct {
 	Stale      bool      `json:"stale"`
 	realm      string
 	accounts   json.RawMessage
-	pl, gl     json.RawMessage
+	pl, gl, tb json.RawMessage
 	xero       json.RawMessage
 }
 
@@ -32,6 +33,33 @@ type payeeAmount struct {
 	Name      string `json:"name"`
 	ThisMonth string `json:"this_month"`
 	LastMonth string `json:"last_month"`
+}
+
+// periodBooks is a close's newest month-end capture, from QuickBooks or Xero, whichever is newer; nil when neither.
+// rowReader is a *sql.DB or a *sql.Tx.
+type rowReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func periodBooks(ctx context.Context, db rowReader, closeID, period string) (*fluxMonth, error) {
+	m := fluxMonth{Period: period, Source: "quickbooks"}
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'ProfitAndLoss',s.payload->'reports'->'GeneralLedger',COALESCE(s.payload->'reports'->'TrialBalance','null') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
+ WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &m.Stale, &m.accounts, &m.pl, &m.gl, &m.tb)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	x := fluxMonth{Period: period, Source: "xero"}
+	xeroErr := db.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,x.state<>'active',s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&x.SnapshotID, &x.realm, &x.CapturedAt, &x.Stale, &x.xero)
+	if xeroErr != nil && xeroErr != sql.ErrNoRows {
+		return nil, xeroErr
+	}
+	if xeroErr == nil && (err == sql.ErrNoRows || x.CapturedAt.After(m.CapturedAt)) {
+		return &x, nil
+	}
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &m, nil
 }
 
 // flux explains the largest movements in the Profit and Loss from last month's close to this one, from the payees behind them.
@@ -45,26 +73,7 @@ func flux(db *sql.DB) http.HandlerFunc {
 			problem(w, 404, "Close not found.")
 			return
 		}
-		month := func(closeID, period string) (*fluxMonth, error) {
-			m := fluxMonth{Period: period, Source: "quickbooks"}
-			err := db.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'ProfitAndLoss',s.payload->'reports'->'GeneralLedger' FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
- WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &m.Stale, &m.accounts, &m.pl, &m.gl)
-			if err != nil && err != sql.ErrNoRows {
-				return nil, err
-			}
-			x := fluxMonth{Period: period, Source: "xero"}
-			xeroErr := db.QueryRowContext(ctx, `SELECT s.id::text,s.tenant_id,s.captured_at,x.state<>'active',s.payload FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE s.close_id::text=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&x.SnapshotID, &x.realm, &x.CapturedAt, &x.Stale, &x.xero)
-			if xeroErr != nil && xeroErr != sql.ErrNoRows {
-				return nil, xeroErr
-			}
-			if xeroErr == nil && (err == sql.ErrNoRows || x.CapturedAt.After(m.CapturedAt)) {
-				return &x, nil
-			}
-			if err == sql.ErrNoRows {
-				return nil, nil
-			}
-			return &m, nil
-		}
+		month := func(closeID, period string) (*fluxMonth, error) { return periodBooks(ctx, db, closeID, period) }
 		this, err := month(r.PathValue("id"), period)
 		if err != nil {
 			problem(w, 503, "Period snapshot unavailable.")
