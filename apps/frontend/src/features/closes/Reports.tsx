@@ -19,6 +19,8 @@ type Pack =
       as_of: string;
       stale: boolean;
       status: Status;
+      overall: Status;
+      digest: string;
       complete: boolean;
       note: string;
       prior?: { close_id: string; period: string; snapshot_id: string; as_of: string; stale: boolean; status: Status };
@@ -35,7 +37,7 @@ type Status = "provisional" | "signed_off" | "unknown";
 const statusLabels = { provisional: ["status warn", "Provisional"], signed_off: ["status ok", "Sign-off stands"], unknown: ["status danger", "Status unknown"] } as const;
 
 // The month's management accounts from the close's captured reports. Every figure links to its ledger rows when the
-// capture holds them; nothing here is published or sent.
+// capture holds them; a reviewer publishes a signed-off pack as a frozen version.
 export function Reports({ closeId }: { closeId: string }) {
   const [pack, setPack] = useState<Pack>();
   const [error, setError] = useState("");
@@ -50,7 +52,13 @@ export function Reports({ closeId }: { closeId: string }) {
     };
   }, [closeId]);
   if (!pack) return error ? <p role="alert">{error}</p> : <p role="status">Preparing the management pack…</p>;
-  if (pack.state === "waiting") return <p className="empty">{pack.reason}</p>;
+  if (pack.state === "waiting")
+    return (
+      <>
+        <p className="empty">{pack.reason}</p>
+        <Publication closeId={closeId} pack={pack} />
+      </>
+    );
   const show = (value: string | null) => (value === null ? "–" : amount(value, pack.currency));
   const compared = !!pack.prior;
   // Xero captures have no ledger-row reader yet, so their figures are not drillable.
@@ -147,6 +155,7 @@ export function Reports({ closeId }: { closeId: string }) {
       {bs.difference !== "0.00" && <p role="alert">Assets differ from liabilities and equity by {show(bs.difference)}.</p>}
       <SectionHeader title="Cash flow" />
       <p className="note">{pack.cash_flow.unavailable}</p>
+      <Publication closeId={closeId} pack={pack} />
       {drill && account && (
         <>
           <SectionHeader id="figure-ledger" title={`Ledger rows behind this figure, ${pack.period}`} />
@@ -160,5 +169,124 @@ export function Reports({ closeId }: { closeId: string }) {
         </>
       )}
     </section>
+  );
+}
+
+type Published = {
+  id: string;
+  version: number;
+  commentary: string;
+  reason: string;
+  supersedes: string | null;
+  published_by: string;
+  published_at: string;
+  state: keyof typeof publishedStates;
+  acknowledgments: { subject: string; at: string }[];
+};
+const publishedStates = {
+  current: ["status ok", "Current"],
+  superseded: ["status info", "Superseded"],
+  needs_correction: ["status danger", "Books changed: needs a correction"],
+  unverified: ["status warn", "Live figures unavailable: cannot confirm it is current"],
+} as const;
+
+// Publishing freezes this pack with the reviewer's commentary; exports come from the frozen version, never the live figures.
+function Publication({ closeId, pack }: { closeId: string; pack: Pack }) {
+  const [list, setList] = useState<Published[]>();
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    let live = true;
+    workspaceRequest(`/${closeId}/management-pack/publications`)
+      .then((data) => live && setList(data.publications))
+      .catch((e) => live && setError(e instanceof Error ? e.message : "Publications are unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [closeId, version]);
+  async function act(body: Record<string, unknown>, done: string) {
+    setBusy(true);
+    setError("");
+    setSaved("");
+    try {
+      await workspaceRequest(`/${closeId}/management-pack/publications`, body);
+      setSaved(done);
+      setVersion((n) => n + 1);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The pack could not be published.");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function download(p: Published, format: "csv" | "pdf") {
+    try {
+      const blob = await workspaceRequest(`/${closeId}/management-pack/publications/${p.id}/export?format=${format}`, undefined, true);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `management pack v${p.version}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The export is unavailable.");
+    }
+  }
+  const latest = list?.[0];
+  const publishable = pack.state === "ready" && pack.overall === "signed_off" && !pack.stale && pack.complete;
+  return (
+    <>
+      <SectionHeader title="Publication" />
+      {error && <p role="alert">{error}</p>}
+      {saved && <p role="status">{saved}</p>}
+      {!list ? null : list.length === 0 ? <p className="empty">Not published yet.</p> : (
+        <ul>
+          {list.map((p) => (
+            <li key={p.id}>
+              <strong>Version {p.version}</strong> · published by {p.published_by} {new Date(p.published_at).toLocaleString()} ·{" "}
+              <span className={publishedStates[p.state][0]}>{publishedStates[p.state][1]}</span>
+              <p>{p.commentary}</p>
+              {p.reason && <p className="note">Corrects version {list.find((q) => q.id === p.supersedes)?.version}: {p.reason}</p>}
+              <p className="note">
+                {p.acknowledgments.length === 0 ? "Not acknowledged yet." : `Acknowledged by ${p.acknowledgments.map((a) => `${a.subject} (${new Date(a.at).toLocaleDateString()})`).join(", ")}.`}
+              </p>
+              <button type="button" onClick={() => void download(p, "pdf")}>PDF</button> <button type="button" onClick={() => void download(p, "csv")}>CSV</button>{" "}
+              <button type="button" disabled={busy} onClick={() => void act({ action: "acknowledge", publication_id: p.id }, `Acknowledged version ${p.version}.`)}>Acknowledge</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!publishable ? (
+        <p className="note">Publish once the capture is current, the pack is complete and the sign-off of every month shown stands.</p>
+      ) : latest && latest.state === "current" ? null : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const element = e.currentTarget;
+            const form = new FormData(element);
+            void act({ action: "publish", digest: pack.state === "ready" && pack.digest, commentary: form.get("commentary"), reason: form.get("reason") ?? "", confirmed: form.has("confirmed") }, latest ? "Published a correction." : "Published.").then((ok) => ok && element.reset());
+          }}
+        >
+          <fieldset disabled={busy}>
+            <legend>{latest ? "Publish a correction" : "Publish this pack"}</legend>
+            <label>
+              Commentary: what moved and why, as you have verified it
+              <textarea name="commentary" required maxLength={4000} />
+            </label>
+            {latest && (
+              <label>
+                Why this corrects version {latest.version}
+                <textarea name="reason" required maxLength={2000} />
+              </label>
+            )}
+            <label><input type="checkbox" name="confirmed" required /> I reviewed these figures; the published version and its exports will not change.</label>
+            <button className="primary">Publish</button>
+          </fieldset>
+        </form>
+      )}
+    </>
   );
 }

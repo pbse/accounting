@@ -1,6 +1,6 @@
 # Management reports
 
-B07 in the [agent-first build plan](agent-first-build-plan.md). This page records what is built; the historical cash-flow statement, publication, commentary, exports and executive access are still to come and are not claimed here.
+B07 in the [agent-first build plan](agent-first-build-plan.md). This page records what is built; the historical cash-flow statement and executive access are still to come and are not claimed here.
 
 ## Management pack
 
@@ -29,3 +29,11 @@ B08. Below the pack on the **Reports** tab (`GET`/`POST /v1/closes/{id}/budget`,
 CSV files exported with a byte-order mark are read. Before this change, a ledger connection without a fiscal-year start made the close's profile say the year starts in December; it now keeps January.
 
 **Checks:** `TestBudgetParsesMapsAndComparesByHand` (parsing, a byte-order mark, exact-name mapping, an ambiguous name, a mapping to a non-income account, favorable and unfavorable differences, no percentage against zero or negative budgets, an unbudgeted account, a month without books, a month without a budget column, an account active only last month and totals worked by hand) and `TestBudgetImportRemapApproveAndCompare` (no-budget state, an unmapped line blocking approval, remapping into a new version, an approved budget without the close month ignored, and the comparison against two months of captured books).
+
+## Publication
+
+A reviewer (`workpapers:review`) publishes the pack from the **Publication** section under it (B07; migration 114). Publishing is refused unless the capture is current, the pack is complete and the sign-off of every month shown stands; the reviewer writes the commentary (what moved and why, as verified) and confirms the figures they reviewed. The figures digest they reviewed must still be the pack's, or they are asked to review it again.
+
+- **Frozen.** The published version keeps the whole pack and its commentary; rows are only ever added. PDF and CSV exports are rendered from that version, so they always agree with what was published, however the books change later.
+- **Corrections are new versions.** When the books change after publication (any figure, not just a later capture time), the current version shows *Books changed: needs a correction*. A correction needs a new sign-off and a reason; it names the version it supersedes, which stays readable and exportable. An unchanged pack is not published twice.
+- **Acknowledgment is separate.** Anyone who can open the close can acknowledge a version; each acknowledgment records who and when, apart from the publication itself. Sending or notifying recipients is not part of publication.
