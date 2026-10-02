@@ -75,6 +75,27 @@ func latestOpenItems(r *http.Request, db *sql.DB) (receivables, payables []openI
 	return lists[0], lists[1], meta, nil
 }
 
+// openItemDecisions is each decided document's newest decision for a client's ledger company, by "kind|id".
+func openItemDecisions(r *http.Request, db *sql.DB, org, entity, company string) (map[string]openItem, error) {
+	rows, err := db.QueryContext(r.Context(), `SELECT DISTINCT ON (kind,item_id) kind,item_id,label,COALESCE(document_date::text,''),id::text,owner,status,COALESCE(expected_on::text,''),note,actor,created_at FROM open_item_actions
+ WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND company=$3 ORDER BY kind,item_id,id DESC`, org, entity, company)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	decided := map[string]openItem{}
+	for rows.Next() {
+		item, a := openItem{}, openItemAction{}
+		if err := rows.Scan(&item.Kind, &item.ID, &item.Label, &item.Date, &a.ID, &a.Owner, &a.Status, &a.ExpectedOn, &a.Note, &a.Actor, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		a.Mine = a.Owner != "" && a.Owner == subject(r)
+		item.Action = &a
+		decided[item.Kind+"|"+item.ID] = item
+	}
+	return decided, rows.Err()
+}
+
 func registerOpenItems(mux *http.ServeMux, db *sql.DB) {
 	client := func(r *http.Request) (org, entity string, err error) {
 		err = db.QueryRowContext(r.Context(), `SELECT organization_id,entity FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&org, &entity)
@@ -92,25 +113,8 @@ func registerOpenItems(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Open items are unavailable.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT DISTINCT ON (kind,item_id) kind,item_id,label,COALESCE(document_date::text,''),id::text,owner,status,COALESCE(expected_on::text,''),note,actor,created_at FROM open_item_actions
- WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND company=$3 ORDER BY kind,item_id,id DESC`, org, entity, meta["company"])
+		decided, err := openItemDecisions(r, db, org, entity, meta["company"].(string))
 		if err != nil {
-			problem(w, 503, "Open item decisions are unavailable.")
-			return
-		}
-		defer rows.Close()
-		decided := map[string]openItem{}
-		for rows.Next() {
-			item, a := openItem{}, openItemAction{}
-			if err := rows.Scan(&item.Kind, &item.ID, &item.Label, &item.Date, &a.ID, &a.Owner, &a.Status, &a.ExpectedOn, &a.Note, &a.Actor, &a.CreatedAt); err != nil {
-				problem(w, 503, "Open item decisions are unavailable.")
-				return
-			}
-			a.Mine = a.Owner != "" && a.Owner == subject(r)
-			item.Action = &a
-			decided[item.Kind+"|"+item.ID] = item
-		}
-		if rows.Err() != nil {
 			problem(w, 503, "Open item decisions are unavailable.")
 			return
 		}

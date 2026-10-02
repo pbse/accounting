@@ -13,6 +13,7 @@ import { Coordinator } from "./Coordinator";
 import { GoalPanel } from "./Goal";
 import { EmailReplies } from "./EmailReplies";
 import { Aging } from "./Aging";
+import { CashPlan } from "./CashPlan";
 import { OpenItems } from "./OpenItems";
 import { Matching } from "./Matching";
 import { Exceptions } from "./Exceptions";
@@ -48,11 +49,12 @@ const tabs = [
   ["evidence", "Evidence"],
   ["requests", "Requests"],
   ["reports", "Reports"],
+  ["cash", "Cash plan"],
   ["signoff", "Close & sign-off"],
   ["settings", "Settings"],
 ] as const;
 type Tab = (typeof tabs)[number][0];
-const tabActivity: Record<Tab, Activity> = { overview: "prepare", workpapers: "prepare", evidence: "evidence", requests: "requests", reports: "review", signoff: "signoff", settings: "configuration" };
+const tabActivity: Record<Tab, Activity> = { overview: "prepare", workpapers: "prepare", evidence: "evidence", requests: "requests", reports: "review", cash: "review", signoff: "signoff", settings: "configuration" };
 const filters: Record<string, [string, (paper: Paper) => boolean]> = {
   all: ["All drafts", () => true],
   ready: ["Ready for review", readyForReview],
@@ -263,6 +265,7 @@ export default function ClientClose() {
       )}
       {tab === "requests" && <Requests closeId={close.id} papers={papers} />}
       {tab === "reports" && <Reports key={`reports-${close.id}`} closeId={close.id} />}
+      {tab === "cash" && <CashPlan key={`cash-${close.id}`} closeId={close.id} />}
       {tab === "signoff" && (
         <div className="stack">
           <Readiness key={`readiness-${close.id}`} closeId={close.id} papers={papers} />
