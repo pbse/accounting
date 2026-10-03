@@ -56,6 +56,7 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 | `close_brief` | Where a close stands, area by area, with a headline of what needs a person |
 | `explain_changes` | The largest Profit and Loss movements from last month, with the payees behind them and questions about bills that did not recur |
 | `management_pack` | The month's Profit and Loss, Balance Sheet and working capital from the newest capture, compared with last month, with each month's status ([management reports](management-reports.md)) |
+| `open_items` | Open invoices and bills from the latest capture with each one's owner, follow-up status, promised or bill-pay date and note, and those since settled in the ledger |
 | `tie_out` | Each asset and liability compared with the balance the close's workpapers support |
 | `list_client_requests`, `draft_client_request` | Client request drafts; save a new draft (not sent or approved) |
 | `open_close` | Open or return the close for a client and month |

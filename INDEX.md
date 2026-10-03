@@ -40,7 +40,7 @@ These are pointers into the existing implementation, not evidence that a package
 | **B07 Management and executive reports** | [Management reports](docs/management-reports.md), [build plan](docs/agent-first-build-plan.md), [existing binder/export](docs/close-review-package.md), [access architecture](docs/architecture.md), [design system](docs/design-system.md) |
 | **B08 Budget comparison** | [Build plan](docs/agent-first-build-plan.md), [supporting business requirements](docs/design-partner-product-bar.md) |
 | **B09 Maintained cash decisions** | [Build plan](docs/agent-first-build-plan.md), [cash assumptions and daily shortfall rationale](docs/design-partner-product-bar.md#cash-and-planning) |
-| **B10 AR/AP actions** | [Build plan](docs/agent-first-build-plan.md), [existing email/outbox controls](docs/email-delivery.md), [governed corrections](docs/production-posting.md) |
+| **B10 AR/AP actions** | [Open item follow-up](docs/work-inbox.md#cash-operations-overdue-receivables-and-payables), [build plan](docs/agent-first-build-plan.md), [existing email/outbox controls](docs/email-delivery.md), [governed corrections](docs/production-posting.md) |
 | **B11 Next month and continuity** | [Carry-forward](docs/carry-forward.md), [coordinator](docs/close-coordinator.md), [methods](docs/accounting-methods.md), [package/year-end exports](docs/close-review-package.md) |
 | **B12 Hosted and partner operation** | [Onboarding](docs/onboarding.md), [deployment](docs/deployment.md), [operations](docs/operations.md), [auth](docs/auth-sandbox-staging.md), [MCP](docs/mcp.md), [validation](docs/validation.md) |
 
