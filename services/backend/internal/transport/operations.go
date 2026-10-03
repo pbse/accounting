@@ -13,8 +13,8 @@ const operationsAlerts = `SELECT organization,kind,close_id,item_id,state,age_mi
  SELECT c.organization_id AS organization,'preparation' AS kind,j.close_id::text AS close_id,j.id::text AS item_id,j.state, GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(i.agent_started_at,j.created_at))/60)::int) AS age_minutes
  FROM preparation_jobs j JOIN client_closes c ON c.id=j.close_id LEFT JOIN preparation_intakes i ON i.job_id=j.id
  WHERE ($1='' OR c.organization_id=$1) AND (j.state='failed' OR (j.state='interpreting' AND COALESCE(i.agent_started_at,j.created_at)<now()-interval '2 minutes') OR (j.state='queued' AND j.created_at<now()-interval '10 minutes') OR (j.state='waiting_evidence' AND j.created_at<now()-interval '1 hour'))
- UNION ALL SELECT c.organization_id,'email',d.close_id::text,m.id,m.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(m.claimed_at,m.created_at))/60)::int)
- FROM email_outbox m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id
+ UNION ALL SELECT c.organization_id,'email',c.id::text,m.id,m.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(m.claimed_at,m.created_at))/60)::int)
+ FROM email_outbox m LEFT JOIN work_requests q ON q.id=m.request_id LEFT JOIN request_drafts d ON d.id=q.draft_id LEFT JOIN collection_messages cm ON cm.id=m.collection_id JOIN client_closes c ON c.id=COALESCE(d.close_id,cm.close_id)
  WHERE ($1='' OR c.organization_id=$1) AND (m.state='unknown' OR (m.state='sending' AND m.claimed_at<now()-interval '2 minutes'))
  UNION ALL SELECT c.organization_id,'sandbox_posting',p.close_id::text,p.id::text,p.state,GREATEST(0,(EXTRACT(EPOCH FROM now()-COALESCE(p.attempted_at,now()))/60)::int)
  FROM sandbox_postings p JOIN client_closes c ON c.id=p.close_id WHERE ($1='' OR c.organization_id=$1) AND p.state IN ('unknown','executing')

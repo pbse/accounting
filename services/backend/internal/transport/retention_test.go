@@ -93,6 +93,18 @@ func TestCloseDeletionRequiresPolicyAndSettledWork(t *testing.T) {
 	if _, err = db.Exec(`INSERT INTO email_delivery_events(connection_id,event_id,body_digest,provider_id,recipient,kind,occurred_at) VALUES($1,'unrelated','synthetic','unrelated-provider','other@example.test','bounced',now())`, emailConnection); err != nil {
 		t.Fatal(err)
 	}
+	// A collection email that bounced: the address stays do not contact for the client after its month is deleted.
+	var message string
+	if err = db.QueryRow(`INSERT INTO collection_messages(organization_id,close_id,client_entity,company,capture_id,item_id,label,customer,amount,currency,recipient,subject,body,created_by) VALUES('local-development',$1,$2,'quickbooks:fixture','1','2','Invoice INV-2','Beta',10,'USD','ap@beta.example','Reminder','Synthetic reminder','fixture') RETURNING id::text`, closeID, entity).Scan(&message); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DELETE FROM collection_contact_preferences WHERE organization_id='local-development' AND lower(client_entity)=lower($1)`, entity)
+	if _, err = db.Exec(`INSERT INTO email_outbox(id,collection_id,connection_id,payload,approved_by,firm_authority,approved_until,state,provider_id) VALUES($1,$2,$3,'x','fixture',true,now(),'accepted','collect-provider')`, rand.Text(), message, emailConnection); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`INSERT INTO email_delivery_events(connection_id,event_id,body_digest,provider_id,recipient,kind,occurred_at,close_id) VALUES($1,'collect-bounce','synthetic','collect-provider','AP@beta.example','bounced',now(),$2)`, emailConnection, closeID); err != nil {
+		t.Fatal(err)
+	}
 	json.Unmarshal(call(base+"/retention", nil, 200), &status)
 	if len(status.Blockers) != 0 {
 		t.Fatal(status.Blockers)
@@ -111,6 +123,10 @@ func TestCloseDeletionRequiresPolicyAndSettledWork(t *testing.T) {
 	call(base+"/delete", map[string]any{"expected_version": status.Version, "entity": entity, "period": "2026-09", "reason_code": "retention_expired", "confirmed": true}, 200)
 	if aliases() != 2 {
 		t.Fatal("deleting a month whose retention expired keeps the client's other names")
+	}
+	var kept bool
+	if e := db.QueryRow(`SELECT do_not_contact FROM collection_contact_preferences WHERE organization_id='local-development' AND lower(client_entity)=lower($1) AND recipient='ap@beta.example' ORDER BY id DESC LIMIT 1`, entity).Scan(&kept); e != nil || !kept {
+		t.Fatalf("a deleted month's bounced collection address stays do not contact: %v %v", kept, e)
 	}
 	// Deleting a month at the client's request forgets the other names its documents use, retired ones too.
 	var requested string

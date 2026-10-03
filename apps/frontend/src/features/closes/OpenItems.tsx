@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
+import { Collections } from "./Collections";
 
 type Action = { id: string; owner: string; mine: boolean; status: string; expected_on: string; note: string; actor: string; created_at: string };
 type Item = {
@@ -150,8 +151,8 @@ export function OpenItems({ closeId }: { closeId: string }) {
         <>
           <p className="note">
             Open in the capture of {new Date(items.captured_at).toLocaleString()}. A document is settled only when a later capture that read every open item no longer
-            lists it. Promised dates and bill-pay handoffs are what the cash plan will use. Nothing here contacts a customer, pays a bill or writes anything off: a
-            write-off is a correction prepared in the close.{" "}
+            lists it. Promised dates and bill-pay handoffs are what the cash plan will use. A customer is contacted only by a collection email a person approves, under
+            the client's authority; nothing here pays a bill or writes anything off: a write-off is a correction prepared in the close.{" "}
             <button type="button" onClick={() => setVersion((n) => n + 1)}>
               Refresh
             </button>
@@ -159,6 +160,7 @@ export function OpenItems({ closeId }: { closeId: string }) {
           {saved && <p role="status">{saved}</p>}
           {!items.complete && <p role="status">Incomplete: some open items could not be read in this capture.</p>}
           {table("Receivables", items.receivables, items.capture_id, items.company)}
+          <Collections closeId={closeId} refresh={version} invoices={items.receivables.filter((i) => i.kind === "Invoice" && i.balance)} />
           {table("Payables", items.payables, items.capture_id, items.company)}
           {items.receivables.length + items.payables.length === 0 && <p className="empty">No open invoices or bills in the latest capture.</p>}
           {items.settled.length > 0 && (

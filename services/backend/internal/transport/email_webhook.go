@@ -68,9 +68,9 @@ func emailWebhook(db *sql.DB) http.HandlerFunc {
 			return
 		}
 		var closeID sql.NullString
-		err = db.QueryRowContext(r.Context(), `SELECT CASE WHEN count(DISTINCT d.close_id)=1 THEN min(d.close_id)::text END
- FROM email_outbox m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id
- WHERE m.connection_id=$1 AND m.provider_id=$2 AND lower(q.recipient)=lower($3)`, r.PathValue("connection"), event.Data.ID, event.Data.To[0]).Scan(&closeID)
+		err = db.QueryRowContext(r.Context(), `SELECT CASE WHEN count(DISTINCT COALESCE(d.close_id,cm.close_id))=1 THEN min(COALESCE(d.close_id,cm.close_id))::text END
+ FROM email_outbox m LEFT JOIN work_requests q ON q.id=m.request_id LEFT JOIN request_drafts d ON d.id=q.draft_id LEFT JOIN collection_messages cm ON cm.id=m.collection_id
+ WHERE m.connection_id=$1 AND m.provider_id=$2 AND lower(COALESCE(q.recipient,cm.recipient))=lower($3)`, r.PathValue("connection"), event.Data.ID, event.Data.To[0]).Scan(&closeID)
 		if err != nil {
 			problem(w, 503, "Delivery scope unavailable.")
 			return

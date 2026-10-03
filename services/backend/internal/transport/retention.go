@@ -31,7 +31,7 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
  EXISTS(SELECT 1 FROM preparation_jobs j WHERE j.close_id=c.id AND j.state IN ('queued','waiting_evidence','interpreting','needs_confirmation','waiting_client')),
  EXISTS(SELECT 1 FROM quickbooks_entity_syncs s WHERE s.close_id=c.id AND s.state IN ('queued','running')),
  EXISTS(SELECT 1 FROM sandbox_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM vendor_credit_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM credit_applications p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM bill_corrections p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM xero_corrections p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM production_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')) OR EXISTS(SELECT 1 FROM xero_postings p WHERE p.close_id=c.id AND p.state IN ('executing','unknown')),
- EXISTS(SELECT 1 FROM email_outbox m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND m.state IN ('queued','sending','unknown')),
+ EXISTS(SELECT 1 FROM email_outbox m LEFT JOIN work_requests q ON q.id=m.request_id LEFT JOIN request_drafts d ON d.id=q.draft_id LEFT JOIN collection_messages cm ON cm.id=m.collection_id WHERE COALESCE(d.close_id,cm.close_id)=c.id AND m.state IN ('queued','sending','unknown')),
  EXISTS(SELECT 1 FROM client_request_links l JOIN work_requests q ON q.id=l.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now()),
  EXISTS(SELECT 1 FROM client_attachments a WHERE a.close_id=c.id AND a.state NOT IN ('released','rejected')),
  EXISTS(SELECT 1 FROM forwarding_links l WHERE l.close_id=c.id AND l.revoked_at IS NULL AND l.expires_at>now()) OR EXISTS(SELECT 1 FROM forwarded_files f WHERE f.close_id=c.id AND f.state NOT IN ('released','rejected')),
@@ -43,8 +43,8 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
  EXISTS(SELECT 1 FROM stripe_connections x WHERE x.close_id=c.id AND x.state<>'disconnected') OR EXISTS(SELECT 1 FROM stripe_report_runs s WHERE s.close_id=c.id AND s.state IN ('requesting','pending')),
  EXISTS(SELECT 1 FROM stripe_connections x JOIN stripe_report_runs s ON s.connection_id=x.id WHERE x.close_id=c.id AND s.close_id<>c.id),
  EXISTS(SELECT 1 FROM email_delivery_events e JOIN email_outbox m ON m.connection_id=e.connection_id AND m.provider_id=e.provider_id
-  JOIN work_requests q ON q.id=m.request_id AND lower(q.recipient)=lower(e.recipient)
-  JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=c.id AND e.close_id IS NULL)
+  LEFT JOIN work_requests q ON q.id=m.request_id LEFT JOIN request_drafts d ON d.id=q.draft_id LEFT JOIN collection_messages cm ON cm.id=m.collection_id
+  WHERE lower(COALESCE(q.recipient,cm.recipient))=lower(e.recipient) AND COALESCE(d.close_id,cm.close_id)=c.id AND e.close_id IS NULL)
  FROM client_closes c WHERE c.id::text=$1 AND c.organization_id=$2`, closeID, org).Scan(&out.RetainUntil, &out.LegalHold, &out.Version, &due, &jobs, &syncs, &postings, &mail, &links, &attachments, &forwarding, &connection, &grants, &shared, &xeroConnection, &xeroShared, &stripeConnection, &stripeShared, &unmapped)
 	if err != nil {
 		return out, err
@@ -209,6 +209,10 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 		// Child records are removed in foreign-key order. Shared firm procedures,
 		// member access and email sender connections stay in place.
 		for _, query := range []string{
+			`INSERT INTO collection_contact_preferences(organization_id,client_entity,recipient,do_not_contact,reason,recorded_by)
+ SELECT DISTINCT b.organization_id,b.client_entity,b.recipient,true,'An earlier collection email to this address bounced, was marked as spam or was suppressed; kept when its close was deleted.','retention'
+ FROM collection_messages c JOIN collection_bounces b ON b.organization_id=c.organization_id AND b.client_entity=lower(c.client_entity) AND b.recipient=lower(c.recipient)
+ WHERE c.close_id=$1 AND NOT COALESCE((SELECT p.do_not_contact FROM collection_contact_preferences p WHERE p.organization_id=b.organization_id AND lower(p.client_entity)=b.client_entity AND lower(p.recipient)=b.recipient ORDER BY p.id DESC LIMIT 1),false)`,
 			`DELETE FROM work_requests WHERE draft_id IN (SELECT id FROM request_drafts WHERE close_id=$1)`,
 			`DELETE FROM request_drafts WHERE close_id=$1`,
 			`DELETE FROM preparation_jobs WHERE close_id=$1`,
