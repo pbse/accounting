@@ -21,7 +21,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /v1/closes/{id}/evidence", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 6*1024*1024)
 		if err := r.ParseMultipartForm(6 * 1024 * 1024); err != nil {
-			problem(w, 400, "Upload text/CSV up to 512 KiB or a PDF up to 5 MiB.")
+			problem(w, 400, "Upload text/CSV up to 512 KiB, a PDF up to 5 MiB or an Excel workbook (.xlsx) up to 5 MiB.")
 			return
 		}
 		defer r.MultipartForm.RemoveAll()
@@ -49,6 +49,18 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 		defer file.Close()
 		body, err := io.ReadAll(io.LimitReader(file, 5242881))
 		name := h.Filename
+		// An Excel workbook is kept as CSV text of its first sheet, under its name with .csv added.
+		if strings.HasSuffix(strings.ToLower(name), ".xlsx") && err == nil && len(body) <= 5*1024*1024 {
+			text, e := documents.SpreadsheetText(body)
+			if e != nil {
+				problem(w, 422, "The workbook could not be read: "+e.Error()+". Save the sheet as CSV and upload that.")
+				return
+			}
+			for len(name)+4 > 200 {
+				name = string([]rune(name)[:len([]rune(name))-1])
+			}
+			name, body = name+".csv", []byte(text)
+		}
 		pdf := strings.HasSuffix(strings.ToLower(name), ".pdf")
 		invalid := err != nil || !validEvidenceFile(name, body)
 		if invalid {
