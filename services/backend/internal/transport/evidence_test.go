@@ -84,6 +84,24 @@ func TestEvidencePreparationRoundTrip(t *testing.T) {
 	upload("source.pdf", "%PDF-1.5", true, 422)
 	upload("source.txt", "binary\x00text", true, 422)
 	upload("large.txt", strings.Repeat("a", 524289), true, 422)
+	// An Excel workbook is kept as CSV text of its first sheet.
+	var book bytes.Buffer
+	workbook := zip.NewWriter(&book)
+	for name, body := range map[string]string{
+		"xl/workbook.xml":            `<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml":   `<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>Insurance</t></is></c><c r="B1"><v>1200</v></c></row></sheetData></worksheet>`,
+	} {
+		w, _ := workbook.Create(name)
+		io.WriteString(w, body)
+	}
+	workbook.Close()
+	sheet := idOf(upload("Prior schedule.xlsx", book.String(), true, 200))
+	var sheetName, sheetText string
+	if err = db.QueryRow(`SELECT name,content FROM evidence WHERE id::text=$1`, sheet).Scan(&sheetName, &sheetText); err != nil || sheetName != "Prior schedule.xlsx.csv" || sheetText != "Insurance,1200\n" {
+		t.Fatalf("a workbook is kept as CSV of its first sheet: %q %q %v", sheetName, sheetText, err)
+	}
+	upload("broken.xlsx", "not a workbook", true, 422)
 	statement := "id,date,amount\nS1,2026-09-02,200.00\nS2,2026-09-05,-50.00"
 	ledger := "id,date,amount\nL1,2026-09-02,200.00\nL2,2026-09-05,-50.00\nL3,2026-09-28,-50.00"
 	s := idOf(upload("statement.csv", statement, true, 200))

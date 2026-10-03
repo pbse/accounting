@@ -4,7 +4,7 @@ Uploaded evidence starts durable intake and optional OpenAI interpretation. The 
 
 ## Use it
 
-1. Open a client/month and upload authorized TXT/CSV or PDF evidence. The upload returns a durable source/job identity; PDF text extraction must finish before interpretation can use it.
+1. Open a client/month and upload authorized TXT/CSV, PDF or Excel (.xlsx) evidence. A workbook's first sheet is kept as CSV text (named `<file>.xlsx.csv`): values as shown in their columns, shared and inline text, date-formatted cells as YYYY-MM-DD and formulas as their saved results; the workbook itself is not kept, and other sheets are not read. The upload returns a durable source/job identity; PDF text extraction must finish before interpretation can use it.
 2. Inspect the proposed facts and quoted source locations in Work. Resolve identity ambiguity, missing evidence and method questions. A proposal is not a verified booking fact.
 3. Confirm the supported method and assumptions. The original job resumes and prepares a draft for review. For manually selected work, save source-linked instructions and choose **Prepare selected work**; this remains available beside agent intake.
 4. Inspect the calculation, originals and blockers; approve or request changes. Client requests and scanned/released replies can resume the affected work: [coverage requests](coverage-requests.md).
@@ -14,7 +14,7 @@ Uploaded evidence starts durable intake and optional OpenAI interpretation. The 
 ## Storage and processing boundaries
 
 - Hosted access requires active firm membership, client access and applicable permissions. Source/plan/job references are checked against the close. The development token is shared and local-only.
-- PostgreSQL stores original bytes, hashes, extracted text and revisions. Current original-evidence limits are 100 files / 20 MiB per close, 512 KiB per TXT/CSV, and 5 MiB / 20 pages per PDF. R2 is not deployed.
+- PostgreSQL stores original bytes, hashes, extracted text and revisions. Current original-evidence limits are 100 files / 20 MiB per close, 512 KiB per TXT/CSV (including a workbook's CSV text), 5 MiB per Excel workbook, and 5 MiB / 20 pages per PDF. R2 is not deployed.
 - Staff direct uploads use file validation and bounded parsing; do not describe them as malware-scanned. Public client attachments are quarantined, scanned and explicitly released. Forwarded documents have a separate reviewed intake path. [Scanning](cloudflare-upload-scanning.md), [forwarding/Drive](source-sync-and-forwarding.md)
 - Text is escaped in the UI; originals download with restrictive headers. Poppler/Tesseract run in bounded subprocesses with no provider/database credentials. OCR is not proof of complete or correct facts. [PDF details](recalculation-and-pdf.md)
 - PostgreSQL jobs, fenced claims/checkpoints and source checks own recovery. A stopped worker leaves work visible rather than losing it. Deterministic calculation replay preserves identities; OCR/model recovery may repeat processing/cost. External posting/email has separate attempt rules.

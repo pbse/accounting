@@ -180,14 +180,15 @@ export function Evidence({
     <section>
       <h2>Source evidence</h2>
       <p>
-        Upload text/CSV up to 512 KiB, or PDF up to 5 MiB and 20 pages. PDF
-        extraction runs in the background, with English OCR for pages without
-        text. Files belong to this client and month.
+        Upload text/CSV up to 512 KiB, PDF up to 5 MiB and 20 pages, or an
+        Excel workbook (.xlsx) up to 5 MiB, whose first sheet is kept as CSV.
+        PDF extraction runs in the background, with English OCR for pages
+        without text. Files belong to this client and month.
       </p>
       <form onSubmit={upload}>
         <label>
           Evidence file
-          <input name="file" type="file" accept=".txt,.csv,.pdf" required />
+          <input name="file" type="file" accept=".txt,.csv,.pdf,.xlsx" required />
         </label>
         <button disabled={busy}>
           {busy ? "Uploading…" : "Upload evidence"}
