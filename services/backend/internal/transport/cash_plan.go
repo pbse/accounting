@@ -19,6 +19,8 @@ var centsText = regexp.MustCompile(`^[0-9]{1,16}(\.[0-9]{1,2})?$`)
 
 // cashItem is one dated receipt (positive) or disbursement (negative) in the plan's currency, with where it came from.
 type cashItem struct {
+	// Key names an open invoice or bill ("invoice:3") so a scenario can move it.
+	Key    string `json:"key,omitempty"`
 	On     string `json:"on"`
 	Amount string `json:"amount"`
 	Label  string `json:"label"`
@@ -106,6 +108,88 @@ func occurrences(first time.Time, every string, until *time.Time, start, end tim
 			out = append(out, on)
 		}
 	}
+}
+
+// cashChange is one change a scenario makes: move an open item to another date, or add a receipt or payment once or on
+// a schedule.
+type cashChange struct {
+	Kind      string `json:"kind"`
+	Item      string `json:"item,omitempty"`
+	On        string `json:"on,omitempty"`
+	Label     string `json:"label,omitempty"`
+	Direction string `json:"direction,omitempty"`
+	Amount    string `json:"amount,omitempty"`
+	FirstOn   string `json:"first_on,omitempty"`
+	Every     string `json:"every,omitempty"`
+	UntilOn   string `json:"until_on,omitempty"`
+}
+
+var itemKey = regexp.MustCompile(`^(invoice|bill):[^\s]{1,100}$`)
+
+func (c cashChange) valid() bool {
+	date := func(v string) bool {
+		t, err := time.Parse("2006-01-02", v)
+		return err == nil && t.Year() >= 2000 && t.Year() <= 2100
+	}
+	switch c.Kind {
+	case "move":
+		return itemKey.MatchString(c.Item) && date(c.On)
+	case "add":
+		label := strings.TrimSpace(c.Label)
+		return label != "" && len(label) <= 200 && (c.Direction == "in" || c.Direction == "out") && centsText.MatchString(c.Amount) && c.Amount != "0" && strings.Trim(c.Amount, "0.") != "" &&
+			date(c.FirstOn) && slices.Contains([]string{"once", "week", "two_weeks", "month"}, c.Every) && (c.UntilOn == "" || (date(c.UntilOn) && c.UntilOn >= c.FirstOn))
+	}
+	return false
+}
+
+// applyScenario is the plan's items with a scenario's changes: moved open items keep their amount on the new date, and
+// added receipts or payments fall on each of their dates in the horizon. A move whose item is not in the plan (paid,
+// disputed or undated since) is returned as missing.
+func applyScenario(items []cashItem, name string, changes []cashChange, start, end time.Time) (out []cashItem, missing []string) {
+	out, missing = slices.Clone(items), []string{}
+	for _, c := range changes {
+		switch c.Kind {
+		case "move":
+			i := slices.IndexFunc(out, func(item cashItem) bool { return item.Key == c.Item })
+			if i < 0 {
+				missing = append(missing, c.Item)
+				continue
+			}
+			out[i].On, out[i].Basis = c.On, "scenario: "+name
+		case "add":
+			first, _ := time.Parse("2006-01-02", c.FirstOn)
+			var until *time.Time
+			if t, err := time.Parse("2006-01-02", c.UntilOn); err == nil {
+				until = &t
+			}
+			for _, on := range occurrences(first, c.Every, until, start, end) {
+				value, _ := new(big.Rat).SetString(c.Amount)
+				if c.Direction == "out" {
+					value.Neg(value)
+				}
+				out = append(out, cashItem{On: on.Format("2006-01-02"), Amount: value.FloatString(2), Label: strings.TrimSpace(c.Label), Source: "scenario", Basis: "scenario: " + name, value: value})
+			}
+		}
+	}
+	return out, missing
+}
+
+// visibleScenario is SQL: a client's executive (the executive placeholder) sees and removes only their own scenarios
+// (the who placeholder), so a firm's what-ifs (a draft salary, say) stay with the firm; anyone else sees every scenario.
+func visibleScenario(executive, who string) string {
+	return `(NOT ` + executive + `::bool OR created_by=` + who + `)`
+}
+
+// lowestWeek is the week with the lowest end-of-day balance in the plan.
+func lowestWeek(weeks []cashWeek) cashWeek {
+	lowest, low := weeks[0], new(big.Rat)
+	low.SetString(lowest.Lowest)
+	for _, week := range weeks {
+		if l, _ := new(big.Rat).SetString(week.Lowest); l.Cmp(low) < 0 {
+			lowest, low = week, l
+		}
+	}
+	return lowest
 }
 
 type cashObligation struct {
@@ -266,7 +350,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				if side == 1 {
 					value.Neg(value)
 				}
-				items = append(items, cashItem{On: on, Amount: value.FloatString(2), Label: item.Label, Source: strings.ToLower(item.Kind), Basis: basis, value: value})
+				items = append(items, cashItem{Key: strings.ToLower(item.Kind) + ":" + item.ID, On: on, Amount: value.FloatString(2), Label: item.Label, Source: strings.ToLower(item.Kind), Basis: basis, value: value})
 			}
 		}
 		obligations, err := clientObligations(r, db, org, entity)
@@ -307,6 +391,29 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				items = append(items, item)
 			}
 		}
+		// A scenario changes only this view: the base plan's lowest point is reported beside it.
+		var scenario map[string]any
+		if id := r.URL.Query().Get("scenario"); id != "" {
+			var name, books, currency string
+			var raw []byte
+			if err := db.QueryRowContext(ctx, `SELECT name,changes,company,currency FROM cash_scenarios WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND retired_at IS NULL AND `+visibleScenario("$4", "$5"), id, org, entity, executive(r), reviewerName(r)).Scan(&name, &raw, &books, &currency); err != nil {
+				problem(w, 404, "Scenario not found.")
+				return
+			}
+			// A scenario names open items and amounts of the books it was made for; other books or a new home currency
+			// could give the same key to another document.
+			if books != company || currency != home {
+				problem(w, 409, "This scenario was made for other books or another currency, so it is not applied. Try the change again on these books.")
+				return
+			}
+			var changes []cashChange
+			json.Unmarshal(raw, &changes)
+			base, _ := planWeeks(start, opening, items)
+			baseLowest := lowestWeek(base)
+			var missing []string
+			items, missing = applyScenario(items, name, changes, start, end)
+			scenario = map[string]any{"id": id, "name": name, "changes": changes, "missing": missing, "base_lowest": map[string]string{"amount": baseLowest.Lowest, "on": baseLowest.LowestOn}}
+		}
 		weeks, outside := planWeeks(start, opening, items)
 		before, after, first := []cashItem{}, []cashItem{}, start.Format("2006-01-02")
 		for _, item := range outside {
@@ -316,13 +423,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				after = append(after, item)
 			}
 		}
-		lowest, low := weeks[0], new(big.Rat)
-		low.SetString(lowest.Lowest)
-		for _, week := range weeks {
-			if l, _ := new(big.Rat).SetString(week.Lowest); l.Cmp(low) < 0 {
-				lowest, low = week, l
-			}
-		}
+		lowest := lowestWeek(weeks)
 		openItemsAt, _ := time.Parse(time.RFC3339, meta["captured_at"].(string))
 		apart := asOf.Sub(openItemsAt)
 		// An executive sees approved schedules only; drafts (their amounts, vendors and notes) stay with the firm.
@@ -334,8 +435,79 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 			"opening":    map[string]any{"amount": opening.FloatString(2), "as_of": asOf, "snapshot_id": snapshotID, "stale": stale, "accounts": banks, "left_out": foreignBanks},
 			"open_items": map[string]any{"captured_at": meta["captured_at"], "capture_id": meta["capture_id"], "complete": meta["complete"], "hours_apart": int(apart.Abs().Hours()), "through": meta["month_end"], "missing_later": first > meta["month_end"].(string)},
 			"weeks":      weeks, "lowest": map[string]string{"amount": lowest.Lowest, "on": lowest.LowestOn},
-			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "covered": covered, "pending_obligations": draftSchedules,
+			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "covered": covered, "pending_obligations": draftSchedules, "scenario": scenario,
 			"note": "Book cash is the ledger's bank balances at the capture, not bank-available cash. Receipts and payments are expectations from due dates, promises, bill-pay handoffs and approved schedules; nothing is paid, collected or written to the ledger. Sales not yet invoiced are not in the plan unless an approved receipt schedule adds them, so later weeks show only what is already known."})
+	})
+	mux.HandleFunc("GET /v1/closes/{id}/cash-scenarios", func(w http.ResponseWriter, r *http.Request) {
+		org, entity, err := client(r)
+		if err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		var raw []byte
+		if err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id::text,'name',name,'changes',changes,'created_by',created_by,'created_at',created_at) ORDER BY id DESC),'[]') FROM cash_scenarios WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND retired_at IS NULL AND `+visibleScenario("$3", "$4"), org, entity, executive(r), reviewerName(r)).Scan(&raw); err != nil {
+			problem(w, 503, "Scenarios are unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"scenarios": json.RawMessage(raw)})
+	})
+	// Anyone who can open the plan can try a what-if; a scenario changes no plan, open item or ledger.
+	mux.HandleFunc("POST /v1/closes/{id}/cash-scenarios", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Action  string       `json:"action"`
+			ID      string       `json:"id"`
+			Name    string       `json:"name"`
+			Changes []cashChange `json:"changes"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		org, entity, err := client(r)
+		if err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		var result sql.Result
+		switch in.Action {
+		case "add":
+			in.Name = strings.TrimSpace(in.Name)
+			if in.Name == "" || len(in.Name) > 200 || len(in.Changes) < 1 || len(in.Changes) > 20 || slices.ContainsFunc(in.Changes, func(c cashChange) bool { return !c.valid() }) {
+				problem(w, 422, "Name the scenario and give 1–20 changes: move an open invoice or bill to a date, or add a receipt or payment with a label, an amount in cents, a first date and how often.")
+				return
+			}
+			raw, _ := json.Marshal(in.Changes)
+			// The scenario is kept with the books and home currency it was made for.
+			var company, home string
+			if err = db.QueryRowContext(r.Context(), `SELECT 'quickbooks:'||x.environment||':'||x.realm,COALESCE(x.home_currency,'') FROM quickbooks_connections x WHERE x.id=`+quickbooks.ReadingConnection("$1::bigint"), r.PathValue("id")).Scan(&company, &home); err != nil && err != sql.ErrNoRows {
+				problem(w, 503, "The scenario could not be saved.")
+				return
+			}
+			if home == "" {
+				problem(w, 409, "Connect the client's QuickBooks books first: a scenario is made for one set of books.")
+				return
+			}
+			var id string
+			if err = db.QueryRowContext(r.Context(), `INSERT INTO cash_scenarios(organization_id,client_entity,company,currency,name,changes,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, org, entity, company, home, in.Name, raw, reviewerName(r)).Scan(&id); err != nil {
+				problem(w, 503, "The scenario could not be saved.")
+				return
+			}
+			jsonReply(w, 200, map[string]any{"saved": true, "id": id})
+			return
+		case "retire":
+			result, err = db.ExecContext(r.Context(), `UPDATE cash_scenarios SET retired_by=$5,retired_at=now() WHERE id::text=$3 AND organization_id=$1 AND lower(client_entity)=lower($2) AND retired_at IS NULL AND `+visibleScenario("$4", "$5"), org, entity, in.ID, executive(r), reviewerName(r))
+		default:
+			problem(w, 422, "Add or retire a scenario.")
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The scenario could not be saved.")
+			return
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			problem(w, 409, "That scenario was already retired. Refresh the list.")
+			return
+		}
+		jsonReply(w, 200, map[string]bool{"saved": true})
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/cash-obligations", func(w http.ResponseWriter, r *http.Request) {
 		org, entity, err := client(r)

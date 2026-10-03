@@ -84,6 +84,7 @@ func TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews(t *testing.T
 	call("user_ceo", ceo, "POST", base+"/management-pack/publications", map[string]any{"action": "acknowledge", "publication_id": publication}, 200)
 	call("user_ceo", ceo, "POST", base+"/management-pack/publications", map[string]any{"action": "publish", "digest": "d", "commentary": "x", "confirmed": true}, 403)
 	call("user_ceo", ceo, "GET", base+"/cash-plan", nil, 200)
+	call("user_ceo", ceo, "GET", base+"/cash-scenarios", nil, 200)
 	_, err = db.Exec(`INSERT INTO budget_versions(organization_id,client_entity,name,company,currency,lines,digest,source,created_by) VALUES($1,'Alpha','Draft plan','quickbooks:123','USD','[{"account":"Salaries","account_id":"","months":{"2026-09":"9000.00"}}]','b','Pasted CSV','user_staff')`, org)
 	must(err)
 	if body := call("user_ceo", ceo, "GET", base+"/budget", nil, 200); strings.Contains(string(body), "Draft plan") || strings.Contains(string(body), "Salaries") {
