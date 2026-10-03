@@ -68,7 +68,7 @@ const apps = [
     // Matched against the end of Vite's data-vite-dev-id, which is the stylesheet's absolute file path.
     stylesheet: "/apps/frontend/src/styles.css",
     routes: [
-      "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, "/dashboard/firm",
+      "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, `/dashboard/closes/${close}?tab=reports`, "/dashboard/firm",
       "/dashboard/measure", "/dashboard/security", "/dashboard/close", "/dashboard/review",
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],

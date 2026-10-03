@@ -412,6 +412,16 @@ body {
   line-height: 20px;
   text-align: left;
 }
+/* An account name in a statement table that opens its ledger rows reads as text, not a raised button. */
+.app-shell button.cell-link,
+.app-shell button.cell-link:hover:not(:disabled) {
+  background: none;
+  box-shadow: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+}
 .app-shell button.nav-item:hover:not(:disabled) {
   background: var(--fill);
 }

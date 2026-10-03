@@ -37,7 +37,7 @@ These are pointers into the existing implementation, not evidence that a package
 | **B04 Recurring preparation and investigation** | [Accounting methods](docs/accounting-methods.md), [evidence/preparation](docs/evidence-and-preparation.md), [assistant](docs/chat.md), [firm procedures](docs/firm-procedures.md) |
 | **B05 Client follow-through** | [Requests](docs/client-request-links.md), [coverage requests](docs/coverage-requests.md), [email](docs/email-delivery.md), [scanning](docs/cloudflare-upload-scanning.md) |
 | **B06 Review, corrections and change** | [Review](docs/workpaper-review.md), [change review](docs/change-review-and-requests.md), [posting](docs/production-posting.md), [operations](docs/operations.md) |
-| **B07 Management and executive reports** | [Build plan](docs/agent-first-build-plan.md), [existing binder/export](docs/close-review-package.md), [access architecture](docs/architecture.md), [design system](docs/design-system.md) |
+| **B07 Management and executive reports** | [Management reports](docs/management-reports.md), [build plan](docs/agent-first-build-plan.md), [existing binder/export](docs/close-review-package.md), [access architecture](docs/architecture.md), [design system](docs/design-system.md) |
 | **B08 Budget comparison** | [Build plan](docs/agent-first-build-plan.md), [supporting business requirements](docs/design-partner-product-bar.md) |
 | **B09 Maintained cash decisions** | [Build plan](docs/agent-first-build-plan.md), [cash assumptions and daily shortfall rationale](docs/design-partner-product-bar.md#cash-and-planning) |
 | **B10 AR/AP actions** | [Build plan](docs/agent-first-build-plan.md), [existing email/outbox controls](docs/email-delivery.md), [governed corrections](docs/production-posting.md) |
@@ -76,6 +76,7 @@ These are pointers into the existing implementation, not evidence that a package
 | [Email delivery](docs/email-delivery.md) | Approved sends, inbound replies, reminders, delivery and recovery. |
 | [Firm procedures](docs/firm-procedures.md) | Approved methods, client accounting authority and proposed learning. |
 | [Carry-forward](docs/carry-forward.md) | Next-period schedules and bounded standing approval. |
+| [Management reports](docs/management-reports.md) | Month-end Profit and Loss, Balance Sheet and working capital from captured reports; status, comparison and drill-down. |
 | [Close review package](docs/close-review-package.md) | Binder, sign-off scope, manifests and portable supporting exports. |
 | [Settlement reconciliation](docs/settlement-reconciliation.md) | Stripe payout/deposit support, exports, connector flow and limits. |
 | [Production posting](docs/production-posting.md) | Exact approved effects, grants, operation activation, one-attempt execution and readback/recovery. |

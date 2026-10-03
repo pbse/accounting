@@ -16,6 +16,7 @@ import { Aging } from "./Aging";
 import { Matching } from "./Matching";
 import { Exceptions } from "./Exceptions";
 import { Flux } from "./Flux";
+import { Reports } from "./Reports";
 import { TieOut } from "./TieOut";
 import { RetentionControls } from "./Enterprise";
 import { Evidence, PreparationJobs } from "./Evidence";
@@ -45,11 +46,12 @@ const tabs = [
   ["workpapers", "Workpapers"],
   ["evidence", "Evidence"],
   ["requests", "Requests"],
+  ["reports", "Reports"],
   ["signoff", "Close & sign-off"],
   ["settings", "Settings"],
 ] as const;
 type Tab = (typeof tabs)[number][0];
-const tabActivity: Record<Tab, Activity> = { overview: "prepare", workpapers: "prepare", evidence: "evidence", requests: "requests", signoff: "signoff", settings: "configuration" };
+const tabActivity: Record<Tab, Activity> = { overview: "prepare", workpapers: "prepare", evidence: "evidence", requests: "requests", reports: "review", signoff: "signoff", settings: "configuration" };
 const filters: Record<string, [string, (paper: Paper) => boolean]> = {
   all: ["All drafts", () => true],
   ready: ["Ready for review", readyForReview],
@@ -258,6 +260,7 @@ export default function ClientClose() {
         </div>
       )}
       {tab === "requests" && <Requests closeId={close.id} papers={papers} />}
+      {tab === "reports" && <Reports key={`reports-${close.id}`} closeId={close.id} />}
       {tab === "signoff" && (
         <div className="stack">
           <Readiness key={`readiness-${close.id}`} closeId={close.id} papers={papers} />
