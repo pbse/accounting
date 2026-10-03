@@ -26,6 +26,7 @@ type fluxMonth struct {
 	realm      string
 	accounts   json.RawMessage
 	pl, gl, tb json.RawMessage
+	cashFlow   json.RawMessage
 	xero       json.RawMessage
 }
 
@@ -43,8 +44,8 @@ type rowReader interface {
 
 func periodBooks(ctx context.Context, db rowReader, closeID, period string) (*fluxMonth, error) {
 	m := fluxMonth{Period: period, Source: "quickbooks"}
-	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'ProfitAndLoss',s.payload->'reports'->'GeneralLedger',COALESCE(s.payload->'reports'->'TrialBalance','null') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
- WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &m.Stale, &m.accounts, &m.pl, &m.gl, &m.tb)
+	err := db.QueryRowContext(ctx, `SELECT s.id::text,s.realm,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',s.payload->'accounts',s.payload->'reports'->'ProfitAndLoss',s.payload->'reports'->'GeneralLedger',COALESCE(s.payload->'reports'->'TrialBalance','null'),COALESCE(s.payload->'reports'->'CashFlow','null') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id
+ WHERE s.close_id::text=$1 AND s.payload ? 'period' AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&m.SnapshotID, &m.realm, &m.CapturedAt, &m.Stale, &m.accounts, &m.pl, &m.gl, &m.tb, &m.cashFlow)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}

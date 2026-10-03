@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"math/big"
 	"net/http"
@@ -29,6 +30,8 @@ type books struct {
 	Accounts map[string]packAccount
 	Balances map[string]*big.Rat
 	Activity map[string]*big.Rat
+	// CashFlow is the ledger's own Statement of Cash Flows for the month, when the capture has one.
+	CashFlow json.RawMessage
 }
 
 type packLine struct {
@@ -271,7 +274,10 @@ func managementPack(this, last *books) map[string]any {
 		names = append(names, cmp.Or(this.Accounts[id].Name, id))
 	}
 	out := map[string]any{"profit_and_loss": statement{plSections, measures}, "balance_sheet": balance, "reclassified": names,
-		"cash_flow": map[string]string{"unavailable": "A historical cash-flow statement needs the ledger's own Statement of Cash Flows or an accountant-approved preparation method, and neither is captured yet: balance changes alone cannot separate depreciation, assets bought on credit or borrowing from cash. Book cash and its change are on the balance sheet."}}
+		"cash_flow": cashFlow(this, last, compared)}
+	if flow := out["cash_flow"].(map[string]any); flow["reconciled"] == false {
+		complete = false
+	}
 	if !this.Typed {
 		out["working_capital"] = map[string]string{"unavailable": "Xero captures do not carry account types, so current and long-term balances are not separated."}
 		out["complete"] = complete
@@ -295,6 +301,59 @@ func managementPack(this, last *books) map[string]any {
 	return out
 }
 
+// cashFlow is the ledger's own Statement of Cash Flows for the month, as the report gives it, checked against the books:
+// its sections add to the net change, beginning cash plus the change is ending cash, ending cash is the month-end book
+// cash and, with last month compared, beginning cash is last month's. Without the report it says why there is none.
+func cashFlow(this, last *books, compared bool) map[string]any {
+	if !this.Typed || len(this.CashFlow) == 0 || string(this.CashFlow) == "null" {
+		return map[string]any{"unavailable": "A historical cash-flow statement needs the ledger's own Statement of Cash Flows or an accountant-approved preparation method, and neither is captured yet: balance changes alone cannot separate depreciation, assets bought on credit or borrowing from cash. Book cash and its change are on the balance sheet."}
+	}
+	sections, totals, err := quickbooks.CashFlow(this.CashFlow)
+	if err != nil {
+		return map[string]any{"unavailable": "The captured Statement of Cash Flows could not be read: " + err.Error() + "."}
+	}
+	// Book cash is each month's own Bank accounts, whatever this month's presentation calls them.
+	bank := func(b *books) *big.Rat {
+		total := zero()
+		for id, balance := range b.Balances {
+			if b.Accounts[id].Type == "Bank" {
+				total.Add(total, balance)
+			}
+		}
+		return total
+	}
+	cash := bank(this)
+	differences := []string{}
+	differ := func(what string, stated, books *big.Rat) {
+		if stated.Cmp(books) != 0 {
+			differences = append(differences, fmt.Sprintf("%s: the statement says %s, the books %s, a difference of %s.", what, money(stated), money(books), money(new(big.Rat).Sub(stated, books))))
+		}
+	}
+	shown, added := []packSection{}, zero()
+	for _, s := range sections {
+		lines, detail := []packLine{}, zero()
+		for _, l := range s.Lines {
+			lines = append(lines, packLine{Name: l.Name, Amount: money(l.Amount)})
+			detail.Add(detail, l.Amount)
+		}
+		if len(s.Lines) > 0 {
+			differ(s.Name+" total against its lines", s.Total, detail)
+		}
+		shown = append(shown, packSection{Name: s.Name, Lines: lines, Total: packLine{Name: "Net cash from " + strings.ToLower(s.Name), Amount: money(s.Total)}})
+		added.Add(added, s.Total)
+	}
+	change, beginning, ending := totals["CashIncrease"], totals["BeginningCash"], totals["EndingCash"]
+	differ("Net change in cash", change, added)
+	differ("Ending cash", ending, new(big.Rat).Add(beginning, change))
+	differ("Ending cash against the month-end book cash", ending, cash)
+	if compared {
+		differ("Beginning cash against last month's book cash", beginning, bank(last))
+	}
+	return map[string]any{"sections": shown, "net_change": packLine{Name: "Net change in cash", Amount: money(change)},
+		"beginning": packLine{Name: "Cash at the beginning of the month", Amount: money(beginning)}, "ending": packLine{Name: "Cash at the end of the month", Amount: money(ending)},
+		"book_cash": money(cash), "reconciled": len(differences) == 0, "differences": differences}
+}
+
 // readLedgerMonth reads a capture's Trial Balance and Profit and Loss into books.
 func readLedgerMonth(m *fluxMonth) (*books, error) {
 	b := &books{Accounts: map[string]packAccount{}, Balances: map[string]*big.Rat{}, Activity: map[string]*big.Rat{}}
@@ -313,7 +372,7 @@ func readLedgerMonth(m *fluxMonth) (*books, error) {
 			b.Accounts[a.ID] = packAccount{Name: a.Name, Class: a.Class}
 		}
 	} else {
-		b.Typed = true
+		b.Typed, b.CashFlow = true, m.cashFlow
 		if b.Currency, balances, err = quickbooks.TrialBalance(m.accounts, m.tb); err != nil {
 			return nil, err
 		}

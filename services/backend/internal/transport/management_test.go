@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http/httptest"
 	"os"
@@ -388,5 +389,75 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 	}
 	if csv := export(first.ID, "csv"); !strings.Contains(csv, "Net income,300.00") {
 		t.Fatalf("the original version's export is unchanged: %s", csv)
+	}
+}
+
+func TestManagementPackShowsTheLedgersCashFlowOnlyAsItTies(t *testing.T) {
+	accounts := map[string]packAccount{"1": {"Checking", "Asset", "Bank", ""}, "8": {"Owner", "Equity", "Equity", ""}, "10": {"Sales", "Revenue", "Income", ""}}
+	rats := func(m map[string]string) map[string]*big.Rat {
+		out := map[string]*big.Rat{}
+		for k, v := range m {
+			out[k], _ = new(big.Rat).SetString(v)
+		}
+		return out
+	}
+	statement := func(ending string, payable ...string) json.RawMessage {
+		payable = append(payable, "200.00")
+		return json.RawMessage(`{"Header":{"ReportName":"CashFlow","StartPeriod":"2026-09-01","EndPeriod":"2026-09-30","Currency":"USD"},"Rows":{"Row":[
+ {"type":"Section","group":"OperatingActivities","Header":{"ColData":[{"value":"OPERATING ACTIVITIES"},{"value":""}]},"Rows":{"Row":[{"type":"Data","group":"NetIncome","ColData":[{"value":"Net Income"},{"value":"100.00"}]},
+  {"type":"Section","group":"OperatingAdjustments","Header":{"ColData":[{"value":"Adjustments"},{"value":""}]},"Rows":{"Row":[{"type":"Data","ColData":[{"value":"Accounts Payable"},{"value":"` + payable[0] + `"}]},{"type":"Data","ColData":[{"value":"Note"}]}]},"Summary":{"ColData":[{"value":"Total adjustments"},{"value":"200.00"}]}}]},
+  "Summary":{"ColData":[{"value":"Net cash provided by operating activities"},{"value":"300.00"}]}},
+ {"type":"Section","group":"InvestingActivities","Rows":{"Row":[{"type":"Data","ColData":[{"value":"Equipment"},{"value":"-250.00"}]}]},"Summary":{"ColData":[{"value":"Net cash provided by investing activities"},{"value":"-250.00"}]}},
+ {"type":"Section","group":"FinancingActivities","Rows":{"Row":[{"type":"Data","ColData":[{"value":"Owner contribution"},{"value":"50.00"}]}]},"Summary":{"ColData":[{"value":"Net cash provided by financing activities"},{"value":"50.00"}]}},
+ {"type":"Section","group":"CashIncrease","Summary":{"ColData":[{"value":"NET CASH INCREASE FOR PERIOD"},{"value":"100.00"}]}},
+ {"type":"Section","group":"BeginningCash","Summary":{"ColData":[{"value":"Cash at beginning of period"},{"value":"9,800.00"}]}},
+ {"type":"Data","group":"EndingCash","ColData":[{"value":"CASH AT END OF PERIOD"},{"value":"` + ending + `"}]}]}}`)
+	}
+	last := &books{Currency: "USD", Typed: true, Accounts: accounts, Balances: rats(map[string]string{"1": "9800", "8": "-9800"}), Activity: rats(nil)}
+	var pack map[string]any
+	month := func(report json.RawMessage) map[string]any {
+		this := &books{Currency: "USD", Typed: true, Accounts: accounts, Balances: rats(map[string]string{"1": "9900", "8": "-9800", "10": "-100"}), Activity: rats(map[string]string{"10": "100"}), CashFlow: report}
+		pack = managementPack(this, last)
+		raw, _ := json.Marshal(pack["cash_flow"])
+		var flow map[string]any
+		json.Unmarshal(raw, &flow)
+		return flow
+	}
+	flow := month(statement("9,900.00"))
+	sections, _ := flow["sections"].([]any)
+	if flow["reconciled"] != true || pack["complete"] != true || len(sections) != 3 || !strings.Contains(fmt.Sprint(sections[0]), "Accounts Payable") || flow["book_cash"] != "9900.00" {
+		t.Fatalf("a statement that ties to the books is shown: %v", flow)
+	}
+	// Published, it is in the export with its reconciliation.
+	frozen, _ := json.Marshal(pack)
+	rows, err := publicationRows(publication{Pack: frozen})
+	if err != nil || !strings.Contains(fmt.Sprint(rows), "Cash flow Operating activities Accounts Payable 200.00") || !strings.Contains(fmt.Sprint(rows), "Ties to the books") {
+		t.Fatalf("the export carries the statement: %v %v", rows, err)
+	}
+	// A month without activity sections is still a statement, and is exported.
+	quiet := json.RawMessage(`{"Rows":{"Row":[{"group":"CashIncrease","Summary":{"ColData":[{"value":"Net change"},{"value":"0.00"}]}},{"group":"BeginningCash","Summary":{"ColData":[{"value":"Beginning"},{"value":"9900.00"}]}},{"group":"EndingCash","Summary":{"ColData":[{"value":"Ending"},{"value":"9900.00"}]}}]}}`)
+	this := &books{Currency: "USD", Typed: true, Accounts: accounts, Balances: rats(map[string]string{"1": "9900", "8": "-9900"}), Activity: rats(nil), CashFlow: quiet}
+	frozen, _ = json.Marshal(managementPack(this, nil))
+	if rows, err = publicationRows(publication{Pack: frozen}); err != nil || !strings.Contains(fmt.Sprint(rows), "Ties to the books") {
+		t.Fatalf("a statement without activity is exported: %v %v", rows, err)
+	}
+	flow = month(statement("9950.00"))
+	if flow["reconciled"] != false || pack["complete"] != false || !strings.Contains(fmt.Sprint(flow["differences"]), "Ending cash against the month-end book cash: the statement says 9950.00, the books 9900.00") {
+		t.Fatalf("a statement that does not tie says where and leaves the pack incomplete: %v", flow)
+	}
+	if flow = month(statement("9900.00", "999.00")); flow["reconciled"] != false || !strings.Contains(fmt.Sprint(flow["differences"]), "Operating activities total against its lines: the statement says 300.00, the books 1099.00") {
+		t.Fatalf("lines that do not add to their section's total are a difference: %v", flow)
+	}
+	if flow = month(json.RawMessage(`{"Rows":{"Row":[]}}`)); !strings.Contains(fmt.Sprint(flow["unavailable"]), "could not be read") {
+		t.Fatalf("an unreadable statement is not shown: %v", flow)
+	}
+	// Without a statement the pack, and the digest a publication binds, are as before.
+	if flow = month(nil); !strings.Contains(fmt.Sprint(flow["unavailable"]), "neither is captured yet") {
+		t.Fatalf("a capture without a statement says so: %v", flow)
+	}
+	plain := map[string]any{"entity": "E", "period": "2026-09", "cash_flow": map[string]any{"unavailable": "x"}}
+	shown := map[string]any{"entity": "E", "period": "2026-09", "cash_flow": map[string]any{"sections": []packSection{}}}
+	if figuresDigest(plain) != figuresDigest(map[string]any{"entity": "E", "period": "2026-09"}) || figuresDigest(shown) == figuresDigest(plain) {
+		t.Fatal("only a shown statement is bound by the digest")
 	}
 }
