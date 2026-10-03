@@ -16,7 +16,7 @@ type Found = {
   next_step: string;
   question: string;
 };
-type Balance = { type: "abnormal_balance" | "holding_balance"; account_id: string; account: string; side: string; amount: string; currency: string; finding: string; next_step: string; question: string };
+type Balance = { type: "abnormal_balance" | "holding_balance" | "opening_balance_equity"; account_id: string; account: string; side: string; amount: string; currency: string; finding: string; next_step: string; question: string };
 type Scan = {
   capture: { id: string; source: "quickbooks" | "xero"; evidence_id?: string; finished_at: string; unread?: string } | null;
   scanned?: number;
@@ -165,16 +165,16 @@ export function Exceptions({ closeId }: { closeId: string }) {
           {balances.error ? (
             <p role="alert">The agent could not read this Trial Balance: {balances.error}.</p>
           ) : balances.items.length === 0 ? (
-            <p className="empty">Every classified account in this Trial Balance sits on its normal side, and no holding or clearing account carries a balance.</p>
+            <p className="empty">Every classified account in this Trial Balance sits on its normal side, no holding or clearing account carries a balance, and no nonzero Opening Balance Equity was found in the rows that could be read.</p>
           ) : (
             <RowList columns={["What the agent found", "Question for the client", "Balance", ""]}>
               {balances.items.map((item) => (
                 <div className="row" key={item.account_id}>
                   <div>
-                    <span className="status warn">{item.type === "holding_balance" ? "Needs reconciliation" : "Abnormal balance"}</span>
+                    <span className="status warn">{{ holding_balance: "Needs reconciliation", opening_balance_equity: "Opening balance to place", abnormal_balance: "Abnormal balance" }[item.type]}</span>
                     <p>{item.finding}</p>
                     <small>{item.next_step}</small>
-                    {item.type === "holding_balance" && balances.snapshot?.source === "quickbooks" && (
+                    {item.type !== "abnormal_balance" && balances.snapshot?.source === "quickbooks" && (
                       <details>
                         <summary>This month's ledger rows in {item.account}</summary>
                         <LedgerSelection closeId={closeId} snapshotId={balances.snapshot.id} accountId={item.account_id} stale={balances.snapshot.stale} suggestions={[]} />

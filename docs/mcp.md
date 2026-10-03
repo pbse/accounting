@@ -45,7 +45,7 @@ Every tool replays one existing API call using the caller's own credentials. Fir
 | `list_work`, `review_queue` | Ranked preparation work; drafts ready for review, with approval requests |
 | `list_evidence`, `read_evidence_text` | Documents on a close and their extracted text |
 | `get_workpaper` | One draft: inputs, results, cited sources, blockers and questions |
-| `find_exceptions` | Questions from the latest QuickBooks capture, abnormal Trial Balance balances and holding or clearing accounts that still hold a balance |
+| `find_exceptions` | Questions from the latest QuickBooks capture, abnormal Trial Balance balances, holding or clearing accounts that still hold a balance, and a nonzero Opening Balance Equity |
 | `get_readiness` | What still blocks sign-off |
 | `native_reconciliation` | For Xero books, Xero's own reconciled flags per bank account |
 | `proposed_state` | Production journal proposals awaiting approval or execution, with balances before and projected after |

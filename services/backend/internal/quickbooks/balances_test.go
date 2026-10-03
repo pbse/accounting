@@ -59,23 +59,31 @@ func TestHoldingAccountsWithABalanceNeedReconciliation(t *testing.T) {
 		{"Id":"3","Name":"Ask My Accountant","AccountType":"Expense"},
 		{"Id":"4","Name":"Checking","AccountType":"Bank"},
 		{"Id":"5","Name":"Clearing Revenue","AccountType":"Income"},
-		{"Id":"6","Name":"Stripe clearing","AccountType":"Other Current Asset"}]`)
+		{"Id":"6","Name":"Stripe clearing","AccountType":"Other Current Asset"},
+		{"Id":"7","Name":"Opening Balance Equity","AccountType":"Equity","AccountSubType":"OpeningBalanceEquity"},
+		{"Id":"8","Name":"Owner's equity","AccountType":"Equity"},
+		{"Id":"9","Name":"Opening balances - distributions","AccountType":"Equity","AccountSubType":"OpeningBalanceEquity"},
+		{"Id":"10","Name":"Former Opening Balance Equity","AccountType":"Equity"}]`)
 	tb := json.RawMessage(`{"Header":{"Currency":"USD"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Debit"},{"ColTitle":"Credit"}]},"Rows":{"Row":[
 		{"type":"Data","ColData":[{"id":"1","value":"Undeposited Funds"},{"value":"1200.00"},{"value":""}]},
 		{"type":"Data","ColData":[{"id":"2","value":"Payroll clearing"},{"value":"0.00"},{"value":""}]},
 		{"type":"Data","ColData":[{"id":"3","value":"Ask My Accountant"},{"value":"35.00"},{"value":""}]},
 		{"type":"Data","ColData":[{"id":"4","value":"Checking"},{"value":"500.00"},{"value":""}]},
 		{"type":"Data","ColData":[{"id":"5","value":"Clearing Revenue"},{"value":""},{"value":"100.00"}]},
-		{"type":"Data","ColData":[{"id":"6","value":"Stripe clearing"},{"value":""},{"value":"15.00"}]}]}}`)
+		{"type":"Data","ColData":[{"id":"6","value":"Stripe clearing"},{"value":""},{"value":"15.00"}]},
+		{"type":"Data","ColData":[{"id":"7","value":"Opening Balance Equity"},{"value":""},{"value":"4200.00"}]},
+		{"type":"Data","ColData":[{"id":"8","value":"Owner's equity"},{"value":""},{"value":"9000.00"}]},
+		{"type":"Data","ColData":[{"id":"9","value":"Opening balances - distributions"},{"value":"300.00"},{"value":""}]},
+		{"type":"Data","ColData":[{"id":"10","value":"Former Opening Balance Equity"},{"value":""},{"value":"50.00"}]}]}}`)
 	found, err := AbnormalBalances(accounts, tb)
-	if err != nil || len(found) != 3 {
-		t.Fatalf("Undeposited Funds, Ask My Accountant and the Stripe clearing credit are the only candidates: %+v %v", found, err)
+	if err != nil || len(found) != 5 {
+		t.Fatalf("Undeposited Funds, Ask My Accountant, the Stripe clearing credit and both opening-balance accounts are the only candidates: %+v %v", found, err)
 	}
 	got := map[string]string{}
 	for _, item := range found {
 		got[item.Account] = item.Type + " " + item.Side + " " + item.Amount
 	}
-	if got["Undeposited Funds"] != "holding_balance debit 1200.00" || got["Ask My Accountant"] != "holding_balance debit 35.00" || got["Stripe clearing"] != "holding_balance credit 15.00" {
+	if got["Undeposited Funds"] != "holding_balance debit 1200.00" || got["Ask My Accountant"] != "holding_balance debit 35.00" || got["Stripe clearing"] != "holding_balance credit 15.00" || got["Opening Balance Equity"] != "opening_balance_equity credit 4200.00" || got["Opening balances - distributions"] != "opening_balance_equity debit 300.00" {
 		t.Fatalf("each holding account is one reconciliation item: %v", got)
 	}
 	for _, item := range found {

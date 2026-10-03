@@ -98,6 +98,11 @@ func AbnormalBalances(accounts, trialBalance json.RawMessage) ([]ledger.BalanceE
 	out := []ledger.BalanceException{}
 	for _, account := range rows {
 		lower := strings.ToLower(account.Name)
+		// Opening Balance Equity is recognised by its own identity, before the skips that depend on class or wording.
+		if item := ledger.OpeningEquity(account.ID, account.Name, account.Subtype, account.Net, currency, "balance"); item != nil {
+			out = append(out, *item)
+			continue
+		}
 		if account.Class == "" || slices.Contains(oppositeSubtypes, account.Subtype) || account.Class == "Equity" && (strings.Contains(lower, "draw") || strings.Contains(lower, "distribution")) {
 			continue
 		}
