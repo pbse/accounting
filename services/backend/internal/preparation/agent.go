@@ -228,7 +228,7 @@ Depreciation schedules a fixed asset's cost over its useful life, between deprec
 Loan checks one month of a loan against the lender's statement. The primary source must be the lender statement (role statement); the note or agreement and the amortization schedule are support, and one ledger page for the loan account is ledger. A note, agreement or schedule alone is support for its statement's job: return unsupported and say which statement it supports. Fields: lender, agreement_reference, annual_rate (percent), opening_principal, interest_paid_through, closing_principal, book_balance, loan_account, interest_account, principal_due_next_12_months, schedule_reference. Never split payments, choose a method or day-count, or infer rate changes or fees; cite the note's interest clause as agreement_reference, and the preparer enters payments from the statement.
 Owner is one owner-related transaction in the close month: a personal cost paid by the business, or a business cost paid by the owner. Select the receipt or transaction record as primary support and one ledger page showing its booking as ledger. Fields: transaction_reference, transaction_date, payee, amount, ledger_reference, stated_purpose, client_confirmation_reference. Never decide the direction, treatment, business-use share or entity type.
 Payroll records one month's payroll from the payroll provider's summary of pay dates in the close month; it never runs payroll. Select the provider's payroll summary or register as primary support and one ledger page of the account the payroll bank debits are booked to as ledger. Fields: provider, source_reference (the summary's title and date range), first_pay_date, last_pay_date, gross_wages, employee_taxes (withheld from employees), employee_deductions (other employee withholdings), net_pay, employer_taxes, employer_contributions, provider_debits (what the provider debited from the bank for these pay dates), ledger_debits (the payroll debits on the ledger page, in total), ledger_reference. A summary spanning several months is unsupported: ask for one per month. Never choose accounts.
-A prior accountant's schedule listing several prepaid expenses or deferred revenue items with their balances has the role schedule. Unless you are told this is the client's opening month, lines is empty and every fact has line 0.
+A prior accountant's schedule listing several prepaid expenses, deferred revenue items or depreciated fixed assets with their balances has the role schedule. Unless you are told this is the client's opening month, lines is empty and every fact has line 0.
 If identity, work type, source role, date scope or method is ambiguous or unsupported, return unsupported with a precise question. Inspect all permitted evidence before asking. Missing facts should be omitted and explained with specific questions about what is needed and why. Questions are for clarification, not claims that fraud/errors exist. Keep the summary factual and short. No external tools, no actions, no policy confirmations.`
 
 // agentFields are the cited facts each form-prepared kind accepts, named as that form's fields.
@@ -277,7 +277,7 @@ func blockedIdentity(primary, entity string, aliases []string, sources []IntakeS
 
 // scheduleInstructions read a prior accountant's schedule on the client's opening month, row by row.
 const scheduleInstructions = `
-This close is the client's opening month, its first in the firm: if primary_source_id is a prior accountant's schedule listing prepaid expenses or deferred revenue, give it the role schedule and choose prepaid or deferred_revenue. A schedule mixing kinds, of another kind, or with more than 20 rows is unsupported with a question. Give each row as a line numbered from 1 in the schedule's order, with row a verbatim quote of that whole row, unique in the document; a total or subtotal row is not a line. Cite each row's facts with its line number, each quote inside its row: label (the row's description), amount (the original amount), service_start, service_end, expense_account (for deferred revenue, the revenue account), prepaid_account (for deferred revenue, the deferred revenue liability) and remaining (the balance the schedule states at close_period's month-end); currency may be cited anywhere in the document. For any other document, lines is empty and every fact has line 0.`
+This close is the client's opening month, its first in the firm: if primary_source_id is a prior accountant's schedule listing prepaid expenses, deferred revenue or fixed assets being depreciated, give it the role schedule and choose prepaid, deferred_revenue or depreciation. A schedule mixing kinds, of another kind, or with more than 20 rows is unsupported with a question. Give each row as a line numbered from 1 in the schedule's order, with row a verbatim quote of that whole row, unique in the document; a total or subtotal row is not a line. Cite each row's facts with its line number, each quote inside its row: label (the row's description), amount (the original amount), service_start, service_end, expense_account (for deferred revenue, the revenue account), prepaid_account (for deferred revenue, the deferred revenue liability; for depreciation, the accumulated depreciation account) and remaining (the balance the schedule states at close_period's month-end; for depreciation, the net book value), and for depreciation the salvage_value when the register states one; for depreciation, amount is the asset's cost, service_start the date it went into service and service_end the end of its useful life; currency may be cited anywhere in the document. For any other document, lines is empty and every fact has line 0.`
 
 func interpret(ctx context.Context, entity, period, currency, primary string, sources []IntakeSource, opening bool) (Proposal, error) {
 	var p Proposal
@@ -482,8 +482,9 @@ func cite(f Fact, facts []agentFact, available map[string]IntakeSource) (Fact, [
 	return f, questions
 }
 
-// scheduleFields are what each row of a prior accountant's schedule cites, inside its row except the currency.
-var scheduleFields = []string{"label", "amount", "service_start", "service_end", "currency", "expense_account", "prepaid_account", "remaining"}
+// scheduleFields are what each row of a prior accountant's schedule cites, inside its row except the currency; a fixed
+// asset register's row may also cite a salvage value.
+var scheduleFields = []string{"label", "amount", "service_start", "service_end", "currency", "expense_account", "prepaid_account", "remaining", "salvage_value"}
 
 // validateSchedule reads a prior accountant's schedule row by row. Each line quotes its whole row, unique in the
 // document, and each of its facts is cited inside that row, so a value from another row cannot be attached to it.
@@ -492,7 +493,7 @@ func validateSchedule(result agentResult, primary string, sources []IntakeSource
 	invalid := func() (Proposal, error) {
 		return Proposal{}, fmt.Errorf("The schedule's rows or citations could not be validated. Review the schedule and retry.")
 	}
-	if !slices.Contains([]string{"prepaid", "deferred_revenue", "unsupported"}, p.Kind) || len(p.Summary) > 2000 || len(p.Questions) > 20 || len(result.Facts) > 220 || len(result.Sources) > 20 {
+	if !slices.Contains([]string{"prepaid", "deferred_revenue", "depreciation", "unsupported"}, p.Kind) || len(p.Summary) > 2000 || len(p.Questions) > 20 || len(result.Facts) > 220 || len(result.Sources) > 20 {
 		return invalid()
 	}
 	for _, q := range p.Questions {
@@ -531,7 +532,7 @@ func validateSchedule(result agentResult, primary string, sources []IntakeSource
 		if len(result.Lines) > 20 {
 			p.Questions = append(p.Questions, "The schedule has more than 20 rows. Split it into schedules of at most 20 rows and upload each.")
 		} else if len(p.Questions) == 0 {
-			p.Questions = []string{"No rows of the schedule were read. Which prepaid expenses or deferred revenue does it list, with their dates and balances?"}
+			p.Questions = []string{"No rows of the schedule were read. Which prepaid expenses, deferred revenue or fixed assets does it list, with their dates and balances?"}
 		}
 		p.Kind, p.Lines = "unsupported", nil
 		return p, nil
@@ -568,7 +569,7 @@ func validateSchedule(result agentResult, primary string, sources []IntakeSource
 	}
 	perLine := map[int][]agentFact{}
 	for _, f := range result.Facts {
-		if f.Line < 1 || f.Line > len(result.Lines) || !slices.Contains(scheduleFields, f.Field) || len(f.Value) == 0 || len(f.Value) > 200 || len(f.Quote) == 0 || len(f.Quote) > 2000 || f.SourceID != primary {
+		if f.Line < 1 || f.Line > len(result.Lines) || !slices.Contains(scheduleFields, f.Field) || (f.Field == "salvage_value" && p.Kind != "depreciation") || len(f.Value) == 0 || len(f.Value) > 200 || len(f.Quote) == 0 || len(f.Quote) > 2000 || f.SourceID != primary {
 			return invalid()
 		}
 		if _, unique := documents.QuoteLocation(document.Name, document.Content, f.Quote); !unique {
@@ -588,8 +589,15 @@ func validateSchedule(result agentResult, primary string, sources []IntakeSource
 		}
 		line := ScheduleLine{Line: l.Line, Row: l.Row, Facts: []Fact{}}
 		for _, field := range scheduleFields {
+			if field == "salvage_value" && p.Kind != "depreciation" {
+				continue
+			}
 			label := strings.ReplaceAll(field, "_", " ")
-			f, asked := cite(Fact{Field: field, Label: label, Question: "Confirm the " + label + " of this row from the schedule."}, perLine[l.Line], available)
+			question := "Confirm the " + label + " of this row from the schedule."
+			if field == "salvage_value" {
+				question = ""
+			}
+			f, asked := cite(Fact{Field: field, Label: label, Question: question}, perLine[l.Line], available)
 			// A name is read as printed: a label, account or currency its quote does not show is a question, not a value.
 			for _, c := range perLine[l.Line] {
 				if c.Field == field && !slices.Contains(quotedAmounts, field) && !slices.Contains(quotedDates, field) && !strings.Contains(strings.ToLower(c.Quote), strings.ToLower(c.Value)) {

@@ -2,6 +2,7 @@ package preparation
 
 import (
 	"close.local/backend/internal/llm"
+	"close.local/backend/internal/prepaids"
 	"context"
 	"encoding/json"
 	"io"
@@ -325,5 +326,52 @@ func TestPriorScheduleIsReadRowByRowOnTheOpeningMonth(t *testing.T) {
 	}
 	if p, err = interpret(agentModelContext(t, client), "Example", "2026-09", "USD", "1", sources, false); err != nil || p.Kind != "unsupported" || len(p.Lines) != 0 || !strings.Contains(strings.Join(p.Questions, " "), "opening month") || strings.Contains(request, "the client's opening month, its first in the firm") {
 		t.Fatal("another month does not read a schedule", p, err)
+	}
+}
+
+func TestAnImportedFixedAssetTiesToTheRegistersNetBookValue(t *testing.T) {
+	asset := func(nbv string) Plan {
+		input, _ := json.Marshal(prepaids.Input{Basis: "accrual", Entity: "Example", ClosePeriod: "2026-08", SourceReference: "Prior schedule #1 · Van", Amount: "3600.00", ServiceStart: "2026-01-01", ServiceEnd: "2028-12-31",
+			Currency: "USD", ExpenseAccount: "Depreciation expense", PrepaidAccount: "Accumulated depreciation", Method: prepaids.Method, Schedule: prepaids.Depreciation, SalvageValue: "360.00"})
+		return Plan{Kind: "prepaid", Input: input, Imported: &Imported{RootSourceID: "1", Label: "Van", Remaining: nbv}}
+	}
+	// Cost 3,600, salvage 360, 36 months: 90 a month, 720 by August, so 2,520 left to depreciate and a net book value of 2,880.
+	raw, err := Calculate(asset("2880.00"), "Example", "2026-08")
+	var paper struct {
+		Balance  string          `json:"prepaid_balance"`
+		Proposal json.RawMessage `json:"proposal"`
+	}
+	json.Unmarshal(raw, &paper)
+	if err != nil || paper.Balance != "2520.00" || (len(paper.Proposal) > 0 && string(paper.Proposal) != "null") {
+		t.Fatalf("an asset whose register states its net book value is a schedule-only draft: %s %v", raw, err)
+	}
+	if _, err = Calculate(asset("2520.00"), "Example", "2026-08"); err == nil || !strings.Contains(err.Error(), "gives 2880.00") {
+		t.Fatalf("a register figure that is not the net book value is refused: %v", err)
+	}
+
+	// A register's rows may state a salvage value; a prepaid schedule's may not.
+	content := "Fixed asset register at 2026-08-31 (USD)\nVan,3600.00,2026-01-01,2028-12-31,Depreciation expense,Accumulated depreciation,2880.00,360.00"
+	sources := []IntakeSource{{Source: Source{ID: "1", Name: "register.csv", Digest: "h", Role: "evidence"}, Content: content}}
+	row := "Van,3600.00,2026-01-01,2028-12-31,Depreciation expense,Accumulated depreciation,2880.00,360.00"
+	register := agentResult{Kind: "depreciation", Summary: "Register", Questions: []string{}, Sources: []struct {
+		ID   string `json:"id"`
+		Role string `json:"role"`
+	}{{"1", "schedule"}}, Lines: []struct {
+		Line int    `json:"line"`
+		Row  string `json:"row"`
+	}{{1, row}}, Facts: []agentFact{{"label", "Van", "1", "Van,3600.00", 1}, {"amount", "3600.00", "1", "Van,3600.00", 1}, {"service_start", "2026-01-01", "1", "3600.00,2026-01-01", 1},
+		{"service_end", "2028-12-31", "1", "2026-01-01,2028-12-31", 1}, {"expense_account", "Depreciation expense", "1", "2028-12-31,Depreciation expense", 1}, {"prepaid_account", "Accumulated depreciation", "1", "expense,Accumulated depreciation", 1},
+		{"remaining", "2880.00", "1", "depreciation,2880.00", 1}, {"currency", "USD", "1", "(USD)", 1}}}
+	p, err := validateSchedule(register, "1", sources)
+	if err != nil || len(p.Lines) != 1 || len(p.Lines[0].Facts) != 9 || p.Lines[0].Facts[8].Field != "salvage_value" || p.Lines[0].Facts[8].Question != "" {
+		t.Fatal("a register row reads with an optional salvage value", p, err)
+	}
+	register.Facts = append(register.Facts, agentFact{"salvage_value", "360.00", "1", "2880.00,360.00", 1})
+	if p, err = validateSchedule(register, "1", sources); err != nil || p.Lines[0].Facts[8].Value != "360.00" {
+		t.Fatal("a cited salvage value is read", p, err)
+	}
+	register.Kind = "prepaid"
+	if _, err = validateSchedule(register, "1", sources); err == nil {
+		t.Fatal("a prepaid schedule row citing a salvage value was accepted")
 	}
 }

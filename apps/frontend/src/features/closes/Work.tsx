@@ -958,7 +958,7 @@ function ScheduleImport({ item, lines, busy, blocked, onImport }: { item: WorkIt
           return (
             <fieldset key={l.line}>
               <legend>
-                Row {l.line}: {value("label") || "unlabeled"} · {value("amount")} {value("currency")} · {value("service_start")} to {value("service_end")} · remaining {value("remaining")}
+                Row {l.line}: {value("label") || "unlabeled"} · {value("amount")} {value("currency")} · {value("service_start")} to {value("service_end")} · {item.proposal.kind === "depreciation" ? "net book value" : "remaining"} {value("remaining")}{value("salvage_value") ? ` · salvage ${value("salvage_value")}` : ""}
               </legend>
               <small>{l.row}</small>
               {open.length > 0 && (

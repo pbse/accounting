@@ -94,17 +94,22 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 		if p.CarryForward != nil && p.Revises == "" || p.Imported != nil {
 			prepare = prepaids.ScheduleOnly
 		}
-		if p.Imported != nil && (in.Schedule == prepaids.Depreciation || in.DisposalPeriod != "" || in.CreditAmount != "" || len(in.Credits) > 0 || in.CancellationMethod != "") {
-			return nil, fmt.Errorf("An imported schedule line is a prepaid or deferred revenue schedule without credits, cancellations or disposals")
+		if p.Imported != nil && (in.DisposalPeriod != "" || in.CreditAmount != "" || len(in.Credits) > 0 || in.CancellationMethod != "" || in.Method == prepaids.DecliningMethod || in.Convention != "") {
+			return nil, fmt.Errorf("An imported schedule line is a straight schedule without credits, cancellations, disposals or depreciation conventions")
 		}
 		paper, err := prepare(in)
 		if err != nil {
 			return nil, err
 		}
 		if p.Imported != nil {
-			stated, e := prepaids.Amount(p.Imported.Remaining)
-			if e != nil || prepaids.Money(stated) != paper.PrepaidBalance {
-				return nil, fmt.Errorf("%s: the schedule states %s at the month-end, but the calculation gives %s. Check the dates, amount and method", p.Imported.Label, p.Imported.Remaining, paper.PrepaidBalance)
+			// A register states an asset's net book value: what is left to depreciate plus its salvage value.
+			calculated, e := prepaids.Amount(paper.PrepaidBalance)
+			if salvage, err := prepaids.Amount(in.SalvageValue); in.Schedule == prepaids.Depreciation && e == nil && err == nil {
+				calculated += salvage
+			}
+			stated, err := prepaids.Amount(p.Imported.Remaining)
+			if e != nil || err != nil || stated != calculated {
+				return nil, fmt.Errorf("%s: the schedule states %s at the month-end, but the calculation gives %s. Check the dates, amount and method", p.Imported.Label, p.Imported.Remaining, prepaids.Money(calculated))
 			}
 		}
 		value = paper
