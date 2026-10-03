@@ -173,7 +173,11 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 		if strings.TrimSpace(in.Entity) != entity || in.ClosePeriod != period || p.CarryForward != nil || p.RecurringAccrual != nil {
 			return nil, fmt.Errorf("Client and period must match this close")
 		}
-		paper, err := loans.Prepare(in)
+		prepare := loans.Prepare
+		if p.Imported != nil {
+			prepare = loans.ScheduleOnly
+		}
+		paper, err := prepare(in)
 		if err != nil {
 			return nil, err
 		}

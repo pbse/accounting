@@ -18,6 +18,7 @@ import (
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/documents"
 	"close.local/backend/internal/llm"
+	"close.local/backend/internal/loans"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
@@ -244,6 +245,9 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			Alias              string          `json:"alias"`
 			ClientConfirmed    bool            `json:"client_confirmed"`
 			RosterConfirmed    bool            `json:"roster_confirmed"`
+			DayCount           string          `json:"day_count"`
+			Reclass            bool            `json:"reclass_current_portion"`
+			CurrentAccount     string          `json:"current_portion_account"`
 			Lines              []struct {
 				Line     int    `json:"line"`
 				Decision string `json:"decision"`
@@ -429,6 +433,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Answer the schedule's open questions and let the agent read it again before importing.")
 				return
 			}
+			// A loan's schedule is one loan, imported whole; any other schedule's rows are each imported or set aside.
 			decided := map[int]bool{}
 			for _, d := range in.Lines {
 				if d.Line < 1 || d.Line > len(proposed.Lines) || decided[d.Line] {
@@ -437,7 +442,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				}
 				decided[d.Line] = true
 			}
-			if len(decided) != len(proposed.Lines) {
+			if proposed.Kind != "loan" && len(decided) != len(proposed.Lines) {
 				problem(w, 422, "Decide every row of the schedule: import it with a method, or set it aside with a reason.")
 				return
 			}
@@ -476,6 +481,39 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			}
 			schedule := map[string]string{"deferred_revenue": prepaids.DeferredRevenue, "depreciation": prepaids.Depreciation}[proposed.Kind]
 			plans, listed := []preparation.Plan{}, map[string]bool{}
+			if proposed.Kind == "loan" {
+				if _, ok := loans.DayCounts[in.DayCount]; !ok || len(in.Lines) > 0 {
+					problem(w, 422, "Choose the day-count the loan's note states; a loan's schedule is imported whole.")
+					return
+				}
+				lender := ""
+				for _, f := range proposed.Facts {
+					if f.Field == "lender" {
+						lender = f.Value
+					}
+				}
+				reference := "Prior schedule #" + root + " · " + lender
+				input, e := preparation.ScheduledLoan(proposed, entity, period, reference, in.DayCount, in.Reclass, in.CurrentAccount)
+				if e == nil && len(reference) > 200 {
+					e = errors.New("The lender's name is too long to track; shorten it in the schedule.")
+				}
+				if e != nil {
+					problem(w, 422, e.Error())
+					return
+				}
+				raw, _ := json.Marshal(input)
+				p := preparation.Plan{Kind: "loan", Input: raw, Sources: fresh.Sources, Revises: current[strings.ToLower(lender)], Imported: &preparation.Imported{RootSourceID: root, Label: lender, Remaining: input.ClosingPrincipal}}
+				body, e := preparation.Calculate(p, entity, period)
+				if e != nil {
+					problem(w, 422, e.Error())
+					return
+				}
+				if e = preparation.CheckProcedureMethod(r.Context(), tx, closeID, "loan", body); e != nil {
+					problem(w, 409, e.Error())
+					return
+				}
+				plans, listed[strings.ToLower(lender)] = append(plans, p), true
+			}
 			for _, d := range in.Lines {
 				line := &proposed.Lines[d.Line-1]
 				value := map[string]string{}

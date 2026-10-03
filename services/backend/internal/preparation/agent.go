@@ -241,8 +241,8 @@ var agentFields = map[string][]string{
 }
 
 // Amounts and dates must be what their quote prints; a misread value becomes a question, not a cited candidate.
-var quotedAmounts = []string{"amount", "remaining", "booked_balance", "salvage_value", "credit_amount", "estimate_amount", "annual_rate", "opening_principal", "closing_principal", "book_balance", "principal_due_next_12_months", "statement_opening", "statement_closing", "ledger_opening", "ledger_closing", "gross_wages", "employee_taxes", "employee_deductions", "net_pay", "employer_taxes", "employer_contributions", "provider_debits", "ledger_debits"}
-var quotedDates = []string{"service_start", "service_end", "transaction_date", "interest_paid_through", "credit_period", "cancellation_period", "first_pay_date", "last_pay_date"}
+var quotedAmounts = []string{"amount", "remaining", "principal", "interest", "balance", "booked_balance", "salvage_value", "credit_amount", "estimate_amount", "annual_rate", "opening_principal", "closing_principal", "book_balance", "principal_due_next_12_months", "statement_opening", "statement_closing", "ledger_opening", "ledger_closing", "gross_wages", "employee_taxes", "employee_deductions", "net_pay", "employer_taxes", "employer_contributions", "provider_debits", "ledger_debits"}
+var quotedDates = []string{"date", "service_start", "service_end", "transaction_date", "interest_paid_through", "credit_period", "cancellation_period", "first_pay_date", "last_pay_date"}
 
 func valueShown(field, value, quote string) bool {
 	switch {
@@ -277,7 +277,7 @@ func blockedIdentity(primary, entity string, aliases []string, sources []IntakeS
 
 // scheduleInstructions read a prior accountant's schedule on the client's opening month, row by row.
 const scheduleInstructions = `
-This close is the client's opening month, its first in the firm: if primary_source_id is a prior accountant's schedule listing prepaid expenses, deferred revenue or fixed assets being depreciated, give it the role schedule and choose prepaid, deferred_revenue or depreciation. A schedule mixing kinds, of another kind, or with more than 20 rows is unsupported with a question. Give each row as a line numbered from 1 in the schedule's order, with row a verbatim quote of that whole row, unique in the document; a total or subtotal row is not a line. Cite each row's facts with its line number, each quote inside its row: label (the row's description), amount (the original amount), service_start, service_end, expense_account (for deferred revenue, the revenue account), prepaid_account (for deferred revenue, the deferred revenue liability; for depreciation, the accumulated depreciation account) and remaining (the balance the schedule states at close_period's month-end; for depreciation, the net book value), and for depreciation the salvage_value when the register states one; for depreciation, amount is the asset's cost, service_start the date it went into service and service_end the end of its useful life; currency may be cited anywhere in the document. For any other document, lines is empty and every fact has line 0.`
+This close is the client's opening month, its first in the firm: if primary_source_id is a prior accountant's schedule listing prepaid expenses, deferred revenue or fixed assets being depreciated, give it the role schedule and choose prepaid, deferred_revenue or depreciation. A schedule mixing kinds, of another kind, or with more than 20 rows is unsupported with a question. Give each row as a line numbered from 1 in the schedule's order, with row a verbatim quote of that whole row, unique in the document; a total or subtotal row is not a line. Cite each row's facts with its line number, each quote inside its row: label (the row's description), amount (the original amount), service_start, service_end, expense_account (for deferred revenue, the revenue account), prepaid_account (for deferred revenue, the deferred revenue liability; for depreciation, the accumulated depreciation account) and remaining (the balance the schedule states at close_period's month-end; for depreciation, the net book value), and for depreciation the salvage_value when the register states one; for depreciation, amount is the asset's cost, service_start the date it went into service and service_end the end of its useful life; currency may be cited anywhere in the document.  A prior accountant's amortization schedule for one loan is kind loan with the role schedule: cite with line 0 its lender, agreement_reference, annual_rate (percent), currency, loan_account and interest_account, and give as lines, in order, the last payment row before close_period, every payment row in close_period and every payment row of the following 12 months, each with its date, interest, principal and balance (after the payment), quoted inside its row. For any other document, lines is empty and every fact has line 0.`
 
 func interpret(ctx context.Context, entity, period, currency, primary string, sources []IntakeSource, opening bool) (Proposal, error) {
 	var p Proposal
@@ -486,6 +486,10 @@ func cite(f Fact, facts []agentFact, available map[string]IntakeSource) (Fact, [
 // asset register's row may also cite a salvage value.
 var scheduleFields = []string{"label", "amount", "service_start", "service_end", "currency", "expense_account", "prepaid_account", "remaining", "salvage_value"}
 
+// A loan's amortization schedule names the loan once (loanFields, cited anywhere in it) and gives each payment as a row.
+var loanFields = []string{"lender", "agreement_reference", "annual_rate", "currency", "loan_account", "interest_account"}
+var loanRowFields = []string{"date", "interest", "principal", "balance"}
+
 // validateSchedule reads a prior accountant's schedule row by row. Each line quotes its whole row, unique in the
 // document, and each of its facts is cited inside that row, so a value from another row cannot be attached to it.
 func validateSchedule(result agentResult, primary string, sources []IntakeSource) (Proposal, error) {
@@ -493,7 +497,7 @@ func validateSchedule(result agentResult, primary string, sources []IntakeSource
 	invalid := func() (Proposal, error) {
 		return Proposal{}, fmt.Errorf("The schedule's rows or citations could not be validated. Review the schedule and retry.")
 	}
-	if !slices.Contains([]string{"prepaid", "deferred_revenue", "depreciation", "unsupported"}, p.Kind) || len(p.Summary) > 2000 || len(p.Questions) > 20 || len(result.Facts) > 220 || len(result.Sources) > 20 {
+	if !slices.Contains([]string{"prepaid", "deferred_revenue", "depreciation", "loan", "unsupported"}, p.Kind) || len(p.Summary) > 2000 || len(p.Questions) > 20 || len(result.Facts) > 220 || len(result.Sources) > 20 {
 		return invalid()
 	}
 	for _, q := range p.Questions {
@@ -567,20 +571,49 @@ func validateSchedule(result agentResult, primary string, sources []IntakeSource
 		}
 		end = at + len(l.Row)
 	}
+	rowFields, documentFields := scheduleFields, []string{}
+	if p.Kind != "depreciation" {
+		rowFields = scheduleFields[:len(scheduleFields)-1]
+	}
+	if p.Kind == "loan" {
+		rowFields, documentFields = loanRowFields, loanFields
+	}
 	perLine := map[int][]agentFact{}
 	for _, f := range result.Facts {
-		if f.Line < 1 || f.Line > len(result.Lines) || !slices.Contains(scheduleFields, f.Field) || (f.Field == "salvage_value" && p.Kind != "depreciation") || len(f.Value) == 0 || len(f.Value) > 200 || len(f.Quote) == 0 || len(f.Quote) > 2000 || f.SourceID != primary {
+		fields := rowFields
+		if f.Line == 0 {
+			fields = documentFields
+		}
+		if f.Line < 0 || f.Line > len(result.Lines) || !slices.Contains(fields, f.Field) || len(f.Value) == 0 || len(f.Value) > 200 || len(f.Quote) == 0 || len(f.Quote) > 2000 || f.SourceID != primary {
 			return invalid()
 		}
 		if _, unique := documents.QuoteLocation(document.Name, document.Content, f.Quote); !unique {
 			return invalid()
 		}
-		if f.Field != "currency" && !strings.Contains(result.Lines[f.Line-1].Row, f.Quote) {
+		if f.Line > 0 && f.Field != "currency" && !strings.Contains(result.Lines[f.Line-1].Row, f.Quote) {
 			return invalid()
 		}
-		if perLine[f.Line] = append(perLine[f.Line], f); len(perLine[f.Line]) > 10 {
+		if perLine[f.Line] = append(perLine[f.Line], f); f.Line > 0 && len(perLine[f.Line]) > 10 {
 			return invalid()
 		}
+	}
+	// read gives each field its fact; a name is read as printed: a label, account or currency its quote does not show is a
+	// question, not a value.
+	read := func(field, where, question string, facts []agentFact) Fact {
+		label := strings.ReplaceAll(field, "_", " ")
+		f, asked := cite(Fact{Field: field, Label: label, Question: question}, facts, available)
+		for _, c := range facts {
+			if c.Field == field && !slices.Contains(quotedAmounts, field) && !slices.Contains(quotedDates, field) && !strings.Contains(strings.ToLower(c.Quote), strings.ToLower(c.Value)) {
+				asked = append(asked, fmt.Sprintf("Check the %s%s: the cited text does not show %s.", label, where, c.Value))
+			}
+		}
+		if len(asked) > 0 {
+			f.Value, f.Question = "", strings.Join(asked, " ")
+		}
+		return f
+	}
+	for _, field := range documentFields {
+		p.Facts = append(p.Facts, read(field, " of the loan", "Confirm the "+strings.ReplaceAll(field, "_", " ")+" of the loan from the schedule.", perLine[0]))
 	}
 	labels := map[string]int{}
 	for _, l := range result.Lines {
@@ -588,25 +621,12 @@ func validateSchedule(result agentResult, primary string, sources []IntakeSource
 			return invalid()
 		}
 		line := ScheduleLine{Line: l.Line, Row: l.Row, Facts: []Fact{}}
-		for _, field := range scheduleFields {
-			if field == "salvage_value" && p.Kind != "depreciation" {
-				continue
-			}
-			label := strings.ReplaceAll(field, "_", " ")
-			question := "Confirm the " + label + " of this row from the schedule."
+		for _, field := range rowFields {
+			question := "Confirm the " + strings.ReplaceAll(field, "_", " ") + " of this row from the schedule."
 			if field == "salvage_value" {
 				question = ""
 			}
-			f, asked := cite(Fact{Field: field, Label: label, Question: question}, perLine[l.Line], available)
-			// A name is read as printed: a label, account or currency its quote does not show is a question, not a value.
-			for _, c := range perLine[l.Line] {
-				if c.Field == field && !slices.Contains(quotedAmounts, field) && !slices.Contains(quotedDates, field) && !strings.Contains(strings.ToLower(c.Quote), strings.ToLower(c.Value)) {
-					asked = append(asked, fmt.Sprintf("Check the %s of row %d: the cited text does not show %s.", label, l.Line, c.Value))
-				}
-			}
-			if len(asked) > 0 {
-				f.Value, f.Question = "", strings.Join(asked, " ")
-			}
+			f := read(field, fmt.Sprintf(" of row %d", l.Line), question, perLine[l.Line])
 			if field == "label" && f.Value != "" {
 				if other, seen := labels[strings.ToLower(f.Value)]; seen {
 					p.Questions = append(p.Questions, fmt.Sprintf("Rows %d and %d share the label %q; give each row its own label so it can be tracked.", other, l.Line, f.Value))

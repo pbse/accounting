@@ -257,3 +257,47 @@ func TestTieOutComparesBalancesWithLatestSupport(t *testing.T) {
 		t.Fatalf("a Xero journal verified after the Trial Balance is still pending in it: %+v", rows["Accrued liabilities"])
 	}
 }
+
+func TestTieOutLeavesARevisedDraftOut(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	entity := "Revised tie-out " + rand.Text()
+	var closeID, connection, evidenceID, old string
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
+	defer func() {
+		for _, q := range []string{`DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+			db.Exec(q, closeID)
+		}
+	}()
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&connection))
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'snapshot.json',$2,'{}','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&evidenceID))
+	payload, _ := json.Marshal(map[string]any{"period": "2026-09", "source_id": evidenceID, "accounts": []map[string]string{{"Id": "3", "Name": "Checking", "AccountType": "Bank", "Classification": "Asset"}},
+		"reports": map[string]any{"TrialBalance": map[string]any{"Header": map[string]string{"Currency": "USD"}, "Columns": map[string]any{"Column": []map[string]string{{"ColTitle": ""}, {"ColTitle": "Debit"}, {"ColTitle": "Credit"}}},
+			"Rows": map[string]any{"Row": []map[string]any{{"type": "Data", "ColData": []map[string]string{{"id": "3", "value": "Checking"}, {"value": "900.00"}, {"value": ""}}}}}}}})
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,$4,now(),'fixture')`, closeID, connection, rand.Text(), string(payload))
+	must(err)
+	// A draft first saved against the wrong account and then revised to the right one supports only the right one.
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'reconciliation',$2,'{"input":{"account":"Old checking","ledger_closing":"900.00"}}') RETURNING id::text`, closeID, rand.Text()).Scan(&old))
+	_, err = db.Exec(`INSERT INTO workpapers(close_id,kind,digest,paper) VALUES($1,'reconciliation',$2,$3)`, closeID, rand.Text(), `{"input":{"account":"Checking","ledger_closing":"900.00"},"revises":"`+old+`"}`)
+	must(err)
+	tx, err := db.Begin()
+	must(err)
+	defer tx.Rollback()
+	tie, err := closeTieOut(t.Context(), tx, closeID)
+	if err != nil || len(tie.Unmatched) != 0 || len(tie.Rows) != 1 || tie.Rows[0].Status != "ties" {
+		t.Fatalf("the revised draft is left out: %+v %v", tie, err)
+	}
+}

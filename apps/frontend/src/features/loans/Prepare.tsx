@@ -15,17 +15,19 @@ export function LoanResult({ result }: { result: LoanWorkpaper }) {
   const input = result.input;
   const rated = result.schedule.some((row) => row.rates?.length);
   const feesPaid = result.schedule.some((row) => row.fee);
+  // A loan read from a prior accountant's schedule has no book balance compared and no lender statement.
+  const scheduled = result.book_difference === "";
   return (
     <section>
       <h3>Loan schedule · {input.lender} · {input.close_period}</h3>
       <p>
-        {input.annual_rate}%{input.rate_changes?.map((c) => `, ${c.annual_rate}% from ${c.effective}${c.index ? ` (${c.index} ${c.index_rate}% published for ${c.index_date} + ${c.margin}%)` : ""} (${c.reference})`).join("")} · {dayCounts[input.day_count]} · note {input.agreement_reference} · statement {input.source_reference}. The lender's split of each payment is used as stated; the note-rate column only checks it.
+        {input.annual_rate}%{input.rate_changes?.map((c) => `, ${c.annual_rate}% from ${c.effective}${c.index ? ` (${c.index} ${c.index_rate}% published for ${c.index_date} + ${c.margin}%)` : ""} (${c.reference})`).join("")} · {dayCounts[input.day_count]} · note {input.agreement_reference} · {scheduled ? "schedule" : "statement"} {input.source_reference}. {scheduled ? "The schedule's" : "The lender's"} split of each payment is used as stated; the note-rate column only checks it.
       </p>
       {result.blockers.map((b) => <p role="alert" key={b}>{b}</p>)}
       <div className="table-scroll">
       <table>
         <thead>
-          <tr><th>Payment</th><th>Principal before</th><th>Days</th><th>Principal</th><th>Lender interest</th><th>Note-rate interest</th><th>Difference</th>{rated && <th>Rates</th>}{feesPaid && <th>Fee paid in cash</th>}</tr>
+          <tr><th>Payment</th><th>Principal before</th><th>Days</th><th>Principal</th><th>{scheduled ? "Scheduled interest" : "Lender interest"}</th><th>Note-rate interest</th><th>Difference</th>{rated && <th>Rates</th>}{feesPaid && <th>Fee paid in cash</th>}</tr>
         </thead>
         <tbody>
           {result.schedule.length === 0 && <tr><td colSpan={7}>No payments this month.</td></tr>}
@@ -35,7 +37,11 @@ export function LoanResult({ result }: { result: LoanWorkpaper }) {
         </tbody>
       </table>
       </div>
-      <p>Lender principal: {money(input.opening_principal, input.currency)} opening{result.fees && ` + ${money(result.fees, input.currency)} fees added`} → {money(input.closing_principal, input.currency)} closing. Books differ by {money(result.book_difference, input.currency)}.</p>
+      {scheduled ? (
+        <p>Scheduled principal from the prior accountant's schedule: {money(input.opening_principal, input.currency)} opening → {money(input.closing_principal, input.currency)} closing. Schedule only: no book balance is compared here; the opening baseline ties the loan to the Trial Balance.</p>
+      ) : (
+        <p>Lender principal: {money(input.opening_principal, input.currency)} opening{result.fees && ` + ${money(result.fees, input.currency)} fees added`} → {money(input.closing_principal, input.currency)} closing. Books differ by {money(result.book_difference, input.currency)}.</p>
+      )}
       {input.fees?.map((f) => <p key={f.date + f.reference}>Fee {f.date}: {f.description}, {money(f.amount, input.currency)} ({f.reference}).</p>)}
       {result.fees_paid && <p>Fees paid in cash with the payments: {money(result.fees_paid, input.currency)}. They are not part of principal; no entry is proposed for them, so check how they were booked.</p>}
       {result.issuance_costs && input.issuance_costs && (

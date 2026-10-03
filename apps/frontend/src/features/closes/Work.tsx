@@ -932,6 +932,7 @@ function MemoryHint({ hint }: { hint: Hint }) {
 // A prior accountant's schedule, read on the client's opening month, is decided whole: each row imported as a schedule
 // (no journal) with a method, or set aside with a reason.
 function ScheduleImport({ item, lines, busy, blocked, onImport }: { item: WorkItem; lines: NonNullable<WorkItem["proposal"]["lines"]>; busy: boolean; blocked: boolean; onImport: (body: object) => void }) {
+  if (item.proposal.kind === "loan") return <LoanScheduleImport item={item} lines={lines} busy={busy} blocked={blocked} onImport={onImport} />;
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -995,6 +996,83 @@ function ScheduleImport({ item, lines, busy, blocked, onImport }: { item: WorkIt
           </label>
         )}
         <button className="primary">Import schedule</button>
+      </fieldset>
+      {blocked && <p>Answer the questions above first; the agent reads the schedule again.</p>}
+    </form>
+  );
+}
+
+// A prior loan's amortization schedule is imported whole as one schedule-only loan draft for this month.
+function LoanScheduleImport({ item, lines, busy, blocked, onImport }: { item: WorkItem; lines: NonNullable<WorkItem["proposal"]["lines"]>; busy: boolean; blocked: boolean; onImport: (body: object) => void }) {
+  const loan = item.proposal.facts ?? [];
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    onImport({
+      client_confirmed: data.has("client"),
+      roster_confirmed: data.has("roster"),
+      inventory_confirmed: data.has("inventory"),
+      day_count: String(data.get("day_count")),
+      reclass_current_portion: data.has("reclass"),
+      current_portion_account: String(data.get("current_account") ?? "").trim(),
+    });
+  };
+  return (
+    <form onSubmit={submit}>
+      <p>
+        {loan.map((f) => `${f.label}: ${f.value || f.question}`).join(" · ")}. The payment before this month opens it, this month's payments close it, and every row must be the balance
+        before it less its principal. It becomes a schedule-only loan draft with no journal; the opening baseline ties it to the Trial Balance.
+      </p>
+      <table>
+        <caption>{lines.length} payment rows read from {item.source_name}</caption>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Interest</th>
+            <th>Principal</th>
+            <th>Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((l) => (
+            <tr key={l.line}>
+              {["date", "interest", "principal", "balance"].map((field) => {
+                const fact = l.facts.find((f) => f.field === field);
+                return <td key={field}>{fact?.value || fact?.question}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <fieldset disabled={busy || blocked}>
+        <label>
+          Day-count the note states
+          <select name="day_count" defaultValue="actual_365">
+            <option value="actual_360">Actual/360</option>
+            <option value="actual_365">Actual/365 (fixed)</option>
+            <option value="30_360_bond">30/360 bond basis</option>
+            <option value="30e_360">30E/360</option>
+          </select>
+        </label>
+        <label>
+          <input type="checkbox" name="reclass" /> Show the principal due in the 12 months after month-end as a current liability
+        </label>
+        <label>
+          Current portion account (only with the current liability)
+          <input name="current_account" maxLength={200} placeholder="Loan, current portion" />
+        </label>
+        <label>
+          <input type="checkbox" name="client" required /> This loan is {item.entity}'s.
+        </label>
+        <label>
+          <input type="checkbox" name="roster" required /> These rows include the last payment before this month, every payment this month and, for a current portion, every payment of the 12 months after it.
+        </label>
+        {(item.proposal.unselected?.length ?? 0) > 0 && (
+          <label>
+            <input type="checkbox" name="inventory" required /> I reviewed the evidence the agent did not use.
+          </label>
+        )}
+        <button className="primary">Import loan schedule</button>
       </fieldset>
       {blocked && <p>Answer the questions above first; the agent reads the schedule again.</p>}
     </form>
