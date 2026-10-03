@@ -1,6 +1,6 @@
 # Cash plan
 
-B09 in the [agent-first build plan](agent-first-build-plan.md). This page records what is built: the base 13-week plan and named what-if scenarios. Reviewed versions that changed inputs invalidate, and comparing a past plan with what happened, are still to come and are not claimed here.
+B09 in the [agent-first build plan](agent-first-build-plan.md). This page records what is built: the base 13-week plan, named what-if scenarios, reviewed versions that changed inputs invalidate, and comparing a reviewed plan with what happened.
 
 ## The base plan
 
@@ -26,4 +26,12 @@ A scenario is kept with the QuickBooks books and home currency it was made for a
 A scenario changes only that view: never the base plan, a promise or bill-pay date recorded on an open item, an approved schedule or the ledger. It keeps the open items it moves by their document (`invoice:3`); one that has since been paid, disputed or left undated is named as not applied. Removing a scenario keeps its record.
 
 **Checks:** `TestScenariosMoveOpenItemsAndAddPaymentsWithoutTouchingTheBase` (a moved copy, a two-weekly payment up to its end date, a move with nothing to move, refused changes) and the scenario part of `TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations` (a delayed promised invoice and a hire through the API, the base plan unchanged, an executive seeing only their own scenario, a scenario for other books refused, a removed scenario no longer shown).
+
+## Reviewed versions and forecast against actual
+
+Until a person reviews it, the plan is a working forecast. Under **Reviewed versions**, someone with `workpapers:review` reviews the plan in view (as it stands, or with a scenario) by stating the assumptions they accept, the dates, promises and schedules relied on, and confirming the figures they saw (`POST /v1/closes/{id}/cash-plan/reviews`, migration `116_cash_plan_reviews.sql`). The plan's digest covers every figure and date shown, the capture and open-items read they came from, and the calculation (`cash_plan_v1`); each item names the decision or approved schedule that dates or adds it. A review is refused if the plan changed since they looked, its capture is no longer current, its open items were not all read, or the newest review of that view already covers exactly this plan (a plan that returns to an earlier state can be reviewed again). Reviews of a close are made one at a time. The reviewed plan is kept whole with the assumptions; rows are only ever added.
+
+`GET /v1/closes/{id}/cash-plan/reviews` lists reviews newest first. The newest review of each view is **current** only while the plan can still be laid out from a current, complete capture with the same figures and sources; it says **inputs changed** once a capture (even with the same totals), a promise, a bill-pay date, a schedule or a scenario changes it, or the books can no longer be read; the review itself stays as it was, and older ones are superseded. Each reviewed plan is compared with every later QuickBooks capture of the same books and currency within its 13 weeks (up to 30): the book cash at the capture's time beside the balance the reviewed plan expected at the end of that day, and the difference. A capture can be earlier in the day than that day's planned payments and receipts, so the page shows its time and says so. A home-currency bank balance that cannot be read is named and no actual is stated for that capture. Amounts are shown in each review's own currency. A client's executive sees reviews of the plan as it stands, not of scenarios, and cannot review.
+
+**Checks:** the review part of `TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations` (a short statement refused, a stale digest refused, a review, a repeat refused, current with nothing to compare; after a bill-pay handoff it shows inputs changed, and a capture three days later is compared: forecast -500.00, actual 5,000.00, difference 5,500.00; a capture with an unreadable bank balance states no actual), and the executive checks in `TestExecutivesReadOnlyTheirClientsPublishedReportsAndCashViews`.
 

@@ -42,7 +42,7 @@ func organizationAccess(db *sql.DB, r *http.Request) (bool, error) {
 // checked against this close by their existing handlers.
 // executiveRoutes are all an executive may call: their overview, a close's published packs, their exports and
 // acknowledgment, the read-only cash plan and budget comparison, and the plan's what-if scenarios.
-var executiveRoutes = regexp.MustCompile(`^(GET /executive|GET /[^/]+/management-pack/publications(/[^/]+(/export)?)?|POST /[^/]+/management-pack/publications|GET /[^/]+/(cash-plan|budget|cash-scenarios)|POST /[^/]+/cash-scenarios)$`)
+var executiveRoutes = regexp.MustCompile(`^(GET /executive|GET /[^/]+/management-pack/publications(/[^/]+(/export)?)?|POST /[^/]+/management-pack/publications|GET /[^/]+/(cash-plan|cash-plan/reviews|budget|cash-scenarios)|POST /[^/]+/cash-scenarios)$`)
 
 func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

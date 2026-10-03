@@ -68,6 +68,7 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
 	defer func() {
 		db.Exec(`DELETE FROM cash_obligations WHERE client_entity=$1`, entity)
+		db.Exec(`DELETE FROM cash_plan_reviews WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`, entity)
 		db.Exec(`DELETE FROM cash_scenarios WHERE client_entity=$1`, entity)
 		db.Exec(`DELETE FROM open_item_actions WHERE client_entity=$1`, entity)
 		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
@@ -251,12 +252,54 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	call("POST", "/cash-scenarios", map[string]any{"action": "retire", "id": id}, 200)
 	call("GET", "/cash-plan?scenario="+id, nil, 404)
 
+	// A person reviews the plan they see; the review stays current until a figure changes.
+	var digest struct{ Digest string }
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &digest))
+	call("POST", "/cash-plan/reviews", map[string]any{"digest": digest.Digest, "assumptions": "ok", "confirmed": true}, 422)
+	call("POST", "/cash-plan/reviews", map[string]any{"digest": "stale", "assumptions": "Promised dates as recorded", "confirmed": true}, 409)
+	call("POST", "/cash-plan/reviews", map[string]any{"digest": digest.Digest, "assumptions": "Promised dates as recorded; payroll per Gusto", "confirmed": true}, 200)
+	call("POST", "/cash-plan/reviews", map[string]any{"digest": digest.Digest, "assumptions": "Promised dates as recorded; payroll per Gusto", "confirmed": true}, 409)
+	type reviewed struct {
+		Reviews []struct {
+			State, Assumptions string
+			Actuals            []map[string]string
+		}
+	}
+	var reviews reviewed
+	must(json.Unmarshal(call("GET", "/cash-plan/reviews", nil, 200), &reviews))
+	if len(reviews.Reviews) != 1 || reviews.Reviews[0].State != "current" || len(reviews.Reviews[0].Actuals) != 0 {
+		t.Fatalf("the reviewed plan is current, with nothing to compare yet: %+v", reviews)
+	}
+
 	// Handing the landlord's bill to bill pay for next week moves the payment, and the estimate stays covered by it.
 	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "handed_to_bill_pay", "expected_on": "2026-10-14"}, 200)
 	plan.Covered = nil
 	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
 	if w1, w2 := plan.Weeks[0], plan.Weeks[1]; len(plan.Covered) != 1 || w1.Disbursements != "4000.00" || w1.Lowest != "1000.00" || w2.Disbursements != "1500.00" || w2.Closing != "2100.00" {
 		t.Fatalf("the bill moves to its bill-pay date and the rent estimate is still not counted: %+v %+v %+v", plan.Covered, w1, w2)
+	}
+	// The handoff changed the plan: the review is kept and says so. A capture three days later is compared with what
+	// the reviewed plan expected that day: 5,000 opening less the rent bill and payroll on the 7th is -500.00.
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) SELECT close_id,connection_id,realm,'later',payload,now(),captured_at+interval '3 days','fixture' FROM quickbooks_snapshots WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID)
+	must(err)
+	must(json.Unmarshal(call("GET", "/cash-plan/reviews", nil, 200), &reviews))
+	if r := reviews.Reviews[0]; r.State != "inputs_changed" || len(r.Actuals) != 1 || r.Actuals[0]["on"] != "2026-10-08" || r.Actuals[0]["forecast"] != "-500.00" || r.Actuals[0]["actual"] != "5000.00" || r.Actuals[0]["difference"] != "5500.00" {
+		t.Fatalf("a changed plan leaves its review flagged, and later book cash is compared with the reviewed forecast: %+v", reviews)
+	}
+	// A capture whose home-currency bank balance cannot be read states no actual, rather than a zero.
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) SELECT close_id,connection_id,realm,'unreadable',jsonb_set(payload,'{accounts}','[{"Id":"1","Name":"Checking","AccountType":"Bank","CurrentBalance":null}]'),now(),captured_at+interval '1 day','fixture' FROM quickbooks_snapshots WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID)
+	must(err)
+	var unreadable struct {
+		Reviews []struct {
+			Actuals []struct {
+				Actual     string
+				Unreadable []string
+			}
+		}
+	}
+	must(json.Unmarshal(call("GET", "/cash-plan/reviews", nil, 200), &unreadable))
+	if a := unreadable.Reviews[0].Actuals; len(a) != 2 || a[1].Actual != "" || len(a[1].Unreadable) != 1 || a[1].Unreadable[0] != "Checking" {
+		t.Fatalf("an unreadable bank balance is named, not counted as zero: %+v", a)
 	}
 }
 
