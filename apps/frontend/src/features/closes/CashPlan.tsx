@@ -43,6 +43,7 @@ type Plan =
       covered: { obligation: string; on: string; vendor: string }[];
       note: string;
       unapproved_schedules?: number;
+      digest: string;
       scenario: (Scenario & { missing: string[]; base_lowest: { amount: string; on: string } }) | null;
     };
 
@@ -145,6 +146,7 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
           setVersion((n) => n + 1);
         }}
       />
+      <Reviews closeId={closeId} plan={plan} scenario={scenario} readOnly={readOnly} />
       <p className="note">{plan.note}</p>
       {readOnly && !!plan.unapproved_schedules && <p className="note">{plan.unapproved_schedules} schedule{plan.unapproved_schedules === 1 ? " is" : "s are"} waiting for the firm's approval and not counted.</p>}
       {plan.opening.stale && <p role="alert">The bank balances come from a capture that is no longer current. Capture the books again before relying on the plan.</p>}
@@ -480,6 +482,141 @@ function Scenarios({ closeId, plan, scenarios, selected, onSelect }: { closeId: 
           </fieldset>
         </form>
       </details>
+    </>
+  );
+}
+
+type Review = {
+  id: string;
+  scenario: string;
+  scenario_name: string;
+  assumptions: string;
+  reviewed_by: string;
+  reviewed_at: string;
+  start: string;
+  lowest: { amount: string; on: string };
+  state: "current" | "inputs_changed" | "superseded" | "unverified";
+  currency: string;
+  calculation: string;
+  actuals: { captured_at: string; on: string; forecast: string; actual?: string; difference?: string; unreadable?: string[] }[];
+};
+const reviewStates = {
+  current: ["status ok", "Current"],
+  inputs_changed: ["status warn", "Inputs changed since review"],
+  superseded: ["status info", "Superseded"],
+  unverified: ["status warn", "Cannot confirm it is current"],
+} as const;
+
+// Reviewed plans: a person accepts the assumptions of the plan in view and it is kept as it was; later captures show
+// how actual book cash compared with what it expected.
+function Reviews({ closeId, plan, scenario, readOnly }: { closeId: string; plan: Extract<Plan, { state: "ready" }>; scenario: string; readOnly: boolean }) {
+  const [list, setList] = useState<Review[]>([]);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState(0);
+  // The states shown are those read for the plan on screen; while reading again, or if that fails, none is shown.
+  const [loadedFor, setLoadedFor] = useState("");
+  useEffect(() => {
+    let live = true;
+    setLoadedFor("");
+    workspaceRequest(`/${closeId}/cash-plan/reviews`)
+      .then((data) => live && (setList(data.reviews), setError(""), setLoadedFor(plan.digest)))
+      .catch((e) => live && (setList([]), setError(e instanceof Error ? e.message : "Reviews are unavailable.")));
+    return () => {
+      live = false;
+    };
+  }, [closeId, version, plan.digest]);
+  const reviewable = loadedFor === plan.digest && !plan.opening.stale && plan.open_items.complete && !list.some((r) => r.scenario === scenario && r.state === "current");
+  function review(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const element = event.currentTarget;
+    const form = new FormData(element);
+    setBusy(true);
+    setError("");
+    setSaved("");
+    workspaceRequest(`/${closeId}/cash-plan/reviews`, { scenario, digest: plan.digest, assumptions: form.get("assumptions"), confirmed: form.has("confirmed") })
+      .then(() => {
+        setSaved("Reviewed. It stays current until a figure in the plan changes.");
+        setVersion((n) => n + 1);
+        element.reset();
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "The review could not be saved."))
+      .finally(() => setBusy(false));
+  }
+  return (
+    <>
+      <SectionHeader title="Reviewed versions" />
+      {error && <p role="alert">{error}</p>}
+      {saved && <p role="status">{saved}</p>}
+      {list.length === 0 ? (
+        <p className="empty">No reviewed version yet. Until a person reviews it, the plan is a working forecast.</p>
+      ) : (
+        <ul>
+          {list.map((r) => {
+            const show = (value: string) => amount(value, r.currency);
+            return (
+            <li key={r.id}>
+              <strong>{r.scenario_name ? `With “${r.scenario_name}”` : "As it stood"}</strong> · from {r.start} · reviewed by {r.reviewed_by} {new Date(r.reviewed_at).toLocaleString()} ·{" "}
+              {loadedFor === plan.digest ? <span className={reviewStates[r.state][0]}>{reviewStates[r.state][1]}</span> : <span className="status info">Checking…</span>} · lowest {show(r.lowest.amount)} on {r.lowest.on}
+              <p>Assumptions accepted: {r.assumptions}</p>
+              {r.actuals.length > 0 && (
+                <table>
+                  <caption>Book cash at each later capture against the plan's end-of-day balance that day</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col" style={{ textAlign: "left" }}>
+                        Captured
+                      </th>
+                      <th scope="col">Planned end of day</th>
+                      <th scope="col">Actual at capture</th>
+                      <th scope="col">Difference</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {r.actuals.map((a) => (
+                      <tr key={a.captured_at}>
+                        <th scope="row" style={{ textAlign: "left", fontWeight: 400 }}>
+                          {new Date(a.captured_at).toLocaleString()}
+                        </th>
+                        <td>{show(a.forecast)}</td>
+                        {a.actual === undefined ? (
+                          <td colSpan={2}>Not stated: the balance of {a.unreadable?.join(", ")} could not be read.</td>
+                        ) : (
+                          <>
+                            <td>{show(a.actual)}</td>
+                            <td style={{ color: negative(a.difference ?? "") ? "var(--danger, #b42318)" : undefined }}>{show(a.difference ?? "0.00")}</td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <small>
+                {r.currency} · calculation {r.calculation} · the actual is measured at the capture's time, which may be before that day's planned payments and
+                receipts.
+              </small>
+            </li>
+            );
+          })}
+        </ul>
+      )}
+      {!readOnly && reviewable && (
+        <form onSubmit={review}>
+          <fieldset disabled={busy}>
+            <legend>Review the plan {plan.scenario ? `with “${plan.scenario.name}”` : "as it stands"}</legend>
+            <label>
+              The assumptions you accept: dates, promises and schedules relied on
+              <textarea name="assumptions" required minLength={5} maxLength={4000} />
+            </label>
+            <label>
+              <input type="checkbox" name="confirmed" required /> I reviewed these figures; this version is kept as it is.
+            </label>
+            <button className="primary">Review this plan</button>
+          </fieldset>
+        </form>
+      )}
     </>
   );
 }

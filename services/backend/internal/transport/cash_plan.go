@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
 )
 
@@ -19,8 +21,10 @@ var centsText = regexp.MustCompile(`^[0-9]{1,16}(\.[0-9]{1,2})?$`)
 
 // cashItem is one dated receipt (positive) or disbursement (negative) in the plan's currency, with where it came from.
 type cashItem struct {
-	// Key names an open invoice or bill ("invoice:3") so a scenario can move it.
+	// Key names an open invoice or bill ("invoice:3") so a scenario can move it; Ref is the record that dates or adds
+	// it: a recorded decision ("decision:12") or an approved schedule ("obligation:5").
 	Key    string `json:"key,omitempty"`
+	Ref    string `json:"ref,omitempty"`
 	On     string `json:"on"`
 	Amount string `json:"amount"`
 	Label  string `json:"label"`
@@ -180,6 +184,61 @@ func visibleScenario(executive, who string) string {
 	return `(NOT ` + executive + `::bool OR created_by=` + who + `)`
 }
 
+// bookCash is a capture's book cash: its home-currency bank accounts' balances at the capture; accounts in another
+// currency, and home-currency ones whose balance cannot be read, are named apart. Not ok when the accounts or the home
+// currency cannot be read.
+func bookCash(accounts []byte, home string) (total *big.Rat, banks []map[string]string, foreign, unreadable []string, ok bool) {
+	var directory []struct {
+		ID             string `json:"Id"`
+		Name           string
+		AccountType    string
+		CurrentBalance json.Number
+		CurrencyRef    struct{ Value string }
+	}
+	if json.Unmarshal(accounts, &directory) != nil || home == "" {
+		return nil, nil, nil, nil, false
+	}
+	total, banks, foreign, unreadable = new(big.Rat), []map[string]string{}, []string{}, []string{}
+	for _, a := range directory {
+		if a.AccountType != "Bank" {
+			continue
+		}
+		balance, ok := new(big.Rat).SetString(string(a.CurrentBalance))
+		switch {
+		case a.CurrencyRef.Value != "" && a.CurrencyRef.Value != home:
+			foreign = append(foreign, a.Name)
+		case !ok:
+			unreadable = append(unreadable, a.Name)
+		default:
+			total.Add(total, balance)
+			banks = append(banks, map[string]string{"account_id": a.ID, "name": a.Name, "balance": balance.FloatString(2)})
+		}
+	}
+	return total, banks, foreign, unreadable, true
+}
+
+// forecastOn is a plan's end-of-day book cash on a day within its weeks: the week's opening plus that week's items
+// through the day. Not ok outside the 13 weeks.
+func forecastOn(weeks []cashWeek, day string) (string, bool) {
+	for _, week := range weeks {
+		if day < week.Start || day > week.End {
+			continue
+		}
+		balance, _ := new(big.Rat).SetString(week.Opening)
+		for _, item := range week.Items {
+			if item.On <= day {
+				value, _ := new(big.Rat).SetString(item.Amount)
+				balance.Add(balance, value)
+			}
+		}
+		return balance.FloatString(2), true
+	}
+	return "", false
+}
+
+// cashPlanCalculation names how the plan is laid out; a review keeps it with the plan.
+const cashPlanCalculation = "cash_plan_v1"
+
 // lowestWeek is the week with the lowest end-of-day balance in the plan.
 func lowestWeek(weeks []cashWeek) cashWeek {
 	lowest, low := weeks[0], new(big.Rat)
@@ -256,13 +315,16 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		err = db.QueryRowContext(r.Context(), `SELECT organization_id,entity FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&org, &entity)
 		return
 	}
-	mux.HandleFunc("GET /v1/closes/{id}/cash-plan", func(w http.ResponseWriter, r *http.Request) {
+	// plan is the close's 13-week plan, with a scenario's changes when one is named; a plan that cannot be laid out yet
+	// is {state: waiting, reason}. Its digest covers every figure and date shown, not when it was read.
+	plan := func(r *http.Request, scenarioID string) (map[string]any, error) {
 		ctx := r.Context()
-		wait := func(reason string) { jsonReply(w, 200, map[string]any{"state": "waiting", "reason": reason}) }
+		wait := func(reason string) (map[string]any, error) {
+			return map[string]any{"state": "waiting", "reason": reason}, nil
+		}
 		org, entity, err := client(r)
 		if err != nil {
-			problem(w, 404, "Close not found.")
-			return
+			return nil, tieRefusal{404, "Close not found."}
 		}
 		// Opening book cash: the ledger's bank accounts in the close's newest QuickBooks capture, as of that capture.
 		var snapshotID, home, company string
@@ -272,55 +334,30 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		err = db.QueryRowContext(ctx, `SELECT s.id::text,s.captured_at,e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active',COALESCE(s.payload->'accounts','[]'::jsonb),COALESCE(x.home_currency,''),'quickbooks:'||x.environment||':'||x.realm FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id
  LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id::text=$1 AND s.connection_id=`+quickbooks.ReadingConnection("s.close_id")+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, r.PathValue("id")).Scan(&snapshotID, &asOf, &stale, &accounts, &home, &company)
 		if err == sql.ErrNoRows {
-			wait("Capture this client's QuickBooks books first: the plan opens from the ledger's bank balances. A Xero client's cash plan is not built yet.")
-			return
+			return wait("Capture this client's QuickBooks books first: the plan opens from the ledger's bank balances. A Xero client's cash plan is not built yet.")
 		}
 		if err != nil {
-			problem(w, 503, "The cash plan is unavailable.")
-			return
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
 		}
-		var directory []struct {
-			ID             string `json:"Id"`
-			Name           string
-			AccountType    string
-			CurrentBalance json.Number
-			CurrencyRef    struct{ Value string }
-		}
-		if json.Unmarshal(accounts, &directory) != nil || home == "" {
-			wait("The capture's accounts or the client's home currency could not be read.")
-			return
-		}
-		opening, banks, foreignBanks := new(big.Rat), []map[string]string{}, []string{}
-		for _, a := range directory {
-			if a.AccountType != "Bank" {
-				continue
-			}
-			balance, ok := new(big.Rat).SetString(string(a.CurrentBalance))
-			if !ok || (a.CurrencyRef.Value != "" && a.CurrencyRef.Value != home) {
-				foreignBanks = append(foreignBanks, a.Name)
-				continue
-			}
-			opening.Add(opening, balance)
-			banks = append(banks, map[string]string{"account_id": a.ID, "name": a.Name, "balance": balance.FloatString(2)})
+		opening, banks, foreignBanks, unreadableBanks, ok := bookCash(accounts, home)
+		foreignBanks = append(foreignBanks, unreadableBanks...)
+		if !ok {
+			return wait("The capture's accounts or the client's home currency could not be read.")
 		}
 		receivables, payables, meta, err := latestOpenItems(r, db)
 		var waitErr waiting
 		if errors.As(err, &waitErr) {
-			wait(string(waitErr))
-			return
+			return wait(string(waitErr))
 		}
 		if err != nil {
-			problem(w, 503, "The cash plan is unavailable.")
-			return
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
 		}
 		if meta["company"] != company {
-			wait("The latest open items come from other books than the bank balances; the plan needs both from the same QuickBooks company. Capture this month's QuickBooks transactions.")
-			return
+			return wait("The latest open items come from other books than the bank balances; the plan needs both from the same QuickBooks company. Capture this month's QuickBooks transactions.")
 		}
 		decided, err := openItemDecisions(r, db, org, entity, company)
 		if err != nil {
-			problem(w, 503, "The cash plan is unavailable.")
-			return
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
 		}
 		asOf = asOf.UTC()
 		start := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
@@ -350,13 +387,16 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				if side == 1 {
 					value.Neg(value)
 				}
-				items = append(items, cashItem{Key: strings.ToLower(item.Kind) + ":" + item.ID, On: on, Amount: value.FloatString(2), Label: item.Label, Source: strings.ToLower(item.Kind), Basis: basis, value: value})
+				ref := ""
+				if item.Action != nil && basis != "due date" {
+					ref = "decision:" + item.Action.ID
+				}
+				items = append(items, cashItem{Key: strings.ToLower(item.Kind) + ":" + item.ID, Ref: ref, On: on, Amount: value.FloatString(2), Label: item.Label, Source: strings.ToLower(item.Kind), Basis: basis, value: value})
 			}
 		}
 		obligations, err := clientObligations(r, db, org, entity)
 		if err != nil {
-			problem(w, 503, "The cash plan is unavailable.")
-			return
+			return nil, tieRefusal{503, "The cash plan is unavailable."}
 		}
 		// An approved obligation counts on each of its dates, except where an open bill from its named vendor already
 		// falls in the same week: that bill is the payment, so the estimate is not counted twice.
@@ -383,7 +423,7 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 				if o.Direction == "out" {
 					value.Neg(value)
 				}
-				item := cashItem{On: on.Format("2006-01-02"), Amount: value.FloatString(2), Label: o.Name, Source: o.Category, Basis: "approved " + strings.ReplaceAll(o.Every, "_", " ") + " schedule", value: value}
+				item := cashItem{Ref: "obligation:" + o.ID, On: on.Format("2006-01-02"), Amount: value.FloatString(2), Label: o.Name, Source: o.Category, Basis: "approved " + strings.ReplaceAll(o.Every, "_", " ") + " schedule", value: value}
 				if o.Direction == "out" && o.Vendor != "" && billWeeks[strings.ToLower(o.Vendor)+"|"+strconv.Itoa(day(on)/7)] {
 					covered = append(covered, map[string]string{"obligation": o.Name, "on": item.On, "vendor": o.Vendor})
 					continue
@@ -393,18 +433,16 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		}
 		// A scenario changes only this view: the base plan's lowest point is reported beside it.
 		var scenario map[string]any
-		if id := r.URL.Query().Get("scenario"); id != "" {
+		if id := scenarioID; id != "" {
 			var name, books, currency string
 			var raw []byte
 			if err := db.QueryRowContext(ctx, `SELECT name,changes,company,currency FROM cash_scenarios WHERE id::text=$1 AND organization_id=$2 AND lower(client_entity)=lower($3) AND retired_at IS NULL AND `+visibleScenario("$4", "$5"), id, org, entity, executive(r), reviewerName(r)).Scan(&name, &raw, &books, &currency); err != nil {
-				problem(w, 404, "Scenario not found.")
-				return
+				return nil, tieRefusal{404, "Scenario not found."}
 			}
 			// A scenario names open items and amounts of the books it was made for; other books or a new home currency
 			// could give the same key to another document.
 			if books != company || currency != home {
-				problem(w, 409, "This scenario was made for other books or another currency, so it is not applied. Try the change again on these books.")
-				return
+				return nil, tieRefusal{409, "This scenario was made for other books or another currency, so it is not applied. Try the change again on these books."}
 			}
 			var changes []cashChange
 			json.Unmarshal(raw, &changes)
@@ -431,12 +469,227 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		if executive(r) {
 			draftSchedules = []cashObligation{}
 		}
-		jsonReply(w, 200, map[string]any{"state": "ready", "entity": entity, "currency": home, "start": start.Format("2006-01-02"), "unapproved_schedules": len(pending),
+		out := map[string]any{"state": "ready", "entity": entity, "currency": home, "start": start.Format("2006-01-02"), "unapproved_schedules": len(pending),
 			"opening":    map[string]any{"amount": opening.FloatString(2), "as_of": asOf, "snapshot_id": snapshotID, "stale": stale, "accounts": banks, "left_out": foreignBanks},
 			"open_items": map[string]any{"captured_at": meta["captured_at"], "capture_id": meta["capture_id"], "complete": meta["complete"], "hours_apart": int(apart.Abs().Hours()), "through": meta["month_end"], "missing_later": first > meta["month_end"].(string)},
 			"weeks":      weeks, "lowest": map[string]string{"amount": lowest.Lowest, "on": lowest.LowestOn},
 			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "covered": covered, "pending_obligations": draftSchedules, "scenario": scenario,
-			"note": "Book cash is the ledger's bank balances at the capture, not bank-available cash. Receipts and payments are expectations from due dates, promises, bill-pay handoffs and approved schedules; nothing is paid, collected or written to the ledger. Sales not yet invoiced are not in the plan unless an approved receipt schedule adds them, so later weeks show only what is already known."})
+			"note": "Book cash is the ledger's bank balances at the capture, not bank-available cash. Receipts and payments are expectations from due dates, promises, bill-pay handoffs and approved schedules; nothing is paid, collected or written to the ledger. Sales not yet invoiced are not in the plan unless an approved receipt schedule adds them, so later weeks show only what is already known."}
+		// The digest binds the sources (the capture and the open items read) and the calculation, not only the totals.
+		figures, _ := json.Marshal([]any{cashPlanCalculation, entity, home, company, snapshotID, meta["capture_id"], out["start"], opening.FloatString(2), banks, weeks, before, after, unscheduled, covered, otherCurrency, scenario})
+		out["company"], out["calculation"], out["digest"] = company, cashPlanCalculation, preparation.Digest(figures)
+		return out, nil
+	}
+	mux.HandleFunc("GET /v1/closes/{id}/cash-plan", func(w http.ResponseWriter, r *http.Request) {
+		out, err := plan(r, r.URL.Query().Get("scenario"))
+		if refused, ok := err.(tieRefusal); ok {
+			problem(w, refused.status, refused.message)
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The cash plan is unavailable.")
+			return
+		}
+		jsonReply(w, 200, out)
+	})
+	// A person reviews the plan they see: its figures must be unchanged since, its capture current and its open items
+	// complete. The review keeps the whole plan and the assumptions they accepted.
+	mux.HandleFunc("POST /v1/closes/{id}/cash-plan/reviews", func(w http.ResponseWriter, r *http.Request) {
+		who, ok := reviewActor(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			Scenario    string `json:"scenario"`
+			Digest      string `json:"digest"`
+			Assumptions string `json:"assumptions"`
+			Confirmed   bool   `json:"confirmed"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if in.Assumptions = strings.TrimSpace(in.Assumptions); !in.Confirmed || in.Digest == "" || utf8.RuneCountInString(in.Assumptions) < 5 || utf8.RuneCountInString(in.Assumptions) > 4000 {
+			problem(w, 422, "Confirm the plan you reviewed and state the assumptions you accept (5–4,000 characters).")
+			return
+		}
+		out, err := plan(r, in.Scenario)
+		if refused, ok := err.(tieRefusal); ok {
+			problem(w, refused.status, refused.message)
+			return
+		}
+		if err != nil {
+			problem(w, 503, "The cash plan is unavailable.")
+			return
+		}
+		switch {
+		case out["state"] != "ready":
+			problem(w, 409, "The plan is not ready: "+out["reason"].(string))
+			return
+		case out["digest"] != in.Digest:
+			problem(w, 409, "The plan changed since you looked at it. Review it again.")
+			return
+		case out["opening"].(map[string]any)["stale"] == true || out["open_items"].(map[string]any)["complete"] != true:
+			problem(w, 409, "Only a plan from a current capture with every open item read can be reviewed.")
+			return
+		}
+		// Reviews of a close are made one at a time; the newest review of this view decides whether this one is new, so a
+		// plan that returns to an earlier state can be reviewed again.
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The review could not be saved.")
+			return
+		}
+		defer tx.Rollback()
+		var org, newest string
+		if err = tx.QueryRowContext(r.Context(), `SELECT organization_id FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&org); err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT digest FROM cash_plan_reviews WHERE close_id::text=$1 AND scenario_id IS NOT DISTINCT FROM NULLIF($2,'')::bigint ORDER BY id DESC LIMIT 1),'')`, r.PathValue("id"), in.Scenario).Scan(&newest); err != nil {
+			problem(w, 503, "The review could not be saved.")
+			return
+		}
+		if newest == in.Digest {
+			problem(w, 409, "This plan is already reviewed; nothing in it has changed since.")
+			return
+		}
+		frozen, _ := json.Marshal(out)
+		var id string
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO cash_plan_reviews(organization_id,close_id,scenario_id,company,currency,plan,digest,assumptions,reviewed_by) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,$6,$7,$8,$9) RETURNING id::text`,
+			org, r.PathValue("id"), in.Scenario, out["company"], out["currency"], frozen, in.Digest, in.Assumptions, who).Scan(&id); err != nil || tx.Commit() != nil {
+			problem(w, 503, "The review could not be saved.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"id": id})
+	})
+	// Reviewed plans, newest first: the newest for each scenario (or the plan as it stands) is current until its figures
+	// change, older ones are superseded. Each is compared with the book cash of later captures of the same books, on the
+	// capture's day. A client's executive sees reviews of the plan as it stands only.
+	mux.HandleFunc("GET /v1/closes/{id}/cash-plan/reviews", func(w http.ResponseWriter, r *http.Request) {
+		org, entity, err := client(r)
+		if err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT v.id::text,COALESCE(v.scenario_id::text,''),COALESCE(s.name,''),v.company,v.currency,v.plan,v.digest,v.assumptions,v.reviewed_by,v.reviewed_at
+ FROM cash_plan_reviews v LEFT JOIN cash_scenarios s ON s.id=v.scenario_id WHERE v.close_id::text=$1 AND (NOT $2::bool OR v.scenario_id IS NULL) ORDER BY v.id DESC LIMIT 50`, r.PathValue("id"), executive(r))
+		if err != nil {
+			problem(w, 503, "Reviews are unavailable.")
+			return
+		}
+		// A capture's book cash is measured at its time; the plan's figure is the planned balance at the end of that day.
+		type comparison struct {
+			CapturedAt time.Time `json:"captured_at"`
+			On         string    `json:"on"`
+			Forecast   string    `json:"forecast"`
+			Actual     string    `json:"actual,omitempty"`
+			Difference string    `json:"difference,omitempty"`
+			Unreadable []string  `json:"unreadable,omitempty"`
+		}
+		type review struct {
+			ID          string       `json:"id"`
+			Scenario    string       `json:"scenario"`
+			Name        string       `json:"scenario_name"`
+			Assumptions string       `json:"assumptions"`
+			ReviewedBy  string       `json:"reviewed_by"`
+			ReviewedAt  time.Time    `json:"reviewed_at"`
+			Start       string       `json:"start"`
+			Lowest      any          `json:"lowest"`
+			State       string       `json:"state"`
+			Actuals     []comparison `json:"actuals"`
+			Currency    string       `json:"currency"`
+			Calculation string       `json:"calculation"`
+			company     string
+			digest      string
+			asOf        time.Time
+			weeks       []cashWeek
+		}
+		reviews := []review{}
+		for rows.Next() {
+			var v review
+			var raw []byte
+			if err = rows.Scan(&v.ID, &v.Scenario, &v.Name, &v.company, &v.Currency, &raw, &v.digest, &v.Assumptions, &v.ReviewedBy, &v.ReviewedAt); err != nil {
+				break
+			}
+			var frozen struct {
+				Start       string
+				Calculation string
+				Lowest      any
+				Opening     struct {
+					AsOf time.Time `json:"as_of"`
+				}
+				Weeks []cashWeek
+			}
+			json.Unmarshal(raw, &frozen)
+			v.Start, v.Calculation, v.Lowest, v.asOf, v.weeks, v.Actuals = frozen.Start, frozen.Calculation, frozen.Lowest, frozen.Opening.AsOf, frozen.Weeks, []comparison{}
+			reviews = append(reviews, v)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		if err != nil {
+			problem(w, 503, "Reviews are unavailable.")
+			return
+		}
+		seen := map[string]bool{}
+		for i := range reviews {
+			v := &reviews[i]
+			if seen[v.Scenario] {
+				v.State = "superseded"
+			} else {
+				seen[v.Scenario] = true
+				// The newest review of each view is current while the plan still shows the same figures.
+				live, e := plan(r, v.Scenario)
+				switch {
+				case e != nil:
+					v.State = "unverified"
+				case live["state"] != "ready" || live["opening"].(map[string]any)["stale"] == true || live["open_items"].(map[string]any)["complete"] != true:
+					// The plan can no longer be laid out from current, complete books, so it cannot be confirmed as reviewed.
+					v.State = "inputs_changed"
+				case live["digest"] == v.digest:
+					v.State = "current"
+				default:
+					v.State = "inputs_changed"
+				}
+			}
+			start, _ := time.Parse("2006-01-02", v.Start)
+			later, e := db.QueryContext(r.Context(), `SELECT s.captured_at,COALESCE(s.payload->'accounts','[]'::jsonb) FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id
+ WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND s.captured_at>$3 AND s.captured_at<$4 AND 'quickbooks:'||x.environment||':'||x.realm=$5 AND COALESCE(x.home_currency,'')=$6 ORDER BY s.captured_at LIMIT 30`, org, entity, v.asOf, start.AddDate(0, 0, 13*7), v.company, v.Currency)
+			if e != nil {
+				problem(w, 503, "Reviews are unavailable.")
+				return
+			}
+			for later.Next() {
+				var at time.Time
+				var accounts []byte
+				if e = later.Scan(&at, &accounts); e != nil {
+					break
+				}
+				on := at.UTC().Format("2006-01-02")
+				forecast, inPlan := forecastOn(v.weeks, on)
+				actual, _, _, unreadable, ok := bookCash(accounts, v.Currency)
+				if !inPlan || !ok {
+					continue
+				}
+				// A home-currency balance that cannot be read is not zero: no actual is stated for that capture.
+				if len(unreadable) > 0 {
+					v.Actuals = append(v.Actuals, comparison{CapturedAt: at, On: on, Forecast: forecast, Unreadable: unreadable})
+					continue
+				}
+				expected, _ := new(big.Rat).SetString(forecast)
+				v.Actuals = append(v.Actuals, comparison{CapturedAt: at, On: on, Forecast: forecast, Actual: actual.FloatString(2), Difference: new(big.Rat).Sub(actual, expected).FloatString(2)})
+			}
+			if e == nil {
+				e = later.Err()
+			}
+			later.Close()
+			if e != nil {
+				problem(w, 503, "Reviews are unavailable.")
+				return
+			}
+		}
+		jsonReply(w, 200, map[string]any{"reviews": reviews})
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/cash-scenarios", func(w http.ResponseWriter, r *http.Request) {
 		org, entity, err := client(r)
