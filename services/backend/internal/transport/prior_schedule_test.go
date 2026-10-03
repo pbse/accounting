@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"close.local/backend/internal/loans"
 	"close.local/backend/internal/preparation"
 )
 
@@ -155,5 +156,93 @@ func TestPriorScheduleRowsBecomeScheduleOnlyDrafts(t *testing.T) {
 	must(err)
 	if got := importing(combined, both(map[string]any{"line": 2, "decision": "import", "method": "equal_full_months_v1"}), 409); !strings.Contains(got, "one schedule at a time") {
 		t.Fatalf("a schedule replacing two documents is refused: %s", got)
+	}
+}
+
+func TestAPriorLoanScheduleBecomesOneScheduleOnlyLoanDraft(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	entity := "Prior loan " + rand.Text()
+	defer func() {
+		for _, q := range []string{`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`, `DELETE FROM preparation_intakes WHERE job_id IN (SELECT j.id FROM preparation_jobs j JOIN client_closes c ON c.id=j.close_id WHERE c.entity=$1)`,
+			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`, `DELETE FROM client_closes WHERE entity=$1`} {
+			db.Exec(q, entity)
+		}
+	}()
+	token := strings.Repeat("l", 32)
+	handler := apiWithStore(db, token)
+	call := func(method, path string, body any, want int) []byte {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, strings.NewReader(string(raw)))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s %v: %d %s", method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.Bytes()
+	}
+	var opening struct{ ID string }
+	must(json.Unmarshal(call("POST", "/v1/closes", map[string]string{"entity": entity, "period": "2026-08"}, 200), &opening))
+	fact := func(field, value string) preparation.Fact {
+		return preparation.Fact{Field: field, Label: strings.ReplaceAll(field, "_", " "), Value: value}
+	}
+	p := preparation.Proposal{Kind: "loan", Summary: "Prior loan schedule", Facts: []preparation.Fact{fact("lender", "First Bank"), fact("agreement_reference", "Note 2024-1"), fact("annual_rate", "6.000"), fact("currency", "USD"), fact("loan_account", "Term loan"), fact("interest_account", "Interest expense")}}
+	content := "First Bank schedule\n"
+	for i, row := range [][4]string{{"2026-07-15", "50.00", "0.00", "10000.00"}, {"2026-08-15", "50.00", "500.00", "9500.00"}} {
+		content += strings.Join(row[:], ",") + "\n"
+		p.Lines = append(p.Lines, preparation.ScheduleLine{Line: i + 1, Row: strings.Join(row[:], ","), Facts: []preparation.Fact{fact("date", row[0]), fact("interest", row[1]), fact("principal", row[2]), fact("balance", row[3])}})
+	}
+	var evidence, digest, job string
+	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1::bigint,'loan.csv',$2,$3,'fixture') RETURNING id::text,digest`, opening.ID, rand.Text(), content).Scan(&evidence, &digest))
+	p.Sources = []preparation.Source{{ID: evidence, Digest: digest, Name: "loan.csv", Role: "invoice", Location: "Full extracted text"}}
+	proposal, _ := json.Marshal(p)
+	must(db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1::bigint,$2,'[]','needs_confirmation','fixture') RETURNING id::text`, opening.ID, "intake:"+evidence).Scan(&job))
+	_, err = db.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal) VALUES($1::bigint,$2::bigint,$3)`, job, evidence, string(proposal))
+	must(err)
+	importing := func(body map[string]any, want int) string {
+		t.Helper()
+		var revision int
+		must(db.QueryRow(`SELECT revision FROM preparation_intakes WHERE job_id::text=$1`, job).Scan(&revision))
+		body["revision"], body["client_confirmed"], body["roster_confirmed"] = revision, true, true
+		return string(call("POST", "/v1/closes/"+opening.ID+"/work/"+job+"/import_schedule", body, want))
+	}
+	importing(map[string]any{"day_count": "monthly"}, 422)
+	if got := importing(map[string]any{"day_count": "actual_365", "reclass_current_portion": true, "current_portion_account": "Loan, current portion"}, 422); !strings.Contains(got, "not the 12 months after") {
+		t.Fatalf("a schedule without the next year's payments cannot state a current portion: %s", got)
+	}
+	// A loan draft needs the firm's approved loan procedure, as any loan draft does.
+	if got := importing(map[string]any{"day_count": "actual_365"}, 409); !strings.Contains(got, "approved loan procedure") {
+		t.Fatalf("a loan without the firm's loan procedure is refused: %s", got)
+	}
+	_, err = db.Exec(`INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor,method) SELECT organization_id,entity,'loan','Synthetic loan procedure',true,'Synthetic approval','fixture',$2 FROM client_closes WHERE id::text=$1`, opening.ID, loans.Method)
+	must(err)
+	defer db.Exec(`DELETE FROM procedure_versions WHERE client_entity=$1`, entity)
+	importing(map[string]any{"day_count": "actual_365"}, 200)
+	for range 5 {
+		if worked, e := preparation.ProcessOne(t.Context(), db); e != nil || !worked {
+			break
+		}
+	}
+	var kind, closing, reference, imported string
+	var proposals int
+	must(db.QueryRow(`SELECT kind,paper->'input'->>'closing_principal',paper->'input'->>'source_reference',jsonb_array_length(COALESCE(paper->'proposals','[]')),paper->'imported'->>'label' FROM workpapers WHERE close_id::text=$1`, opening.ID).Scan(&kind, &closing, &reference, &proposals, &imported))
+	if kind != "loan" || closing != "9500.00" || reference != "Prior schedule #"+evidence+" · First Bank" || proposals != 0 || imported != "First Bank" {
+		t.Fatalf("the loan is one schedule-only draft named by its schedule: %s %s %s %d %s", kind, closing, reference, proposals, imported)
 	}
 }

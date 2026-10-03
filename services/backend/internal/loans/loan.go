@@ -3,6 +3,7 @@
 package loans
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"regexp"
@@ -527,4 +528,36 @@ func Prepare(in Input) (Workpaper, error) {
 	}
 	result.Input = in
 	return result, nil
+}
+
+// ScheduleOnly checks a month of a loan read from a prior accountant's amortization schedule. There is no ledger balance
+// to compare (the opening baseline ties the loan to the Trial Balance), so the book balances are taken as the schedule's
+// and no entry is proposed; the confirmations and those balances are not kept. A month the calculation blocks is refused.
+func ScheduleOnly(in Input) (Workpaper, error) {
+	closing, err := prepaids.Amount(in.ClosingPrincipal)
+	if err != nil {
+		return Workpaper{}, fmt.Errorf("Enter the closing principal as a nonnegative amount with at most two decimals.")
+	}
+	current := int64(0)
+	if in.ReclassCurrentPortion {
+		if current, err = prepaids.Amount(in.PrincipalDueNext12Months); err != nil || current > closing {
+			return Workpaper{}, fmt.Errorf("The principal due in the next 12 months must be an amount no larger than the closing principal.")
+		}
+		in.BookedCurrentPortion = prepaids.Money(current)
+	} else {
+		in.BookedCurrentPortion = ""
+	}
+	in.BookBalance = prepaids.Money(closing - current)
+	in.MethodConfirmed, in.RateConfirmed, in.BookingConfirmed = true, true, true
+	paper, err := Prepare(in)
+	if err != nil {
+		return Workpaper{}, err
+	}
+	if len(paper.Blockers) > 0 {
+		return Workpaper{}, errors.New(strings.Join(paper.Blockers, " "))
+	}
+	paper.Input.BookBalance, paper.Input.BookedCurrentPortion = "", ""
+	paper.Input.MethodConfirmed, paper.Input.RateConfirmed, paper.Input.BookingConfirmed = false, false, false
+	paper.BookDifference, paper.Proposals = "", []prepaids.Adjustment{}
+	return paper, nil
 }
