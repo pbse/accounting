@@ -55,3 +55,8 @@ Before activation, separately authorize a synthetic recipient on staging: config
 Provider references: [send email](https://resend.com/docs/api-reference/emails/send-email), [idempotency keys](https://resend.com/docs/dashboard/emails/idempotency-keys), [domain verification response](https://resend.com/docs/api-reference/domains/get-domain).
 
 Webhook references: [Resend verification](https://resend.com/docs/webhooks/verify-webhooks-requests), [Svix signing format](https://docs.svix.com/receiving/verifying-payloads/how-manual).
+
+## Collection emails
+
+The same outbox, sender and delivery tracking also send [collection emails](work-inbox.md#cash-operations-overdue-receivables-and-payables) to a client's customers (migration `117_collections.sql`): an outbox message belongs either to a client request (with its private link) or to one collection message. Before each send the worker checks the client's authority to contact its customers from this sender, the address's contact preference and any earlier bounce, complaint or suppression for that client, that the books were not captured again since approval, the approver's access and the approval window; anything that changed cancels the message. A delivery event that arrives before the provider id is stored is linked to the collection message's close, as for requests.
+
