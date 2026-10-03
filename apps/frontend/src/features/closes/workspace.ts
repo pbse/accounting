@@ -69,6 +69,12 @@ export async function workspaceRequest(
 export const money = (amount = "", currency = "USD") =>
   currency === "USD" ? `$${amount}` : `${amount} ${currency}`;
 
+// A decimal string as a statement shows it: thousands separators and a true minus, without converting to a float.
+export const amount = (value: string, currency = "USD") => {
+  const [whole, cents] = value.replace("-", "").split(".");
+  return (value.startsWith("-") ? "−" : "") + money(`${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}${cents === undefined ? "" : `.${cents}`}`, currency);
+};
+
 // The client's home currency as its connected ledger reports it; USD until known.
 export function useCurrency(close: string | null) {
   const [currency, setCurrency] = useState("USD");
