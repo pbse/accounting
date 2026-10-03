@@ -6,6 +6,7 @@ import type { ReconciliationWorkpaper } from "../../../../../packages/contracts/
 import type { SettlementWorkpaper } from "../../../../../packages/contracts/settlement";
 import type { LoanWorkpaper } from "../../../../../packages/contracts/loan";
 import type { OwnerWorkpaper } from "../../../../../packages/contracts/owner";
+import type { PayrollWorkpaper } from "../../../../../packages/contracts/payroll";
 import { AccrualResult } from "../accruals/Prepare";
 import { EffortTracker } from "./Effort";
 import { PageHeader } from "@close/ui/components/PageHeader";
@@ -14,6 +15,7 @@ import { ReconciliationResult } from "../reconciliation/Prepare";
 import { SettlementResult } from "../settlements/Prepare";
 import { LoanResult } from "../loans/Prepare";
 import { OwnerResult } from "../owners/Prepare";
+import { PayrollResult } from "../payroll/Prepare";
 import type { Source } from "./Evidence";
 import type { Plan } from "./Planning";
 import { Posting, ProductionPosting, XeroPosting } from "./Posting";
@@ -36,11 +38,12 @@ export type Paper = { id: string; created_at: string; review_state: string } & (
   | Saved<"settlement", SettlementWorkpaper>
   | Saved<"loan", LoanWorkpaper>
   | Saved<"owner", OwnerWorkpaper>
+  | Saved<"payroll", PayrollWorkpaper>
 );
 
-const paperLabels = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", loan: "Loan schedule", owner: "Owner reclassification" };
+const paperLabels = { prepaid: "Prepaid schedule", accrual: "Accrued expense", reconciliation: "Statement reconciliation", settlement: "Stripe settlement", loan: "Loan schedule", owner: "Owner reclassification", payroll: "Payroll" };
 export const paperLabel = (p: Paper) => (p.kind === "prepaid" && p.paper.input.schedule ? `${scheduleTerms[p.paper.input.schedule].name} schedule` : paperLabels[p.kind]);
-const paperPaths = { prepaid: "prepaids", accrual: "accruals", reconciliation: "reconciliations", settlement: "settlements", loan: "loans", owner: "owners" };
+const paperPaths = { prepaid: "prepaids", accrual: "accruals", reconciliation: "reconciliations", settlement: "settlements", loan: "loans", owner: "owners", payroll: "payroll" };
 const reviewLabels: Record<string, [string, string]> = {
   pending: ["Awaiting review", "pill muted"],
   approved: ["Approved", "pill"],
@@ -259,6 +262,7 @@ function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
   if (saved.kind === "accrual") return <><AccrualResult result={saved.paper} />{saved.paper.proposal && posting}</>;
   if (saved.kind === "loan") return <><LoanResult result={saved.paper} />{saved.paper.proposals.length > 0 && saved.paper.blockers.length === 0 && posting}</>;
   if (saved.kind === "owner") return <><OwnerResult result={saved.paper} />{saved.paper.proposal && posting}</>;
+  if (saved.kind === "payroll") return <PayrollResult result={saved.paper} />;
   if (saved.kind === "reconciliation") return <><ReconciliationResult result={saved.paper} /><NativeFlags closeId={close.id} account={saved.paper.input.account} /></>;
   const paper = saved.paper;
   const terms = scheduleTerms[paper.input.schedule ?? ""];

@@ -79,7 +79,7 @@ export function Procedures({
         impact_digest: publishImpact.impact_digest,
         client_entity: target === "client" ? entity : "",
         kind,
-        method: kind === "loan" ? data.get("loan_method") : kind === "basis" ? data.get("basis") : kind === "owner" && target === "client" ? data.get("entity_type") : "",
+        method: kind === "loan" ? data.get("loan_method") : kind === "payroll" ? "payroll_summary_v1" : kind === "basis" ? data.get("basis") : kind === "owner" && target === "client" ? data.get("entity_type") : "",
         instructions: data.get("instructions"),
         expense_account: data.get("expense_account") ?? "",
         prepaid_account: data.get("prepaid_account") ?? "",
@@ -176,14 +176,14 @@ export function Procedures({
       {loaded && (
         <>
           <h3>Effective versions for {entity}</h3>
-          {["basis", "owner", "prepaid", "reconciliation", "accrual", "loan"].map((k) => {
+          {["basis", "owner", "prepaid", "reconciliation", "accrual", "loan", "payroll"].map((k) => {
             const v =
               versions.find((p) => matches(p, entity, k)) ??
               versions.find((p) => matches(p, "", k));
             return (
               <section key={k}>
                 <h4>
-                  {k === "basis" ? "Accounting basis" : k === "owner" ? "Owner treatments" : k === "prepaid" ? "Prepaid preparation" : k === "accrual" ? "Accrual preparation" : k === "loan" ? "Loan schedules" : "Statement reconciliation"}
+                  {k === "basis" ? "Accounting basis" : k === "owner" ? "Owner treatments" : k === "prepaid" ? "Prepaid preparation" : k === "accrual" ? "Accrual preparation" : k === "loan" ? "Loan schedules" : k === "payroll" ? "Payroll recording" : "Statement reconciliation"}
                 </h4>
                 {!v ? (
                   <p>
@@ -211,7 +211,7 @@ export function Procedures({
                       Approval record: {v.reason} · {v.actor} ·{" "}
                       {new Date(v.created_at).toLocaleString()}
                     </p>
-                    {v.enabled && k !== "basis" && k !== "owner" && <>
+                    {v.enabled && k !== "basis" && k !== "owner" && k !== "payroll" && <>
                       <button disabled={busy} onClick={() => void preview(v)}>Preview affected work</button>
                       {impact?.version_id === v.id && <>
                         <p>Current pinned procedure source: {impact.source_id ? `#${impact.source_id}` : "none"}. Applying this version changes the cited context for {impact.affected_drafts.length} workpaper(s); their review may become stale.</p>
@@ -263,9 +263,10 @@ export function Procedures({
                   <option value="loan">Loan schedules (lender statement method)</option>
                   <option value="basis">Accounting basis</option>
                   <option value="owner">Owner treatments (entity type)</option>
+                  <option value="payroll">Payroll recording (provider summary method)</option>
                 </select>
               </label>
-              {target === "client" && kind !== "basis" && kind !== "owner" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
+              {target === "client" && kind !== "basis" && kind !== "owner" && kind !== "payroll" && <button onClick={() => void suggest()} disabled={busy}>Draft review points from prior edits</button>}
               <button onClick={() => { setSuggestion(undefined);setEditing(true); }} disabled={busy}>
                 Propose and approve a new version
               </button>

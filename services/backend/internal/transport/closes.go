@@ -5,6 +5,7 @@ import (
 	"close.local/backend/internal/llm"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"close.local/backend/internal/payroll"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -403,6 +404,14 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			err = preparation.Strict(input.Input, &value)
 			if err == nil {
 				paper, err = owners.Prepare(value)
+			}
+			entity = strings.TrimSpace(value.Entity)
+			period = value.ClosePeriod
+		case "payroll":
+			var value payroll.Input
+			err = preparation.Strict(input.Input, &value)
+			if err == nil {
+				paper, err = payroll.Prepare(value)
 			}
 			entity = strings.TrimSpace(value.Entity)
 			period = value.ClosePeriod

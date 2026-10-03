@@ -3,6 +3,7 @@ package transport
 import (
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"close.local/backend/internal/payroll"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -53,7 +54,7 @@ func readProcedureImpact(ctx context.Context, tx *sql.Tx, closeID, kind string) 
 }
 
 // Kinds whose procedure names its reviewed method directly; other methods come from procedure learning.
-var fixedMethods = map[string][]string{"loan": {loans.Method, loans.VariableMethod, loans.CostsMethod}, "basis": {"cash", "modified_cash", "accrual"}}
+var fixedMethods = map[string][]string{"loan": {loans.Method, loans.VariableMethod, loans.CostsMethod}, "payroll": {payroll.Method}, "basis": {"cash", "modified_cash", "accrual"}}
 
 func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/{id}/procedures/suggestion", func(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +141,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/procedures", func(w http.ResponseWriter, r *http.Request) {
 		if kind := r.URL.Query().Get("impact_kind"); kind != "" {
 			client := strings.TrimSpace(r.URL.Query().Get("client_entity"))
-			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis" && kind != "owner") || len(client) > 200 {
+			if (kind != "prepaid" && kind != "accrual" && kind != "reconciliation" && kind != "loan" && kind != "basis" && kind != "owner" && kind != "payroll") || len(client) > 200 {
 				problem(w, 422, "Choose a supported procedure scope.")
 				return
 			}
@@ -236,7 +237,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			// Entity type is a fact about one client; the firm default carries only policy and account names.
 			methodOK = (in.ClientEntity != "") == (in.Method != "") && (in.Method == "" || slices.Contains(owners.EntityTypes, in.Method))
 		}
-		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis" && in.Kind != "owner") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
+		if !in.Confirmed || !methodOK || (in.Kind == "basis" && !in.Enabled) || (in.Kind != "prepaid" && in.Kind != "reconciliation" && in.Kind != "accrual" && in.Kind != "loan" && in.Kind != "basis" && in.Kind != "owner" && in.Kind != "payroll") || len(in.ClientEntity) > 200 || len(in.Instructions) < 1 || len(in.Instructions) > 4000 || len(in.Reason) < 1 || len(in.Reason) > 2000 || len(in.ExpenseAccount) > 200 || len(in.PrepaidAccount) > 200 || strings.ContainsAny(in.ExpenseAccount+in.PrepaidAccount, "\r\n") || (in.Kind != "prepaid" && (in.ExpenseAccount != "" || in.PrepaidAccount != "")) {
 			problem(w, 422, "Confirm a supported procedure, bounded instructions, a reason and optional single-line prepaid account names.")
 			return
 		}

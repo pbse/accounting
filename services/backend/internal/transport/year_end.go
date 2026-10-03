@@ -22,6 +22,7 @@ import (
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"close.local/backend/internal/payroll"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
@@ -127,7 +128,7 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 		type slot struct{ period, kind, key string }
 		latest := map[slot]paper{}
 		order := []slot{}
-		rows, err = tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT y.period,w.id::text,w.kind,w.review_state,w.paper FROM y JOIN workpaper_review_state w ON w.close_id=y.id WHERE w.kind IN ('prepaid','accrual','loan','owner','reconciliation','settlement') ORDER BY y.period,w.id`, r.PathValue("id"), from)
+		rows, err = tx.QueryContext(ctx, `WITH y AS (`+yearCloses+`) SELECT y.period,w.id::text,w.kind,w.review_state,w.paper FROM y JOIN workpaper_review_state w ON w.close_id=y.id WHERE w.kind IN ('prepaid','accrual','loan','owner','payroll','reconciliation','settlement') ORDER BY y.period,w.id`, r.PathValue("id"), from)
 		if err != nil {
 			problem(w, 503, "Could not read saved workpapers.")
 			return
@@ -261,6 +262,15 @@ func yearEndHandoff(db *sql.DB) http.HandlerFunc {
 					return
 				}
 				propose(p, wp.Proposal)
+			case "payroll":
+				var wp payroll.Workpaper
+				if json.Unmarshal(p.raw, &wp) != nil {
+					problem(w, 500, "A saved payroll entry could not be read. No partial handoff was downloaded.")
+					return
+				}
+				for i := range wp.Proposals {
+					propose(p, &wp.Proposals[i])
+				}
 			case "settlement":
 				var wp reconciliation.SettlementWorkpaper
 				if json.Unmarshal(p.raw, &wp) != nil {
@@ -379,12 +389,15 @@ func paperKey(kind string, raw json.RawMessage) string {
 			AccountType          string `json:"account_type"`
 			ReportReference      string `json:"report_reference"`
 			Schedule             string `json:"schedule"`
+			Provider             string `json:"provider"`
 		} `json:"input"`
 	}
 	json.Unmarshal(raw, &p)
 	in := p.Input
 	parts := []string{in.SourceReference}
 	switch kind {
+	case "payroll":
+		parts = []string{strings.ToLower(strings.TrimSpace(in.Provider))}
 	case "prepaid":
 		if in.Schedule != "" {
 			parts = append(parts, in.Schedule)

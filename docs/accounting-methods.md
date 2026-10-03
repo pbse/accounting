@@ -115,6 +115,17 @@ The local agent recognizes exact labeled facts. To propose an accrual locally, p
   - A partnership draw or contribution needs the partner and that partner's account.
 - Earlier periods need the firm's prior-period approval and aren't handled here. Tax treatment (constructive dividends, basis tracking, reasonable salary) is never decided. Nothing is posted.
 
+## Payroll recording
+
+**Payroll** (`/dashboard/payroll/new`, method `payroll_summary_v1`) records one month's payroll from the provider's approved summary (Gusto, ADP and similar) for pay dates in the close month (B04). It never runs payroll, and nothing is posted.
+
+- **It needs the firm's payroll procedure.** Publish **Payroll recording** under Procedures (a firm default or client override, enabled) before a draft can be saved, like loan schedules.
+- **The preparer confirms the run.** The summary must be the provider's final, approved payroll for these pay dates (not a preview), and the ledger must show its bank debits in the clearing account with this payroll not yet recorded. A source-linked draft needs both the summary (support) and the clearing account's ledger page (ledger). A corrected summary for the same provider replaces the month's payroll whatever its title.
+- **The summary must tie to itself.** Gross wages less employee taxes and other deductions must equal net pay.
+- **The cash must tie to the ledger.** The provider's debits for these pay dates must cover net pay, cannot exceed the payroll's total cost, and must equal the payroll debits booked in the ledger's clearing account (the account the bank debits are booked to). Any difference blocks the draft with the amounts, and nothing is proposed.
+- **The entry, dated month-end**, debits wages (gross), payroll tax expense (employer taxes) and benefits expense (employer contributions) against the clearing account. Whatever the provider did not debit (total cost less its debits, such as deductions owed to a benefits provider or taxes the client remits itself) moves from clearing to the payroll liability account. The clearing account then nets to zero against the bank debits already booked.
+- Wages earned but unpaid at month-end are an accrual, not part of this entry. A summary spanning several months needs one summary per month.
+
 ## Reviewing a draft
 
 A draft's page keeps its evidence beside the calculation, the proposed entry and the review decision:
