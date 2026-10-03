@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"sort"
 	"strings"
@@ -162,6 +164,13 @@ func selectedIDs(sources []IntakeSource) []string {
 	return ids
 }
 
+type agentFact struct {
+	Field    string `json:"field"`
+	Value    string `json:"value"`
+	SourceID string `json:"source_id"`
+	Quote    string `json:"quote"`
+	Line     int    `json:"line"`
+}
 type agentResult struct {
 	Kind      string   `json:"kind"`
 	Summary   string   `json:"summary"`
@@ -170,12 +179,11 @@ type agentResult struct {
 		ID   string `json:"id"`
 		Role string `json:"role"`
 	} `json:"sources"`
-	Facts []struct {
-		Field    string `json:"field"`
-		Value    string `json:"value"`
-		SourceID string `json:"source_id"`
-		Quote    string `json:"quote"`
-	} `json:"facts"`
+	Facts []agentFact `json:"facts"`
+	Lines []struct {
+		Line int    `json:"line"`
+		Row  string `json:"row"`
+	} `json:"lines"`
 }
 
 // CurrentProposalSources binds both relevant evidence and the inventory the
@@ -220,6 +228,7 @@ Depreciation schedules a fixed asset's cost over its useful life, between deprec
 Loan checks one month of a loan against the lender's statement. The primary source must be the lender statement (role statement); the note or agreement and the amortization schedule are support, and one ledger page for the loan account is ledger. A note, agreement or schedule alone is support for its statement's job: return unsupported and say which statement it supports. Fields: lender, agreement_reference, annual_rate (percent), opening_principal, interest_paid_through, closing_principal, book_balance, loan_account, interest_account, principal_due_next_12_months, schedule_reference. Never split payments, choose a method or day-count, or infer rate changes or fees; cite the note's interest clause as agreement_reference, and the preparer enters payments from the statement.
 Owner is one owner-related transaction in the close month: a personal cost paid by the business, or a business cost paid by the owner. Select the receipt or transaction record as primary support and one ledger page showing its booking as ledger. Fields: transaction_reference, transaction_date, payee, amount, ledger_reference, stated_purpose, client_confirmation_reference. Never decide the direction, treatment, business-use share or entity type.
 Payroll records one month's payroll from the payroll provider's summary of pay dates in the close month; it never runs payroll. Select the provider's payroll summary or register as primary support and one ledger page of the account the payroll bank debits are booked to as ledger. Fields: provider, source_reference (the summary's title and date range), first_pay_date, last_pay_date, gross_wages, employee_taxes (withheld from employees), employee_deductions (other employee withholdings), net_pay, employer_taxes, employer_contributions, provider_debits (what the provider debited from the bank for these pay dates), ledger_debits (the payroll debits on the ledger page, in total), ledger_reference. A summary spanning several months is unsupported: ask for one per month. Never choose accounts.
+A prior accountant's schedule listing several prepaid expenses or deferred revenue items with their balances has the role schedule. Unless you are told this is the client's opening month, lines is empty and every fact has line 0.
 If identity, work type, source role, date scope or method is ambiguous or unsupported, return unsupported with a precise question. Inspect all permitted evidence before asking. Missing facts should be omitted and explained with specific questions about what is needed and why. Questions are for clarification, not claims that fraud/errors exist. Keep the summary factual and short. No external tools, no actions, no policy confirmations.`
 
 // agentFields are the cited facts each form-prepared kind accepts, named as that form's fields.
@@ -232,7 +241,7 @@ var agentFields = map[string][]string{
 }
 
 // Amounts and dates must be what their quote prints; a misread value becomes a question, not a cited candidate.
-var quotedAmounts = []string{"amount", "booked_balance", "salvage_value", "credit_amount", "estimate_amount", "annual_rate", "opening_principal", "closing_principal", "book_balance", "principal_due_next_12_months", "statement_opening", "statement_closing", "ledger_opening", "ledger_closing", "gross_wages", "employee_taxes", "employee_deductions", "net_pay", "employer_taxes", "employer_contributions", "provider_debits", "ledger_debits"}
+var quotedAmounts = []string{"amount", "remaining", "booked_balance", "salvage_value", "credit_amount", "estimate_amount", "annual_rate", "opening_principal", "closing_principal", "book_balance", "principal_due_next_12_months", "statement_opening", "statement_closing", "ledger_opening", "ledger_closing", "gross_wages", "employee_taxes", "employee_deductions", "net_pay", "employer_taxes", "employer_contributions", "provider_debits", "ledger_debits"}
 var quotedDates = []string{"service_start", "service_end", "transaction_date", "interest_paid_through", "credit_period", "cancellation_period", "first_pay_date", "last_pay_date"}
 
 func valueShown(field, value, quote string) bool {
@@ -266,7 +275,11 @@ func blockedIdentity(primary, entity string, aliases []string, sources []IntakeS
 	return Proposal{}, false
 }
 
-func interpret(ctx context.Context, entity, period, currency, primary string, sources []IntakeSource) (Proposal, error) {
+// scheduleInstructions read a prior accountant's schedule on the client's opening month, row by row.
+const scheduleInstructions = `
+This close is the client's opening month, its first in the firm: if primary_source_id is a prior accountant's schedule listing prepaid expenses or deferred revenue, give it the role schedule and choose prepaid or deferred_revenue. A schedule mixing kinds, of another kind, or with more than 20 rows is unsupported with a question. Give each row as a line numbered from 1 in the schedule's order, with row a verbatim quote of that whole row, unique in the document; a total or subtotal row is not a line. Cite each row's facts with its line number, each quote inside its row: label (the row's description), amount (the original amount), service_start, service_end, expense_account (for deferred revenue, the revenue account), prepaid_account (for deferred revenue, the deferred revenue liability) and remaining (the balance the schedule states at close_period's month-end); currency may be cited anywhere in the document. For any other document, lines is empty and every fact has line 0.`
+
+func interpret(ctx context.Context, entity, period, currency, primary string, sources []IntakeSource, opening bool) (Proposal, error) {
 	var p Proposal
 	if llm.Model(ctx, "preparation") == "" {
 		return p, fmt.Errorf("Configure the preparation model on the worker, then retry interpretation.")
@@ -278,9 +291,12 @@ func interpret(ctx context.Context, entity, period, currency, primary string, so
 	}
 	// The schema describes only proposals. There are deliberately no executable
 	// tools, URLs, journal fields, confirmations, or credentials in model context.
-	schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["kind","summary","questions","sources","facts"],"properties":{"kind":{"type":"string","enum":["prepaid","accrual","reconciliation","deferred_revenue","depreciation","loan","owner","payroll","unsupported"]},"summary":{"type":"string"},"questions":{"type":"array","items":{"type":"string"}},"sources":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","role"],"properties":{"id":{"type":"string"},"role":{"type":"string","enum":["invoice","statement","ledger","support","client_reply"]}}}},"facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["field","value","source_id","quote"],"properties":{"field":{"type":"string"},"value":{"type":"string"},"source_id":{"type":"string"},"quote":{"type":"string"}}}}}}`)
+	schema := json.RawMessage(`{"type":"object","additionalProperties":false,"required":["kind","summary","questions","sources","facts","lines"],"properties":{"kind":{"type":"string","enum":["prepaid","accrual","reconciliation","deferred_revenue","depreciation","loan","owner","payroll","unsupported"]},"summary":{"type":"string"},"questions":{"type":"array","items":{"type":"string"}},"sources":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","role"],"properties":{"id":{"type":"string"},"role":{"type":"string","enum":["invoice","statement","ledger","support","client_reply","schedule"]}}}},"facts":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["field","value","source_id","quote","line"],"properties":{"field":{"type":"string"},"value":{"type":"string"},"source_id":{"type":"string"},"quote":{"type":"string"},"line":{"type":"integer"}}}},"lines":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["line","row"],"properties":{"line":{"type":"integer"},"row":{"type":"string"}}}}}}`)
 	contextData, _ := json.Marshal(map[string]any{"entity": entity, "close_period": period, "home_currency": currency, "primary_source_id": primary, "evidence": sources})
 	request := llm.Request{Purpose: "preparation", MaxResponseBytes: 262144, MaxOutputTokens: 6000, Instructions: agentInstructions, Data: json.RawMessage(contextData), Schema: &llm.OutputSchema{Name: "preparation_proposal", Definition: schema}}
+	if opening {
+		request.Instructions, request.MaxOutputTokens = agentInstructions+scheduleInstructions, 16000
+	}
 	response, err := llm.Generate(ctx, request)
 	if err != nil {
 		return p, err
@@ -289,7 +305,16 @@ func interpret(ctx context.Context, entity, period, currency, primary string, so
 	if Strict([]byte(response.Text), &result) != nil {
 		return p, fmt.Errorf("OpenAI returned an invalid proposal. No facts were accepted.")
 	}
-	p, err = validateInterpretation(result, primary, sources)
+	schedule := false
+	for _, s := range result.Sources {
+		schedule = schedule || s.Role == "schedule"
+	}
+	if !schedule {
+		p, err = validateInterpretation(result, primary, sources)
+	} else if p, err = validateSchedule(result, primary, sources); err == nil && !opening {
+		p.Kind, p.Lines, p.Facts = "unsupported", nil, []Fact{}
+		p.Questions = []string{"A prior accountant's schedule is read on the client's opening month, its first close in the firm. Upload it there."}
+	}
 	if err == nil {
 		p.Engine = "openai"
 		p.Model = llm.Model(ctx, "preparation")
@@ -305,7 +330,7 @@ func validateInterpretation(result agentResult, primary string, sources []Intake
 	invalid := func() (Proposal, error) {
 		return Proposal{}, fmt.Errorf("The proposed work or citations could not be validated. Review the source evidence and retry.")
 	}
-	if (!slices.Contains([]string{"prepaid", "reconciliation", "accrual", "unsupported"}, p.Kind) && agentFields[p.Kind] == nil) || len(p.Summary) > 2000 || len(p.Questions) > 20 || len(result.Facts) > 60 || len(result.Sources) > 20 {
+	if (!slices.Contains([]string{"prepaid", "reconciliation", "accrual", "unsupported"}, p.Kind) && agentFields[p.Kind] == nil) || len(p.Summary) > 2000 || len(p.Questions) > 20 || len(result.Facts) > 60 || len(result.Sources) > 20 || len(result.Lines) > 0 {
 		return invalid()
 	}
 	for _, q := range p.Questions {
@@ -408,7 +433,7 @@ func validateInterpretation(result agentResult, primary string, sources []Intake
 		known[f.Field] = true
 	}
 	for _, f := range result.Facts {
-		if !known[f.Field] || len(f.Value) == 0 || len(f.Value) > 200 || len(f.Quote) == 0 || len(f.Quote) > 2000 || selected[f.SourceID].ID == "" {
+		if !known[f.Field] || f.Line != 0 || len(f.Value) == 0 || len(f.Value) > 200 || len(f.Quote) == 0 || len(f.Quote) > 2000 || selected[f.SourceID].ID == "" {
 			return invalid()
 		}
 		if _, unique := documents.QuoteLocation(available[f.SourceID].Name, available[f.SourceID].Content, f.Quote); !unique {
@@ -416,34 +441,174 @@ func validateInterpretation(result agentResult, primary string, sources []Intake
 		}
 	}
 	for _, f := range definitions {
-		f.Value = ""
-		f.Candidates = []Candidate{}
-		values := map[string]bool{}
-		for _, candidate := range result.Facts {
-			if candidate.Field == f.Field {
-				if !valueShown(candidate.Field, candidate.Value, candidate.Quote) {
-					p.Questions = append(p.Questions, fmt.Sprintf("Check the %s in source #%s: the cited text does not show %s.", f.Label, candidate.SourceID, candidate.Value))
-					continue
-				}
-				location, _ := documents.QuoteLocation(available[candidate.SourceID].Name, available[candidate.SourceID].Content, candidate.Quote)
-				f.Candidates = append(f.Candidates, Candidate{candidate.Value, candidate.SourceID, location, candidate.Quote})
-				values[candidate.Value] = true
-			}
-		}
-		if len(values) == 1 {
-			for v := range values {
-				f.Value = v
-			}
-			f.Question = ""
-		} else if len(values) > 1 {
-			f.Question = "Conflicting values: confirm the correct " + f.Label + " against all cited evidence."
-		}
+		f, asked := cite(f, result.Facts, available)
+		p.Questions = append(p.Questions, asked...)
 		p.Facts = append(p.Facts, f)
 	}
 	for _, s := range selected {
 		p.Sources = append(p.Sources, s)
 	}
 	sort.Slice(p.Sources, func(i, j int) bool { return p.Sources[i].ID < p.Sources[j].ID })
+	return p, nil
+}
+
+// cite fills a fact from the model's citations of its field: one value is the fact's value, several are a question, and
+// a value its quote does not show is returned as a question instead of a candidate.
+func cite(f Fact, facts []agentFact, available map[string]IntakeSource) (Fact, []string) {
+	var questions []string
+	f.Value = ""
+	f.Candidates = []Candidate{}
+	values := map[string]bool{}
+	for _, candidate := range facts {
+		if candidate.Field != f.Field {
+			continue
+		}
+		if !valueShown(candidate.Field, candidate.Value, candidate.Quote) {
+			questions = append(questions, fmt.Sprintf("Check the %s in source #%s: the cited text does not show %s.", f.Label, candidate.SourceID, candidate.Value))
+			continue
+		}
+		location, _ := documents.QuoteLocation(available[candidate.SourceID].Name, available[candidate.SourceID].Content, candidate.Quote)
+		f.Candidates = append(f.Candidates, Candidate{candidate.Value, candidate.SourceID, location, candidate.Quote})
+		values[candidate.Value] = true
+	}
+	if len(values) == 1 {
+		for v := range values {
+			f.Value = v
+		}
+		f.Question = ""
+	} else if len(values) > 1 {
+		f.Question = "Conflicting values: confirm the correct " + f.Label + " against all cited evidence."
+	}
+	return f, questions
+}
+
+// scheduleFields are what each row of a prior accountant's schedule cites, inside its row except the currency.
+var scheduleFields = []string{"label", "amount", "service_start", "service_end", "currency", "expense_account", "prepaid_account", "remaining"}
+
+// validateSchedule reads a prior accountant's schedule row by row. Each line quotes its whole row, unique in the
+// document, and each of its facts is cited inside that row, so a value from another row cannot be attached to it.
+func validateSchedule(result agentResult, primary string, sources []IntakeSource) (Proposal, error) {
+	p := Proposal{Kind: result.Kind, Summary: result.Summary, Questions: result.Questions, Facts: []Fact{}, Sources: []Source{}, Lines: []ScheduleLine{}}
+	invalid := func() (Proposal, error) {
+		return Proposal{}, fmt.Errorf("The schedule's rows or citations could not be validated. Review the schedule and retry.")
+	}
+	if !slices.Contains([]string{"prepaid", "deferred_revenue", "unsupported"}, p.Kind) || len(p.Summary) > 2000 || len(p.Questions) > 20 || len(result.Facts) > 220 || len(result.Sources) > 20 {
+		return invalid()
+	}
+	for _, q := range p.Questions {
+		if strings.TrimSpace(q) == "" || len(q) > 1000 {
+			return invalid()
+		}
+	}
+	available, selected := map[string]IntakeSource{}, map[string]Source{}
+	for _, s := range sources {
+		available[s.ID] = s
+	}
+	for _, s := range result.Sources {
+		source, ok := available[s.ID]
+		if !ok || selected[s.ID].ID != "" || (s.ID == primary) != (s.Role == "schedule") || !slices.Contains([]string{"schedule", "support", "client_reply"}, s.Role) || (s.Role == "client_reply") != (source.Role == "client_reply") {
+			return invalid()
+		}
+		source.Role = s.Role
+		selected[s.ID] = source.Source
+	}
+	if selected[primary].ID == "" {
+		return invalid()
+	}
+	for _, s := range sources {
+		if (s.Role == "client_reply" || s.Role == "answer" || s.Role == "procedure") && selected[s.ID].ID == "" {
+			if s.Role == "answer" || s.Role == "procedure" {
+				s.Role = "support"
+			}
+			selected[s.ID] = s.Source
+		}
+	}
+	for _, s := range selected {
+		p.Sources = append(p.Sources, s)
+	}
+	sort.Slice(p.Sources, func(i, j int) bool { return p.Sources[i].ID < p.Sources[j].ID })
+	if p.Kind == "unsupported" || len(result.Lines) == 0 || len(result.Lines) > 20 {
+		if len(result.Lines) > 20 {
+			p.Questions = append(p.Questions, "The schedule has more than 20 rows. Split it into schedules of at most 20 rows and upload each.")
+		} else if len(p.Questions) == 0 {
+			p.Questions = []string{"No rows of the schedule were read. Which prepaid expenses or deferred revenue does it list, with their dates and balances?"}
+		}
+		p.Kind, p.Lines = "unsupported", nil
+		return p, nil
+	}
+	document := available[primary]
+	// A CSV row is a record: a schedule with a cell spanning lines is not read, so a line inside a cell cannot pass for a row.
+	if strings.HasSuffix(strings.ToLower(document.Name), ".csv") {
+		reader := csv.NewReader(strings.NewReader(document.Content))
+		reader.FieldsPerRecord = -1
+		for {
+			record, err := reader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil || slices.ContainsFunc(record, func(cell string) bool { return strings.ContainsAny(cell, "\r\n") }) {
+				p.Kind, p.Lines = "unsupported", nil
+				p.Questions = append(p.Questions, "The schedule has a cell that spans several lines or cannot be read as CSV. Save it with one line per row and upload it again.")
+				return p, nil
+			}
+		}
+	}
+	// Each row is one whole line of the document, in the schedule's order, so no row can take in another's figures.
+	end := 0
+	for i, l := range result.Lines {
+		at := strings.Index(document.Content[end:], l.Row)
+		if l.Line != i+1 || len(l.Row) == 0 || len(l.Row) > 2000 || strings.Contains(l.Row, "\n") || at < 0 {
+			return invalid()
+		}
+		at += end
+		if (at > 0 && document.Content[at-1] != '\n') || (at+len(l.Row) < len(document.Content) && document.Content[at+len(l.Row)] != '\n' && document.Content[at+len(l.Row)] != '\r') {
+			return invalid()
+		}
+		end = at + len(l.Row)
+	}
+	perLine := map[int][]agentFact{}
+	for _, f := range result.Facts {
+		if f.Line < 1 || f.Line > len(result.Lines) || !slices.Contains(scheduleFields, f.Field) || len(f.Value) == 0 || len(f.Value) > 200 || len(f.Quote) == 0 || len(f.Quote) > 2000 || f.SourceID != primary {
+			return invalid()
+		}
+		if _, unique := documents.QuoteLocation(document.Name, document.Content, f.Quote); !unique {
+			return invalid()
+		}
+		if f.Field != "currency" && !strings.Contains(result.Lines[f.Line-1].Row, f.Quote) {
+			return invalid()
+		}
+		if perLine[f.Line] = append(perLine[f.Line], f); len(perLine[f.Line]) > 10 {
+			return invalid()
+		}
+	}
+	labels := map[string]int{}
+	for _, l := range result.Lines {
+		if _, unique := documents.QuoteLocation(document.Name, document.Content, l.Row); !unique {
+			return invalid()
+		}
+		line := ScheduleLine{Line: l.Line, Row: l.Row, Facts: []Fact{}}
+		for _, field := range scheduleFields {
+			label := strings.ReplaceAll(field, "_", " ")
+			f, asked := cite(Fact{Field: field, Label: label, Question: "Confirm the " + label + " of this row from the schedule."}, perLine[l.Line], available)
+			// A name is read as printed: a label, account or currency its quote does not show is a question, not a value.
+			for _, c := range perLine[l.Line] {
+				if c.Field == field && !slices.Contains(quotedAmounts, field) && !slices.Contains(quotedDates, field) && !strings.Contains(strings.ToLower(c.Quote), strings.ToLower(c.Value)) {
+					asked = append(asked, fmt.Sprintf("Check the %s of row %d: the cited text does not show %s.", label, l.Line, c.Value))
+				}
+			}
+			if len(asked) > 0 {
+				f.Value, f.Question = "", strings.Join(asked, " ")
+			}
+			if field == "label" && f.Value != "" {
+				if other, seen := labels[strings.ToLower(f.Value)]; seen {
+					p.Questions = append(p.Questions, fmt.Sprintf("Rows %d and %d share the label %q; give each row its own label so it can be tracked.", other, l.Line, f.Value))
+				}
+				labels[strings.ToLower(f.Value)] = l.Line
+			}
+			line.Facts = append(line.Facts, f)
+		}
+		p.Lines = append(p.Lines, line)
+	}
 	return p, nil
 }
 
@@ -467,7 +632,8 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err = tx.QueryRowContext(ctx, `SELECT organization_id,entity,period FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&org, &entity, &period); err != nil {
+	var opening bool
+	if err = tx.QueryRowContext(ctx, `SELECT organization_id,entity,period,takeover FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&org, &entity, &period, &opening); err != nil {
 		return false, err
 	}
 	profile, err := ClientProfile(ctx, tx, closeID)
@@ -565,7 +731,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	proposal, interpretErr := blocked, selectErr
 	if !identityBlocked && selectErr == nil {
-		proposal, interpretErr = interpret(ctx, entity, period, profile.Currency, primary, selected)
+		proposal, interpretErr = interpret(ctx, entity, period, profile.Currency, primary, selected, opening)
 		if interpretErr == nil {
 			used := map[string]bool{}
 			for _, source := range proposal.Sources {
@@ -614,7 +780,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		// The procedure, the capture and the aliases are read here, in the finishing transaction, and only for a proposal that could qualify.
 		var plan Plan
 		reason := "only an agent-read prepaid invoice with no open questions can be prepared without confirmation"
-		if proposal.Kind == "prepaid" && proposal.Engine == "openai" && len(proposal.Questions) == 0 {
+		if proposal.Kind == "prepaid" && proposal.Engine == "openai" && len(proposal.Questions) == 0 && len(proposal.Lines) == 0 {
 			procedure, e := CurrentProcedure(persist, finish, closeID, "prepaid")
 			if e != nil && e != sql.ErrNoRows {
 				return true, e
@@ -700,8 +866,9 @@ func Replay(ctx context.Context, db *sql.DB, closeID, jobID string) (Proposal, e
 	}
 	defer tx.Rollback()
 	var primary, entity, period string
+	var opening bool
 	var raw, checkpoint []byte
-	if err = tx.QueryRowContext(ctx, `SELECT i.source_id::text,i.proposal,i.agent_checkpoint,c.entity,c.period FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE i.job_id::text=$1 AND j.close_id::text=$2 AND i.confirmed_by IS NOT NULL AND i.proposal->>'engine'='openai'`, jobID, closeID).Scan(&primary, &raw, &checkpoint, &entity, &period); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT i.source_id::text,i.proposal,i.agent_checkpoint,c.entity,c.period,c.takeover FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE i.job_id::text=$1 AND j.close_id::text=$2 AND i.confirmed_by IS NOT NULL AND i.proposal->>'engine'='openai'`, jobID, closeID).Scan(&primary, &raw, &checkpoint, &entity, &period, &opening); err != nil {
 		return Proposal{}, fmt.Errorf("This document has no confirmed model reading to replay.")
 	}
 	var original Proposal
@@ -726,7 +893,7 @@ func Replay(ctx context.Context, db *sql.DB, closeID, jobID string) (Proposal, e
 		return Proposal{}, fmt.Errorf("The evidence the agent originally selected is not recorded; not replayed.")
 	}
 	tx.Rollback()
-	p, err := interpret(ctx, entity, period, profile.Currency, primary, selected)
+	p, err := interpret(ctx, entity, period, profile.Currency, primary, selected, opening)
 	if err != nil {
 		return Proposal{}, err
 	}

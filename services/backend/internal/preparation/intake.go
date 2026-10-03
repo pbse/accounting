@@ -42,6 +42,17 @@ type Proposal struct {
 	Facts      []Fact   `json:"facts"`
 	Sources    []Source `json:"sources"`
 	Unselected []Source `json:"unselected,omitempty"`
+	// Lines are the rows of a prior accountant's schedule, read on the client's opening month.
+	Lines []ScheduleLine `json:"lines,omitempty"`
+}
+
+// ScheduleLine is one row of a prior accountant's schedule: the row as quoted, its facts and, once decided, why it was
+// set aside rather than imported.
+type ScheduleLine struct {
+	Line     int    `json:"line"`
+	Row      string `json:"row"`
+	Facts    []Fact `json:"facts"`
+	SetAside string `json:"set_aside,omitempty"`
 }
 type IntakeSource struct {
 	Source

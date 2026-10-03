@@ -34,6 +34,9 @@ type Plan struct {
 	CarryForward     *CarryForward     `json:"carry_forward,omitempty"`
 	RecurringAccrual *RecurringAccrual `json:"recurring_accrual,omitempty"`
 	Revises          string            `json:"revises,omitempty"`
+	// Imported is one line of a prior accountant's schedule read on the client's opening month: prepared as a schedule
+	// only, and only while it gives the balance the schedule states at the month-end.
+	Imported *Imported `json:"imported,omitempty"`
 	// Procedure is the enabled procedure version a straight-through draft was prepared under; the worker refuses the
 	// plan if that version is no longer the client's current, enabled one with the same accounts.
 	Procedure string `json:"procedure,omitempty"`
@@ -44,6 +47,14 @@ type Plan struct {
 	Kind     string          `json:"kind"`
 	Input    json.RawMessage `json:"input"`
 	Sources  []Source        `json:"sources"`
+}
+
+// Imported names a schedule line by the first version of its schedule's evidence and its label, so a corrected schedule
+// revises the same draft, and keeps the balance the schedule states.
+type Imported struct {
+	RootSourceID string `json:"root_source_id"`
+	Label        string `json:"label"`
+	Remaining    string `json:"remaining"`
 }
 
 // WorkKind is the kind of work a plan prepares: a prepaid plan with a schedule prepares deferred revenue or depreciation.
@@ -80,12 +91,21 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 			return nil, fmt.Errorf("Client and period must match this close")
 		}
 		prepare := prepaids.Prepare
-		if p.CarryForward != nil && p.Revises == "" {
+		if p.CarryForward != nil && p.Revises == "" || p.Imported != nil {
 			prepare = prepaids.ScheduleOnly
+		}
+		if p.Imported != nil && (in.Schedule == prepaids.Depreciation || in.DisposalPeriod != "" || in.CreditAmount != "" || len(in.Credits) > 0 || in.CancellationMethod != "") {
+			return nil, fmt.Errorf("An imported schedule line is a prepaid or deferred revenue schedule without credits, cancellations or disposals")
 		}
 		paper, err := prepare(in)
 		if err != nil {
 			return nil, err
+		}
+		if p.Imported != nil {
+			stated, e := prepaids.Amount(p.Imported.Remaining)
+			if e != nil || prepaids.Money(stated) != paper.PrepaidBalance {
+				return nil, fmt.Errorf("%s: the schedule states %s at the month-end, but the calculation gives %s. Check the dates, amount and method", p.Imported.Label, p.Imported.Remaining, paper.PrepaidBalance)
+			}
 		}
 		value = paper
 	case "accrual":
@@ -186,6 +206,9 @@ func Calculate(p Plan, entity, period string) ([]byte, error) {
 	if p.Revises != "" {
 		object["revises"], _ = json.Marshal(p.Revises)
 	}
+	if p.Imported != nil {
+		object["imported"], _ = json.Marshal(p.Imported)
+	}
 	// A draft prepared without field confirmation says so, so a later replacement can revise it without a person.
 	if p.Procedure != "" {
 		object["straight_through"], _ = json.Marshal(true)
@@ -222,11 +245,17 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	var entity, period string
-	if err = tx.QueryRowContext(ctx, `SELECT entity,period FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&entity, &period); err != nil {
+	var opening bool
+	if err = tx.QueryRowContext(ctx, `SELECT entity,period,takeover FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&entity, &period, &opening); err != nil {
 		return false, err
 	}
 	bodies := make([][]byte, len(plans))
 	failure := ""
+	for _, p := range plans {
+		if p.Imported != nil && !opening {
+			failure = "This close is no longer the client's opening month, so its prior schedule is not imported. Read the schedule on the opening month."
+		}
+	}
 	var proposalRaw []byte
 	intakeErr := tx.QueryRowContext(ctx, `SELECT proposal FROM preparation_intakes WHERE job_id=$1`, id).Scan(&proposalRaw)
 	if intakeErr != nil && intakeErr != sql.ErrNoRows {

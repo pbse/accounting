@@ -58,6 +58,7 @@ type WorkItem = Plan & {
     summary?: string;
     questions?: string[];
     unselected?: Source[];
+    lines?: { line: number; row: string; facts: Fact[]; set_aside?: string }[];
   };
   requests: {
     consolidated?: boolean;
@@ -928,6 +929,78 @@ function MemoryHint({ hint }: { hint: Hint }) {
   );
 }
 
+// A prior accountant's schedule, read on the client's opening month, is decided whole: each row imported as a schedule
+// (no journal) with a method, or set aside with a reason.
+function ScheduleImport({ item, lines, busy, blocked, onImport }: { item: WorkItem; lines: NonNullable<WorkItem["proposal"]["lines"]>; busy: boolean; blocked: boolean; onImport: (body: object) => void }) {
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    onImport({
+      client_confirmed: data.has("client"),
+      roster_confirmed: data.has("roster"),
+      inventory_confirmed: data.has("inventory"),
+      lines: lines.map((l) => {
+        const choice = String(data.get(`decision-${l.line}`));
+        return choice === "set_aside" ? { line: l.line, decision: "set_aside", reason: String(data.get(`reason-${l.line}`) ?? "").trim() } : { line: l.line, decision: "import", method: choice };
+      }),
+    });
+  };
+  return (
+    <form onSubmit={submit}>
+      <p>
+        {lines.length} row{lines.length === 1 ? "" : "s"} read from {item.source_name}. Each row you import becomes a schedule as of this month-end, with no journal; it is
+        refused if the calculation does not give the balance the schedule states. The opening baseline then ties the schedules to the Trial Balance.
+      </p>
+      <fieldset disabled={busy || blocked}>
+        {lines.map((l) => {
+          const value = (field: string) => l.facts.find((f) => f.field === field)?.value ?? "";
+          const open = l.facts.filter((f) => f.question);
+          return (
+            <fieldset key={l.line}>
+              <legend>
+                Row {l.line}: {value("label") || "unlabeled"} · {value("amount")} {value("currency")} · {value("service_start")} to {value("service_end")} · remaining {value("remaining")}
+              </legend>
+              <small>{l.row}</small>
+              {open.length > 0 && (
+                <ul>
+                  {open.map((f) => (
+                    <li key={f.field}>{f.question}</li>
+                  ))}
+                </ul>
+              )}
+              <label>
+                Decision
+                <select name={`decision-${l.line}`} defaultValue={open.length > 0 ? "set_aside" : "equal_full_months_v1"}>
+                  <option value="equal_full_months_v1" disabled={open.length > 0}>Import · equal full months</option>
+                  <option value="actual_days_v1" disabled={open.length > 0}>Import · actual days</option>
+                  <option value="set_aside">Set aside</option>
+                </select>
+              </label>
+              <label>
+                Why it is set aside (only when setting it aside)
+                <input name={`reason-${l.line}`} maxLength={2000} />
+              </label>
+            </fieldset>
+          );
+        })}
+        <label>
+          <input type="checkbox" name="client" required /> This schedule is {item.entity}'s.
+        </label>
+        <label>
+          <input type="checkbox" name="roster" required /> These {lines.length} rows are all of the schedule's rows.
+        </label>
+        {(item.proposal.unselected?.length ?? 0) > 0 && (
+          <label>
+            <input type="checkbox" name="inventory" required /> I reviewed the evidence the agent did not use.
+          </label>
+        )}
+        <button className="primary">Import schedule</button>
+      </fieldset>
+      {blocked && <p>Answer the questions above first; the agent reads the schedule again.</p>}
+    </form>
+  );
+}
+
 function WorkDetails({
   item,
   onChange,
@@ -946,6 +1019,7 @@ function WorkDetails({
   const facts = item.proposal.facts ?? [];
   const kind = item.proposal.kind ?? "prepaid";
   const questions = item.proposal.questions ?? [];
+  const lines = item.proposal.lines ?? [];
   const latest = item.requests[0];
   const [drafts, setDrafts] = useState<
     { id: string; body: string; stale: boolean }[]
@@ -956,6 +1030,7 @@ function WorkDetails({
       [
         ...questions,
         ...facts.filter((f) => f.question).map((f) => f.question),
+        ...(item.proposal.lines ?? []).flatMap((l) => l.facts.filter((f) => f.question).map((f) => `Row ${l.line}: ${f.question}`)),
       ].map((q, i) => `${i + 1}. ${q}`).join("\n") ||
       "Please clarify the following specific missing information:"
     }`,
@@ -1173,7 +1248,8 @@ function WorkDetails({
               </Link>
             </p>
           )}
-          {formFor[kind] && (
+          {lines.length > 0 && <ScheduleImport item={item} lines={lines} busy={busy} blocked={questions.length > 0} onImport={(body) => void act("import_schedule", body)} />}
+          {formFor[kind] && lines.length === 0 && (
             <p>
               {facts.filter((f) => f.candidates.length > 0).map((f) => (
                 <span key={f.field} className="block">
@@ -1188,7 +1264,7 @@ function WorkDetails({
               </Link>}
             </p>
           )}
-          {kind !== "unsupported" && kind !== "settlement" && !formFor[kind] && item.proposal.engine !== "recognized_export" && (
+          {kind !== "unsupported" && kind !== "settlement" && !formFor[kind] && item.proposal.engine !== "recognized_export" && lines.length === 0 && (
             <form onSubmit={confirm}>
               <fieldset disabled={busy}>
                 <legend>

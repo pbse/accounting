@@ -30,7 +30,7 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 		body, _ := json.Marshal(map[string]any{"id": "response-fixture", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": output}}}}, "usage": map[string]int{"input_tokens": 100, "output_tokens": 50}})
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
 	})}
-	p, err := interpret(agentModelContext(t, client), "Example", "2026-09", "USD", "1", sources)
+	p, err := interpret(agentModelContext(t, client), "Example", "2026-09", "USD", "1", sources, false)
 	if err != nil || p.Engine != "openai" || p.Facts[0].Value != "1200.00" || p.Facts[1].Candidates[0].Location != "line 2" || len(p.Sources) != 2 || p.Facts[2].Question == "" || p.InputTokens != 100 {
 		t.Fatal("Missing validated proposals or provenance", p, err)
 	}
@@ -61,7 +61,7 @@ func TestInterpretationContractAndCitationBoundary(t *testing.T) {
 	client.Transport = agentRoundTrip(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"status":"incomplete","output":[]}`)), Header: http.Header{}}, nil
 	})
-	if _, err = interpret(agentModelContext(t, client), "Example", "2026-09", "USD", "1", sources); err == nil {
+	if _, err = interpret(agentModelContext(t, client), "Example", "2026-09", "USD", "1", sources, false); err == nil {
 		t.Fatal("Incomplete response accepted")
 	}
 }
@@ -200,12 +200,7 @@ func TestFormPreparedKindsKeepTheirFormsSources(t *testing.T) {
 			}
 		}
 		for _, field := range fields {
-			r.Facts = append(r.Facts, struct {
-				Field    string `json:"field"`
-				Value    string `json:"value"`
-				SourceID string `json:"source_id"`
-				Quote    string `json:"quote"`
-			}{field, "118000.00", "1", "Closing principal 118,000.00"})
+			r.Facts = append(r.Facts, agentFact{Field: field, Value: "118000.00", SourceID: "1", Quote: "Closing principal 118,000.00"})
 		}
 		return r
 	}
@@ -256,4 +251,79 @@ func agentModelContext(t *testing.T, httpClient *http.Client) context.Context {
 		t.Fatal(err)
 	}
 	return llm.WithClient(context.Background(), client)
+}
+
+func TestPriorScheduleIsReadRowByRowOnTheOpeningMonth(t *testing.T) {
+	content := "Prior schedule of prepaid expenses at 2026-08-31 (USD)\nDescription,Amount,Start,End,Expense account,Prepaid account,Remaining\nInsurance,1200.00,2026-01-01,2026-12-31,Insurance expense,Prepaid insurance,400.00\nSoftware,2400.00,2026-03-01,2027-02-28,Software expense,Prepaid software,1400.00\nTotal,,,,,,1800.00"
+	sources := []IntakeSource{{Source: Source{ID: "1", Name: "schedule.csv", Digest: "schedule-hash", Role: "evidence", Location: "Full extracted text"}, Content: content}}
+	row := func(n int, label, amount, start, end, expense, prepaid, remaining string) []agentFact {
+		return []agentFact{{"label", label, "1", label + "," + amount, n}, {"amount", amount, "1", label + "," + amount, n}, {"service_start", start, "1", amount + "," + start, n}, {"service_end", end, "1", start + "," + end, n},
+			{"expense_account", expense, "1", end + "," + expense, n}, {"prepaid_account", prepaid, "1", expense + "," + prepaid, n}, {"remaining", remaining, "1", prepaid + "," + remaining, n}, {"currency", "USD", "1", "(USD)", n}}
+	}
+	output := func() agentResult {
+		var r agentResult
+		json.Unmarshal([]byte(`{"kind":"prepaid","summary":"Prior prepaid schedule","questions":[],"sources":[{"id":"1","role":"schedule"}],"facts":[],"lines":[{"line":1,"row":"Insurance,1200.00,2026-01-01,2026-12-31,Insurance expense,Prepaid insurance,400.00"},{"line":2,"row":"Software,2400.00,2026-03-01,2027-02-28,Software expense,Prepaid software,1400.00"}]}`), &r)
+		r.Facts = append(row(1, "Insurance", "1200.00", "2026-01-01", "2026-12-31", "Insurance expense", "Prepaid insurance", "400.00"), row(2, "Software", "2400.00", "2026-03-01", "2027-02-28", "Software expense", "Prepaid software", "1400.00")...)
+		return r
+	}
+	p, err := validateSchedule(output(), "1", sources)
+	if err != nil || len(p.Lines) != 2 || len(p.Questions) != 0 || p.Lines[1].Facts[7].Value != "1400.00" || p.Lines[0].Facts[0].Value != "Insurance" || p.Lines[0].Facts[1].Candidates[0].Location == "" {
+		t.Fatal("each row is a line with its cited facts", p, err)
+	}
+	for _, f := range p.Lines[0].Facts {
+		if f.Question != "" {
+			t.Fatal("a fully cited row has no questions", f)
+		}
+	}
+	// A value cited from another row is refused, so rows cannot borrow each other's figures.
+	swapped := output()
+	swapped.Facts[1] = agentFact{"amount", "2400.00", "1", "Software,2400.00", 1}
+	if _, err = validateSchedule(swapped, "1", sources); err == nil {
+		t.Fatal("a fact cited outside its row was accepted")
+	}
+	// A label its quote does not show is a question for that row, not a value.
+	borrowed := output()
+	borrowed.Facts[8] = agentFact{"label", "Insurance", "1", "Software,2400.00", 2}
+	if p, err = validateSchedule(borrowed, "1", sources); err != nil || p.Lines[1].Facts[0].Value != "" || !strings.Contains(p.Lines[1].Facts[0].Question, "does not show Insurance") {
+		t.Fatal("a label not in its quote is a question", p, err)
+	}
+	// A row must be one whole line of the document, so it cannot take in another row's figures.
+	longer := []IntakeSource{{Source: sources[0].Source, Content: strings.Replace(content, "Prepaid insurance,400.00", "Prepaid insurance,400.00 (renewed in January)", 1)}}
+	if _, err = validateSchedule(output(), "1", longer); err == nil {
+		t.Fatal("a row that is only part of a line was accepted")
+	}
+	// A CSV cell spanning lines can hold a line that looks like a row, so such a schedule is not read.
+	celled := []IntakeSource{{Source: sources[0].Source, Content: content + "\nMemo,\"Renewed\nInsurance,1200.00 note\""}}
+	if p, err = validateSchedule(output(), "1", celled); err != nil || p.Kind != "unsupported" || len(p.Lines) != 0 || !strings.Contains(strings.Join(p.Questions, " "), "spans several lines") {
+		t.Fatal("a CSV cell spanning lines is a question", p, err)
+	}
+	// Two rows printed with one label cannot be told apart later, so they are a question for the document.
+	twice := []IntakeSource{{Source: sources[0].Source, Content: strings.Replace(content, "Software,2400.00", "Insurance,2400.00", 1)}}
+	same := output()
+	same.Lines[1].Row = strings.Replace(same.Lines[1].Row, "Software,2400.00", "Insurance,2400.00", 1)
+	for i := 8; i < 16; i++ {
+		same.Facts[i].Quote = strings.Replace(same.Facts[i].Quote, "Software,2400.00", "Insurance,2400.00", 1)
+	}
+	same.Facts[8].Value = "Insurance"
+	if p, err = validateSchedule(same, "1", twice); err != nil || !strings.Contains(strings.Join(p.Questions, "\n"), "share the label") {
+		t.Fatal("rows sharing a label are a question", p, err)
+	}
+
+	// Only the opening month reads a schedule: elsewhere it is unsupported, with a question saying where to upload it.
+	raw, _ := json.Marshal(output())
+	var sent map[string]any
+	var request string
+	client := &http.Client{Transport: agentRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body, _ := io.ReadAll(r.Body)
+		request = string(body)
+		json.Unmarshal(body, &sent)
+		reply, _ := json.Marshal(map[string]any{"id": "response-fixture", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(raw)}}}}, "usage": map[string]int{"input_tokens": 10, "output_tokens": 10}})
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(reply))), Header: http.Header{}}, nil
+	})}
+	if p, err = interpret(agentModelContext(t, client), "Example", "2026-08", "USD", "1", sources, true); err != nil || len(p.Lines) != 2 || sent["max_output_tokens"] != float64(16000) || !strings.Contains(request, "the client's opening month, its first in the firm") {
+		t.Fatal("the opening month reads the schedule", p, err)
+	}
+	if p, err = interpret(agentModelContext(t, client), "Example", "2026-09", "USD", "1", sources, false); err != nil || p.Kind != "unsupported" || len(p.Lines) != 0 || !strings.Contains(strings.Join(p.Questions, " "), "opening month") || strings.Contains(request, "the client's opening month, its first in the firm") {
+		t.Fatal("another month does not read a schedule", p, err)
+	}
 }
