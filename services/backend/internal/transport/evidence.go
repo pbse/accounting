@@ -185,6 +185,10 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Use the reviewed next-month carry-forward action.")
 			return
 		}
+		if p.Imported != nil {
+			problem(w, 422, "Import a prior schedule from its reading on the Work page.")
+			return
+		}
 		if len(p.Sources) < 1 || len(p.Sources) > 8 {
 			problem(w, 422, "Link source evidence and the ledger/credit support for the selected method.")
 			return
@@ -202,9 +206,9 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 		}
 		if p.Revises != "" {
 			var valid bool
-			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM workpapers WHERE id::text=$1 AND close_id::text=$2 AND kind=$3 AND paper->'carry_forward' IS NULL)`, p.Revises, r.PathValue("id"), p.Kind).Scan(&valid)
+			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM workpapers WHERE id::text=$1 AND close_id::text=$2 AND kind=$3 AND paper->'carry_forward' IS NULL AND paper->'imported' IS NULL)`, p.Revises, r.PathValue("id"), p.Kind).Scan(&valid)
 			if err != nil || !valid {
-				problem(w, 422, "Revision must refer to the same kind of workpaper in this close.")
+				problem(w, 422, "Revision must refer to the same kind of workpaper in this close. A line of a prior schedule is corrected by uploading the corrected schedule.")
 				return
 			}
 		}
@@ -364,6 +368,10 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			var proposal preparation.Proposal
 			if json.Unmarshal(proposalRaw, &proposal) != nil {
 				problem(w, 503, "Could not read intake proposal.")
+				return
+			}
+			if len(proposal.Lines) > 0 {
+				problem(w, 409, "Import this prior schedule from its reading on the Work page.")
 				return
 			}
 			if proposal.Engine == "openai" {

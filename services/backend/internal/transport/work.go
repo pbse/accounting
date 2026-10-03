@@ -1,16 +1,19 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/mail"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/documents"
@@ -239,6 +242,14 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			DeliveryReference  string          `json:"delivery_reference"`
 			ReceivedFrom       string          `json:"received_from"`
 			Alias              string          `json:"alias"`
+			ClientConfirmed    bool            `json:"client_confirmed"`
+			RosterConfirmed    bool            `json:"roster_confirmed"`
+			Lines              []struct {
+				Line     int    `json:"line"`
+				Decision string `json:"decision"`
+				Method   string `json:"method"`
+				Reason   string `json:"reason"`
+			} `json:"lines"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -254,7 +265,8 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		var closeID, entity, period string
-		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID, &entity, &period); err != nil {
+		var opening bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,entity,period,takeover FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID, &entity, &period, &opening); err != nil {
 			problem(w, 404, "Close not found.")
 			return
 		}
@@ -291,7 +303,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 		var fresh preparation.Proposal
 		var proposed preparation.Proposal
 		var sources []preparation.IntakeSource
-		if action == "confirm" || action == "request" {
+		if action == "confirm" || action == "request" || action == "import_schedule" {
 			if json.Unmarshal(raw, &proposed) != nil {
 				problem(w, 503, "Stored proposals unavailable.")
 				return
@@ -321,6 +333,10 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			}
 			if proposed.Engine == "openai" && len(proposed.Questions) > 0 {
 				problem(w, 409, "Answer the open questions and let the agent recheck the evidence before preparation.")
+				return
+			}
+			if len(proposed.Lines) > 0 {
+				problem(w, 409, "Decide every row of this prior schedule with Import schedule.")
 				return
 			}
 			kind := proposed.Kind
@@ -392,6 +408,140 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET plans=$2,state='queued',error='',finished_at=NULL WHERE id=$1`, jobID, string(plans))
 			if err == nil {
 				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET confirmed_by=$2,confirmed_at=now() WHERE job_id=$1`, jobID, actor)
+			}
+		case "import_schedule":
+			// A prior accountant's schedule is decided whole on the client's opening month: each row imported as a schedule
+			// with a method, or set aside with a reason. A corrected schedule revises the current drafts of rows imported from
+			// an earlier version, named by the first version's evidence and the row's label.
+			if state != "needs_confirmation" || len(proposed.Lines) == 0 {
+				problem(w, 409, "This work is not a prior schedule waiting for a decision.")
+				return
+			}
+			if !opening {
+				problem(w, 409, "This close is no longer the client's opening month. Read the prior schedule on the opening month.")
+				return
+			}
+			if !in.ClientConfirmed || !in.RosterConfirmed || (len(proposed.Unselected) > 0 && !in.InventoryConfirmed) {
+				problem(w, 422, "Confirm the schedule is this client's and that the listed rows are all of its rows.")
+				return
+			}
+			if len(proposed.Questions) > 0 {
+				problem(w, 409, "Answer the schedule's open questions and let the agent read it again before importing.")
+				return
+			}
+			decided := map[int]bool{}
+			for _, d := range in.Lines {
+				if d.Line < 1 || d.Line > len(proposed.Lines) || decided[d.Line] {
+					problem(w, 422, "Decide each row once.")
+					return
+				}
+				decided[d.Line] = true
+			}
+			if len(decided) != len(proposed.Lines) {
+				problem(w, 422, "Decide every row of the schedule: import it with a method, or set it aside with a reason.")
+				return
+			}
+			// A schedule that replaces more than one earlier document, or whose earlier versions' rows were imported under
+			// another first version, is refused rather than guessed.
+			var root string
+			var tangled bool
+			if err = tx.QueryRowContext(r.Context(), `WITH RECURSIVE chain(id) AS (SELECT $1::bigint UNION SELECT e.id FROM evidence e JOIN chain c ON e.superseded_by=c.id WHERE e.close_id=$2)
+ SELECT (SELECT min(id)::text FROM chain),
+  EXISTS(SELECT 1 FROM evidence e WHERE e.close_id=$2 AND e.superseded_by IN (SELECT id FROM chain) GROUP BY e.superseded_by HAVING count(*)>1)
+  OR EXISTS(SELECT 1 FROM workpapers w WHERE w.close_id=$2 AND w.paper->'imported'->>'root_source_id' IN (SELECT id::text FROM chain) AND w.paper->'imported'->>'root_source_id'<>(SELECT min(id)::text FROM chain))`, sourceID, closeID).Scan(&root, &tangled); err != nil {
+				problem(w, 503, "Could not read the schedule's earlier versions.")
+				return
+			}
+			if tangled {
+				problem(w, 409, "This schedule replaces more than one earlier document, or its earlier versions were imported separately. Correct one schedule at a time.")
+				return
+			}
+			current := map[string]string{}
+			rows, e := tx.QueryContext(r.Context(), `SELECT lower(w.paper->'imported'->>'label'),w.id::text FROM workpapers w WHERE w.close_id=$1 AND w.paper->'imported'->>'root_source_id'=$2 AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)`, closeID, root)
+			if e != nil {
+				problem(w, 503, "Could not read the schedule's drafts.")
+				return
+			}
+			for rows.Next() {
+				var label, id string
+				if e = rows.Scan(&label, &id); e != nil {
+					break
+				}
+				current[label] = id
+			}
+			rows.Close()
+			if e != nil || rows.Err() != nil {
+				problem(w, 503, "Could not read the schedule's drafts.")
+				return
+			}
+			schedule := ""
+			if proposed.Kind == "deferred_revenue" {
+				schedule = prepaids.DeferredRevenue
+			}
+			plans, listed := []preparation.Plan{}, map[string]bool{}
+			for _, d := range in.Lines {
+				line := &proposed.Lines[d.Line-1]
+				value := map[string]string{}
+				for _, f := range line.Facts {
+					value[f.Field] = f.Value
+				}
+				label := value["label"]
+				listed[strings.ToLower(label)] = true
+				switch d.Decision {
+				case "set_aside":
+					if n := utf8.RuneCountInString(strings.TrimSpace(d.Reason)); n < 5 || n > 2000 {
+						problem(w, 422, fmt.Sprintf("Say why row %d is set aside (5–2,000 characters).", d.Line))
+						return
+					}
+					if current[strings.ToLower(label)] != "" {
+						problem(w, 409, fmt.Sprintf("Row %d (%s) was imported from an earlier version of this schedule; import its corrected row.", d.Line, label))
+						return
+					}
+					line.SetAside = strings.TrimSpace(d.Reason)
+				case "import":
+					for _, f := range line.Facts {
+						if f.Question != "" || f.Value == "" {
+							problem(w, 409, fmt.Sprintf("Row %d: %s", d.Line, cmp.Or(f.Question, "Confirm the "+f.Label+" of this row.")))
+							return
+						}
+					}
+					if d.Method != prepaids.Method && d.Method != prepaids.DailyMethod {
+						problem(w, 422, fmt.Sprintf("Choose equal full months or actual days for row %d.", d.Line))
+						return
+					}
+					reference := "Prior schedule #" + root + " · " + label
+					if len(reference) > 200 {
+						problem(w, 422, fmt.Sprintf("Row %d's label is too long to track; shorten it in the schedule.", d.Line))
+						return
+					}
+					input, _ := json.Marshal(prepaids.Input{Basis: "accrual", Entity: entity, ClosePeriod: period, SourceReference: reference, Amount: value["amount"], ServiceStart: value["service_start"], ServiceEnd: value["service_end"],
+						Currency: value["currency"], ExpenseAccount: value["expense_account"], PrepaidAccount: value["prepaid_account"], Method: d.Method, Schedule: schedule})
+					p := preparation.Plan{Kind: "prepaid", Input: input, Sources: fresh.Sources, Revises: current[strings.ToLower(label)], Imported: &preparation.Imported{RootSourceID: root, Label: label, Remaining: value["remaining"]}}
+					if _, e := preparation.Calculate(p, entity, period); e != nil {
+						problem(w, 422, fmt.Sprintf("Row %d: %s", d.Line, e.Error()))
+						return
+					}
+					plans = append(plans, p)
+				default:
+					problem(w, 422, fmt.Sprintf("Import row %d or set it aside.", d.Line))
+					return
+				}
+			}
+			for label := range current {
+				if !listed[label] {
+					problem(w, 409, "The corrected schedule must list every row imported from its earlier version, including "+label+".")
+					return
+				}
+			}
+			decision, _ := json.Marshal(proposed)
+			saved, _ := json.Marshal(plans)
+			next := "queued"
+			if len(plans) == 0 {
+				next = "completed"
+			}
+			_, err = tx.ExecContext(r.Context(), `UPDATE preparation_jobs SET plans=$2,state=$3,error='',finished_at=CASE WHEN $3='completed' THEN now() END WHERE id=$1`, jobID, string(saved), next)
+			if err == nil {
+				_, err = tx.ExecContext(r.Context(), `UPDATE preparation_intakes SET proposal=$2,confirmed_by=$3,confirmed_at=now() WHERE job_id=$1`, jobID, string(decision), actor)
 			}
 		case "request":
 			if state != "needs_confirmation" {
