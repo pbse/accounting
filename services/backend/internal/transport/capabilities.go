@@ -41,6 +41,7 @@ var capabilities = []capability{
 	{"QuickBooks", "accrual", "Journal: accrual", "Only the approved accrual's lines; a reversal is its own approved entry."},
 	{"QuickBooks", "loan", "Journal: loan interest and current portion", "From a schedule checked against the lender statement."},
 	{"QuickBooks", "owner", "Journal: owner item", "Only under the client's approved owner rule; tax treatment is never decided."},
+	{"QuickBooks", "payroll", "Journal: payroll from the provider's summary", "Only a summary tied to the clearing account's debits; payroll is never run."},
 	{"QuickBooks", "settlement", "Journal: Stripe fees", "For payouts deposited in the month when the client books deposits net."},
 	{"QuickBooks", "bill_correction", "Bill line recode", "One line of an unpaid Bill; both accounts must be in the grant."},
 	{"QuickBooks", "purchase_correction", "Expense line recode", "Up to ten simple expense lines, no tax, nothing linked."},
@@ -53,6 +54,7 @@ var capabilities = []capability{
 	{"Xero", "accrual", "Manual journal: accrual", "Dated after the organisation's lock dates, to accounts the grant lists."},
 	{"Xero", "loan", "Manual journal: loan", "Dated after the organisation's lock dates, to accounts the grant lists."},
 	{"Xero", "owner", "Manual journal: owner item", "Dated after the organisation's lock dates, to accounts the grant lists."},
+	{"Xero", "payroll", "Manual journal: payroll", "Dated after the organisation's lock dates, to accounts the grant lists."},
 	{"Xero", "settlement", "Manual journal: Stripe fees", "Dated after the organisation's lock dates, to accounts the grant lists."},
 	{"Xero", "bill_correction", "Bill line recode", "One bill line moved to another expense account the grant lists."},
 	{"Stripe", "read", "Payout and balance reports", "The balance roll-forward is computed, not tied to Stripe's own balances."},
@@ -149,7 +151,7 @@ func capabilityRegister(evidence, grants, services, acceptances json.RawMessage)
 				}
 			}
 		}
-		row["sandbox_recorded"] = c.provider != "Xero" && !slices.Contains([]string{"accrual", "loan", "owner", "settlement"}, c.kind)
+		row["sandbox_recorded"] = c.provider != "Xero" && !slices.Contains([]string{"accrual", "loan", "owner", "payroll", "settlement"}, c.kind)
 		status := "documented"
 		switch {
 		case approved && len(clients) > 0:

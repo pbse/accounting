@@ -16,6 +16,7 @@ import (
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
+	"close.local/backend/internal/payroll"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/quickbooks"
@@ -100,7 +101,7 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 	must(err)
 
 	// Liabilities carry positive credit balances; the expense a positive debit balance.
-	accounts := map[string][3]string{"30": {"Interest expense", "Expense", "100.00"}, "31": {"Accrued interest", "Liability", "0.00"}, "32": {"Loan payable", "Liability", "100000.00"}, "33": {"Current portion of loan", "Liability", "18000.00"}, "40": {"Meals", "Expense", "500.00"}, "42": {"Shareholder distributions", "Equity", "0.00"}, "43": {"Shareholder distributions", "Equity", "0.00"}, "50": {"Stripe fees", "Expense", "10.00"}, "51": {"Sales", "Revenue", "5000.00"}}
+	accounts := map[string][3]string{"20": {"Wages", "Expense", "0.00"}, "21": {"Payroll taxes", "Expense", "0.00"}, "22": {"Payroll clearing", "Asset", "10265.00"}, "23": {"Payroll liabilities", "Liability", "0.00"}, "30": {"Interest expense", "Expense", "100.00"}, "31": {"Accrued interest", "Liability", "0.00"}, "32": {"Loan payable", "Liability", "100000.00"}, "33": {"Current portion of loan", "Liability", "18000.00"}, "40": {"Meals", "Expense", "500.00"}, "42": {"Shareholder distributions", "Equity", "0.00"}, "43": {"Shareholder distributions", "Equity", "0.00"}, "50": {"Stripe fees", "Expense", "10.00"}, "51": {"Sales", "Revenue", "5000.00"}}
 	after := map[string]string{"30": "119.67", "31": "19.67", "32": "98000.00", "33": "20000.00"}
 	writes := 0
 	var posted quickbooks.Journal
@@ -154,7 +155,7 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 	grantPath := "/v1/closes/" + closeID + "/production-grant"
 	grant := func(limit string, kinds []string) string {
 		var out struct{ ID string }
-		json.Unmarshal(call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "account_ids": []string{"30", "31", "32", "33", "40", "42", "43", "50", "51"}, "kinds": kinds, "max_amount": limit, "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic loan and owner posting", "confirmation": "GRANT PRODUCTION POSTING"}, 200), &out)
+		json.Unmarshal(call(grantPath, map[string]any{"action": "grant", "connection_id": connectionID, "account_ids": []string{"20", "21", "22", "23", "30", "31", "32", "33", "40", "42", "43", "50", "51"}, "kinds": kinds, "max_amount": limit, "expires_at": time.Now().Add(time.Hour), "reason": "Reviewed synthetic loan and owner posting", "confirmation": "GRANT PRODUCTION POSTING"}, 200), &out)
 		return out.ID
 	}
 	loanPath := "/v1/closes/" + closeID + "/workpapers/" + loanID + "/production-posting"
@@ -193,7 +194,7 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 	}
 	feePath := "/v1/closes/" + closeID + "/workpapers/" + feeID + "/production-posting"
 	call(grantPath, map[string]any{"action": "revoke", "grant_id": second, "confirmation": "REVOKE PRODUCTION GRANT"}, 200)
-	grant("3000.00", []string{"settlement"})
+	third := grant("3000.00", []string{"settlement"})
 	if body := call(feePath, map[string]string{"action": "preview"}, 409); !strings.Contains(string(body), "not enabled") {
 		t.Fatalf("Stripe fee entries stay off until enabled: %s", body)
 	}
@@ -213,5 +214,29 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 	json.Unmarshal(call(feePath, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 200), &result)
 	if writes != 2 || result.State != "verified" {
 		t.Fatalf("the approved Stripe fee entry posts once and verifies: %+v writes=%d", result, writes)
+	}
+
+	pay, err := payroll.Prepare(payroll.Input{Entity: "Entries fixture", ClosePeriod: "2026-09", Currency: "USD", Provider: "Gusto", SourceReference: "Payroll summary Sep 2026", FirstPayDate: "2026-09-15", LastPayDate: "2026-09-30",
+		GrossWages: "10000.00", EmployeeTaxes: "1500.00", EmployeeDeductions: "500.00", NetPay: "8000.00", EmployerTaxes: "765.00", EmployerContributions: "0.00", ProviderDebits: "10265.00", LedgerDebits: "10265.00",
+		LedgerReference: "Payroll clearing GL", WageAccount: "Wages", TaxExpenseAccount: "Payroll taxes", ClearingAccount: "Payroll clearing", LiabilityAccount: "Payroll liabilities", Method: payroll.Method, ApprovedConfirmed: true, NotBookedConfirmed: true})
+	must(err)
+	payrollID := saved("payroll", pay)
+	payrollPath := "/v1/closes/" + closeID + "/workpapers/" + payrollID + "/production-posting"
+	call(grantPath, map[string]any{"action": "revoke", "grant_id": third, "confirmation": "REVOKE PRODUCTION GRANT"}, 200)
+	grant("20000.00", []string{"payroll"})
+	t.Setenv("PRODUCTION_POSTING_KINDS", "prepaid,loan,owner,settlement,payroll")
+	must(db.QueryRow(`INSERT INTO workpapers(close_id,kind,digest,paper) SELECT close_id,kind,'newer',jsonb_set(paper,'{input,source_reference}','"Payroll summary Sep 2026, corrected"') FROM workpapers WHERE id=$1 RETURNING id::text`, payrollID).Scan(&newer))
+	if body := call(payrollPath, map[string]string{"action": "preview"}, 409); !strings.Contains(string(body), "newer source draft") {
+		t.Fatalf("a corrected summary from the same provider supersedes this one, whatever its title: %s", body)
+	}
+	_, err = db.Exec(`UPDATE workpapers SET paper=jsonb_set(paper,'{input}',paper->'input'||'{"provider":"ADP","source_reference":"Payroll summary Sep 2026"}') WHERE id=$1`, newer)
+	must(err)
+	call(payrollPath, map[string]string{"action": "preview"}, 200)
+	_, err = db.Exec(`DELETE FROM workpapers WHERE id=$1`, newer)
+	must(err)
+	json.Unmarshal(call(payrollPath, map[string]string{"action": "preview"}, 200), &preview)
+	json.Unmarshal(preview.Journal, &journal)
+	if len(journal.Line) != 6 || preview.Projected["20"] != "10000.00" || preview.Projected["21"] != "765.00" || preview.Projected["22"] != "0.00" || preview.Projected["23"] != "500.00" {
+		t.Fatalf("the payroll entries post as one journal and clear the provider's debits: %+v %v", journal.Line, preview.Projected)
 	}
 }

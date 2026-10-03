@@ -263,7 +263,7 @@ function XeroGrant({ closeId, connectionId }: { closeId: string; connectionId: s
           </label>
           <fieldset>
             <legend>Draft kinds</legend>
-            {["prepaid", "accrual", "loan", "owner", "settlement", "bill_correction"].map((kind) => (
+            {["prepaid", "accrual", "loan", "owner", "payroll", "settlement", "bill_correction"].map((kind) => (
               <label key={kind}>
                 <input type="checkbox" checked={kinds.includes(kind)} onChange={(e) => setKinds(e.target.checked ? [...kinds, kind] : kinds.filter((k) => k !== kind))} /> {kind}
               </label>

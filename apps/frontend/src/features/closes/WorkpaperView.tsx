@@ -262,7 +262,7 @@ function WorkpaperResult({ close, saved }: { close: Close; saved: Paper }) {
   if (saved.kind === "accrual") return <><AccrualResult result={saved.paper} />{saved.paper.proposal && posting}</>;
   if (saved.kind === "loan") return <><LoanResult result={saved.paper} />{saved.paper.proposals.length > 0 && saved.paper.blockers.length === 0 && posting}</>;
   if (saved.kind === "owner") return <><OwnerResult result={saved.paper} />{saved.paper.proposal && posting}</>;
-  if (saved.kind === "payroll") return <PayrollResult result={saved.paper} />;
+  if (saved.kind === "payroll") return <><PayrollResult result={saved.paper} />{saved.paper.proposals.length > 0 && saved.paper.blockers.length === 0 && posting}</>;
   if (saved.kind === "reconciliation") return <><ReconciliationResult result={saved.paper} /><NativeFlags closeId={close.id} account={saved.paper.input.account} /></>;
   const paper = saved.paper;
   const terms = scheduleTerms[paper.input.schedule ?? ""];
