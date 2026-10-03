@@ -19,6 +19,7 @@ import { Matching } from "./Matching";
 import { Exceptions } from "./Exceptions";
 import { Flux } from "./Flux";
 import { Reports } from "./Reports";
+import { Budget } from "./Budget";
 import { TieOut } from "./TieOut";
 import { RetentionControls } from "./Enterprise";
 import { Evidence, PreparationJobs } from "./Evidence";
@@ -264,7 +265,12 @@ export default function ClientClose() {
         </div>
       )}
       {tab === "requests" && <Requests closeId={close.id} papers={papers} />}
-      {tab === "reports" && <Reports key={`reports-${close.id}`} closeId={close.id} />}
+      {tab === "reports" && (
+        <>
+          <Reports key={`reports-${close.id}`} closeId={close.id} />
+          <Budget key={`budget-${close.id}`} closeId={close.id} />
+        </>
+      )}
       {tab === "cash" && <CashPlan key={`cash-${close.id}`} closeId={close.id} />}
       {tab === "signoff" && (
         <div className="stack">

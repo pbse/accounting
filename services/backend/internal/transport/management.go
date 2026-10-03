@@ -333,10 +333,9 @@ func readLedgerMonth(m *fluxMonth) (*books, error) {
 			Name, Classification, AccountType, AccountSubType string
 		}
 		json.Unmarshal(m.accounts, &accounts)
+		// The whole chart, so an account with no activity yet can still be named (and a budget line mapped to it).
 		for _, a := range accounts {
-			if _, ok := b.Activity[a.ID]; ok {
-				b.Accounts[a.ID] = packAccount{Name: a.Name, Class: a.Classification, Type: a.AccountType, Subtype: a.AccountSubType}
-			}
+			b.Accounts[a.ID] = packAccount{Name: a.Name, Class: a.Classification, Type: a.AccountType, Subtype: a.AccountSubType}
 		}
 	}
 	for _, a := range balances {
