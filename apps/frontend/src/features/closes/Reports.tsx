@@ -29,7 +29,7 @@ export type Pack =
       profit_and_loss: { sections: Section[]; measures: Line[] };
       balance_sheet: { sections: Section[]; earnings: Line; total_assets: Line; total_liabilities: Line; total_equity: Line; difference: string };
       working_capital: Record<"book_cash" | "receivables" | "payables" | "current_assets" | "current_liabilities" | "working_capital", Line> | { unavailable: string };
-      cash_flow: { unavailable: string };
+      cash_flow: { unavailable: string } | { sections: Section[]; net_change: Line; beginning: Line; ending: Line; book_cash: string; reconciled: boolean; differences: string[] };
     };
 
 type Status = "provisional" | "signed_off" | "unknown";
@@ -118,6 +118,7 @@ export function PackView({ closeId, pack, staff = false }: { closeId: string; pa
   const [statusClass, statusText] = statusLabels[pack.status];
   const bs = pack.balance_sheet;
   const wc = pack.working_capital;
+  const flow = pack.cash_flow;
   const prior = pack.prior;
   return (
     <section aria-label="Management pack">
@@ -162,7 +163,59 @@ export function PackView({ closeId, pack, staff = false }: { closeId: string; pa
       {table(`Balances at the end of ${pack.period}`, bs.sections, [bs.earnings, bs.total_assets, bs.total_liabilities, bs.total_equity])}
       {bs.difference !== "0.00" && <p role="alert">Assets differ from liabilities and equity by {show(bs.difference)}.</p>}
       <SectionHeader title="Cash flow" />
-      <p className="note">{pack.cash_flow.unavailable}</p>
+      {"unavailable" in flow ? (
+        <p className="note">{flow.unavailable}</p>
+      ) : (
+        <>
+          <table>
+            <caption>The ledger's Statement of Cash Flows for {pack.period}</caption>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left" }}>Line</th>
+                <th>{pack.period}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {flow.sections.map((section) => (
+                <Fragment key={section.name}>
+                  <tr>
+                    <th colSpan={2} style={{ textAlign: "left" }}>
+                      {section.name}
+                    </th>
+                  </tr>
+                  {section.lines.map((line, i) => (
+                    <tr key={i}>
+                      <th scope="row" style={{ textAlign: "left", fontWeight: "normal" }}>
+                        {line.name}
+                      </th>
+                      <td>{show(line.amount)}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <th scope="row" style={{ textAlign: "left" }}>
+                      {section.total.name}
+                    </th>
+                    <td>{show(section.total.amount)}</td>
+                  </tr>
+                </Fragment>
+              ))}
+              {[flow.net_change, flow.beginning, flow.ending].map((line) => (
+                <tr key={line.name}>
+                  <th scope="row" style={{ textAlign: "left" }}>
+                    {line.name}
+                  </th>
+                  <td>{show(line.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {flow.reconciled ? (
+            <p role="status">Ties to the books: the statement's ending cash is the month-end book cash of {show(flow.book_cash)}.</p>
+          ) : (
+            <p role="alert">Does not tie to the books. {flow.differences.join(" ")}</p>
+          )}
+        </>
+      )}
       {staff && <Publication closeId={closeId} pack={pack} />}
       {drill && account && (
         <>

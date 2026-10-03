@@ -58,7 +58,136 @@ func PeriodReports(ctx context.Context, env, realm, token, period string) (map[s
 		}
 		reports[name] = raw
 	}
+	// The Statement of Cash Flows is kept only when the ledger gives it for exactly this month in the same currency; a
+	// capture never fails for it, and the management pack says when it is missing.
+	query := url.Values{"start_date": {start.Format("2006-01-02")}, "end_date": {end}, "accounting_method": {"Accrual"}}
+	optional, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < 40*time.Second {
+		return reports, nil
+	}
+	if raw, err := read(optional, env, realm, token, "/reports/CashFlow?"+query.Encode(), 1024*1024); err == nil {
+		var report struct {
+			Header struct {
+				ReportName, StartPeriod, EndPeriod, Currency string
+				Option                                       []struct{ Name, Value string }
+			}
+		}
+		kept := json.Unmarshal(raw, &report) == nil && report.Header.ReportName == "CashFlow" && report.Header.StartPeriod == start.Format("2006-01-02") && report.Header.EndPeriod == end && report.Header.Currency == currency
+		for _, option := range report.Header.Option {
+			kept = kept && !(strings.Contains(strings.ToLower(option.Name), "truncat") && option.Value != "false")
+		}
+		if kept {
+			reports["CashFlow"] = raw
+		}
+	}
 	return reports, nil
+}
+
+// CashSection is one activity section of the ledger's Statement of Cash Flows: its lines as the report names them and
+// the total it states.
+type CashSection struct {
+	Name  string
+	Lines []CashLine
+	Total *big.Rat
+}
+
+type CashLine struct {
+	Name   string
+	Amount *big.Rat
+}
+
+// CashFlow reads QuickBooks' Statement of Cash Flows: the operating, investing and financing sections, and the net
+// change, beginning cash and ending cash it states (keyed CashIncrease, BeginningCash and EndingCash).
+func CashFlow(raw json.RawMessage) ([]CashSection, map[string]*big.Rat, error) {
+	type cells []struct {
+		Value string `json:"value"`
+	}
+	type row struct {
+		Group   string `json:"group"`
+		ColData cells  `json:"ColData"`
+		Rows    *struct {
+			Row []json.RawMessage `json:"Row"`
+		} `json:"Rows"`
+		Summary *struct {
+			ColData cells `json:"ColData"`
+		} `json:"Summary"`
+	}
+	amount := func(c cells) (*big.Rat, error) {
+		if len(c) < 2 {
+			return nil, fmt.Errorf("a row has no amount")
+		}
+		return ledger.Net(c[len(c)-1].Value, "")
+	}
+	var lines func([]json.RawMessage) ([]CashLine, error)
+	lines = func(rows []json.RawMessage) ([]CashLine, error) {
+		out := []CashLine{}
+		for _, raw := range rows {
+			var r row
+			if err := json.Unmarshal(raw, &r); err != nil {
+				return nil, fmt.Errorf("a row is not readable")
+			}
+			if len(r.ColData) >= 2 {
+				value, err := amount(r.ColData)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, CashLine{strings.TrimSpace(r.ColData[0].Value), value})
+			}
+			if r.Rows != nil {
+				nested, err := lines(r.Rows.Row)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, nested...)
+			}
+		}
+		return out, nil
+	}
+	var report struct {
+		Rows struct {
+			Row []json.RawMessage `json:"Row"`
+		} `json:"Rows"`
+	}
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return nil, nil, fmt.Errorf("the report is not readable")
+	}
+	names := map[string]string{"OperatingActivities": "Operating activities", "InvestingActivities": "Investing activities", "FinancingActivities": "Financing activities"}
+	sections, totals := []CashSection{}, map[string]*big.Rat{}
+	for _, raw := range report.Rows.Row {
+		var r row
+		if err := json.Unmarshal(raw, &r); err != nil {
+			return nil, nil, fmt.Errorf("a section is not readable")
+		}
+		switch r.Group {
+		case "OperatingActivities", "InvestingActivities", "FinancingActivities", "CashIncrease", "BeginningCash", "EndingCash":
+			stated := r.ColData
+			if r.Summary != nil {
+				stated = r.Summary.ColData
+			}
+			total, err := amount(stated)
+			if err != nil {
+				return nil, nil, err
+			}
+			if names[r.Group] == "" {
+				totals[r.Group] = total
+				continue
+			}
+			section := CashSection{Name: names[r.Group], Lines: []CashLine{}, Total: total}
+			if r.Rows != nil {
+				if section.Lines, err = lines(r.Rows.Row); err != nil {
+					return nil, nil, err
+				}
+			}
+			sections = append(sections, section)
+		}
+	}
+	for _, group := range []string{"CashIncrease", "BeginningCash", "EndingCash"} {
+		if totals[group] == nil {
+			return nil, nil, fmt.Errorf("the report does not state the net change, beginning cash and ending cash")
+		}
+	}
+	return sections, totals, nil
 }
 
 type CoverageItem struct {
@@ -473,6 +602,11 @@ func ReadSnapshot(ctx context.Context, env, realm, token, company, period string
 	snapshot["completed_at"] = time.Now()
 	snapshot["scope"] = "Sequential account and period report reads, not an atomic or independently verified complete ledger. TransactionList contains reported transactions, not full transaction entities. Account CurrentBalance is current, not month-end. Coverage is proposed evidence needs, never approval or completeness."
 	full, err := json.Marshal(snapshot)
+	// The optional Statement of Cash Flows is left out rather than refuse a capture the required reports fit.
+	if err == nil && len(full) > 18*1024*1024 && reports["CashFlow"] != nil {
+		delete(reports, "CashFlow")
+		full, err = json.Marshal(snapshot)
+	}
 	if err != nil || len(full) > 18*1024*1024 {
 		return nil, nil, fmt.Errorf("Period reports exceed the 18 MiB supported snapshot size. No partial ledger was saved.")
 	}

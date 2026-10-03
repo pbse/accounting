@@ -18,8 +18,13 @@ import (
 // figuresDigest identifies what a pack reports, leaving out when it was read and its sign-off status.
 func figuresDigest(pack map[string]any) string {
 	prior, _ := pack["prior"].(map[string]any)
-	raw, _ := json.Marshal(map[string]any{"entity": pack["entity"], "period": pack["period"], "currency": pack["currency"], "basis": pack["basis"],
-		"profit_and_loss": pack["profit_and_loss"], "balance_sheet": pack["balance_sheet"], "working_capital": pack["working_capital"], "prior": prior["period"]})
+	figures := map[string]any{"entity": pack["entity"], "period": pack["period"], "currency": pack["currency"], "basis": pack["basis"],
+		"profit_and_loss": pack["profit_and_loss"], "balance_sheet": pack["balance_sheet"], "working_capital": pack["working_capital"], "prior": prior["period"]}
+	// A statement of cash flows is bound only when one is shown, so packs without one keep their digest.
+	if flow, _ := pack["cash_flow"].(map[string]any); flow["sections"] != nil {
+		figures["cash_flow"] = flow
+	}
+	raw, _ := json.Marshal(figures)
 	return preparation.Digest(raw)
 }
 
@@ -370,7 +375,16 @@ func publicationRows(p publication) ([][]string, error) {
 			TotalEquity      packLine `json:"total_equity"`
 		} `json:"balance_sheet"`
 		WorkingCapital map[string]json.RawMessage `json:"working_capital"`
-		Note           string
+		CashFlow       struct {
+			Sections    []packSection
+			NetChange   packLine `json:"net_change"`
+			Beginning   packLine
+			Ending      packLine
+			BookCash    string `json:"book_cash"`
+			Reconciled  bool
+			Differences []string
+		} `json:"cash_flow"`
+		Note string
 	}
 	if err := json.Unmarshal(p.Pack, &pack); err != nil {
 		return nil, err
@@ -413,6 +427,17 @@ func publicationRows(p publication) ([][]string, error) {
 		if json.Unmarshal(pack.WorkingCapital[key], &l) == nil && l.Name != "" {
 			add("Working capital", "", l)
 		}
+	}
+	for _, s := range pack.CashFlow.Sections {
+		add("Cash flow", s.Name, append(s.Lines, s.Total)...)
+	}
+	if pack.CashFlow.NetChange.Name != "" {
+		add("Cash flow", "", pack.CashFlow.NetChange, pack.CashFlow.Beginning, pack.CashFlow.Ending)
+		tie := "Ties to the books: ending cash is the month-end book cash of " + pack.CashFlow.BookCash + "."
+		if !pack.CashFlow.Reconciled {
+			tie = "Does not tie to the books. " + strings.Join(pack.CashFlow.Differences, " ")
+		}
+		rows = append(rows, []string{"Cash flow", "Reconciliation", tie})
 	}
 	return rows, nil
 }
