@@ -39,6 +39,10 @@ const attentionQuery = `WITH scope AS (
   COALESCE(jsonb_typeof(x.paper->'sources')='array' AND x.paper->'sources'<>'[]'::jsonb,false) AS sourced,
   COALESCE(jsonb_typeof(x.paper->'blockers')='array' AND x.paper->'blockers'<>'[]'::jsonb,false) AS blocked
  FROM workpaper_review_state x WHERE x.close_id IN (SELECT id FROM scope) AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=x.close_id AND n.paper->>'revises'=x.id::text)
+), candidates AS MATERIALIZED (
+ -- Requests still unanswered in the person's closes; reminder and waiting checks run on these alone, not on every request.
+ SELECT q.*,s.owner AS close_owner FROM scope s JOIN request_drafts d ON d.close_id=s.id JOIN work_requests q ON q.draft_id=d.id
+ WHERE NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id)
 ), events AS (
  SELECT 'answered:'||s.id AS key,'answered' AS kind,d.close_id,s.created_at AS at,'Client replied to request #'||s.request_id||CASE WHEN s.complete THEN '' ELSE ' (partial)' END AS text,'' AS workpaper
   FROM request_submissions s JOIN work_requests q ON q.id=s.request_id JOIN request_drafts d ON d.id=q.draft_id
@@ -68,13 +72,13 @@ const attentionQuery = `WITH scope AS (
   WHERE d.close_id IN (SELECT id FROM scope) AND q.delivered_at IS NULL AND NOT EXISTS(SELECT 1 FROM email_delivery m WHERE m.request_id=q.id) AND ` + waitingRequest + `
  UNION ALL
  SELECT 'email:'||m.id||':'||m.state||':'||COALESCE(m.delivery,''),'email',d.close_id,m.created_at,'The email for request #'||q.id||' was not delivered',''
-  FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN LATERAL (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m ON true
-  WHERE d.close_id IN (SELECT id FROM scope) AND ` + undeliveredEmail + ` AND (` + waitingRequest + ` OR ` + waitingCoverage + `)
+  FROM candidates q JOIN request_drafts d ON d.id=q.draft_id JOIN LATERAL (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m ON true
+  WHERE ` + undeliveredEmail + ` AND (` + waitingRequest + ` OR ` + waitingCoverage + `)
  UNION ALL
  SELECT 'unanswered:'||q.id||':'||f.follow,'unanswered',d.close_id,COALESCE((SELECT max(created_at) FROM email_outbox WHERE request_id=q.id),q.approved_at),
   'Request #'||q.id||CASE f.follow WHEN 'exhausted' THEN ' has had no reply after every reminder the firm allows' ELSE ' cannot be reminded again before its link expires' END||'. Contact the client another way, or withdraw and replace the request.',''
-  FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN scope s ON s.id=d.close_id CROSS JOIN LATERAL (SELECT ` + reminderFollow + ` AS follow) f
-  WHERE s.owner IN ('mine','none') AND f.follow IN ('exhausted','expiring')
+  FROM candidates q JOIN request_drafts d ON d.id=q.draft_id CROSS JOIN LATERAL (SELECT ` + reminderFollow + ` AS follow) f
+  WHERE q.close_owner IN ('mine','none') AND f.follow IN ('exhausted','expiring')
   AND NOT EXISTS(SELECT 1 FROM (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m WHERE ` + undeliveredEmail + `)
   AND (` + waitingRequest + ` OR ` + waitingCoverage + `)
  UNION ALL
