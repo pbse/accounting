@@ -8,10 +8,12 @@ import (
 	"slices"
 	"strconv"
 	"time"
+
+	"close.local/backend/internal/preparation"
 )
 
 // attentionKinds are the events that need a person; running, queued, waiting and finished work never is one.
-var attentionKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "release", "send", "email", "goal", "handoff"}
+var attentionKinds = []string{"answered", "confirm", "failed", "approve", "changed", "fix", "release", "send", "email", "unanswered", "goal", "handoff"}
 
 // undeliveredEmail is SQL for an email m, the latest for its request, that did not reach the client.
 const undeliveredEmail = `(m.delivery IN ('bounced','complained','failed','suppressed') OR m.state IN ('failed','unknown') OR (m.state='queued' AND m.error<>''))`
@@ -19,6 +21,13 @@ const undeliveredEmail = `(m.delivery IN ('bounced','complained','failed','suppr
 // waitingRequest is SQL for a request q that is the latest one of work still waiting on the client and has no link reply.
 const waitingRequest = `EXISTS(SELECT 1 FROM request_jobs rj JOIN preparation_jobs j ON j.id=rj.job_id WHERE rj.request_id=q.id AND j.state='waiting_client' AND NOT EXISTS(SELECT 1 FROM request_jobs n WHERE n.job_id=rj.job_id AND n.request_id>rj.request_id))
  AND NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id)`
+
+// waitingCoverage is SQL for a request q about accounts alone, before any work, still current on its close's capture, with
+// no reply and no newer request for any of its accounts.
+const waitingCoverage = `(q.coverage_scope IS NOT NULL AND NOT EXISTS(SELECT 1 FROM request_jobs WHERE request_id=q.id) AND NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id)
+ AND ` + preparation.RequestCoverageIsCurrent + `
+ AND NOT EXISTS(SELECT 1 FROM work_requests n JOIN request_drafts nd ON nd.id=n.draft_id CROSS JOIN jsonb_array_elements(n.coverage_scope->'bindings') nb
+  WHERE nd.close_id=d.close_id AND n.id>q.id AND q.coverage_scope->'bindings' @> jsonb_build_array(jsonb_build_object('account_id',nb->>'account_id'))))`
 
 // attentionQuery derives each event from current work, review and request state; a key changes when the situation does.
 const attentionQuery = `WITH scope AS (
@@ -30,6 +39,10 @@ const attentionQuery = `WITH scope AS (
   COALESCE(jsonb_typeof(x.paper->'sources')='array' AND x.paper->'sources'<>'[]'::jsonb,false) AS sourced,
   COALESCE(jsonb_typeof(x.paper->'blockers')='array' AND x.paper->'blockers'<>'[]'::jsonb,false) AS blocked
  FROM workpaper_review_state x WHERE x.close_id IN (SELECT id FROM scope) AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=x.close_id AND n.paper->>'revises'=x.id::text)
+), candidates AS MATERIALIZED (
+ -- Requests still unanswered in the person's closes; reminder and waiting checks run on these alone, not on every request.
+ SELECT q.*,s.owner AS close_owner FROM scope s JOIN request_drafts d ON d.close_id=s.id JOIN work_requests q ON q.draft_id=d.id
+ WHERE NOT EXISTS(SELECT 1 FROM request_submissions WHERE request_id=q.id)
 ), events AS (
  SELECT 'answered:'||s.id AS key,'answered' AS kind,d.close_id,s.created_at AS at,'Client replied to request #'||s.request_id||CASE WHEN s.complete THEN '' ELSE ' (partial)' END AS text,'' AS workpaper
   FROM request_submissions s JOIN work_requests q ON q.id=s.request_id JOIN request_drafts d ON d.id=q.draft_id
@@ -59,8 +72,15 @@ const attentionQuery = `WITH scope AS (
   WHERE d.close_id IN (SELECT id FROM scope) AND q.delivered_at IS NULL AND NOT EXISTS(SELECT 1 FROM email_delivery m WHERE m.request_id=q.id) AND ` + waitingRequest + `
  UNION ALL
  SELECT 'email:'||m.id||':'||m.state||':'||COALESCE(m.delivery,''),'email',d.close_id,m.created_at,'The email for request #'||q.id||' was not delivered',''
-  FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN LATERAL (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m ON true
-  WHERE d.close_id IN (SELECT id FROM scope) AND ` + undeliveredEmail + ` AND ` + waitingRequest + `
+  FROM candidates q JOIN request_drafts d ON d.id=q.draft_id JOIN LATERAL (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m ON true
+  WHERE ` + undeliveredEmail + ` AND (` + waitingRequest + ` OR ` + waitingCoverage + `)
+ UNION ALL
+ SELECT 'unanswered:'||q.id||':'||f.follow,'unanswered',d.close_id,COALESCE((SELECT max(created_at) FROM email_outbox WHERE request_id=q.id),q.approved_at),
+  'Request #'||q.id||CASE f.follow WHEN 'exhausted' THEN ' has had no reply after every reminder the firm allows' ELSE ' cannot be reminded again before its link expires' END||'. Contact the client another way, or withdraw and replace the request.',''
+  FROM candidates q JOIN request_drafts d ON d.id=q.draft_id CROSS JOIN LATERAL (SELECT ` + reminderFollow + ` AS follow) f
+  WHERE q.close_owner IN ('mine','none') AND f.follow IN ('exhausted','expiring')
+  AND NOT EXISTS(SELECT 1 FROM (SELECT * FROM email_delivery m WHERE m.request_id=q.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1) m WHERE ` + undeliveredEmail + `)
+  AND (` + waitingRequest + ` OR ` + waitingCoverage + `)
  UNION ALL
  SELECT 'goal:'||g.id||':'||CASE g.state WHEN 'reached' THEN floor(extract(epoch FROM g.reached_at))::text ELSE 'stopped' END,'goal',g.close_id,COALESCE(g.reached_at,g.finished_at),
   CASE g.state WHEN 'reached' THEN 'Every uploaded document has a draft ready for review' ELSE g.events->-1->>'text' END,''
@@ -76,9 +96,10 @@ const attentionQuery = `WITH scope AS (
  SELECT 'handoff-owner:'||h.id,'goal',g.close_id,` + handoffEscalated + `,` + handoffStall + `,''
   FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE g.close_id IN (SELECT id FROM scope) AND g.author=$3 AND h.assignee<>$3 AND h.closed_at IS NULL AND ` + handoffEscalated + `<=now()
 )
-SELECT v.key,v.kind,v.close_id::text,v.at,v.text,v.workpaper,COALESCE(h.job_id::text,''),COALESCE(h.account_id,''),s.entity,s.period,s.due_on,s.priority,s.owner,mk.read_at IS NOT NULL,mk.snoozed_until
+SELECT v.key,v.kind,v.close_id::text,v.at,v.text,v.workpaper,COALESCE(h.job_id::text,CASE WHEN uq.coverage_scope IS NULL THEN (SELECT min(job_id)::text FROM request_jobs WHERE request_id=uq.id) END,''),COALESCE(h.account_id,''),s.entity,s.period,s.due_on,s.priority,s.owner,mk.read_at IS NOT NULL,mk.snoozed_until
 FROM events v JOIN scope s ON s.id=v.close_id LEFT JOIN attention_marks mk ON mk.organization_id=$1 AND mk.subject=$3 AND mk.key=v.key
 LEFT JOIN goal_handoffs h ON h.id=CASE WHEN v.key LIKE 'handoff:%' THEN split_part(v.key,':',2)::bigint END
+LEFT JOIN work_requests uq ON uq.id=CASE WHEN v.key LIKE 'unanswered:%' THEN split_part(v.key,':',2)::bigint END
 ORDER BY v.at DESC,v.key`
 
 type attentionEvent struct {

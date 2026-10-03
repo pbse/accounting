@@ -46,6 +46,10 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 		for _, q := range []string{`DELETE FROM attention_marks WHERE organization_id=$1`, `DELETE FROM attention_preferences WHERE organization_id=$1`,
 			`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT w.id FROM workpapers w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1)`,
 			`DELETE FROM workpapers WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
+			`DELETE FROM email_delivery_events WHERE connection_id IN (SELECT id FROM email_connections WHERE organization_id=$1)`,
+			`DELETE FROM email_outbox WHERE connection_id IN (SELECT id FROM email_connections WHERE organization_id=$1)`,
+			`DELETE FROM email_connections WHERE organization_id=$1`,
+			`DELETE FROM client_request_links WHERE request_id IN (SELECT q.id FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
 			`DELETE FROM work_requests WHERE draft_id IN (SELECT d.id FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1)`,
 			`DELETE FROM request_drafts WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
@@ -235,6 +239,38 @@ func TestAttentionInboxIsScopedPersonalAndDerivedFromCurrentState(t *testing.T) 
 	if stale != 0 {
 		t.Fatal("marks for events that no longer exist are dropped")
 	}
+	waitingSource := evidence(alpha, "Alpha lease, unsigned")
+	tx, _ = db.Begin()
+	waiting, err := preparation.StartIntake(t.Context(), tx, alpha, waitingSource, "fixture")
+	if err != nil || tx.Commit() != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`UPDATE preparation_jobs SET state='waiting_client' WHERE id=$1`, waiting)
+	must(err)
+	var lapsed, mailbox string
+	must(db.QueryRow(`WITH d AS (INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'1. Send the signed lease.','[]','y','fixture') RETURNING id)
+ INSERT INTO work_requests(job_id,draft_id,revision,recipient,approved_by) SELECT $2,id,0,'client@example.test','fixture' FROM d RETURNING id::text`, alpha, waiting).Scan(&lapsed))
+	_, err = db.Exec(`INSERT INTO client_request_links(digest,request_id,issued_by,expires_at) VALUES($1,$2,'fixture',now()-interval '1 day')`, "attention-"+lapsed, lapsed)
+	must(err)
+	must(db.QueryRow(`INSERT INTO email_connections(organization_id,sender,domain_id,credential,actor) VALUES($1,'firm@example.test','synthetic','dummy','fixture') RETURNING id::text`, org).Scan(&mailbox))
+	_, err = db.Exec(`INSERT INTO email_outbox(id,request_id,connection_id,link_digest,payload,state,provider_id,approved_by,firm_authority,approved_until) VALUES($1,$2,$3,$4,'dummy','accepted','attention-provider','fixture',true,now()+interval '1 hour')`, "attention-mail-"+lapsed, lapsed, mailbox, "attention-"+lapsed)
+	must(err)
+	if got, events = mine(""); events["unanswered"].Key != "unanswered:"+lapsed+":expiring" || events["unanswered"].JobID != waiting || !strings.Contains(events["unanswered"].Text, "cannot be reminded again before its link expires") {
+		t.Fatalf("a request that cannot be reminded again is escalated to the close's owner: %+v", got)
+	}
+	_, err = db.Exec(`UPDATE client_closes SET owner='user_colleague' WHERE id=$1`, alpha)
+	must(err)
+	if got, events = mine(""); events["unanswered"].Key != "" {
+		t.Fatalf("the escalation goes to the close's owner, not everyone: %+v", got)
+	}
+	_, err = db.Exec(`UPDATE client_closes SET owner='user_a' WHERE id=$1`, alpha)
+	must(err)
+	_, err = db.Exec(`INSERT INTO email_delivery_events(connection_id,event_id,body_digest,provider_id,recipient,kind,occurred_at) SELECT connection_id,'attention-bounce','x',provider_id,'client@example.test','bounced',now() FROM email_outbox WHERE id=$1`, "attention-mail-"+lapsed)
+	must(err)
+	if got, events = mine(""); events["unanswered"].Key != "" || events["email"].Key == "" {
+		t.Fatalf("an undelivered email is its own item, not an unanswered request: %+v", got)
+	}
+
 	var previous string
 	must(db.QueryRow(`SELECT id::text FROM current_organization_members WHERE organization_id=$1 AND subject='user_a'`, org).Scan(&previous))
 	call("user_admin", []string{"clients:all", "members:manage"}, "POST", "/v1/closes/members", map[string]any{"subject": "user_a", "granted": false, "previous_id": previous, "reason": "Left the firm for another role", "confirmed": true}, 200)

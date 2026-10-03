@@ -312,6 +312,24 @@ func TestCoverageRequestsQuarantineAndResolution(t *testing.T) {
 		Token string `json:"link_token"`
 	}
 	must(json.Unmarshal(call("POST", path, token, map[string]any{"action": "request", "digest": v.Digest, "accounts": []string{"c"}, "jobs": []string{}, "recipient": "client@example.test", "body": "Please provide missing invoice C.", "confirmed": true}, 200), &noJob))
+	var mailbox string
+	must(db.QueryRow(`INSERT INTO email_connections(organization_id,sender,domain_id,credential,enabled,actor) SELECT organization_id,'firm@example.test','synthetic',decode('00','hex'),false,'fixture' FROM client_closes WHERE id=$1 RETURNING id::text`, cid).Scan(&mailbox))
+	_, err = db.Exec(`INSERT INTO email_outbox(id,request_id,connection_id,link_digest,payload,state,provider_id,approved_by,firm_authority,approved_until) SELECT 'coverage-mail-'||$1,$1::bigint,$2,digest,'dummy','accepted','coverage-provider','fixture',true,now() FROM client_request_links WHERE request_id=$1::bigint`, noJob.ID, mailbox)
+	must(err)
+	_, err = db.Exec(`UPDATE client_request_links SET expires_at=expires_at-interval '100 days' WHERE request_id=$1::bigint`, noJob.ID)
+	must(err)
+	if !strings.Contains(string(call("GET", "/v1/closes/attention", token, nil, 200)), `"key":"unanswered:`+noJob.ID+`:expiring"`) {
+		t.Fatal("an emailed request for an account alone is escalated once it cannot be reminded again")
+	}
+	_, err = db.Exec(`INSERT INTO email_delivery_events(connection_id,event_id,body_digest,provider_id,recipient,kind,occurred_at) VALUES($1,'coverage-bounce','x','coverage-provider','client@example.test','bounced',now())`, mailbox)
+	must(err)
+	if attention := string(call("GET", "/v1/closes/attention", token, nil, 200)); strings.Contains(attention, `"key":"unanswered:`+noJob.ID) || !strings.Contains(attention, `"key":"email:coverage-mail-`+noJob.ID+`:accepted:bounced"`) {
+		t.Fatal("a bounced request for an account alone shows as undelivered", attention)
+	}
+	_, err = db.Exec(`UPDATE client_request_links SET expires_at=expires_at+interval '100 days' WHERE request_id=$1::bigint`, noJob.ID)
+	must(err)
+	_, err = db.Exec(`WITH m AS (DELETE FROM email_outbox WHERE connection_id=$1) DELETE FROM email_connections WHERE id=$1`, mailbox)
+	must(err)
 	call("POST", "/v1/client-request", noJob.Token, map[string]any{"body": "Invoice C will follow.", "confirmed": true}, 200)
 	// A request for an account alone keeps taking answers after the first reply, and Coverage says so.
 	if !strings.Contains(string(call("GET", "/v1/client-request", noJob.Token, nil, 200)), `"open":true`) {
