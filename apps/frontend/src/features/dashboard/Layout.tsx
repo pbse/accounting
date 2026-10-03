@@ -1,9 +1,11 @@
-import { Suspense, useEffect, useRef } from "react";
-import { Link, NavLink, Outlet, useNavigate } from "react-router";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { SidebarAccount } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
 import { openAssistant } from "./assistantStore";
 import { AttentionBadge } from "../closes/Attention";
+import { workspaceRequest } from "../closes/workspace";
+import { authKitClientId, useSession } from "../auth/Auth";
 import { Icon, type IconName } from "@close/ui/components/Icon";
 import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
 
@@ -45,17 +47,50 @@ const groups: { label: string; items: { to: string; label: string; icon: IconNam
   },
 ];
 
+// A client's executive sees their business results and nothing of the firm's workspace; the server enforces the same.
+// Links keep the client and month they chose.
+const executiveGroups = (close: string | null): typeof groups => [
+  {
+    label: "Business",
+    items: ([
+      { to: "/dashboard/executive", label: "Business overview", icon: "measure", end: true },
+      { to: "/dashboard/executive/reports", label: "Reports", icon: "file" },
+      { to: "/dashboard/executive/cash", label: "Cash plan", icon: "reconcile" },
+      { to: "/dashboard/executive/decisions", label: "My decisions", icon: "decision" },
+    ] as (typeof groups)[number]["items"]).map((item) => ({ ...item, to: close ? `${item.to}?close=${encodeURIComponent(close)}` : item.to })),
+  },
+];
+
 export default function WorkspaceLayout() {
   const search = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+  const location = useLocation();
   const signedIn = useSignedIn();
+  // Unknown until the server says; nothing of the workspace shows before then, so an executive never sees it.
+  const [executive, setExecutive] = useState<boolean>();
+  // A hosted session still loading is not yet signed out.
+  const sessionLoading = authKitClientId ? useSession().isLoading : false;
+  const known = !sessionLoading && (!signedIn || executive !== undefined);
+  useEffect(() => {
+    if (!signedIn) return;
+    let live = true;
+    workspaceRequest("/executive")
+      .then((data) => live && setExecutive(!!data.executive))
+      .catch(() => live && setExecutive(false));
+    return () => {
+      live = false;
+    };
+  }, [signedIn]);
+  useEffect(() => {
+    if (executive && !location.pathname.startsWith("/dashboard/executive")) navigate("/dashboard/executive", { replace: true });
+  }, [executive, location.pathname, navigate]);
   useShellThemeColor();
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (event.key !== "/" || target.closest("input, textarea, select, [contenteditable]")) return;
+      if (event.key !== "/" || target.closest("input, textarea, select, [contenteditable]") || !search.current) return;
       event.preventDefault();
-      search.current?.focus();
+      search.current.focus();
     };
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
@@ -73,7 +108,7 @@ export default function WorkspaceLayout() {
             <small>Preparation workspace</small>
           </span>
         </Link>
-        <form
+        {known && !executive && <form
           role="search"
           onSubmit={(event) => {
             event.preventDefault();
@@ -86,9 +121,9 @@ export default function WorkspaceLayout() {
             <input ref={search} name="q" aria-label="Search clients" placeholder="Search clients" maxLength={200} autoComplete="off" />
             <kbd aria-hidden="true">/</kbd>
           </label>
-        </form>
+        </form>}
         <nav aria-label="Workspace">
-          {groups.map((group) => (
+          {(executive ? executiveGroups(new URLSearchParams(location.search).get("close")) : known ? groups : []).map((group) => (
             <div className="nav-group" key={group.label}>
               <div className="nav-label">{group.label}</div>
               {group.items.map((item) => (
@@ -115,11 +150,11 @@ export default function WorkspaceLayout() {
       <main id="main" className="app-main">
         <div className="page">
           <Suspense fallback={<p role="status">Opening…</p>}>
-            <Outlet />
+            {known ? <Outlet /> : <p role="status">Opening…</p>}
           </Suspense>
         </div>
       </main>
-      <Assistant />
+      {executive === false && <Assistant />}
     </div>
   );
 }

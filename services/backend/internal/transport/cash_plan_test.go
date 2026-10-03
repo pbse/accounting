@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"close.local/backend/internal/auth"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Worked by hand: opening 1,000.00 on Monday 2026-10-05; Wednesday payroll of 3,000.00, a Thursday receipt of
@@ -164,6 +167,22 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	}
 	if len(plan.Covered) != 1 || plan.Covered[0]["on"] != "2026-10-07" || len(plan.Pending) != 1 || plan.Pending[0].Name != "Sales tax" || plan.Weeks[4].Disbursements != "5500.00" {
 		t.Fatalf("the week's landlord bill covers the rent estimate, and an unapproved obligation does not count: %+v %+v", plan.Covered, plan.Pending)
+	}
+	// An executive's plan leaves the draft schedule (its amount, vendor and notes) with the firm, saying only how many.
+	executive := "user_ceo_" + rand.Text()
+	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) SELECT organization_id,$1,true,'Synthetic','fixture' FROM client_closes WHERE id::text=$2`, executive, closeID)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) SELECT organization_id,$1,entity,true,'Synthetic','fixture' FROM client_closes WHERE id::text=$2`, executive, closeID)
+	must(err)
+	defer db.Exec(`DELETE FROM client_access WHERE subject=$1`, executive)
+	defer db.Exec(`DELETE FROM organization_member_access WHERE subject=$1`, executive)
+	var org string
+	must(db.QueryRow(`SELECT organization_id FROM client_closes WHERE id::text=$1`, closeID).Scan(&org))
+	seen := httptest.NewRequest("GET", "/v1/closes/"+closeID+"/cash-plan", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: executive}, Organization: org, Permissions: []string{"executive:read"}}))
+	w := httptest.NewRecorder()
+	savedCloses(db, token).ServeHTTP(w, seen)
+	if w.Code != 200 || strings.Contains(w.Body.String(), "Sales tax") || !strings.Contains(w.Body.String(), `"unapproved_schedules":1`) || !strings.Contains(w.Body.String(), `"pending_obligations":[]`) {
+		t.Fatalf("an executive does not see draft schedules: %d %s", w.Code, w.Body.String())
 	}
 	// Handing the landlord's bill to bill pay for next week moves the payment, and the estimate stays covered by it.
 	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "handed_to_bill_pay", "expected_on": "2026-10-14"}, 200)

@@ -325,11 +325,16 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		}
 		openItemsAt, _ := time.Parse(time.RFC3339, meta["captured_at"].(string))
 		apart := asOf.Sub(openItemsAt)
-		jsonReply(w, 200, map[string]any{"state": "ready", "entity": entity, "currency": home, "start": start.Format("2006-01-02"),
+		// An executive sees approved schedules only; drafts (their amounts, vendors and notes) stay with the firm.
+		var draftSchedules any = pending
+		if executive(r) {
+			draftSchedules = []cashObligation{}
+		}
+		jsonReply(w, 200, map[string]any{"state": "ready", "entity": entity, "currency": home, "start": start.Format("2006-01-02"), "unapproved_schedules": len(pending),
 			"opening":    map[string]any{"amount": opening.FloatString(2), "as_of": asOf, "snapshot_id": snapshotID, "stale": stale, "accounts": banks, "left_out": foreignBanks},
 			"open_items": map[string]any{"captured_at": meta["captured_at"], "capture_id": meta["capture_id"], "complete": meta["complete"], "hours_apart": int(apart.Abs().Hours()), "through": meta["month_end"], "missing_later": first > meta["month_end"].(string)},
 			"weeks":      weeks, "lowest": map[string]string{"amount": lowest.Lowest, "on": lowest.LowestOn},
-			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "covered": covered, "pending_obligations": pending,
+			"past_due": before, "after_horizon": after, "unscheduled": unscheduled, "other_currency": otherCurrency, "covered": covered, "pending_obligations": draftSchedules,
 			"note": "Book cash is the ledger's bank balances at the capture, not bank-available cash. Receipts and payments are expectations from due dates, promises, bill-pay handoffs and approved schedules; nothing is paid, collected or written to the ledger. Sales not yet invoiced are not in the plan unless an approved receipt schedule adds them, so later weeks show only what is already known."})
 	})
 	mux.HandleFunc("GET /v1/closes/{id}/cash-obligations", func(w http.ResponseWriter, r *http.Request) {

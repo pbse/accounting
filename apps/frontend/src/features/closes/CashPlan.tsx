@@ -40,12 +40,14 @@ type Plan =
       other_currency: string[];
       covered: { obligation: string; on: string; vendor: string }[];
       note: string;
+      unapproved_schedules?: number;
     };
 
 const every: Record<string, string> = { once: "once", week: "every week", two_weeks: "every two weeks", month: "every month" };
 const negative = (value: string) => value.startsWith("-");
 
-export function CashPlan({ closeId }: { closeId: string }) {
+// readOnly is an executive's view: the plan alone, without schedules to edit or the agent.
+export function CashPlan({ closeId, readOnly = false }: { closeId: string; readOnly?: boolean }) {
   const [plan, setPlan] = useState<Plan>();
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [error, setError] = useState("");
@@ -54,7 +56,7 @@ export function CashPlan({ closeId }: { closeId: string }) {
   const [version, setVersion] = useState(0);
   useEffect(() => {
     let live = true;
-    Promise.all([workspaceRequest(`/${closeId}/cash-plan`), workspaceRequest(`/${closeId}/cash-obligations`)])
+    Promise.all([workspaceRequest(`/${closeId}/cash-plan`), readOnly ? { obligations: [] } : workspaceRequest(`/${closeId}/cash-obligations`)])
       .then(([data, list]) => {
         if (live) {
           setPlan(data);
@@ -66,7 +68,7 @@ export function CashPlan({ closeId }: { closeId: string }) {
     return () => {
       live = false;
     };
-  }, [closeId, version]);
+  }, [closeId, version, readOnly]);
   async function act(body: Record<string, unknown>, done: string) {
     setBusy(true);
     setError("");
@@ -96,12 +98,14 @@ export function CashPlan({ closeId }: { closeId: string }) {
   const active = obligations.filter((o) => !o.retired_at);
   return (
     <section aria-label="Cash plan">
-      <AskAgent
-        closeId={closeId}
-        description="Ask about the next 13 weeks. The agent reads the same plan, open items and approved schedules."
-        placeholder="Which week is tightest, and why?"
-        suggestions={["When does book cash run lowest, and what causes it?", "Which overdue invoices would cover the shortfall?", "Which payments could move without missing a due date?"]}
-      />
+      {!readOnly && (
+        <AskAgent
+          closeId={closeId}
+          description="Ask about the next 13 weeks. The agent reads the same plan, open items and approved schedules."
+          placeholder="Which week is tightest, and why?"
+          suggestions={["When does book cash run lowest, and what causes it?", "Which overdue invoices would cover the shortfall?", "Which payments could move without missing a due date?"]}
+        />
+      )}
       <p>
         <strong>{plan.entity}</strong> · 13 weeks from {plan.start} · {plan.currency} · opening book cash {show(plan.opening.amount)} at{" "}
         {new Date(plan.opening.as_of).toLocaleString()}
@@ -110,6 +114,7 @@ export function CashPlan({ closeId }: { closeId: string }) {
         Lowest end-of-day book cash: <strong>{show(plan.lowest.amount)}</strong> on {plan.lowest.on}.
       </p>
       <p className="note">{plan.note}</p>
+      {readOnly && !!plan.unapproved_schedules && <p className="note">{plan.unapproved_schedules} schedule{plan.unapproved_schedules === 1 ? " is" : "s are"} waiting for the firm's approval and not counted.</p>}
       {plan.opening.stale && <p role="alert">The bank balances come from a capture that is no longer current. Capture the books again before relying on the plan.</p>}
       {!plan.open_items.complete && <p role="alert">The latest capture did not read every open item, so some receipts or payments are missing.</p>}
       {plan.open_items.missing_later && (
@@ -199,7 +204,7 @@ export function CashPlan({ closeId }: { closeId: string }) {
       )}
       {plan.after_horizon.length > 0 && <p className="note">{plan.after_horizon.length} open items fall after the 13 weeks.</p>}
       {plan.other_currency.length > 0 && <p className="note">Left out (another currency): {plan.other_currency.join(", ")}.</p>}
-
+      {!readOnly && <>
       <SectionHeader title="Payroll, tax, debt and other schedules" />
       <p className="note">
         Commitments the open items do not show, from the client's own schedules (payroll provider, tax calendar, loan agreement, lease). Each counts once a person
@@ -303,6 +308,7 @@ export function CashPlan({ closeId }: { closeId: string }) {
           </fieldset>
         </form>
       </details>
+      </>}
     </section>
   );
 }

@@ -237,6 +237,21 @@ func mcpOAuth() *auth.Verifier {
 	return &auth.Verifier{Issuer: domain, JWKSURL: domain + "/oauth2/jwks", Audience: resource, Organization: os.Getenv("WORKOS_ORGANIZATION_ID")}
 }
 
+// agentActor is who an OAuth agent acts as. The tool table is the only reachable surface and the grant's permission
+// only satisfies its routes; without clients:all the boundary limits the agent to the member's assigned clients. An
+// executive's agent stays an executive whatever its grant.
+func agentActor(claims auth.Claims, scope string) *auth.Claims {
+	granted := claims
+	granted.Permissions = nil
+	switch {
+	case slices.Contains(claims.Permissions, "executive:read"):
+		granted.Permissions = []string{"executive:read"}
+	case scope == "prepare":
+		granted.Permissions = []string{"workpapers:review"}
+	}
+	return &granted
+}
+
 // mcpMetadataURL is the resource's protected resource metadata (RFC 9728).
 func mcpMetadataURL(resource string) string {
 	u, err := url.Parse(resource)
@@ -317,14 +332,7 @@ func mcpHandler(store http.Handler, token string, db *sql.DB) http.Handler {
 					problem(w, 403, "Ask a firm administrator to approve agent access for your account under Firm settings.")
 					return
 				}
-				// The tool table is the only reachable surface; this permission only satisfies its routes.
-				// Without clients:all the boundary limits the agent to the member's assigned clients.
-				granted := *claims
-				granted.Permissions = nil
-				if scope == "prepare" {
-					granted.Permissions = []string{"workpapers:review"}
-				}
-				actor, err = &granted, nil
+				actor, err = agentActor(*claims, scope), nil
 				agent = "MCP (client unverified)"
 				if claims.ClientID != "" {
 					agent = "MCP client " + claims.ClientID

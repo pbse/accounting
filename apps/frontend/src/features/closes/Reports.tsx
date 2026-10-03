@@ -6,7 +6,7 @@ import { SectionHeader } from "@close/ui/components/SectionHeader";
 
 type Line = { account_id?: string; name: string; amount: string; prior: string | null; change: string | null };
 type Section = { name: string; lines: Line[]; total: Line };
-type Pack =
+export type Pack =
   | { state: "waiting"; reason: string }
   | {
       state: "ready";
@@ -41,7 +41,6 @@ const statusLabels = { provisional: ["status warn", "Provisional"], signed_off: 
 export function Reports({ closeId }: { closeId: string }) {
   const [pack, setPack] = useState<Pack>();
   const [error, setError] = useState("");
-  const [account, setAccount] = useState("");
   useEffect(() => {
     let live = true;
     workspaceRequest(`/${closeId}/management-pack`)
@@ -59,10 +58,17 @@ export function Reports({ closeId }: { closeId: string }) {
         <Publication closeId={closeId} pack={pack} />
       </>
     );
+  return <PackView closeId={closeId} pack={pack} staff />;
+}
+
+// A pack's statements, live or as published. Staff can ask the agent, open each figure's ledger rows and publish;
+// an executive reads the figures alone.
+export function PackView({ closeId, pack, staff = false }: { closeId: string; pack: Extract<Pack, { state: "ready" }>; staff?: boolean }) {
+  const [account, setAccount] = useState("");
   const show = (value: string | null) => (value === null ? "–" : amount(value, pack.currency));
   const compared = !!pack.prior;
   // Xero captures have no ledger-row reader yet, so their figures are not drillable.
-  const drill = pack.source === "quickbooks";
+  const drill = staff && pack.source === "quickbooks";
   const row = (line: Line, key: string, strong = false) => (
     <tr key={key}>
       <th scope="row" style={{ textAlign: "left", fontWeight: strong ? 600 : 400 }}>
@@ -115,12 +121,14 @@ export function Reports({ closeId }: { closeId: string }) {
   const prior = pack.prior;
   return (
     <section aria-label="Management pack">
-      <AskAgent
-        closeId={closeId}
-        description="Ask about these results. The agent reads the same captured reports and cites them."
-        placeholder="Why did operating profit change this month?"
-        suggestions={["Explain the largest movements in profit this month", "What drove the change in working capital?", "Which accounts make up book cash?"]}
-      />
+      {staff && (
+        <AskAgent
+          closeId={closeId}
+          description="Ask about these results. The agent reads the same captured reports and cites them."
+          placeholder="Why did operating profit change this month?"
+          suggestions={["Explain the largest movements in profit this month", "What drove the change in working capital?", "Which accounts make up book cash?"]}
+        />
+      )}
       <p>
         <strong>
           {pack.entity} · {pack.period}
@@ -155,7 +163,7 @@ export function Reports({ closeId }: { closeId: string }) {
       {bs.difference !== "0.00" && <p role="alert">Assets differ from liabilities and equity by {show(bs.difference)}.</p>}
       <SectionHeader title="Cash flow" />
       <p className="note">{pack.cash_flow.unavailable}</p>
-      <Publication closeId={closeId} pack={pack} />
+      {staff && <Publication closeId={closeId} pack={pack} />}
       {drill && account && (
         <>
           <SectionHeader id="figure-ledger" title={`Ledger rows behind this figure, ${pack.period}`} />
@@ -191,7 +199,7 @@ const publishedStates = {
 } as const;
 
 // Publishing freezes this pack with the reviewer's commentary; exports come from the frozen version, never the live figures.
-function Publication({ closeId, pack }: { closeId: string; pack: Pack }) {
+export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?: Pack; onOpen?: (id: string) => void }) {
   const [list, setList] = useState<Published[]>();
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -236,7 +244,7 @@ function Publication({ closeId, pack }: { closeId: string; pack: Pack }) {
     }
   }
   const latest = list?.[0];
-  const publishable = pack.state === "ready" && pack.overall === "signed_off" && !pack.stale && pack.complete;
+  const publishable = pack?.state === "ready" && pack.overall === "signed_off" && !pack.stale && pack.complete;
   return (
     <>
       <SectionHeader title="Publication" />
@@ -253,13 +261,14 @@ function Publication({ closeId, pack }: { closeId: string; pack: Pack }) {
               <p className="note">
                 {p.acknowledgments.length === 0 ? "Not acknowledged yet." : `Acknowledged by ${p.acknowledgments.map((a) => `${a.subject} (${new Date(a.at).toLocaleDateString()})`).join(", ")}.`}
               </p>
+              {onOpen && <button type="button" onClick={() => onOpen(p.id)}>Read version {p.version}</button>}{" "}
               <button type="button" onClick={() => void download(p, "pdf")}>PDF</button> <button type="button" onClick={() => void download(p, "csv")}>CSV</button>{" "}
               <button type="button" disabled={busy} onClick={() => void act({ action: "acknowledge", publication_id: p.id }, `Acknowledged version ${p.version}.`)}>Acknowledge</button>
             </li>
           ))}
         </ul>
       )}
-      {!publishable ? (
+      {!pack ? null : !publishable ? (
         <p className="note">Publish once the capture is current, the pack is complete and the sign-off of every month shown stands.</p>
       ) : latest && latest.state === "current" ? null : (
         <form
@@ -267,7 +276,7 @@ function Publication({ closeId, pack }: { closeId: string; pack: Pack }) {
             e.preventDefault();
             const element = e.currentTarget;
             const form = new FormData(element);
-            void act({ action: "publish", digest: pack.state === "ready" && pack.digest, commentary: form.get("commentary"), reason: form.get("reason") ?? "", confirmed: form.has("confirmed") }, latest ? "Published a correction." : "Published.").then((ok) => ok && element.reset());
+            void act({ action: "publish", digest: pack?.state === "ready" && pack.digest, commentary: form.get("commentary"), reason: form.get("reason") ?? "", confirmed: form.has("confirmed") }, latest ? "Published a correction." : "Published.").then((ok) => ok && element.reset());
           }}
         >
           <fieldset disabled={busy}>

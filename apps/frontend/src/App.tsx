@@ -22,6 +22,7 @@ const Firm = lazy(() => import("./features/closes/Firm"));
 const Measure = lazy(() => import("./features/closes/Measure"));
 const Attention = lazy(() => import("./features/closes/Attention"));
 const SecurityCenter = lazy(() => import("./features/closes/Security"));
+const Executive = lazy(() => import("./features/executive/Executive"));
 
 function Gated({ children }: { children: ReactNode }) {
   return <WorkspaceGate>{children}</WorkspaceGate>;
@@ -84,6 +85,10 @@ export function App() {
             <Route path="attention" element={<Gated><Attention /></Gated>} />
             <Route path="security" element={<Gated><SecurityCenter /></Gated>} />
             <Route path="measure" element={<Gated><Measure /></Gated>} />
+            <Route path="executive" element={<Gated><Executive view="overview" /></Gated>} />
+            <Route path="executive/reports" element={<Gated><Executive view="reports" /></Gated>} />
+            <Route path="executive/cash" element={<Gated><Executive view="cash" /></Gated>} />
+            <Route path="executive/decisions" element={<Gated><Executive view="decisions" /></Gated>} />
             <Route path="reconciliations/new" element={<CloseScoped><Reconciliation /></CloseScoped>} />
             <Route path="settlements/new" element={<CloseScoped><Settlement /></CloseScoped>} />
             <Route path="accruals/new" element={<CloseScoped><AccrualPreparation /></CloseScoped>} />

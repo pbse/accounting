@@ -116,6 +116,10 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		closeID := r.PathValue("id")
+		if executive(r) && in.Action != "acknowledge" {
+			problem(w, 403, "Executive access is read-only; acknowledging a version is all it records.")
+			return
+		}
 		if in.Action == "acknowledge" {
 			result, err := db.ExecContext(r.Context(), `INSERT INTO management_acknowledgments(publication_id,subject) SELECT id,$3 FROM management_publications WHERE id::text=$1 AND close_id::text=$2 ON CONFLICT DO NOTHING`, in.PublicationID, closeID, subject(r))
 			if err != nil {
@@ -202,6 +206,89 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		jsonReply(w, 200, map[string]any{"id": id, "version": version + 1})
+	})
+	// An executive's overview: the closes of their assigned clients, and each close's newest published version with its
+	// headline figures and whether they acknowledged it. Anyone else is told they are not an executive.
+	mux.HandleFunc("GET /v1/closes/executive", func(w http.ResponseWriter, r *http.Request) {
+		if !executive(r) {
+			jsonReply(w, 200, map[string]any{"executive": false})
+			return
+		}
+		const assigned = `c.organization_id=$1 AND EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$2 AND lower(g.client_entity)=lower(c.entity) AND g.granted)`
+		closes := []map[string]string{}
+		rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period FROM client_closes c WHERE `+assigned+` ORDER BY c.period DESC,c.entity`, organization(r), subject(r))
+		if err != nil {
+			problem(w, 503, "Your reports are unavailable.")
+			return
+		}
+		for rows.Next() {
+			var id, entity, period string
+			if err = rows.Scan(&id, &entity, &period); err != nil {
+				break
+			}
+			closes = append(closes, map[string]string{"id": id, "entity": entity, "period": period})
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		rows.Close()
+		published := []map[string]any{}
+		if err == nil {
+			rows, err = db.QueryContext(r.Context(), `SELECT * FROM (SELECT DISTINCT ON (p.close_id) p.close_id::text,c.entity,c.period,p.id::text,p.version,p.published_at,p.pack,
+ EXISTS(SELECT 1 FROM management_acknowledgments a WHERE a.publication_id=p.id AND a.subject=$2)
+ FROM management_publications p JOIN client_closes c ON c.id=p.close_id WHERE `+assigned+` ORDER BY p.close_id,p.version DESC) newest ORDER BY period DESC,entity`, organization(r), subject(r))
+		}
+		if err != nil {
+			problem(w, 503, "Your reports are unavailable.")
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var closeID, entity, period, id string
+			var version int
+			var at time.Time
+			var raw []byte
+			var acknowledged bool
+			if err = rows.Scan(&closeID, &entity, &period, &id, &version, &at, &raw, &acknowledged); err != nil {
+				problem(w, 503, "Your reports are unavailable.")
+				return
+			}
+			var pack struct {
+				Currency       string
+				ProfitAndLoss  struct{ Measures []packLine } `json:"profit_and_loss"`
+				WorkingCapital map[string]json.RawMessage    `json:"working_capital"`
+			}
+			json.Unmarshal(raw, &pack)
+			figure := func(key string) string {
+				var l packLine
+				json.Unmarshal(pack.WorkingCapital[key], &l)
+				return l.Amount
+			}
+			net := ""
+			if n := len(pack.ProfitAndLoss.Measures); n > 0 {
+				net = pack.ProfitAndLoss.Measures[n-1].Amount
+			}
+			published = append(published, map[string]any{"close_id": closeID, "entity": entity, "period": period, "publication_id": id, "version": version, "published_at": at,
+				"acknowledged": acknowledged, "currency": pack.Currency, "net_income": net, "book_cash": figure("book_cash"), "working_capital": figure("working_capital")})
+		}
+		if rows.Err() != nil {
+			problem(w, 503, "Your reports are unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"executive": true, "closes": closes, "published": published})
+	})
+	// One published version as it was frozen, to read in the page.
+	mux.HandleFunc("GET /v1/closes/{id}/management-pack/publications/{publication}", func(w http.ResponseWriter, r *http.Request) {
+		var p publication
+		var acks []byte
+		err := db.QueryRowContext(r.Context(), `SELECT p.id::text,p.version,p.digest,p.commentary,p.supersedes::text,p.reason,p.published_by,p.published_at,p.pack,
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('subject',a.subject,'at',a.acknowledged_at) ORDER BY a.acknowledged_at) FROM management_acknowledgments a WHERE a.publication_id=p.id),'[]')
+ FROM management_publications p WHERE p.id::text=$1 AND p.close_id::text=$2`, r.PathValue("publication"), r.PathValue("id")).Scan(&p.ID, &p.Version, &p.Digest, &p.Commentary, &p.Supersedes, &p.Reason, &p.PublishedBy, &p.PublishedAt, &p.Pack, &acks)
+		if err != nil || json.Unmarshal(acks, &p.Acknowledgments) != nil {
+			problem(w, 404, "Publication not found.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"publication": p, "pack": p.Pack})
 	})
 	// Exports are rendered from the frozen version, so they always agree with what was published.
 	mux.HandleFunc("GET /v1/closes/{id}/management-pack/publications/{publication}/export", func(w http.ResponseWriter, r *http.Request) {

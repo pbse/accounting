@@ -330,6 +330,10 @@ func registerBudget(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		out := map[string]any{"period": period, "versions": list, "accounts": choices}
+		// An executive sees the comparison with the approved baseline, not draft or earlier budget versions.
+		if executive(r) {
+			out["versions"], out["accounts"] = []budgetVersion{}, []any{}
+		}
 		wait := func(reason string) {
 			out["state"], out["reason"] = "waiting", reason
 			jsonReply(w, 200, out)

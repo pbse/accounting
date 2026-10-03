@@ -1,6 +1,6 @@
 # Management reports
 
-B07 in the [agent-first build plan](agent-first-build-plan.md). This page records what is built; the historical cash-flow statement and executive access are still to come and are not claimed here.
+B07 in the [agent-first build plan](agent-first-build-plan.md). This page records what is built; the historical cash-flow statement is still to come and is not claimed here.
 
 ## Management pack
 
@@ -37,3 +37,14 @@ A reviewer (`workpapers:review`) publishes the pack from the **Publication** sec
 - **Frozen.** The published version keeps the whole pack and its commentary; rows are only ever added. PDF and CSV exports are rendered from that version, so they always agree with what was published, however the books change later.
 - **Corrections are new versions.** When the books change after publication (any figure, not just a later capture time), the current version shows *Books changed: needs a correction*. A correction needs a new sign-off and a reason; it names the version it supersedes, which stays readable and exportable. An unchanged pack is not published twice.
 - **Acknowledgment is separate.** Anyone who can open the close can acknowledge a version; each acknowledgment records who and when, apart from the publication itself. Sending or notifying recipients is not part of publication.
+
+## Executive access
+
+A client's executive (B07) signs in to the same workspace with a role that grants `executive:read`, and is assigned to their clients under **Client access** like any member. They see **Business overview** (each client's newest published pack: net income, book cash, working capital and whether they acknowledged it), **Reports** (the published versions, each readable in the page and downloadable as PDF or CSV, with the current budget comparison), **Cash plan** (the 13-week plan, labeled as a working forecast of book cash) and **My decisions** (versions waiting for their acknowledgment, which records receipt and approves nothing).
+
+- **Enforced on the server, deny by default.** For an executive, every workspace request outside that list is refused (403): live packs, workpapers, evidence, requests, notes, the Attention inbox, search, the assistant and agent tools (which replay the same requests), settings, exports of the close and every write except acknowledging. A close of a client they are not assigned to is not found.
+- **Drafts stay with the firm.** The cash plan they see counts approved schedules only and says how many drafts are left out (their amounts, vendors and notes are not sent); the budget comparison uses the approved baseline and sends no draft or earlier budget versions.
+- **Agents and calculators too.** An agent signed in for an executive acts as an executive, whatever its grant, so it reaches only the same reads; the stand-alone preparation calculators refuse executives. Both rely on the role's permissions being in the sign-in token, as WorkOS issues them.
+- **Their role cannot widen it.** An executive never has firm-wide client access, even if their role also grants `clients:all`, and cannot publish even if it grants `workpapers:review`. Give executives a role of their own.
+- Published figures are reviewed and frozen; the cash plan and budget comparison are current views, read-only, and say so. Questions to the agent, notifications and other decisions for executives are not built yet.
+

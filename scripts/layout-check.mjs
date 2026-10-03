@@ -69,7 +69,7 @@ const apps = [
     stylesheet: "/apps/frontend/src/styles.css",
     routes: [
       "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, `/dashboard/closes/${close}?tab=reports`, "/dashboard/firm", `/dashboard/closes/${close}?tab=cash`,
-      "/dashboard/measure", "/dashboard/security", "/dashboard/close", "/dashboard/review",
+      "/dashboard/measure", "/dashboard/executive", "/dashboard/security", "/dashboard/close", "/dashboard/review",
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],
   },

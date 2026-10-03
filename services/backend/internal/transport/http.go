@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -86,8 +87,13 @@ func apiWithStore(db *sql.DB, token string) http.Handler {
 	protectPreparation := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if verifier.ClientID != "" {
-				if _, err := verifier.Authenticate(r, token); err != nil {
+				actor, err := verifier.Authenticate(r, token)
+				if err != nil {
 					problem(w, 401, "Sign in to prepare client work.")
+					return
+				}
+				if slices.Contains(actor.Permissions, "executive:read") {
+					problem(w, 403, "Executive access is read-only.")
 					return
 				}
 			}
