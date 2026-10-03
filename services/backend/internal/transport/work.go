@@ -474,10 +474,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Could not read the schedule's drafts.")
 				return
 			}
-			schedule := ""
-			if proposed.Kind == "deferred_revenue" {
-				schedule = prepaids.DeferredRevenue
-			}
+			schedule := map[string]string{"deferred_revenue": prepaids.DeferredRevenue, "depreciation": prepaids.Depreciation}[proposed.Kind]
 			plans, listed := []preparation.Plan{}, map[string]bool{}
 			for _, d := range in.Lines {
 				line := &proposed.Lines[d.Line-1]
@@ -500,7 +497,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 					line.SetAside = strings.TrimSpace(d.Reason)
 				case "import":
 					for _, f := range line.Facts {
-						if f.Question != "" || f.Value == "" {
+						if f.Question != "" || (f.Value == "" && f.Field != "salvage_value") {
 							problem(w, 409, fmt.Sprintf("Row %d: %s", d.Line, cmp.Or(f.Question, "Confirm the "+f.Label+" of this row.")))
 							return
 						}
@@ -515,7 +512,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 						return
 					}
 					input, _ := json.Marshal(prepaids.Input{Basis: "accrual", Entity: entity, ClosePeriod: period, SourceReference: reference, Amount: value["amount"], ServiceStart: value["service_start"], ServiceEnd: value["service_end"],
-						Currency: value["currency"], ExpenseAccount: value["expense_account"], PrepaidAccount: value["prepaid_account"], Method: d.Method, Schedule: schedule})
+						Currency: value["currency"], ExpenseAccount: value["expense_account"], PrepaidAccount: value["prepaid_account"], Method: d.Method, Schedule: schedule, SalvageValue: value["salvage_value"]})
 					p := preparation.Plan{Kind: "prepaid", Input: input, Sources: fresh.Sources, Revises: current[strings.ToLower(label)], Imported: &preparation.Imported{RootSourceID: root, Label: label, Remaining: value["remaining"]}}
 					if _, e := preparation.Calculate(p, entity, period); e != nil {
 						problem(w, 422, fmt.Sprintf("Row %d: %s", d.Line, e.Error()))
