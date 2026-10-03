@@ -29,6 +29,9 @@ const capabilityEvidence = `SELECT COALESCE(jsonb_agg(x),'[]'::jsonb) FROM (SELE
  UNION ALL SELECT 'Stripe','read',k.livemode,r.finished_at,r.close_id FROM stripe_report_runs r JOIN stripe_connections k ON k.id=r.connection_id WHERE k.organization_id=$1 AND r.state='saved'
 ) e GROUP BY provider,kind) x`
 
+const capabilityAcceptances = `SELECT COALESCE(jsonb_agg(x),'[]'::jsonb) FROM (SELECT DISTINCT ON (provider,kind,stage) provider,kind,stage,accepted,evidence,actor,created_at AS at
+ FROM operation_acceptances WHERE organization_id=$1 ORDER BY provider,kind,stage,id DESC) x`
+
 // capability is one connector operation: a posting kind a grant can cover, or a provider's reads ("read").
 type capability struct{ provider, kind, operation, limitation string }
 
@@ -59,7 +62,7 @@ var capabilities = []capability{
 // tested (a verified sandbox record exists), production approved (this server allows live use), or enabled for the
 // clients whose grant in force (writes) or active connection (reads) covers it. Journal kinds are checked in a
 // QuickBooks sandbox, and Xero operations on a demo company, outside the app, so no sandbox date is recorded for them.
-func capabilityRegister(evidence, grants, services json.RawMessage) ([]map[string]any, error) {
+func capabilityRegister(evidence, grants, services, acceptances json.RawMessage) ([]map[string]any, error) {
 	var found []struct {
 		Provider, Kind string
 		Sandbox, Live  *time.Time
@@ -71,7 +74,15 @@ func capabilityRegister(evidence, grants, services json.RawMessage) ([]map[strin
 		Kinds            []string
 	}
 	var connected []struct{ Provider, Client, Mode, State string }
+	var recorded []struct {
+		Provider, Kind, Stage, Evidence, Actor string
+		Accepted                               bool
+		At                                     time.Time
+	}
 	if err := json.Unmarshal(evidence, &found); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(acceptances, &recorded); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(grants, &granted); err != nil {
@@ -89,7 +100,13 @@ func capabilityRegister(evidence, grants, services json.RawMessage) ([]map[strin
 				sandbox, live, sandboxClose, liveClose = f.Sandbox, f.Live, f.SandboxClose, f.LiveClose
 			}
 		}
-		row := map[string]any{"provider": c.provider, "operation": c.operation, "limitation": c.limitation, "sandbox_verified_at": sandbox, "live_verified_at": live, "sandbox_close_id": sandboxClose, "live_close_id": liveClose}
+		row := map[string]any{"provider": c.provider, "kind": c.kind, "operation": c.operation, "limitation": c.limitation, "sandbox_verified_at": sandbox, "live_verified_at": live, "sandbox_close_id": sandboxClose, "live_close_id": liveClose,
+			"sandbox_checked": nil, "accountant_accepted": nil}
+		for _, a := range recorded {
+			if a.Provider == c.provider && a.Kind == c.kind {
+				row[a.Stage] = map[string]any{"accepted": a.Accepted, "evidence": a.Evidence, "by": a.Actor, "at": a.At}
+			}
+		}
 		clients := []string{}
 		add := func(client string) {
 			if !slices.ContainsFunc(clients, func(k string) bool { return strings.EqualFold(k, client) }) {

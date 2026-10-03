@@ -5,6 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
+	"unicode/utf8"
+
+	"close.local/backend/internal/auth"
 )
 
 // securityPeople is each member's latest decision, their recorded client assignments, their latest agent access decision and,
@@ -131,15 +136,54 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			{"provider": "WorkOS", "receives": "Sign-in identity and roles. It also holds each person's Google Drive grant, which Close uses to download the files a person imports directly from Google; those grants are managed in WorkOS.", "evidence": map[bool]string{true: "Sign-in configured on this server", false: "Sign-in not configured on this server"}[set("WORKOS_CLIENT_ID")], "in_use": set("WORKOS_CLIENT_ID")},
 			{"provider": "Operations webhook", "receives": "Organization, close and item IDs, state and age of stuck work; no client names or amounts. Set on the worker.", "evidence": plural(alerts, "alert", "alerts") + " accepted in the last 30 days", "in_use": alerts > 0},
 		}
-		var evidence []byte
-		if err = tx.QueryRowContext(r.Context(), capabilityEvidence, org).Scan(&evidence); err != nil {
+		var evidence, acceptances []byte
+		if err = tx.QueryRowContext(r.Context(), capabilityEvidence, org).Scan(&evidence); err == nil {
+			err = tx.QueryRowContext(r.Context(), capabilityAcceptances, org).Scan(&acceptances)
+		}
+		if err != nil {
 			problem(w, 503, "Security center unavailable.")
 			return
 		}
-		if out["operations"], err = capabilityRegister(evidence, out["posting_grants"].(json.RawMessage), out["services"].(json.RawMessage)); err != nil {
+		if out["operations"], err = capabilityRegister(evidence, out["posting_grants"].(json.RawMessage), out["services"].(json.RawMessage), acceptances); err != nil {
 			problem(w, 503, "Security center unavailable.")
 			return
 		}
 		jsonReply(w, 200, out)
+	})
+	mux.HandleFunc("POST /v1/closes/security/operations", func(w http.ResponseWriter, r *http.Request) {
+		if !canManageMembers(r) {
+			problem(w, 403, "Recording connector checks requires clients:all and members:manage.")
+			return
+		}
+		var in struct {
+			Provider string `json:"provider"`
+			Kind     string `json:"kind"`
+			Stage    string `json:"stage"`
+			Accepted bool   `json:"accepted"`
+			Evidence string `json:"evidence"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		in.Evidence = strings.TrimSpace(in.Evidence)
+		switch {
+		case !slices.ContainsFunc(capabilities, func(c capability) bool { return c.provider == in.Provider && c.kind == in.Kind }):
+			problem(w, 422, "Choose a listed connector operation.")
+			return
+		case in.Stage != "sandbox_checked" && in.Stage != "accountant_accepted":
+			problem(w, 422, "Record a sandbox check or the accountant's acceptance.")
+			return
+		case utf8.RuneCountInString(in.Evidence) < 5 || utf8.RuneCountInString(in.Evidence) > 2000:
+			problem(w, 422, "Give the evidence: what was checked, where, and its result or reference (5–2,000 characters).")
+			return
+		case in.Stage == "accountant_accepted" && !slices.Contains(auth.Actor(r.Context()).Permissions, "workpapers:review"):
+			problem(w, 403, "Only an accountant who reviews workpapers can accept an operation.")
+			return
+		}
+		if _, err := db.ExecContext(r.Context(), `INSERT INTO operation_acceptances(organization_id,provider,kind,stage,accepted,evidence,actor) VALUES($1,$2,$3,$4,$5,$6,$7)`, organization(r), in.Provider, in.Kind, in.Stage, in.Accepted, in.Evidence, subject(r)); err != nil {
+			problem(w, 503, "The record could not be saved.")
+			return
+		}
+		jsonReply(w, 200, map[string]bool{"saved": true})
 	})
 }
