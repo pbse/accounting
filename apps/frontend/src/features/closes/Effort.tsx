@@ -10,6 +10,9 @@ const labels: Record<Activity, string> = {
   signoff: "Sign-off",
   configuration: "Configuration",
 };
+// Recorded time may also be our own team's setup or support help, which is reported apart.
+type EntryActivity = Activity | "assistance";
+const entryLabels: Record<EntryActivity, string> = { ...labels, assistance: "Our team's help (setup or support)" };
 
 // Credits 30 seconds only when the tab is visible and someone interacted in the last two minutes.
 export function EffortTracker({ closeId, activity }: { closeId: string; activity: Activity }) {
@@ -38,7 +41,7 @@ type Summary = {
   tracked_seconds: number;
   tracked_by_activity: Partial<Record<Activity, number>>;
   recorded_minutes: number;
-  entries: { activity: Activity; minutes: number; note: string; created_at: string; mine: boolean }[];
+  entries: { activity: EntryActivity; minutes: number; note: string; created_at: string; mine: boolean }[];
   answered_wait_seconds: number;
   open_requests: number;
   tracking_since?: string;
@@ -51,7 +54,7 @@ const hours = (seconds: number) => (seconds < 3600 ? minutes(seconds / 60) : `${
 export function EffortCard({ closeId }: { closeId: string }) {
   const [summary, setSummary] = useState<Summary>();
   const [error, setError] = useState("");
-  const [form, setForm] = useState({ activity: "prepare" as Activity, minutes: "", note: "" });
+  const [form, setForm] = useState({ activity: "prepare" as EntryActivity, minutes: "", note: "" });
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
@@ -119,8 +122,8 @@ export function EffortCard({ closeId }: { closeId: string }) {
         <div className="form-grid">
           <label>
             Activity
-            <select value={form.activity} onChange={(e) => setForm({ ...form, activity: e.target.value as Activity })}>
-              {Object.entries(labels).map(([key, label]) => (
+            <select value={form.activity} onChange={(e) => setForm({ ...form, activity: e.target.value as EntryActivity })}>
+              {Object.entries(entryLabels).map(([key, label]) => (
                 <option key={key} value={key}>
                   {label}
                 </option>
@@ -143,7 +146,7 @@ export function EffortCard({ closeId }: { closeId: string }) {
           <ul>
             {summary.entries.map((entry, index) => (
               <li key={index}>
-                {labels[entry.activity]} · {entry.minutes} min · {entry.note} · {new Date(entry.created_at).toLocaleDateString()}
+                {entryLabels[entry.activity]} · {entry.minutes} min · {entry.note} · {new Date(entry.created_at).toLocaleDateString()}
                 {entry.mine ? " · you" : ""}
               </li>
             ))}

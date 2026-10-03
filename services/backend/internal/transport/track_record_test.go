@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -38,14 +39,15 @@ func TestTrackRecordComparesProposalsWithWhatPeopleConfirmed(t *testing.T) {
 		must(err)
 	}
 	month := time.Now().UTC().Format("2006-01")
-	var harbor, foreign, old, edge string
+	var harbor, foreign, old, edge, next string
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Harbor Dental',$2) RETURNING id::text`, org, month).Scan(&harbor))
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Harbor Dental',$2) RETURNING id::text`, org, time.Now().UTC().AddDate(-2, 0, 0).Format("2006-01")).Scan(&old))
 	now := time.Now().UTC()
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Harbor Dental',$2) RETURNING id::text`, org, time.Date(now.Year(), now.Month()-12, 1, 0, 0, 0, 0, time.UTC).Format("2006-01")).Scan(&edge))
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Foreign Bakery',$2) RETURNING id::text`, other, month).Scan(&foreign))
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Harbor Dental',$2) RETURNING id::text`, org, time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC).Format("2006-01")).Scan(&next))
 	defer func() {
-		for _, id := range []string{harbor, foreign, old, edge} {
+		for _, id := range []string{harbor, foreign, old, edge, next} {
 			db.Exec(`DELETE FROM workpaper_reviews WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`, id)
 			db.Exec(`DELETE FROM workpapers WHERE close_id=$1`, id)
 			db.Exec(`DELETE FROM preparation_jobs WHERE close_id=$1`, id)
@@ -116,6 +118,25 @@ func TestTrackRecordComparesProposalsWithWhatPeopleConfirmed(t *testing.T) {
 	_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(proposal,'{kind}','"accrual"') WHERE job_id=(SELECT max(id) FROM preparation_jobs WHERE close_id=$1)`, harbor)
 	must(err)
 	intake(foreign, "openai", `[{"field":"amount","value":"10"}]`, `{"amount":"10"}`, true, paper(foreign, `{"input":{"source_reference":"Foreign"}}`, nil))
+	// Straight-through work, a failed document and an unsupported one count toward where the work came from.
+	review(paper(harbor, `{"straight_through":true,"input":{"source_reference":"Verified invoice"}}`, nil), "approved")
+	_, err = db.Exec(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[]','failed','user_partner')`, harbor, rand.Text())
+	must(err)
+	intake(harbor, "openai", `[]`, `{}`, false)
+	_, err = db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(proposal,'{kind}','"unsupported"') WHERE job_id=(SELECT max(id) FROM preparation_jobs WHERE close_id=$1)`, harbor)
+	must(err)
+	// A straight-through draft the agent refreshed for a replaced invoice is a refresh, not a person's revision; next
+	// month's work is outside the window.
+	invoice, invoiceDigest := document(harbor)
+	refreshed := paper(harbor, `{"straight_through":true,"input":{"source_reference":"Replaced invoice"},"sources":[{"id":"`+invoice+`","digest":"`+invoiceDigest+`"}]}`, nil)
+	replacement, _ := document(harbor)
+	_, err = db.Exec(`UPDATE evidence SET superseded_by=$2 WHERE id=$1`, invoice, replacement)
+	must(err)
+	paper(harbor, `{"straight_through":true,"revises":"`+refreshed+`","input":{"source_reference":"Replaced invoice"}}`, nil)
+	paper(next, `{"input":{"source_reference":"Next month"}}`, "user_partner")
+	humanFixed := paper(harbor, `{"straight_through":true,"input":{"source_reference":"Corrected by hand"}}`, nil)
+	review(humanFixed, "approved")
+	paper(harbor, `{"revises":"`+humanFixed+`","input":{"source_reference":"Corrected by hand"}}`, "user_partner")
 
 	mux := http.NewServeMux()
 	registerEffort(mux, db)
@@ -136,8 +157,9 @@ func TestTrackRecordComparesProposalsWithWhatPeopleConfirmed(t *testing.T) {
 	}
 	read := func(permissions ...string) (out struct {
 		Clients  []client
-		Unlinked int    `json:"unlinked_human_drafts"`
-		Window   string `json:"window_from"`
+		Unlinked int            `json:"unlinked_human_drafts"`
+		Window   string         `json:"window_from"`
+		Coverage map[string]int `json:"coverage"`
 	}) {
 		t.Helper()
 		subject := "user_member"
@@ -164,8 +186,11 @@ func TestTrackRecordComparesProposalsWithWhatPeopleConfirmed(t *testing.T) {
 	if c.Reviewed != 3 || c.Approved != 1 || c.Revised != 1 || c.SentBack != 2 {
 		t.Errorf("drafts are judged by recorded decisions and actual revisions, and a sent-back draft that was revised counts as both: %+v", c)
 	}
-	if got.Unlinked != 1 {
-		t.Errorf("drafts people saved directly are counted as not covered: %d", got.Unlinked)
+	if got.Unlinked != 2 {
+		t.Errorf("drafts people saved directly, their revisions included, are counted as not covered: %d", got.Unlinked)
+	}
+	if want := map[string]int{"straight_through": 3, "person_confirmed": 4, "carried": 0, "other_agent": 1, "people": 1, "straight_judged": 2, "straight_approved": 1, "straight_revised": 1, "straight_sent_back": 0, "straight_refreshed": 1, "failed_jobs": 1, "unsupported_intakes": 1}; !maps.Equal(got.Coverage, want) {
+		t.Errorf("each original draft counts once by where it came from, with failed and unsupported documents: %v", got.Coverage)
 	}
 	if member := read(); len(member.Clients) != 0 {
 		t.Fatalf("a member without the client grant sees nothing: %+v", member.Clients)

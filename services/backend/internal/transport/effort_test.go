@@ -157,10 +157,17 @@ func TestEffortCapsCreditAndSeparatesWaiting(t *testing.T) {
 	if err = db.QueryRow(`SELECT COALESCE(sum(seconds),0) FROM close_effort WHERE close_id=$1 AND activity='review'`, measured).Scan(&trackedReview); err != nil {
 		t.Fatal(err)
 	}
+	type cohort struct {
+		Eligible   int      `json:"eligible"`
+		Measured   int      `json:"measured"`
+		Median     *float64 `json:"median_minutes"`
+		Recorded   int      `json:"recorded_minutes"`
+		Assistance int      `json:"assistance_minutes"`
+	}
 	var report struct {
 		Items         []map[string]any `json:"items"`
-		Measured      int              `json:"measured"`
-		Median        *float64         `json:"median_minutes"`
+		Completed     cohort           `json:"completed"`
+		InProgress    cohort           `json:"in_progress"`
 		Reviews       int              `json:"reviews"`
 		AfterApproval int              `json:"reviews_after_approval"`
 		Trend         []struct {
@@ -170,11 +177,40 @@ func TestEffortCapsCreditAndSeparatesWaiting(t *testing.T) {
 		} `json:"trend"`
 	}
 	json.Unmarshal(call("GET", "/v1/closes/effort?period="+period, nil, 200), &report)
-	if len(report.Items) != 2 || report.Measured != 1 || report.Median == nil || *report.Median < 16.4 || *report.Median > 17.1 {
-		t.Fatalf("median must use measured closes only and never count the quiet close as zero: %+v", report)
+	if in := report.InProgress; len(report.Items) != 2 || in.Eligible != 2 || in.Measured != 1 || in.Median == nil || *in.Median < 16.4 || *in.Median > 17.1 || in.Recorded != 15 || report.Completed.Eligible != 0 || report.Completed.Median != nil {
+		t.Fatalf("effort so far uses measured open closes only, never the quiet close as zero, and nothing is completed yet: %+v", report)
 	}
-	if len(report.Trend) != 12 || report.Trend[11].Period != period || report.Trend[11].Measured != 1 || report.Trend[11].Median == nil || *report.Trend[11].Median != *report.Median {
-		t.Fatalf("the trend ends with this month's measured closes and median: %+v", report.Trend)
+	if len(report.Trend) != 12 || report.Trend[11].Period != period || report.Trend[11].Measured != 0 {
+		t.Fatalf("the trend counts signed-off closes only: %+v", report.Trend)
+	}
+	// A recorded sign-off that no longer stands (its digest is stale) leaves the close open.
+	if _, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','stale','{}','Synthetic sign-off','fixture')`, measured); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Exec(`DELETE FROM close_signoffs WHERE close_id=$1`, measured)
+	defer db.Exec(`DELETE FROM close_scopes WHERE close_id=$1`, measured)
+	report.Completed, report.InProgress = cohort{}, cohort{}
+	json.Unmarshal(call("GET", "/v1/closes/effort?period="+period, nil, 200), &report)
+	if report.Completed.Eligible != 0 || report.InProgress.Eligible != 2 {
+		t.Fatalf("a sign-off changed since it was made is open work, not completed effort: %+v", report)
+	}
+	// A sign-off over the close's current readiness moves its effort to the completed cohort and the trend; our team's
+	// help is part of the close's minutes and reported apart.
+	call("POST", "/v1/closes/"+measured+"/effort/entries", map[string]any{"activity": "assistance", "minutes": 10, "note": "Set up the client's procedures"}, 200)
+	var current readiness
+	json.Unmarshal(call("GET", "/v1/closes/"+measured+"/readiness", nil, 200), &current)
+	call("POST", "/v1/closes/"+measured+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "reopen", "note": "Recheck", "confirmed": true}, 200)
+	json.Unmarshal(call("GET", "/v1/closes/"+measured+"/readiness", nil, 200), &current)
+	call("POST", "/v1/closes/"+measured+"/scope", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "scope": closeScope{Description: "Effort fixture", RequiredPapers: []string{}, ExternalSteps: []externalStep{{Name: "Ledger review", Complete: true, Reference: "Reviewed"}}}}, 200)
+	json.Unmarshal(call("GET", "/v1/closes/"+measured+"/readiness", nil, 200), &current)
+	call("POST", "/v1/closes/"+measured+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "sign", "note": "Synthetic sign-off", "confirmed": true}, 200)
+	report.Completed, report.InProgress = cohort{}, cohort{}
+	json.Unmarshal(call("GET", "/v1/closes/effort?period="+period, nil, 200), &report)
+	if done := report.Completed; done.Eligible != 1 || done.Measured != 1 || done.Median == nil || *done.Median < 26.4 || *done.Median > 27.1 || done.Assistance != 10 || done.Recorded != 15 || report.InProgress.Eligible != 1 || report.InProgress.Measured != 0 || report.InProgress.Median != nil {
+		t.Fatalf("a standing sign-off is completed effort, with our team's help apart; the quiet open close stays unmeasured: %+v", report)
+	}
+	if report.Trend[11].Measured != 1 || report.Trend[11].Median == nil || *report.Trend[11].Median != *report.Completed.Median {
+		t.Fatalf("the trend ends with this month's signed-off closes and median: %+v", report.Trend)
 	}
 	if first, _ := time.Parse("2006-01", period); report.Trend[0].Period != first.AddDate(0, -11, 0).Format("2006-01") {
 		t.Fatalf("the trend starts eleven months earlier, oldest first: %+v", report.Trend)

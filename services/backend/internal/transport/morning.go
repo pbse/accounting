@@ -52,17 +52,7 @@ func outstanding(ctx context.Context, tx *sql.Tx, now time.Time, org string, fir
 		return nil, err
 	}
 	for _, o := range signed {
-		if _, err = tx.ExecContext(ctx, `SAVEPOINT recheck`); err != nil {
-			return nil, err
-		}
-		current, readErr := closeReadiness(ctx, tx, o.CloseID)
-		if o.State = current.State; readErr != nil {
-			o.State = "unknown"
-			if _, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT recheck`); err != nil {
-				return nil, err
-			}
-		}
-		if _, err = tx.ExecContext(ctx, `RELEASE SAVEPOINT recheck`); err != nil {
+		if o.State, err = recheckSignOff(ctx, tx, o.CloseID); err != nil {
 			return nil, err
 		}
 		if o.State != "signed_off" {
@@ -70,6 +60,25 @@ func outstanding(ctx context.Context, tx *sql.Tx, now time.Time, org string, fir
 		}
 	}
 	return open, nil
+}
+
+// recheckSignOff is closeReadiness's state for a close with a recorded sign-off, read in the caller's snapshot:
+// signed_off while it stands, reopen_required after a change, or unknown when readiness cannot be read. The error is
+// only for a transaction that can no longer be used.
+func recheckSignOff(ctx context.Context, tx *sql.Tx, id string) (string, error) {
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT recheck`); err != nil {
+		return "", err
+	}
+	current, err := closeReadiness(ctx, tx, id)
+	state := current.State
+	if err != nil {
+		state = "unknown"
+		if _, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT recheck`); err != nil {
+			return "", err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `RELEASE SAVEPOINT recheck`)
+	return state, err
 }
 
 // morning says what the agent did in the past day across the firm's outstanding closes, which closes need a person
