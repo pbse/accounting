@@ -627,6 +627,27 @@ func buildClosePackage(pack closePackage) ([]byte, error) {
 }
 
 func workpapersPDF(saved []savedPaper, summaries []reviewPaper) ([]byte, error) {
+	pages := [][]string{}
+	if len(saved) == 0 {
+		pages = append(pages, []string{"No saved workpapers in this close."})
+	}
+	for index, paper := range saved {
+		values := []string{"Draft #" + paper.ID + " - " + paper.Kind, "Review: " + paper.ReviewState + "; digest: " + paper.Digest}
+		if summaries[index].Scope != "" {
+			values = append(values, summaries[index].Scope)
+		}
+		values = append(values, "Source: "+summaries[index].Source, "Method: "+summaries[index].Method, "Full saved calculation and inputs:")
+		var pretty bytes.Buffer
+		if err := json.Indent(&pretty, paper.Paper, "", "  "); err != nil {
+			return nil, err
+		}
+		pages = append(pages, append(values, strings.Split(pretty.String(), "\n")...))
+	}
+	return linesPDF(pages)
+}
+
+// linesPDF writes each page's lines in order, wrapping long ones and continuing onto further pages.
+func linesPDF(pages [][]string) ([]byte, error) {
 	var pdf gopdf.GoPdf
 	pdf.Start(gopdf.Config{PageSize: *gopdf.PageSizeA4})
 	if err := pdf.AddTTFFontData("Go", goregular.TTF); err != nil {
@@ -672,31 +693,10 @@ func workpapersPDF(saved []savedPaper, summaries []reviewPaper) ([]byte, error) 
 		}
 		return nil
 	}
-	page()
-	if len(saved) == 0 {
-		if err := line("No saved workpapers in this close."); err != nil {
-			return nil, err
-		}
-	}
-	for index, paper := range saved {
-		if index > 0 {
-			page()
-			y = 40
-		}
-		values := []string{"Draft #" + paper.ID + " - " + paper.Kind, "Review: " + paper.ReviewState + "; digest: " + paper.Digest}
-		if summaries[index].Scope != "" {
-			values = append(values, summaries[index].Scope)
-		}
-		for _, value := range append(values, "Source: "+summaries[index].Source, "Method: "+summaries[index].Method, "Full saved calculation and inputs:") {
-			if err := line(value); err != nil {
-				return nil, err
-			}
-		}
-		var pretty bytes.Buffer
-		if err := json.Indent(&pretty, paper.Paper, "", "  "); err != nil {
-			return nil, err
-		}
-		for _, value := range strings.Split(pretty.String(), "\n") {
+	for _, lines := range pages {
+		page()
+		y = 40
+		for _, value := range lines {
 			if err := line(value); err != nil {
 				return nil, err
 			}

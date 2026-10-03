@@ -370,79 +370,89 @@ func captureStatus(ctx context.Context, tx *sql.Tx, closeID string, m *fluxMonth
 // one snapshot.
 func managementReport(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		wait := func(reason string) { jsonReply(w, 200, map[string]any{"state": "waiting", "reason": reason}) }
-		tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
 			problem(w, 503, "Management pack unavailable.")
 			return
 		}
 		defer tx.Rollback()
-		var org, entity, period string
-		if err := tx.QueryRowContext(ctx, `SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&org, &entity, &period); err != nil {
-			problem(w, 404, "Close not found.")
+		pack, err := closeManagementPack(r.Context(), tx, r.PathValue("id"))
+		if refused, ok := err.(tieRefusal); ok {
+			problem(w, refused.status, refused.message)
 			return
 		}
-		this, err := periodBooks(ctx, tx, r.PathValue("id"), period)
 		if err != nil {
-			problem(w, 503, "Period snapshot unavailable.")
+			problem(w, 503, "Management pack unavailable.")
 			return
 		}
-		if this == nil {
-			wait("Capture this month's QuickBooks period snapshot or Xero Trial Balance first.")
-			return
-		}
-		thisBooks, err := readLedgerMonth(this)
-		if err != nil {
-			wait("This month's capture could not be read: " + err.Error() + ".")
-			return
-		}
-		var last *fluxMonth
-		var lastBooks *books
-		comparison := ""
-		var priorClose string
-		switch err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, shiftMonth(period, -1)).Scan(&priorClose); {
-		case err == sql.ErrNoRows:
-			comparison = "Last month has no close in this workspace."
-		case err != nil:
-			problem(w, 503, "Last month's close is unavailable.")
-			return
-		default:
-			if last, err = periodBooks(ctx, tx, priorClose, shiftMonth(period, -1)); err != nil {
-				problem(w, 503, "Last month's snapshot is unavailable.")
-				return
-			}
-			switch {
-			case last == nil:
-				comparison = "Last month's close has no month-end capture."
-			case last.Source != this.Source || last.realm != this.realm:
-				comparison = "Last month was captured from a different ledger or company."
-			default:
-				if lastBooks, err = readLedgerMonth(last); err != nil {
-					comparison = "Last month's capture could not be read: " + err.Error() + "."
-				} else if lastBooks.Currency != thisBooks.Currency {
-					comparison, lastBooks = "Last month's capture is in a different currency.", nil
-				}
-			}
-		}
-		pack := managementPack(thisBooks, lastBooks)
-		status := captureStatus(ctx, tx, r.PathValue("id"), this)
-		pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, "Accrual"
-		pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"] = this.Source, this.SnapshotID, this.CapturedAt, this.Stale, status
-		note := "Figures are the ledger as captured; approved drafts not yet posted are excluded."
-		if lastBooks != nil {
-			prior := captureStatus(ctx, tx, priorClose, last)
-			pack["prior"] = map[string]any{"close_id": priorClose, "period": last.Period, "snapshot_id": last.SnapshotID, "as_of": last.CapturedAt, "stale": last.Stale, "status": prior}
-			if prior != "signed_off" {
-				status = prior
-			}
-		} else {
-			pack["comparison_unavailable"] = comparison
-		}
-		if status != "signed_off" {
-			note += " Provisional until the sign-off of every month shown stands."
-		}
-		pack["note"] = note
 		jsonReply(w, 200, pack)
 	}
+}
+
+// closeManagementPack builds the pack inside the caller's transaction, which should be one consistent snapshot. A pack
+// not yet ready is {state: waiting, reason}; a ready one carries the digest of its figures and its overall status.
+func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[string]any, error) {
+	wait := func(reason string) (map[string]any, error) {
+		return map[string]any{"state": "waiting", "reason": reason}, nil
+	}
+	var org, entity, period string
+	if err := tx.QueryRowContext(ctx, `SELECT organization_id,entity,period FROM client_closes WHERE id::text=$1`, closeID).Scan(&org, &entity, &period); err != nil {
+		return nil, tieRefusal{404, "Close not found."}
+	}
+	this, err := periodBooks(ctx, tx, closeID, period)
+	if err != nil {
+		return nil, tieRefusal{503, "Period snapshot unavailable."}
+	}
+	if this == nil {
+		return wait("Capture this month's QuickBooks period snapshot or Xero Trial Balance first.")
+	}
+	thisBooks, err := readLedgerMonth(this)
+	if err != nil {
+		return wait("This month's capture could not be read: " + err.Error() + ".")
+	}
+	var last *fluxMonth
+	var lastBooks *books
+	comparison := ""
+	var priorClose string
+	switch err = tx.QueryRowContext(ctx, `SELECT id::text FROM client_closes WHERE organization_id=$1 AND lower(entity)=lower($2) AND period=$3`, org, entity, shiftMonth(period, -1)).Scan(&priorClose); {
+	case err == sql.ErrNoRows:
+		comparison = "Last month has no close in this workspace."
+	case err != nil:
+		return nil, tieRefusal{503, "Last month's close is unavailable."}
+	default:
+		if last, err = periodBooks(ctx, tx, priorClose, shiftMonth(period, -1)); err != nil {
+			return nil, tieRefusal{503, "Last month's snapshot is unavailable."}
+		}
+		switch {
+		case last == nil:
+			comparison = "Last month's close has no month-end capture."
+		case last.Source != this.Source || last.realm != this.realm:
+			comparison = "Last month was captured from a different ledger or company."
+		default:
+			if lastBooks, err = readLedgerMonth(last); err != nil {
+				comparison = "Last month's capture could not be read: " + err.Error() + "."
+			} else if lastBooks.Currency != thisBooks.Currency {
+				comparison, lastBooks = "Last month's capture is in a different currency.", nil
+			}
+		}
+	}
+	pack := managementPack(thisBooks, lastBooks)
+	status := captureStatus(ctx, tx, closeID, this)
+	pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, "Accrual"
+	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"] = this.Source, this.SnapshotID, this.CapturedAt, this.Stale, status
+	note := "Figures are the ledger as captured; approved drafts not yet posted are excluded."
+	if lastBooks != nil {
+		prior := captureStatus(ctx, tx, priorClose, last)
+		pack["prior"] = map[string]any{"close_id": priorClose, "period": last.Period, "snapshot_id": last.SnapshotID, "as_of": last.CapturedAt, "stale": last.Stale, "status": prior}
+		if prior != "signed_off" {
+			status = prior
+		}
+	} else {
+		pack["comparison_unavailable"] = comparison
+	}
+	if status != "signed_off" {
+		note += " Provisional until the sign-off of every month shown stands."
+	}
+	pack["note"], pack["overall"], pack["digest"] = note, status, figuresDigest(pack)
+	return pack, nil
 }
