@@ -103,7 +103,7 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 		if toolRounds > 0 && (!strings.Contains(given.Reads["read_evidence_text#1"], "Annual premium USD 1,200.00") || strings.Contains(given.Reads["read_evidence_text#1"], "4111")) {
 			t.Fatalf("the document text is a read for the final answer, redacted: %q", given.Reads["read_evidence_text#1"])
 		}
-		answer, _ := json.Marshal(map[string]any{"answerable": true, "answer": "The invoice is an annual premium of USD 1,200.00.", "support": []map[string]string{{"source": "read_evidence_text#1", "quote": "Annual premium USD 1,200.00"}}})
+		answer, _ := json.Marshal(map[string]any{"answerable": true, "answer": "The invoice is an annual premium of USD 1,200.00.", "support": []map[string]string{{"source": "read_evidence_text#1", "quote": "Annual premium USD 1,200.00"}}, "next": "prepare"})
 		lines := []string{}
 		for i := 0; i < len(answer); i += 9 {
 			delta, _ := json.Marshal(map[string]string{"type": "response.output_text.delta", "delta": string(answer[i:min(i+9, len(answer))])})
@@ -157,6 +157,12 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 	}
 	if !strings.HasPrefix(body, "The invoice is an annual premium of USD 1,200.00.") || lines[1] != "Investigated: read_evidence_text "+evidenceID+" (ok); export_close_package (refused); read_evidence_text "+cardID+" (ok)" || !strings.Contains(body, "Written by the model after it read") {
 		t.Fatalf("the kept answer lists what was read and says it was investigated: %q", body)
+	}
+	// The investigation ends on the step it found, as the close's own card for the author to confirm.
+	var card string
+	must(db.QueryRow(`SELECT COALESCE(action,'') FROM chat_messages WHERE close_id::text=$1 AND role='assistant' ORDER BY id DESC LIMIT 1`, closeID).Scan(&card))
+	if card != "prepare" || lines[len(lines)-1] != chatActionReply["prepare"] {
+		t.Fatalf("the investigated answer offers the prepare card: %q %q", card, body)
 	}
 	if len(cited) != 1 || cited[0]["label"] != "Evidence #"+evidenceID || cited[0]["href"] != "/dashboard/closes/"+closeID+"?tab=evidence" {
 		t.Fatalf("the read document is linked: %v", cited)
