@@ -3,7 +3,9 @@ import { AskAgent } from "../dashboard/AskAgent";
 import { amount, workspaceRequest } from "./workspace";
 import { SectionHeader } from "@close/ui/components/SectionHeader";
 
-type Item = { on: string; amount: string; label: string; source: string; basis: string };
+type Item = { key?: string; on: string; amount: string; label: string; source: string; basis: string };
+type Change = { kind: "move" | "add"; item?: string; on?: string; label?: string; direction?: string; amount?: string; first_on?: string; every?: string; until_on?: string };
+type Scenario = { id: string; name: string; changes: Change[] };
 type Week = { start: string; end: string; opening: string; receipts: string; disbursements: string; closing: string; lowest: string; lowest_on: string; items: Item[] };
 type Obligation = {
   id: string;
@@ -41,6 +43,7 @@ type Plan =
       covered: { obligation: string; on: string; vendor: string }[];
       note: string;
       unapproved_schedules?: number;
+      scenario: (Scenario & { missing: string[]; base_lowest: { amount: string; on: string } }) | null;
     };
 
 const every: Record<string, string> = { once: "once", week: "every week", two_weeks: "every two weeks", month: "every month" };
@@ -54,21 +57,37 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
   const [version, setVersion] = useState(0);
+  const [scenario, setScenario] = useState("");
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [notice, setNotice] = useState("");
   useEffect(() => {
     let live = true;
-    Promise.all([workspaceRequest(`/${closeId}/cash-plan`), readOnly ? { obligations: [] } : workspaceRequest(`/${closeId}/cash-obligations`)])
-      .then(([data, list]) => {
+    Promise.all([
+      workspaceRequest(`/${closeId}/cash-plan${scenario ? `?scenario=${encodeURIComponent(scenario)}` : ""}`),
+      readOnly ? { obligations: [] } : workspaceRequest(`/${closeId}/cash-obligations`),
+      workspaceRequest(`/${closeId}/cash-scenarios`),
+    ])
+      .then(([data, list, what]) => {
         if (live) {
           setPlan(data);
           setObligations(list.obligations);
+          setScenarios(what.scenarios);
           setError("");
         }
       })
-      .catch((e) => live && setError(e instanceof Error ? e.message : "The cash plan is unavailable."));
+      .catch((e) => {
+        if (!live) return;
+        // A scenario that cannot be shown (removed, or made for other books) never leaves its figures in place.
+        if (scenario) {
+          setPlan(undefined);
+          setScenario("");
+          setNotice(`That scenario cannot be shown: ${e instanceof Error ? e.message : "it is unavailable"}`);
+        } else setError(e instanceof Error ? e.message : "The cash plan is unavailable.");
+      });
     return () => {
       live = false;
     };
-  }, [closeId, version, readOnly]);
+  }, [closeId, version, readOnly, scenario]);
   async function act(body: Record<string, unknown>, done: string) {
     setBusy(true);
     setError("");
@@ -113,6 +132,19 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
       <p className={negative(plan.lowest.amount) ? undefined : "note"} role={negative(plan.lowest.amount) ? "alert" : undefined}>
         Lowest end-of-day book cash: <strong>{show(plan.lowest.amount)}</strong> on {plan.lowest.on}.
       </p>
+      {notice && <p role="alert">{notice}</p>}
+      {readOnly && error && <p role="alert">{error}</p>}
+      <Scenarios
+        closeId={closeId}
+        plan={plan}
+        scenarios={scenarios}
+        selected={scenario}
+        onSelect={(id) => {
+          setNotice("");
+          setScenario(id);
+          setVersion((n) => n + 1);
+        }}
+      />
       <p className="note">{plan.note}</p>
       {readOnly && !!plan.unapproved_schedules && <p className="note">{plan.unapproved_schedules} schedule{plan.unapproved_schedules === 1 ? " is" : "s are"} waiting for the firm's approval and not counted.</p>}
       {plan.opening.stale && <p role="alert">The bank balances come from a capture that is no longer current. Capture the books again before relying on the plan.</p>}
@@ -312,3 +344,143 @@ export function CashPlan({ closeId, readOnly = false }: { closeId: string; readO
     </section>
   );
 }
+
+// What-ifs over the plan: each moves receipts or payments, or adds them, and changes only its own view of the weeks; the
+// base plan, open items and ledger stay as they are.
+function Scenarios({ closeId, plan, scenarios, selected, onSelect }: { closeId: string; plan: Extract<Plan, { state: "ready" }>; scenarios: Scenario[]; selected: string; onSelect: (id: string) => void }) {
+  const movable = [...plan.past_due, ...plan.weeks.flatMap((w) => w.items), ...plan.after_horizon].filter((i) => i.key);
+  const [kind, setKind] = useState<"move" | "add">(movable.length > 0 ? "move" : "add");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const show = (value: string) => amount(value, plan.currency);
+  const current = plan.scenario;
+  async function save(body: Record<string, unknown>) {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await workspaceRequest(`/${closeId}/cash-scenarios`, body);
+      onSelect(body.action === "add" ? result.id : "");
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The scenario could not be saved.");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const element = event.currentTarget;
+    const form = Object.fromEntries([...new FormData(element)].map(([k, v]) => [k, String(v).trim()]));
+    const change: Change =
+      kind === "move"
+        ? { kind, item: form.item, on: form.on }
+        : { kind, label: form.label, direction: form.direction, amount: form.amount, first_on: form.first_on, every: form.every, ...(form.until_on ? { until_on: form.until_on } : {}) };
+    void save({ action: "add", name: form.name, changes: [change] }).then((ok) => ok && element.reset());
+  }
+  return (
+    <>
+      <SectionHeader title="What if" />
+      {error && <p role="alert">{error}</p>}
+      {scenarios.length > 0 && (
+        <label>
+          Show the plan{" "}
+          <select value={selected} onChange={(e) => onSelect(e.target.value)}>
+            <option value="">as it stands</option>
+            {scenarios.map((s) => (
+              <option key={s.id} value={s.id}>
+                with “{s.name}”
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {current && (
+        <p role="status">
+          With “{current.name}”, book cash runs lowest at <strong>{show(plan.lowest.amount)}</strong> on {plan.lowest.on}; as the plan stands, its lowest is{" "}
+          {show(current.base_lowest.amount)} on {current.base_lowest.on}. A scenario changes nothing in the plan, the open items or the ledger.
+          {current.missing.length > 0 && ` Not applied (no longer open or undated): ${current.missing.join(", ")}.`}{" "}
+          <button type="button" disabled={busy} onClick={() => void save({ action: "retire", id: current.id })}>
+            Remove this scenario
+          </button>
+        </p>
+      )}
+      <details>
+        <summary>Try a what-if</summary>
+        <form onSubmit={add}>
+          <fieldset disabled={busy}>
+            <label>
+              Name
+              <input name="name" required maxLength={200} placeholder="Acme pays three weeks late" />
+            </label>
+            <label>
+              Change
+              <select value={kind} onChange={(e) => setKind(e.target.value as "move" | "add")}>
+                <option value="move" disabled={movable.length === 0}>
+                  Move a receipt or payment
+                </option>
+                <option value="add">Add a receipt or payment</option>
+              </select>
+            </label>
+            {kind === "move" ? (
+              <>
+                <label>
+                  Which one
+                  <select name="item" required>
+                    {movable.map((i) => (
+                      <option key={i.key} value={i.key}>
+                        {i.label} · {show(i.amount)} · {i.on}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  New date
+                  <input name="on" type="date" required />
+                </label>
+              </>
+            ) : (
+              <>
+                <label>
+                  What it is
+                  <input name="label" required maxLength={200} placeholder="New engineer's pay" />
+                </label>
+                <label>
+                  Direction
+                  <select name="direction" defaultValue="out">
+                    <option value="out">Payment out</option>
+                    <option value="in">Receipt in</option>
+                  </select>
+                </label>
+                <label>
+                  Amount ({plan.currency})
+                  <input name="amount" required inputMode="decimal" pattern="[0-9]{1,16}(\.[0-9]{1,2})?" />
+                </label>
+                <label>
+                  First date
+                  <input name="first_on" type="date" required />
+                </label>
+                <label>
+                  How often
+                  <select name="every" defaultValue="once">
+                    {Object.entries(every).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Last date (optional)
+                  <input name="until_on" type="date" />
+                </label>
+              </>
+            )}
+            <button>Show the plan with this change</button>
+          </fieldset>
+        </form>
+      </details>
+    </>
+  );
+}
+

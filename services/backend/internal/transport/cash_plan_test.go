@@ -68,6 +68,7 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
 	defer func() {
 		db.Exec(`DELETE FROM cash_obligations WHERE client_entity=$1`, entity)
+		db.Exec(`DELETE FROM cash_scenarios WHERE client_entity=$1`, entity)
 		db.Exec(`DELETE FROM open_item_actions WHERE client_entity=$1`, entity)
 		db.Exec(`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, closeID)
 		db.Exec(`DELETE FROM quickbooks_snapshots WHERE close_id=$1`, closeID)
@@ -174,6 +175,7 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	must(err)
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) SELECT organization_id,$1,entity,true,'Synthetic','fixture' FROM client_closes WHERE id::text=$2`, executive, closeID)
 	must(err)
+	defer db.Exec(`DELETE FROM cash_scenarios WHERE created_by=$1`, executive)
 	defer db.Exec(`DELETE FROM client_access WHERE subject=$1`, executive)
 	defer db.Exec(`DELETE FROM organization_member_access WHERE subject=$1`, executive)
 	var org string
@@ -184,11 +186,94 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	if w.Code != 200 || strings.Contains(w.Body.String(), "Sales tax") || !strings.Contains(w.Body.String(), `"unapproved_schedules":1`) || !strings.Contains(w.Body.String(), `"pending_obligations":[]`) {
 		t.Fatalf("an executive does not see draft schedules: %d %s", w.Code, w.Body.String())
 	}
+	// A what-if delays the promised invoice and adds a hire; only its own view changes.
+	var none struct{ Scenarios []map[string]any }
+	call("POST", "/cash-scenarios", map[string]any{"action": "add", "name": "Late customer", "changes": []map[string]any{{"kind": "move", "item": "invoice:3", "on": "not a date"}}}, 422)
+	call("POST", "/cash-scenarios", map[string]any{"action": "add", "name": "Late customer and a hire", "changes": []map[string]any{
+		{"kind": "move", "item": "invoice:3", "on": "2026-11-04"},
+		{"kind": "add", "label": "New engineer payroll", "direction": "out", "amount": "3000.00", "first_on": "2026-10-16", "every": "two_weeks"},
+		{"kind": "move", "item": "invoice:404", "on": "2026-10-20"}}}, 200)
+	must(json.Unmarshal(call("GET", "/cash-scenarios", nil, 200), &none))
+	if len(none.Scenarios) != 1 {
+		t.Fatalf("the scenario is listed: %+v", none)
+	}
+	id := none.Scenarios[0]["id"].(string)
+	var what struct {
+		Weeks    []cashWeek
+		Lowest   map[string]string
+		Scenario struct {
+			Name       string
+			Missing    []string
+			BaseLowest map[string]string `json:"base_lowest"`
+		}
+	}
+	var again struct {
+		Weeks  []cashWeek
+		Lowest map[string]string
+	}
+	must(json.Unmarshal(call("GET", "/cash-plan?scenario="+id, nil, 200), &what))
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &again))
+	if what.Weeks[1].Receipts != "0.00" || what.Weeks[4].Receipts != "600.00" || what.Weeks[1].Disbursements != "3000.00" || what.Scenario.BaseLowest["amount"] != again.Lowest["amount"] ||
+		len(what.Scenario.Missing) != 1 || what.Scenario.Missing[0] != "invoice:404" || what.Lowest["amount"] == again.Lowest["amount"] {
+		t.Fatalf("the scenario moves the receipt to its week, adds the hire's payroll and reports the base plan's low point: %+v %+v %+v", what.Weeks[:5], what.Scenario, again.Lowest)
+	}
+	if again.Weeks[1].Receipts != "600.00" {
+		t.Fatalf("the base plan is unchanged by a scenario: %+v", again.Weeks[1])
+	}
+	// An executive sees and opens only their own scenarios; the firm's stay with the firm.
+	asExecutive := func(method, path string, body any) (int, string) {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(method, "/v1/closes/"+closeID+path, bytes.NewReader(raw)).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: executive}, Organization: org, Permissions: []string{"executive:read"}}))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		savedCloses(db, token).ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+	if code, body := asExecutive("GET", "/cash-scenarios", nil); code != 200 || strings.Contains(body, "Late customer") {
+		t.Fatalf("an executive does not see the firm's scenarios: %d %s", code, body)
+	}
+	if code, _ := asExecutive("GET", "/cash-plan?scenario="+id, nil); code != 404 {
+		t.Fatalf("an executive cannot open the firm's scenario: %d", code)
+	}
+	if code, body := asExecutive("POST", "/cash-scenarios", map[string]any{"action": "add", "name": "Board's hire", "changes": []map[string]any{{"kind": "add", "label": "Sales lead", "direction": "out", "amount": "2500.00", "first_on": "2026-10-23", "every": "once"}}}); code != 200 {
+		t.Fatalf("an executive tries their own what-if: %d %s", code, body)
+	}
+	if _, body := asExecutive("GET", "/cash-scenarios", nil); !strings.Contains(body, "Board's hire") {
+		t.Fatalf("an executive sees their own scenario: %s", body)
+	}
+	if body := string(call("GET", "/cash-scenarios", nil, 200)); !strings.Contains(body, "Board's hire") || !strings.Contains(body, "Late customer") {
+		t.Fatalf("the firm sees every scenario of the client: %s", body)
+	}
+	// A scenario made for other books is not applied to these.
+	_, err = db.Exec(`UPDATE cash_scenarios SET company='quickbooks:sandbox:other' WHERE id::text=$1`, id)
+	must(err)
+	call("GET", "/cash-plan?scenario="+id, nil, 409)
+	call("POST", "/cash-scenarios", map[string]any{"action": "retire", "id": id}, 200)
+	call("GET", "/cash-plan?scenario="+id, nil, 404)
+
 	// Handing the landlord's bill to bill pay for next week moves the payment, and the estimate stays covered by it.
 	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "handed_to_bill_pay", "expected_on": "2026-10-14"}, 200)
 	plan.Covered = nil
 	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
 	if w1, w2 := plan.Weeks[0], plan.Weeks[1]; len(plan.Covered) != 1 || w1.Disbursements != "4000.00" || w1.Lowest != "1000.00" || w2.Disbursements != "1500.00" || w2.Closing != "2100.00" {
 		t.Fatalf("the bill moves to its bill-pay date and the rent estimate is still not counted: %+v %+v %+v", plan.Covered, w1, w2)
+	}
+}
+
+func TestScenariosMoveOpenItemsAndAddPaymentsWithoutTouchingTheBase(t *testing.T) {
+	start := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	item := func(key, on, amount string) cashItem {
+		v, _ := new(big.Rat).SetString(amount)
+		return cashItem{Key: key, On: on, Amount: amount, value: v}
+	}
+	base := []cashItem{item("invoice:3", "2026-10-14", "600.00"), item("bill:9", "2026-10-07", "-1500.00")}
+	out, missing := applyScenario(base, "Hire", []cashChange{{Kind: "move", Item: "invoice:3", On: "2026-11-04"}, {Kind: "add", Label: "Engineer", Direction: "out", Amount: "3000.00", FirstOn: "2026-10-16", Every: "two_weeks", UntilOn: "2026-10-31"}, {Kind: "move", Item: "bill:1", On: "2026-10-20"}}, start, start.AddDate(0, 0, 91))
+	if base[0].On != "2026-10-14" || out[0].On != "2026-11-04" || out[0].Basis != "scenario: Hire" || len(out) != 4 || out[2].On != "2026-10-16" || out[2].Amount != "-3000.00" || out[3].On != "2026-10-30" || len(missing) != 1 || missing[0] != "bill:1" {
+		t.Fatalf("a scenario moves a copy of the item, adds the payroll on each date up to its end and names a move it cannot make: %+v %v", out, missing)
+	}
+	for _, c := range []cashChange{{Kind: "move", Item: "obligation:2", On: "2026-10-20"}, {Kind: "add", Label: "Hire", Direction: "out", Amount: "0.00", FirstOn: "2026-10-16", Every: "once"}, {Kind: "add", Label: "Hire", Direction: "sideways", Amount: "10.00", FirstOn: "2026-10-16", Every: "once"}, {Kind: "delete"}} {
+		if c.valid() {
+			t.Fatalf("an invalid change is refused: %+v", c)
+		}
 	}
 }
