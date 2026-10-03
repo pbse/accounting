@@ -66,8 +66,10 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 		return out, err
 	}
 	out.coverage = coverage
+	coverageAt := map[int]string{}
 	for _, item := range coverage.Items {
 		if item.State != "resolved" && item.State != "excluded" {
+			coverageAt[len(out.Blockers)] = item.AccountID
 			out.Blockers = append(out.Blockers, "Coverage for "+item.Name+": "+strings.ReplaceAll(item.State, "_", " ")+".")
 		}
 	}
@@ -224,11 +226,25 @@ func closeReadiness(ctx context.Context, tx *sql.Tx, id string) (readiness, erro
 	} else if err != nil {
 		return out, err
 	}
+	// A client's opening baseline is checked apart from the signed snapshot; on the opening close, an account it noted as
+	// inherited cleanup no longer blocks for its difference or its coverage.
+	opening, noted, err := openingBlockers(ctx, tx, id, tie)
+	if err != nil {
+		return out, err
+	}
+	kept := out.Blockers[:0]
+	for i, b := range out.Blockers {
+		if account, ok := coverageAt[i]; !ok || !noted[account] {
+			kept = append(kept, b)
+		}
+	}
+	out.Blockers = kept
 	for _, row := range tie.Rows {
-		if row.Status == "differs" {
+		if row.Status == "differs" && !noted[row.AccountID] {
 			out.Blockers = append(out.Blockers, fmt.Sprintf("Tie-out: %s is %s in the Trial Balance but %s in its support, a difference of %s.", row.Account, row.Balance, *row.Expected, *row.Difference))
 		}
 	}
+	out.Blockers = append(out.Blockers, opening...)
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',s.id::text,'decision',s.decision,'snapshot_digest',s.snapshot_digest,'note',s.note,'actor',s.actor,'created_at',s.created_at) ORDER BY s.id DESC),'[]') FROM close_signoffs s WHERE s.close_id::text=$1`, id).Scan(&out.History)
 	if err != nil {
 		return out, err
