@@ -10,9 +10,16 @@ import (
 	"close.local/backend/internal/auth"
 )
 
+// executive is a client's executive: they read their assigned clients' published reports and current cash and budget
+// views, and nothing else, whatever other permissions their role carries.
+func executive(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return a != nil && slices.Contains(a.Permissions, "executive:read")
+}
+
 func firmAccess(r *http.Request) bool {
 	a := auth.Actor(r.Context())
-	return a != nil && (a.Organization == "" || slices.Contains(a.Permissions, "clients:all"))
+	return a != nil && !executive(r) && (a.Organization == "" || slices.Contains(a.Permissions, "clients:all"))
 }
 func subject(r *http.Request) string {
 	if a := auth.Actor(r.Context()); a != nil {

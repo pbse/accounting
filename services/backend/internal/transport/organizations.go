@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"close.local/backend/internal/auth"
@@ -39,6 +40,10 @@ func organizationAccess(db *sql.DB, r *http.Request) (bool, error) {
 // All saved-close routes pass this boundary, including downloads and future routes.
 // Close ownership is immutable through the API. Child identifiers are additionally
 // checked against this close by their existing handlers.
+// executiveRoutes are all an executive may call: their overview, a close's published packs, their exports and
+// acknowledgment, and the read-only cash plan and budget comparison.
+var executiveRoutes = regexp.MustCompile(`^(GET /executive|GET /[^/]+/management-pack/publications(/[^/]+(/export)?)?|POST /[^/]+/management-pack/publications|GET /[^/]+/(cash-plan|budget))$`)
+
 func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		org := organization(r)
@@ -52,7 +57,11 @@ func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 			return
 		}
 		path := strings.TrimPrefix(r.URL.EscapedPath(), "/v1/closes")
-		if path != "" && path != "/work" && path != "/work/interpret" && path != "/chat" && path != "/search" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/track-record" && path != "/organization/policy" && path != "/agent-access" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" && path != "/daily" && path != "/morning" && path != "/attention" && path != "/attention/preferences" && path != "/security" && path != "/security/operations" && path != "/index-rates" && path != "/portfolio" && path != "/portfolio/run" && path != "/goals" && path != "/plans/catalog" && path != "/plans/proposals" && path != "/setup" && path != "/members/roles" && path != "/members/invitations" {
+		if executive(r) && !executiveRoutes.MatchString(r.Method+" "+path) {
+			problem(w, 403, "Executive access covers published reports, the cash plan and the budget comparison only.")
+			return
+		}
+		if path != "" && path != "/executive" && path != "/work" && path != "/work/interpret" && path != "/chat" && path != "/search" && path != "/dependencies" && path != "/review-queue" && path != "/review-batch" && path != "/effort" && path != "/track-record" && path != "/organization/policy" && path != "/agent-access" && path != "/procedures" && path != "/access" && path != "/members" && path != "/organization/revoke" && path != "/operations" && path != "/email" && path != "/daily" && path != "/morning" && path != "/attention" && path != "/attention/preferences" && path != "/security" && path != "/security/operations" && path != "/index-rates" && path != "/portfolio" && path != "/portfolio/run" && path != "/goals" && path != "/plans/catalog" && path != "/plans/proposals" && path != "/setup" && path != "/members/roles" && path != "/members/invitations" {
 			id, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 			id, err = url.PathUnescape(id)
 			if err != nil {

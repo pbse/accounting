@@ -39,7 +39,8 @@ type Report = {
 };
 
 // Budget against actual for the close month and the fiscal year to date, from an approved baseline the firm imported.
-export function Budget({ closeId }: { closeId: string }) {
+// readOnly is an executive's view: the comparison alone, without budget versions to import or approve.
+export function Budget({ closeId, readOnly = false }: { closeId: string; readOnly?: boolean }) {
   const [report, setReport] = useState<Report>();
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -108,7 +109,7 @@ export function Budget({ closeId }: { closeId: string }) {
       <SectionHeader title="Budget against actual" />
       {error && <p role="alert">{error}</p>}
       {saved && <p role="status">{saved}</p>}
-      {report.state === "no_budget" && <p className="empty">No approved budget covers {report.period}. Import the client's agreed budget below; nothing is assumed until a person approves it.</p>}
+      {report.state === "no_budget" && <p className="empty">No approved budget covers {report.period}.{readOnly ? "" : " Import the client's agreed budget below; nothing is assumed until a person approves it."}</p>}
       {report.state === "waiting" && <p className="empty">{report.reason}</p>}
       {report.state === "ready" && report.rows && report.totals && (
         <>
@@ -167,7 +168,7 @@ export function Budget({ closeId }: { closeId: string }) {
           </table>
         </>
       )}
-      <details open={report.state === "no_budget"}>
+      {!readOnly && <details open={report.state === "no_budget"}>
         <summary>Budget versions</summary>
         <p className="note">
           Every import or remapping is a new version; approving one makes it the baseline, and an approved version never changes, so the original plan stays
@@ -283,7 +284,7 @@ export function Budget({ closeId }: { closeId: string }) {
             <button>Import as a draft</button>
           </fieldset>
         </form>
-      </details>
+      </details>}
     </section>
   );
 }
