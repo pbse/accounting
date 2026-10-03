@@ -32,6 +32,7 @@ import { Xero } from "./Xero";
 import { HistoricalExports } from "./HistoricalExports";
 import { Stripe } from "./Stripe";
 import { Readiness } from "./Readiness";
+import { OpeningBaseline } from "./OpeningBaseline";
 import { Recurring } from "./Recurring";
 import { Replay } from "./Replay";
 import { RecurringAccruals } from "./RecurringAccruals";
@@ -277,6 +278,7 @@ export default function ClientClose() {
       {tab === "cash" && <CashPlan key={`cash-${close.id}`} closeId={close.id} />}
       {tab === "signoff" && (
         <div className="stack">
+          <OpeningBaseline key={`opening-${close.id}`} closeId={close.id} />
           <Readiness key={`readiness-${close.id}`} closeId={close.id} papers={papers} />
           <ProposedStatePreview closeId={close.id} />
           <EffortCard closeId={close.id} />

@@ -63,6 +63,15 @@ func readRetention(ctx context.Context, tx *sql.Tx, closeID, org string) (retent
 	if err != nil {
 		return out, err
 	}
+	// An opening month whose later months still wait for its baseline or inherited cleanup keeps that record.
+	var opening bool
+	if err = tx.QueryRowContext(ctx, `SELECT c.takeover AND EXISTS(SELECT 1 FROM client_closes d WHERE d.organization_id=c.organization_id AND d.period>c.period AND client_identity(d.organization_id,d.entity)=client_identity(c.organization_id,c.entity))
+ AND (NOT EXISTS(SELECT 1 FROM opening_baselines b WHERE b.close_id=c.id) OR `+openCleanup+`>0) FROM client_closes c WHERE c.id::text=$1`, closeID).Scan(&opening); err != nil {
+		return out, err
+	}
+	if opening {
+		out.Blockers = append(out.Blockers, "Later months of this client wait for its opening baseline or inherited cleanup here; review and resolve it before deleting this close.")
+	}
 	if out.RetainUntil == "" {
 		out.Blockers = append(out.Blockers, "Set an approved retention date for this close.")
 	} else if !due {
@@ -178,15 +187,16 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
+		// The firm, then the close: the order opening-baseline reviews and close creation use.
+		var enabled bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, organization(r)).Scan(&enabled); err != nil || !enabled {
+			problem(w, 403, "Firm access changed. Refresh before deleting.")
+			return
+		}
 		var id, entity, period string
 		err = tx.QueryRowContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE id::text=$1 AND organization_id=$2 FOR UPDATE`, r.PathValue("id"), organization(r)).Scan(&id, &entity, &period)
 		if err != nil || entity != in.Entity || period != in.Period {
 			problem(w, 409, "Close identity changed. Refresh before deleting.")
-			return
-		}
-		var enabled bool
-		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, organization(r)).Scan(&enabled); err != nil || !enabled {
-			problem(w, 403, "Firm access changed. Refresh before deleting.")
 			return
 		}
 		if organization(r) != "local-development" {

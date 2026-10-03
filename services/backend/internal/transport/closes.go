@@ -22,6 +22,7 @@ import (
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/preparation"
 	"close.local/backend/internal/reconciliation"
@@ -152,6 +153,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerAging(mux, db)
 	registerOpenItems(mux, db)
 	registerCollections(mux, db)
+	registerOpeningBaseline(mux, db)
 	registerCashPlan(mux, db)
 	registerMatching(mux, db)
 	registerIndexRates(mux, db)
@@ -267,7 +269,29 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 				problem(w, 429, "This firm has reached its close limit. Archive or retain existing work according to policy before opening another period.")
 				return
 			}
-			err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) RETURNING id::text,entity,period`, input.Entity, input.Period, organization(r)).Scan(&item.ID, &item.Entity, &item.Period)
+			// A client's first close in the firm is its opening month. A month opened earlier than that one, before its
+			// baseline is reviewed, becomes the opening month instead. A name that is a confirmed alias of more than one
+			// client is not guessed.
+			var clients int
+			var first bool
+			var earlier string
+			err = tx.QueryRowContext(r.Context(), `SELECT (SELECT count(DISTINCT lower(client_entity)) FROM client_aliases WHERE organization_id=$1 AND alias=$3 AND retired_at IS NULL AND lower(client_entity)<>lower($2)),
+ NOT EXISTS(SELECT 1 FROM client_closes c WHERE `+sameClient+`),
+ COALESCE((SELECT c.id::text FROM client_closes c WHERE `+sameClient+` AND c.takeover AND c.period>$4 LIMIT 1),'')`, organization(r), input.Entity, documents.NormalizeEntity(input.Entity), input.Period).Scan(&clients, &first, &earlier)
+			if err == nil && clients > 1 {
+				problem(w, 409, "This name is a confirmed alias of more than one client. Open the close under the client's own name.")
+				return
+			}
+			if err == nil && earlier != "" {
+				var moved sql.Result
+				if moved, err = tx.ExecContext(r.Context(), `UPDATE client_closes c SET takeover=false WHERE c.id::text=$1 AND NOT EXISTS(SELECT 1 FROM opening_baselines b WHERE b.close_id=c.id)`, earlier); err == nil {
+					n, _ := moved.RowsAffected()
+					first = n > 0
+				}
+			}
+			if err == nil {
+				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id,takeover) VALUES($1,$2,$3,$4) RETURNING id::text,entity,period`, input.Entity, input.Period, organization(r), first).Scan(&item.ID, &item.Entity, &item.Period)
+			}
 		}
 		if err != nil {
 			problem(w, 503, "Could not save the close. Retry safely with the same client and month.")
