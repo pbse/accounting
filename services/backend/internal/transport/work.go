@@ -116,7 +116,12 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Dependency review unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"items": items, "has_more": more, "predicted": predicted, "predicted_more": predictedMore})
+		ledger, ledgerMore, err := ledgerDiffers(r, db, search)
+		if err != nil {
+			problem(w, 503, "Dependency review unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"items": items, "has_more": more, "predicted": predicted, "predicted_more": predictedMore, "no_longer_ties": ledger, "no_longer_ties_more": ledgerMore})
 	})
 	read := func(w http.ResponseWriter, r *http.Request) {
 		view := r.URL.Query().Get("view")
@@ -644,6 +649,108 @@ func predictedReviews(r *http.Request, db *sql.DB, search string) ([]map[string]
 		return nil, false, err
 	}
 	return items[:min(len(items), 100)], len(items) > 100, nil
+}
+
+// ledgerDiffers lists each approved draft in an open close whose account no longer ties in a Trial Balance captured after
+// the approval, with both balances: the tie-out's own "differs", across up to 10 closes, newest Trial Balance first. A
+// close whose tie-out cannot be computed is left out; its own tie-out says why.
+func ledgerDiffers(r *http.Request, db *sql.DB, search string) ([]map[string]any, bool, error) {
+	type candidate struct{ id, entity, period string }
+	var closes []candidate
+	rows, err := db.QueryContext(r.Context(), `SELECT c.id::text,c.entity,c.period FROM client_closes c
+ CROSS JOIN LATERAL (SELECT GREATEST((SELECT max(s.captured_at) FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND s.connection_id=COALESCE(`+quickbooks.ReadingConnection("s.close_id")+`,s.connection_id)),(SELECT max(captured_at) FROM xero_snapshots WHERE close_id=c.id)) AS captured) l
+ WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted)) AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4)
+ AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'
+ AND EXISTS(SELECT 1 FROM workpaper_review_state w JOIN workpaper_reviews v ON v.id::text=w.review_id WHERE w.close_id=c.id AND w.review_state='approved' AND v.created_at<l.captured)
+ ORDER BY l.captured DESC,c.id DESC LIMIT 11`, organization(r), firmAccess(r), subject(r), search)
+	if err != nil {
+		return nil, false, err
+	}
+	for rows.Next() {
+		var c candidate
+		if err = rows.Scan(&c.id, &c.entity, &c.period); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
+		closes = append(closes, c)
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, false, err
+	}
+	items := []map[string]any{}
+	for _, c := range closes[:min(len(closes), 10)] {
+		found, err := closeDiffers(r, db, c.id)
+		if err != nil {
+			return nil, false, err
+		}
+		for _, item := range found {
+			item["close_id"], item["entity"], item["period"] = c.id, c.entity, c.period
+			items = append(items, item)
+		}
+	}
+	return items, len(closes) > 10, nil
+}
+
+// closeDiffers ties out one close in its own short read and returns its approved drafts on differing rows, approved
+// before that Trial Balance was captured, once per draft and account.
+func closeDiffers(r *http.Request, db *sql.DB, closeID string) ([]map[string]any, error) {
+	tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	tie, err := closeTieOut(r.Context(), tx, closeID)
+	at, _ := tie.Snapshot["captured_at"].(time.Time)
+	if err != nil || at.IsZero() {
+		return nil, nil
+	}
+	type support struct {
+		row   tieRow
+		paper tieSupport
+	}
+	var differing []support
+	ids := []string{}
+	for _, row := range tie.Rows {
+		seen := map[string]bool{}
+		for _, s := range row.Supports {
+			if row.Status == "differs" && s.Review == "approved" && !seen[s.PaperID] {
+				seen[s.PaperID] = true
+				differing = append(differing, support{row, s})
+				ids = append(ids, s.PaperID)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	approved := map[string]time.Time{}
+	rows, err := tx.QueryContext(r.Context(), `SELECT w.id::text,v.created_at FROM workpaper_review_state w JOIN workpaper_reviews v ON v.id::text=w.review_id WHERE w.close_id::text=$1 AND w.id::text=ANY($2::text[])`, closeID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id string
+		var when time.Time
+		if err = rows.Scan(&id, &when); err != nil {
+			break
+		}
+		approved[id] = when
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	items := []map[string]any{}
+	for _, d := range differing {
+		if when, ok := approved[d.paper.PaperID]; ok && at.After(when) {
+			items = append(items, map[string]any{"workpaper_id": d.paper.PaperID, "kind": d.paper.Kind, "account": d.row.Account, "balance": d.row.Balance, "expected": *d.row.Expected, "difference": *d.row.Difference, "captured_at": at, "approved_at": when})
+		}
+	}
+	return items, nil
 }
 
 // workPredicates are the inbox views as SQL over a job j, its intake i, evidence e and close c, with the member at $5.

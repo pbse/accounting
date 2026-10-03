@@ -94,6 +94,7 @@ type WorkItem = Plan & {
 };
 type Dependency = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; upstream_workpaper_id: string };
 type Predicted = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; transaction: string; account: string; updated_at: string; approved_at: string; count: number };
+type Untied = { workpaper_id: string; close_id: string; entity: string; period: string; kind: string; account: string; balance: string; expected: string; difference: string; captured_at: string };
 const labels: Record<string, string> = {
   waiting_evidence: "Reading evidence",
   needs_confirmation: "Needs your decision",
@@ -155,6 +156,7 @@ export function Work({
   const [dependencyError, setDependencyError] = useState("");
   const [dependencyLoaded, setDependencyLoaded] = useState(false);
   const [predicted, setPredicted] = useState<{ items: Predicted[]; more: boolean }>({ items: [], more: false });
+  const [untied, setUntied] = useState<{ items: Untied[]; more: boolean }>({ items: [], more: false });
   const [queue, setQueue] = useState<{ items: QueueItem[]; count: number }>();
   const [queueError, setQueueError] = useState("");
   const [asOf, setAsOf] = useState<Date>();
@@ -225,7 +227,7 @@ export function Work({
     if (closeId) return;
     let live = true;
     const dependencies = workspaceRequest(`/dependencies?client=${encodeURIComponent(clientSearch)}`).then(data => {
-      if (live) { setDependencies(data.items); setDependencyMore(data.has_more); setPredicted({ items: data.predicted ?? [], more: data.predicted_more }); setDependencyError(""); setDependencyLoaded(true); }
+      if (live) { setDependencies(data.items); setDependencyMore(data.has_more); setPredicted({ items: data.predicted ?? [], more: data.predicted_more }); setUntied({ items: data.no_longer_ties ?? [], more: data.no_longer_ties_more }); setDependencyError(""); setDependencyLoaded(true); }
     }).catch(e => {
       if (live) { setDependencyError(e instanceof Error ? e.message : "Dependency review unavailable."); setDependencyLoaded(true); }
     });
@@ -247,6 +249,7 @@ export function Work({
     setDependencies([]);
     setDependencyMore(false);
     setPredicted({ items: [], more: false });
+    setUntied({ items: [], more: false });
     setDependencyError("");
     setQueue(undefined);
     setQueueError("");
@@ -254,6 +257,7 @@ export function Work({
     setMorningError("");
   };
   const dueCounts = morning?.due_counts;
+  const visiblePredicted = predicted.items.filter(item => !untied.items.some(u => u.workpaper_id === item.workpaper_id));
   const show = (view: string) => {
     setFilter(view);
     document.getElementById("work-list")?.scrollIntoView({ block: "start" });
@@ -371,10 +375,24 @@ export function Work({
                 ))}
               </RowList>
               {dependencyMore && <p>Showing 100 recent affected workpapers. Filter by client or month to see more.</p>}
-              {predicted.items.length > 0 && (
+              {(untied.items.length > 0 || untied.more) && (
+                <RowList label="No longer ties">
+                  <p><strong>No longer ties</strong> · approved drafts in open closes whose account differs from what the approved work supports in a Trial Balance captured after the approval. Sign-off is blocked until it ties; the approval stands until you review again.</p>
+                  {untied.items.map(item => (
+                    <Link className="row" key={`${item.workpaper_id}-${item.account}`} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
+                      <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}`} />
+                      <span className="status danger">No longer ties</span>
+                      <small>{item.account} is {item.balance} in the Trial Balance captured {new Date(item.captured_at).toLocaleString()} but {item.expected} in its support, a difference of {item.difference}.</small>
+                      <Icon name="arrow" />
+                    </Link>
+                  ))}
+                  {untied.more && <p>Checked the 10 open closes with the newest Trial Balances. Filter by client or month to check others.</p>}
+                </RowList>
+              )}
+              {visiblePredicted.length > 0 && (
                 <RowList label="Predicted re-review">
                   <p><strong>May need re-review</strong> · approved drafts in open closes whose account had a transaction updated in QuickBooks after the approval. The update may not change the balance; the approval stands until you review again.</p>
-                  {predicted.items.map(item => (
+                  {visiblePredicted.map(item => (
                     <Link className="row" key={item.workpaper_id} to={`/dashboard/closes/${item.close_id}/workpapers/${item.workpaper_id}`}>
                       <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`${kindLabels[item.kind] ?? item.kind} · draft #${item.workpaper_id}`} />
                       <span className="status">May be affected</span>
