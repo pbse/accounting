@@ -7,7 +7,9 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Firm management in the staff console (docs/admin-panel.md, phase A2): a firm's people, activity and staff audit, and
@@ -26,6 +28,8 @@ func registerAdminFirms(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("POST /v1/admin/firms/{id}/members/{subject}/revoke", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminMemberAccess(w, r, db, false) }))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/members/{subject}/restore", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminMemberAccess(w, r, db, true) }))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/limits", route(platformOperate, adminFirmLimits))
+	mux.HandleFunc("POST /v1/admin/firms/{id}/support-owner", route(platformOperate, adminSupportOwner))
+	mux.HandleFunc("POST /v1/admin/firms/{id}/assistance", route(platformOperate, adminAssistance))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/invitations/{invitation}/revoke", route(platformOperate, adminRevokeInvitation))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/emails/{outbox}/settle", route(platformOperate, adminSettleEmail))
 }
@@ -34,6 +38,7 @@ var (
 	errInvitationClosed = errors.New("only an open invitation can be revoked")
 	errNotAMember       = errors.New("this person is not a member of the firm")
 	errLimitsChanged    = errors.New("the firm's limits changed")
+	errCloseNotInFirm   = errors.New("no such close in the firm")
 )
 
 // adminFirmProblem answers a failed firm read or action.
@@ -55,6 +60,8 @@ func adminFirmProblem(w http.ResponseWriter, err error, what string) {
 		problem(w, 502, err.Error()+". Nothing changed; try again.")
 	case errors.Is(err, errNotAMember):
 		problem(w, 409, "This person is not a member of the firm. Refresh the list.")
+	case errors.Is(err, errCloseNotInFirm):
+		problem(w, 404, "No close with that ID belongs to this firm.")
 	case errors.Is(err, errLimitsChanged):
 		problem(w, 409, "The firm's limits changed since you loaded them. Refresh and decide again.")
 	default:
@@ -276,6 +283,83 @@ func adminMemberAccess(w http.ResponseWriter, r *http.Request, db *sql.DB, grant
 		return
 	}
 	jsonReply(w, 200, map[string]bool{map[bool]string{false: "revoked", true: "restored"}[granted]: true})
+}
+
+// adminSupportOwner names the person on our team who supports the firm; the firm sees the name in its settings.
+func adminSupportOwner(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	firm := r.PathValue("id")
+	var in struct {
+		Owner  string `json:"owner"`
+		Reason string `json:"reason"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Reason }) {
+		return
+	}
+	if in.Owner = strings.TrimSpace(in.Owner); utf8.RuneCountInString(in.Owner) > 200 {
+		problem(w, 422, "Name the support owner in up to 200 characters.")
+		return
+	}
+	if err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error { return adminFirmExists(ctx, tx, firm) }); err != nil {
+		adminFirmProblem(w, err, "firm read")
+		return
+	}
+	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "firm.support_owner", TargetType: "firm", TargetID: firm, Reason: strings.TrimSpace(in.Reason), Request: map[string]string{"owner": in.Owner}},
+		func(ctx context.Context, tx *sql.Tx) error {
+			result, err := tx.ExecContext(ctx, `UPDATE organizations SET support_owner=$2 WHERE id=$1 AND support_owner<>$2`, firm, in.Owner)
+			if err != nil {
+				return err
+			}
+			if n, _ := result.RowsAffected(); n == 0 {
+				return errAlreadyThatWay
+			}
+			return nil
+		})
+	if err != nil {
+		adminFirmProblem(w, err, "support owner change")
+		return
+	}
+	jsonReply(w, 200, map[string]string{"owner": in.Owner})
+}
+
+// adminAssistance records our team's setup or service time for a firm: on one of its closes, or on the firm itself
+// before or beside any close. It is reported apart from the firm's own time.
+func adminAssistance(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	firm := r.PathValue("id")
+	var in struct {
+		CloseID string `json:"close_id"`
+		Minutes int    `json:"minutes"`
+		Note    string `json:"note"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Note }) {
+		return
+	}
+	in.CloseID, in.Note = strings.TrimSpace(in.CloseID), strings.TrimSpace(in.Note)
+	if id, err := strconv.ParseInt(in.CloseID, 10, 64); (in.CloseID != "" && (err != nil || id < 1)) || in.Minutes < 1 || in.Minutes > 480 || utf8.RuneCountInString(in.Note) < 10 || utf8.RuneCountInString(in.Note) > 500 {
+		problem(w, 422, "Record 1–480 minutes with a note of 10–500 characters, on the firm or on one of its closes by ID.")
+		return
+	}
+	if err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error { return adminFirmExists(ctx, tx, firm) }); err != nil {
+		adminFirmProblem(w, err, "firm read")
+		return
+	}
+	who := "staff:" + staffOf(r.Context()).Subject
+	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "effort.assistance", TargetType: "firm", TargetID: firm, Reason: in.Note, Request: map[string]any{"close_id": in.CloseID, "minutes": in.Minutes}},
+		func(ctx context.Context, tx *sql.Tx) error {
+			result, err := tx.ExecContext(ctx, `INSERT INTO close_effort_entries(close_id,organization_id,actor,activity,minutes,note)
+ SELECT NULLIF($2,'')::bigint,$1,$3,'assistance',$4,$5 WHERE $2='' OR EXISTS(SELECT 1 FROM client_closes c WHERE c.id::text=$2 AND c.organization_id=$1)`, firm, in.CloseID, who, in.Minutes, in.Note)
+			if err != nil {
+				return err
+			}
+			if n, _ := result.RowsAffected(); n == 0 {
+				return errCloseNotInFirm
+			}
+			return nil
+		})
+	if err != nil {
+		adminFirmProblem(w, err, "time record")
+		return
+	}
+	jsonReply(w, 200, map[string]bool{"recorded": true})
 }
 
 // adminFirmLimits sets a firm's capacity: closes, active preparation jobs and model calls per UTC day, within the

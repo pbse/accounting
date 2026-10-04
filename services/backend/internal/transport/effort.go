@@ -292,6 +292,15 @@ func registerEffort(mux *http.ServeMux, db *sql.DB) {
 			fail()
 			return
 		}
-		jsonReply(w, 200, map[string]any{"period": period, "items": items, "completed": cohort(true), "in_progress": cohort(false), "unchecked": unchecked, "has_more": more, "reviews": reviews, "reviews_after_approval": afterApproval, "trend": trend})
+		out := map[string]any{"period": period, "items": items, "completed": cohort(true), "in_progress": cohort(false), "unchecked": unchecked, "has_more": more, "reviews": reviews, "reviews_after_approval": afterApproval, "trend": trend}
+		if firmAccess(r) {
+			var setup int
+			if err = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(minutes),0) FROM close_effort_entries WHERE close_id IS NULL AND organization_id=$1`, organization(r)).Scan(&setup); err != nil {
+				fail()
+				return
+			}
+			out["firm_assistance_minutes"] = setup
+		}
+		jsonReply(w, 200, out)
 	})
 }

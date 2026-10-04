@@ -9,6 +9,50 @@ import { workspaceRequest } from "./workspace";
 
 type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; investigations: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
 
+// Who on our team supports the firm, and the firm's own records to take away at exit.
+function SupportAndExit() {
+  const [owner, setOwner] = useState<string>();
+  const [unread, setUnread] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/organization/policy")
+      .then((data: { support_owner: string }) => live && setOwner(data.support_owner))
+      .catch((e) => live && setUnread(e instanceof Error ? e.message : "The support owner could not be read."));
+    return () => {
+      live = false;
+    };
+  }, []);
+  async function download() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(await workspaceRequest("/firm-export", undefined, true));
+      link.download = `firm-export-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "The firm export is unavailable.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-label="Support and exit">
+      <h2>Support and your records</h2>
+      {unread ? <p role="alert">{unread}</p> : owner === undefined ? null : <p>{owner ? `Your support owner is ${owner}.` : "No support owner is named yet."}</p>}
+      <p>
+        At any time, and when you leave, a data administrator can download the firm's own records: settings, people and access history, procedures, client
+        records, and every close with where its review package downloads.
+      </p>
+      {message && <p role="alert">{message}</p>}
+      <button type="button" disabled={busy} onClick={() => void download()}>Download the firm's records</button>
+    </section>
+  );
+}
+
 function IndependentReview() {
   const [policy, setPolicy] = useState<Policy>();
   const [reason, setReason] = useState("");
@@ -372,6 +416,7 @@ export default function Firm() {
       <WrittenAnswers />
       <Materiality />
       <ReminderRule />
+      <SupportAndExit />
           <p>
             People, client assignments, agent grants, connected services and recent changes are in the <Link to="/dashboard/security">Security center</Link>. Request or give up your own agent access here.
           </p>

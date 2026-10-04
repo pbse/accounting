@@ -156,6 +156,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerCollections(mux, db)
 	registerOpeningBaseline(mux, db)
 	registerTakeoverSetup(mux, db)
+	registerFirmExport(mux, db)
 	registerCashPlan(mux, db)
 	registerMatching(mux, db)
 	registerIndexRates(mux, db)

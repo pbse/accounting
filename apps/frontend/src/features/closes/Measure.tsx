@@ -34,6 +34,7 @@ type Report = {
   reviews: number;
   reviews_after_approval: number;
   trend: { period: string; measured: number; median_minutes?: number }[];
+  firm_assistance_minutes?: number;
 };
 
 const monthLabel = (period: string) => new Date(`${period}-01T00:00:00`).toLocaleDateString(undefined, { month: "short", year: "numeric" });
@@ -107,6 +108,7 @@ export default function Measure() {
             {minutes(report.in_progress.tracked_minutes)}, {minutes(report.in_progress.recorded_minutes)} and {minutes(report.in_progress.assistance_minutes)}. Each
             close's minutes include all three. Tracked activity counts visible, interactive workspace time; off-screen minutes and our team's help are whatever is
             recorded on each close, so these are not total labour.
+            {report.firm_assistance_minutes !== undefined && ` Our team also recorded ${minutes(report.firm_assistance_minutes)} setting up and supporting the firm outside any close, in all months.`}
           </p>
           <p className="note">
             Reviews this month: {report.reviews}, of which {report.reviews_after_approval} came after an earlier version was approved (any reason, not only a
