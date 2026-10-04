@@ -128,7 +128,7 @@ const providers: { name: string; purpose: string; receives: string }[] = [
   { name: "Cloudflare", purpose: "Hosts the website and runs the application; scans client files for malware; can receive email forwarded to Close.", receives: "Every request to the site and the application, including uploaded files and the data they carry." },
   { name: "Neon (on Amazon Web Services, United States)", purpose: "The database.", receives: "Everything Close stores, including original documents." },
   { name: "WorkOS", purpose: "Sign-in, roles and invitations; holds each person’s Google Drive permission.", receives: "Names, email addresses and roles of firm members, and each person’s Google Drive permission. Close uses that permission to download a file a person chooses directly from Google." },
-  { name: "OpenAI", purpose: "AI reading of documents and, if a firm turns them on, written answers.", receives: "What AI and your data describes: document and statement text, policies and assistant questions with sensitive numbers removed, and file names and Work requests as written. Each request asks OpenAI not to store it." },
+  { name: "OpenAI or Anthropic (according to the configured model route)", purpose: "AI reading of documents and, if a firm turns them on, written answers.", receives: "What AI and your data describes: document and statement text, policies and assistant questions with sensitive numbers removed, and file names and Work requests as written. API requests ask the provider not to store task history; private context-machine completions use disposable CLI workspaces." },
   { name: "Resend", purpose: "Sends emails a person has approved, from the firm’s own sender through the firm’s own Resend account: client request emails, and payment reminders to the client’s customers.", receives: "The recipient’s email address and the approved message. A client request email carries a standard notice and the private reply link, never the request’s questions or the client’s figures. A payment reminder carries the approved subject and message, which by default name the invoice, its amount, its due date and the client, and anything the accountant wrote." },
 ];
 
@@ -212,9 +212,9 @@ export function AiData() {
       <section>
         <h2>Our AI provider</h2>
         <p>
-          Close uses OpenAI’s API. OpenAI says data sent to its API is not used to train its models unless the customer opts in; we have not. Each request also asks OpenAI not to store it. OpenAI still keeps abuse-monitoring logs for up to 30 days unless the law requires longer; zero data retention needs OpenAI’s separate approval, which we do not have.
+          Close routes model requests through its configured API or private context machine, using OpenAI Codex or Anthropic Claude. Your firm settings identify the configured provider. The context machine deletes task workspaces after each call; this does not guarantee provider-side zero retention. Provider processing, retention and training terms depend on the provider and account type. Personal subscription credentials are restricted to the configured owner and cannot serve other platform users. Business workspace credentials use their provisioned access profiles.
         </p>
-        <p>A separate research service, using Anthropic’s Claude or OpenAI’s Codex, is deployed alongside Close. No product feature sends it firm or client data; only a health check calls it.</p>
+        <p>When the context machine is selected, it receives the same authorized, redacted model inputs described above. Its separate research endpoint receives data only when a configured workflow explicitly requests research.</p>
         <p>We don’t use your firm’s or your clients’ data to train any model, and one firm’s data is never used in another firm’s work.</p>
       </section>
       <section>

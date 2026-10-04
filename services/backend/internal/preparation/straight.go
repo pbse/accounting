@@ -1,6 +1,7 @@
 package preparation
 
 import (
+	"close.local/backend/internal/llm"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -42,7 +43,7 @@ type Ledger struct {
 // did not use, or could not read, is left for a person, as the confirmation form asks, except the capture, the chart
 // and the procedure copy, which this check reads itself.
 func StraightThrough(p Proposal, invoice string, aliases []string, procedure Procedure, procedureSource Source, currency, entity, period, jobID string, unread bool, ledger *Ledger) (Plan, string) {
-	if p.Engine != "openai" || p.Kind != "prepaid" {
+	if !llm.IsModelEngine(p.Engine) || p.Kind != "prepaid" {
 		return Plan{}, "only an agent-read prepaid invoice can be prepared without confirmation"
 	}
 	if len(p.Questions) > 0 {

@@ -178,3 +178,17 @@ test('personal auth seed is compacted and checked against Worker secret limits b
  assert.match(result.stderr,/5 KB secret limit/);
  assert.ok(!result.stderr.includes(auth.tokens.access_token));
 });
+
+test('completion routing requires an enabled service and explicit subscription token-limit acknowledgement', () => {
+  const disabled = check({ CONTEXT_MACHINE_ENABLED: 'false', LLM_PROVIDER: 'context_machine' });
+  assert.notEqual(disabled.status, 0);
+  assert.match(disabled.stderr, /requires CONTEXT_MACHINE_ENABLED=true/);
+  const subscription = { LLM_PROVIDER: 'context_machine', CODEX_AUTH_MODE: 'subscription', CODEX_ACCESS_TOKEN: 'test-only-token', OPENAI_API_KEY: '' };
+  const denied = check(subscription);
+  assert.notEqual(denied.status, 0);
+  assert.match(denied.stderr, /LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS=true/);
+  assert.equal(check({ ...subscription, LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS: 'true' }).status, 0);
+  const badEffort = check({ LLM_PROVIDER: 'context_machine', LLM_REASONING_EFFORTS: '{"work_command":"none"}' });
+  assert.notEqual(badEffort.status, 0);
+  assert.match(badEffort.stderr, /Invalid context-machine LLM_REASONING_EFFORTS/);
+});

@@ -7,7 +7,7 @@ import { EmailSettings } from "./Email";
 import { FirmEnrollment } from "./Enterprise";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; investigations: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
+type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; investigations: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
 
 // Who on our team supports the firm, and the firm's own records to take away at exit.
 function SupportAndExit() {
@@ -183,7 +183,7 @@ function LinkPasscodes() {
 }
 
 // Each reminder still needs a person's approval; the rule says when one is due and how many a request can have.
-// Written answers send a close's saved reads to OpenAI, so they stay off until an administrator turns them on.
+// Written answers send a close's saved reads to the configured provider, so they stay off until an administrator turns them on.
 function WrittenAnswers() {
   const [policy, setPolicy] = useState<Policy>();
   const [reason, setReason] = useState("");
@@ -220,19 +220,19 @@ function WrittenAnswers() {
         {policy.model_answers
           ? "On: when a question in a client close matches none of the assistant's fixed reads, the model writes an answer."
           : "Off: questions in a client close are answered only from the assistant's fixed reads and are never sent."}{" "}
-        When on, the question and that close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft) go to OpenAI, with card, bank and sign-in details removed and a request not to store them. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. Each attempt counts against the firm's daily model limit.
+        When on, the question and that close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft) go to {policy.model_provider}, with card, bank and sign-in details removed. API requests ask not to store task history; context-machine task workspaces are deleted after completion. Provider-side retention depends on the provider and account type. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. Each attempt counts against the firm's daily model limit.
       </p>
       <p>
         {policy.firm_answers
           ? "Firm-wide answers are on: a question asked outside a client close that matches none of the fixed reads is also answered by the model."
           : "Firm-wide answers are off: questions asked outside a client close are never sent."}{" "}
-        When on, the question and the member's own lists of what needs a person today, the review queue and blocked work, across the clients they can open, go to OpenAI under the same removals and checks. The answer is shown once and never kept in the conversation.
+        When on, the question and the member's own lists of what needs a person today, the review queue and blocked work, across the clients they can open, go to {policy.model_provider} under the same removals and checks. The answer is shown once and never kept in the conversation.
       </p>
       <p>
         {policy.investigations
           ? "Investigations are on: before writing a close answer, the model may first read that close's own records through the assistant's read-only tools."
           : "Investigations are off: a written answer rests only on the close's saved status, blockers, tie-out, changes and exceptions."}{" "}
-        When on, the model may make up to six reads of this close (a document's text, a draft, the tie-out, changes, exceptions, a search), each made with your own permissions, redacted the same way and sent to OpenAI unstored; each read counts against the firm's daily model limit, the answer lists what was read, and the reads are kept with the attempt's record. It reads only; it never changes, approves, sends or posts anything. Written answers must be on.
+        When on, the model may make up to six reads of this close (a document's text, a draft, the tie-out, changes, exceptions, a search), each made with your own permissions, redacted the same way and sent to {policy.model_provider} under the same task-history and provider-retention policy; each read counts against the firm's daily model limit, the answer lists what was read, and the reads are kept with the attempt's record. It reads only; it never changes, approves, sends or posts anything. Written answers must be on.
       </p>
       {policy.can_manage_model_answers ? (
         <>

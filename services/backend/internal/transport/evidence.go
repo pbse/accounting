@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"close.local/backend/internal/llm"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -386,7 +387,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Import this prior schedule from its reading on the Work page.")
 				return
 			}
-			if proposal.Engine == "openai" {
+			if llm.IsModelEngine(proposal.Engine) {
 				var schedule struct {
 					Schedule string `json:"schedule"`
 				}
@@ -427,7 +428,7 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			for _, s := range sources {
-				if (s.Role == "client_reply" || (proposal.Engine == "openai" && s.Role == "support")) && !slices.ContainsFunc(p.Sources, func(selected preparation.Source) bool { return selected.ID == s.ID }) {
+				if (s.Role == "client_reply" || (llm.IsModelEngine(proposal.Engine) && s.Role == "support")) && !slices.ContainsFunc(p.Sources, func(selected preparation.Source) bool { return selected.ID == s.ID }) {
 					p.Sources = append(p.Sources, s.Source)
 				}
 			}
@@ -592,7 +593,7 @@ func addEvidence(ctx context.Context, tx *sql.Tx, closeID, name string, body []b
 		jobID, err = preparation.StartIntake(ctx, tx, closeID, id, auth.Actor(ctx).Subject)
 	}
 	if err == nil && added && purpose == "work" {
-		_, err = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.id::text<>$2 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai' AND (jsonb_array_length(COALESCE(i.proposal->'questions','[]'))>0 OR EXISTS(SELECT 1 FROM jsonb_array_elements(i.proposal->'facts') f WHERE COALESCE(f->>'question','')<>''))`, closeID, jobID)
+		_, err = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.id::text<>$2 AND j.state='needs_confirmation' AND i.proposal->>'engine' IN ('openai','context_machine') AND (jsonb_array_length(COALESCE(i.proposal->'questions','[]'))>0 OR EXISTS(SELECT 1 FROM jsonb_array_elements(i.proposal->'facts') f WHERE COALESCE(f->>'question','')<>''))`, closeID, jobID)
 	}
 	if err != nil {
 		return "", "", "", jobRefusal(err, "Upload could not be confirmed. Retry the same file safely.")

@@ -25,6 +25,9 @@ var ErrModelLimit = errors.New("The firm's daily model call limit is reached; it
 func ReserveModelCalls(ctx context.Context, q interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, org string, n int) error {
+	if !llm.Allows(ctx, org) {
+		return llm.ErrUnavailable
+	}
 	err := q.QueryRowContext(ctx, `INSERT INTO model_calls AS m(organization_id,day,calls) SELECT id,(now() AT TIME ZONE 'UTC')::date,$2 FROM organizations WHERE id=$1 AND $2<=max_model_calls_per_day
  ON CONFLICT(organization_id,day) DO UPDATE SET calls=m.calls+$2 WHERE m.calls+$2<=(SELECT max_model_calls_per_day FROM organizations WHERE id=m.organization_id) RETURNING calls`, org, n).Scan(new(int))
 	if err == sql.ErrNoRows {
@@ -89,7 +92,7 @@ func selectEvidence(ctx context.Context, primary string, sources []IntakeSource)
 		return sources, nil
 	}
 	if llm.Model(ctx, "evidence_selection") == "" {
-		return nil, fmt.Errorf("Configure OpenAI before selecting evidence from a large close.")
+		return nil, fmt.Errorf("Configure the model before selecting evidence from a large close.")
 	}
 	metadata := make([]map[string]string, 0, len(sources))
 	for _, s := range sources {
@@ -189,7 +192,7 @@ type agentResult struct {
 // CurrentProposalSources binds both relevant evidence and the inventory the
 // agent inspected. Newly available evidence cannot bypass another review pass.
 func CurrentProposalSources(ctx context.Context, tx *sql.Tx, closeID, jobID string, p Proposal) ([]IntakeSource, error) {
-	if p.Engine != "openai" {
+	if !llm.IsModelEngine(p.Engine) {
 		return IntakeSources(ctx, tx, jobID)
 	}
 	inventory, digest, err := AgentInventory(ctx, tx, closeID, jobID)
@@ -303,7 +306,7 @@ func interpret(ctx context.Context, entity, period, currency, primary string, so
 	}
 	var result agentResult
 	if Strict([]byte(response.Text), &result) != nil {
-		return p, fmt.Errorf("OpenAI returned an invalid proposal. No facts were accepted.")
+		return p, fmt.Errorf("The model returned an invalid proposal. No facts were accepted.")
 	}
 	schedule := false
 	for _, s := range result.Sources {
@@ -316,7 +319,7 @@ func interpret(ctx context.Context, entity, period, currency, primary string, so
 		p.Questions = []string{"A prior accountant's schedule is read on the client's opening month, its first close in the firm. Upload it there."}
 	}
 	if err == nil {
-		p.Engine = "openai"
+		p.Engine = llm.Engine(ctx, "preparation")
 		p.Model = llm.Model(ctx, "preparation")
 		p.ResponseID = response.ID
 		p.InputTokens = response.Usage.Input
@@ -650,10 +653,10 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	defer tx.Rollback()
-	var id, closeID, primary, org, entity, period string
+	var id, closeID, primary, org, entity, period, actor string
 	var revision, attempts int
 	var checkpoint []byte
-	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text,i.source_id::text,i.revision,i.agent_attempts,i.agent_checkpoint FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE (j.state='waiting_evidence' OR (j.state='interpreting' AND i.agent_started_at<now()-interval '2 minutes')) AND e.extraction_state IN ('ready','failed') AND (i.agent_retry_at IS NULL OR i.agent_retry_at<=now()) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j,i SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &primary, &revision, &attempts, &checkpoint)
+	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text,i.source_id::text,i.revision,i.agent_attempts,i.agent_checkpoint,j.created_by FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE (j.state='waiting_evidence' OR (j.state='interpreting' AND i.agent_started_at<now()-interval '2 minutes')) AND e.extraction_state IN ('ready','failed') AND (i.agent_retry_at IS NULL OR i.agent_retry_at<=now()) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j,i SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &primary, &revision, &attempts, &checkpoint, &actor)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -717,6 +720,13 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		if !reusable && needsSelection(sources) {
 			calls = 2
 		}
+	}
+	ctx = llm.WithIdentity(ctx, org, actor)
+	if calls > 0 && !llm.Allows(ctx, org) {
+		if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='failed',error='The configured model route is not authorized for this job creator.' WHERE id=$1`, id); err != nil {
+			return false, err
+		}
+		return true, tx.Commit()
 	}
 	if calls > 0 {
 		if err = ReserveModelCalls(ctx, tx, org, calls); errors.Is(err, ErrModelLimit) {
@@ -808,7 +818,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		// The procedure, the capture and the aliases are read here, in the finishing transaction, and only for a proposal that could qualify.
 		var plan Plan
 		reason := "only an agent-read prepaid invoice with no open questions can be prepared without confirmation"
-		if proposal.Kind == "prepaid" && proposal.Engine == "openai" && len(proposal.Questions) == 0 && len(proposal.Lines) == 0 {
+		if proposal.Kind == "prepaid" && llm.IsModelEngine(proposal.Engine) && len(proposal.Questions) == 0 && len(proposal.Lines) == 0 {
 			procedure, e := CurrentProcedure(persist, finish, closeID, "prepaid")
 			if e != nil && e != sql.ErrNoRows {
 				return true, e
@@ -893,10 +903,10 @@ func Replay(ctx context.Context, db *sql.DB, closeID, jobID string) (Proposal, e
 		return Proposal{}, err
 	}
 	defer tx.Rollback()
-	var primary, entity, period string
+	var primary, entity, period, org, actor string
 	var opening bool
 	var raw, checkpoint []byte
-	if err = tx.QueryRowContext(ctx, `SELECT i.source_id::text,i.proposal,i.agent_checkpoint,c.entity,c.period,c.takeover FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE i.job_id::text=$1 AND j.close_id::text=$2 AND i.confirmed_by IS NOT NULL AND i.proposal->>'engine'='openai'`, jobID, closeID).Scan(&primary, &raw, &checkpoint, &entity, &period, &opening); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT i.source_id::text,i.proposal,i.agent_checkpoint,c.entity,c.period,c.takeover,c.organization_id,j.created_by FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE i.job_id::text=$1 AND j.close_id::text=$2 AND i.confirmed_by IS NOT NULL AND i.proposal->>'engine' IN ('openai','context_machine')`, jobID, closeID).Scan(&primary, &raw, &checkpoint, &entity, &period, &opening, &org, &actor); err != nil {
 		return Proposal{}, fmt.Errorf("This document has no confirmed model reading to replay.")
 	}
 	var original Proposal
@@ -921,6 +931,9 @@ func Replay(ctx context.Context, db *sql.DB, closeID, jobID string) (Proposal, e
 		return Proposal{}, fmt.Errorf("The evidence the agent originally selected is not recorded; not replayed.")
 	}
 	tx.Rollback()
+	if !llm.HasIdentity(ctx) {
+		ctx = llm.WithIdentity(ctx, org, actor)
+	}
 	p, err := interpret(ctx, entity, period, profile.Currency, primary, selected, opening)
 	if err != nil {
 		return Proposal{}, err

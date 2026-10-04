@@ -3078,3 +3078,14 @@ Browser check, with the API and the firm app running locally on a fresh PostgreS
 Review: the first Codex pass (gpt-6-sol, high) found nothing.
 
 Verified: `npm run check`, `npm test` (27 pass), `npm run build` and `npm run check:layout` after a clean `npm ci`.
+
+
+## Configurable accounting LLM routing — 2026-10-04 (B04/B12)
+
+All eight accounting purposes can select direct API or private context-machine completion through `LLM_PROVIDER`. Completion runs use a restricted native CLI, one provider call, no executable CLI tools, structured output and caller-validated tool proposals. Model-origin confirmation, inventory, source refresh, procedure, replay and tracking checks cover both historical `openai` and new `context_machine` provenance. Trusted HTTP/job identities and pre-reservation eligibility keep unconfigured firms and users from spending budget. Busy completions wait only within the caller deadline; incomplete/refused provider streams fail closed before returning text. Scheduled replay selection filters configured firms and creators before all batch limits, with a local-database regression covering 21 earlier-sorting unconfigured firms and newer foreign-creator readings.
+
+Local validation used disposable PostgreSQL databases at 127.0.0.1:5434, never a Neon branch. Gateway/runtime/preparation/QuickBooks race tests, TypeScript checks and 28 Node tests passed. Both pinned CLI binaries passed 33 fake-provider cases: 28 existing research/tool cases plus five completion cases covering Codex API/static/managed ChatGPT and Claude API/subscription. PDF/OCR tests ran in the existing application image because host Poppler/Tesseract were absent. The production Worker dry run built its real container image and bundled successfully; deployment workflow YAML and Compose configuration parsed successfully. The full backend suite passed with the two host PDF cases run separately in the application image; the full transport suite passed in that image against the fresh database migrated through 122.
+
+Review: Claude Opus 5.5 at medium effort reviewed the complete update, then verified the fixes. Findings corrected Codex string-delta parsing, numeric precision, replay concurrency/budget eligibility and scheduled QuickBooks provenance filtering; the last pass found no actionable issues. No dependencies or CI jobs were added.
+
+No production provider credentials were installed and no paid inference occurred. Live entitlement, cold-start deadlines, output budgets/quality and provider/account consent remain activation gates. Production stays in standby until credentials and the owner read profile are provisioned; a healthy app readiness check while research is disabled does not verify an active context machine.

@@ -3,14 +3,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
+const provider = process.env.LLM_PROVIDER || "api";
+if (!["api", "context_machine"].includes(provider)) throw new Error("LLM_PROVIDER must be api or context_machine");
+const uncapped = process.env.LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS || "false";
+if (!["true", "false"].includes(uncapped)) throw new Error("LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS must be true or false");
 const enabled = process.env.CONTEXT_MACHINE_ENABLED || "true";
 if (!["true", "false"].includes(enabled)) throw new Error("CONTEXT_MACHINE_ENABLED must be true or false");
+
+if (provider === "context_machine" && enabled !== "true") throw new Error("LLM_PROVIDER=context_machine requires CONTEXT_MACHINE_ENABLED=true");
 
 // Prepare only the disposable deployment checkout and step environment. Saved
 // GitHub secrets/variables are retained so a later enabled deploy can reuse them.
 if (process.argv.includes("--prepare-callers")) {
  const clear = enabled === "false" ? ["CONTEXT_MACHINE_TOKEN", "CONTEXT_MACHINE_MODEL"] : [];
- if (!process.env.OPENAI_API_KEY) clear.push("OPENAI_MODEL", "OPENAI_REASONING_EFFORT", "LLM_MODELS", "LLM_REASONING_EFFORTS");
+ if (!process.env.OPENAI_API_KEY) clear.push("OPENAI_MODEL", "OPENAI_REASONING_EFFORT", ...(provider === "api" ? ["LLM_MODELS", "LLM_REASONING_EFFORTS"] : []));
  if (!process.env.GITHUB_ENV) throw new Error("--prepare-callers requires GITHUB_ENV");
  if (enabled === "false") {
   for (const app of ["edge", "queue"]) {
@@ -36,7 +42,7 @@ if (enabled === "false" && !provisionDisabled) {
 // One required configuration contract for staging and production. Never print values.
 const names = ["CONTEXT_MACHINE_TOKEN", "CONTEXT_MACHINE_DATABASE_URL", "CONTEXT_MACHINE_PROFILES", "CONTEXT_MACHINE_MODEL",
  "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CODEX_MODEL", "CLAUDE_MODEL", "CODEX_ACCESS_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
- "CODEX_AUTH_MODE", "CLAUDE_AUTH_MODE", "CODEX_REASONING_EFFORT", "CLAUDE_REASONING_EFFORT", "CODEX_AUTH_JSON"];
+ "CODEX_AUTH_MODE", "CLAUDE_AUTH_MODE", "CODEX_REASONING_EFFORT", "CLAUDE_REASONING_EFFORT", "CODEX_AUTH_JSON", "LLM_MODELS", "LLM_REASONING_EFFORTS"];
 if ((process.env.CONTEXT_MACHINE_TOKEN || "").length < 32) throw new Error("CONTEXT_MACHINE_TOKEN requires 32 random characters");
 if (enabled === "true") {
 const missing = names.slice(0, 4).filter(name => !process.env[name]);
@@ -87,6 +93,19 @@ let profiles;
 try { profiles = JSON.parse(process.env.CONTEXT_MACHINE_PROFILES); } catch { throw new Error("Invalid CONTEXT_MACHINE_PROFILES JSON"); }
 const codexMode = process.env.CODEX_AUTH_MODE || "auto", claudeMode = process.env.CLAUDE_AUTH_MODE || "auto";
 const personalSelected = codexMode === "chatgpt" || (codexMode === "auto" && personal && !process.env.OPENAI_API_KEY && process.env.CODEX_MODEL) || claudeMode === "subscription" || (claudeMode === "auto" && !process.env.ANTHROPIC_API_KEY && process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.CLAUDE_MODEL);
+if (provider === "context_machine") {
+ const agent = process.env.CONTEXT_MACHINE_MODEL;
+ const mode = process.env[`${agent.toUpperCase()}_AUTH_MODE`] || "auto";
+ const subscription = agent === "codex" && (mode === "subscription" || mode === "chatgpt" || (mode === "auto" && !process.env.OPENAI_API_KEY));
+ if (subscription && uncapped !== "true") throw new Error("Codex subscription completions require LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS=true");
+ const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation"];
+ for (const name of ["LLM_MODELS", "LLM_REASONING_EFFORTS"]) {
+  if (!process.env[name]) continue;
+  let values; try { values=JSON.parse(process.env[name]); } catch { throw new Error(`Invalid ${name}`); }
+  const levels = agent === "codex" ? ["low","medium","high","xhigh","max","ultra"] : ["low","medium","high","xhigh","max"];
+  if (!values || Array.isArray(values) || typeof values !== "object" || Object.entries(values).some(([p,v]) => !purposes.includes(p) || typeof v !== "string" || !v || (name === "LLM_REASONING_EFFORTS" && !levels.includes(v)))) throw new Error(`Invalid context-machine ${name}`);
+ }
+}
 if (personalSelected && (!Array.isArray(profiles) || profiles.length !== 1)) throw new Error("Personal subscriptions require exactly one owner access profile");
 if (!Array.isArray(profiles) || !profiles.length ||
     profiles.some(p => !p || ["organization", "subject", "access_profile"].some(k => typeof p[k] !== "string" || !p[k].trim())) ||
@@ -95,6 +114,8 @@ if (!Array.isArray(profiles) || !profiles.length ||
 
 }
 
+// API policies are not CLI policies; only completion routing applies these overrides.
+if (provider !== "context_machine") { process.env.LLM_MODELS = ""; process.env.LLM_REASONING_EFFORTS = ""; }
 if (!process.argv.includes("--check")) {
   const dir = mkdtempSync(join(tmpdir(), "close-context-machine-"));
   try {

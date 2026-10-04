@@ -9,6 +9,11 @@ import (
 )
 
 func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t *testing.T) {
+	for _, engine := range []string{"openai", "context_machine"} {
+		t.Run(engine, func(t *testing.T) { straightThroughEngineChecks(t, engine) })
+	}
+}
+func straightThroughEngineChecks(t *testing.T, engine string) {
 	fact := func(field, value string) Fact {
 		quote := "Annual premium USD " + value
 		if field == "currency" {
@@ -30,7 +35,7 @@ func TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed(t 
 	billedTo.Candidates[0].Quote = "Bill to: Example"
 	invoiceNumber := optionalFact("invoice_number", "INV-778")
 	invoiceNumber.Candidates[0].Quote = "Invoice INV-778"
-	proposal := Proposal{Kind: "prepaid", Engine: "openai", Sources: []Source{{ID: "1", Digest: "d", Name: "insurance.pdf", Role: "invoice"}},
+	proposal := Proposal{Kind: "prepaid", Engine: engine, Sources: []Source{{ID: "1", Digest: "d", Name: "insurance.pdf", Role: "invoice"}},
 		Facts: []Fact{fact("amount", "1200.00"), fact("service_start", "2026-09-01"), fact("service_end", "2027-08-31"), fact("currency", "USD"), {Field: "expense_account", Label: "expense account"}, {Field: "prepaid_account", Label: "prepaid account"}, {Field: "booked_balance", Label: "booked balance", Optional: true}, vendorFact, billedTo, invoiceNumber}}
 	invoice := "Acme Insurance Co\nInvoice INV-778\nPO-123\nBill to: Example\nAnnual premium USD 1,200.00\nCoverage September 1, 2026 to August 31, 2027\n\nPay online with Stripe"
 	rule := Source{ID: "3", Digest: "rule", Name: "Approved prepaid procedure v7.txt"}

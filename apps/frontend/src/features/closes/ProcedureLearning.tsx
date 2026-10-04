@@ -46,7 +46,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
     try {
       const d=await workspaceRequest(base,{client_entity:scope==="client"?entity:"",kind,method,source_id:fromEdits?"":source,from_edits:fromEdits}) as Draft;
       await load();await choose(d);
-      setMessage(`${d.engine==="openai"?"AI draft":"Local review prompt"} saved as an inactive proposal. Inspect its source and rewrite the instructions before approving an example.`);
+      setMessage(`${["openai", "context_machine"].includes(d.engine)?"AI draft":"Local review prompt"} saved as an inactive proposal. Inspect its source and rewrite the instructions before approving an example.`);
     } catch(e){setError(e instanceof Error?e.message:"Could not draft the rule.");}
     finally{setBusy(false);}
   }
@@ -111,7 +111,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
   return <details onToggle={e=>{if(e.currentTarget.open)void load();}}>
     <summary>Learn a procedure from evidence or reviewer edits</summary>
     <p>A proposal is never policy. Choose a supported method, inspect and edit the draft, approve a current workpaper example, then preview affected clients.</p>
-    <p>When OpenAI is configured, drafting sends the selected policy text (up to 16 KiB) or up to 30 approved field edits to OpenAI. Without it, drafting creates a local review prompt. No draft activates itself.</p>
+    <p>When a model is configured, drafting sends the selected policy text (up to 16 KiB) or up to 30 approved field edits to the configured model provider. Without it, drafting creates a local review prompt. No draft activates itself.</p>
     {error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
     <fieldset disabled={busy}><legend>Start an unapproved rule</legend>
       <form onSubmit={e=>void upload(e)}><label>Upload firm checklist or policy <input name="file" type="file" accept=".txt,.csv,.pdf" required/></label><button>Save policy source</button></form>
@@ -128,7 +128,7 @@ export function ProcedureLearning({closeId,entity,onActivated}:{closeId:string;e
     <ul>{drafts.map(d=><li key={d.id}><button type="button" onClick={()=>void choose(d)}>#{d.id} · {d.client_entity||"Firm default"} · {d.method} · {d.activated_version_id?"activated v"+d.activated_version_id:"inactive"}</button></li>)}</ul>
     {selected&&<section>
       <h4>Proposal #{selected.id}</h4>
-      <p>{selected.engine==="openai"?`AI draft · ${selected.model}`:"Local review prompt"} · {selected.activated_version_id?"activated after accountant approval":"inactive until accountant approval"}</p>
+      <p>{["openai", "context_machine"].includes(selected.engine)?`AI draft · ${selected.model}`:"Local review prompt"} · {selected.activated_version_id?"activated after accountant approval":"inactive until accountant approval"}</p>
       <p>Source: {selected.source_id?<><a href={"/dashboard/closes/"+selected.source_close_id}>Document #{selected.source_id} in its close</a> <button type="button" onClick={()=>void inspectSource()}>Inspect extracted source</button></>:<>Reviewer drafts {selected.source_edits.map(edit=><a key={edit.id} href={"/dashboard/closes/"+edit.close_id}>#{edit.id} </a>)}</>}. {selected.source_quote&&<>Cited passage: “{selected.source_quote}”</>}</p>
       {sourceText&&<pre className="scroll-text">{sourceText}</pre>}
       <p>Method boundary: {selected.method}. {selected.example_count} approved example(s).</p>

@@ -441,7 +441,7 @@ func captureFirstPeriod(ctx context.Context, db *sql.DB, job syncClaim, environm
 	if !first {
 		return tx.Commit()
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai'`, job.closeID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.state='needs_confirmation' AND i.proposal->>'engine' IN ('openai','context_machine')`, job.closeID); err != nil {
 		return err
 	}
 	return tx.Commit()

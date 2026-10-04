@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/llm"
 )
 
 func organization(r *http.Request) string {
@@ -79,6 +80,6 @@ func organizationBoundary(db *sql.DB, next http.Handler) http.Handler {
 				return
 			}
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(llm.WithIdentity(r.Context(), org, subject(r))))
 	})
 }

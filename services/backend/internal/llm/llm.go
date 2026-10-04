@@ -29,6 +29,8 @@ type route struct {
 	URL      string
 	Token    string
 	Effort   string
+	Agent    string
+	Uncapped bool
 }
 
 // Client owns immutable purpose routing configured at application startup.
@@ -37,6 +39,7 @@ type route struct {
 type Client struct {
 	http             *http.Client
 	routes           map[string]route
+	profiles         []Scope
 	readinessMu      sync.Mutex
 	readinessExpires time.Time
 	readinessErr     error
@@ -53,21 +56,23 @@ type Request struct {
 	Tools             []Tool
 	ToolChoice        string
 	ParallelToolCalls bool
-	// Per-call token ceiling unless research explicitly allows an uncapped transport.
+	// Per-call token ceiling unless the configured route explicitly permits uncapped output.
 	MaxOutputTokens  int
 	MaxResponseBytes int64
 	// MaxModelCalls bounds the agent's internal loop. The caller reserves this
 	// many calls before dispatch; the service must enforce it.
 	MaxModelCalls int
-	// Research-only opt-in for subscription transports without a provider-side
-	// output-token ceiling. Call count, deadline and byte limits still apply.
+	// Research opt-in for subscription transports without a provider-side
+	// output-token ceiling. Accounting completions use trusted route configuration.
+	// Call count, deadline and byte limits still apply.
 	AllowUncappedOutputTokens bool
 	// OnText receives provisional deltas. A successful return is still required
 	// before treating the result as complete. Returning false cancels the call.
-	OnText func(string) bool
+	OnText func(string) bool `json:"-"`
 	// OnProgress receives provisional research progress, never executable actions.
-	OnProgress func(string) bool
-	// Scope is required for a context machine. It identifies a pre-provisioned,
+	OnProgress func(string) bool `json:"-"`
+	// Scope is required for research; completions derive it from trusted identity.
+	// It identifies a pre-provisioned,
 	// read-only access profile; it does not itself grant database permissions.
 	Scope *Scope
 }
@@ -164,7 +169,11 @@ func (c *Client) Generate(ctx context.Context, in Request) (Response, error) {
 	case OpenAI:
 		result, err = c.openAI(ctx, route, in)
 	case ContextMachine:
-		result, err = c.contextMachine(ctx, route, in)
+		if in.Purpose == "research" {
+			result, err = c.contextMachine(ctx, route, in)
+		} else {
+			result, err = c.completion(ctx, route, in)
+		}
 	default:
 		return Response{}, errors.New("unsupported model provider")
 	}
@@ -226,7 +235,7 @@ func boundedRead(r io.Reader, limit int64) ([]byte, error) {
 func validEndpoint(endpoint string) bool {
 	// This exact host/path is intercepted by Cloudflare's outbound service binding.
 	// No configurable HTTP hostname or public-network fallback is accepted.
-	if endpoint == "http://context-machine.internal/v1/run" {
+	if endpoint == "http://context-machine.internal/v1/run" || endpoint == "http://context-machine.internal/v1/complete" {
 		return true
 	}
 	u, err := url.Parse(endpoint)

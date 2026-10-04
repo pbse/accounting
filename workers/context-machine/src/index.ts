@@ -20,6 +20,8 @@ interface Env {
   CODEX_AUTH_JSON?: string;
   CLAUDE_CODE_OAUTH_TOKEN?: string;
   CONTEXT_MACHINE_MODEL?: string;
+ LLM_MODELS?: string;
+ LLM_REASONING_EFFORTS?: string;
 
 }
 
@@ -46,6 +48,8 @@ export class ContextMachine extends Container<Env> {
     CODEX_AUTH_STATE_URL: "http://context-machine-auth.internal/codex",
     CLAUDE_CODE_OAUTH_TOKEN: this.env.CLAUDE_CODE_OAUTH_TOKEN ?? "",
     CONTEXT_MACHINE_MODEL: this.env.CONTEXT_MACHINE_MODEL ?? "",
+ LLM_MODELS: this.env.LLM_MODELS ?? "",
+ LLM_REASONING_EFFORTS: this.env.LLM_REASONING_EFFORTS ?? "",
 
   };
 }
@@ -59,7 +63,7 @@ ContextMachine.outboundByHost = {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (!["/v1/run", "/readyz"].includes(path)) return new Response(null, { status: 404 });
+    if (!["/v1/run", "/v1/complete", "/readyz"].includes(path)) return new Response(null, { status: 404 });
     if (!env.CONTEXT_MACHINE_TOKEN || env.CONTEXT_MACHINE_TOKEN.length < 32 || request.headers.get("Authorization") !== `Bearer ${env.CONTEXT_MACHINE_TOKEN}`)
       return new Response(null, { status: 401 });
     if (env.CONTEXT_MACHINE_ENABLED !== "true")
