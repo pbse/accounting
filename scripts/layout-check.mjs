@@ -269,22 +269,33 @@ for (const app of apps) {
     await page.close();
   }
 }
-// The public site, as a visitor moves through it: from the home page, each public link must open its page without throwing.
+// The public site, as a visitor moves through it: from the home page, each public link must open its own page, the
+// one a direct load shows (never the 404 page), without throwing.
 {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  const heading = () => page.evaluate(() => document.querySelector("#main h1")?.textContent?.trim() ?? "");
+  const headingOf = async (url) => {
+    await page.goto(url);
+    await page.waitForFunction(() => document.querySelector("#main h1")?.textContent?.trim(), null, { timeout: 10000 }).catch(() => {});
+    return heading();
+  };
+  const missing = await headingOf(`${frontend}/layout-check-missing-page`);
   for (const path of ["/contact", "/privacy", "/subprocessors", "/ai", "/data-retention", "/pilot-terms", "/login"]) {
+    const expected = await headingOf(frontend + path);
+    if (!expected || expected === missing) {
+      failures.push(`public site ${path}: a direct load does not open the page (heading "${expected}")`);
+      continue;
+    }
     await page.goto(`${frontend}/`);
     await page.waitForLoadState("networkidle");
     errors.length = 0;
     try {
       await page.locator(`a[href="${path}"]`).first().click({ timeout: 10000 });
-      await page.waitForURL(`**${path}`, { timeout: 10000 });
-      // The header and footer stay on screen, so the page counts only once its own heading shows.
-      await page.waitForFunction(() => document.querySelector("#main h1")?.textContent?.trim(), null, { timeout: 10000 });
+      await page.waitForFunction((want) => document.querySelector("#main h1")?.textContent?.trim() === want, expected, { timeout: 10000 });
     } catch {
-      failures.push(`public site ${path}: nothing rendered after clicking its link from the home page`);
+      failures.push(`public site ${path}: clicking its link from the home page did not open it (heading "${await heading()}")`);
     }
     if (errors.length) failures.push(`public site ${path}: page errors after clicking its link: ${errors.join(" | ")}`);
     pages += 1;
