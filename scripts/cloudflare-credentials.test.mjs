@@ -37,7 +37,7 @@ test('direct credential installer scopes stdin, excludes secret arguments, and r
   result=spawnSync(process.execPath,['scripts/cloudflare-credentials.mjs','CONTEXT_MACHINE_TOKEN','production'],{input:secret,env,encoding:'utf8'});
   assert.equal(result.status,1);assert.ok(!`${result.stderr}${result.stdout}`.includes(secret));
   assert.throws(() => install('scanner',{CODEX_AUTH_JSON:'bad'},true),/outside/);
-  for (const call of calls.filter(c=>c.input)) {assert.deepEqual(call.args.slice(0,3),['wrangler','secret','bulk']);assert.deepEqual(JSON.parse(call.input),{CONTEXT_MACHINE_TOKEN:secret});}
+  for (const call of calls.filter(c=>c.input)) {assert.deepEqual(call.args.slice(0,4),['--no','wrangler','secret','bulk']);assert.deepEqual(JSON.parse(call.input),{CONTEXT_MACHINE_TOKEN:secret});}
  } finally {rmSync(dir,{recursive:true,force:true});}
 });
 
@@ -69,4 +69,11 @@ console.log(JSON.stringify(['DATABASE_URL','CONTEXT_MACHINE_TOKEN','CONTEXT_MACH
    assert.ok(!call.input.includes('MIGRATION_DATABASE_URL'));
   }
  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test('installer requires an explicit valid environment', () => {
+ for (const args of [[],['CODEX_AUTH_JSON'],['CODEX_AUTH_JSON','prod'],['CODEX_AUTH_JSON','production','extra']]) {
+  const result=spawnSync(process.execPath,['scripts/cloudflare-credentials.mjs',...args],{input:'private-value',encoding:'utf8'});
+  assert.equal(result.status,1);assert.match(result.stderr,/Usage:/);assert.ok(!result.stderr.includes('private-value'));
+ }
 });

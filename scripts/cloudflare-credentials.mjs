@@ -12,7 +12,7 @@ export const credentials = {
 };
 export function wrangler(app, command, production, input) {
  if (!credentials[app]) throw new Error('Unknown credential destination');
- const result = spawnSync('npx', ['wrangler', ...command, '-c', `workers/${app}/wrangler.jsonc`, ...(production ? ['--env','production'] : [])], {
+ const result = spawnSync('npx', ['--no', 'wrangler', ...command, '-c', `workers/${app}/wrangler.jsonc`, ...(production ? ['--env','production'] : [])], {
   input, encoding: 'utf8', env: Object.fromEntries(['PATH','HOME','CI','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','WRANGLER_SEND_METRICS'].map(name => [name,name === 'WRANGLER_SEND_METRICS' ? 'false' : process.env[name] || ''])), maxBuffer: 1024 * 1024,
  });
  // Never relay CLI diagnostics: providers may echo rejected secret values.
