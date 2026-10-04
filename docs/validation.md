@@ -3097,3 +3097,13 @@ The production Worker declares `getkrith.com` as a Cloudflare custom domain (`wo
 Review: Codex (gpt-6-sol, high) pass 1 found `MCP_RESOURCE_URL` and the connector redirect URIs missing from the move; pass 2 found `VITE_API_BASE_URL` missing (both added); pass 3 found nothing.
 
 Verified: `wrangler deploy --dry-run --env production` with the custom domain after `npm ci` and `npm run build`.
+
+## Public pages no longer go blank on a click (2026-10-04)
+
+Reported on getkrith.com: clicking any link on a public page left the page blank until a reload. Reproduced in Edge 154 on production: every link from the home page threw `TypeError: l is not a function` in React's effect clean-up. The public layout scrolled to the top in a braceless effect, `useEffect(() => window.scrollTo(0, 0), [pathname])`; in current Chromium `window.scrollTo` returns a Promise (checked: `[object Promise]`), so the effect handed React a clean-up that is not a function, and React threw on the next page change. A reload never ran that clean-up, so it worked. The effect now returns nothing; the staff console's schema form, the one other effect that returned a value (its `onChange` result), now returns nothing too.
+
+The layout check now moves through the public site as a visitor does: it takes each public page's heading from a direct load (never the 404 page's), then clicks that page's link from the home page and waits for the same heading, failing on page errors. With the old layout it reports the public pages; with this one it passes (77 page views).
+
+Review: Codex (gpt-6-sol, high) pass 1 asked for the destination's own content rather than the layout's header and footer; pass 2 for each page's own heading and never the 404's (both done); pass 3 found nothing.
+
+Verified: `npm run check`, `npm test`, `npm run build` and `npm run check:layout` after a clean `npm ci`; the click-through on a local build opens every public page.
