@@ -142,6 +142,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerRetention(mux, db)
 	registerOperations(mux, db)
 	registerEmail(mux, db)
+	registerEmailSettlement(mux, db)
 	registerEmailReplies(mux, db)
 	registerCoordinator(mux, db)
 	registerCoverage(mux, db)

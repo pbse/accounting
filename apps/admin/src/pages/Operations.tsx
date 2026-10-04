@@ -1,5 +1,8 @@
 import { Link, useSearchParams } from "react-router";
-import { useResource, when } from "../api";
+import { useState } from "react";
+import { post, useResource, when } from "../api";
+import { usePermissions } from "../App";
+import { ActionForm } from "../components/ActionForm";
 import { PageHeader } from "@close/ui/components/PageHeader";
 
 // Filters kept in the URL, so a view can be shared and reloaded; changing one goes back to the first page.
@@ -46,6 +49,28 @@ const age = (minutes: number) => (minutes < 120 ? `${minutes} min` : minutes < 2
 
 type Kind = { kind: string; items: number; firms: number; oldest_minutes: number };
 type Item = { organization: string; firm_name: string; enabled: boolean; kind: string; close_id: string; item_id: string; state: string; age_minutes: number };
+
+// An email whose outcome is unknown, or a send that stopped, settled from the firm's provider records; also while the
+// firm is suspended, as recovery needs.
+function SettleEmail({ item, onDone }: { item: Item; onDone: () => void }) {
+  const [outcome, setOutcome] = useState("accepted");
+  const [provider, setProvider] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const operate = usePermissions().includes("platform:operate");
+  return (
+    <details>
+      <summary>Settle</summary>
+      <ActionForm label="Settle email" allowed={operate} minLength={10} onSubmit={async (reason) => {
+        await post(`/v1/admin/firms/${encodeURIComponent(item.organization)}/emails/${encodeURIComponent(item.item_id)}/settle`, { expected_state: item.state, outcome, provider_id: outcome === "accepted" ? provider.trim() : "", evidence: evidence.trim(), reason });
+        onDone();
+      }}>
+        <label>Outcome<select value={outcome} onChange={(e) => setOutcome(e.target.value)}><option value="accepted">Accepted: the provider has it</option>{item.state === "unknown" && <option value="failed">Failed: the provider has no such email</option>}</select></label>
+        <label>Provider message ID<input value={provider} maxLength={200} onChange={(e) => setProvider(e.target.value)} /></label>
+        <label>What the provider's records show<textarea value={evidence} minLength={5} maxLength={2000} required onChange={(e) => setEvidence(e.target.value)} /></label>
+      </ActionForm>
+    </details>
+  );
+}
 
 export function Jobs() {
   const f = useFilters(["kind", "firm"]);
@@ -96,7 +121,7 @@ export function Jobs() {
                       <td><Link to={`/firms/${encodeURIComponent(i.organization)}`}>{i.firm_name}</Link>{!i.enabled && <small> suspended</small>}</td>
                       <td>{i.kind.replaceAll("_", " ")}</td>
                       <td>{i.close_id}</td>
-                      <td>{i.item_id}</td>
+                      <td>{i.item_id}{i.kind === "email" && <SettleEmail item={i} onDone={jobs.reload} />}</td>
                       <td>{i.state}</td>
                       <td>{age(i.age_minutes)}</td>
                     </tr>

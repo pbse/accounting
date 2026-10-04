@@ -1504,7 +1504,7 @@ function WorkDetails({
                 To: {q.recipient} · approved by {q.approved_by}
               </p>
               <pre>{q.body}</pre>
-              {!!q.emails?.length && <EmailHistory emails={q.emails} />}
+              {!!q.emails?.length && <EmailHistory emails={q.emails} closeId={item.close_id} />}
               {q.delivery_reference && (
                 <p>Delivery record: {q.delivery_reference}</p>
               )}
