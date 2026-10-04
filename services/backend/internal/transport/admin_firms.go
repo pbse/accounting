@@ -23,13 +23,16 @@ func registerAdminFirms(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("GET /v1/admin/firms/{id}/audit", route(platformRead, adminFirmAudit))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/suspend", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminFirmEnabled(w, r, db, false) }))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/resume", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminFirmEnabled(w, r, db, true) }))
-	mux.HandleFunc("POST /v1/admin/firms/{id}/members/{subject}/revoke", route(platformOperate, adminRevokeMember))
+	mux.HandleFunc("POST /v1/admin/firms/{id}/members/{subject}/revoke", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminMemberAccess(w, r, db, false) }))
+	mux.HandleFunc("POST /v1/admin/firms/{id}/members/{subject}/restore", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminMemberAccess(w, r, db, true) }))
+	mux.HandleFunc("POST /v1/admin/firms/{id}/limits", route(platformOperate, adminFirmLimits))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/invitations/{invitation}/revoke", route(platformOperate, adminRevokeInvitation))
 }
 
 var (
 	errInvitationClosed = errors.New("only an open invitation can be revoked")
 	errNotAMember       = errors.New("this person is not a member of the firm")
+	errLimitsChanged    = errors.New("the firm's limits changed")
 )
 
 // adminFirmProblem answers a failed firm read or action.
@@ -51,6 +54,8 @@ func adminFirmProblem(w http.ResponseWriter, err error, what string) {
 		problem(w, 502, err.Error()+". Nothing changed; try again.")
 	case errors.Is(err, errNotAMember):
 		problem(w, 409, "This person is not a member of the firm. Refresh the list.")
+	case errors.Is(err, errLimitsChanged):
+		problem(w, 409, "The firm's limits changed since you loaded them. Refresh and decide again.")
 	default:
 		log.Printf("Admin %s failed: %v", what, err)
 		problem(w, 503, "The "+what+" could not be completed. Refresh and try again.")
@@ -225,7 +230,9 @@ func adminFirmEnabled(w http.ResponseWriter, r *http.Request, db *sql.DB, enable
 
 // adminRevokeMember ends a person's membership in the firm's app, as a firm administrator would: previous_id is the
 // decision the staff member saw, so a change made meanwhile is not overwritten. Their WorkOS membership is untouched.
-func adminRevokeMember(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+// adminMemberAccess revokes a current member or restores a revoked one; it never creates a membership for anyone else.
+// Restoring is how a firm whose administrators were all revoked gets one back, after staff verify the person in WorkOS.
+func adminMemberAccess(w http.ResponseWriter, r *http.Request, db *sql.DB, granted bool) {
 	firm, member := r.PathValue("id"), r.PathValue("subject")
 	var in struct {
 		PreviousID string `json:"previous_id"`
@@ -243,29 +250,80 @@ func adminRevokeMember(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	by := "staff:" + staffOf(r.Context()).Subject
-	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "member.revoke", TargetType: "member", TargetID: member, Reason: strings.TrimSpace(in.Reason), Request: map[string]string{"previous_id": in.PreviousID}},
+	action := map[bool]string{false: "member.revoke", true: "member.restore"}[granted]
+	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: action, TargetType: "member", TargetID: member, Reason: strings.TrimSpace(in.Reason), Request: map[string]string{"previous_id": in.PreviousID}},
 		func(ctx context.Context, tx *sql.Tx) error {
 			// The firm's row lock serializes this with the firm's own member changes.
-			var enabled, granted bool
+			var enabled, now bool
 			if err := tx.QueryRowContext(ctx, `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, firm).Scan(&enabled); err != nil {
 				return err
 			}
-			// Only a current member can be revoked; this route never creates a membership record for anyone else.
-			err := tx.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, firm, member).Scan(&granted)
-			if errors.Is(err, sql.ErrNoRows) || (err == nil && !granted) {
+			err := tx.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, firm, member).Scan(&now)
+			switch {
+			case errors.Is(err, sql.ErrNoRows) || (err == nil && !now && !granted):
 				return errNotAMember
-			}
-			if err != nil {
+			case err != nil:
 				return err
+			case now && granted:
+				return errAlreadyThatWay
 			}
-			_, err = decideMemberAccess(ctx, tx, firm, member, false, in.PreviousID, strings.TrimSpace(in.Reason), by)
+			_, err = decideMemberAccess(ctx, tx, firm, member, granted, in.PreviousID, strings.TrimSpace(in.Reason), by)
 			return err
 		})
 	if err != nil {
-		adminFirmProblem(w, err, "member revoke")
+		adminFirmProblem(w, err, map[bool]string{false: "member revoke", true: "member restore"}[granted])
 		return
 	}
-	jsonReply(w, 200, map[string]bool{"revoked": true})
+	jsonReply(w, 200, map[string]bool{map[bool]string{false: "revoked", true: "restored"}[granted]: true})
+}
+
+// adminFirmLimits sets a firm's capacity: closes, active preparation jobs and model calls per UTC day, within the
+// database's bounds, from the values staff saw.
+func adminFirmLimits(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+	firm := r.PathValue("id")
+	type limits struct {
+		MaxCloses           int `json:"max_closes"`
+		MaxPendingJobs      int `json:"max_pending_jobs"`
+		MaxModelCallsPerDay int `json:"max_model_calls_per_day"`
+	}
+	var in struct {
+		Before limits `json:"before"`
+		After  limits `json:"after"`
+		Reason string `json:"reason"`
+	}
+	if !adminReason(w, r, &in, func() string { return in.Reason }) {
+		return
+	}
+	if a := in.After; a.MaxCloses < 1 || a.MaxCloses > 10000 || a.MaxPendingJobs < 1 || a.MaxPendingJobs > 10000 || a.MaxModelCallsPerDay < 1 || a.MaxModelCallsPerDay > 100000 {
+		problem(w, 422, "Closes and active preparation jobs are 1–10,000 each; model calls are 1–100,000 a day.")
+		return
+	}
+	if in.After == in.Before {
+		problem(w, 409, "These are the firm's limits already. Nothing changed.")
+		return
+	}
+	if err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error { return adminFirmExists(ctx, tx, firm) }); err != nil {
+		adminFirmProblem(w, err, "firm read")
+		return
+	}
+	err := adminAct(r.Context(), db, adminAction{Firm: firm, Action: "firm.limits", TargetType: "firm", TargetID: firm, Reason: strings.TrimSpace(in.Reason), Request: map[string]limits{"before": in.Before, "after": in.After}},
+		func(ctx context.Context, tx *sql.Tx) error {
+			b, a := in.Before, in.After
+			result, err := tx.ExecContext(ctx, `UPDATE organizations SET max_closes=$5,max_pending_jobs=$6,max_model_calls_per_day=$7 WHERE id=$1 AND max_closes=$2 AND max_pending_jobs=$3 AND max_model_calls_per_day=$4`,
+				firm, b.MaxCloses, b.MaxPendingJobs, b.MaxModelCallsPerDay, a.MaxCloses, a.MaxPendingJobs, a.MaxModelCallsPerDay)
+			if err != nil {
+				return err
+			}
+			if n, _ := result.RowsAffected(); n == 0 {
+				return errLimitsChanged
+			}
+			return nil
+		})
+	if err != nil {
+		adminFirmProblem(w, err, "limit change")
+		return
+	}
+	jsonReply(w, 200, map[string]bool{"changed": true})
 }
 
 // adminRevokeInvitation revokes an open invitation in the app, then in WorkOS once that committed (best effort: the answer
