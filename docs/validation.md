@@ -3107,3 +3107,11 @@ The layout check now moves through the public site as a visitor does: it takes e
 Review: Codex (gpt-6-sol, high) pass 1 asked for the destination's own content rather than the layout's header and footer; pass 2 for each page's own heading and never the 404's (both done); pass 3 found nothing.
 
 Verified: `npm run check`, `npm test`, `npm run build` and `npm run check:layout` after a clean `npm ci`; the click-through on a local build opens every public page.
+
+## Production's workers.dev address turned off (2026-10-04)
+
+Production moved to `https://getkrith.com`: `PRODUCTION_URL` switched, the WorkOS redirect, sign-out and web-origin entries added for it (read back from WorkOS), and a browser check showed sign-in hands WorkOS `redirect_uri=https://getkrith.com/login` and WorkOS shows its sign-in form. `workers_dev` is now `false` for `close-production`, so the old address cannot bypass the zone's WAF and redirect rules. Before turning it off, nothing outside pointed at it: Resend had no webhooks, and production had no email connections and no open client request links (counted, nothing read).
+
+Review: Codex (gpt-6-sol, high) pass 1 asked to account for webhooks and request links already sent on the old host (checked and recorded in the move's steps); pass 2 found nothing.
+
+Verified: `wrangler deploy --dry-run --env production` in CI.
