@@ -154,6 +154,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerOpenItems(mux, db)
 	registerCollections(mux, db)
 	registerOpeningBaseline(mux, db)
+	registerTakeoverSetup(mux, db)
 	registerCashPlan(mux, db)
 	registerMatching(mux, db)
 	registerIndexRates(mux, db)
@@ -284,7 +285,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			}
 			if err == nil && earlier != "" {
 				var moved sql.Result
-				if moved, err = tx.ExecContext(r.Context(), `UPDATE client_closes c SET takeover=false WHERE c.id::text=$1 AND NOT EXISTS(SELECT 1 FROM opening_baselines b WHERE b.close_id=c.id)`, earlier); err == nil {
+				if moved, err = tx.ExecContext(r.Context(), `UPDATE client_closes c SET takeover=false WHERE c.id::text=$1 AND NOT EXISTS(SELECT 1 FROM opening_baselines b WHERE b.close_id=c.id) AND NOT EXISTS(SELECT 1 FROM takeover_setups s WHERE s.close_id=c.id)`, earlier); err == nil {
 					n, _ := moved.RowsAffected()
 					first = n > 0
 				}
