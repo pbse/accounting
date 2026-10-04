@@ -1,6 +1,6 @@
 # Management reports
 
-B07 in the [agent-first build plan](agent-first-build-plan.md). This page records what is built; the historical cash-flow statement is still to come and is not claimed here.
+B07 in the [agent-first build plan](agent-first-build-plan.md). This page records what is built.
 
 ## Management pack
 
@@ -32,10 +32,10 @@ CSV files exported with a byte-order mark are read. Before this change, a ledger
 
 ## Publication
 
-A reviewer (`workpapers:review`) publishes the pack from the **Publication** section under it (B07; migration 114). Publishing is refused unless the capture is current, the pack is complete and the sign-off of every month shown stands; the reviewer writes the commentary (what moved and why, as verified) and confirms the figures they reviewed. The figures digest they reviewed must still be the pack's, or they are asked to review it again.
+A reviewer (`workpapers:review`) publishes the pack from the **Publication** section under it (B07; migration 114). Publishing is refused unless the capture is current, the pack is complete (every account classified, every total reconciled, and a reconciled cash-flow statement: a pack without one, including every Xero pack until Xero's statement is read, is not complete) and the sign-off of every month shown stands; the reviewer writes the commentary (what moved and why, as verified) and confirms the figures they reviewed. The figures digest they reviewed must still be the pack's, or they are asked to review it again.
 
 - **Frozen.** The published version keeps the whole pack and its commentary; rows are only ever added. PDF and CSV exports are rendered from that version, so they always agree with what was published, however the books change later.
-- **Corrections are new versions.** When the books change after publication (any figure, not just a later capture time), the current version shows *Books changed: needs a correction*. A correction needs a new sign-off and a reason; it names the version it supersedes, which stays readable and exportable. An unchanged pack is not published twice.
+- **Corrections are new versions.** When the books change after publication (any figure, not just a later capture time), the current version shows *Books changed: needs a correction*. When the figures are unchanged but the close's sign-off no longer stands (it was reopened, or a newer capture is not yet signed), it shows *Sign-off no longer stands*: the published version is kept as it was and is current again once the same figures are signed off. A correction needs a new sign-off and a reason; it names the version it supersedes, which stays readable and exportable. An unchanged pack is not published twice.
 - **Acknowledgment is separate.** Anyone who can open the close can acknowledge a version; each acknowledgment records who and when, apart from the publication itself. Sending or notifying recipients is not part of publication.
 
 ## Executive access

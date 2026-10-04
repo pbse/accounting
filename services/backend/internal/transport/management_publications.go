@@ -49,7 +49,8 @@ type acknowledgment struct {
 
 // publications lists a close's published packs, newest first; the newest is current unless the books changed since
 // (or unverified while the live figures cannot be read), and every earlier one is superseded.
-func publications(r *http.Request, tx *sql.Tx, closeID, current string) ([]publication, error) {
+// current is the live figures' digest; stands is whether the close's sign-off still stands over them.
+func publications(r *http.Request, tx *sql.Tx, closeID, current string, stands bool) ([]publication, error) {
 	rows, err := tx.QueryContext(r.Context(), `SELECT p.id::text,p.version,p.digest,p.commentary,p.supersedes::text,p.reason,p.published_by,p.published_at,p.pack,
  COALESCE((SELECT jsonb_agg(jsonb_build_object('subject',a.subject,'at',a.acknowledged_at) ORDER BY a.acknowledged_at) FROM management_acknowledgments a WHERE a.publication_id=p.id),'[]')
  FROM management_publications p WHERE p.close_id::text=$1 ORDER BY p.version DESC`, closeID)
@@ -74,6 +75,8 @@ func publications(r *http.Request, tx *sql.Tx, closeID, current string) ([]publi
 			p.State = "unverified"
 		case current != p.Digest:
 			p.State = "needs_correction"
+		case !stands:
+			p.State = "signoff_lapsed"
 		default:
 			p.State = "current"
 		}
@@ -100,7 +103,7 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		current, _ := pack["digest"].(string)
-		list, err := publications(r, tx, r.PathValue("id"), current)
+		list, err := publications(r, tx, r.PathValue("id"), current, pack["overall"] == "signed_off" && pack["stale"] != true)
 		if err != nil {
 			problem(w, 503, "Publications unavailable.")
 			return
@@ -185,7 +188,7 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "The pack changed since you reviewed it. Review it again before publishing.")
 			return
 		case pack["overall"] != "signed_off" || pack["stale"] == true || pack["complete"] != true:
-			problem(w, 409, "Only a complete pack from a current capture whose sign-off stands for every month shown can be published.")
+			problem(w, 409, "Only a complete pack (every account classified, every total reconciled and a reconciled cash-flow statement) from a current capture whose sign-off stands for every month shown can be published.")
 			return
 		}
 		var latest sql.NullString
