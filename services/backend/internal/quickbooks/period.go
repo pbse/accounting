@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -625,4 +626,109 @@ func ReadSnapshot(ctx context.Context, env, realm, token, company, period string
 		return nil, nil, fmt.Errorf("Could not prepare the ledger evidence index.")
 	}
 	return snapshot, evidence, nil
+}
+
+// LedgerLines is one bank account's month from the captured General Ledger as a reconciliation's ledger side: its rows as
+// id,date,amount, and its opening and closing balances. It is refused unless every row is dated in the month and the
+// ledger proves itself against the Trial Balance: the beginning balance plus the rows equals the account's Trial
+// Balance balance, and so does the last running balance. Otherwise the ledger is exported by hand.
+func LedgerLines(accounts, generalLedger, trialBalance json.RawMessage, accountID, period string) (csv, opening, closing string, err error) {
+	refuse := func(why string) (string, string, string, error) {
+		return "", "", "", fmt.Errorf("The captured General Ledger cannot stand in for the ledger export: %s. Export the ledger by hand", why)
+	}
+	month, e := time.Parse("2006-01", period)
+	if e != nil {
+		return refuse("the close month is invalid")
+	}
+	currency, balances, e := TrialBalance(accounts, trialBalance)
+	if e != nil {
+		return refuse(e.Error())
+	}
+	var directory []struct {
+		ID          string `json:"Id"`
+		CurrencyRef struct{ Value string }
+	}
+	json.Unmarshal(accounts, &directory)
+	for _, a := range directory {
+		if a.ID == accountID && (currency == "" || a.CurrencyRef.Value != currency) {
+			return refuse("the account's currency is not shown to be the books' currency")
+		}
+	}
+	var tb *big.Rat
+	for _, b := range balances {
+		if b.ID == accountID && b.AccountType == "Bank" {
+			tb = b.Net
+		}
+	}
+	if tb == nil {
+		return refuse("the account is not a bank account in this capture's Trial Balance")
+	}
+	var root struct {
+		Columns struct{ Column []struct{ ColTitle string } }
+		Rows    struct{ Row []json.RawMessage }
+	}
+	if json.Unmarshal(generalLedger, &root) != nil {
+		return refuse("the report is invalid")
+	}
+	at := map[string]int{}
+	for i, column := range root.Columns.Column {
+		at[strings.ToLower(strings.TrimSpace(column.ColTitle))] = i + 1
+	}
+	date, amount, running := at["date"]-1, at["amount"]-1, at["balance"]-1
+	if date < 0 || amount < 0 || running < 0 {
+		return refuse("it has no Date, Amount and Balance columns")
+	}
+	parse := func(v string) (*big.Rat, bool) {
+		return new(big.Rat).SetString(strings.ReplaceAll(strings.TrimSpace(v), ",", ""))
+	}
+	var begin, last *big.Rat
+	sum, lines := new(big.Rat), []string{"id,date,amount"}
+	accountColumn := len(root.Columns.Column) > 0 && strings.Contains(strings.ToLower(root.Columns.Column[0].ColTitle), "account")
+	walkErr := walkLedger(root.Rows.Row, "reports.GeneralLedger.Rows", "", accountColumn, func(_, account string, _ json.RawMessage, row ledgerRow) error {
+		if account != accountID || row.Type != "Data" {
+			return nil
+		}
+		if len(row.ColData) <= max(date, amount, running) {
+			return fmt.Errorf("a row of the account is incomplete")
+		}
+		if slices.ContainsFunc(row.ColData, func(c ledgerCell) bool { return strings.EqualFold(strings.TrimSpace(c.Value), "Beginning Balance") }) {
+			value, ok := parse(row.ColData[running].Value)
+			if !ok {
+				return fmt.Errorf("the beginning balance is unreadable")
+			}
+			begin = value
+			return nil
+		}
+		// A row with no amount (a memo line) moves nothing; any other row must be a readable transaction of the month.
+		if strings.TrimSpace(row.ColData[amount].Value) == "" {
+			return nil
+		}
+		value, ok := parse(row.ColData[amount].Value)
+		balance, readable := parse(row.ColData[running].Value)
+		if !ok || !readable {
+			return fmt.Errorf("a row's amount or running balance is unreadable")
+		}
+		when := strings.TrimSpace(row.ColData[date].Value)
+		on, e := time.Parse("2006-01-02", when)
+		if e != nil || on.Before(month) || !on.Before(month.AddDate(0, 1, 0)) {
+			return fmt.Errorf("a row is dated %q, outside %s", when, period)
+		}
+		last = balance
+		sum.Add(sum, value)
+		lines = append(lines, fmt.Sprintf("GL%d,%s,%s", len(lines), when, value.FloatString(2)))
+		return nil
+	})
+	if walkErr != nil {
+		return refuse(walkErr.Error())
+	}
+	if begin == nil {
+		begin = new(big.Rat)
+	}
+	if new(big.Rat).Add(begin, sum).Cmp(tb) != 0 {
+		return refuse(fmt.Sprintf("its beginning balance %s plus its rows %s is not the Trial Balance balance %s", begin.FloatString(2), sum.FloatString(2), tb.FloatString(2)))
+	}
+	if len(lines) > 1 && (last == nil || last.Cmp(tb) != 0) {
+		return refuse("its last running balance is not the Trial Balance balance")
+	}
+	return strings.Join(lines, "\n") + "\n", begin.FloatString(2), tb.FloatString(2), nil
 }
