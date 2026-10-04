@@ -64,7 +64,13 @@ DO $$ BEGIN
  EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L {attributes}',
                 '{ROLE}', (SELECT value FROM pg_temp.context_machine_password));
 EXCEPTION WHEN OTHERS THEN
- RAISE EXCEPTION 'Reader creation rejected by provider' USING ERRCODE=SQLSTATE;
+ IF SQLSTATE='42501' THEN
+  RAISE EXCEPTION 'permission denied creating reader' USING ERRCODE=SQLSTATE;
+ ELSIF SQLSTATE='42710' THEN
+  RAISE EXCEPTION 'Dedicated role already exists' USING ERRCODE=SQLSTATE;
+ ELSE
+  RAISE EXCEPTION 'Reader creation rejected by provider' USING ERRCODE=SQLSTATE;
+ END IF;
 END $$;
 """
 
