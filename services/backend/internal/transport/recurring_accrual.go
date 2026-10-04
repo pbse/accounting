@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,17 +18,23 @@ import (
 )
 
 type recurringAccrualItem struct {
-	ID          string             `json:"id"`
-	Digest      string             `json:"digest"`
-	ReviewID    string             `json:"review_id"`
-	Amount      string             `json:"amount"`
-	Rule        string             `json:"rule"`
-	AccountID   string             `json:"account_id,omitempty"`
-	AccountName string             `json:"account_name,omitempty"`
-	Location    string             `json:"location,omitempty"`
-	Cells       json.RawMessage    `json:"cells,omitempty"`
-	Blocker     string             `json:"blocker,omitempty"`
-	Paper       accruals.Workpaper `json:"-"`
+	ID          string          `json:"id"`
+	Digest      string          `json:"digest"`
+	ReviewID    string          `json:"review_id"`
+	Amount      string          `json:"amount"`
+	Rule        string          `json:"rule"`
+	AccountID   string          `json:"account_id,omitempty"`
+	AccountName string          `json:"account_name,omitempty"`
+	Location    string          `json:"location,omitempty"`
+	Cells       json.RawMessage `json:"cells,omitempty"`
+	Blocker     string          `json:"blocker,omitempty"`
+	// Defaults for the person's one confirmation: the account's credit balance in this capture's Trial Balance (only
+	// when the balance sits on its credit side), last month's reversal choice, and this month's document when exactly
+	// one the agent read as an accrual shows the rule's amount.
+	BookedBalance     string             `json:"booked_balance,omitempty"`
+	ReverseNextMonth  bool               `json:"reverse_next_month"`
+	SuggestedEvidence string             `json:"suggested_evidence,omitempty"`
+	Paper             accruals.Workpaper `json:"-"`
 }
 
 func recurringAccrualPreview(ctx context.Context, tx *sql.Tx, closeID, org string) (recurringSnapshot, []recurringAccrualItem, string, string, error) {
@@ -56,6 +64,18 @@ func recurringAccrualPreview(ctx context.Context, tx *sql.Tx, closeID, org strin
 			return snapshot, nil, "", "", fmt.Errorf("Invalid period snapshot")
 		}
 		snapshot.Period, snapshot.SourceID = period, payload.SourceID
+	}
+	balances := map[string]*big.Rat{}
+	if snapshot.Active {
+		if _, list, e := quickbooks.TrialBalance(payload.Accounts, payload.Reports["TrialBalance"]); e == nil {
+			for _, b := range list {
+				balances[b.ID] = b.Net
+			}
+		}
+	}
+	docs, err := accrualDocuments(ctx, tx, closeID, payload.SourceID)
+	if err != nil {
+		return snapshot, nil, "", "", err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT w.id::text,w.digest,w.review_id,w.paper,c.id::text FROM workpaper_review_state w JOIN client_closes c ON c.id=w.close_id WHERE c.organization_id=$1 AND lower(c.entity)=lower($2) AND c.period=$3 AND w.kind='accrual' AND w.review_state='approved' AND w.paper->'input'->>'method'=$4 AND NOT EXISTS(SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text) ORDER BY w.id DESC LIMIT 101`, org, entity, previous, accruals.RecurringMethod)
 	if err != nil {
@@ -101,18 +121,99 @@ func recurringAccrualPreview(ctx context.Context, tx *sql.Tx, closeID, org strin
 				_, item.Location, item.Cells, err = quickbooks.TrialBalanceLiability(payload.Accounts, payload.Reports["TrialBalance"], item.AccountID, item.Paper.Input.Currency)
 				if err != nil {
 					item.Blocker = err.Error()
+				} else if net, ok := balances[item.AccountID]; ok && net.Sign() <= 0 {
+					item.BookedBalance = money(new(big.Rat).Neg(net))
 				}
 			}
 		}
+		item.ReverseNextMonth = item.Paper.Input.ReverseNextMonth
 		items = append(items, item)
 	}
 	if err = rows.Err(); err != nil {
 		return snapshot, nil, "", "", err
 	}
+	suggestEvidence(items, docs)
 	if len(items) > 100 {
 		return snapshot, nil, "", "", fmt.Errorf("Recurring accrual preview exceeds 100 papers")
 	}
 	return snapshot, items, entity, previous, nil
+}
+
+// accrualDocument is a current, readable document of the close the agent read as an accrual, with the one amount it
+// shows (cited from the document itself) and the currency it states, if any.
+type accrualDocument struct {
+	id, currency string
+	amount       int64
+}
+
+// accrualDocuments lists those documents; the capture's own evidence, and documents with no amount or several, are not
+// among them.
+func accrualDocuments(ctx context.Context, tx *sql.Tx, closeID, capture string) ([]accrualDocument, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT e.id::text,i.proposal FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id
+ WHERE e.close_id::text=$1 AND e.id::text<>$2 AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind'='accrual'`, closeID, capture)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	parse := func(v string) (int64, error) {
+		return prepaids.Amount(strings.ReplaceAll(strings.TrimSpace(v), ",", ""))
+	}
+	var out []accrualDocument
+	for rows.Next() {
+		var id string
+		var raw []byte
+		var p preparation.Proposal
+		if err = rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal(raw, &p) != nil {
+			continue
+		}
+		doc, amounts, unclear := accrualDocument{id: id}, 0, false
+		for _, f := range p.Facts {
+			switch f.Field {
+			case "amount":
+				amounts++
+				value, e := parse(f.Value)
+				if e == nil && slices.ContainsFunc(f.Candidates, func(c preparation.Candidate) bool {
+					v, e := parse(c.Value)
+					return c.SourceID == id && e == nil && v == value
+				}) {
+					doc.amount = value
+				}
+			case "currency":
+				// Candidates with no resolved value are a currency the document states but the reading left in conflict.
+				doc.currency, unclear = strings.ToUpper(strings.TrimSpace(f.Value)), strings.TrimSpace(f.Value) == "" && len(f.Candidates) > 0
+			}
+		}
+		if amounts == 1 && doc.amount > 0 && !unclear {
+			out = append(out, doc)
+		}
+	}
+	return out, rows.Err()
+}
+
+// suggestEvidence names this month's document for each rule when exactly one document shows the rule's amount in its
+// currency and no other rule has that amount, so one document is never offered for two rules.
+func suggestEvidence(items []recurringAccrualItem, docs []accrualDocument) {
+	rules := map[int64]int{}
+	for _, item := range items {
+		if amount, e := prepaids.Amount(item.Amount); e == nil {
+			rules[amount]++
+		}
+	}
+	for i := range items {
+		amount, e := prepaids.Amount(items[i].Amount)
+		if e != nil || rules[amount] != 1 {
+			continue
+		}
+		matches := slices.DeleteFunc(slices.Clone(docs), func(d accrualDocument) bool {
+			return d.amount != amount || (d.currency != "" && d.currency != items[i].Paper.Input.Currency)
+		})
+		if len(matches) == 1 {
+			items[i].SuggestedEvidence = matches[0].id
+		}
+	}
 }
 
 func registerRecurringAccrual(mux *http.ServeMux, db *sql.DB) {
