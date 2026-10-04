@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -940,4 +941,73 @@ func queueStraightThrough(ctx context.Context, tx *sql.Tx, closeID, jobID, invoi
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET confirmed_by='agent',confirmed_at=now() WHERE job_id=$1`, jobID)
 	return "", err
+}
+
+// ErrInventoryChanged is a proposal whose close no longer holds the evidence it was read from.
+var ErrInventoryChanged = errors.New("Evidence inventory changed. Recheck proposals before confirming.")
+
+// pendingEvidence is SQL for whether the close (a SQL expression for its id) holds current work evidence still being read.
+func pendingEvidence(close string) string {
+	return `EXISTS(SELECT 1 FROM evidence o WHERE o.close_id=` + close + ` AND o.purpose='work' AND o.superseded_by IS NULL AND o.extraction_state NOT IN ('ready','failed'))`
+}
+
+// UnrelatedEvidence is the close's documents that positively are another invoice: another job's own document, fully
+// read, that the agent read as a prepaid invoice (its latest reading, even while that job is read again) whose vendor and
+// invoice number its current text prints and differ from this proposal's, and whose text names neither this vendor nor this invoice number (whole words) and speaks of no credit,
+// cancellation, refund, adjustment, reversal or void. Anything else stays something a person weighs.
+func UnrelatedEvidence(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, closeID, jobID string, p Proposal) (map[string]bool, error) {
+	vendor, number := identity(p)
+	out := map[string]bool{}
+	if vendor == "" || number == "" {
+		return out, nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT e.id::text,COALESCE(e.content,''),i.proposal FROM evidence e JOIN preparation_intakes i ON i.source_id=e.id AND i.job_id::text<>$2
+
+ WHERE e.close_id::text=$1 AND e.purpose='work' AND e.superseded_by IS NULL AND e.extraction_state='ready' AND i.proposal->>'kind'='prepaid' AND i.proposal->>'engine'='openai'`, closeID, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	thisVendor, thisNumber := wholeWord(vendor), wholeWord(number)
+	for rows.Next() {
+		var id, text string
+		var raw []byte
+		var other Proposal
+		if err = rows.Scan(&id, &text, &raw); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal(raw, &other) != nil || strings.TrimSpace(text) == "" || strings.Contains(text, documents.UnreadPage) {
+			continue
+		}
+		lower, normal := strings.ToLower(text), documents.NormalizeEntity(text)
+		v, n := identity(other)
+		if v == "" || n == "" || v == vendor || n == number || !wholeWord(v).MatchString(normal) || !wholeWord(n).MatchString(lower) {
+			continue
+		}
+		if thisVendor.MatchString(normal) || thisNumber.MatchString(lower) ||
+			mentionsAny(strings.ReplaceAll(lower, "credit card", ""), []string{"credit", "cancel", "refund", "adjust", "revers", "void"}) {
+			continue
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// identity is a proposal's normalized vendor and lower-cased invoice number.
+func identity(p Proposal) (vendor, number string) {
+	for _, f := range p.Facts {
+		switch f.Field {
+		case "vendor":
+			vendor = documents.NormalizeEntity(f.Value)
+		case "invoice_number":
+			number = strings.ToLower(strings.TrimSpace(f.Value))
+		}
+	}
+	return vendor, number
+}
+
+func wholeWord(term string) *regexp.Regexp {
+	return regexp.MustCompile(`(^|[^0-9a-z])` + regexp.QuoteMeta(term) + `([^0-9a-z]|$)`)
 }

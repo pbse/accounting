@@ -24,6 +24,9 @@ type boundedOutput struct{ bytes.Buffer }
 
 var markerLike = regexp.MustCompile(`(?m)^--- Page `)
 
+// UnreadPage stands for a PDF page the extractor could not read.
+const UnreadPage = "[No text detected; inspect this page in the original PDF.]"
+
 func (b *boundedOutput) Write(p []byte) (int, error) {
 	if b.Len()+len(p) > 524288 {
 		return 0, fmt.Errorf("extracted text exceeds 512 KiB")
@@ -103,7 +106,7 @@ func Extract(ctx context.Context, original []byte) (string, error) {
 			return r
 		}, text)
 		if strings.TrimSpace(text) == "" {
-			text = "[No text detected; inspect this page in the original PDF.]"
+			text = UnreadPage
 		}
 		// A line in the document shaped like a page marker is indented, so only the extractor marks pages.
 		text = markerLike.ReplaceAllString(text, " $0")
