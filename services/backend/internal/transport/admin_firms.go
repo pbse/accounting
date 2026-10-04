@@ -27,6 +27,7 @@ func registerAdminFirms(mux *http.ServeMux, db *sql.DB, token string) {
 	mux.HandleFunc("POST /v1/admin/firms/{id}/members/{subject}/restore", route(platformOperate, func(w http.ResponseWriter, r *http.Request, db *sql.DB) { adminMemberAccess(w, r, db, true) }))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/limits", route(platformOperate, adminFirmLimits))
 	mux.HandleFunc("POST /v1/admin/firms/{id}/invitations/{invitation}/revoke", route(platformOperate, adminRevokeInvitation))
+	mux.HandleFunc("POST /v1/admin/firms/{id}/emails/{outbox}/settle", route(platformOperate, adminSettleEmail))
 }
 
 var (

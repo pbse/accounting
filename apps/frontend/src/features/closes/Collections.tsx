@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { money, workspaceRequest } from "./workspace";
+import { SettleEmail } from "./Email";
 
 type Invoice = { id: string; label: string; balance: string; currency: string; due: string };
 type Message = {
@@ -10,7 +11,7 @@ type Message = {
   recipient: string;
   subject: string;
   body: string;
-  email: { state: string; delivery: string; error: string } | null;
+  email: { id: string; state: string; delivery: string; error: string } | null;
 };
 type State = {
   authority: { granted: boolean; sender: string; reference: string; recorded_by: string; recorded_at: string } | null;
@@ -144,9 +145,12 @@ export function Collections({ closeId, invoices, refresh }: { closeId: string; i
               <li key={m.id}>
                 <strong>{m.label}</strong> to {m.recipient} · {money(m.amount, m.currency)} ·{" "}
                 {m.email ? (
+                  <>
                   <span className={m.email.delivery === "delivered" ? "status ok" : m.email.state === "cancelled" || ["bounced", "complained", "suppressed", "failed"].includes(m.email.delivery) ? "status danger" : "status info"}>
                     {m.email.state === "cancelled" ? "Not sent: cancelled before sending" : `${m.email.state} · ${m.email.delivery}`}
                   </span>
+                  {m.email.state === "unknown" && <SettleEmail closeId={closeId} emailId={m.email.id} />}
+                  </>
                 ) : (
                   <span className="status warn">Draft</span>
                 )}

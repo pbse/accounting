@@ -290,10 +290,47 @@ export function SendRequestEmail({
   );
 }
 
+// An email whose outcome the app could not know, settled from the provider's own records.
+export function SettleEmail({ closeId, emailId }: { closeId: string; emailId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState("");
+  if (done) return <p role="status">Settled as {done}. Refresh to see it in the history.</p>;
+  const settle = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const outcome = String(form.get("outcome"));
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest(`/${closeId}/email/${encodeURIComponent(emailId)}/settle`, { expected_state: "unknown", outcome, provider_id: outcome === "accepted" ? String(form.get("provider_id") ?? "").trim() : "", evidence: String(form.get("evidence") ?? "").trim() });
+      setDone(outcome);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The settlement could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <details>
+      <summary>Settle from the provider's records</summary>
+      <form onSubmit={(e) => void settle(e)}>
+        <fieldset disabled={busy}>
+          {error && <p role="alert">{error}</p>}
+          <label>Outcome<select name="outcome" defaultValue="accepted"><option value="accepted">Accepted: the provider has this email</option><option value="failed">Failed: the provider has no such email</option></select></label>
+          <label>Provider message ID (when accepted)<input name="provider_id" maxLength={200} /></label>
+          <label>What the provider's records show and how you searched them<textarea name="evidence" required minLength={5} maxLength={2000} placeholder="Resend logs for the sender, recipient and attempt time show…" /></label>
+          <button>Settle</button>
+        </fieldset>
+      </form>
+    </details>
+  );
+}
+
 export type ReminderStatus = { left: number; due_at?: string; expires_at?: string };
 export type EmailRecord = { id: string; state: string; delivery: string; reminder_of?: string; error: string; approved_by?: string; created_at: string };
-export function EmailHistory({emails}: {emails: EmailRecord[]}) {
-  return <section aria-label="Email delivery history"><h5>Email history</h5>{emails.map(m=><p key={m.id}>
+export function EmailHistory({emails, closeId}: {emails: EmailRecord[]; closeId?: string}) {
+  return <section aria-label="Email delivery history"><h5>Email history</h5>{emails.map(m=><div key={m.id}><p>
     {m.reminder_of ? "Reminder" : "Initial email"} · {new Date(m.created_at).toLocaleString()} · {m.state.replaceAll("_"," ")} · delivery: {m.delivery.replaceAll("_"," ")}{m.approved_by ? ` · approved by ${m.approved_by}` : ""}. {m.error}
-  </p>)}<p>Delivered means accepted by the recipient’s mail server, not read. Reminders require a separate approval after confirmed delivery. Replies and delivery failures block reminders.</p></section>;
+  </p>{closeId && m.state === "unknown" && <SettleEmail closeId={closeId} emailId={m.id} />}</div>)}<p>Delivered means accepted by the recipient’s mail server, not read. Reminders require a separate approval after confirmed delivery. Replies and delivery failures block reminders.</p></section>;
 }
