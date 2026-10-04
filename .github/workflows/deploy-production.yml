@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     # Documentation changes alone change nothing deployed.
-    paths-ignore: ['docs/**', '**/*.md']
+    paths-ignore: ['docs/**', '**/*.md', '.github/workflows/provision-context-machine-database.yml', 'scripts/provision-context-machine-database.py', 'scripts/provision-context-machine-database.test.py']
 permissions:
   contents: read
   # To find the merged pull request and its CI run.

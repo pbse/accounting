@@ -65,6 +65,7 @@ jobs:
            DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh &&
            again=$(DATABASE_URL="$TEST_DATABASE_URL" infra/postgres/migrate.sh) && test -z "$again" &&
            timeout 300 sh -c 'until [ -f /tmp/apt.status ]; do sleep 1; done' && test "$(cat /tmp/apt.status)" = 0 &&
+           python3 scripts/provision-context-machine-database.test.py &&
            cd services/backend && go test -count=1 -p 1 -vet=off ./... && go vet ./...
            echo $? > /tmp/go.status) > /tmp/go.log 2>&1 &
       - uses: actions/setup-node@v4
