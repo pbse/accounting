@@ -3,7 +3,7 @@ import { Link } from "react-router";
 
 // The public legal and data pages. Each statement follows what the service's code does today; when the code changes,
 // change the page and its date. The workspace's Security center shows which of these services a firm is using.
-const updated = "29 September 2026";
+const updated = "3 October 2026";
 
 export const legalPages = [
   { to: "/privacy", label: "Privacy" },
@@ -56,7 +56,7 @@ export function Privacy() {
             <strong>Client data a firm provides:</strong> documents the firm uploads, forwards or imports from Google Drive; replies and files a client sends through a private request link; ledger data read from QuickBooks or Xero and payout reports from Stripe, when the firm connects them; and the workpapers, questions, reviews and assistant conversations built from them.
           </li>
           <li>
-            <strong>Client contacts:</strong> the email address a firm records for each client request it approves, whether Close emails the request or the firm shares its private link itself.
+            <strong>Client contacts:</strong> the email address a firm records for each client request it approves, whether Close emails the request or the firm shares its private link itself, and the email addresses of the client’s customers that the client provided for payment reminders.
           </li>
         </ul>
       </section>
@@ -129,7 +129,7 @@ const providers: { name: string; purpose: string; receives: string }[] = [
   { name: "Neon (on Amazon Web Services, United States)", purpose: "The database.", receives: "Everything Close stores, including original documents." },
   { name: "WorkOS", purpose: "Sign-in, roles and invitations; holds each person’s Google Drive permission.", receives: "Names, email addresses and roles of firm members, and each person’s Google Drive permission. Close uses that permission to download a file a person chooses directly from Google." },
   { name: "OpenAI", purpose: "AI reading of documents and, if a firm turns them on, written answers.", receives: "What AI and your data describes: document and statement text, policies and assistant questions with sensitive numbers removed, and file names and Work requests as written. Each request asks OpenAI not to store it." },
-  { name: "Resend", purpose: "Sends client request emails a person has approved, from the firm’s own sender. Not yet in use.", receives: "The recipient’s email address, a standard notice from the firm’s sender and the private reply link; never the request’s questions or the client’s figures." },
+  { name: "Resend", purpose: "Sends emails a person has approved, from the firm’s own sender through the firm’s own Resend account: client request emails, and payment reminders to the client’s customers.", receives: "The recipient’s email address and the approved message. A client request email carries a standard notice and the private reply link, never the request’s questions or the client’s figures. A payment reminder carries the approved subject and message, which by default name the invoice, its amount, its due date and the client, and anything the accountant wrote." },
 ];
 
 export function Subprocessors() {
@@ -186,7 +186,7 @@ export function AiData() {
           <li>Proposes rows from a bank statement when a person asks.</li>
           <li>Drafts a firm procedure from a policy the firm provides, or from its reviewers’ edits.</li>
           <li>Understands a plain-language request in Work, such as “what’s stuck for this client?”.</li>
-          <li>Only if a firm administrator turns them on: writes answers to questions about a close, and investigates a close by reading its records through read-only tools.</li>
+          <li>Only if a firm administrator turns them on: writes answers to questions about a close or across the firm’s work, and investigates a close by reading its records through read-only tools.</li>
           <li>Only for a firm with written answers on: helps our staff draft a workflow plan for one of its closes.</li>
         </ul>
       </section>
@@ -204,6 +204,7 @@ export function AiData() {
           <li>Statement text for a statement a person asks about, and policy text or reviewer edits for a procedure draft.</li>
           <li>A plain-language request in Work, with the client names visible to the person asking.</li>
           <li>With written answers on: the question and the close’s records the answer reads, such as its sign-off blockers, tie-out, changes and exceptions.</li>
+          <li>With firm-wide answers on: the question and the lists of work needing a person today, the review queue, blocked work and work handed to the agent, with client names, across the closes the person can open.</li>
           <li>When our staff draft a workflow plan: their instruction, with the client’s name, the month, whether the close is signed off and counts of its preparation work.</li>
         </ul>
         <p>Before document and statement text, policies, reviewer edits and assistant questions and reads are sent, Close removes card numbers, IBANs, Social Security numbers, labelled bank account numbers and passwords or other sign-in details. File names and a plain-language request in Work are sent as written, so keep such details out of them.</p>
@@ -213,6 +214,7 @@ export function AiData() {
         <p>
           Close uses OpenAI’s API. OpenAI says data sent to its API is not used to train its models unless the customer opts in; we have not. Each request also asks OpenAI not to store it. OpenAI still keeps abuse-monitoring logs for up to 30 days unless the law requires longer; zero data retention needs OpenAI’s separate approval, which we do not have.
         </p>
+        <p>A separate research service, using Anthropic’s Claude or OpenAI’s Codex, is deployed alongside Close. No product feature sends it firm or client data; only a health check calls it.</p>
         <p>We don’t use your firm’s or your clients’ data to train any model, and one firm’s data is never used in another firm’s work.</p>
       </section>
       <section>
