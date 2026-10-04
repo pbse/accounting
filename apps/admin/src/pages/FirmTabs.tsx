@@ -60,6 +60,18 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
                       <td>{shown(p.reason)}</td>
                       <td>{when(p.decided_at)}</td>
                       <td>
+                        {!p.granted && (
+                          <details>
+                            <summary>Restore</summary>
+                            <ActionForm label="Restore membership" allowed={operate} minLength={10} onSubmit={async (reason) => {
+                              await post(`${base}/members/${encodeURIComponent(p.subject)}/restore`, { previous_id: p.id, reason });
+                              people.reload();
+                              onChanged();
+                            }}>
+                              <p>Verify this person in WorkOS first and say how in the reason; restore their WorkOS roles there.</p>
+                            </ActionForm>
+                          </details>
+                        )}
                         {p.granted && (
                           <details>
                             <summary>Revoke</summary>

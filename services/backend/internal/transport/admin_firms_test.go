@@ -2,6 +2,7 @@ package transport
 
 import (
 	"crypto/rand"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -100,6 +101,42 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 		t.Fatal("revoking a stranger must not record anything")
 	}
 
+	// A revoked member is restored only from the decision staff saw, and never someone who was not a member.
+	var revoked string
+	if err := db.QueryRow(`SELECT id::text FROM current_organization_members WHERE organization_id=$1 AND subject='user_leaver'`, firm).Scan(&revoked); err != nil {
+		t.Fatal(err)
+	}
+	adminJSON(t, h, token, "POST", base+"/members/user_stranger/restore", `{"previous_id":"","reason":"Verified in WorkOS on a call"}`, 409)
+	adminJSON(t, h, token, "POST", base+"/members/user_leaver/restore", `{"previous_id":"`+current+`","reason":"Verified in WorkOS on a call"}`, 409)
+	adminJSON(t, h, token, "POST", base+"/members/user_leaver/restore", `{"previous_id":"`+revoked+`","reason":"Verified in WorkOS on a call"}`, 200)
+	if db.QueryRow(`SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject='user_leaver'`, firm).Scan(&granted); !granted {
+		t.Fatal("the member must be restored")
+	}
+	var restored string
+	if err := db.QueryRow(`SELECT id::text FROM current_organization_members WHERE organization_id=$1 AND subject='user_leaver'`, firm).Scan(&restored); err != nil {
+		t.Fatal(err)
+	}
+	adminJSON(t, h, token, "POST", base+"/members/user_leaver/restore", `{"previous_id":"`+restored+`","reason":"Verified in WorkOS on a call"}`, 409)
+	if db.QueryRow(`SELECT count(*) FROM organization_member_access WHERE organization_id=$1 AND subject='user_stranger'`, firm).Scan(&strangers); strangers != 0 {
+		t.Fatal("restoring a stranger must not record anything")
+	}
+
+	// Limits change from the values staff saw, within the database's bounds.
+	limits := func(closes, jobs, calls int) string {
+		return fmt.Sprintf(`{"max_closes":%d,"max_model_calls_per_day":%d,"max_pending_jobs":%d}`, closes, calls, jobs)
+	}
+	if detail := mustString(adminJSON(t, h, token, "GET", base, "", 200)); !strings.Contains(detail, `"limits":`+limits(500, 250, 2000)) {
+		t.Fatalf("the firm shows its limits: %s", detail)
+	}
+	adminJSON(t, h, token, "POST", base+"/limits", `{"before":`+limits(500, 250, 2000)+`,"after":`+limits(0, 250, 2000)+`,"reason":"Pilot firm needs more room"}`, 422)
+	adminJSON(t, h, token, "POST", base+"/limits", `{"before":`+limits(500, 250, 2000)+`,"after":`+limits(500, 250, 2000)+`,"reason":"Pilot firm needs more room"}`, 409)
+	adminJSON(t, h, token, "POST", base+"/limits", `{"before":`+limits(400, 250, 2000)+`,"after":`+limits(800, 300, 5000)+`,"reason":"Pilot firm needs more room"}`, 409)
+	adminJSON(t, h, token, "POST", base+"/limits", `{"before":`+limits(500, 250, 2000)+`,"after":`+limits(800, 300, 5000)+`,"reason":"Pilot firm needs more room"}`, 200)
+	var closes, jobs, calls int
+	if db.QueryRow(`SELECT max_closes,max_pending_jobs,max_model_calls_per_day FROM organizations WHERE id=$1`, firm).Scan(&closes, &jobs, &calls); closes != 800 || jobs != 300 || calls != 5000 {
+		t.Fatalf("the limits must change: %d %d %d", closes, jobs, calls)
+	}
+
 	// An open invitation is revoked once.
 	var invitation string
 	if err := db.QueryRow(`SELECT id::text FROM member_invitations WHERE organization_id=$1 AND state='sending'`, firm).Scan(&invitation); err != nil {
@@ -136,7 +173,7 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 	if revealed := mustString(adminJSON(t, h, token, "GET", base+"/audit?reveal=1", "", 200, "X-Access-Reason", "reviewing staff actions")); !strings.Contains(revealed, `"previous_id":"`+current+`"`) || !strings.Contains(revealed, "Chargeback") {
 		t.Fatalf("a reveal shows the request details: %s", revealed)
 	}
-	for _, want := range []string{`"action":"firm.suspend"`, `"action":"firm.resume"`, `"action":"member.revoke"`, `"result":"refused"`, `"action":"invitation.revoke"`, `"action":"content.reveal"`} {
+	for _, want := range []string{`"action":"firm.suspend"`, `"action":"firm.resume"`, `"action":"member.revoke"`, `"action":"member.restore"`, `"action":"firm.limits"`, `"result":"refused"`, `"action":"invitation.revoke"`, `"action":"content.reveal"`} {
 		if !strings.Contains(audit, want) {
 			t.Fatalf("audit lacks %s: %s", want, audit)
 		}
@@ -154,7 +191,7 @@ func TestReadOnlyStaffCannotChangeAFirm(t *testing.T) {
 	}
 	h := apiWithStore(db, strings.Repeat("x", 32))
 	reader := sign(staffOrg, "platform:read")
-	for _, path := range []string{"/suspend", "/resume", "/members/user_a/revoke", "/invitations/1/revoke"} {
+	for _, path := range []string{"/suspend", "/resume", "/members/user_a/revoke", "/members/user_a/restore", "/limits", "/invitations/1/revoke"} {
 		adminJSON(t, h, reader, "POST", "/v1/admin/firms/"+firm+path, `{"confirm":"`+firm+`","reason":"Trying without permission"}`, 403)
 	}
 	adminJSON(t, h, reader, "GET", "/v1/admin/firms/"+firm+"/people?reveal=1", "", 403, "X-Access-Reason", "curious")

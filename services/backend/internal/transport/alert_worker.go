@@ -203,3 +203,29 @@ func RunPlatformAlerts(ctx context.Context, db *sql.DB) {
 		}
 	}
 }
+
+// workerHealth answers an outside monitor: 503 unless the worker process and the workflow engine both beat in the last
+// 5 minutes, the rule platform alerts use. The worker sends those alerts itself, so a dead worker needs this check.
+func workerHealth(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if db == nil {
+			problem(w, 503, "No database is configured.")
+			return
+		}
+		var stale []string
+		var raw []byte
+		err := db.QueryRowContext(context.WithValue(r.Context(), systemKey{}, true), `SELECT COALESCE(jsonb_agg(n ORDER BY n),'[]'::jsonb) FROM unnest(ARRAY['worker','workflow_engine']) n
+ WHERE NOT EXISTS(SELECT 1 FROM worker_heartbeats h WHERE h.loop=n AND h.beat_at>now()-interval '5 minutes')`).Scan(&raw)
+		if err == nil {
+			err = json.Unmarshal(raw, &stale)
+		}
+		switch {
+		case err != nil:
+			problem(w, 503, "Worker heartbeats could not be read.")
+		case len(stale) > 0:
+			jsonReply(w, 503, map[string]any{"ok": false, "stale": stale})
+		default:
+			jsonReply(w, 200, map[string]bool{"ok": true})
+		}
+	}
+}

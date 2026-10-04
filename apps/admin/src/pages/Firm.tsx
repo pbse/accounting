@@ -14,7 +14,8 @@ import { Stat } from "../components/Stat";
 
 type Run = { id: number; workflow: string; state: string; started_by: string; created_at: string; finished_at: string | null };
 type Health = { run_id: number; finished_at: string; report: Record<string, number> } | null;
-type Detail = { firm: FirmRow; last_suspension: { at: string; by: string } | null; runs: Run[]; health: Health };
+type Limits = { max_closes: number; max_pending_jobs: number; max_model_calls_per_day: number };
+type Detail = { firm: FirmRow; last_suspension: { at: string; by: string } | null; runs: Run[]; health: Health; limits: Limits };
 
 const tabs = [["", "Overview"], ["people", "People"], ["activity", "Activity"], ["audit", "Staff audit"]] as const;
 
@@ -109,8 +110,32 @@ function Overview({ detail, reload }: { detail: Detail; reload: () => void }) {
           <Link to={`/runs?firm=${encodeURIComponent(f.id)}`}>All runs for this firm</Link> · <Link to={`/jobs?firm=${encodeURIComponent(f.id)}`}>Stuck work</Link> · <Link to={`/connections?firm=${encodeURIComponent(f.id)}`}>Connections</Link>
         </p>
       </section>
+      <FirmLimits key={JSON.stringify(detail.limits)} firm={f} limits={detail.limits} onDone={reload} />
       <Suspension firm={f} onDone={reload} />
     </>
+  );
+}
+
+// A firm's capacity, changed from the values shown so two staff members cannot overwrite each other.
+function FirmLimits({ firm, limits, onDone }: { firm: FirmRow; limits: Limits; onDone: () => void }) {
+  const [after, setAfter] = useState(limits);
+  const operate = usePermissions().includes("platform:operate");
+  const field = (key: keyof Limits, label: string, max: number) => (
+    <label>{label}<input type="number" min={1} max={max} required value={after[key]} onChange={(event) => setAfter({ ...after, [key]: Number(event.target.value) })} /></label>
+  );
+  return (
+    <section>
+      <h2>Limits</h2>
+      <p>Closes, active preparation jobs and model calls per UTC day. Check capacity and backlog before raising them.</p>
+      <ActionForm label="Change limits" allowed={operate} minLength={10} onSubmit={async (reason) => {
+        await post(`/v1/admin/firms/${encodeURIComponent(firm.id)}/limits`, { before: limits, after, reason });
+        onDone();
+      }}>
+        {field("max_closes", "Closes", 10000)}
+        {field("max_pending_jobs", "Active preparation jobs", 10000)}
+        {field("max_model_calls_per_day", "Model calls per day", 100000)}
+      </ActionForm>
+    </section>
   );
 }
 
