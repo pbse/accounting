@@ -22,6 +22,7 @@ export type Pack =
       overall: Status;
       digest: string;
       complete: boolean;
+      draft_commentary?: string;
       note: string;
       prior?: { close_id: string; period: string; snapshot_id: string; as_of: string; stale: boolean; status: Status };
       reclassified: string[];
@@ -336,8 +337,8 @@ export function Publication({ closeId, pack, onOpen }: { closeId: string; pack?:
           <fieldset disabled={busy}>
             <legend>{latest ? "Publish a correction" : "Publish this pack"}</legend>
             <label>
-              Commentary: what moved and why, as you have verified it
-              <textarea name="commentary" required maxLength={4000} />
+              Commentary: what moved and why, as you have verified it (drafted from the figures; add why each moved)
+              <textarea name="commentary" required maxLength={4000} defaultValue={pack?.state === "ready" ? pack.draft_commentary : ""} />
             </label>
             {latest && (
               <label>

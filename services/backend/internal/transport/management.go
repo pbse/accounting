@@ -514,5 +514,84 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 		note += " Provisional until the sign-off of every month shown stands."
 	}
 	pack["note"], pack["overall"], pack["digest"] = note, status, figuresDigest(pack)
+	var materiality sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT materiality_amount::text FROM organizations WHERE id=$1`, org).Scan(&materiality); err != nil {
+		return nil, tieRefusal{503, "Firm settings are unavailable."}
+	}
+	pack["draft_commentary"] = draftCommentary(pack, materiality.String)
 	return pack, nil
+}
+
+// draftCommentary is a starting point for the reviewer's commentary from the pack's own figures: net income, the P&L
+// lines that moved most against last month (those at or above the firm's materiality, when it sets one, else the five
+// largest), and the month's change in cash when the statement of cash flows reconciles. It says what moved, never why.
+func draftCommentary(pack map[string]any, materiality string) string {
+	pl, _ := pack["profit_and_loss"].(statement)
+	currency, _ := pack["currency"].(string)
+	show := func(amount string) string { return ledger.Show(amount, currency) }
+	moved := func(l packLine) string {
+		change, _ := new(big.Rat).SetString(*l.Change)
+		switch change.Sign() {
+		case 0:
+			return l.Name + " " + show(l.Amount) + ", unchanged from last month"
+		case -1:
+			return fmt.Sprintf("%s %s, down %s from %s", l.Name, show(l.Amount), show(money(change.Abs(change))), show(*l.Prior))
+		}
+		return fmt.Sprintf("%s %s, up %s from %s", l.Name, show(l.Amount), show(money(change)), show(*l.Prior))
+	}
+	var out []string
+	if n := len(pl.Measures); n > 0 {
+		net := pl.Measures[n-1]
+		if net.Change != nil {
+			out = append(out, moved(net)+".")
+		} else {
+			out = append(out, net.Name+" "+show(net.Amount)+"; last month is not compared.")
+		}
+	}
+	var lines []packLine
+	for _, s := range pl.Sections {
+		for _, l := range s.Lines {
+			if change, ok := new(big.Rat).SetString(cmp.Or(deref(l.Change), "0")); ok && change.Sign() != 0 {
+				lines = append(lines, l)
+			}
+		}
+	}
+	size := func(l packLine) *big.Rat { r, _ := new(big.Rat).SetString(*l.Change); return r.Abs(r) }
+	slices.SortStableFunc(lines, func(a, b packLine) int { return size(b).Cmp(size(a)) })
+	floor, limited := new(big.Rat), false
+	if _, ok := floor.SetString(materiality); ok && floor.Sign() > 0 {
+		lines = slices.DeleteFunc(lines, func(l packLine) bool { return size(l).Cmp(floor) < 0 })
+	} else if len(lines) > 5 {
+		lines, limited = lines[:5], true
+	}
+	if len(lines) > 0 {
+		said := []string{}
+		for _, l := range lines {
+			said = append(said, moved(l))
+		}
+		lead := "Lines that moved by at least the firm's materiality of " + show(materiality) + ": "
+		if floor.Sign() <= 0 {
+			lead = map[bool]string{true: "The five largest movements: ", false: "Movements: "}[limited]
+		}
+		out = append(out, lead+strings.Join(said, "; ")+".")
+	}
+	if flow, _ := pack["cash_flow"].(map[string]any); flow["reconciled"] == true {
+		if change, ok := flow["net_change"].(packLine); ok {
+			out = append(out, "Net change in cash "+show(change.Amount)+".")
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, " ") + " " + draftWhy
+}
+
+// draftWhy ends a drafted commentary; a commentary still carrying it has not been written by the reviewer.
+const draftWhy = "Why: (add what caused each movement, as you have verified it.)"
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

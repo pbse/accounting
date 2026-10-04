@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/llm"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -106,9 +107,12 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	t.Setenv("QBO_PRODUCTION_CLIENT_SECRET", "secret")
 	t.Setenv("QBO_PRODUCTION_REDIRECT_URI", "https://app.example.test/v1/quickbooks/callback")
 	store := savedCloses(db, strings.Repeat("a", 32))
+	// The firm's model calls go to Claude through the private context machine.
+	models, err := llm.New(llm.Config{Provider: "context_machine", ContextMachineToken: "fixture-token", ContextMachineModel: "claude", ClaudeModel: "claude-fixture", Profiles: []llm.Scope{{Organization: org, Subject: "user_admin", AccessProfile: "fixture"}}})
+	must(err)
 	call := func(subject string, permissions []string, want int) string {
 		t.Helper()
-		r := httptest.NewRequest("GET", "/v1/closes/security", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}))
+		r := httptest.NewRequest("GET", "/v1/closes/security", nil).WithContext(auth.WithActor(llm.WithClient(t.Context(), models), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}))
 		w := httptest.NewRecorder()
 		store.ServeHTTP(w, r)
 		if w.Code != want {
@@ -266,13 +270,20 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 		}
 	}
 	providers := map[string]bool{}
+	var model struct {
+		Provider, Evidence string
+		InUse              bool `json:"in_use"`
+	}
 	for _, p := range got.Providers {
 		providers[p.Provider] = p.InUse
-		if p.Provider == "OpenAI" && !strings.HasPrefix(p.Evidence, "3 model calls reserved") {
-			t.Fatalf("model use is shown as the reserved budget it is: %+v", p)
+		if strings.Contains(p.Evidence, "model call") {
+			model = p
 		}
 	}
-	if !providers["OpenAI"] || !providers["Resend"] || !providers["QuickBooks"] || providers["Xero"] || providers["Stripe"] {
+	if !strings.HasPrefix(model.Evidence, "3 model calls reserved") || !model.InUse || model.Provider != "Claude (Anthropic) through the private context machine" {
+		t.Fatalf("model use is shown as the reserved budget it is, under the configured provider: %+v", model)
+	}
+	if !providers["Resend"] || !providers["QuickBooks"] || providers["Xero"] || providers["Stripe"] {
 		t.Fatalf("which outside services are in use: %+v", got.Providers)
 	}
 	if got.OrganizationID != org || strings.Join(got.Clients, ",") != "Alpha,Beta" {

@@ -153,6 +153,10 @@ func registerManagementPublications(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Confirm the reviewed pack and write its commentary (up to 4,000 characters).")
 			return
 		}
+		if strings.Contains(in.Commentary, draftWhy) {
+			problem(w, 422, "Replace the draft's closing prompt with why each line moved, as you have verified it, before publishing.")
+			return
+		}
 		// Like sign-off, lock first and read after: captures and sign-off decisions lock these closes, so the pack read
 		// below is the latest for both months shown.
 		tx, err := db.BeginTx(r.Context(), nil)
