@@ -23,6 +23,7 @@
     "production": {
       "services": [{"binding": "CONTEXT_MACHINE", "service": "close-context-machine-production"}],
       "name": "close-production",
+      "routes": [{"pattern": "getkrith.com", "custom_domain": true}],
       "workers_dev": true,
       "containers": [{
         "class_name": "CapabilityAPI",
