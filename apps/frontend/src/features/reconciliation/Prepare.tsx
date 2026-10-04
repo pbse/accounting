@@ -175,6 +175,31 @@ export default function Prepare() {
   const [params] = useSearchParams();
   const currency = useCurrency(params.get("close"));
   const form = useRef<HTMLFormElement>(null);
+  // A bank account's month from the close's current QuickBooks capture, refused unless it ties to the Trial Balance;
+  // the capture becomes the ledger source, and the person still reviews and confirms the reconciliation.
+  async function fillLedger() {
+    const fields = form.current?.elements;
+    const account = (fields?.namedItem("account") as HTMLInputElement | null)?.value.trim() ?? "";
+    if (!fields || !account) return setError("Enter the bank account's name first.");
+    setBusy(true);
+    setError("");
+    try {
+      const ledger: Record<string, string> = await workspaceRequest(`/${params.get("close")}/reconciliation-ledger?account=${encodeURIComponent(account)}`);
+      for (const name of ["ledger_csv", "ledger_opening", "ledger_closing", "ledger_reference"]) {
+        const field = fields.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | null;
+        if (field) field.value = ledger[name];
+      }
+      const type = fields.namedItem("account_type") as HTMLSelectElement | null;
+      if (type) type.value = "bank";
+      // The capture itself is the ledger's source; saving reads the ledger from it again.
+      setSourceSelections((previous) => ({ ...previous, ledger: { id: ledger.source_id, location: ledger.location } }));
+      setResult(undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The captured ledger could not be used.");
+    } finally {
+      setBusy(false);
+    }
+  }
   const revision = useRevision(form);
   const heading = useRef<HTMLHeadingElement>(null);
   const [result, setResult] = useState<ReconciliationWorkpaper>();
@@ -402,7 +427,7 @@ export default function Prepare() {
                         .filter(
                           (f) =>
                             !f.superseded_by &&
-                            f.name.toLowerCase().endsWith(".csv"),
+                            (f.name.toLowerCase().endsWith(".csv") || f.id === sourceSelections[role]?.id),
                         )
                         .map((f) => (
                           <option key={f.id} value={f.id}>
@@ -525,6 +550,11 @@ export default function Prepare() {
                   maxLength={200000}
                 />
               </label>
+              {params.get("close") && (
+                <button type="button" disabled={busy} onClick={() => void fillLedger()}>
+                  Fill the ledger from the QuickBooks capture
+                </button>
+              )}
               <label>Other account statement CSV (transfers only)<textarea name="other_statement_csv" rows={5} maxLength={200000} /></label>
               <label>Other account ledger CSV (transfers only)<textarea name="other_ledger_csv" rows={5} maxLength={200000} /></label>
             </div>

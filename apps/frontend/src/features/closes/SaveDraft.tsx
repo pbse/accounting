@@ -118,7 +118,7 @@ export function SaveDraft({
                     !f.superseded_by &&
                     f.extraction_state === "ready" &&
                     (role === "procedure" ? f.procedure_kind === "reconciliation" : !csvOnly || role === "support" || role === "clearing" || role === "native_status" ||
-                      f.name.toLowerCase().endsWith(".csv")),
+                      f.name.toLowerCase().endsWith(".csv") || f.id === sources[role]?.id),
                 )
                 .map((f) => (
                   <option key={f.id} value={f.id}>

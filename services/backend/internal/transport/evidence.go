@@ -313,6 +313,27 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			}
 			in.StatementCSV = content["statement"]
 			in.LedgerCSV = content["ledger"]
+			// A ledger source that is the close's QuickBooks capture is read from it, for the bank account named.
+			for _, s := range p.Sources {
+				if s.Role != "ledger" {
+					continue
+				}
+				lines, opening, closing, captured, err := captureLedger(r.Context(), tx, r.PathValue("id"), s.ID, in.Account)
+				switch {
+				case captured && in.AccountType == "credit_card":
+					problem(w, 422, "A credit card is reconciled from its exported ledger.")
+					return
+				case captured && err != nil:
+					problem(w, 422, err.Error()+".")
+					return
+				case err != nil:
+					problem(w, 503, "The QuickBooks capture is unavailable.")
+					return
+				}
+				if captured {
+					in.LedgerCSV, in.LedgerOpening, in.LedgerClosing = lines, opening, closing
+				}
+			}
 			in.OtherStatementCSV = content["other_statement"]
 			in.OtherLedgerCSV = content["other_ledger"]
 			for _, s := range p.Sources {

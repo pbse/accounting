@@ -51,7 +51,92 @@ func quickbooksReturn(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	origin.Fragment = url.Values{"qbo_code": {q.Get("code")}, "qbo_state": {q.Get("state")}, "qbo_realm": {q.Get("realmId")}, "qbo_env": {environment}}.Encode()
 	http.Redirect(w, r, origin.String(), http.StatusSeeOther)
 }
+
+// captureLedger is the ledger side of a bank reconciliation read from the close's QuickBooks capture whose evidence entry
+// is sourceID, for the one bank account named account; ok is false when sourceID is no capture of this close.
+func captureLedger(ctx context.Context, tx *sql.Tx, closeID, sourceID, account string) (csv, opening, closing string, ok bool, err error) {
+	var raw []byte
+	var period string
+	err = tx.QueryRowContext(ctx, `SELECT s.payload,c.period FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.close_id::text=$1 AND s.payload->>'source_id'=$2 AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1`, closeID, sourceID).Scan(&raw, &period)
+	if err == sql.ErrNoRows {
+		return "", "", "", false, nil
+	}
+	if err != nil {
+		return "", "", "", false, err
+	}
+	var payload struct {
+		Accounts json.RawMessage            `json:"accounts"`
+		Reports  map[string]json.RawMessage `json:"reports"`
+	}
+	var directory []struct {
+		ID                       string `json:"Id"`
+		Name, FullyQualifiedName string
+		AccountType              string
+	}
+	if json.Unmarshal(raw, &payload) != nil || json.Unmarshal(payload.Accounts, &directory) != nil {
+		return "", "", "", true, fmt.Errorf("The QuickBooks capture is unreadable")
+	}
+	id := ""
+	for _, a := range directory {
+		if a.AccountType == "Bank" && (strings.EqualFold(a.Name, account) || strings.EqualFold(a.FullyQualifiedName, account)) {
+			if id != "" {
+				return "", "", "", true, fmt.Errorf("More than one bank account in the capture is named %s; reconcile it from its exported ledger", account)
+			}
+			id = a.ID
+		}
+	}
+	if id == "" {
+		return "", "", "", true, fmt.Errorf("No bank account named %s is in the capture; credit cards and other accounts are reconciled from their exported ledger", account)
+	}
+	csv, opening, closing, err = quickbooks.LedgerLines(payload.Accounts, payload.Reports["GeneralLedger"], payload.Reports["TrialBalance"], id, period)
+	return csv, opening, closing, true, err
+}
+
 func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
+	// A bank account's month from the close's current QuickBooks capture, as a reconciliation's ledger side, so the ledger
+	// need not be exported by hand; the person still reviews and confirms the reconciliation.
+	mux.HandleFunc("GET /v1/closes/{id}/reconciliation-ledger", func(w http.ResponseWriter, r *http.Request) {
+		name := strings.TrimSpace(r.URL.Query().Get("account"))
+		if name == "" || len(name) > 200 {
+			problem(w, 422, "Name the bank account to reconcile.")
+			return
+		}
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			problem(w, 503, "Could not open a consistent snapshot.")
+			return
+		}
+		defer tx.Rollback()
+		var period string
+		if err = tx.QueryRowContext(r.Context(), `SELECT period FROM client_closes WHERE id::text=$1`, r.PathValue("id")).Scan(&period); err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		month, err := periodBooks(r.Context(), tx, r.PathValue("id"), period)
+		switch {
+		case err != nil:
+			problem(w, 503, "Period snapshot unavailable.")
+			return
+		case month == nil || month.Source != "quickbooks" || month.SnapshotID == "":
+			problem(w, 409, "Capture this month's QuickBooks period snapshot first.")
+			return
+		case month.Stale:
+			problem(w, 409, "Capture this month again: this capture is no longer current.")
+			return
+		}
+		var source string
+		if err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(payload->>'source_id','') FROM quickbooks_snapshots WHERE id::text=$1`, month.SnapshotID).Scan(&source); err != nil {
+			problem(w, 503, "Period snapshot unavailable.")
+			return
+		}
+		lines, opening, closing, _, err := captureLedger(r.Context(), tx, r.PathValue("id"), source, name)
+		if err != nil {
+			problem(w, 409, err.Error()+".")
+			return
+		}
+		jsonReply(w, 200, map[string]string{"source_id": source, "location": "General Ledger · " + name, "ledger_csv": lines, "ledger_opening": opening, "ledger_closing": closing,
+			"ledger_reference": "QuickBooks General Ledger for " + name + ", capture #" + month.SnapshotID + " of " + month.CapturedAt.UTC().Format("2006-01-02 15:04") + " UTC"})
+	})
 	path := "/v1/closes/{id}/quickbooks"
 	ledgerPage := func(w http.ResponseWriter, r *http.Request, saved bool) {
 		accountID := r.URL.Query().Get("account_id")
