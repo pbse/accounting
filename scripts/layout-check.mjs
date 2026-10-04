@@ -281,7 +281,8 @@ for (const app of apps) {
     try {
       await page.locator(`a[href="${path}"]`).first().click({ timeout: 10000 });
       await page.waitForURL(`**${path}`, { timeout: 10000 });
-      await page.waitForFunction(() => document.querySelector("#root")?.innerText.trim(), null, { timeout: 10000 });
+      // The header and footer stay on screen, so the page counts only once its own heading shows.
+      await page.waitForFunction(() => document.querySelector("#main h1")?.textContent?.trim(), null, { timeout: 10000 });
     } catch {
       failures.push(`public site ${path}: nothing rendered after clicking its link from the home page`);
     }
