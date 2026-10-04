@@ -38,7 +38,9 @@ export function SchemaForm({ schema, onChange }: { schema?: Schema; onChange: (v
     return [out, valid];
   };
   // The untouched form counts too: required fields start empty, so it starts invalid.
-  useEffect(() => onChange(...build({})), []);
+  useEffect(() => {
+    onChange(...build({}));
+  }, []);
   if (!properties) {
     return (
       <label>
