@@ -56,7 +56,7 @@ LLM_REASONING_EFFORTS={"work_command":"none","investigation":"none","written_ans
 
 These small-budget overrides use GPT-5.5’s supported `none` effort; revalidate them if you choose a different model. Claude can be pinned separately with `CLAUDE_MODEL=claude-opus-5-5` and `CLAUDE_REASONING_EFFORT=medium`.
 
-Use model IDs available to your account. Model/effort variables can be staged before credentials: the deployment preparation step clears direct-API route metadata from the step environment when `OPENAI_API_KEY` is absent, while preserving the GitHub variables. Installing the key activates that saved policy on the next deployment. Setting `CODEX_AUTH_MODE=subscription` explicitly chooses the account token even when an API key exists. Direct API workflows still need an API key: their structured output, tool and consent contracts are not interchangeable with research runs.
+Use model IDs available to your account. Model/effort variables can be staged before credentials: the deployment preparation step clears direct-API route metadata from the step environment when `OPENAI_API_KEY` is absent, while preserving the GitHub variables. Installing the key activates that saved policy on the next deployment. Setting `CODEX_AUTH_MODE=subscription` explicitly chooses the account token even when an API key exists. Direct API mode still needs an API key. Context-machine completion mode preserves schemas and caller-executed tool proposals; it is separate from autonomous research.
 
 Upload credentials through GitHub's production environment secrets UI or an interactive `gh secret set NAME --env production` prompt. Never put token values into chat, shell command arguments or repository files. [Codex access tokens](https://learn.chatgpt.com/docs/enterprise/access-tokens) are intended for trusted automation; [Claude Code tokens](https://code.claude.com/docs/en/env-vars#claude_code_oauth_token) can be generated using `claude setup-token`. The static-token modes do not import desktop keychains, accept browser cookies, or refresh those tokens. The separate Codex `chatgpt` mode below lets the unmodified CLI refresh its own managed login. Rotate expired/revoked tokens in GitHub and redeploy. Codex token availability depends on workspace permissions.
 
@@ -107,7 +107,7 @@ Model calls return the selected `model`, `reasoning_effort`, and `auth_mode` as 
 
 **Token-limit capability:** API-key mode enforces the requested per-call output-token limit. Claude subscription mode retains `max_tokens`. Codex's subscription transport does not accept `max_output_tokens`, so that route cannot promise a hard per-call token ceiling. The library caller must explicitly set `AllowUncappedOutputTokens: true` (wire field `allow_uncapped_output_tokens`) for this route; otherwise the service rejects the run before touching the database or provider. Use `CODEX_AUTH_MODE=api_key` where that ceiling is required. Both modes enforce the same model-call budget, response byte cap and execution deadline. The byte cap is not a token/cost ceiling and does not bound hidden reasoning work. Subscription usage is subject to account limits, not interchangeable with API dollar budgets.
 
-One container accepts one run at a time, with a two-minute deadline and 1–16 model calls. Busy requests return 429; the caller decides whether a new attempt is authorized. Each run gets a fresh temporary workspace. Streaming reports start and completion, not live token output. Five idle minutes allow the container to sleep.
+One container accepts one run at a time, with a two-minute deadline and 1–16 model calls. Busy research requests return 429; the caller decides whether a new attempt is authorized. Completions wait for the existing execution slot within the caller deadline, without retrying inference. Each run gets a fresh temporary workspace. Streaming reports start and completion, not live token output. Five idle minutes allow the container to sleep.
 
 Pin upgrades in `services/context-machine/Dockerfile` and rerun CI's actual-CLI smoke tests. Roll back by redeploying the last known-good commit of **all three Workers** with matching configuration. Update a rotated service token on all three in the same deployment. Failed later steps do not automatically undo earlier Worker deployments.
 
@@ -115,7 +115,7 @@ Provision the selected agent credentials/models, read-only service database cred
 
 ## Launch acceptance checks
 
-Starting the context machine enables the `research` route only. The eight existing accounting purposes still require `OPENAI_API_KEY` and `OPENAI_MODEL`; subscription credentials alone do not enable them. Research currently has no production feature caller. Integrate it into an authorized workflow with consent, budget reservation, provenance and citation validation before exposing it to users.
+Starting the context machine enables the `research` route. Set `LLM_PROVIDER=context_machine` to route all eight accounting purposes through its private completion endpoint too; the main API and queue then need no provider API key. `LLM_PROVIDER=api` retains direct API routing. Research currently has no production feature caller. Integrate it into an authorized workflow with consent, budget reservation, provenance and citation validation before exposing it to users.
 
 Before calling the AI layer ready:
 
@@ -131,7 +131,7 @@ Fake-provider tests and `/readyz` do not prove live provider authentication, acc
 
 A GitHub variable stores a non-secret setting; a GitHub secret stores a credential. `CONTEXT_MACHINE_DATABASE_URL` is a **secret containing a real, provisioned read-only login**, not a service URL and not a copy of `DATABASE_URL`. `CONTEXT_MACHINE_PROFILES` must name existing authorized platform members; a provider subscription token cannot replace that identity.
 
-The minimum provider secret for all existing accounting features plus Codex research is `OPENAI_API_KEY`. `CODEX_ACCESS_TOKEN` can additionally enable Codex subscription mode, and `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` enables Claude. Install these with GitHub's environment secrets UI or `gh secret set NAME --env production`, which prompts securely. API credentials cannot be generated by this repository, and GitHub does not return stored secret values.
+With `LLM_PROVIDER=api`, existing accounting features require `OPENAI_API_KEY`. With `LLM_PROVIDER=context_machine`, the selected CLI credential is sufficient for all model calls; provider keys remain confined to that service. `CODEX_ACCESS_TOKEN` can additionally enable Codex subscription mode, and `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` enables Claude. Install these with GitHub's environment secrets UI or `gh secret set NAME --env production`, which prompts securely. API credentials cannot be generated by this repository, and GitHub does not return stored secret values.
 
 With research enabled, do not rerun deployment until the required secrets and profile have been provisioned. Validation remains strict for enabled research.
 
@@ -147,7 +147,7 @@ The equivalent local command is `node scripts/deploy-context-machine.mjs --provi
 
 ### Personal subscriptions: your own research only
 
-Use one owner access profile in `CONTEXT_MACHINE_PROFILES`; personal Codex login and Claude subscription mode reject multiple profiles. These credentials must not serve other platform users. Existing accounting workflows still need `OPENAI_API_KEY`; the personal login enables the research agent only.
+Use one owner access profile in `CONTEXT_MACHINE_PROFILES`; personal Codex login and Claude subscription mode reject multiple profiles. These credentials must not serve other platform users. All accounting workflows can use the personal login with `LLM_PROVIDER=context_machine`, but only requests from its configured owner identity are accepted. Other platform users require an appropriate API/provider arrangement.
 
 **Codex / ChatGPT Pro:** create a separate managed session for this service using the official CLI. Do not upload the auth file actively used by your desktop: concurrent refreshes of the same session can invalidate each other. On your trusted computer:
 
@@ -181,3 +181,25 @@ Claude's setup token is already supported by the service. Its real value stays i
 Keep `CONTEXT_MACHINE_ENABLED=false` until the read-only database login and owner profile are configured. Then enable research and run the normal production deployment to install the credentials and restore caller bindings. Do not rerun the standby-only provisioning workflow to install credentials: it intentionally has no provider secrets. Validate one authorized run in each selected mode after activation; fake-provider CLI tests cannot prove real entitlement or token validity.
 
 Sources: [OpenAI managed auth on trusted runners](https://learn.chatgpt.com/docs/auth/ci-cd-auth), [Claude token lifecycle](https://code.claude.com/docs/en/env-vars#claude_code_oauth_token), and [Claude hosted-use requirements](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
+
+## Route every accounting call through the context machine (B04/B12)
+
+After installing the credentials and read-only owner profile, set production **variables**:
+
+```sh
+gh variable set LLM_PROVIDER --body context_machine --env production --repo pbse/accounting
+gh variable set CONTEXT_MACHINE_ENABLED --body true --env production --repo pbse/accounting
+gh variable set CONTEXT_MACHINE_MODEL --body codex --env production --repo pbse/accounting
+# Required acknowledgement for personal Codex/subscription output limits:
+gh variable set LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS --body true --env production --repo pbse/accounting
+# API-only "none" efforts are incompatible with the CLI. Start small-call purposes at low.
+gh variable set LLM_REASONING_EFFORTS --body '{"work_command":"low","investigation":"low","written_answer":"low"}' --env production --repo pbse/accounting
+```
+
+Pin `CODEX_MODEL` / `CLAUDE_MODEL` and their default effort. Optional `LLM_MODELS` and `LLM_REASONING_EFFORTS` apply to every completion purpose; the same policy is deployed to the gateway and service. Redeploy using the normal production workflow to update the service, API and queue together. Preflight rejects routing to a disabled service, unsupported CLI efforts, missing credentials and unacknowledged Codex subscription token limits before builds/migrations. Small existing output ceilings may need explicit, budget-reviewed adjustment after live acceptance; a fluent partial answer is never success.
+
+The HTTP organization boundary supplies the authenticated organization/subject. Preparation jobs use their recorded creator; scheduled replays use the original job creator, while manual replays retain the current caller identity. The service matches the entire provisioned profile and checks current organization/member access before launching the CLI. Personal accounts require one owner profile and reject other identities. Do not expose personal subscriptions to other platform users.
+
+Each `/v1/complete` call uses exactly one model-call reservation and no agent read tools. Schemas and tool proposals are returned to existing domain validators; the caller's existing capability authorization, consent and approval gates still apply. Completion text arrives in one callback after validation, rather than live token deltas. Autonomous research retains its separately reserved multi-call/read-tool protocol. `/readyz` checks the same private binding for either mode but performs no paid inference.
+
+To return accounting calls to direct API, set `LLM_PROVIDER=api`, install `OPENAI_API_KEY`/`OPENAI_MODEL`, restore API-compatible effort/model policy and redeploy. Research may stay enabled independently. There is no automatic fallback and no code change. Review provider disclosures and existing firm consent before switching account/provider types; task workspace deletion does not imply provider-side zero retention.

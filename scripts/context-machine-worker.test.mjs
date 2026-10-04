@@ -20,7 +20,7 @@ test('standby authenticates and refuses research without starting a container; e
   } } };
   for (const enabled of [undefined, '', 'false', 'invalid', 'true']) {
     env.CONTEXT_MACHINE_ENABLED = enabled;
-    for (const path of ['/readyz', '/v1/run']) {
+    for (const path of ['/readyz', '/v1/run', '/v1/complete']) {
       const request = new Request(`https://context-machine.internal${path}`, { headers: { Authorization: `Bearer ${token}` } });
       assert.equal((await worker.fetch(new Request(request.url), env)).status, 401);
       assert.equal((await worker.fetch(request, { ...env, CONTEXT_MACHINE_TOKEN: '' })).status, 401);
@@ -35,9 +35,9 @@ test('standby authenticates and refuses research without starting a container; e
       }
     }
   }
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.equal((await worker.fetch(new Request('https://context-machine.internal/unknown'), env)).status, 404);
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
 });
 
 test('private auth store serializes refresh and survives restarts without exposing credentials through fetch', async () => {

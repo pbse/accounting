@@ -26,11 +26,17 @@ type replayItem struct {
 	Changed   []string `json:"changed_fields"`
 	Error     string   `json:"error,omitempty"`
 	plan      confirmedPlan
+	creator   string
 }
 
 // runReplay reads up to three of a close's confirmed documents again with the current model, counted against the firm's daily limit, and compares each with what was confirmed.
 func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayItem, error) {
-	rows, err := db.QueryContext(ctx, `SELECT i.job_id::text,e.name,j.plans FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine'='openai' ORDER BY i.confirmed_at DESC,i.job_id DESC LIMIT 3`, closeID)
+	profiles := llm.CompletionProfiles(ctx)
+	if llm.HasIdentity(ctx) {
+		profiles = nil // Manual replay uses the authenticated caller.
+	}
+	eligible, _ := json.Marshal(profiles)
+	rows, err := db.QueryContext(ctx, `SELECT i.job_id::text,e.name,j.plans,j.created_by FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND ($2::jsonb='null'::jsonb OR EXISTS(SELECT 1 FROM jsonb_to_recordset(NULLIF($2::jsonb,'null'::jsonb)) p(organization text,subject text) WHERE p.organization=$3 AND p.subject=j.created_by)) ORDER BY i.confirmed_at DESC,i.job_id DESC LIMIT 3`, closeID, string(eligible), org)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +44,7 @@ func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayI
 	for rows.Next() {
 		var it replayItem
 		var rawPlans []byte
-		if err = rows.Scan(&it.JobID, &it.Source, &rawPlans); err != nil {
+		if err = rows.Scan(&it.JobID, &it.Source, &rawPlans, &it.creator); err != nil {
 			break
 		}
 		var plans []confirmedPlan
@@ -46,6 +52,13 @@ func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayI
 			it.plan = plans[0]
 		} else {
 			it.Error = "The confirmation is not one readable plan; not replayed."
+		}
+		probe := ctx
+		if !llm.HasIdentity(probe) {
+			probe = llm.WithIdentity(probe, org, it.creator)
+		}
+		if !llm.Allows(probe, org) {
+			it.Error = "The configured model route is not authorized for this reading's creator."
 		}
 		it.Confirmed, it.Changed = it.plan.Kind, []string{}
 		items = append(items, &it)
@@ -71,7 +84,7 @@ func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayI
 		if it.Error != "" {
 			continue
 		}
-		wg.Go(func() {
+		readOne := func() {
 			fresh, err := preparation.Replay(ctx, db, closeID, it.JobID)
 			if err != nil {
 				it.Error = err.Error()
@@ -88,7 +101,12 @@ func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayI
 			}
 			it.Replayed = reading.Kind
 			it.Kept, it.Changed, _ = compareProposal(reading, it.plan, expected)
-		})
+		}
+		if llm.Engine(ctx, "preparation") == "context_machine" {
+			readOne()
+		} else {
+			wg.Go(readOne)
+		}
 	}
 	wg.Wait()
 	return items, nil
@@ -173,8 +191,9 @@ func sweepReplays(ctx context.Context, db *sql.DB) error {
 	if model == "" {
 		return nil
 	}
-	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine'='openai' ORDER BY i.confirmed_at DESC LIMIT 1) j
- WHERE o.enabled AND NOT EXISTS(SELECT 1 FROM replay_runs r WHERE r.organization_id=o.id AND r.model=$1 AND r.reasoning_effort=$2) ORDER BY o.id LIMIT 20`, model, llm.ReasoningEffort(ctx, "preparation"))
+	eligible, _ := json.Marshal(llm.CompletionProfiles(ctx))
+	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND ($3::jsonb='null'::jsonb OR EXISTS(SELECT 1 FROM jsonb_to_recordset(NULLIF($3::jsonb,'null'::jsonb)) p(organization text,subject text) WHERE p.organization=o.id AND p.subject=j.created_by)) ORDER BY i.confirmed_at DESC LIMIT 1) j
+ WHERE o.enabled AND NOT EXISTS(SELECT 1 FROM replay_runs r WHERE r.organization_id=o.id AND r.model=$1 AND r.reasoning_effort=$2) ORDER BY o.id LIMIT 20`, model, llm.ReasoningEffort(ctx, "preparation"), string(eligible))
 	if err != nil {
 		return err
 	}
@@ -195,6 +214,9 @@ func sweepReplays(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	for _, d := range firms {
+		if !llm.Allows(ctx, d.org) {
+			continue
+		}
 		run, cancel := context.WithTimeout(ctx, 90*time.Second)
 		items, err := runReplay(run, db, d.org, d.close)
 		scored := false

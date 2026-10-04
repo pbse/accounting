@@ -290,7 +290,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
       </form>
       <p className="assistant-note">
         Answers come from saved work you can access. A card's action runs only after you confirm it, through the same checks as the close page; the assistant never approves, sends or posts anything.
-        {" "}If your firm turns on written answers, a question in a client close that none of its fixed reads matches goes to OpenAI with this close's saved status, sign-off blockers, tie-out, changes, exceptions and any open draft, and the answer says it was written by the model. Separately, if your firm turns on firm-wide answers, such a question asked outside a close goes with your lists of what needs a person today, the review queue and blocked work, and its answer is shown once and not kept.
+        {" "}If your firm turns on written answers, a question in a client close that none of its fixed reads matches goes to the configured model provider with this close's saved status, sign-off blockers, tie-out, changes, exceptions and any open draft, and the answer says it was written by the model. Separately, if your firm turns on firm-wide answers, such a question asked outside a close goes with your lists of what needs a person today, the review queue and blocked work, and its answer is shown once and not kept.
       </p>
     </aside>
   );

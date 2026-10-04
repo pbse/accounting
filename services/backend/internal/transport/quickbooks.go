@@ -446,7 +446,7 @@ func registerQuickBooks(mux *http.ServeMux, db *sql.DB) {
 				}
 				snapshot["source_id"] = sourceID
 				payload, _ = json.Marshal(snapshot)
-				_, e = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.state='needs_confirmation' AND i.proposal->>'engine'='openai'`, lockedClose)
+				_, e = tx.ExecContext(ctx, `UPDATE preparation_jobs j SET state='waiting_evidence',error='' FROM preparation_intakes i WHERE i.job_id=j.id AND j.close_id=$1 AND j.state='needs_confirmation' AND i.proposal->>'engine' IN ('openai','context_machine')`, lockedClose)
 				if e != nil {
 					problem(w, 503, "Could not resume evidence interpretation.")
 					return

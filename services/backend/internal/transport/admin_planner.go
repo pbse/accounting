@@ -169,8 +169,8 @@ func adminDraftPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	}
 	// Each attempt counts against the firm's daily model calls, as every other model call does. Both attempts share
 	// plannerTime; a second starts only with time for it.
-	system := context.WithValue(r.Context(), systemKey{}, true)
-	deadline, cancel := context.WithTimeout(r.Context(), plannerTime)
+	system := llm.WithIdentity(context.WithValue(r.Context(), systemKey{}, true), in.Firm, subject(r))
+	deadline, cancel := context.WithTimeout(llm.WithIdentity(r.Context(), in.Firm, subject(r)), plannerTime)
 	defer cancel()
 	var plan json.RawMessage
 	var rationale string

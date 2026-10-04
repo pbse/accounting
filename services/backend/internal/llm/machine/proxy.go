@@ -1,9 +1,12 @@
 package machine
 
 import (
+	"bufio"
 	"bytes"
+	"close.local/backend/internal/llm"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -20,6 +23,9 @@ type modelProxy struct {
 	calls                    atomic.Int32
 	client                   *http.Client
 	personal                 *codexAuthSession
+	completion               bool
+	schema                   json.RawMessage
+	refused                  atomic.Bool
 }
 
 func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +83,16 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Only our two scoped MCP tools are advertised. Built-in shell, filesystem,
 	// web, subagents, and arbitrary remote MCP tools are never exposed to a model.
 	body["tools"] = readTools(body["tools"])
+	if p.completion {
+		body["tools"] = []any{}
+		if len(p.schema) > 0 {
+			if p.agent == "claude" {
+				body["output_config"].(map[string]any)["format"] = map[string]any{"type": "json_schema", "schema": p.schema}
+			} else {
+				body["text"] = map[string]any{"format": map[string]any{"type": "json_schema", "name": "completion", "strict": true, "schema": p.schema}}
+			}
+		}
+	}
 
 	delete(body, "tool_choice")
 	if int(p.calls.Add(1)) > p.limit {
@@ -145,6 +161,24 @@ func (p *modelProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model request failed", res.StatusCode)
 		return
 	}
+	if p.completion {
+		raw, err := io.ReadAll(io.LimitReader(res.Body, (4<<20)+1))
+		if err == nil && len(raw) <= 4<<20 {
+			err = completionProviderStatus(p.agent, raw)
+		} else {
+			err = llm.ErrLimit
+		}
+		if errors.Is(err, llm.ErrRefused) {
+			p.refused.Store(true)
+		}
+		if err != nil {
+			http.Error(w, "incomplete model response", 502)
+			return
+		}
+		w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
+		w.Write(raw)
+		return
+	}
 	w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
 	// Bound streamed provider output as well as the CLI's final output.
 	reader := &io.LimitedReader{R: res.Body, N: 4 << 20}
@@ -195,4 +229,59 @@ func readTools(value any) []any {
 		}
 	}
 	return allowed
+}
+
+// Inspect terminal provider status before passing a completion to the CLI. A
+// syntactically valid JSON fragment can still be a truncated or refused result.
+func completionProviderStatus(agent string, raw []byte) error {
+	scan := bufio.NewScanner(bytes.NewReader(raw))
+	scan.Buffer(make([]byte, 4096), 4<<20)
+	complete, stopped := false, false
+	for scan.Scan() {
+		data, ok := strings.CutPrefix(scan.Text(), "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		var e struct {
+			Type     string
+			Response struct{ Status string }
+			Delta    json.RawMessage
+		}
+		if json.Unmarshal([]byte(data), &e) != nil {
+			return llm.ErrIncomplete
+		}
+		var delta struct {
+			StopReason string `json:"stop_reason"`
+		}
+		if agent == "claude" && e.Type == "message_delta" && json.Unmarshal(e.Delta, &delta) != nil {
+			return llm.ErrIncomplete
+		}
+		if strings.HasPrefix(e.Type, "response.refusal.") || delta.StopReason == "refusal" {
+			return llm.ErrRefused
+		}
+		if e.Type == "error" || e.Type == "response.incomplete" || e.Type == "response.failed" || delta.StopReason == "max_tokens" {
+			return llm.ErrIncomplete
+		}
+		if agent == "codex" && e.Type == "response.completed" {
+			if e.Response.Status != "completed" || complete {
+				return llm.ErrIncomplete
+			}
+			complete = true
+		}
+		if agent == "claude" {
+			if e.Type == "message_delta" {
+				stopped = delta.StopReason == "end_turn" || delta.StopReason == "stop_sequence"
+			}
+			if e.Type == "message_stop" {
+				if !stopped || complete {
+					return llm.ErrIncomplete
+				}
+				complete = true
+			}
+		}
+	}
+	if scan.Err() != nil || !complete {
+		return llm.ErrIncomplete
+	}
+	return nil
 }

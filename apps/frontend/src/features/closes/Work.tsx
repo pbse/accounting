@@ -1242,7 +1242,7 @@ function WorkDetails({
       {item.state === "needs_confirmation" && !item.stale && (
         <>
           <h3>
-            {item.proposal.engine === "openai"
+            {["openai", "context_machine"].includes(item.proposal.engine ?? "")
               ? "Agent-proposed work and facts"
               : item.proposal.engine === "recognized_export"
                 ? kind === "reconciliation" ? "Recognized reconciliation CSV" : "Recognized Stripe payout export"
@@ -1284,7 +1284,7 @@ function WorkDetails({
               .
             </p>
           )}
-          {item.proposal.engine === "openai" && (
+          {["openai", "context_machine"].includes(item.proposal.engine ?? "") && (
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -1385,7 +1385,7 @@ function WorkDetails({
                 <button
                   className="primary"
                   disabled={
-                    item.proposal.engine === "openai" && questions.length > 0
+                    ["openai", "context_machine"].includes(item.proposal.engine ?? "") && questions.length > 0
                   }
                 >
                   Confirm assumptions and prepare automatically

@@ -335,7 +335,7 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Review the proposed facts, client replies, entity and any uncited evidence before confirming.")
 				return
 			}
-			if proposed.Engine == "openai" && len(proposed.Questions) > 0 {
+			if llm.IsModelEngine(proposed.Engine) && len(proposed.Questions) > 0 {
 				problem(w, 409, "Answer the open questions and let the agent recheck the evidence before preparation.")
 				return
 			}

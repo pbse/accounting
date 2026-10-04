@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"close.local/backend/internal/llm"
 	"close.local/backend/internal/preparation"
 )
 
@@ -243,5 +244,75 @@ func TestReplayComparesTheCurrentModelWithConfirmedReadings(t *testing.T) {
 	must(sweepReplays(modelContext(t, ctx), db))
 	if calls != spent || runs("synthetic-model-3") != 0 {
 		t.Fatalf("no model call is made past the limit: %d → %d, %d runs", spent, calls, runs("synthetic-model-3"))
+	}
+}
+
+func TestContextMachineReplaySelectsEligibleCreatorsBeforeBatchLimits(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed := rand.Text()
+	owner := "org_Z" + seed
+	for i := 0; i < 22; i++ {
+		org := fmt.Sprintf("org_A%s%d", seed, i)
+		if i == 21 {
+			org = owner
+		}
+		_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Replay eligibility test')`, org)
+		must(err)
+		t.Cleanup(func() {
+			db.Exec(`DELETE FROM preparation_jobs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, org)
+			db.Exec(`DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, org)
+			db.Exec(`DELETE FROM client_closes WHERE organization_id=$1`, org)
+			db.Exec(`DELETE FROM model_calls WHERE organization_id=$1`, org)
+			db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
+		})
+	}
+	// The tests intentionally have stale inventory: selection reserves budget,
+	// then refuses inference. No provider connection or credentials are needed.
+	reading := func(org, closeID, creator, at string) string {
+		t.Helper()
+		if closeID == "" {
+			must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,$2,'2026-09') RETURNING id::text`, org, rand.Text()).Scan(&closeID))
+		}
+		var source, job string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,$2,$3,'Insurance USD 100.00.',$4) RETURNING id::text`, closeID, rand.Text(), rand.Text(), creator).Scan(&source))
+		must(db.QueryRow(`INSERT INTO preparation_jobs(close_id,digest,plans,state,created_by) VALUES($1,$2,'[{"kind":"prepaid","input":{"amount":"100.00"}}]','completed',$3) RETURNING id::text`, closeID, rand.Text(), creator).Scan(&job))
+		_, err = db.Exec(`INSERT INTO preparation_intakes(job_id,source_id,proposal,confirmed_by,confirmed_at) VALUES($1,$2,'{"engine":"context_machine","inventory_digest":"stale"}',$3,$4::timestamptz)`, job, source, creator, at)
+		must(err)
+		return closeID
+	}
+	for i := 0; i < 21; i++ {
+		reading(fmt.Sprintf("org_A%s%d", seed, i), "", "other", "2026-10-03")
+	}
+	closeID := reading(owner, "", "owner", "2026-10-01")
+	for i := 0; i < 4; i++ {
+		reading(owner, closeID, "other", "2026-10-02")
+	}
+	reading(owner, "", "other", "2026-10-03") // The newest close is ineligible too.
+	c, err := llm.New(llm.Config{Provider: "context_machine", ContextMachineToken: "private", ContextMachineModel: "codex", CodexModel: "fixed", Profiles: []llm.Scope{{Organization: owner, Subject: "owner", AccessProfile: "own"}}})
+	must(err)
+	ctx := llm.WithClient(context.Background(), c)
+	must(sweepReplays(ctx, db))
+	var calls int
+	must(db.QueryRow(`SELECT calls FROM model_calls WHERE organization_id=$1`, owner).Scan(&calls))
+	if calls != 1 {
+		t.Fatalf("only the eligible owner's older reading should reserve budget: %d", calls)
+	}
+	must(db.QueryRow(`SELECT COALESCE(sum(calls),0) FROM model_calls WHERE organization_id LIKE $1`, "org_A"+seed+"%").Scan(&calls))
+	if calls != 0 {
+		t.Fatalf("unconfigured firms spent budget: %d", calls)
 	}
 }

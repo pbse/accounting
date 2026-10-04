@@ -141,4 +141,4 @@ jobs:
         run: |
           docker build -t close-context-machine -f services/context-machine/Dockerfile .
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go -C services/backend test -c -o /tmp/machine.test ./internal/llm/machine
-          docker run --rm --entrypoint /tmp/machine.test -e CONTEXT_MACHINE_CLI_SMOKE=1 -v /tmp/machine.test:/tmp/machine.test:ro close-context-machine -test.run TestInstalledCLIs -test.v
+          docker run --rm --entrypoint /tmp/machine.test -e CONTEXT_MACHINE_CLI_SMOKE=1 -v /tmp/machine.test:/tmp/machine.test:ro close-context-machine -test.run 'TestInstalled.*CLIs' -test.v

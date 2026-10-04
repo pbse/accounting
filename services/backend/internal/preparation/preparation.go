@@ -3,6 +3,7 @@ package preparation
 
 import (
 	"bytes"
+	"close.local/backend/internal/llm"
 	"close.local/backend/internal/loans"
 	"close.local/backend/internal/owners"
 	"close.local/backend/internal/payroll"
@@ -275,7 +276,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		if json.Unmarshal(proposalRaw, &proposal) != nil {
 			return false, fmt.Errorf("Invalid intake proposal")
 		}
-		if proposal.Engine == "openai" {
+		if llm.IsModelEngine(proposal.Engine) {
 			if _, e := CurrentProposalSources(ctx, tx, closeID, id, proposal); e != nil {
 				failure = e.Error()
 			}

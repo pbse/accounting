@@ -327,14 +327,14 @@ func registerProcedureLearning(mux *http.ServeMux, db *sql.DB) {
 			if !modelBudget(w, r, db, 1) {
 				return
 			}
-			engine = "openai"
+			engine = llm.Engine(r.Context(), "procedure_draft")
 			instructions, quote, err = modelProcedureDraft(r.Context(), in.Kind, in.Method, source, edits)
 		} else {
 			instructions, quote, err = localProcedureDraft(source, edits)
 		}
 		if err != nil {
 			status := 422
-			if engine == "openai" {
+			if llm.IsModelEngine(engine) {
 				status = 503
 			}
 			problem(w, status, err.Error())
