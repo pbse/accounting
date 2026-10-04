@@ -58,6 +58,25 @@ class ProvisionTest(unittest.TestCase):
                 self.assertFalse(Path(directory, "connection.json").exists())
             finally:
                 sql("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+            # Exercise Neon's plaintext-only path on local PostgreSQL, with real login.
+            create = provision.create_role_sql(password, "ep-test.neon.tech")
+            self.assertNotIn("PASSWORD '" + password, create)
+            result = sql("BEGIN; SET LOCAL password_encryption='scram-sha-256'; " + create + "COMMIT;")
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(sql("SELECT 1", reader).returncode, 0)
+            repeat = sql("BEGIN; " + create + "COMMIT;")
+            self.assertNotEqual(repeat.returncode, 0)
+            self.assertNotIn(password, repeat.stdout + repeat.stderr)
+            self.assertEqual(sql("DROP OWNED BY context_machine_reader; DROP ROLE context_machine_reader").returncode, 0)
+            # Permission failure must not echo a dynamic password-bearing CREATE ROLE.
+            self.assertEqual(sql("CREATE ROLE provision_denied_owner").returncode, 0)
+            try:
+                denied = sql("BEGIN; SET LOCAL ROLE provision_denied_owner; " + create + "COMMIT;")
+                self.assertNotEqual(denied.returncode, 0)
+                self.assertNotIn(password, denied.stdout + denied.stderr)
+                self.assertIn("Reader creation rejected by provider", denied.stderr)
+            finally:
+                sql("DROP ROLE provision_denied_owner")
             failure = subprocess.CompletedProcess([], 3, stdout=" connected\n created-reader\n", stderr="ERROR:  42P01: " + password + " SCRAM-SHA-256$private")
             with patch.dict(os.environ, run_env), patch.object(provision.subprocess, "run", return_value=failure):
                 with self.assertRaises(provision.ProvisionError) as caught:

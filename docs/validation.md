@@ -3128,8 +3128,8 @@ The first production provisioning run stopped without exposing credentials, but 
 
 Local PostgreSQL checks passed, including exact existing-role/unsafe-PUBLIC diagnostics and exclusion of plaintext passwords and SCRAM verifiers. A separate transaction verified the creation flags with a non-superuser CREATEROLE owner. Claude Opus 5.5 Medium reviewed the change and verified the fixes; the final pass found no blockers. Production provisioning remains pending successful execution and verified owner membership.
 
-## PostgreSQL status diagnostics for reader provisioning — 2026-10-04 (B12)
+## Neon-compatible reader provisioning and safe status diagnostics — 2026-10-04 (B12)
 
-An unclassified hosted failure now reports only psql's numeric exit status, a strict five-character SQLSTATE when available, and the last of three constant phase markers. Arbitrary server messages, SQL and connection details remain captured. Mutation and grants still occur within the original transaction.
+Neon's official role documentation requires plaintext passwords and rejects the precomputed SCRAM verifier accepted by standalone PostgreSQL. Direct `.neon.tech` endpoints now receive the password as COPY data over mandatory TLS/channel binding, with a temporary table dropped at commit. The surrounding SQL contains no plaintext password literal; a fixed exception handler prevents dynamic creation SQL and provider error text appearing in errors. Other hosts retain SCRAM verifier provisioning. Existing-role refusal, transaction boundaries and canonical read grants remain intact.
 
-Local PostgreSQL checks passed. A simulated verbose SQL error containing both a plaintext password and a SCRAM verifier proves only status and constant phase metadata are reported. Claude Opus 5.5 Medium reviewed the complete script and test and found no blockers.
+Unclassified hosted errors report only psql's numeric status, a strict five-character SQLSTATE and the last constant phase marker. Local PostgreSQL checks verify native login on both provisioning paths, existing-role refusal, rollback under unsafe PUBLIC privileges, redaction on permission failure and simulated verbose SQL errors. No Neon branch was created.
