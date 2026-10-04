@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlsplit, urlunsplit
 
 SCRIPT = Path(__file__).with_name("provision-context-machine-database.py")
@@ -57,6 +58,14 @@ class ProvisionTest(unittest.TestCase):
                 self.assertFalse(Path(directory, "connection.json").exists())
             finally:
                 sql("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+            failure = subprocess.CompletedProcess([], 3, stdout=" connected\n created-reader\n", stderr="ERROR:  42P01: " + password + " SCRAM-SHA-256$private")
+            with patch.dict(os.environ, run_env), patch.object(provision.subprocess, "run", return_value=failure):
+                with self.assertRaises(provision.ProvisionError) as caught:
+                    provision.main()
+            self.assertIn("SQLSTATE 42P01", str(caught.exception))
+            self.assertIn("last phase: created-reader", str(caught.exception))
+            self.assertNotIn(password, str(caught.exception))
+            self.assertNotIn("SCRAM-SHA-256$", str(caught.exception))
 
 
 if __name__ == "__main__":

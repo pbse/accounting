@@ -3127,3 +3127,9 @@ Verified: `wrangler deploy --dry-run --env production` in CI.
 The first production provisioning run stopped without exposing credentials, but its generic message did not identify the cause. Explicit validation failures now use fixed operator messages; database failures classify only known errors without relaying SQL, libpq output, passwords or SCRAM verifiers. Unknown failures keep a neutral message. Role creation, grants and rollback behavior are unchanged.
 
 Local PostgreSQL checks passed, including exact existing-role/unsafe-PUBLIC diagnostics and exclusion of plaintext passwords and SCRAM verifiers. A separate transaction verified the creation flags with a non-superuser CREATEROLE owner. Claude Opus 5.5 Medium reviewed the change and verified the fixes; the final pass found no blockers. Production provisioning remains pending successful execution and verified owner membership.
+
+## PostgreSQL status diagnostics for reader provisioning — 2026-10-04 (B12)
+
+An unclassified hosted failure now reports only psql's numeric exit status, a strict five-character SQLSTATE when available, and the last of three constant phase markers. Arbitrary server messages, SQL and connection details remain captured. Mutation and grants still occur within the original transaction.
+
+Local PostgreSQL checks passed. A simulated verbose SQL error containing both a plaintext password and a SCRAM verifier proves only status and constant phase metadata are reported. Claude Opus 5.5 Medium reviewed the complete script and test and found no blockers.

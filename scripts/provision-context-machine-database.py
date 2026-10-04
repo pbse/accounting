@@ -67,8 +67,9 @@ def main():
     # Never rotate an existing role implicitly. A repeated run fails without changes.
     verifier = scram_verifier(password)
     create = f"CREATE ROLE {ROLE} LOGIN PASSWORD '{verifier}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;"
-    sql = sql.replace("BEGIN;", "BEGIN;\nSET LOCAL statement_timeout='15s';\nSET LOCAL password_encryption='scram-sha-256';\n" + create, 1)
+    sql = sql.replace("BEGIN;", "SELECT 'connected';\nBEGIN;\nSET LOCAL statement_timeout='15s';\nSET LOCAL password_encryption='scram-sha-256';\n" + create + "\nSELECT 'created-reader';", 1)
     sql = sql.replace("COMMIT;", f"""
+SELECT 'applied-grants';
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='{ROLE}' AND (rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolreplication))
  OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f') AND (has_table_privilege('{ROLE}',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER') OR c.relowner=(SELECT oid FROM pg_roles WHERE rolname='{ROLE}')))
@@ -79,7 +80,7 @@ DO $$ BEGIN
 END $$;
 COMMIT;
 """, 1)
-    result = subprocess.run(["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", f"agent_role={ROLE}"],
+    result = subprocess.run(["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", "-v", f"agent_role={ROLE}"],
                             input=sql, text=True, env=env, capture_output=True)
     if result.returncode:
         (directory / "connection.json").unlink(missing_ok=True)
@@ -95,6 +96,18 @@ COMMIT;
             if pattern in result.stderr:
                 reason = message
                 break
+        else:
+            # Extract only the fixed-width SQLSTATE and our own known phase markers.
+            # Never relay arbitrary database error text, SQL, or connection details.
+            state = re.search(r"(?:ERROR|FATAL):\s+([0-9A-Z]{5}):", result.stderr)
+            phase = "not connected"
+            for marker in ("connected", "created-reader", "applied-grants"):
+                if marker in {line.strip() for line in result.stdout.splitlines()}:
+                    phase = marker
+            reason += f" (psql exit {result.returncode}; last phase: {phase}"
+            if state:
+                reason += f"; SQLSTATE {state.group(1)}"
+            reason += ")"
         raise ProvisionError(reason)
     print("Dedicated database reader provisioned; only password-free connection metadata exported.")
 
