@@ -363,7 +363,8 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 		start := time.Date(asOf.Year(), asOf.Month(), asOf.Day(), 0, 0, 0, 0, time.UTC)
 		day := func(on time.Time) int { return int(on.Sub(start) / (24 * time.Hour)) }
 		end := start.AddDate(0, 0, 13*7)
-		// Open bills by vendor and due week, before any bill-pay date moves them: an obligation's payment that week is the bill.
+		// Counted open bills by vendor and due week, before any bill-pay date moves them: an obligation's payment that week is
+		// the bill. A bill left out of the plan (disputed, on hold, undated) is not the payment, so the obligation counts.
 		billWeeks := map[string]bool{}
 		items, unscheduled, otherCurrency := []cashItem{}, []map[string]string{}, []string{}
 		for side, list := range [][]openItem{receivables, payables} {
@@ -375,13 +376,13 @@ func registerCashPlan(mux *http.ServeMux, db *sql.DB) {
 					otherCurrency = append(otherCurrency, item.Label)
 					continue
 				}
-				if due, err := time.Parse("2006-01-02", item.Due); err == nil && side == 1 && !due.Before(start) {
-					billWeeks[strings.ToLower(strings.TrimSpace(item.Party))+"|"+strconv.Itoa(day(due)/7)] = true
-				}
 				on, basis, reason := cashSchedule(item)
 				if reason != "" {
 					unscheduled = append(unscheduled, map[string]string{"label": item.Label, "amount": item.Balance, "reason": reason})
 					continue
+				}
+				if due, err := time.Parse("2006-01-02", item.Due); err == nil && side == 1 && !due.Before(start) {
+					billWeeks[strings.ToLower(strings.TrimSpace(item.Party))+"|"+strconv.Itoa(day(due)/7)] = true
 				}
 				value, _ := new(big.Rat).SetString(item.Balance)
 				if side == 1 {

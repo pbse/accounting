@@ -275,7 +275,8 @@ func managementPack(this, last *books) map[string]any {
 	}
 	out := map[string]any{"profit_and_loss": statement{plSections, measures}, "balance_sheet": balance, "reclassified": names,
 		"cash_flow": cashFlow(this, last, compared)}
-	if flow := out["cash_flow"].(map[string]any); flow["reconciled"] == false {
+	// The pack's scope includes a reconciled historical cash-flow statement: without one it is not complete.
+	if flow := out["cash_flow"].(map[string]any); flow["reconciled"] != true {
 		complete = false
 	}
 	if !this.Typed {

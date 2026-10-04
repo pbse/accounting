@@ -278,6 +278,19 @@ func TestCashPlanFromTheLedgerOpenItemsAndApprovedObligations(t *testing.T) {
 	if w1, w2 := plan.Weeks[0], plan.Weeks[1]; len(plan.Covered) != 1 || w1.Disbursements != "4000.00" || w1.Lowest != "1000.00" || w2.Disbursements != "1500.00" || w2.Closing != "2100.00" {
 		t.Fatalf("the bill moves to its bill-pay date and the rent estimate is still not counted: %+v %+v %+v", plan.Covered, w1, w2)
 	}
+	// A disputed bill is left out of the payments, so it no longer stands in for the week's rent: the estimate counts.
+	decided := func() string {
+		var id string
+		must(db.QueryRow(`SELECT id::text FROM open_item_actions WHERE lower(client_entity)=lower($1) AND kind='Bill' AND item_id='9' ORDER BY id DESC LIMIT 1`, entity).Scan(&id))
+		return id
+	}
+	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "disputed", "note": "Overcharged", "previous_id": decided()}, 200)
+	plan.Covered = nil
+	must(json.Unmarshal(call("GET", "/cash-plan", nil, 200), &plan))
+	if w1 := plan.Weeks[0]; len(plan.Covered) != 0 || w1.Disbursements != "5500.00" {
+		t.Fatalf("an excluded bill does not cover the rent estimate: %+v %+v", plan.Covered, w1)
+	}
+	call("POST", "/open-items", map[string]any{"capture_id": items.CaptureID, "kind": "Bill", "item_id": "9", "status": "handed_to_bill_pay", "expected_on": "2026-10-14", "previous_id": decided()}, 200)
 	// The handoff changed the plan: the review is kept and says so. A capture three days later is compared with what
 	// the reviewed plan expected that day: 5,000 opening less the rent bill and payroll on the 7th is -500.00.
 	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) SELECT close_id,connection_id,realm,'later',payload,now(),captured_at+interval '3 days','fixture' FROM quickbooks_snapshots WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID)

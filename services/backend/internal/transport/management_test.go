@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -103,8 +104,8 @@ func TestManagementPackTiesStatementsToTheTrialBalances(t *testing.T) {
 	if got.CashFlow["unavailable"] == "" {
 		t.Error("no cash-flow statement is derived from balance changes")
 	}
-	if !got.Complete {
-		t.Error("a reconciled pack is complete")
+	if got.Complete {
+		t.Error("a pack without a reconciled cash-flow statement is not complete")
 	}
 
 	// An account the ledger does not classify is shown, never folded into a total that then looks complete.
@@ -122,8 +123,8 @@ func TestManagementPackTiesStatementsToTheTrialBalances(t *testing.T) {
 
 	// Without account types (Xero) there is no current/long-term split, so neither is guessed.
 	pack := managementPack(&books{Currency: "USD", Accounts: map[string]packAccount{"a": {"Bank", "Asset", "", ""}, "b": {"Sales", "Revenue", "", ""}}, Balances: rats(map[string]string{"a": "70", "b": "-70"}), Activity: rats(map[string]string{"b": "70"})}, nil)
-	if _, ok := pack["working_capital"].(map[string]string)["unavailable"]; !ok || pack["complete"] != true {
-		t.Errorf("an untyped ledger states working capital is unavailable: %+v", pack)
+	if _, ok := pack["working_capital"].(map[string]string)["unavailable"]; !ok || pack["complete"] != false {
+		t.Errorf("an untyped ledger states working capital is unavailable and, with no cash-flow statement, is not complete: %+v", pack)
 	}
 }
 
@@ -197,7 +198,7 @@ func TestManagementPackReadsTheCapturedReports(t *testing.T) {
 		t.Fatalf("pack: %d %s", w.Code, w.Body.String())
 	}
 	net := got.ProfitAndLoss.Measures[len(got.ProfitAndLoss.Measures)-1]
-	if got.State != "ready" || got.Status != "provisional" || got.Currency != "USD" || got.Basis != "Accrual" || got.Source != "quickbooks" || !got.Complete {
+	if got.State != "ready" || got.Status != "provisional" || got.Currency != "USD" || got.Basis != "Accrual" || got.Source != "quickbooks" || got.Complete {
 		t.Fatalf("pack metadata: %s", w.Body.String())
 	}
 	if net.Name != "Net income" || net.Amount != "300.00" || net.Prior != nil || got.BalanceSheet.TotalAssets.Amount != "1500.00" || got.BalanceSheet.TotalEquity.Amount != "1300.00" || got.BalanceSheet.Difference != "0.00" {
@@ -293,7 +294,16 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 		accounts := `[{"Id":"1","Name":"Checking","Classification":"Asset","AccountType":"Bank"},{"Id":"2","Name":"Card","Classification":"Liability","AccountType":"Credit Card"},{"Id":"3","Name":"Owner","Classification":"Equity","AccountType":"Equity"},{"Id":"4","Name":"Sales","Classification":"Revenue","AccountType":"Income"},{"Id":"5","Name":"Rent","Classification":"Expense","AccountType":"Expense"}]`
 		tb := `{"Header":{"Currency":"USD"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Debit"},{"ColTitle":"Credit"}]},"Rows":{"Row":[` + strings.Join([]string{row("1", "Checking", cash, ""), row("2", "Card", "", "200.00"), row("3", "Owner", "", "1000.00"), row("4", "Sales", "", "800.00"), row("5", "Rent", rent, "")}, ",") + `]}}`
 		pl := `{"Header":{"Currency":"USD"},"Columns":{"Column":[{"ColTitle":""},{"ColTitle":"Total"}]},"Rows":{"Row":[` + row("4", "Sales", "800.00", "-") + `,` + row("5", "Rent", rent, "-") + `]}}`
-		payload := `{"period":"2026-09","source_id":"` + evidence + `","accounts":` + accounts + `,"reports":{"TrialBalance":` + tb + `,"ProfitAndLoss":` + pl + `,"GeneralLedger":{}}}`
+		// The ledger's own Statement of Cash Flows: net income is the month's change in cash.
+		r, _ := strconv.ParseFloat(rent, 64)
+		c, _ := strconv.ParseFloat(cash, 64)
+		net, begin := fmt.Sprintf("%.2f", 800-r), fmt.Sprintf("%.2f", c-(800-r))
+		flow := `{"Header":{"ReportName":"CashFlow","StartPeriod":"2026-09-01","EndPeriod":"2026-09-30","Currency":"USD"},"Rows":{"Row":[
+ {"type":"Section","group":"OperatingActivities","Rows":{"Row":[{"type":"Data","group":"NetIncome","ColData":[{"value":"Net Income"},{"value":"` + net + `"}]}]},"Summary":{"ColData":[{"value":"Net cash provided by operating activities"},{"value":"` + net + `"}]}},
+ {"type":"Section","group":"CashIncrease","Summary":{"ColData":[{"value":"NET CASH INCREASE FOR PERIOD"},{"value":"` + net + `"}]}},
+ {"type":"Section","group":"BeginningCash","Summary":{"ColData":[{"value":"Cash at beginning of period"},{"value":"` + begin + `"}]}},
+ {"type":"Data","group":"EndingCash","ColData":[{"value":"CASH AT END OF PERIOD"},{"value":"` + cash + `"}]}]}}`
+		payload := `{"period":"2026-09","source_id":"` + evidence + `","accounts":` + accounts + `,"reports":{"TrialBalance":` + tb + `,"ProfitAndLoss":` + pl + `,"CashFlow":` + flow + `,"GeneralLedger":{}}}`
 		_, err := db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,actor) VALUES($1,$2,'123',$3,$4,now(),'fixture')`, closeID, connection, rand.Text(), payload)
 		must(err)
 	}
@@ -371,6 +381,15 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 	}
 
 	// The books change after publication: the version is flagged, and a correction is a new version with its reason.
+	// Reopening the signed close leaves the published pack as it was, flagged: its approval no longer stands.
+	sign("reopen")
+	if got := list(); got.Publications[0].State != "signoff_lapsed" {
+		t.Fatalf("a reopened close's publication is not current: %+v", got)
+	}
+	sign("sign")
+	if got := list(); got.Publications[0].State != "current" {
+		t.Fatalf("signed again with the same figures, the publication is current again: %+v", got)
+	}
 	capture("600.00", "1400.00")
 	if got := list(); got.Publications[0].State != "needs_correction" {
 		t.Fatalf("changed books flag the published version: %+v", got)

@@ -138,7 +138,7 @@ export function PackView({ closeId, pack, staff = false }: { closeId: string; pa
         <span className={statusClass}>{statusText}</span>
       </p>
       {pack.stale && <p role="alert">This capture is no longer current: its connection or evidence changed. Capture the month again before relying on these figures.</p>}
-      {!pack.complete && <p role="alert">Not complete: an account is unclassified or a total does not reconcile. The difference is shown below; nothing is absorbed.</p>}
+      {!pack.complete && <p role="alert">Not complete: an account is unclassified, a total does not reconcile, or there is no reconciled cash-flow statement. What is missing is shown below; nothing is absorbed.</p>}
       <p className="note">
         {pack.note}{" "}
         {prior ? (
@@ -248,6 +248,7 @@ const publishedStates = {
   current: ["status ok", "Current"],
   superseded: ["status info", "Superseded"],
   needs_correction: ["status danger", "Books changed: needs a correction"],
+  signoff_lapsed: ["status warn", "Sign-off no longer stands: review before relying on it"],
   unverified: ["status warn", "Live figures unavailable: cannot confirm it is current"],
 } as const;
 
