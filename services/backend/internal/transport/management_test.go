@@ -358,6 +358,15 @@ func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T
 	call("POST", base+"/scope", map[string]any{"digest": current.Digest, "scope": closeScope{Description: "Management accounts", RequiredPapers: []string{}, ExternalSteps: []externalStep{{Name: "Ledger review", Complete: true, Reference: "Reviewed"}}}}, 200)
 	sign("sign")
 	publish["digest"] = digest()
+	// The drafted commentary is a starting point: published unedited, it is refused.
+	var drafted struct {
+		DraftCommentary string `json:"draft_commentary"`
+	}
+	must(json.Unmarshal(call("GET", base+"/management-pack", nil, 200), &drafted))
+	unedited := map[string]any{"action": "publish", "digest": publish["digest"], "commentary": drafted.DraftCommentary, "confirmed": true}
+	if body := call("POST", base+"/management-pack/publications", unedited, 422); !strings.Contains(string(body), "why each line moved") || !strings.Contains(drafted.DraftCommentary, "Net income") {
+		t.Fatalf("an unedited draft is not published: %s %q", body, drafted.DraftCommentary)
+	}
 	var first struct {
 		ID      string
 		Version int
