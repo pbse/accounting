@@ -13,14 +13,18 @@ from urllib.parse import parse_qs, unquote, urlencode, urlsplit, urlunsplit
 ROLE = "context_machine_reader"
 
 
+class ProvisionError(Exception):
+    """Only fixed, credential-free operator diagnostics belong in this exception."""
+
+
 def connection_env(uri):
     u = urlsplit(uri)
     query = parse_qs(u.query)
     sslmode = query.get("sslmode", [""])[0]
     if u.scheme not in ("postgres", "postgresql") or not u.hostname or not u.username or not u.path.strip("/"):
-        raise ValueError("A PostgreSQL connection is required")
+        raise ProvisionError("A PostgreSQL connection is required")
     if u.hostname not in ("localhost", "127.0.0.1", "::1") and (sslmode not in ("require", "verify-ca", "verify-full") or "-pooler" in u.hostname):
-        raise ValueError("Hosted provisioning requires a direct PostgreSQL endpoint with TLS")
+        raise ProvisionError("Hosted provisioning requires a direct PostgreSQL endpoint with TLS")
     env = dict(os.environ, PGHOST=u.hostname, PGPORT=str(u.port or 5432), PGUSER=unquote(u.username),
                PGPASSWORD=unquote(u.password or ""), PGDATABASE=unquote(u.path[1:]),
                PGSSLMODE=sslmode or "disable", PGCHANNELBINDING="disable" if u.hostname in ("localhost", "127.0.0.1", "::1") else "require",
@@ -43,12 +47,12 @@ def main():
     owner, env = connection_env(os.environ["MIGRATION_DATABASE_URL"])
     runtime, _ = connection_env(os.environ["DATABASE_URL"])
     if (owner.hostname, owner.port or 5432, owner.path) != (runtime.hostname, runtime.port or 5432, runtime.path):
-        raise ValueError("Owner and application connections must target the same database")
+        raise ProvisionError("Owner and application connections must target the same database")
     if unquote(runtime.username) == ROLE:
-        raise ValueError("The reader must be separate from the application role")
+        raise ProvisionError("The reader must be separate from the application role")
     password = os.environ["CONTEXT_MACHINE_DATABASE_PASSWORD"]
     if not re.fullmatch(r"[A-Za-z0-9_-]{48,128}", password):
-        raise ValueError("A newly generated reader password of at least 48 characters is required")
+        raise ProvisionError("A newly generated reader password of at least 48 characters is required")
     # Prepare password-free metadata before making any database changes.
     query = {"sslmode": env["PGSSLMODE"], "channel_binding": env["PGCHANNELBINDING"]}
     authority = ROLE + "@" + owner.netloc.rsplit("@", 1)[-1]
@@ -59,7 +63,7 @@ def main():
     grant_file = Path(__file__).resolve().parents[1] / "infra/postgres/context-machine-role.sql"
     sql = grant_file.read_text()
     if sql.count("BEGIN;") != 1 or sql.count("COMMIT;") != 1:
-        raise ValueError("Expected the canonical grants to contain one transaction")
+        raise ProvisionError("Expected the canonical grants to contain one transaction")
     # Never rotate an existing role implicitly. A repeated run fails without changes.
     verifier = scram_verifier(password)
     create = f"CREATE ROLE {ROLE} LOGIN PASSWORD '{verifier}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;"
@@ -80,13 +84,27 @@ COMMIT;
     if result.returncode:
         (directory / "connection.json").unlink(missing_ok=True)
         # SQL errors can echo statements containing credentials. Never relay them.
-        raise RuntimeError("Database provisioning failed and rolled back; check role existence and owner privileges")
+        reason = "Database provisioning did not complete; check connectivity, role existence and owner privileges"
+        for pattern, message in (
+            ("already exists", "The dedicated role already exists; no credential rotation was attempted"),
+            ("Unexpected reader privileges", "Unsafe existing PUBLIC privileges; role creation rolled back"),
+            ("permission denied", "The owner lacks required role/schema/grant permissions; provisioning rolled back"),
+            ("password authentication failed", "The production owner credential could not authenticate"),
+            ("channel binding", "The production owner connection did not satisfy required channel binding"),
+        ):
+            if pattern in result.stderr:
+                reason = message
+                break
+        raise ProvisionError(reason)
     print("Dedicated database reader provisioned; only password-free connection metadata exported.")
 
 
 if __name__ == "__main__":
     try:
         main()
+    except ProvisionError as error:
+        print(str(error))
+        raise SystemExit(1) from None
     except (KeyError, ValueError, RuntimeError, OSError):
         # Do not print arbitrary exception data or libpq connection strings.
         print("Reader provisioning did not complete. No credentials were logged.")

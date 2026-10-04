@@ -3121,3 +3121,9 @@ Production moved to `https://getkrith.com`: `PRODUCTION_URL` switched, the WorkO
 Review: Codex (gpt-6-sol, high) pass 1 asked to account for webhooks and request links already sent on the old host (checked and recorded in the move's steps); pass 2 found nothing.
 
 Verified: `wrangler deploy --dry-run --env production` in CI.
+
+## Credential-free reader provisioning diagnostics — 2026-10-04 (B12)
+
+The first production provisioning run stopped without exposing credentials, but its generic message did not identify the cause. Explicit validation failures now use fixed operator messages; database failures classify only known errors without relaying SQL, libpq output, passwords or SCRAM verifiers. Unknown failures keep a neutral message. Role creation, grants and rollback behavior are unchanged.
+
+Local PostgreSQL checks passed, including exact existing-role/unsafe-PUBLIC diagnostics and exclusion of plaintext passwords and SCRAM verifiers. A separate transaction verified the creation flags with a non-superuser CREATEROLE owner. Claude Opus 5.5 Medium reviewed the change and verified the fixes; the final pass found no blockers. Production provisioning remains pending successful execution and verified owner membership.

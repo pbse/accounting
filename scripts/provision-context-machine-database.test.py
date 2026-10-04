@@ -42,12 +42,17 @@ class ProvisionTest(unittest.TestCase):
             repeat = subprocess.run(["python3", str(SCRIPT)], env=run_env, capture_output=True, text=True)
             self.assertNotEqual(repeat.returncode, 0)
             self.assertNotIn(password, repeat.stdout + repeat.stderr)
+            self.assertEqual(repeat.stdout.strip(), "The dedicated role already exists; no credential rotation was attempted")
+            self.assertNotIn("SCRAM-SHA-256$", repeat.stdout + repeat.stderr)
             self.assertEqual(sql("SELECT 1", reader).returncode, 0, "A repeated run must not rotate the existing credential")
             self.assertEqual(sql("DROP OWNED BY context_machine_reader; DROP ROLE context_machine_reader").returncode, 0)
             self.assertEqual(sql("GRANT CREATE ON SCHEMA public TO PUBLIC").returncode, 0)
             try:
                 unsafe = subprocess.run(["python3", str(SCRIPT)], env=run_env, capture_output=True, text=True)
                 self.assertNotEqual(unsafe.returncode, 0)
+                self.assertNotIn(password, unsafe.stdout + unsafe.stderr)
+                self.assertEqual(unsafe.stdout.strip(), "Unsafe existing PUBLIC privileges; role creation rolled back")
+                self.assertNotIn("SCRAM-SHA-256$", unsafe.stdout + unsafe.stderr)
                 self.assertEqual(sql("SELECT count(*) FROM pg_roles WHERE rolname='context_machine_reader'").stdout.strip(), "0", "Unsafe PUBLIC permissions must roll back role creation")
                 self.assertFalse(Path(directory, "connection.json").exists())
             finally:
