@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import urlsplit, urlunsplit
 
 SCRIPT = Path(__file__).with_name("provision-context-machine-database.py")
@@ -57,6 +58,46 @@ class ProvisionTest(unittest.TestCase):
                 self.assertFalse(Path(directory, "connection.json").exists())
             finally:
                 sql("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+            # Exercise Neon's plaintext-only path on local PostgreSQL, with real login.
+            create = provision.create_role_sql(password, "ep-test.neon.tech")
+            self.assertNotIn("PASSWORD '" + password, create)
+            original_create = provision.create_role_sql
+            with patch.dict(os.environ, run_env), patch.object(provision, "create_role_sql", side_effect=lambda value, host: original_create(value, "ep-test.neon.tech")):
+                provision.main()
+                self.assertEqual(sql("SELECT rolpassword LIKE 'SCRAM-SHA-256$%' FROM pg_authid WHERE rolname='context_machine_reader'").stdout.strip(), "t")
+                self.assertEqual(sql("SHOW default_transaction_read_only", reader).stdout.strip(), "on")
+                self.assertEqual(sql("SELECT has_table_privilege(current_user,'evidence','SELECT'),has_table_privilege(current_user,'evidence','UPDATE')", reader).stdout.strip(), "t|f")
+                with self.assertRaises(provision.ProvisionError) as repeated:
+                    provision.main()
+                self.assertIn("already exists", str(repeated.exception))
+                self.assertEqual(sql("SELECT 1", reader).returncode, 0)
+                self.assertEqual(sql("DROP OWNED BY context_machine_reader; DROP ROLE context_machine_reader").returncode, 0)
+                self.assertEqual(sql("GRANT CREATE ON SCHEMA public TO PUBLIC").returncode, 0)
+                try:
+                    with self.assertRaises(provision.ProvisionError) as unsafe_neon:
+                        provision.main()
+                    self.assertIn("Unsafe existing PUBLIC privileges", str(unsafe_neon.exception))
+                    self.assertEqual(sql("SELECT count(*) FROM pg_roles WHERE rolname='context_machine_reader'").stdout.strip(), "0")
+                    self.assertFalse(Path(directory, "connection.json").exists())
+                finally:
+                    sql("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+            # Permission failure must not echo a dynamic password-bearing CREATE ROLE.
+            self.assertEqual(sql("CREATE ROLE provision_denied_owner").returncode, 0)
+            try:
+                denied = sql("BEGIN; SET LOCAL ROLE provision_denied_owner; " + create + "COMMIT;")
+                self.assertNotEqual(denied.returncode, 0)
+                self.assertNotIn(password, denied.stdout + denied.stderr)
+                self.assertIn("permission denied creating reader", denied.stderr)
+            finally:
+                sql("DROP ROLE provision_denied_owner")
+            failure = subprocess.CompletedProcess([], 3, stdout=" connected\n created-reader\n", stderr="ERROR:  42P01: " + password + " SCRAM-SHA-256$private")
+            with patch.dict(os.environ, run_env), patch.object(provision.subprocess, "run", return_value=failure):
+                with self.assertRaises(provision.ProvisionError) as caught:
+                    provision.main()
+            self.assertIn("SQLSTATE 42P01", str(caught.exception))
+            self.assertIn("last phase: created-reader", str(caught.exception))
+            self.assertNotIn(password, str(caught.exception))
+            self.assertNotIn("SCRAM-SHA-256$", str(caught.exception))
 
 
 if __name__ == "__main__":

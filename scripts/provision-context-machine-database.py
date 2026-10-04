@@ -43,6 +43,38 @@ def scram_verifier(password):
     return f"SCRAM-SHA-256$4096:{b64(salt)}${b64(stored)}:{b64(server)}"
 
 
+def create_role_sql(password, hostname):
+    attributes = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+    if not hostname.endswith(".neon.tech"):
+        return f"CREATE ROLE {ROLE} LOGIN PASSWORD '{scram_verifier(password)}' {attributes};"
+    # Neon requires plaintext: https://neon.com/docs/manage/roles#manage-roles-with-sql
+    # COPY sends data separately from SQL statements. The DO body contains no
+    # credential; its exception handler prevents dynamic SQL appearing in errors.
+    return f"""
+DO $$ BEGIN
+ IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='{ROLE}') THEN
+  RAISE EXCEPTION 'Dedicated role already exists';
+ END IF;
+END $$;
+CREATE TEMP TABLE context_machine_password(value text) ON COMMIT DROP;
+COPY pg_temp.context_machine_password(value) FROM STDIN;
+{password}
+\\.
+DO $$ BEGIN
+ EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L {attributes}',
+                '{ROLE}', (SELECT value FROM pg_temp.context_machine_password));
+EXCEPTION WHEN OTHERS THEN
+ IF SQLSTATE='42501' THEN
+  RAISE EXCEPTION 'permission denied creating reader' USING ERRCODE=SQLSTATE;
+ ELSIF SQLSTATE='42710' THEN
+  RAISE EXCEPTION 'Dedicated role already exists' USING ERRCODE=SQLSTATE;
+ ELSE
+  RAISE EXCEPTION 'Reader creation rejected by provider' USING ERRCODE=SQLSTATE;
+ END IF;
+END $$;
+"""
+
+
 def main():
     owner, env = connection_env(os.environ["MIGRATION_DATABASE_URL"])
     runtime, _ = connection_env(os.environ["DATABASE_URL"])
@@ -65,10 +97,10 @@ def main():
     if sql.count("BEGIN;") != 1 or sql.count("COMMIT;") != 1:
         raise ProvisionError("Expected the canonical grants to contain one transaction")
     # Never rotate an existing role implicitly. A repeated run fails without changes.
-    verifier = scram_verifier(password)
-    create = f"CREATE ROLE {ROLE} LOGIN PASSWORD '{verifier}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;"
-    sql = sql.replace("BEGIN;", "BEGIN;\nSET LOCAL statement_timeout='15s';\nSET LOCAL password_encryption='scram-sha-256';\n" + create, 1)
+    create = create_role_sql(password, owner.hostname)
+    sql = sql.replace("BEGIN;", "SELECT 'connected';\nBEGIN;\nSET LOCAL statement_timeout='15s';\nSET LOCAL password_encryption='scram-sha-256';\n" + create + "\nSELECT 'created-reader';", 1)
     sql = sql.replace("COMMIT;", f"""
+SELECT 'applied-grants';
 DO $$ BEGIN
  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='{ROLE}' AND (rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolreplication))
  OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f') AND (has_table_privilege('{ROLE}',c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER') OR c.relowner=(SELECT oid FROM pg_roles WHERE rolname='{ROLE}')))
@@ -79,7 +111,7 @@ DO $$ BEGIN
 END $$;
 COMMIT;
 """, 1)
-    result = subprocess.run(["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", f"agent_role={ROLE}"],
+    result = subprocess.run(["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-v", "VERBOSITY=verbose", "-v", f"agent_role={ROLE}"],
                             input=sql, text=True, env=env, capture_output=True)
     if result.returncode:
         (directory / "connection.json").unlink(missing_ok=True)
@@ -95,6 +127,18 @@ COMMIT;
             if pattern in result.stderr:
                 reason = message
                 break
+        else:
+            # Extract only the fixed-width SQLSTATE and our own known phase markers.
+            # Never relay arbitrary database error text, SQL, or connection details.
+            state = re.search(r"(?:ERROR|FATAL):\s+([0-9A-Z]{5}):", result.stderr)
+            phase = "not connected"
+            for marker in ("connected", "created-reader", "applied-grants"):
+                if marker in {line.strip() for line in result.stdout.splitlines()}:
+                    phase = marker
+            reason += f" (psql exit {result.returncode}; last phase: {phase}"
+            if state:
+                reason += f"; SQLSTATE {state.group(1)}"
+            reason += ")"
         raise ProvisionError(reason)
     print("Dedicated database reader provisioned; only password-free connection metadata exported.")
 
