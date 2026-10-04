@@ -3089,3 +3089,11 @@ Local validation used disposable PostgreSQL databases at 127.0.0.1:5434, never a
 Review: Claude Opus 5.5 at medium effort reviewed the complete update, then verified the fixes. Findings corrected Codex string-delta parsing, numeric precision, replay concurrency/budget eligibility and scheduled QuickBooks provenance filtering; the last pass found no actionable issues. No dependencies or CI jobs were added.
 
 No production provider credentials were installed and no paid inference occurred. Live entitlement, cold-start deadlines, output budgets/quality and provider/account consent remain activation gates. Production stays in standby until credentials and the owner read profile are provisioned; a healthy app readiness check while research is disabled does not verify an active context machine.
+
+## Production on getkrith.com (2026-10-04)
+
+The production Worker declares `getkrith.com` as a Cloudflare custom domain (`workers/edge/wrangler.jsonc`), so the next deploy creates its DNS record and certificate and later deploys keep it. Checked through the Cloudflare API: the zone is active in the production account (rockr1992, Free plan, Cloudflare nameservers) and has no DNS records, so nothing conflicts. The `workers.dev` URL stays on until the move is verified. The deploy no longer passes `--route "${UPLOAD_SCAN_HOST}/*"`, which would replace the configured routes once `UPLOAD_SCAN_HOST` is set; it is empty today, so nothing changes now. `docs/deployment.md` gives the move in order: readyz on the new domain, the WorkOS addresses, every separately set URL (`PRODUCTION_URL`, `VITE_API_BASE_URL`, `MCP_RESOURCE_URL`, the QuickBooks and Xero redirect URIs) in one change, then `workers_dev` off.
+
+Review: Codex (gpt-6-sol, high) pass 1 found `MCP_RESOURCE_URL` and the connector redirect URIs missing from the move; pass 2 found `VITE_API_BASE_URL` missing (both added); pass 3 found nothing.
+
+Verified: `wrangler deploy --dry-run --env production` with the custom domain after `npm ci` and `npm run build`.
