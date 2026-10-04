@@ -13,6 +13,20 @@ import (
 	"close.local/backend/internal/xero"
 )
 
+// yourPermissions says what the signed-in member may do, in plain words.
+func yourPermissions(r *http.Request) []string {
+	a := auth.Actor(r.Context())
+	you := []string{}
+	for _, p := range plainPermissions {
+		if a == nil || a.Organization == "" || slices.Contains(a.Permissions, p.name) {
+			you = append(you, p.plain)
+		} else if p.name == "clients:all" {
+			you = append(you, "See only the clients assigned to you")
+		}
+	}
+	return you
+}
+
 // plainPermissions says what each permission the application checks lets a member do.
 var plainPermissions = []struct{ name, plain string }{
 	{"clients:all", "See every client in the firm"},
@@ -186,15 +200,7 @@ func registerSetup(mux *http.ServeMux, db *sql.DB) {
 		if a := auth.Actor(r.Context()); a != nil && a.Organization != "" {
 			granted = a.Permissions
 		}
-		you := []string{}
-		for _, p := range plainPermissions {
-			if a := auth.Actor(r.Context()); a == nil || a.Organization == "" || slices.Contains(granted, p.name) {
-				you = append(you, p.plain)
-			} else if p.name == "clients:all" {
-				you = append(you, "See only the clients assigned to you")
-			}
-		}
-		out := map[string]any{"steps": steps, "permissions": you, "reconnect": reconnect, "can_reconnect": slices.Contains(granted, "integrations:manage")}
+		out := map[string]any{"steps": steps, "permissions": yourPermissions(r), "reconnect": reconnect, "can_reconnect": slices.Contains(granted, "integrations:manage")}
 		if first != "" {
 			draft := map[string]any{"workpaper_id": first, "close_id": firstClose, "elapsed_minutes": nil, "human_minutes": human}
 			if elapsed.Valid {

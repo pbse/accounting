@@ -72,6 +72,14 @@ func openingBlockers(ctx context.Context, tx *sql.Tx, closeID string, tie tieOut
 		return nil, nil, err
 	}
 	if takeover {
+		var blockers []string
+		var confirmed bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM takeover_setups WHERE close_id::text=$1)`, closeID).Scan(&confirmed); err != nil {
+			return nil, nil, err
+		}
+		if !confirmed {
+			blockers = append(blockers, "Confirm the takeover setup: the company, basis, procedures, access, account scope and timezone this client is taken over with.")
+		}
 		digest, _, refusal := openingContent(tie)
 		var reviewed string
 		var notes []byte
@@ -80,7 +88,7 @@ func openingBlockers(ctx context.Context, tx *sql.Tx, closeID string, tie tieOut
 			return nil, nil, err
 		}
 		if refusal != nil || err == sql.ErrNoRows || reviewed != digest {
-			return []string{"Review the opening baseline: this is the client's first close in the firm, so its balances are the starting point."}, nil, nil
+			return append(blockers, "Review the opening baseline: this is the client's first close in the firm, so its balances are the starting point."), nil, nil
 		}
 		var keys map[string]string
 		json.Unmarshal(notes, &keys)
@@ -92,7 +100,7 @@ func openingBlockers(ctx context.Context, tx *sql.Tx, closeID string, tie tieOut
 				noted[id] = true
 			}
 		}
-		return nil, noted, nil
+		return blockers, noted, nil
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT c.entity,c.period,EXISTS(SELECT 1 FROM opening_baselines b WHERE b.close_id=c.id),`+openCleanup+`
  FROM client_closes c WHERE `+sameClient+` AND c.takeover AND c.period<$3 ORDER BY c.id`, org, entity, period)
