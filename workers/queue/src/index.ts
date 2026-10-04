@@ -1,3 +1,4 @@
+import { llmEnvironment } from '../../shared/llm';
 import { Container } from "@cloudflare/containers";
 // Required entrypoint for Cloudflare container outbound service interception.
 export { ContainerProxy } from "@cloudflare/containers";
@@ -7,22 +8,7 @@ export class PreparationWorker extends Container<Env> {
   envVars = {
     DATABASE_URL: this.env.DATABASE_URL,
     SECRETS_KEY: this.env.SECRETS_KEY ?? "",
-    OPENAI_API_KEY: this.env.OPENAI_API_KEY ?? "",
-    OPENAI_MODEL: this.env.OPENAI_MODEL ?? "",
-    OPENAI_REASONING_EFFORT: this.env.OPENAI_REASONING_EFFORT ?? "",
-    LLM_REASONING_EFFORTS: this.env.LLM_REASONING_EFFORTS ?? "",
-    LLM_MODELS: this.env.LLM_MODELS ?? "",
-    LLM_PROVIDER: this.env.LLM_PROVIDER ?? "",
-    LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS: this.env.LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS ?? "",
-    CONTEXT_MACHINE_PROFILES: this.env.CONTEXT_MACHINE_PROFILES ?? "",
-    CODEX_MODEL: this.env.CODEX_MODEL ?? "",
-    CLAUDE_MODEL: this.env.CLAUDE_MODEL ?? "",
-    CODEX_REASONING_EFFORT: this.env.CODEX_REASONING_EFFORT ?? "",
-    CLAUDE_REASONING_EFFORT: this.env.CLAUDE_REASONING_EFFORT ?? "",
-
-    CONTEXT_MACHINE_TOKEN: this.env.CONTEXT_MACHINE_TOKEN ?? "",
-    CONTEXT_MACHINE_MODEL: this.env.CONTEXT_MACHINE_MODEL ?? "",
-    CONTEXT_MACHINE_ENDPOINT: this.env.CONTEXT_MACHINE_TOKEN ? "http://context-machine.internal/v1/run" : "",
+    ...llmEnvironment(this.env),
     OPERATIONS_ALERT_WEBHOOK_URL: this.env.OPERATIONS_ALERT_WEBHOOK_URL ?? "",
     OPERATIONS_ALERT_WEBHOOK_TOKEN: this.env.OPERATIONS_ALERT_WEBHOOK_TOKEN ?? "",
     QBO_CLIENT_ID: this.env.QBO_CLIENT_ID ?? "",
