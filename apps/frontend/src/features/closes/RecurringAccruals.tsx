@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { money, workspaceRequest } from "./workspace";
 
-type Item = { id: string; digest: string; review_id: string; amount: string; rule: string; account_id?: string; account_name?: string; location?: string; cells?: { value: string }[]; blocker?: string };
+type Item = { id: string; digest: string; review_id: string; amount: string; rule: string; account_id?: string; account_name?: string; location?: string; cells?: { value: string }[]; blocker?: string; booked_balance?: string; reverse_next_month: boolean; suggested_evidence?: string };
 type Evidence = { id: string; name: string; extraction_state: string; superseded_by: string | null };
 type Preview = { snapshot: { id?: string; period?: string; captured_at?: string; source_id?: string }; items: Item[] };
 
@@ -12,7 +12,8 @@ export function RecurringAccruals({ closeId, currency, onPrepared }: { closeId: 
   const [error, setError] = useState("");
   const [queued, setQueued] = useState("");
   async function load() {
-    setBusy(true); setError("");
+    // Fresh forms for every comparison, so a value or confirmation from an earlier capture never carries over.
+    setBusy(true); setError(""); setPreview(undefined);
     try {
       const [next, sources] = await Promise.all([workspaceRequest(`/${closeId}/recurring-accruals`), workspaceRequest(`/${closeId}/evidence`)]);
       setPreview(next); setEvidence(sources);
@@ -48,9 +49,10 @@ export function RecurringAccruals({ closeId, currency, onPrepared }: { closeId: 
           <p>Client accountant rule: {item.rule}</p>
           {item.blocker ? <p role="status">{item.blocker}</p> : <>
             <p>Exact liability: {item.account_name} (#{item.account_id}). Trial Balance location: {item.location}. Report cells: {item.cells?.map(c => c.value || "—").join(" · ")}. Check cutoff and credit signs in the captured report.</p>
-            <label>Current-month service evidence<select name="evidence_id" required defaultValue=""><option value="">Select uploaded proof</option>{evidence.filter(s => s.extraction_state === "ready" && !s.superseded_by && s.id !== preview.snapshot.source_id).map(s => <option key={s.id} value={s.id}>{s.name} · #{s.id}</option>)}</select></label>
-            <label>Confirmed booked liability credit balance at this month’s cutoff ({currency})<input name="booked_balance" required inputMode="decimal" maxLength={13} pattern="(0|[1-9][0-9]*)(\.[0-9]{1,2})?" /></label>
-            <label>Propose reversal of this month’s adjustment next month?<select name="reverse_next_month" required defaultValue=""><option value="">Choose explicitly</option><option value="false">No</option><option value="true">Yes</option></select></label>
+            <p className="note">Prefilled from the records: the booked balance is the account's credit balance in this capture's Trial Balance, the reversal is last month's choice, and the evidence is this month's document the agent read for the rule's amount, when there is exactly one. Check each before confirming.</p>
+            <label>Current-month service evidence<select name="evidence_id" required defaultValue={item.suggested_evidence ?? ""}><option value="">Select uploaded proof</option>{evidence.filter(s => s.extraction_state === "ready" && !s.superseded_by && s.id !== preview.snapshot.source_id).map(s => <option key={s.id} value={s.id}>{s.name} · #{s.id}</option>)}</select></label>
+            <label>Confirmed booked liability credit balance at this month’s cutoff ({currency})<input name="booked_balance" required inputMode="decimal" maxLength={13} pattern="(0|[1-9][0-9]*)(\.[0-9]{1,2})?" defaultValue={item.booked_balance ?? ""} /></label>
+            <label>Propose reversal of this month’s adjustment next month?<select name="reverse_next_month" required defaultValue={String(item.reverse_next_month)}><option value="">Choose explicitly</option><option value="false">No</option><option value="true">Yes</option></select></label>
             <label><input type="checkbox" name="confirmed" required /> The client accountant confirmed the current service, exact ledger account, booked balance, recurring rule, synthetic example and reversal choice. Create a fresh draft only.</label>
             <button className="primary">Prepare this month’s accrual</button>
           </>}
