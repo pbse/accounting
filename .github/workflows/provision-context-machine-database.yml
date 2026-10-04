@@ -1,0 +1,30 @@
+name: Provision context-machine database reader
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: context-machine-database-provision
+  cancel-in-progress: false
+jobs:
+  provision:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Create the unprivileged reader and apply the canonical grants atomically
+        env:
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Temporary secret installed by the operator, removed after storing the final URL.
+          CONTEXT_MACHINE_DATABASE_PASSWORD: ${{ secrets.CONTEXT_MACHINE_DATABASE_PASSWORD }}
+        run: CONTEXT_MACHINE_PROVISION_OUTPUT="$RUNNER_TEMP/context-machine-reader" python3 scripts/provision-context-machine-database.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: context-machine-reader-connection
+          path: ${{ runner.temp }}/context-machine-reader/connection.json
+          retention-days: 1

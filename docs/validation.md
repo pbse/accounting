@@ -3098,6 +3098,12 @@ Review: Codex (gpt-6-sol, high) pass 1 found `MCP_RESOURCE_URL` and the connecto
 
 Verified: `wrangler deploy --dry-run --env production` with the custom domain after `npm ci` and `npm run build`.
 
+
+## Dedicated context-machine database provisioning — 2026-10-04 (B12)
+
+A manual production administration job reuses the existing migration-owner credential to create the dedicated reader and apply the canonical grants atomically. The locally generated password is passed through a temporary production secret; its artifact contains connection metadata without the password. The operator stores the final URL through GitHub's encrypted secret API and removes the temporary secret. SQL contains a salted SCRAM verifier rather than the plaintext password, hosted provisioning requires channel binding, and the production environment is verified to admit only `main`. Creation rejects existing roles rather than rotating credentials implicitly, unexpected write/ownership/schema/role-membership privileges abort the transaction, and no app membership or client grant is changed. These administration-only files do not trigger an app deployment.
+
+Local PostgreSQL checks cover native login, read-only default, allowed evidence reads, forbidden writes/private-table reads, password-free output, repeated-run refusal without credential rotation, and rollback under unsafe PUBLIC schema privileges. No Neon branch is created. Actionlint passed for all affected workflows. Claude Opus 5.5 Medium reviewed the complete change; workflow-context, plaintext SQL password and concurrency findings were fixed, and final verification found no actionable issues. Production execution and owner-profile verification are separate from these local checks.
 ## Public pages no longer go blank on a click (2026-10-04)
 
 Reported on getkrith.com: clicking any link on a public page left the page blank until a reload. Reproduced in Edge 154 on production: every link from the home page threw `TypeError: l is not a function` in React's effect clean-up. The public layout scrolled to the top in a braceless effect, `useEffect(() => window.scrollTo(0, 0), [pathname])`; in current Chromium `window.scrollTo` returns a Promise (checked: `[object Promise]`), so the effect handed React a clean-up that is not a function, and React threw on the next page change. A reload never ran that clean-up, so it worked. The effect now returns nothing; the staff console's schema form, the one other effect that returned a value (its `onChange` result), now returns nothing too.
