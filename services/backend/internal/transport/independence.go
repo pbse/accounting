@@ -76,15 +76,15 @@ func correctionIndependenceIssue(ctx context.Context, q querier, closeID, propos
 func registerIndependence(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/organization/policy", func(w http.ResponseWriter, r *http.Request) {
 		var required, passcode, written, firmWritten, investigations bool
-		var minimum, materiality string
+		var minimum, materiality, owner string
 		var after, most int
-		if err := db.QueryRowContext(r.Context(), `SELECT require_independent_review,require_link_passcode,COALESCE(independent_review_min_amount::text,''),COALESCE(materiality_amount::text,''),reminder_after_days,reminder_max,assistant_model_answers,assistant_firm_answers,assistant_investigations FROM organizations WHERE id=$1`, organization(r)).Scan(&required, &passcode, &minimum, &materiality, &after, &most, &written, &firmWritten, &investigations); err != nil {
+		if err := db.QueryRowContext(r.Context(), `SELECT require_independent_review,require_link_passcode,COALESCE(independent_review_min_amount::text,''),COALESCE(materiality_amount::text,''),reminder_after_days,reminder_max,assistant_model_answers,assistant_firm_answers,assistant_investigations,support_owner FROM organizations WHERE id=$1`, organization(r)).Scan(&required, &passcode, &minimum, &materiality, &after, &most, &written, &firmWritten, &investigations, &owner); err != nil {
 			problem(w, 503, "Firm policy is unavailable.")
 			return
 		}
 		local := organization(r) == "local-development"
 		manage := slices.Contains(actorPermissions(r), "org:manage")
-		jsonReply(w, 200, map[string]any{"independent_review": required, "independent_review_min_amount": minimum, "materiality_amount": materiality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_answers": written, "firm_answers": firmWritten, "investigations": investigations, "hosted": !local, "can_manage": !local && manage, "can_manage_links": local || manage, "can_manage_model_answers": local || manage})
+		jsonReply(w, 200, map[string]any{"independent_review": required, "independent_review_min_amount": minimum, "materiality_amount": materiality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_answers": written, "firm_answers": firmWritten, "investigations": investigations, "support_owner": owner, "hosted": !local, "can_manage": !local && manage, "can_manage_links": local || manage, "can_manage_model_answers": local || manage})
 	})
 	// Each change names only the settings it changes and records the resulting state of both.
 	mux.HandleFunc("POST /v1/closes/organization/policy", func(w http.ResponseWriter, r *http.Request) {

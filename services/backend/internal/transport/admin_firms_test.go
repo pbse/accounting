@@ -21,7 +21,7 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 	}
 	must(`INSERT INTO organizations(id,name) VALUES($1,'Managed firm')`, firm)
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM member_invitations WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM close_effort_entries WHERE organization_id=$1`, `DELETE FROM member_invitations WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`,
 			`DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`} {
 			db.Exec(q, firm)
 		}
@@ -137,6 +137,18 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 		t.Fatalf("the limits must change: %d %d %d", closes, jobs, calls)
 	}
 
+	// A named support owner, and staff time on the firm itself or on one of its closes.
+	owner := `{"owner":"Priya, customer operations","reason":"Assigned at the onboarding call"}`
+	adminJSON(t, h, token, "POST", base+"/support-owner", owner, 200)
+	adminJSON(t, h, token, "POST", base+"/support-owner", owner, 409)
+	adminJSON(t, h, token, "POST", base+"/assistance", `{"minutes":90,"note":"Configured procedures before the first close"}`, 200)
+	adminJSON(t, h, token, "POST", base+"/assistance", `{"close_id":"999999999","minutes":30,"note":"Reviewed the opening month together"}`, 404)
+	adminJSON(t, h, token, "POST", base+"/assistance", `{"minutes":0,"note":"Configured procedures before the first close"}`, 422)
+	adminJSON(t, h, token, "POST", base+"/assistance", `{"minutes":30,"note":"配置账务流程"}`, 422)
+	if detail := mustString(adminJSON(t, h, token, "GET", base, "", 200)); !strings.Contains(detail, `"support_owner":"Priya, customer operations"`) || !strings.Contains(detail, `"assistance_minutes":90`) {
+		t.Fatalf("the firm shows its support owner and our team's time: %s", detail)
+	}
+
 	// An open invitation is revoked once.
 	var invitation string
 	if err := db.QueryRow(`SELECT id::text FROM member_invitations WHERE organization_id=$1 AND state='sending'`, firm).Scan(&invitation); err != nil {
@@ -173,7 +185,7 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 	if revealed := mustString(adminJSON(t, h, token, "GET", base+"/audit?reveal=1", "", 200, "X-Access-Reason", "reviewing staff actions")); !strings.Contains(revealed, `"previous_id":"`+current+`"`) || !strings.Contains(revealed, "Chargeback") {
 		t.Fatalf("a reveal shows the request details: %s", revealed)
 	}
-	for _, want := range []string{`"action":"firm.suspend"`, `"action":"firm.resume"`, `"action":"member.revoke"`, `"action":"member.restore"`, `"action":"firm.limits"`, `"result":"refused"`, `"action":"invitation.revoke"`, `"action":"content.reveal"`} {
+	for _, want := range []string{`"action":"firm.suspend"`, `"action":"firm.resume"`, `"action":"member.revoke"`, `"action":"member.restore"`, `"action":"firm.limits"`, `"action":"firm.support_owner"`, `"action":"effort.assistance"`, `"result":"refused"`, `"action":"invitation.revoke"`, `"action":"content.reveal"`} {
 		if !strings.Contains(audit, want) {
 			t.Fatalf("audit lacks %s: %s", want, audit)
 		}
@@ -191,7 +203,7 @@ func TestReadOnlyStaffCannotChangeAFirm(t *testing.T) {
 	}
 	h := apiWithStore(db, strings.Repeat("x", 32))
 	reader := sign(staffOrg, "platform:read")
-	for _, path := range []string{"/suspend", "/resume", "/members/user_a/revoke", "/members/user_a/restore", "/limits", "/invitations/1/revoke"} {
+	for _, path := range []string{"/suspend", "/resume", "/members/user_a/revoke", "/members/user_a/restore", "/limits", "/support-owner", "/assistance", "/invitations/1/revoke"} {
 		adminJSON(t, h, reader, "POST", "/v1/admin/firms/"+firm+path, `{"confirm":"`+firm+`","reason":"Trying without permission"}`, 403)
 	}
 	adminJSON(t, h, reader, "GET", "/v1/admin/firms/"+firm+"/people?reveal=1", "", 403, "X-Access-Reason", "curious")

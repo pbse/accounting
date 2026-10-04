@@ -344,6 +344,8 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	id := r.PathValue("id")
 	var firm adminFirmRow
 	var suspension, runs, health, limits []byte
+	var owner string
+	var assistance int
 	err := adminRead(r.Context(), db, func(ctx context.Context, tx *sql.Tx) error {
 		var err error
 		if firm, err = scanFirm(tx.QueryRowContext(ctx, `SELECT `+adminFirmColumns+` FROM organizations o WHERE o.id=$1`, id)); err != nil {
@@ -354,7 +356,9 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'workflow',workflow,'state',state,'started_by',started_by,'created_at',created_at,'finished_at',finished_at) ORDER BY id DESC)
    FROM (SELECT * FROM workflow_runs WHERE organization_id=$1 ORDER BY id DESC LIMIT 20) r),'[]'::jsonb),
  COALESCE((SELECT jsonb_build_object('run_id',id,'finished_at',finished_at,'report',output) FROM workflow_runs WHERE organization_id=$1 AND workflow='firm_health_check' AND state='completed' ORDER BY finished_at DESC LIMIT 1),'null'::jsonb),
- (SELECT jsonb_build_object('max_closes',max_closes,'max_pending_jobs',max_pending_jobs,'max_model_calls_per_day',max_model_calls_per_day) FROM organizations WHERE id=$1)`, id).Scan(&suspension, &runs, &health, &limits)
+ (SELECT jsonb_build_object('max_closes',max_closes,'max_pending_jobs',max_pending_jobs,'max_model_calls_per_day',max_model_calls_per_day) FROM organizations WHERE id=$1),
+ (SELECT support_owner FROM organizations WHERE id=$1),
+ (SELECT COALESCE(sum(x.minutes),0) FROM close_effort_entries x LEFT JOIN client_closes c ON c.id=x.close_id WHERE x.activity='assistance' AND COALESCE(c.organization_id,x.organization_id)=$1)`, id).Scan(&suspension, &runs, &health, &limits, &owner, &assistance)
 	})
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "local-development") {
 		problem(w, 404, "Firm not found.")
@@ -366,7 +370,7 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		return
 	}
 	// The last suspension's reason is free text; it is in the firm's activity, masked until revealed.
-	jsonReply(w, 200, map[string]any{"firm": firm, "last_suspension": json.RawMessage(suspension), "runs": json.RawMessage(runs), "health": json.RawMessage(health), "limits": json.RawMessage(limits)})
+	jsonReply(w, 200, map[string]any{"firm": firm, "last_suspension": json.RawMessage(suspension), "runs": json.RawMessage(runs), "health": json.RawMessage(health), "limits": json.RawMessage(limits), "support_owner": owner, "assistance_minutes": assistance})
 }
 
 // RunHeartbeat records every 30 seconds that loop is alive, for the admin overview.

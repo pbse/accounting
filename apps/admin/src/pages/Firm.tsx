@@ -15,7 +15,7 @@ import { Stat } from "../components/Stat";
 type Run = { id: number; workflow: string; state: string; started_by: string; created_at: string; finished_at: string | null };
 type Health = { run_id: number; finished_at: string; report: Record<string, number> } | null;
 type Limits = { max_closes: number; max_pending_jobs: number; max_model_calls_per_day: number };
-type Detail = { firm: FirmRow; last_suspension: { at: string; by: string } | null; runs: Run[]; health: Health; limits: Limits };
+type Detail = { firm: FirmRow; last_suspension: { at: string; by: string } | null; runs: Run[]; health: Health; limits: Limits; support_owner: string; assistance_minutes: number };
 
 const tabs = [["", "Overview"], ["people", "People"], ["activity", "Activity"], ["audit", "Staff audit"]] as const;
 
@@ -110,9 +110,39 @@ function Overview({ detail, reload }: { detail: Detail; reload: () => void }) {
           <Link to={`/runs?firm=${encodeURIComponent(f.id)}`}>All runs for this firm</Link> · <Link to={`/jobs?firm=${encodeURIComponent(f.id)}`}>Stuck work</Link> · <Link to={`/connections?firm=${encodeURIComponent(f.id)}`}>Connections</Link>
         </p>
       </section>
+      <Onboarding key={detail.support_owner} firm={f} detail={detail} onDone={reload} />
       <FirmLimits key={JSON.stringify(detail.limits)} firm={f} limits={detail.limits} onDone={reload} />
       <Suspension firm={f} onDone={reload} />
     </>
+  );
+}
+
+// The firm's named support owner, and our team's setup and service time on the firm or one of its closes.
+function Onboarding({ firm, detail, onDone }: { firm: FirmRow; detail: Detail; onDone: () => void }) {
+  const [owner, setOwner] = useState(detail.support_owner);
+  const [minutes, setMinutes] = useState(30);
+  const [closeId, setCloseId] = useState("");
+  const operate = usePermissions().includes("platform:operate");
+  const base = `/v1/admin/firms/${encodeURIComponent(firm.id)}`;
+  return (
+    <section>
+      <h2>Support</h2>
+      <p>{detail.support_owner ? `Support owner: ${detail.support_owner}.` : "No support owner is named."} Our team's recorded time: {detail.assistance_minutes} minutes.</p>
+      <ActionForm label="Name the support owner" allowed={operate} minLength={10} onSubmit={async (reason) => {
+        await post(`${base}/support-owner`, { owner: owner.trim(), reason });
+        onDone();
+      }}>
+        <label>Support owner<input value={owner} maxLength={200} onChange={(event) => setOwner(event.target.value)} /></label>
+      </ActionForm>
+      <ActionForm label="Record our time" allowed={operate} minLength={10} onSubmit={async (note) => {
+        await post(`${base}/assistance`, { close_id: closeId.trim(), minutes, note });
+        setCloseId("");
+        onDone();
+      }}>
+        <label>Minutes<input type="number" min={1} max={480} required value={minutes} onChange={(event) => setMinutes(Number(event.target.value))} /></label>
+        <label>Close ID (blank for the firm itself)<input value={closeId} inputMode="numeric" onChange={(event) => setCloseId(event.target.value)} /></label>
+      </ActionForm>
+    </section>
   );
 }
 
