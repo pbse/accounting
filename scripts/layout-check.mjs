@@ -269,6 +269,27 @@ for (const app of apps) {
     await page.close();
   }
 }
+// The public site, as a visitor moves through it: from the home page, each public link must open its page without throwing.
+{
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  for (const path of ["/contact", "/privacy", "/subprocessors", "/ai", "/data-retention", "/pilot-terms", "/login"]) {
+    await page.goto(`${frontend}/`);
+    await page.waitForLoadState("networkidle");
+    errors.length = 0;
+    try {
+      await page.locator(`a[href="${path}"]`).first().click({ timeout: 10000 });
+      await page.waitForURL(`**${path}`, { timeout: 10000 });
+      await page.waitForFunction(() => document.querySelector("#root")?.innerText.trim(), null, { timeout: 10000 });
+    } catch {
+      failures.push(`public site ${path}: nothing rendered after clicking its link from the home page`);
+    }
+    if (errors.length) failures.push(`public site ${path}: page errors after clicking its link: ${errors.join(" | ")}`);
+    pages += 1;
+  }
+  await page.close();
+}
 await browser.close();
 console.log(`Checked ${pages} page views across both apps at desktop and phone width.`);
 if (failures.length) {

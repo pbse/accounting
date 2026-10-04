@@ -3,9 +3,13 @@ import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { legalPages } from "./Legal";
 
 export function MarketingLayout() {
-  // The layout stays mounted between public pages, so a new page starts at its top.
+  // The layout stays mounted between public pages, so a new page starts at its top. The braces matter: newer browsers
+  // return a Promise from scrollTo, and an effect that returns it hands React a cleanup that is not a function, which
+  // throws when the page changes and leaves it blank.
   const { pathname } = useLocation();
-  useEffect(() => window.scrollTo(0, 0), [pathname]);
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
   return (
     <div className="marketing">
       <a className="skip" href="#main">
