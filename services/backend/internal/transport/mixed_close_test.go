@@ -1,0 +1,245 @@
+package transport
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"testing"
+
+	"close.local/backend/internal/documents"
+	"close.local/backend/internal/preparation"
+)
+
+// Two unrelated invoices in one close are each prepared without confirmation, whatever order they are read in; a
+// document still being read makes the agent wait, and one naming an invoice, or speaking of a credit, still holds it.
+func TestUnrelatedInvoicesInOneCloseArePreparedStraightThrough(t *testing.T) { mixedClose(t, false) }
+
+// With the preparation worker saving drafts between reads, as it runs, all three invoices end as drafts within budget.
+func TestUnrelatedInvoicesAreDraftedWithTheWorkerRunningBetweenReads(t *testing.T) {
+	mixedClose(t, true)
+}
+
+func mixedClose(t *testing.T, serial bool) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	t.Setenv("OPENAI_API_KEY", "mock-only-key")
+	t.Setenv("OPENAI_MODEL", "mock-only-model")
+	entity := "Mixed " + rand.Text()
+	var closeID, connection, procedureID string
+	must(db.QueryRow(`INSERT INTO client_closes(entity,period) VALUES($1,'2026-09') RETURNING id::text`, entity).Scan(&closeID))
+	defer func() {
+		for _, q := range []string{`DELETE FROM preparation_jobs WHERE close_id=$1`, `DELETE FROM workpapers WHERE close_id=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id=$1`,
+			`DELETE FROM quickbooks_entity_syncs WHERE close_id=$1`, `DELETE FROM quickbooks_connections WHERE close_id=$1`, `DELETE FROM evidence WHERE close_id=$1`, `DELETE FROM client_closes WHERE id=$1`} {
+			db.Exec(q, closeID)
+		}
+		db.Exec(`DELETE FROM procedure_versions WHERE organization_id='local-development' AND client_entity=$1`, entity)
+	}()
+	must(db.QueryRow(`INSERT INTO procedure_versions(organization_id,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor) VALUES('local-development',$1,'prepaid','equal_full_months_v1','Equal full months','Insurance','Prepaid Expenses',true,'Fixture','fixture') RETURNING id::text`, entity).Scan(&procedureID))
+	tx, err := db.Begin()
+	must(err)
+	procedure, err := preparation.CurrentProcedure(context.Background(), tx, closeID, "prepaid")
+	must(err)
+	_, err = preparation.AttachProcedure(context.Background(), tx, closeID, procedure, false, "fixture")
+	must(err)
+	must(tx.Commit())
+	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,home_currency,fiscal_year_start) VALUES($1,'local-development',$2,'fixture','active',$3,now(),'123','USD',1) RETURNING id::text`, closeID, entity, rand.Text()).Scan(&connection))
+	insert := func(name, body, state string) string {
+		t.Helper()
+		var id string
+		must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,$2,$3,$4,'fixture',$5) RETURNING id::text`, closeID, name, preparation.Digest([]byte(body)), body, state).Scan(&id))
+		return id
+	}
+	// Two carriers' bills, each booking its premium to Insurance in September.
+	type invoice struct{ vendor, number, amount, printed, extra string }
+	acme, beacon, carter := invoice{"Acme Insurance Co", "INV-778", "1200.00", "1,200.00", ""}, invoice{"Beacon Mutual", "BM-4410", "600.00", "600.00", ""}, invoice{"Carter Assurance", "CA-12", "300.00", "300.00", ""}
+	captured := insert("QuickBooks transactions 2026-09", "capture", "ready")
+	var syncID string
+	must(db.QueryRow(`INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,started_at,finished_at,payload) VALUES($1,$2,'2026-09','fixture','completed',$3,now()-interval '1 hour',now()-interval '1 hour','{}') RETURNING id::text`, closeID, connection, captured).Scan(&syncID))
+	for i, inv := range []invoice{acme, beacon, carter} {
+		record, _ := json.Marshal(map[string]any{"DocNumber": inv.number, "TotalAmt": json.Number(inv.amount), "VendorRef": map[string]string{"value": string(rune('7' + i)), "name": inv.vendor}, "Line": []map[string]any{{"Amount": json.Number(inv.amount), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"value": "12", "name": "Insurance"}}}}})
+		_, e := db.Exec(`INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,'Bill',$2,'1','2026-09-03',now(),'USD',$3,$4)`, syncID, string(rune('4'+i)), inv.amount, string(record))
+		must(e)
+	}
+	snapshot := insert("QuickBooks 2026-09 accrual period evidence.txt", "period snapshot", "ready")
+	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123',$3,$4,now(),now(),'fixture')`, closeID, connection, rand.Text(), `{"period":"2026-09","source_id":"`+snapshot+`","accounts":[{"Id":"12","Name":"Insurance"},{"Id":"13","Name":"Prepaid Expenses"}],"reports":{}}`)
+	must(err)
+	text := func(inv invoice) string {
+		return inv.vendor + "\nInvoice " + inv.number + "\nBill to: " + entity + "\nAnnual premium USD " + inv.printed + "\nCoverage period 2026-09-01 to 2027-08-31\n" + inv.extra
+	}
+
+	// The model reads whichever invoice is primary and quotes its own lines.
+	originalTransport := http.DefaultTransport
+	defer func() { http.DefaultTransport = originalTransport }()
+	invoices := map[string]invoice{}
+	http.DefaultTransport = modelRoundTrip(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		var request struct {
+			Input []struct {
+				Content string `json:"content"`
+			} `json:"input"`
+		}
+		json.Unmarshal(raw, &request)
+		var given struct {
+			Primary string `json:"primary_source_id"`
+		}
+		for _, item := range request.Input {
+			json.Unmarshal([]byte(item.Content), &given)
+		}
+		inv, ok := invoices[given.Primary]
+		if !ok {
+			t.Fatalf("the model was asked about an unknown primary source: %s", raw)
+		}
+		quote := func(field, value, line string) map[string]string {
+			return map[string]string{"field": field, "value": value, "source_id": given.Primary, "quote": line}
+		}
+		facts := []map[string]string{
+			quote("amount", inv.amount, "Annual premium USD "+inv.printed), quote("currency", "USD", "Annual premium USD "+inv.printed),
+			quote("service_start", "2026-09-01", "Coverage period 2026-09-01 to 2027-08-31"), quote("service_end", "2027-08-31", "Coverage period 2026-09-01 to 2027-08-31"),
+			quote("vendor", inv.vendor, inv.vendor), quote("billed_to", entity, "Bill to: "+entity), quote("invoice_number", inv.number, "Invoice "+inv.number),
+		}
+		output, _ := json.Marshal(map[string]any{"kind": "prepaid", "summary": "Insurance prepaid schedule", "questions": []string{}, "sources": []map[string]string{{"id": given.Primary, "role": "invoice"}}, "facts": facts})
+		body, _ := json.Marshal(map[string]any{"id": "mock-response", "status": "completed", "output": []any{map[string]any{"type": "message", "content": []any{map[string]string{"type": "output_text", "text": string(output)}}}}})
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
+	})
+	start := func(source string) string {
+		t.Helper()
+		tx, err := db.Begin()
+		must(err)
+		job, err := preparation.StartIntake(context.Background(), tx, closeID, source, "fixture")
+		must(err)
+		must(tx.Commit())
+		return job
+	}
+	read := func() bool {
+		t.Helper()
+		worked, e := preparation.ProcessIntake(modelContext(t, context.Background()), db)
+		must(e)
+		return worked
+	}
+	state := func(job string) (string, string) {
+		t.Helper()
+		var s, checkpoint string
+		must(db.QueryRow(`SELECT j.state,COALESCE(i.agent_checkpoint->>'straight_through','') FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.id::text=$1`, job).Scan(&s, &checkpoint))
+		return s, checkpoint
+	}
+
+	// Beacon's invoice is still being read when Acme's is ready: the agent waits, with no model call.
+	first := insert("acme.txt", text(acme), "ready")
+	second := insert("beacon.txt", text(beacon), "processing")
+	third := insert("carter.txt", text(carter), "ready")
+	invoices[first], invoices[second], invoices[third] = acme, beacon, carter
+	jobA, jobB, jobC := start(first), start(second), start(third)
+	if read() {
+		t.Fatal("the agent waits while other evidence in the close is still being read")
+	}
+	_, err = db.Exec(`UPDATE evidence SET extraction_state='ready' WHERE id::text=$1`, second)
+	must(err)
+	if serial {
+		for steps := 0; ; steps++ {
+			read, saved := read(), false
+			if worked, e := preparation.ProcessOne(context.Background(), db); e != nil {
+				t.Fatal(e)
+			} else {
+				saved = worked
+			}
+			if !read && !saved {
+				break
+			}
+			if steps > 10 {
+				t.Fatal("reading and saving do not settle")
+			}
+		}
+		for _, job := range []string{jobA, jobB, jobC} {
+			var done string
+			must(db.QueryRow(`SELECT state||' '||jsonb_array_length(workpaper_ids) FROM preparation_jobs WHERE id::text=$1`, job).Scan(&done))
+			if done != "completed 1" {
+				_, checkpoint := state(job)
+				t.Fatalf("each invoice ends as one draft: %s %s", done, checkpoint)
+			}
+		}
+		return
+	}
+	// An invoice read before the others waits on them; once every other is read as an invoice of its own it is read
+	// again, so three invoices take five reads, within each job's attempts.
+	reads := 0
+	for read() {
+		if reads++; reads > 5 {
+			t.Fatal("the agent keeps reading")
+		}
+	}
+	for _, job := range []string{jobA, jobB, jobC} {
+		if s, checkpoint := state(job); s != "queued" {
+			t.Fatalf("each unrelated invoice is prepared without confirmation: %s %s", s, checkpoint)
+		}
+	}
+	// If Beacon's document stops being read as an invoice before Acme's draft is saved, Acme's is read again.
+	retype := func(kind string) {
+		t.Helper()
+		_, e := db.Exec(`UPDATE preparation_intakes SET proposal=jsonb_set(proposal,'{kind}',to_jsonb($2::text)) WHERE job_id::text=$1`, jobB, kind)
+		must(e)
+	}
+	retype("unsupported")
+	if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
+		t.Fatalf("the worker ran: %v %v", worked, e)
+	}
+	if s, _ := state(jobA); s != "waiting_evidence" {
+		t.Fatalf("an exemption that no longer holds is proven again by reading the close: %s", s)
+	}
+	retype("prepaid")
+	for read() {
+	}
+	if s, checkpoint := state(jobA); s != "queued" {
+		t.Fatalf("read again, Acme's invoice is prepared: %s %s", s, checkpoint)
+	}
+	// A document arriving after Acme's was read but before its draft is saved sends it back to be read again.
+	note := insert("note.txt", "Board minutes for September", "ready")
+	if worked, e := preparation.ProcessOne(context.Background(), db); e != nil || !worked {
+		t.Fatalf("the worker ran: %v %v", worked, e)
+	}
+	if s, _ := state(jobA); s != "waiting_evidence" {
+		t.Fatalf("a changed close is read again, not handed to a person: %s", s)
+	}
+
+	// An invoice that also names Acme's invoice, speaks of a credit, or has a page the extractor could not read is not
+	// unrelated; nor is a document no invoice job reads. Beacon's own invoice is.
+	for i, extra := range []string{"Reference: INV-778", "Credit applied for overbilling", documents.UnreadPage} {
+		other := beacon
+		other.number, other.extra = fmt.Sprintf("BM-50%d", i), extra
+		id := insert(other.number+".txt", text(other), "ready")
+		invoices[id] = other
+		start(id)
+		for read() {
+		}
+		var raw []byte
+		must(db.QueryRow(`SELECT proposal FROM preparation_intakes WHERE job_id::text=$1`, jobA).Scan(&raw))
+		var proposal preparation.Proposal
+		must(json.Unmarshal(raw, &proposal))
+		tx, err := db.Begin()
+		must(err)
+		unrelated, err := preparation.UnrelatedEvidence(context.Background(), tx, closeID, jobA, proposal)
+		tx.Rollback()
+		must(err)
+		if unrelated[id] || unrelated[note] || !unrelated[second] {
+			t.Fatalf("%q is weighed by a person, while Beacon's invoice is unrelated to Acme's: %v", extra, unrelated)
+		}
+	}
+}

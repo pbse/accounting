@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -35,6 +36,8 @@ type Plan struct {
 	CarryForward     *CarryForward     `json:"carry_forward,omitempty"`
 	RecurringAccrual *RecurringAccrual `json:"recurring_accrual,omitempty"`
 	Revises          string            `json:"revises,omitempty"`
+	// Unrelated is the other invoices in the close a straight-through plan left unused, proven again before its draft is saved.
+	Unrelated []string `json:"unrelated,omitempty"`
 	// Imported is one line of a prior accountant's schedule read on the client's opening month: prepared as a schedule
 	// only, and only while it gives the balance the schedule states at the month-end.
 	Imported *Imported `json:"imported,omitempty"`
@@ -260,7 +263,7 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	bodies := make([][]byte, len(plans))
-	failure := ""
+	failure, changed := "", false
 	for _, p := range plans {
 		if p.Imported != nil && !opening {
 			failure = "This close is no longer the client's opening month, so its prior schedule is not imported. Read the schedule on the opening month."
@@ -271,14 +274,14 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	if intakeErr != nil && intakeErr != sql.ErrNoRows {
 		return false, intakeErr
 	}
+	var proposal Proposal
 	if intakeErr == nil {
-		var proposal Proposal
 		if json.Unmarshal(proposalRaw, &proposal) != nil {
 			return false, fmt.Errorf("Invalid intake proposal")
 		}
 		if llm.IsModelEngine(proposal.Engine) {
 			if _, e := CurrentProposalSources(ctx, tx, closeID, id, proposal); e != nil {
-				failure = e.Error()
+				failure, changed = e.Error(), errors.Is(e, ErrInventoryChanged)
 			}
 		}
 	}
@@ -332,6 +335,17 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			} else if other {
 				failure = "Evidence arrived in the close that a person must weigh before this draft is prepared."
 				break
+			}
+			// Each other invoice this plan left unused must still be one, as its own job now reads it.
+			if len(p.Unrelated) > 0 {
+				still, e := UnrelatedEvidence(ctx, tx, closeID, id, proposal)
+				if e != nil {
+					return false, e
+				}
+				if slices.ContainsFunc(p.Unrelated, func(s string) bool { return !still[s] }) {
+					failure, changed = "Another document in the close is no longer read as a separate invoice; reading the close again.", true
+					break
+				}
 			}
 			// The capture the plan cites must still be the close's current one; a capture queued or failed since then is a question for a person.
 			ledger, e := CloseLedger(ctx, tx, closeID)
@@ -403,6 +417,16 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 			ids = append(ids, paperID)
 		}
+	}
+	// A straight-through job whose close gained or changed evidence since it was read is read again, not handed to a person.
+	if changed && slices.ContainsFunc(plans, func(p Plan) bool { return p.Procedure != "" }) {
+		if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='waiting_evidence',error='Evidence changed before the draft was prepared; reading the close again.',finished_at=NULL WHERE id=$1`, id); err == nil {
+			_, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL,confirmed_by=NULL,confirmed_at=NULL WHERE job_id=$1 AND confirmed_by='agent'`, id)
+		}
+		if err != nil {
+			return false, err
+		}
+		return true, tx.Commit()
 	}
 	state := "completed"
 	if failure != "" {

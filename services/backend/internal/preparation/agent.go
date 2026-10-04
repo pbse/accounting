@@ -1,6 +1,7 @@
 package preparation
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -200,7 +201,7 @@ func CurrentProposalSources(ctx context.Context, tx *sql.Tx, closeID, jobID stri
 		return nil, err
 	}
 	if digest != p.InventoryDigest {
-		return nil, fmt.Errorf("Evidence inventory changed. Recheck proposals before confirming.")
+		return nil, ErrInventoryChanged
 	}
 	selected := []IntakeSource{}
 	for _, want := range p.Sources {
@@ -656,7 +657,7 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	var id, closeID, primary, org, entity, period, actor string
 	var revision, attempts int
 	var checkpoint []byte
-	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text,i.source_id::text,i.revision,i.agent_attempts,i.agent_checkpoint,j.created_by FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE (j.state='waiting_evidence' OR (j.state='interpreting' AND i.agent_started_at<now()-interval '2 minutes')) AND e.extraction_state IN ('ready','failed') AND (i.agent_retry_at IS NULL OR i.agent_retry_at<=now()) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) ORDER BY j.id FOR UPDATE OF j,i SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &primary, &revision, &attempts, &checkpoint, &actor)
+	err = tx.QueryRowContext(ctx, `SELECT j.id::text,j.close_id::text,i.source_id::text,i.revision,i.agent_attempts,i.agent_checkpoint,j.created_by FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id JOIN evidence e ON e.id=i.source_id WHERE (j.state='waiting_evidence' OR (j.state='interpreting' AND i.agent_started_at<now()-interval '2 minutes')) AND e.extraction_state IN ('ready','failed') AND (i.agent_retry_at IS NULL OR i.agent_retry_at<=now()) AND j.close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) AND NOT `+pendingEvidence("j.close_id")+` ORDER BY j.id FOR UPDATE OF j,i SKIP LOCKED LIMIT 1`).Scan(&id, &closeID, &primary, &revision, &attempts, &checkpoint, &actor)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -665,6 +666,11 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	var opening bool
 	if err = tx.QueryRowContext(ctx, `SELECT organization_id,entity,period,takeover FROM client_closes WHERE id=$1 FOR UPDATE`, closeID).Scan(&org, &entity, &period, &opening); err != nil {
+		return false, err
+	}
+	// Evidence uploaded since the job was picked and still being read: wait for it, before any model call.
+	var pending bool
+	if err = tx.QueryRowContext(ctx, `SELECT `+pendingEvidence("$1::bigint"), closeID).Scan(&pending); err != nil || pending {
 		return false, err
 	}
 	profile, err := ClientProfile(ctx, tx, closeID)
@@ -851,7 +857,20 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			if e != nil {
 				return true, e
 			}
-			plan, reason = StraightThrough(proposal, invoice, current, procedure, rule, home, entity, period, id, unread, ledger)
+			// Another job's own document that, read in full, names neither this vendor nor this invoice and speaks of no
+			// credit is that job's to prepare, not this one's to weigh.
+			unrelated, e := UnrelatedEvidence(persist, finish, closeID, id, proposal)
+			if e != nil {
+				return true, e
+			}
+			check := proposal
+			check.Unselected = slices.DeleteFunc(slices.Clone(proposal.Unselected), func(s Source) bool { return unrelated[s.ID] })
+			plan, reason = StraightThrough(check, invoice, current, procedure, rule, home, entity, period, id, unread, ledger)
+			for _, s := range proposal.Unselected {
+				if unrelated[s.ID] {
+					plan.Unrelated = append(plan.Unrelated, s.ID)
+				}
+			}
 			if reason == "" {
 				straight = "Prepared without confirmation: every fact is one verified candidate, procedure v" + procedure.ID + " fixes the method and accounts, and one captured bill from its vendor expenses the amount."
 			}
@@ -884,6 +903,14 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	if _, err = finish.ExecContext(persist, `UPDATE preparation_jobs SET state=$2,error=$3 WHERE id=$1`, id, state, message); err != nil {
 		return true, err
+	}
+	// Read as a prepaid invoice, this document may have been the last thing another invoice's job was left for a person
+	// over: a job not yet confirmed, whose every other unused document now proves to be another invoice, is read again.
+	// Siblings someone holds are skipped; a sibling still waiting on a document not yet read stays as it is.
+	if (state == "needs_confirmation" || state == "queued") && proposal.Kind == "prepaid" && proposal.Engine == "openai" {
+		if err = rereadSiblings(persist, finish, closeID, id, primary); err != nil {
+			return true, err
+		}
 	}
 	return true, finish.Commit()
 }
@@ -942,4 +969,61 @@ func Replay(ctx context.Context, db *sql.DB, closeID, jobID string) (Proposal, e
 		return Proposal{}, fmt.Errorf("Evidence in this close changed during the replay; not scored.")
 	}
 	return p, nil
+}
+
+// rereadSiblings returns to waiting_evidence each unconfirmed job of the close that waits for a person only because it did
+// not use document, once every document it did not use is the capture, chart or procedure copy, or proves to be another
+// invoice; with nothing left to weigh, a fresh read prepares it.
+func rereadSiblings(ctx context.Context, tx *sql.Tx, closeID, jobID, document string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT j.id::text,i.proposal FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id
+ WHERE j.close_id=$1::bigint AND j.id<>$2::bigint AND j.state='needs_confirmation' AND i.confirmed_by IS NULL AND i.agent_checkpoint->>'straight_through' LIKE '%was not used%'
+ AND i.proposal->'unselected' @> jsonb_build_array(jsonb_build_object('id',$3::text)) FOR UPDATE OF j,i SKIP LOCKED`, closeID, jobID, document)
+	if err != nil {
+		return err
+	}
+	type sibling struct {
+		id       string
+		proposal Proposal
+	}
+	var siblings []sibling
+	for rows.Next() {
+		var s sibling
+		var raw []byte
+		if err = rows.Scan(&s.id, &raw); err == nil && json.Unmarshal(raw, &s.proposal) == nil {
+			siblings = append(siblings, s)
+		}
+	}
+	if err = cmp.Or(err, rows.Err()); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(siblings) == 0 {
+		return nil
+	}
+	ledger, err := CloseLedger(ctx, tx, closeID)
+	if err != nil {
+		return err
+	}
+	machine := map[string]bool{}
+	if ledger != nil {
+		machine = ledger.Machine
+		machine[ledger.Source.ID], machine[ledger.ChartSource.ID] = true, true
+	}
+	for _, s := range siblings {
+		unrelated, err := UnrelatedEvidence(ctx, tx, closeID, s.id, s.proposal)
+		if err != nil {
+			return err
+		}
+		if slices.ContainsFunc(s.proposal.Unselected, func(u Source) bool { return !unrelated[u.ID] && !machine[u.ID] }) {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET revision=revision+1,agent_claim=NULL WHERE job_id::text=$1`, s.id); err == nil {
+			_, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='waiting_evidence',error='',finished_at=NULL WHERE id::text=$1`, s.id)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
