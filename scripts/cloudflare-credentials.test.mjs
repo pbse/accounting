@@ -98,9 +98,9 @@ test('metadata preflight fails closed and scanner caching follows Cloudflare rot
 });
 
 test('normal workflows reference only GitHub deployment and migration credentials', () => {
- for (const file of ['.github/workflows/deploy-production.yml','.github/workflows/deploy.yml','.github/workflows/provision-context-machine.yml','.github/workflows/provision-context-machine-database.yml']) {
+ for (const file of ['.github/workflows/deploy-production.yml','.github/workflows/deploy.yml','.github/workflows/provision-context-machine.yml','.github/workflows/provision-context-machine-database.yml','.github/workflows/cloudflare-credential-maintenance.yml']) {
   const names=[...readFileSync(file,'utf8').matchAll(/secrets\.(\w+)/g)].map(match=>match[1]);
-  const allowed=file.endsWith('provision-context-machine-database.yml')?['MIGRATION_DATABASE_URL','CONTEXT_MACHINE_DATABASE_PASSWORD']:file.endsWith('provision-context-machine.yml')?['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID']:['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','MIGRATION_DATABASE_URL'];
+  const allowed=file.endsWith('provision-context-machine-database.yml')?['MIGRATION_DATABASE_URL','CONTEXT_MACHINE_DATABASE_PASSWORD']:(file.endsWith('provision-context-machine.yml')||file.endsWith('cloudflare-credential-maintenance.yml'))?['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID']:['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','MIGRATION_DATABASE_URL'];
   for (const name of names) assert.ok(allowed.includes(name),`${file}: ${name}`);
  }
 });
@@ -116,5 +116,32 @@ test('metadata preflight preserves optional features and checks configured integ
   assert.equal(f.run('edge',['--check'],{XERO_CLIENT_ID:'client',XERO_REDIRECT_URI:'https://host/callback',EMAIL_INTAKE_ADDRESS:'evidence@host.example',CONTEXT_MACHINE_ENABLED:'true'}).status,0);
   assert.equal(f.run('edge',[],{UPLOAD_SCAN_HOST:'staging.example'}).status,0);
   assert.ok(JSON.parse(readFileSync(join(f.dir,'upload.json'),'utf8')).args.includes('staging.example/*'));
+ } finally {f.cleanup();}
+});
+
+test('maintenance inspects metadata and rejects stale or out-of-scope deletion plans', () => {
+ const f=fixture();
+ const script=join(process.cwd(),'scripts/cloudflare-credential-maintenance.mjs');
+ writeFileSync(join(f.dir,'npx'),`#!${process.execPath}
+const fs=require('node:fs'),path=require('node:path');const args=process.argv.slice(2);const file=name=>path.join(__dirname,name);fs.appendFileSync(file('calls.jsonl'),JSON.stringify(args)+'\\n');
+if(args.includes('list')){console.log(fs.readFileSync(file(args.includes('deployments')?'versions.json':'names.json'),'utf8'));process.exit(0);}
+if(args.includes('delete')){const name=args[args.indexOf('delete')+1];fs.writeFileSync(file('names.json'),JSON.stringify(JSON.parse(fs.readFileSync(file('names.json'))).filter(entry=>entry.name!==name)));process.exit(0);}process.exit(1);`,{mode:0o700});
+ const run=(plan='',environment='production')=>spawnSync(process.execPath,[script],{cwd:f.dir,env:{PATH:`${f.dir}:${process.env.PATH}`,HOME:process.env.HOME,CREDENTIAL_MAINTENANCE_ENV:environment,CREDENTIAL_MAINTENANCE_PLAN:plan},encoding:'utf8'});
+ const calls=()=>readFileSync(join(f.dir,'calls.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
+ try {
+  let result=run();assert.equal(result.status,0,result.stderr);
+  const snapshot=JSON.parse(readFileSync(join(f.dir,'credential-metadata.json'),'utf8'));
+  assert.equal(snapshot.environment,'production');
+  for(const [app,value] of Object.entries(snapshot.workers)){assert.equal(value.deployment,'new-version');assert.ok(value.credentials.every(name=>credentials[app].includes(name)));}
+  assert.ok(calls().every(args=>!args.includes('delete')));
+  const wrong=run(JSON.stringify({edge:{deployment:'stale-version',remove:['OPENAI_API_KEY']}}));assert.equal(wrong.status,1);assert.match(wrong.stderr,/changed since inspection/);assert.ok(calls().every(args=>!args.includes('delete')));
+  for(const plan of [{edge:{deployment:'new-version',remove:['DATABASE_URL']}},{scanner:{deployment:'new-version',remove:['CODEX_AUTH_JSON']}},{edge:{deployment:'new-version',remove:['OPENAI_API_KEY','OPENAI_API_KEY']}},{edge:{deployment:'new-version',remove:['credential-value-pasted-by-mistake']}}]) {
+   result=run(JSON.stringify(plan));assert.equal(result.status,1);assert.ok(!result.stderr.includes('credential-value-pasted-by-mistake'));
+  }
+  result=run(JSON.stringify({edge:{deployment:'new-version',remove:['QBO_WEBHOOK_VERIFIER']},'context-machine':{deployment:'new-version',remove:['CODEX_AUTH_JSON']}}));assert.equal(result.status,0,result.stderr);
+  const deletes=calls().filter(args=>args.includes('delete'));
+  assert.equal(deletes.length,2);assert.ok(deletes.every(args=>args.includes('production')&&!args.includes('--force')));
+  assert.ok(!result.stdout.includes('private-'));
+  writeFileSync(join(f.dir,'calls.jsonl'),'');result=run('','staging');assert.equal(result.status,0,result.stderr);assert.ok(calls().every(args=>!args.includes('--env')));
  } finally {f.cleanup();}
 });
