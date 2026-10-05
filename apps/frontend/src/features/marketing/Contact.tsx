@@ -9,6 +9,8 @@ export const MAILBOX = "hello@getkrith.com";
 export function Contact() {
   const [state, setState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   const [sender, setSender] = useState({ name: "", email: "" });
+  // One key for this visit's note: if an answer is lost and the visitor sends again, the API returns the note it kept.
+  const [submission] = useState(() => crypto.randomUUID());
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -19,7 +21,7 @@ export function Contact() {
       const response = await fetch(`${apiBaseUrl}/v1/contact`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(fields),
+        body: JSON.stringify({ ...fields, submission }),
       });
       if (!response.ok) throw new Error(`contact ${response.status}`);
       setSender({ name: fields.name.trim().split(/\s+/)[0], email: fields.email.trim() });

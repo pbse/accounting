@@ -3180,4 +3180,6 @@ Pass 4 found the hero's settling clock, and its 7.5-second safety finish, runnin
 
 Pass 5 found the edge refusing the contact form with 503 while workspace sign-in was unconfigured; `/v1/contact` now passes that gate like the health check (`needsWorkspaceAuth`, with a test).
 
+Pass 6 found a retried note kept and forwarded twice, the per-address count living in API memory (reset when the container restarts), and the wordmark not returning to the top from `/#how`. Each visit's form now sends a submission key and a retry returns the kept note unforwarded; both limits are counted from the stored notes, with the sender kept only as an hour-long digest (the privacy notice says so); every navigation now places the page. Tests cover the retry, a restarted API and the hour.
+
 Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.

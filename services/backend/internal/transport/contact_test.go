@@ -89,15 +89,20 @@ func TestContactLimitsEachAddressAndEveryone(t *testing.T) {
 	t.Cleanup(func() { db.Exec(`DELETE FROM contact_notes WHERE firm=$1`, marker) })
 	h := system(contactForm(db, contactLimits{perAddress: 2, perHour: 1000}))
 	body := `{"name":"Ana","email":"ana@firm.example","firm":"` + marker + `"}`
+	one, another := "limit-"+rand.Text(), "limit-"+rand.Text()
 	for i := 0; i < 2; i++ {
-		if code, reply := sendContact(t, h, "192.0.2.10", body); code != 201 {
+		if code, reply := sendContact(t, h, one, body); code != 201 {
 			t.Fatalf("note %d: %d %v", i+1, code, reply)
 		}
 	}
-	if code, _ := sendContact(t, h, "192.0.2.10", body); code != 429 {
+	if code, _ := sendContact(t, h, one, body); code != 429 {
 		t.Fatalf("third note from one address: got %d", code)
 	}
-	if code, _ := sendContact(t, h, "192.0.2.11", body); code != 201 {
+	// The count is kept with the notes, so a restarted API still holds the address to it.
+	if code, _ := sendContact(t, system(contactForm(db, contactLimits{perAddress: 2, perHour: 1000})), one, body); code != 429 {
+		t.Fatalf("third note after a restart: got %d", code)
+	}
+	if code, _ := sendContact(t, h, another, body); code != 201 {
 		t.Fatalf("another address: got %d", code)
 	}
 	// Everyone together: a cap already reached refuses the next note.
@@ -107,23 +112,50 @@ func TestContactLimitsEachAddressAndEveryone(t *testing.T) {
 	}
 }
 
-func TestContactThrottleForgetsAfterAnHour(t *testing.T) {
-	throttle := &contactThrottle{seen: map[string][]time.Time{}}
-	start := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
-	if !throttle.allow("a", 1, start) || throttle.allow("a", 1, start.Add(time.Minute)) {
-		t.Fatal("one note an hour")
+func TestContactSenderIsForgottenAfterAnHour(t *testing.T) {
+	db := adminDB(t)
+	marker := "Contact hour " + rand.Text()
+	t.Cleanup(func() { db.Exec(`DELETE FROM contact_notes WHERE firm=$1`, marker) })
+	address := "hour-" + rand.Text()
+	if _, err := db.Exec(`INSERT INTO contact_notes(name,email,firm,sender_digest,created_at) VALUES('Ana','ana@firm.example',$1,$2,now()-interval '61 minutes')`, marker, contactSender(address)); err != nil {
+		t.Fatal(err)
 	}
-	if !throttle.allow("a", 1, start.Add(61*time.Minute)) {
-		t.Fatal("an hour later the address may send again")
+	h := system(contactForm(db, contactLimits{perAddress: 1, perHour: 1000}))
+	if code, reply := sendContact(t, h, address, `{"name":"Ana","email":"ana@firm.example","firm":"`+marker+`"}`); code != 201 {
+		t.Fatalf("an hour later the address may send again: %d %v", code, reply)
 	}
-	if len(throttle.seen) != 1 || len(throttle.seen["a"]) != 1 {
-		t.Fatalf("old notes are forgotten: %v", throttle.seen)
+	var kept int
+	if err := db.QueryRow(`SELECT count(*) FROM contact_notes WHERE firm=$1 AND sender_digest IS NOT NULL`, marker).Scan(&kept); err != nil || kept != 1 {
+		t.Fatalf("only the new note keeps its sender's digest: %d %v", kept, err)
 	}
-	// A note that was not kept is taken back, so the address may send again.
-	later := start.Add(62 * time.Minute)
-	throttle.undo("a", start.Add(61*time.Minute))
-	if len(throttle.seen) != 0 || !throttle.allow("a", 1, later) {
-		t.Fatalf("an undone note no longer counts: %v", throttle.seen)
+	if strings.Contains(contactSender(address), address) || len(contactSender(address)) != 64 {
+		t.Fatal("the address is kept only as a digest")
+	}
+}
+
+func TestContactRetryReturnsTheKeptNote(t *testing.T) {
+	db := adminDB(t)
+	marker := "Contact retry " + rand.Text()
+	t.Cleanup(func() { db.Exec(`DELETE FROM contact_notes WHERE firm=$1`, marker) })
+	body := `{"name":"Ana","email":"ana@firm.example","firm":"` + marker + `","submission":"` + "retry-" + strings.ToLower(rand.Text()) + `"}`
+	h := system(contactForm(db, contactLimits{perAddress: 5, perHour: 1000}))
+	code, first := sendContact(t, h, "retry-"+rand.Text(), body)
+	if code != 201 || first["forward"] != true {
+		t.Fatalf("first: %d %v", code, first)
+	}
+	// The answer was lost and the visitor sends again, even once the hour's notes are all taken: the same note comes
+	// back, not forwarded twice.
+	full := system(contactForm(db, contactLimits{perAddress: 5, perHour: 0}))
+	code, again := sendContact(t, full, "retry-"+rand.Text(), body)
+	if code != 201 || again["forward"] != false || again["id"] != first["id"] {
+		t.Fatalf("retry: %d %v", code, again)
+	}
+	var notes int
+	if err := db.QueryRow(`SELECT count(*) FROM contact_notes WHERE firm=$1`, marker).Scan(&notes); err != nil || notes != 1 {
+		t.Fatalf("one note kept: %d %v", notes, err)
+	}
+	if code, _ := sendContact(t, h, "retry-x", `{"name":"Ana","email":"ana@firm.example","firm":"F","submission":"bad key!"}`); code != 400 {
+		t.Fatalf("a malformed submission key: got %d", code)
 	}
 }
 
@@ -145,7 +177,7 @@ func TestContactNotesAreCountedOneAtATime(t *testing.T) {
 	go func() {
 		r := httptest.NewRequest("POST", "/v1/contact", strings.NewReader(`{"name":"Ana","email":"ana@firm.example","firm":"`+marker+`"}`))
 		r.Header.Set("Content-Type", "application/json")
-		r.Header.Set("CF-Connecting-IP", "192.0.2.40")
+		r.Header.Set("CF-Connecting-IP", "turn-"+rand.Text())
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		done <- w.Code

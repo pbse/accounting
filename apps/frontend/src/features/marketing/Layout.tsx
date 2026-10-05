@@ -5,18 +5,20 @@ import { drawLandscape } from "./landscape";
 // The public site's frame (docs/marketing-site.md): a masthead that stays at the top, the page, and a footer that ends
 // in a pen-and-ink landscape.
 export function MarketingLayout() {
-  const { pathname, hash } = useLocation();
+  const { pathname, hash, key } = useLocation();
   const [scrolled, setScrolled] = useState(false);
-  const lastPath = useRef(pathname);
+  const lastPath = useRef(pathname), lastKey = useRef("");
   useEffect(() => {
     const update = () => setScrolled(window.scrollY > 8);
     update();
     window.addEventListener("scroll", update, { passive: true });
     return () => window.removeEventListener("scroll", update);
   }, []);
-  // The layout stays mounted between pages: a new page opens at its top, and a link to a section opens at that section.
+  // The layout stays mounted between pages: a link to a section opens at that section, and any other link, the wordmark
+  // on the home page included, opens its page at the top. On first load only a section is looked for.
   useEffect(() => {
-    const newPage = lastPath.current !== pathname;
+    const first = lastKey.current === "", newPage = lastPath.current !== pathname;
+    lastKey.current = key;
     lastPath.current = pathname;
     let id = hash.slice(1);
     try {
@@ -25,9 +27,9 @@ export function MarketingLayout() {
       // A malformed escape is looked up as written.
     }
     const target = id ? document.getElementById(id) : null;
-    if (target) target.scrollIntoView({ behavior: newPage ? "instant" : "smooth" });
-    else if (newPage) window.scrollTo({ top: 0, behavior: "instant" });
-  }, [pathname, hash]);
+    if (target) target.scrollIntoView({ behavior: newPage || first ? "instant" : "smooth" });
+    else if (!first) window.scrollTo({ top: 0, behavior: newPage ? "instant" : "smooth" });
+  }, [pathname, hash, key]);
   return (
     <div className="k-site">
       <a className="k-skip" href="#main">

@@ -37,7 +37,7 @@ export function Privacy() {
               <strong>On this website:</strong> what your browser sends to load a page, and a check of whether you are signed in to the workspace, which contacts our sign-in service (WorkOS, or Krith itself) and sends any sign-in cookie you have. We use no analytics, advertising or tracking, and load no outside fonts or scripts. Our hosting provider, Cloudflare, processes each request, including your IP address, to deliver the site and protect it from abuse.
             </li>
             <li>
-              <strong>People who write to us:</strong> the name, email address, firm and note you send through our contact page or to {MAILBOX}. We keep it to reply to you, and forward it to our team’s inbox.
+              <strong>People who write to us:</strong> the name, email address, firm and note you send through our contact page or to {MAILBOX}. We keep it to reply to you, and forward it to our team’s inbox. To limit repeated notes, we also keep a one-way digest of the network address a note came from, never the address itself, and clear it after an hour.
             </li>
             <li>
               <strong>Firm members:</strong> name, email address and roles, which our sign-in provider WorkOS holds for us; which clients each person may work on; and a record of what each person does in Krith, such as confirming facts, approving drafts and signing off a close.
