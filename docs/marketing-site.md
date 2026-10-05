@@ -37,14 +37,16 @@ Four agents (Collector, Matcher, Investigator, Preparer), shown as collaborators
 ## The contact form
 
 1. The page posts `name`, `email`, `firm`, `note` and a hidden trap field `website` to `POST /v1/contact` (`services/backend/internal/transport/contact.go`).
-2. The API refuses a note without a name, a plain email address or a firm, or with control characters in a one-line field, or a note over 4,000 characters. A filled-in trap field is thanked and dropped. It allows five notes an hour from one address (Cloudflare's `CF-Connecting-IP`) and sixty an hour in all, then keeps the note in `contact_notes` (migration 123; platform rows only, under row-level security) and returns it.
+2. The API accepts the form from `FRONTEND_ORIGIN` when the site and API are on different origins (the route is in its CORS preflight list). It refuses a note without a name, a plain email address or a firm, or with control characters in a one-line field, or a note over 4,000 characters. A filled-in trap field is thanked and dropped. It allows five notes an hour from one address (Cloudflare's `CF-Connecting-IP`) and sixty an hour in all, then keeps the note in `contact_notes` (migration 123; platform rows only, under row-level security) and returns it.
 3. The edge Worker (`workers/edge/src/index.ts`, `contact.ts`) forwards each kept note through Cloudflare Email Routing's `send_email` binding `CONTACT_EMAIL`, from `website@<PUBLIC_APP_URL host>` to `CONTACT_FORWARD_ADDRESS`, with the visitor as Reply-To. Every header value is encoded and carries no line break. The visitor gets their answer at once; a failed forward is logged without its contents and the note stays kept.
 
 Mail sent to **hello@getkrith.com** reaches the same inbox through an Email Routing rule.
 
 ### Cloudflare setup (once per zone)
 
-- Email Routing enabled on getkrith.com, with the apex MX and SPF records Cloudflare adds (done 2026-10-05).
+All four were done on 2026-10-05:
+
+- Email Routing enabled on getkrith.com, with the apex MX and SPF records Cloudflare adds.
 - The forwarding inbox added as a destination address and **verified by its owner** (Cloudflare emails a link). Until then neither the rule nor the Worker can deliver to it.
 - A routing rule: `hello@getkrith.com` → forward to that inbox.
 - The production GitHub variable `CONTACT_FORWARD_ADDRESS` set to that inbox. Without it notes are kept but not forwarded.

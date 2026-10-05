@@ -74,6 +74,8 @@ export function startAgents(root: HTMLElement, pauseButton: HTMLButtonElement): 
       const from = position[k] ?? { x, y }, start = clock(), arc = Math.min(36, Math.hypot(x - from.x, y - from.y) * 0.12);
       const step = () => {
         if (id !== run) return reject(new Error("stopped"));
+        // Held, the clock stands still: look again now and then rather than drawing the same frame.
+        if (held) { const timer = window.setTimeout(() => { timers.delete(timer); step(); }, 150); timers.add(timer); return; }
         const q = Math.min(1, (clock() - start) / ms), e = wave ? q : easeInOut(q);
         place(k, from.x + (x - from.x) * e, from.y + (y - from.y) * e + (wave ? wave(q) : -Math.sin(Math.PI * e) * arc));
         if (q < 1) requestAnimationFrame(step); else resolve();

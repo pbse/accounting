@@ -51,6 +51,22 @@ func TestContactRefusesNotesItCannotForwardSafely(t *testing.T) {
 	}
 }
 
+func TestContactAllowsTheSiteOnAnotherOrigin(t *testing.T) {
+	t.Setenv("FRONTEND_ORIGIN", "https://getkrith.com")
+	h := API()
+	for origin, want := range map[string]int{"https://getkrith.com": 204, "https://untrusted.example": 403} {
+		r := httptest.NewRequest("OPTIONS", "/v1/contact", nil)
+		r.Header.Set("Origin", origin)
+		r.Header.Set("Access-Control-Request-Method", "POST")
+		r.Header.Set("Access-Control-Request-Headers", "content-type")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("preflight from %s: got %d, want %d", origin, w.Code, want)
+		}
+	}
+}
+
 func TestContactKeepsANoteAndReturnsItForForwarding(t *testing.T) {
 	db := adminDB(t)
 	marker := "Contact test " + rand.Text()
