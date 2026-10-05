@@ -123,24 +123,33 @@ const styles = () =>
   });
 
 // A plan's editor shows only under a content grant for the firm (or once the plan is revealed), so the check opens a
-// grant as a person would, reveals the plan if the page still asks, and waits for the editor itself.
+// grant as a person would, reveals the plan if the page asks, and waits for the editor itself. The page is read only
+// once it has settled on the editor or on one of those prompts: reading it mid-load sees neither and waits in vain.
 async function revealPlan(page) {
   const reason = "Browser layout check of the plan editor";
-  const asking = (text) => page.evaluate((text) => [...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes(text)), text);
-  if (await asking("Open a content grant")) {
-    const grant = page.locator(".app-main details", { hasText: "Open a content grant" });
-    await grant.evaluate((details) => (details.open = true));
-    await grant.locator("input").fill(reason);
-    await grant.locator('button:has-text("Open grant")').click();
-    await page.waitForFunction(() => ![...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes("Open a content grant")), null, { timeout: 15000 });
+  const settled = () =>
+    page
+      .waitForFunction(() => {
+        const main = document.querySelector(".app-main");
+        if (!main) return null;
+        if ([...main.querySelectorAll("button")].some((b) => b.textContent.includes("Add a step"))) return "editor";
+        const asks = [...main.querySelectorAll("summary")].map((s) => s.textContent);
+        if (asks.some((t) => t.includes("Open a content grant"))) return "Open a content grant";
+        if (asks.some((t) => t.includes("Reveal client content"))) return "Reveal client content";
+        return null;
+      }, null, { timeout: 15000 })
+      .then((state) => state.jsonValue());
+  const buttons = { "Open a content grant": "Open grant", "Reveal client content": "Reveal client content" };
+  for (let step = 0; step < 3; step++) {
+    const state = await settled();
+    if (state === "editor") return;
+    const prompt = page.locator(".app-main details", { hasText: state });
+    await prompt.evaluate((details) => (details.open = true));
+    await prompt.locator("input").fill(reason);
+    await prompt.locator(`button:has-text("${buttons[state]}")`).click();
+    await page.waitForFunction((text) => ![...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes(text)), state, { timeout: 15000 });
   }
-  if (await asking("Reveal client content")) {
-    const reveal = page.locator(".app-main details", { hasText: "Reveal client content" });
-    await reveal.evaluate((details) => (details.open = true));
-    await reveal.locator("input").fill(reason);
-    await reveal.locator('button:has-text("Reveal client content")').click();
-  }
-  await page.waitForSelector('.app-main button:has-text("Add a step")', { timeout: 15000 });
+  throw new Error("the plan editor did not open");
 }
 
 const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chrome" });
