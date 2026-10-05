@@ -3178,4 +3178,6 @@ Pass 3 found that with `AUTH_SESSION=server` a visitor's ended firm session answ
 
 Pass 4 found the hero's settling clock, and its 7.5-second safety finish, running on while the plate was out of sight. Both now stand still off screen and in a hidden tab; in Chrome, scrolling away mid-settle for nine seconds and back resumed at the same count (before: the finished count).
 
+Pass 5 found the edge refusing the contact form with 503 while workspace sign-in was unconfigured; `/v1/contact` now passes that gate like the health check (`needsWorkspaceAuth`, with a test).
+
 Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.

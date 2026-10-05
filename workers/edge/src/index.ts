@@ -2,7 +2,7 @@ import { llmEnvironment } from '../../shared/llm';
 import { Container } from "@cloudflare/containers";
 // Required entrypoint for Cloudflare container outbound service interception.
 export { ContainerProxy } from "@cloudflare/containers";
-import { adminPage, adminPath, forwardsToAPI, secureAdmin, staffGate } from "./routes";
+import { adminPage, adminPath, forwardsToAPI, needsWorkspaceAuth, secureAdmin, staffGate } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
 import { EmailMessage } from "cloudflare:email";
 import { contactMessage, noteToForward } from "./contact";
@@ -162,11 +162,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (forwardsToAPI(path)) {
-      if (
-        path !== "/healthz" &&
-        path !== "/v1/reference/prepaid" &&
-        (!env.WORKOS_CLIENT_ID || !env.WORKOS_ISSUER)
-      ) {
+      if (needsWorkspaceAuth(path) && (!env.WORKOS_CLIENT_ID || !env.WORKOS_ISSUER)) {
         return new Response(
           "Hosted workspace authentication is not configured",
           { status: 503 },
