@@ -15,6 +15,27 @@ plan=$(mktemp)
 trap 'rm -f "$plan"' EXIT
 sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
 {
+  if [ -n "${MIGRATION_GRANT_TO:-}" ]; then
+    # Validate the verified non-secret runtime role before any schema change.
+    # Keep validation and grants in the same owner session. psql quotes both
+    # the value and identifier; never interpolate an operator role into SQL.
+    echo "SELECT set_config('migrations.runtime_role', :'grant_to', false) AS migration_role_checked \\gset"
+    cat <<'SQL'
+DO $$
+DECLARE target pg_roles;
+BEGIN
+ SELECT * INTO target FROM pg_roles WHERE rolname=current_setting('migrations.runtime_role');
+ IF NOT FOUND OR NOT target.rolcanlogin OR target.rolname=current_user OR target.rolname='context_machine_reader'
+    OR target.rolsuper OR target.rolbypassrls OR target.rolcreaterole OR target.rolcreatedb OR target.rolreplication
+    OR 'default_transaction_read_only=on'=ANY(COALESCE(target.rolconfig,ARRAY[]::text[])) THEN
+  RAISE EXCEPTION 'Migration grants require the dedicated unprivileged application login';
+ END IF;
+ IF pg_has_role(target.oid,current_user,'MEMBER') THEN
+  RAISE EXCEPTION 'Application login must not be a member of the migration owner role';
+ END IF;
+END $$;
+SQL
+  fi
   echo "SELECT 1 AS migration_locked FROM pg_advisory_lock(hashtext('migrations.applied')) \\gset"
   echo "SELECT to_regclass('migrations.applied') IS NULL AS migration_unrecorded,EXISTS(SELECT 1 FROM pg_tables WHERE schemaname='public') AS migration_populated \\gset"
   echo "\\if :migration_unrecorded"
@@ -50,8 +71,8 @@ sum() { shasum -a 256 "$1" | cut -d' ' -f1; }
     echo "\\endif"
   done
   if [ -n "${MIGRATION_GRANT_TO:-}" ]; then
-    echo "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO \"$MIGRATION_GRANT_TO\";"
-    echo "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO \"$MIGRATION_GRANT_TO\";"
+    echo 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"grant_to";'
+    echo 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO :"grant_to";'
   fi
 } > "$plan"
-psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -f "$plan"
+psql "$DATABASE_URL" -X -q -v ON_ERROR_STOP=1 -v grant_to="${MIGRATION_GRANT_TO:-}" -f "$plan"

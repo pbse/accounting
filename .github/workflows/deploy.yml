@@ -28,28 +28,17 @@ jobs:
       VITE_PLATFORM_ORGANIZATION_ID: ${{ vars.PLATFORM_ORGANIZATION_ID }}
       FRONTEND_ORIGIN: ${{ vars.STAGING_URL }}
       STAGING_URL: ${{ vars.STAGING_URL }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+      DATABASE_RUNTIME_ROLE: ${{ vars.DATABASE_RUNTIME_ROLE }}
       TEXT_SCANNER_URL: ${{ vars.TEXT_SCANNER_URL }}
       UPLOAD_SCAN_HOST: ${{ vars.UPLOAD_SCAN_HOST }}
-      UPLOAD_SCAN_KEY: ${{ secrets.UPLOAD_SCAN_KEY }}
       EMAIL_INTAKE_ADDRESS: ${{ vars.EMAIL_INTAKE_ADDRESS }}
-      EMAIL_INTAKE_KEY: ${{ secrets.EMAIL_INTAKE_KEY }}
-      SECRETS_KEY: ${{ secrets.SECRETS_KEY }}
       QBO_CLIENT_ID: ${{ vars.QBO_CLIENT_ID }}
-      QBO_CLIENT_SECRET: ${{ secrets.QBO_CLIENT_SECRET }}
       QBO_REDIRECT_URI: ${{ vars.QBO_REDIRECT_URI }}
-      QBO_WEBHOOK_VERIFIER: ${{ secrets.QBO_WEBHOOK_VERIFIER }}
-      WORKOS_API_KEY: ${{ secrets.WORKOS_API_KEY }}
       QBO_PRODUCTION_CLIENT_ID: ${{ vars.QBO_PRODUCTION_CLIENT_ID }}
-      QBO_PRODUCTION_CLIENT_SECRET: ${{ secrets.QBO_PRODUCTION_CLIENT_SECRET }}
       QBO_PRODUCTION_REDIRECT_URI: ${{ vars.QBO_PRODUCTION_REDIRECT_URI }}
       XERO_CLIENT_ID: ${{ vars.XERO_CLIENT_ID }}
-      XERO_CLIENT_SECRET: ${{ secrets.XERO_CLIENT_SECRET }}
       XERO_REDIRECT_URI: ${{ vars.XERO_REDIRECT_URI }}
-      XERO_WEBHOOK_KEY: ${{ secrets.XERO_WEBHOOK_KEY }}
       PUBLIC_APP_URL: ${{ vars.STAGING_URL }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
       CONTEXT_MACHINE_ENABLED: ${{ vars.CONTEXT_MACHINE_ENABLED || 'true' }}
       CONTEXT_MACHINE_MODEL: ${{ vars.CONTEXT_MACHINE_MODEL }}
@@ -62,24 +51,16 @@ jobs:
       CLAUDE_REASONING_EFFORT: ${{ vars.CLAUDE_REASONING_EFFORT }}
       OPENAI_REASONING_EFFORT: ${{ vars.OPENAI_REASONING_EFFORT }}
       LLM_REASONING_EFFORTS: ${{ vars.LLM_REASONING_EFFORTS }}
-      CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
       LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'api' }}
       LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS: ${{ vars.LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS || 'false' }}
       LLM_MODELS: ${{ vars.LLM_MODELS }}
-      CONTEXT_MACHINE_TOKEN: ${{ secrets.CONTEXT_MACHINE_TOKEN }}
-      CONTEXT_MACHINE_DATABASE_URL: ${{ secrets.CONTEXT_MACHINE_DATABASE_URL }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      OPERATIONS_ALERT_WEBHOOK_URL: ${{ secrets.OPERATIONS_ALERT_WEBHOOK_URL }}
-      OPERATIONS_ALERT_WEBHOOK_TOKEN: ${{ secrets.OPERATIONS_ALERT_WEBHOOK_TOKEN }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       QBO_SANDBOX_REALM_ID: ${{ vars.QBO_SANDBOX_REALM_ID }}
       QBO_SANDBOX_ENTITY: ${{ vars.QBO_SANDBOX_ENTITY }}
       QBO_SANDBOX_PREPAID_ACCOUNT_ID: ${{ vars.QBO_SANDBOX_PREPAID_ACCOUNT_ID }}
       QBO_SANDBOX_EXPENSE_ACCOUNT_ID: ${{ vars.QBO_SANDBOX_EXPENSE_ACCOUNT_ID }}
-      QBO_SANDBOX_ACCESS_TOKEN: ${{ secrets.QBO_SANDBOX_ACCESS_TOKEN }}
       WORKOS_AUTHKIT_DOMAIN: ${{ vars.WORKOS_AUTHKIT_DOMAIN }}
       MCP_RESOURCE_URL: ${{ vars.MCP_RESOURCE_URL }}
       MCP_ALLOWED_ORIGINS: ${{ vars.MCP_ALLOWED_ORIGINS }}
@@ -91,34 +72,22 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm ci
       - name: Prepare optional AI routes and service bindings
         run: node scripts/deploy-context-machine.mjs --prepare-callers
       - name: Validate context-machine configuration
-        env:
-          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
         run: node scripts/deploy-context-machine.mjs --check
       - name: Check staging configuration without exposing secrets
+        env:
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: |
           node --input-type=module <<'JS'
-          for (const name of ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','UPLOAD_SCAN_KEY','WORKOS_CLIENT_ID','WORKOS_ISSUER','DATABASE_URL','MIGRATION_DATABASE_URL','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','STAGING_URL','VITE_WORKOS_API_HOSTNAME']) {
+          for (const name of ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','WORKOS_CLIENT_ID','WORKOS_ISSUER','DATABASE_RUNTIME_ROLE','MIGRATION_DATABASE_URL','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','STAGING_URL','VITE_WORKOS_API_HOSTNAME']) {
             if (!process.env[name]) throw new Error(`Missing staging setting: ${name}`);
           }
-          if (process.env.UPLOAD_SCAN_KEY.length < 32) throw new Error('UPLOAD_SCAN_KEY must contain at least 32 random characters');
           if (new URL(process.env.VITE_API_BASE_URL || process.env.STAGING_URL).hostname !== process.env.UPLOAD_SCAN_HOST || process.env.UPLOAD_SCAN_HOST.endsWith('.workers.dev')) throw new Error('UPLOAD_SCAN_HOST must match the API custom hostname protected by WAF');
-          const qbo = ['QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI'].map(name => !!process.env[name]);
-          if (qbo.some(Boolean) && (!qbo.every(Boolean) || !process.env.SECRETS_KEY)) throw new Error('QBO OAuth requires all three settings and SECRETS_KEY');
-          const productionQbo = ['QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI'].map(name => !!process.env[name]);
-          if (productionQbo.some(Boolean) && (!productionQbo.every(Boolean) || !process.env.SECRETS_KEY)) throw new Error('Production QBO OAuth requires all three settings and SECRETS_KEY');
-          if (process.env.LLM_PROVIDER !== 'context_machine' && !!process.env.OPENAI_API_KEY !== !!process.env.OPENAI_MODEL) throw new Error('Set both OpenAI server settings or neither');
-          if (process.env.OPERATIONS_ALERT_WEBHOOK_URL) {
-            let valid = false;
-            try { const url = new URL(process.env.OPERATIONS_ALERT_WEBHOOK_URL); valid = url.protocol === 'https:' && !!url.hostname && !url.username && !url.password && !url.hash; } catch {}
-            if (!valid) throw new Error('Operations alert webhook must be a valid HTTPS URL without embedded credentials or fragment');
-          }
-          if (process.env.SECRETS_KEY && !/^[0-9a-fA-F]{64}$/.test(process.env.SECRETS_KEY)) throw new Error('SECRETS_KEY must be 32 hex-encoded random bytes');
           const session = process.env.AUTH_SESSION || 'client';
           if (!['client','server'].includes(session)) throw new Error('AUTH_SESSION must be client or server');
-          if (session === 'server' && (!process.env.WORKOS_API_KEY || !process.env.SECRETS_KEY)) throw new Error('AUTH_SESSION=server needs WORKOS_API_KEY and SECRETS_KEY');
           if (session === 'server' && process.env.VITE_API_BASE_URL && new URL(process.env.VITE_API_BASE_URL).origin !== new URL(process.env.STAGING_URL).origin) throw new Error('AUTH_SESSION=server needs the API on the app origin: leave VITE_API_BASE_URL empty or set it to that origin');
           if (session === 'client' && [undefined, '', 'api.workos.com'].includes(process.env.VITE_WORKOS_API_HOSTNAME)) console.log('::warning::AUTH_SESSION=client with api.workos.com: WorkOS needs a custom authentication domain in production; set AUTH_SESSION=server or a custom WORKOS_API_HOSTNAME');
           if (!!process.env.WORKOS_AUTHKIT_DOMAIN !== !!process.env.MCP_RESOURCE_URL) throw new Error('Set WORKOS_AUTHKIT_DOMAIN and MCP_RESOURCE_URL together or neither');
@@ -128,55 +97,35 @@ jobs:
             const mcp = `${new URL(process.env.VITE_API_BASE_URL || process.env.STAGING_URL).origin}/mcp`;
             if (process.env.MCP_RESOURCE_URL !== mcp) throw new Error(`MCP_RESOURCE_URL must be ${mcp}`);
           }
-          if (!!process.env.EMAIL_INTAKE_ADDRESS !== !!process.env.EMAIL_INTAKE_KEY || (process.env.EMAIL_INTAKE_KEY && process.env.EMAIL_INTAKE_KEY.length < 32) || (process.env.EMAIL_INTAKE_ADDRESS && !/^[a-z0-9._-]+@[a-z0-9.-]+$/i.test(process.env.EMAIL_INTAKE_ADDRESS))) throw new Error('Email intake requires a valid routing address and a separate 32-character secret');
+          if (process.env.EMAIL_INTAKE_ADDRESS && !/^[a-z0-9._-]+@[a-z0-9.-]+$/i.test(process.env.EMAIL_INTAKE_ADDRESS)) throw new Error('Invalid email intake address');
           for (const name of ['STAGING_URL','WORKOS_ISSUER','TEXT_SCANNER_URL']) {
             if (new URL(process.env[name]).protocol !== 'https:') throw new Error(`${name} must use HTTPS`);
           }
-          if (!['require','verify-ca','verify-full'].includes(new URL(process.env.DATABASE_URL).searchParams.get('sslmode'))) throw new Error('Staging PostgreSQL must require TLS');
-          // The firm is a session setting, which a transaction pooler would share between firms.
-          if (new URL(process.env.DATABASE_URL).hostname.toLowerCase().includes('-pooler')) throw new Error('Staging DATABASE_URL must use the direct endpoint, not the -pooler one');
+          if (!/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(process.env.DATABASE_RUNTIME_ROLE)) throw new Error('Invalid DATABASE_RUNTIME_ROLE');
           const migration = new URL(process.env.MIGRATION_DATABASE_URL);
           if (!['require','verify-ca','verify-full'].includes(migration.searchParams.get('sslmode')) || migration.hostname.toLowerCase().includes('-pooler')) throw new Error('MIGRATION_DATABASE_URL must be the owner on the direct endpoint and require TLS');
           JS
-      - run: npm ci
-      - name: Apply pending migrations as the database owner
+      - name: Check Cloudflare runtime credential metadata
         run: |
-          export MIGRATION_GRANT_TO="$(node -p 'decodeURIComponent(new URL(process.env.DATABASE_URL).username)')"
+          node scripts/deploy-service.mjs edge --check
+          node scripts/deploy-service.mjs queue --check
+          node scripts/deploy-service.mjs scanner --check
+      - name: Apply pending migrations as the database owner
+        env:
+          MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
+        run: |
+          export MIGRATION_GRANT_TO="$DATABASE_RUNTIME_ROLE"
           DATABASE_URL="$MIGRATION_DATABASE_URL" infra/postgres/migrate.sh
       - name: Stamp the workflow code version
         run: echo "$GITHUB_SHA" > services/backend/internal/wf/version.txt
       - name: Deploy isolated on-demand text scanner
-        run: |
-          export CLOSE_SCANNER_SECRET_FILE="$(mktemp)"
-          trap 'rm -f "$CLOSE_SCANNER_SECRET_FILE"' EXIT
-          node --input-type=module <<'JS'
-          import { writeFileSync } from 'node:fs';
-          writeFileSync(process.env.CLOSE_SCANNER_SECRET_FILE, JSON.stringify({UPLOAD_SCAN_KEY: process.env.UPLOAD_SCAN_KEY}), {mode: 0o600});
-          JS
-          npx wrangler deploy -c workers/scanner/wrangler.jsonc --secrets-file "$CLOSE_SCANNER_SECRET_FILE"
+        run: node scripts/deploy-service.mjs scanner
       - name: Deploy private context machine before its callers
-        env:
-          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
         run: node scripts/deploy-context-machine.mjs
-      - name: Deploy code and server secrets together
-        run: |
-          export CLOSE_DEPLOY_SECRET_FILE="$(mktemp)"
-          trap 'rm -f "$CLOSE_DEPLOY_SECRET_FILE"' EXIT
-          node --input-type=module <<'JS'
-          import { writeFileSync } from 'node:fs';
-          const names = ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','UPLOAD_SCAN_KEY','EMAIL_INTAKE_ADDRESS','EMAIL_INTAKE_KEY','QBO_CLIENT_ID','QBO_CLIENT_SECRET','QBO_REDIRECT_URI','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_ID','QBO_PRODUCTION_CLIENT_SECRET','QBO_PRODUCTION_REDIRECT_URI','XERO_CLIENT_ID','XERO_CLIENT_SECRET','XERO_REDIRECT_URI','XERO_WEBHOOK_KEY','SECRETS_KEY','PUBLIC_APP_URL','DATABASE_URL','WORKOS_CLIENT_ID','WORKOS_ORGANIZATION_ID','WORKOS_ISSUER','PLATFORM_ORGANIZATION_ID','FRONTEND_ORIGIN','OPENAI_API_KEY','OPENAI_MODEL','OPENAI_REASONING_EFFORT','LLM_REASONING_EFFORTS','LLM_MODELS','LLM_PROVIDER','LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS','CONTEXT_MACHINE_PROFILES','CODEX_MODEL','CLAUDE_MODEL','CODEX_REASONING_EFFORT','CLAUDE_REASONING_EFFORT','CONTEXT_MACHINE_TOKEN','CONTEXT_MACHINE_MODEL','QBO_SANDBOX_REALM_ID','QBO_SANDBOX_ENTITY','QBO_SANDBOX_PREPAID_ACCOUNT_ID','QBO_SANDBOX_EXPENSE_ACCOUNT_ID','QBO_SANDBOX_ACCESS_TOKEN','WORKOS_AUTHKIT_DOMAIN','MCP_RESOURCE_URL','MCP_ALLOWED_ORIGINS','PRODUCTION_POSTING_KINDS','XERO_POSTING_KINDS','AUTH_SESSION'];
-          writeFileSync(process.env.CLOSE_DEPLOY_SECRET_FILE, JSON.stringify(Object.fromEntries(names.map(name => [name, ['OPENAI_API_KEY','OPENAI_MODEL'].includes(name) && process.env.LLM_PROVIDER === 'context_machine' ? '' : process.env[name] || '']))), {mode: 0o600});
-          JS
-          npm run deploy:staging -- --secrets-file "$CLOSE_DEPLOY_SECRET_FILE" --route "${UPLOAD_SCAN_HOST}/*"
+      - name: Deploy code while preserving Cloudflare credentials
+        run: node scripts/deploy-service.mjs edge
       - name: Deploy background worker with scoped server configuration
-        run: |
-          export CLOSE_WORKER_SECRET_FILE="$(mktemp)"
-          trap 'rm -f "$CLOSE_WORKER_SECRET_FILE"' EXIT
-          node --input-type=module <<'JS'
-          import { writeFileSync } from 'node:fs';
-          writeFileSync(process.env.CLOSE_WORKER_SECRET_FILE, JSON.stringify({DATABASE_URL: process.env.DATABASE_URL, SECRETS_KEY: process.env.SECRETS_KEY || '', OPENAI_API_KEY: process.env.LLM_PROVIDER === 'context_machine' ? '' : process.env.OPENAI_API_KEY || '', OPENAI_MODEL: process.env.LLM_PROVIDER === 'context_machine' ? '' : process.env.OPENAI_MODEL || '', OPENAI_REASONING_EFFORT: process.env.OPENAI_REASONING_EFFORT || '', LLM_REASONING_EFFORTS: process.env.LLM_REASONING_EFFORTS || '', LLM_MODELS: process.env.LLM_MODELS || '', LLM_PROVIDER: process.env.LLM_PROVIDER || '', LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS: process.env.LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS || '', CONTEXT_MACHINE_PROFILES: process.env.CONTEXT_MACHINE_PROFILES || '', CODEX_MODEL: process.env.CODEX_MODEL || '', CLAUDE_MODEL: process.env.CLAUDE_MODEL || '', CODEX_REASONING_EFFORT: process.env.CODEX_REASONING_EFFORT || '', CLAUDE_REASONING_EFFORT: process.env.CLAUDE_REASONING_EFFORT || '',  CONTEXT_MACHINE_TOKEN: process.env.CONTEXT_MACHINE_TOKEN, CONTEXT_MACHINE_MODEL: process.env.CONTEXT_MACHINE_MODEL, OPERATIONS_ALERT_WEBHOOK_URL: process.env.OPERATIONS_ALERT_WEBHOOK_URL || '', OPERATIONS_ALERT_WEBHOOK_TOKEN: process.env.OPERATIONS_ALERT_WEBHOOK_TOKEN || '', QBO_CLIENT_ID: process.env.QBO_CLIENT_ID || '', QBO_CLIENT_SECRET: process.env.QBO_CLIENT_SECRET || '', QBO_REDIRECT_URI: process.env.QBO_REDIRECT_URI || '', QBO_PRODUCTION_CLIENT_ID: process.env.QBO_PRODUCTION_CLIENT_ID || '', QBO_PRODUCTION_CLIENT_SECRET: process.env.QBO_PRODUCTION_CLIENT_SECRET || '', QBO_PRODUCTION_REDIRECT_URI: process.env.QBO_PRODUCTION_REDIRECT_URI || '', XERO_CLIENT_ID: process.env.XERO_CLIENT_ID || '', XERO_CLIENT_SECRET: process.env.XERO_CLIENT_SECRET || '', XERO_REDIRECT_URI: process.env.XERO_REDIRECT_URI || '', PUBLIC_APP_URL: process.env.PUBLIC_APP_URL || '', UPLOAD_SCAN_KEY: process.env.UPLOAD_SCAN_KEY || '', TEXT_SCANNER_URL: process.env.TEXT_SCANNER_URL || '', WORKOS_API_KEY: process.env.WORKOS_API_KEY || ''}), {mode: 0o600});
-          JS
-          npx wrangler deploy -c workers/queue/wrangler.jsonc --secrets-file "$CLOSE_WORKER_SECRET_FILE"
+        run: node scripts/deploy-service.mjs queue
       - name: Verify staging readiness
         # Retry past the 60-second private readiness cache, including a cold-start failure.
         run: curl --fail --silent --show-error --retry 10 --retry-delay 10 --retry-all-errors --max-time 30 "${STAGING_URL%/}/readyz"

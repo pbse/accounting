@@ -14,7 +14,6 @@ jobs:
     environment: production
     env:
       CONTEXT_MACHINE_ENABLED: ${{ vars.CONTEXT_MACHINE_ENABLED || 'true' }}
-      CONTEXT_MACHINE_TOKEN: ${{ secrets.CONTEXT_MACHINE_TOKEN }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
@@ -23,8 +22,8 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - name: Require explicit standby mode and service authentication
-        run: node scripts/deploy-context-machine.mjs --provision-disabled --check
       - run: npm ci
+      - name: Require explicit standby mode and service authentication
+        run: node scripts/deploy-context-machine.mjs --provision-disabled --check --production
       - name: Deploy the private Worker and real CLI image without starting research
         run: node scripts/deploy-context-machine.mjs --provision-disabled --production
