@@ -3172,4 +3172,6 @@ Local checks: `npm run check`, `npm run build`, `npm test` (43, including the co
 
 Codex (gpt-6-sol, high) pass 1 found the contact route missing from the API's CORS preflight list (a site on another origin than the API could not post) and the agents' cursor glide drawing frames while paused; both are fixed, with a preflight test.
 
+Pass 2 found no staff path to a note whose email never arrived (the staff console now lists contact notes, `GET /v1/admin/contact-notes`), the hourly limit counted and inserted separately (now one at a time under an advisory lock; a test holds the lock and shows a note waits), a refused or failed note still counting against the visitor's address (now taken back), the hero's decision reusing the workpaper's AJE-3 with a different amount (now AJE-4), and a malformed URL fragment throwing in the layout (now looked up as written).
+
 Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.

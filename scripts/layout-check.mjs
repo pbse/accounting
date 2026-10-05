@@ -106,7 +106,7 @@ const apps = [
     prefix: new URL(admin).pathname,
     routes: [
       "/", "/firms", `/firms/${firm}`, "/people", "/audit", "/workflows", "/runs", `/runs/${run}`, "/runs/new",
-      "/plans", `/plans/${plan}`, `/plans/${plan}/edit`, "/plans/new", "/jobs", "/connections",
+      "/plans", `/plans/${plan}`, `/plans/${plan}/edit`, "/plans/new", "/jobs", "/connections", "/contact-notes",
     ],
   },
 ];

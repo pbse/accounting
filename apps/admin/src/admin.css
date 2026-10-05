@@ -234,3 +234,12 @@ pre.json {
     margin: 0;
   }
 }
+/* Contact notes are letters, not figures: they read from the left, each row from its top. */
+.contact-notes th,
+.contact-notes td {
+  text-align: left;
+  vertical-align: top;
+}
+.contact-notes td:last-child {
+  max-width: 40rem;
+}

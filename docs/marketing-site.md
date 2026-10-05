@@ -37,7 +37,7 @@ Four agents (Collector, Matcher, Investigator, Preparer), shown as collaborators
 ## The contact form
 
 1. The page posts `name`, `email`, `firm`, `note` and a hidden trap field `website` to `POST /v1/contact` (`services/backend/internal/transport/contact.go`).
-2. The API accepts the form from `FRONTEND_ORIGIN` when the site and API are on different origins (the route is in its CORS preflight list). It refuses a note without a name, a plain email address or a firm, or with control characters in a one-line field, or a note over 4,000 characters. A filled-in trap field is thanked and dropped. It allows five notes an hour from one address (Cloudflare's `CF-Connecting-IP`) and sixty an hour in all, then keeps the note in `contact_notes` (migration 123; platform rows only, under row-level security) and returns it.
+2. The API accepts the form from `FRONTEND_ORIGIN` when the site and API are on different origins (the route is in its CORS preflight list). It refuses a note without a name, a plain email address or a firm, or with control characters in a one-line field, or a note over 4,000 characters. A filled-in trap field is thanked and dropped. It allows five kept notes an hour from one address (Cloudflare's `CF-Connecting-IP`; a note that was not kept does not count) and sixty an hour in all, counted and stored one note at a time under an advisory lock so a burst cannot pass the limit together, then keeps the note in `contact_notes` (migration 123; platform rows only, under row-level security) and returns it.
 3. The edge Worker (`workers/edge/src/index.ts`, `contact.ts`) forwards each kept note through Cloudflare Email Routing's `send_email` binding `CONTACT_EMAIL`, from `website@<PUBLIC_APP_URL host>` to `CONTACT_FORWARD_ADDRESS`, with the visitor as Reply-To. Every header value is encoded and carries no line break. The visitor gets their answer at once; a failed forward is logged without its contents and the note stays kept.
 
 Mail sent to **hello@getkrith.com** reaches the same inbox through an Email Routing rule.
@@ -51,7 +51,7 @@ All four were done on 2026-10-05:
 - A routing rule: `hello@getkrith.com` → forward to that inbox.
 - The production GitHub variable `CONTACT_FORWARD_ADDRESS` set to that inbox. Without it notes are kept but not forwarded.
 
-Notes are read from the inbox for now; the staff console has no list of them yet.
+The inbox is a convenience; the record is the staff console's **Contact notes** page (`platform:read`), which lists every kept note newest first. A note whose email failed, or that arrived while `CONTACT_FORWARD_ADDRESS` was unset, is read and answered there.
 
 ## Checks
 

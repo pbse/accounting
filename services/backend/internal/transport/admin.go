@@ -224,6 +224,7 @@ func registerAdmin(mux *http.ServeMux, db *sql.DB, token string) {
 	registerAdminPeople(mux, db, token)
 	registerAdminPlans(mux, db, token)
 	registerAdminAudit(mux, db, token)
+	registerAdminContact(mux, db, token)
 	registerAdminGrants(mux, db, token)
 }
 

@@ -18,7 +18,13 @@ export function MarketingLayout() {
   useEffect(() => {
     const newPage = lastPath.current !== pathname;
     lastPath.current = pathname;
-    const target = hash ? document.getElementById(decodeURIComponent(hash.slice(1))) : null;
+    let id = hash.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      // A malformed escape is looked up as written.
+    }
+    const target = id ? document.getElementById(id) : null;
     if (target) target.scrollIntoView({ behavior: newPage ? "instant" : "smooth" });
     else if (newPage) window.scrollTo({ top: 0, behavior: "instant" });
   }, [pathname, hash]);

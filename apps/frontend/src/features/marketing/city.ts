@@ -5,7 +5,7 @@ import { clamp, easeInOut, fractalNoise, prefersReducedMotion, seeded, token } f
 
 type Ask = { client: string; ask: string; amt: string };
 const DECISIONS: Ask[] = [
-  { client: "Harbor Street Dental", ask: "Approve AJE-3", amt: "490.00 to repairs and maintenance" },
+  { client: "Harbor Street Dental", ask: "Approve AJE-4", amt: "490.00 to repairs and maintenance" },
   { client: "Alder & Finch Architects", ask: "Send the September request", amt: "2 receipts outstanding" },
   { client: "Northgate Logistics", ask: "Approve the freight accrual", amt: "3,120.00" },
   { client: "Mesa Physical Therapy", ask: "Owner transfer: draw or loan?", amt: "12,000.00 on 18 Sep" },

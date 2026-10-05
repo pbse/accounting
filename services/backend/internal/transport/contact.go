@@ -1,7 +1,9 @@
 package transport
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"net/http"
 	"net/mail"
@@ -60,6 +62,22 @@ func (t *contactThrottle) allow(address string, most int, now time.Time) bool {
 	return true
 }
 
+// undo takes back a note allow recorded at at, when the note was not kept after all.
+func (t *contactThrottle) undo(address string, at time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	times := t.seen[address]
+	for i, seen := range times {
+		if seen.Equal(at) {
+			t.seen[address] = append(times[:i], times[i+1:]...)
+			break
+		}
+	}
+	if len(t.seen[address]) == 0 {
+		delete(t.seen, address)
+	}
+}
+
 // Cloudflare sets CF-Connecting-IP to the visitor's address and replaces any value a visitor sends.
 func contactAddress(r *http.Request) string {
 	if address := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); address != "" {
@@ -105,24 +123,49 @@ func contactForm(db *sql.DB, limits contactLimits) http.HandlerFunc {
 			problem(w, 503, "Notes can't be received right now. Write to hello@getkrith.com instead.")
 			return
 		}
-		if !throttle.allow(contactAddress(r), limits.perAddress, time.Now()) {
+		address, at := contactAddress(r), time.Now()
+		if !throttle.allow(address, limits.perAddress, at) {
 			problem(w, 429, "You've sent several notes already. Please try again later, or write to hello@getkrith.com.")
 			return
 		}
-		var recent int
-		if err := db.QueryRowContext(r.Context(), `SELECT count(*) FROM contact_notes WHERE created_at > now() - interval '1 hour'`).Scan(&recent); err != nil {
-			problem(w, 503, "Notes can't be received right now. Write to hello@getkrith.com instead.")
-			return
-		}
-		if recent >= limits.perHour {
-			problem(w, 429, "We're receiving a lot of notes just now. Please try again later, or write to hello@getkrith.com.")
-			return
-		}
-		var id int64
-		if err := db.QueryRowContext(r.Context(), `INSERT INTO contact_notes(name,email,firm,note) VALUES($1,$2,$3,$4) RETURNING id`, name, email, firm, note).Scan(&id); err != nil {
-			problem(w, 503, "Notes can't be received right now. Write to hello@getkrith.com instead.")
+		// Only a kept note counts against the visitor's address.
+		id, err := keepContactNote(r.Context(), db, limits.perHour, name, email, firm, note)
+		if err != nil {
+			throttle.undo(address, at)
+			if errors.Is(err, errContactBusy) {
+				problem(w, 429, "We're receiving a lot of notes just now. Please try again later, or write to hello@getkrith.com.")
+			} else {
+				problem(w, 503, "Notes can't be received right now. Write to hello@getkrith.com instead.")
+			}
 			return
 		}
 		jsonReply(w, 201, map[string]any{"forward": true, "id": id, "name": name, "email": email, "firm": firm, "note": note})
 	}
+}
+
+var errContactBusy = errors.New("contact notes: the hourly limit is reached")
+
+// keepContactNote stores a note unless perHour notes arrived in the past hour. Notes are counted and kept one at a time,
+// so a burst from many addresses cannot pass the limit together.
+func keepContactNote(ctx context.Context, db *sql.DB, perHour int, name, email, firm, note string) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var recent int
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('contact_notes'))`); err != nil {
+		return 0, err
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM contact_notes WHERE created_at > now() - interval '1 hour'`).Scan(&recent); err != nil {
+		return 0, err
+	}
+	if recent >= perHour {
+		return 0, errContactBusy
+	}
+	var id int64
+	if err = tx.QueryRowContext(ctx, `INSERT INTO contact_notes(name,email,firm,note) VALUES($1,$2,$3,$4) RETURNING id`, name, email, firm, note).Scan(&id); err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
 }
