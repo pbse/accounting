@@ -1,9 +1,11 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { BrowserRouter, Link, Route, Routes, useSearchParams } from "react-router";
+import { BrowserRouter, Route, Routes, useSearchParams } from "react-router";
 import { MarketingLayout } from "./features/marketing/Layout";
 import { Home } from "./features/marketing/Home";
 import { Contact } from "./features/marketing/Contact";
-import { AiData, PilotTerms, Privacy, Retention, Subprocessors } from "./features/marketing/Legal";
+import { Security } from "./features/marketing/Security";
+import { Privacy } from "./features/marketing/Privacy";
+import { NotFound } from "./features/marketing/NotFound";
 import { Login } from "./features/auth/Login";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { EffortTracker } from "./features/closes/Effort";
@@ -58,21 +60,10 @@ export function App() {
           <Route element={<MarketingLayout />}>
             <Route index element={<Home />} />
             <Route path="contact" element={<Contact />} />
+            <Route path="security" element={<Security />} />
             <Route path="privacy" element={<Privacy />} />
-            <Route path="subprocessors" element={<Subprocessors />} />
-            <Route path="ai" element={<AiData />} />
-            <Route path="data-retention" element={<Retention />} />
-            <Route path="pilot-terms" element={<PilotTerms />} />
             <Route path="login" element={<Login />} />
-            <Route
-              path="*"
-              element={
-                <main id="main" className="public-page">
-                  <h1>We couldn’t find that page.</h1>
-                  <Link to="/">Return home</Link>
-                </main>
-              }
-            />
+            <Route path="*" element={<NotFound />} />
           </Route>
           <Route path="dashboard" element={<WorkspaceLayout />}>
             <Route index element={<Gated><Dashboard view="work" /></Gated>} />

@@ -13,6 +13,7 @@ import { StartRun } from "./pages/StartRun";
 import { Connections, Jobs } from "./pages/Operations";
 import { People } from "./pages/People";
 import { Audit } from "./pages/Audit";
+import { ContactNotes } from "./pages/ContactNotes";
 import { Plan, Plans } from "./pages/Plans";
 import { PlanBuilder } from "./pages/PlanBuilder";
 import { Icon } from "@close/ui/components/Icon";
@@ -32,6 +33,7 @@ export function App() {
           <Route path="firms/:id" element={<Firm />} />
           <Route path="people" element={<People />} />
           <Route path="audit" element={<Audit />} />
+          <Route path="contact-notes" element={<ContactNotes />} />
           <Route path="workflows" element={<Workflows />} />
           <Route path="runs" element={<Runs />} />
           <Route path="runs/new" element={<StartRun />} />
@@ -71,6 +73,7 @@ function Layout() {
             <NavLink className="nav-item" to="/firms"><Icon name="firm" />Firms</NavLink>
             <NavLink className="nav-item" to="/people"><Icon name="clients" />People</NavLink>
             <NavLink className="nav-item" to="/audit"><Icon name="shield" />Staff audit</NavLink>
+            <NavLink className="nav-item" to="/contact-notes"><Icon name="file" />Contact notes</NavLink>
           </div>
           <div className="nav-group">
             <div className="nav-label">Workflows</div>

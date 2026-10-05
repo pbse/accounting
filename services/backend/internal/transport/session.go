@@ -283,7 +283,8 @@ func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Ha
 			kind, check = staffSession, staff
 		}
 		cookie, err := r.Cookie(kind.cookie)
-		if err != nil || r.Header.Get("Authorization") != "" || !strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/v1/auth/") {
+		// The public contact form never uses a session, so an ended one cannot stop a visitor's note.
+		if err != nil || r.Header.Get("Authorization") != "" || !strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/v1/auth/") || r.URL.Path == "/v1/contact" {
 			next.ServeHTTP(w, r)
 			return
 		}

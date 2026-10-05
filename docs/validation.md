@@ -3161,3 +3161,27 @@ Read-only inspection [37250150845](https://github.com/pbse/accounting/actions/ru
 The eight obsolete production GitHub secret copies were then deleted, including the redundant `CODEX_AUTH_MODE` secret; its non-secret variable remains `chatgpt`. Names-only readback verified that GitHub retains only `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and `MIGRATION_DATABASE_URL`. `CONTEXT_MACHINE_DATABASE_URL` is now authoritative in Cloudflare, not GitHub. Public `https://getkrith.com/readyz` returned HTTP 200 with `{"status":"ready"}` after cleanup and GitHub-copy removal. Future runtime credentials go directly through the Cloudflare stdin installer; configuration-only deployments cannot overwrite them.
 
 Research remains explicitly disabled (`CONTEXT_MACHINE_ENABLED=false`, `LLM_PROVIDER=api`). No provider API/subscription credential or `CONTEXT_MACHINE_PROFILES` entry is installed. Creating the profile requires the owner's existing enabled platform membership/client grants. Live provider entitlement, model output and the owner's first research run remain unverified; this cutover does not claim AI activation or staging acceptance. Staging has not been provisioned. Subscription setup, routing/model/effort variables and coordinated fresh-container rotation are documented in the deployment guides.
+
+## The Krith public site — 2026-10-05 (B12)
+
+The public site is rebuilt for Krith at getkrith.com ([public site](marketing-site.md)): Home (a ledger-line city hero that keeps working after it settles, and four agents preparing three looping bank reconciliations for a person to sign), Contact, Security, Privacy notice, Log in and a not-found page. `/subprocessors`, `/ai`, `/data-retention` and `/pilot-terms` and `Legal.tsx` are removed; the providers and retention summary are in the privacy notice. `styles.css` now holds only the public site, under `k-` classes and `.k-site`, with self-hosted OFL fonts.
+
+The contact form keeps each note (`POST /v1/contact`, migration 123 `contact_notes`, platform rows only under row-level security; five notes an hour per address and sixty in all; a trap field) and the edge forwards it by Cloudflare Email Routing (`send_email` binding `CONTACT_EMAIL`, `CONTACT_FORWARD_ADDRESS`). Readiness requires the new table.
+
+Local checks: `npm run check`, `npm run build`, `npm test` (43, including the contact-email header tests and the workpaper ties), the edge's TypeScript, `go vet ./...` and the contact tests against local PostgreSQL. `go test ./...` passes apart from two PDF tests that need Poppler, absent on this machine (`TestExtractMixedPDF`, `TestPackagePreservesBothWorkpapersAndEscapesSources`); CI installs it. `npm run check:layout` passed 74 page views at both widths, including every public page by direct load and from the home page's links. A note sent from the contact page through the dev proxy was kept in local PostgreSQL. The browser check found and fixed the site's base link rule outranking its own buttons (white "Talk to us" text) and the hero heading breaking onto two lines at desktop width.
+
+Codex (gpt-6-sol, high) pass 1 found the contact route missing from the API's CORS preflight list (a site on another origin than the API could not post) and the agents' cursor glide drawing frames while paused; both are fixed, with a preflight test.
+
+Pass 2 found no staff path to a note whose email never arrived (the staff console now lists contact notes, `GET /v1/admin/contact-notes`), the hourly limit counted and inserted separately (now one at a time under an advisory lock; a test holds the lock and shows a note waits), a refused or failed note still counting against the visitor's address (now taken back), the hero's decision reusing the workpaper's AJE-3 with a different amount (now AJE-4), and a malformed URL fragment throwing in the layout (now looked up as written).
+
+Pass 3 found that with `AUTH_SESSION=server` a visitor's ended firm session answered the contact form 401; the session layer now leaves `/v1/contact` alone, and the server-session test posts a note with an ended session.
+
+Pass 4 found the hero's settling clock, and its 7.5-second safety finish, running on while the plate was out of sight. Both now stand still off screen and in a hidden tab; in Chrome, scrolling away mid-settle for nine seconds and back resumed at the same count (before: the finished count).
+
+Pass 5 found the edge refusing the contact form with 503 while workspace sign-in was unconfigured; `/v1/contact` now passes that gate like the health check (`needsWorkspaceAuth`, with a test).
+
+Pass 6 found a retried note kept and forwarded twice, the per-address count living in API memory (reset when the container restarts), and the wordmark not returning to the top from `/#how`. Each visit's form now sends a submission key and a retry returns the kept note unforwarded; both limits are counted from the stored notes, with the sender kept only as an hour-long digest (the privacy notice says so); every navigation now places the page. Tests cover the retry, a restarted API and the hour.
+
+Pass 7 found that an edited note retried under the visit's key was answered with the earlier note; the page now keys each note as written, and the API refuses a kept key with other words (409, tested).
+
+Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.

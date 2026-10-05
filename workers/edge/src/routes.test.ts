@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { adminPage, adminPath, forwardsToAPI, secureAdmin, staffGate } from "./routes.ts";
+import { adminPage, adminPath, forwardsToAPI, needsWorkspaceAuth, secureAdmin, staffGate } from "./routes.ts";
 
 test("MCP and its OAuth discovery reach the API; internal routes and assets do not", () => {
   for (const path of ["/healthz", "/healthz/worker", "/readyz", "/v1/closes", "/mcp", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"]) {
@@ -75,4 +75,9 @@ test("what the console serves is for its staff member alone; refusals are never 
   const refused = await staffGate(new Request("https://app.example.test/admin/"), "client", async () => new Response());
   assert.equal(secureAdmin(refused!).headers.get("Cache-Control"), "no-store");
   assert.equal(secureAdmin(refused!).headers.get("X-Frame-Options"), "DENY");
+});
+
+test("the contact form and health checks stay open while workspace sign-in is unconfigured", () => {
+  for (const path of ["/healthz", "/v1/reference/prepaid", "/v1/contact"]) assert.equal(needsWorkspaceAuth(path), false, path);
+  for (const path of ["/v1/closes", "/v1/contact/1", "/readyz", "/mcp"]) assert.equal(needsWorkspaceAuth(path), true, path);
 });

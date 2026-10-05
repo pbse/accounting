@@ -60,6 +60,7 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 | Production QuickBooks OAuth | `QBO_PRODUCTION_CLIENT_ID`, `QBO_PRODUCTION_REDIRECT_URI` | `QBO_PRODUCTION_CLIENT_SECRET` |
 | Xero OAuth | `XERO_CLIENT_ID`, `XERO_REDIRECT_URI` | `XERO_CLIENT_SECRET`; optional `XERO_WEBHOOK_KEY` |
 | WorkOS directory: teammates, invitations, background role checks, optional Drive | — | `WORKOS_API_KEY` (API and worker; without it a hosted firm's delegated closes and monthly hand-overs wait) |
+| Contact-page forwarding (edge only) | `CONTACT_FORWARD_ADDRESS`, a destination address verified in the zone's Email Routing; the edge's `send_email` binding `CONTACT_EMAIL` is in `wrangler.jsonc` ([public site](marketing-site.md#the-contact-form)) | — |
 | Optional inbound email | `EMAIL_INTAKE_ADDRESS` | `EMAIL_INTAKE_KEY` (independent secret, at least 32 characters) |
 | Optional external alerts | — | Worker-only `OPERATIONS_ALERT_WEBHOOK_URL`, optional `OPERATIONS_ALERT_WEBHOOK_TOKEN` |
 | Legacy single-firm sandbox journal | `QBO_SANDBOX_REALM_ID`, `QBO_SANDBOX_ENTITY`, `QBO_SANDBOX_PREPAID_ACCOUNT_ID`, `QBO_SANDBOX_EXPENSE_ACCOUNT_ID` | `QBO_SANDBOX_ACCESS_TOKEN` |

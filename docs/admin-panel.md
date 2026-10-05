@@ -129,6 +129,7 @@ Workflow tables (`workflow_runs`, `workflow_steps`, `workflow_events`, `workflow
 | **Jobs** | Health of the existing job tables until they move to the engine: by kind and firm, queued, running, failed, oldest age, stale claims. Kinds: preparation, email outbox, forwarded files, QuickBooks syncs, Stripe reports, alerts. | Only the recheck or cancel each kind already exposes, through its own function. Never a generic requeue. |
 | **Connections** | QuickBooks, Xero, Stripe and email-sender connections across firms, by state and last successful capture. | None in A2; reconnecting stays a firm action. |
 | **Audit** | Search staff actions by staff member, firm, action and date; export CSV. | None. |
+| **Contact notes** | Notes from the public site's contact page, newest first: name, email, firm, note, received ([public site](marketing-site.md#the-contact-form)). Krith's own correspondence, not client content. | Reply by email. |
 
 ### Activity sources
 
@@ -186,7 +187,7 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 | `POST /workflows/runs`, `POST /workflows/runs/{id}/cancel`, `…/retry` and `…/resolve` (step `key` in the body), `POST /workflows/events` | `platform:operate` |
 | `GET /plans`, `GET /plans/{id}`, `POST /plans` (a draft or template), `POST /plans/{id}` (edit a draft), `POST /plans/validate`, `POST /plans/{id}/propose`, `…/reject`, `…/instantiate` (templates) | `platform:plans` |
 | `POST /plans/{id}/approve` (the reviewed digest) | `platform:plans` and `platform:content` |
-| `GET /jobs`, `GET /connections`, `GET /audit`, `GET /audit/export` (CSV) | `platform:read` |
+| `GET /jobs`, `GET /connections`, `GET /audit`, `GET /audit/export` (CSV), `GET /contact-notes?before=` | `platform:read` |
 | Any response field marked content, when revealed | `platform:content` plus the `X-Access-Reason` header |
 
 ## Phases

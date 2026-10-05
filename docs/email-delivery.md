@@ -2,6 +2,8 @@
 
 Email is optional. Local development works without Resend: approve a request and share its secure link manually. Provider checks use synthetic messages and a mocked HTTP transport; no live delivery has been validated.
 
+This page covers a firm's mail to its clients. Krith's own addresses are separate: hello@getkrith.com and notes from the public contact page reach Krith's inbox through Cloudflare Email Routing, never through a firm's Resend connection ([public site](marketing-site.md#the-contact-form)).
+
 ## Configure a hosted firm
 
 1. Apply all migrations to the development/staging database using the migration steps in [onboarding](onboarding.md). Back up hosted data before migrations.

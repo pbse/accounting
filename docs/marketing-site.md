@@ -1,0 +1,58 @@
+# Public site
+
+The public site at getkrith.com introduces Krith to accounting firms and finance teams and leads to one action: **Talk to us**. It is part of the firm app (`apps/frontend`), served by the edge Worker like every other page. The product's own pages use the Tray design system ([design system](design-system.md)); the public site has its own, described here.
+
+## Pages and links
+
+| Page | Route | What it holds |
+| --- | --- | --- |
+| Home | `/` | The hero (`#top`), Agents at work (`#how`) and "See one of your closes, prepared" (`#start`) |
+| Contact | `/contact` | The contact form, three plain next steps and hello@getkrith.com |
+| Security | `/security` | Nine short controls: authority, evidence, separation, encryption, uploads, AI, staff access, hosting and the firm's control |
+| Privacy notice | `/privacy` | The notice, including who processes data for us and how long data is kept |
+| Log in | `/login` | Workspace sign-in (existing AuthKit flow) |
+| Not found | any other path | A short page with a link home |
+
+Every page shares one header and footer (`features/marketing/Layout.tsx`). Header: the wordmark (home), **How it works** (`/#how`), **Security**, **Log in** and **Talk to us** (`/contact`). Footer: How it works, Security, Contact, Log in and Privacy notice. Every "Talk to us" goes to `/contact`; "How we protect client data" on the home page goes to `/security`. The client request page (`/request`) links to `/privacy` and `/security`. Nothing on the site links to another domain except the email address.
+
+Earlier pages (`/subprocessors`, `/ai`, `/data-retention`, `/pilot-terms`) were removed on 2026-10-05: the providers list and retention summary moved into the privacy notice, and the AI commitments into Security. The detailed statements remain true of the service and belong in the workspace's Security center and in a firm's written agreement. The site does not mention pilots or design partners.
+
+**Accuracy rule.** Every statement on Security and Privacy follows what the service does today; when the code changes, change the page and the privacy notice's date. Names, firms and figures on the home page are illustrative and labelled so.
+
+## Design
+
+- **Two inks on white paper.** Black is what Krith prepares; blue (`--blue`, #1F3FBF) is what people decide: the decisions in the hero, "Signed by you", the reviewer's signature and every "Talk to us". Light only, by design.
+- **Type.** Newsreader (serif), Geist (sans), Geist Mono and Mrs Saint Delafield (the signature), served from `features/marketing/fonts` with their SIL Open Font Licenses. The site loads no outside fonts or scripts, as the privacy notice says.
+- **Isolation.** `apps/frontend/src/styles.css` holds only the public site. Every class carries a `k-` prefix (states use `is-`) and element rules sit under `.k-site` at no specificity, so the product shell's class names (`.pill`, `.row`, `.status`…) cannot reach these pages, and `scripts/layout-check.mjs` proves the shell takes nothing from this file.
+- **Motion.** Everything moves slowly, pauses when off screen or in a hidden tab, has a visible pause control, and is still under `prefers-reduced-motion`.
+
+## The hero: a city of ledger lines (`features/marketing/city.ts`)
+
+A skyline is generated (seeded, so it is the same each time) and drawn as horizontal ledger lines whose thickness shades it. On load, about 18,000 short dashes, a month's transactions, drift and settle into the lines bottom-up; seven windows then light in blue as decisions waiting for the firm. Afterwards the plate keeps working: transactions arrive from the edges and land in buildings (the tally's transaction count rises), Krith works through one client every few seconds with a reading line and a label ("Preparing · client · job"), each pass ends as "Prepared" or as a new blue decision, and older decisions are taken by people ("Approved · M. Alvarez") and return to ink. Pointing at a blue window shows the decision. The live dot in the tally pauses it.
+
+## Agents at work (`features/marketing/agents.ts`, `workpapers.ts`)
+
+Four agents (Collector, Matcher, Investigator, Preparer), shown as collaborators' cursors, prepare a bank reconciliation: each stamps its initials beside the lines it did, the difference rolls to 0.00, the Preparer rules it off and drafts the entry, and a blue "You" cursor signs. The section then turns to the next of three workpapers and repeats. `workpapers.test.ts` proves each illustrative reconciliation ties. The agents' names describe work the product does (capturing sources, matching, bounded investigations and preparation); keep them in step with how the product names its agents.
+
+## The contact form
+
+1. The page posts `name`, `email`, `firm`, `note` and a hidden trap field `website` to `POST /v1/contact` (`services/backend/internal/transport/contact.go`).
+2. The API accepts the form from `FRONTEND_ORIGIN` when the site and API are on different origins (the route is in its CORS preflight list). It needs no sign-in, and a visitor's ended workspace session does not stand in the way. It refuses a note without a name, a plain email address or a firm, or with control characters in a one-line field, or a note over 4,000 characters. A filled-in trap field is thanked and dropped. It allows five kept notes an hour from one address and sixty an hour in all. Both counts are taken from the stored notes, one note at a time under an advisory lock, so a burst cannot pass them together and a restarted API still holds them; only kept notes count. The address (Cloudflare's `CF-Connecting-IP`) is stored only as a one-way digest, cleared once its note is an hour old, as the privacy notice says. The page sends one `submission` key per note as written (an edit makes a new key): a retry after a lost answer returns the note already kept, with `forward: false`, so nothing is kept or forwarded twice, and a kept key sent with other words is refused (409). The note is kept in `contact_notes` (migration 123; platform rows only, under row-level security) and returned.
+3. The edge Worker (`workers/edge/src/index.ts`, `contact.ts`) forwards each kept note through Cloudflare Email Routing's `send_email` binding `CONTACT_EMAIL`, from `website@<PUBLIC_APP_URL host>` to `CONTACT_FORWARD_ADDRESS`, with the visitor as Reply-To. Every header value is encoded and carries no line break. The visitor gets their answer at once; a failed forward is logged without its contents and the note stays kept.
+
+Mail sent to **hello@getkrith.com** reaches the same inbox through an Email Routing rule.
+
+### Cloudflare setup (once per zone)
+
+All four were done on 2026-10-05:
+
+- Email Routing enabled on getkrith.com, with the apex MX and SPF records Cloudflare adds.
+- The forwarding inbox added as a destination address and **verified by its owner** (Cloudflare emails a link). Until then neither the rule nor the Worker can deliver to it.
+- A routing rule: `hello@getkrith.com` → forward to that inbox.
+- The production GitHub variable `CONTACT_FORWARD_ADDRESS` set to that inbox. Without it notes are kept but not forwarded.
+
+The inbox is a convenience; the record is the staff console's **Contact notes** page (`platform:read`), which lists every kept note newest first. A note whose email failed, or that arrived while `CONTACT_FORWARD_ADDRESS` was unset, is read and answered there.
+
+## Checks
+
+`npm run check:layout` opens every public page directly and from the home page's links, at desktop and phone width, alongside the product's pages. `npm test` runs the workpaper and contact-email tests; `go test ./internal/transport -run Contact` runs the form's validation, limits and storage against local PostgreSQL.

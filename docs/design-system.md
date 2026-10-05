@@ -16,7 +16,7 @@ The reference for every value is the Tray design system: tokens, type scale, com
 | The firm app's own patterns (preparation forms, evidence pane, Work's rows, Attention, the agent panel) | `apps/frontend/src/theme/workspace.css` | One of those changes. |
 | The staff console's own patterns (workflow flow, inspector, schema forms) | `apps/admin/src/admin.css` | One of those changes. |
 | The browser toolbar colour on shell pages | `packages/ui/theme/useShellThemeColor.ts` | A new shell page opens outside the firm app's workspace layout. |
-| The public site's styles | `apps/frontend/src/styles.css` | Marketing or legal pages change. |
+| The public site's styles (its own system: `k-` classes under `.k-site`; see [public site](marketing-site.md#design)) | `apps/frontend/src/styles.css` | A public page changes. |
 
 Both apps import the design system as `@close/ui/...`, an alias to `packages/ui` set in each app's `vite.config.ts` and `tsconfig.json`. Each `main.tsx` imports `@close/ui/theme/tokens.css`, `@close/ui/theme/shell.css` and then its own stylesheet; the firm app imports the public site's `styles.css` first, for its marketing pages. Each component imports its own stylesheet, which loads with the page that uses it.
 

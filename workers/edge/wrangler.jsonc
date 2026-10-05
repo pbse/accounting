@@ -19,9 +19,11 @@
   "durable_objects": {"bindings": [{"name": "API", "class_name": "CapabilityAPI"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["CapabilityAPI"]}],
   "services": [{"binding": "CONTEXT_MACHINE", "service": "close-context-machine-staging"}],
+  "send_email": [{"name": "CONTACT_EMAIL"}],
   "env": {
     "production": {
       "services": [{"binding": "CONTEXT_MACHINE", "service": "close-context-machine-production"}],
+      "send_email": [{"name": "CONTACT_EMAIL"}],
       "name": "close-production",
       "routes": [{"pattern": "getkrith.com", "custom_domain": true}],
       "workers_dev": false,

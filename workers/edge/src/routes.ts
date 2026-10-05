@@ -4,6 +4,12 @@ export function forwardsToAPI(path: string): boolean {
     path === "/.well-known/oauth-protected-resource" || path.startsWith("/.well-known/oauth-protected-resource/");
 }
 
+// What the API answers without a workspace sign-in, so it stays open while the sign-in settings are missing: health
+// checks, the reference workpaper and the public contact form.
+export function needsWorkspaceAuth(path: string): boolean {
+  return path !== "/healthz" && path !== "/v1/reference/prepaid" && path !== "/v1/contact";
+}
+
 // A page of the staff admin panel (served its own index.html); its files (with an extension) are not.
 export function adminPage(path: string): boolean {
   return /^\/admin(\/[^.]*)?$/.test(path);

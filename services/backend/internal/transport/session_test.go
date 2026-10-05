@@ -297,6 +297,16 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	if w := send(handler, "GET", "/v1/closes", invalid, ""); w.Code != 401 {
 		t.Fatalf("a refreshed token with invalid claims ends the session: %d", w.Code)
 	}
+	// The public contact form needs no session: a visitor's ended session does not stop their note.
+	contactFirm := "Session contact " + rand.Text()
+	defer raw.Exec(`DELETE FROM contact_notes WHERE firm=$1`, contactFirm)
+	note := httptest.NewRequest("POST", "https://app.example.test/v1/contact", strings.NewReader(`{"name":"Ana","email":"ana@firm.example","firm":"`+contactFirm+`"}`))
+	note.Header.Set("Content-Type", "application/json")
+	note.Header.Set("Origin", "https://app.example.test")
+	note.AddCookie(&http.Cookie{Name: sessionCookie, Value: invalid})
+	if w := httptest.NewRecorder(); func() int { handler.ServeHTTP(w, note); return w.Code }() != 201 {
+		t.Fatalf("a contact note with an ended session: %d %s", w.Code, w.Body.String())
+	}
 
 	// Sign-out ends the session here and at WorkOS; MCP never accepts the cookie.
 	_, last := signIn(back, "session_3", "refresh-5")
