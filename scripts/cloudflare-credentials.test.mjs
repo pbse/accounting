@@ -41,39 +41,80 @@ test('direct credential installer scopes stdin, excludes secret arguments, and r
  } finally {rmSync(dir,{recursive:true,force:true});}
 });
 
-test('transfer validates all targets before writes and emits only the runtime role', () => {
- const dir=mkdtempSync(join(tmpdir(),'credential-migrate-'));
- const script=join(process.cwd(),'scripts/migrate-service-credentials.mjs');
- const token='private-service-token-00000000000000000';
- writeFileSync(join(dir,'npx'),`#!${process.execPath}
-const fs=require('fs'),path=require('path');const args=process.argv.slice(2);const input=fs.readFileSync(0,'utf8');fs.appendFileSync(path.join(__dirname,'calls'),JSON.stringify({args,input})+'\\n');
-if(fs.existsSync(path.join(__dirname,'missing')) && args.includes('workers/context-machine/wrangler.jsonc'))process.exit(1);
-console.log(JSON.stringify(['DATABASE_URL','CONTEXT_MACHINE_TOKEN','CONTEXT_MACHINE_DATABASE_URL'].map(name=>({name,type:'secret_text'}))));`,{mode:0o700});
- const env={PATH:`${dir}:${process.env.PATH}`,HOME:process.env.HOME,DATABASE_URL:'postgres://close_runtime:private-db-password@db.example/close?sslmode=require',CONTEXT_MACHINE_TOKEN:token,CONTEXT_MACHINE_DATABASE_URL:'postgres://context_machine_reader:private-reader@db.example/close?sslmode=require'};
- const run=(overrides={},args=['--production'])=>spawnSync(process.execPath,[script,...args],{cwd:dir,env:{...env,...overrides},encoding:'utf8'});
- const calls=()=>readFileSync(join(dir,'calls'),'utf8').trim().split('\n').map(JSON.parse);
- try {
-  assert.notEqual(run({CONTEXT_MACHINE_DATABASE_URL:'invalid'}).status,0);
-  assert.throws(()=>calls(),{code:'ENOENT'});
-  assert.notEqual(run({},[]).status,0);
-  writeFileSync(join(dir,'missing'),'true');
-  assert.notEqual(run().status,0);assert.ok(calls().every(c=>!c.input));
-  rmSync(join(dir,'missing'));writeFileSync(join(dir,'calls'),'');
-  const result=run();assert.equal(result.status,0,result.stderr);
-  const operations=calls();assert.ok(operations.slice(0,4).every(c=>!c.input));
-  assert.equal(readFileSync(join(dir,'runtime-role.txt'),'utf8'),'close_runtime\n');
-  assert.ok(!`${result.stdout}${result.stderr}`.includes(token));
-  for (const call of operations.filter(c=>c.input)) {
-   const app=call.args[call.args.indexOf('-c')+1].split('/')[1];
-   assert.ok(Object.keys(JSON.parse(call.input)).every(name=>credentials[app].includes(name)));
-   assert.ok(!call.input.includes('MIGRATION_DATABASE_URL'));
-  }
- } finally {rmSync(dir,{recursive:true,force:true});}
-});
-
 test('installer requires an explicit valid environment', () => {
  for (const args of [[],['CODEX_AUTH_JSON'],['CODEX_AUTH_JSON','prod'],['CODEX_AUTH_JSON','production','extra']]) {
   const result=spawnSync(process.execPath,['scripts/cloudflare-credentials.mjs',...args],{input:'private-value',encoding:'utf8'});
   assert.equal(result.status,1);assert.match(result.stderr,/Usage:/);assert.ok(!result.stderr.includes('private-value'));
  }
+});
+
+function fixture() {
+ const dir=mkdtempSync(join(tmpdir(),'service-deploy-'));
+ const fake=`#!${process.execPath}
+const fs=require('node:fs'),path=require('node:path');const args=process.argv.slice(2);
+if(args.includes('list')) {console.log(fs.readFileSync(path.join(__dirname,args.includes('deployments')?'versions.json':'names.json'),'utf8'));process.exit(0);}
+const file=args[args.indexOf('--secrets-file')+1];fs.writeFileSync(path.join(__dirname,'upload.json'),JSON.stringify({args,values:JSON.parse(fs.readFileSync(file,'utf8')),mode:fs.statSync(file).mode&0o777}));`;
+ for (const tool of ['npx','npm']) writeFileSync(join(dir,tool),fake,{mode:0o700});
+ writeFileSync(join(dir,'names.json'),JSON.stringify([...new Set(Object.values(credentials).flat())].map(name=>({name,type:'secret_text'}))));
+ writeFileSync(join(dir,'versions.json'),JSON.stringify([{id:'new-version',created_on:'2026-10-04T02:00:00Z'},{id:'old-version',created_on:'2026-10-04T01:00:00Z'}]));
+ const script=join(process.cwd(),'scripts/deploy-service.mjs');
+ const env={...process.env,PATH:`${dir}:${process.env.PATH}`,CONTEXT_MACHINE_ENABLED:'false',LLM_PROVIDER:'api',OPENAI_MODEL:'approved',TEXT_SCANNER_URL:'https://scanner.example/scan',DATABASE_URL:'private-db-value',OPENAI_API_KEY:'private-provider-value',CODEX_AUTH_JSON:'private-managed-auth',CONTEXT_MACHINE_TOKEN:'private-token',GITHUB_OUTPUT:join(dir,'outputs')};
+ return {dir,run:(app,args=[],overrides={})=>spawnSync(process.execPath,[script,app,...args],{cwd:dir,env:{...env,...overrides},encoding:'utf8'}),cleanup:()=>rmSync(dir,{recursive:true,force:true})};
+}
+
+test('all deployments preserve credentials and use configuration-only secret files', () => {
+ const f=fixture();
+ try {
+  for (const app of ['edge','queue','scanner']) for (const production of [true,false]) {
+   const result=f.run(app,production?['--production']:[]);assert.equal(result.status,0,result.stderr);
+   const upload=JSON.parse(readFileSync(join(f.dir,'upload.json'),'utf8'));
+   assert.ok(upload.args.includes('--secrets-file'));assert.equal(upload.mode,0o600);
+   for (const name of Object.values(credentials).flat()) assert.equal(upload.values[name],undefined,name);
+   assert.ok(!JSON.stringify(upload.values).includes('private-'));
+   assert.equal(upload.values.OPENAI_MODEL,app==='scanner'?undefined:'approved');
+   assert.throws(()=>readFileSync(upload.args[upload.args.indexOf('--secrets-file')+1]),{code:'ENOENT'});
+   if(app!=='edge')assert.equal(upload.args.includes('--env'),production);
+  }
+  const result=f.run('edge',['--production'],{LLM_PROVIDER:'context_machine'});assert.equal(result.status,0,result.stderr);
+  assert.equal(JSON.parse(readFileSync(join(f.dir,'upload.json'),'utf8')).values.OPENAI_MODEL,'');
+ } finally {f.cleanup();}
+});
+
+test('metadata preflight fails closed and scanner caching follows Cloudflare rotation', () => {
+ const f=fixture();
+ try {
+  assert.equal(f.run('edge',['--check','--production']).status,0);
+  writeFileSync(join(f.dir,'names.json'),'[]');
+  const missing=f.run('edge',['--check','--production']);assert.notEqual(missing.status,0);assert.match(missing.stderr,/DATABASE_URL/);
+  assert.throws(()=>readFileSync(join(f.dir,'upload.json')),{code:'ENOENT'});
+  writeFileSync(join(f.dir,'names.json'),'not-json');assert.notEqual(f.run('queue',['--check']).status,0);
+  assert.equal(f.run('scanner',['--version','--production']).status,0);
+  assert.match(readFileSync(join(f.dir,'outputs'),'utf8'),/version=new-version/);
+  writeFileSync(join(f.dir,'versions.json'),JSON.stringify([{id:'after-rotation',created_on:'2026-10-04T03:00:00Z'}]));
+  assert.equal(f.run('scanner',['--version','--record','--production']).status,0);
+  assert.equal(readFileSync(join(f.dir,'.scanner-deployed/version'),'utf8'),'after-rotation\n');
+  writeFileSync(join(f.dir,'versions.json'),'[]');assert.notEqual(f.run('scanner',['--version']).status,0);
+ } finally {f.cleanup();}
+});
+
+test('normal workflows reference only GitHub deployment and migration credentials', () => {
+ for (const file of ['.github/workflows/deploy-production.yml','.github/workflows/deploy.yml','.github/workflows/provision-context-machine.yml','.github/workflows/provision-context-machine-database.yml']) {
+  const names=[...readFileSync(file,'utf8').matchAll(/secrets\.(\w+)/g)].map(match=>match[1]);
+  const allowed=file.endsWith('provision-context-machine-database.yml')?['MIGRATION_DATABASE_URL','CONTEXT_MACHINE_DATABASE_PASSWORD']:file.endsWith('provision-context-machine.yml')?['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID']:['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','MIGRATION_DATABASE_URL'];
+  for (const name of names) assert.ok(allowed.includes(name),`${file}: ${name}`);
+ }
+});
+
+test('metadata preflight preserves optional features and checks configured integration scopes', () => {
+ const f=fixture();
+ const names=values=>writeFileSync(join(f.dir,'names.json'),JSON.stringify(values.map(name=>({name,type:'secret_text'}))));
+ try {
+  names(['DATABASE_URL','UPLOAD_SCAN_KEY']);
+  assert.equal(f.run('edge',['--check']).status,0);
+  for (const overrides of [{AUTH_SESSION:'server'},{QBO_CLIENT_ID:'client'},{XERO_CLIENT_ID:'client',XERO_REDIRECT_URI:'https://host/callback'},{EMAIL_INTAKE_ADDRESS:'evidence@host.example'},{CONTEXT_MACHINE_ENABLED:'true'}]) assert.notEqual(f.run('edge',['--check'],overrides).status,0);
+  names(['DATABASE_URL','UPLOAD_SCAN_KEY','XERO_CLIENT_SECRET','SECRETS_KEY','EMAIL_INTAKE_KEY','CONTEXT_MACHINE_TOKEN']);
+  assert.equal(f.run('edge',['--check'],{XERO_CLIENT_ID:'client',XERO_REDIRECT_URI:'https://host/callback',EMAIL_INTAKE_ADDRESS:'evidence@host.example',CONTEXT_MACHINE_ENABLED:'true'}).status,0);
+  assert.equal(f.run('edge',[],{UPLOAD_SCAN_HOST:'staging.example'}).status,0);
+  assert.ok(JSON.parse(readFileSync(join(f.dir,'upload.json'),'utf8')).args.includes('staging.example/*'));
+ } finally {f.cleanup();}
 });

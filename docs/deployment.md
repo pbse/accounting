@@ -44,13 +44,13 @@ Use the owner credential only for reviewed migrations; run API/worker with a sep
 5. Dispatch **Deploy staging** from `main` at the reviewed revision. It invokes CI on that revision, checks schema/settings, builds/deploys scanner, API/assets and worker, and requests `/readyz`. Local `npm run deploy:staging` deploys only the API/assets, so use the workflow for the complete environment.
 6. Complete [staging acceptance](onboarding.md#staging-acceptance-matrix), including a real advancing worker job and two-firm access tests. Record results; successful upload/deployment alone is not acceptance.
 
-### GitHub environment settings
+### Environment settings
 
 Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`, committed Wrangler vars or chat.
 
-| Purpose | Variables | Secrets |
+| Purpose | GitHub variables | Cloudflare secrets (unless explicitly marked GitHub) |
 | --- | --- | --- |
-| Required hosting | `STAGING_URL`; optional `VITE_API_BASE_URL` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, runtime `DATABASE_URL`, owner `MIGRATION_DATABASE_URL` (direct endpoint, TLS) |
+| Required hosting | `STAGING_URL`, verified non-secret `DATABASE_RUNTIME_ROLE`; optional `VITE_API_BASE_URL` | GitHub: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, owner `MIGRATION_DATABASE_URL`; Cloudflare: runtime `DATABASE_URL` (direct endpoint, TLS) |
 | Required auth | `WORKOS_CLIENT_ID`, `WORKOS_API_HOSTNAME`, `WORKOS_ISSUER`; optional single-firm `WORKOS_ORGANIZATION_ID` | — |
 | Sign-in session | `AUTH_SESSION`: `client` (default, WorkOS's browser session; needs a custom `WORKOS_API_HOSTNAME` in production) or `server` (the API holds the session) | With `server`: `WORKOS_API_KEY` and `SECRETS_KEY` |
 | Required scanning | `UPLOAD_SCAN_HOST` (API hostname only), `TEXT_SCANNER_URL` | `UPLOAD_SCAN_KEY` (separate random secret, at least 32 characters) |
@@ -68,6 +68,32 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 
 The workflow derives `PUBLIC_APP_URL` and `FRONTEND_ORIGIN` from `STAGING_URL`, and frontend WorkOS values from the auth variables. API and worker receive both QBO environment credentials and Xero credentials for scheduled refresh. Resend and Stripe credentials are entered through their scoped in-app settings and stored encrypted, not as frontend/GitHub variables. Leave legacy global sandbox credentials empty for multi-firm testing; use per-client connectors.
 
+## Cloudflare service credentials
+
+Cloudflare Worker secrets are the authoritative store for service credentials. Routine production/staging deploys read names-only secret metadata and update non-secret configuration; they never copy credentials from GitHub, supply empty credential values or reseed Codex login. The configuration-only `--secrets-file` flag is intentional: pinned Wrangler preserves existing secret bindings with this flag. Do not remove it. Refreshed Codex login remains in the private context-machine Durable Object across restarts and ordinary redeploys.
+
+GitHub retains `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `MIGRATION_DATABASE_URL` for deployment/migrations. Set `DATABASE_RUNTIME_ROLE` to the verified role from the runtime connection; migrations grant it privileges without reading its password. Temporary database-provisioning credentials are administration inputs and must be deleted after use. Per-client connector credentials entered through the product remain encrypted in the application database; this change governs service credentials, not that product data.
+
+On a trusted operator computer, run `npm ci` and authenticate Wrangler for the target account (`npx wrangler login`, or scoped deployment credentials). Confirm the account before any write. The target Workers must already exist; for a fresh environment, bootstrap the reviewed Worker code with its Wrangler config before installing credentials and dispatching the normal workflow. The installer refuses missing/inaccessible destinations and interactive stdin:
+
+```sh
+# The private file must be outside the repository, with mode 0600.
+node scripts/cloudflare-credentials.mjs CONTEXT_MACHINE_DATABASE_URL production < /path/to/private/reader-url
+node scripts/cloudflare-credentials.mjs OPENAI_API_KEY production < /path/to/private/openai-key
+# Use staging explicitly to target staging Workers.
+```
+
+The installer validates values, checks all destinations before writing, sends JSON over stdin and verifies secret names afterward. It prints only credential names and destinations; raw provider error output is suppressed. A later provider/write failure can leave a shared rotation partially installed: correct the failure and rerun with the same value before resuming service traffic. Keep an operator-controlled credential copy until installation succeeds; Cloudflare does not return stored Worker secret values. Never put credentials in command arguments, chat, public `VITE_*` settings or committed files. Shared token/DB/scanner rotations must be coordinated across their services; stop affected traffic, install, redeploy and verify readiness before resuming. A running container retains its startup environment, so secret installation alone is not rotation acceptance; verify a fresh container start as described in [Cloudflare's environment documentation](https://developers.cloudflare.com/containers/examples/env-vars-and-secrets/). Scanner deployment metadata drift deliberately triggers a reviewed rollout on the next push, while unchanged code and metadata reuse the existing scanner image. Encryption-key rotation requires the transaction procedure in [operations](operations.md#offline-encryption-key-rotation), not just changing a Worker secret.
+
+| Worker | Credential scope |
+| --- | --- |
+| API (`close-production`) | Runtime DB, scanner/email keys, encryption key, WorkOS API key, connector secrets, optional OpenAI key, shared context-machine token |
+| Queue (`close-queue-production`) | Runtime DB, scanner/encryption/WorkOS keys, connector secrets, optional OpenAI key, shared context-machine token, optional alert webhook credentials |
+| Scanner (`close-upload-scanner-production`) | `UPLOAD_SCAN_KEY` only |
+| Context machine (`close-context-machine-production`) | Read-only DB, shared token, OpenAI/Anthropic API keys, Codex managed login or account token, Claude OAuth token |
+
+The helper's credential allowlists enforce these scopes. API mode and context-machine mode may retain credentials for both routes in Cloudflare; Worker forwarding exposes only the active route to app containers. Explicit standby removes the research service bindings and hides the token, without deleting installed credentials. Full runtime readiness validates database isolation and selected CLI configuration. Names-only preflight cannot verify stored values or live provider entitlement.
+
 ## Google and email onboarding
 
 Google sign-in identifies a person; it does not grant Drive or Gmail access. Ask for source access only when that person chooses it.
@@ -78,7 +104,7 @@ Start client communication with [Resend](email-delivery.md), secure request link
 
 ## Production and remaining deployment work
 
-**Deploy production** (`.github/workflows/deploy-production.yml`) runs on every push to `main` that changes more than documentation (and by hand), and mirrors the staging workflow against GitHub environment `production`, using the `production` Wrangler environments (`close-production`, `close-queue-production`, `close-upload-scanner-production`). Unlike staging it does not run CI again: a push deploys only when the pull request it merged passed CI (found through the merge commit's second parent or GitHub's commit-to-pull-request link), and the image and app builds then compile what was merged. A hand run skips that check and always redeploys the scanner. A push redeploys the scanner only when `UPLOAD_SCAN_KEY`, `cmd/scanner`, `internal/scanning`, the scanner Worker or Dockerfile, the Go modules, the lockfile or this workflow changed since the scanner was last deployed (recorded in an Actions cache entry each time it is). Key rotation therefore needs no hand run. Do not rename or repoint the staging resources to production. It reads `PRODUCTION_URL` instead of `STAGING_URL`; the other settings match the table above.
+**Deploy production** (`.github/workflows/deploy-production.yml`) runs on every push to `main` that changes more than documentation (and by hand), and mirrors the staging workflow against GitHub environment `production`, using the `production` Wrangler environments (`close-production`, `close-queue-production`, `close-upload-scanner-production`). Unlike staging it does not run CI again: a push deploys only when the pull request it merged passed CI (found through the merge commit's second parent or GitHub's commit-to-pull-request link), and the image and app builds then compile what was merged. A hand run skips that check and always redeploys the scanner. A push redeploys the scanner only when its current Cloudflare deployment version (which changes on direct secret rotation), `cmd/scanner`, `internal/scanning`, the scanner Worker or Dockerfile, the Go modules, the lockfile or this workflow changed since the scanner was last deployed (recorded in an Actions cache entry each time it is). Key rotation therefore needs no hand run. Do not rename or repoint the staging resources to production. It reads `PRODUCTION_URL` instead of `STAGING_URL`; the other settings match the table above.
 
 `close-production` serves only on the custom domain `getkrith.com`, declared in `workers/edge/wrangler.jsonc` (`routes`, `custom_domain`), so every deploy keeps it; Cloudflare manages its DNS record and certificate. Its `workers.dev` URL is off (`workers_dev: false`), so the WAF and zone rules on `getkrith.com` cannot be bypassed through it. `www.getkrith.com` redirects to it (a zone redirect rule). Leave `UPLOAD_SCAN_HOST` empty until the WAF scan is set up there: the edge then refuses every PDF scan, so client PDFs stay quarantined while TXT/CSV use the text scanner (`TEXT_SCANNER_URL` = `https://close-upload-scanner-production.<your-workers-subdomain>.workers.dev/scan`). The deploy passes no `--route`: a command-line route would replace the configured custom domain.
 

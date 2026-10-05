@@ -77,10 +77,16 @@ END $$;
 
 def main():
     owner, env = connection_env(os.environ["MIGRATION_DATABASE_URL"])
-    runtime, _ = connection_env(os.environ["DATABASE_URL"])
-    if (owner.hostname, owner.port or 5432, owner.path) != (runtime.hostname, runtime.port or 5432, runtime.path):
-        raise ProvisionError("Owner and application connections must target the same database")
-    if unquote(runtime.username) == ROLE:
+    runtime_role = os.environ.get("DATABASE_RUNTIME_ROLE")
+    if runtime_role:
+        if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,62}", runtime_role):
+            raise ProvisionError("A verified application role is required")
+    else:
+        runtime, _ = connection_env(os.environ["DATABASE_URL"])
+        if (owner.hostname, owner.port or 5432, owner.path) != (runtime.hostname, runtime.port or 5432, runtime.path):
+            raise ProvisionError("Owner and application connections must target the same database")
+        runtime_role = unquote(runtime.username)
+    if runtime_role == ROLE:
         raise ProvisionError("The reader must be separate from the application role")
     password = os.environ["CONTEXT_MACHINE_DATABASE_PASSWORD"]
     if not re.fullmatch(r"[A-Za-z0-9_-]{48,128}", password):

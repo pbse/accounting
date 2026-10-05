@@ -46,7 +46,7 @@ The staff console (`/admin`, platform staff only) gets the same server session i
 
 **Turning server sessions on** (a merge alone does not; production deploys on every merge but keeps `client` until the variable changes):
 
-1. Add the `WORKOS_API_KEY` secret to the GitHub environment (the API and worker then both receive it).
+1. Install `WORKOS_API_KEY` directly in Cloudflare with `node scripts/cloudflare-credentials.mjs WORKOS_API_KEY production < private-key-file` (the API and worker both receive it); use `staging` for that environment.
 2. In the WorkOS dashboard, add `https://<app>/v1/auth/callback` as a redirect URI, and `https://<app>/` and `https://<app>/admin/` as sign-out redirects.
 3. Set the variable `AUTH_SESSION=server` and deploy.
 4. Sign in, reload the page, wait more than five minutes and reload again (a refresh), then sign out. Do the same as staff at `/admin/`.

@@ -12,19 +12,26 @@ const configured = {
   CONTEXT_MACHINE_PROFILES: JSON.stringify([{ organization: 'org_TEST', subject: 'user_TEST', access_profile: 'read' }]),
   OPENAI_API_KEY: 'test-only', ANTHROPIC_API_KEY: 'test-only', CODEX_MODEL: 'approved', CLAUDE_MODEL: 'approved', CONTEXT_MACHINE_MODEL: 'codex',
 };
-const check = (overrides) => spawnSync(process.execPath, ['scripts/deploy-context-machine.mjs', '--check'], { env: { ...configured, ...overrides }, encoding: 'utf8' });
+const credentialNames=['CONTEXT_MACHINE_TOKEN','CONTEXT_MACHINE_DATABASE_URL','OPENAI_API_KEY','ANTHROPIC_API_KEY','CODEX_AUTH_JSON','CODEX_ACCESS_TOKEN','CLAUDE_CODE_OAUTH_TOKEN'];
+const metadata = (dir,env) => {
+ writeFileSync(join(dir,'metadata.json'),JSON.stringify(credentialNames.filter(name=>env[name]).map(name=>({name,type:'secret_text'}))));
+ writeFileSync(join(dir,'npx'), `#!${process.execPath}
+const fs=require('node:fs'),path=require('node:path');
+if(process.argv.includes('list'))console.log(fs.readFileSync(path.join(__dirname,'metadata.json'),'utf8'));else process.exit(1);`,{mode:0o700});
+};
+const check = (overrides) => {
+ const dir=mkdtempSync(join(tmpdir(),'context-metadata-'));const env={...configured,...overrides};metadata(dir,env);
+ try {return spawnSync(process.execPath,['scripts/deploy-context-machine.mjs','--check'],{env:{...env,PATH:`${dir}:${process.env.PATH}`},encoding:'utf8'});} finally {rmSync(dir,{recursive:true,force:true});}
+};
 
 test('deployment accepts complete private-service configuration', () => {
   assert.equal(check({}).status, 0);
 });
-test('deployment fails before mutation for missing credentials, unsafe DB or invalid profiles', () => {
+test('deployment fails before mutation for missing credential metadata or invalid profiles', () => {
   for (const overrides of [
-    { OPENAI_API_KEY: '' }, { CONTEXT_MACHINE_TOKEN: 'short' },
-    { CONTEXT_MACHINE_DATABASE_URL: configured.DATABASE_URL },
-    { CONTEXT_MACHINE_DATABASE_URL: 'postgres://reader:test@db.example/close' },
+    { OPENAI_API_KEY: '' }, { CONTEXT_MACHINE_TOKEN: '' },
     { CONTEXT_MACHINE_PROFILES: 'null' }, { CONTEXT_MACHINE_PROFILES: '[]' },
     { CONTEXT_MACHINE_MODEL: 'shell' },
-    { CONTEXT_MACHINE_DATABASE_URL: 'invalid secret-credential' },
   ]) {
     const result = check(overrides);
     assert.notEqual(result.status, 0);
@@ -107,7 +114,7 @@ test('disabled deployment removes only research bindings and clears inactive rou
       assert.equal(config.containers.length, 1);
       assert.equal(config.env.production.containers.length, 1);
     }
-    assert.equal(readFileSync(envFile, 'utf8'), 'CONTEXT_MACHINE_TOKEN=\nCONTEXT_MACHINE_MODEL=\nOPENAI_MODEL=\nOPENAI_REASONING_EFFORT=\nLLM_MODELS=\nLLM_REASONING_EFFORTS=\n');
+    assert.equal(readFileSync(envFile, 'utf8'), 'CONTEXT_MACHINE_MODEL=\n');
     writeFileSync(envFile, '');
     const active = spawnSync(process.execPath, [script, '--prepare-callers'], { cwd: dir, env: { ...configured, GITHUB_ENV: envFile }, encoding: 'utf8' });
     assert.equal(active.status, 0, active.stderr);
@@ -115,33 +122,36 @@ test('disabled deployment removes only research bindings and clears inactive rou
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('standby provisioning needs only a strong service token and explicit disabled mode', () => {
-  const provision = (env) => spawnSync(process.execPath, ['scripts/deploy-context-machine.mjs', '--provision-disabled', '--check'], { env, encoding: 'utf8' });
-  const standby = { CONTEXT_MACHINE_ENABLED: 'false', CONTEXT_MACHINE_TOKEN: configured.CONTEXT_MACHINE_TOKEN };
-  assert.equal(provision(standby).status, 0);
-  for (const env of [{ ...standby, CONTEXT_MACHINE_TOKEN: '' }, { ...standby, CONTEXT_MACHINE_TOKEN: 'short' }, { ...configured, CONTEXT_MACHINE_ENABLED: 'true' }, { CONTEXT_MACHINE_TOKEN: configured.CONTEXT_MACHINE_TOKEN }]) {
-    assert.notEqual(provision(env).status, 0);
-  }
+test('standby provisioning requires installed service authentication and explicit disabled mode', () => {
+ const dir=mkdtempSync(join(tmpdir(),'context-standby-'));
+ const provision=(env)=>{metadata(dir,env);return spawnSync(process.execPath,['scripts/deploy-context-machine.mjs','--provision-disabled','--check'],{env:{...env,PATH:`${dir}:${process.env.PATH}`},encoding:'utf8'});};
+ const standby={CONTEXT_MACHINE_ENABLED:'false',CONTEXT_MACHINE_TOKEN:configured.CONTEXT_MACHINE_TOKEN};
+ try {
+  assert.equal(provision(standby).status,0);
+  for (const env of [{...standby,CONTEXT_MACHINE_TOKEN:''},{...configured,CONTEXT_MACHINE_ENABLED:'true'},{CONTEXT_MACHINE_TOKEN:configured.CONTEXT_MACHINE_TOKEN}]) assert.notEqual(provision(env).status,0);
+ } finally {rmSync(dir,{recursive:true,force:true});}
 });
 
-test('deployment uploads the enabled flag with scoped secrets in both modes', () => {
+test('deployment preserves stored credentials and uploads only configuration in both modes', () => {
   const dir = mkdtempSync(join(tmpdir(), 'close-deploy-secrets-'));
   const captured = join(dir, 'captured.json');
   try {
     writeFileSync(join(dir, 'npx'), `#!${process.execPath}
 const fs = require('node:fs');
+if(process.argv.includes('list')){console.log(fs.readFileSync(require('node:path').join(__dirname,'metadata.json'),'utf8'));process.exit(0);}
 const file = process.argv[process.argv.indexOf('--secrets-file') + 1];
 fs.writeFileSync(process.env.CAPTURED, JSON.stringify({ args: process.argv.slice(2), secrets: JSON.parse(fs.readFileSync(file)), mode: fs.statSync(file).mode & 0o777 }));
 `, { mode: 0o755 });
     for (const enabled of ['true', 'false']) {
       const env = enabled === 'true' ? configured : { CONTEXT_MACHINE_TOKEN: configured.CONTEXT_MACHINE_TOKEN };
+      writeFileSync(join(dir,'metadata.json'),JSON.stringify(credentialNames.filter(name=>env[name]).map(name=>({name,type:'secret_text'}))));
       const result = spawnSync(process.execPath, ['scripts/deploy-context-machine.mjs', '--production', ...(enabled === 'false' ? ['--provision-disabled'] : [])], {
         env: { ...env, CONTEXT_MACHINE_ENABLED: enabled, PATH: `${dir}:${process.env.PATH}`, CAPTURED: captured }, encoding: 'utf8',
       });
       assert.equal(result.status, 0, result.stderr);
       const upload = JSON.parse(readFileSync(captured, 'utf8'));
       assert.equal(upload.secrets.CONTEXT_MACHINE_ENABLED, enabled);
-      assert.equal(upload.secrets.CONTEXT_MACHINE_TOKEN, configured.CONTEXT_MACHINE_TOKEN);
+      for (const name of credentialNames) assert.equal(upload.secrets[name],undefined,name);
       assert.equal(upload.mode, 0o600);
       assert.deepEqual(upload.args.slice(-2), ['--env', 'production']);
       assert.equal(upload.secrets.DATABASE_URL, undefined);
@@ -149,7 +159,7 @@ fs.writeFileSync(process.env.CAPTURED, JSON.stringify({ args: process.argv.slice
         for (const [name, value] of Object.entries(upload.secrets)) {
           if (!['CONTEXT_MACHINE_ENABLED', 'CONTEXT_MACHINE_TOKEN'].includes(name)) assert.equal(value, '', name);
         }
-      } else assert.equal(upload.secrets.OPENAI_API_KEY, configured.OPENAI_API_KEY);
+      } else assert.equal(upload.secrets.CODEX_MODEL,configured.CODEX_MODEL);
       assert.throws(() => readFileSync(upload.args[upload.args.indexOf('--secrets-file') + 1]), { code: 'ENOENT' });
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -161,22 +171,10 @@ test('personal Codex managed login and Claude subscriptions require one owner pr
   assert.equal(check({ OPENAI_API_KEY: '', CODEX_AUTH_JSON: auth }).status, 0);
   for (const overrides of [
     { CODEX_AUTH_MODE: 'chatgpt' },
-    { CODEX_AUTH_MODE: 'chatgpt', CODEX_AUTH_JSON: '{}' },
-    { CODEX_AUTH_JSON: auth.replace('chatgpt', 'api_key') },
     { CLAUDE_AUTH_MODE: 'chatgpt', CODEX_AUTH_JSON: auth },
     { CODEX_AUTH_MODE: 'chatgpt', CODEX_AUTH_JSON: auth, CONTEXT_MACHINE_PROFILES: JSON.stringify([{ organization:'one',subject:'owner',access_profile:'one' }, { organization:'two',subject:'other',access_profile:'two' }]) },
     { CLAUDE_AUTH_MODE: 'subscription', CLAUDE_CODE_OAUTH_TOKEN: 'fake', CONTEXT_MACHINE_PROFILES: JSON.stringify([{ organization:'one',subject:'owner',access_profile:'one' }, { organization:'two',subject:'other',access_profile:'two' }]) },
   ]) assert.notEqual(check(overrides).status, 0);
-});
-
-test('personal auth seed is compacted and checked against Worker secret limits before deployment', () => {
- const auth = { auth_mode:'chatgpt',tokens:{access_token:'fake',refresh_token:'fake',id_token:'fake',account_id:'owner'} };
- assert.equal(check({ CODEX_AUTH_MODE:'chatgpt',CODEX_AUTH_JSON:' '.repeat(6000)+JSON.stringify(auth) }).status,0);
- auth.tokens.access_token='x'.repeat(5000);
- const result=check({ CODEX_AUTH_MODE:'chatgpt',CODEX_AUTH_JSON:JSON.stringify(auth) });
- assert.notEqual(result.status,0);
- assert.match(result.stderr,/5 KB secret limit/);
- assert.ok(!result.stderr.includes(auth.tokens.access_token));
 });
 
 test('completion routing requires an enabled service and explicit subscription token-limit acknowledgement', () => {

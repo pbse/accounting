@@ -27,7 +27,7 @@ class ProvisionTest(unittest.TestCase):
         self.addCleanup(lambda: sql("DROP OWNED BY context_machine_reader; DROP ROLE context_machine_reader"))
         with tempfile.TemporaryDirectory() as directory:
             password = "synthetic-local-only-" + "x" * 48
-            run_env = dict(os.environ, MIGRATION_DATABASE_URL=uri, DATABASE_URL=uri,
+            run_env = dict(os.environ, MIGRATION_DATABASE_URL=uri, DATABASE_RUNTIME_ROLE="close_runtime", DATABASE_URL="",
                            CONTEXT_MACHINE_DATABASE_PASSWORD=password, CONTEXT_MACHINE_PROVISION_OUTPUT=directory)
             result = subprocess.run(["python3", str(SCRIPT)], env=run_env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout)
@@ -98,6 +98,47 @@ class ProvisionTest(unittest.TestCase):
             self.assertIn("last phase: created-reader", str(caught.exception))
             self.assertNotIn(password, str(caught.exception))
             self.assertNotIn("SCRAM-SHA-256$", str(caught.exception))
+
+
+    def test_runtime_role_checked_before_schema_changes(self):
+        import secrets
+        uri = os.environ["TEST_DATABASE_URL"]
+        u = urlsplit(uri)
+        self.assertIn(u.hostname, ("localhost", "127.0.0.1", "::1"))
+        suffix = secrets.token_hex(4)
+        database = "migration_guard_" + suffix
+        runtime = "runtime_guard_" + suffix
+        group = "group_guard_" + suffix
+        def sql(statement, connection=uri):
+            return subprocess.run(["psql", connection, "-X", "-At", "-v", "ON_ERROR_STOP=1"],
+                                  input=statement, env=os.environ, capture_output=True, text=True)
+        self.assertEqual(sql(f'CREATE DATABASE {database}').returncode, 0)
+        fresh = urlunsplit((u.scheme, u.netloc, "/" + database, u.query, ""))
+        runner = str(SCRIPT.parents[1] / "infra/postgres/migrate.sh")
+        try:
+            self.assertEqual(sql(f'CREATE ROLE {runtime} LOGIN; CREATE ROLE {group} NOLOGIN').returncode, 0)
+            def run(role):
+                return subprocess.run([runner], env=dict(os.environ, DATABASE_URL=fresh, MIGRATION_GRANT_TO=role), capture_output=True, text=True)
+            for role in ["missing_role_" + suffix, u.username, group, "context_machine_reader", 'bad"; SELECT 1; --']:
+                result = run(role)
+                self.assertNotEqual(result.returncode, 0, role)
+                self.assertEqual(sql("SELECT to_regclass('migrations.applied') IS NULL", fresh).stdout.strip(), "t")
+            self.assertEqual(sql(f'ALTER ROLE {runtime} CREATEDB').returncode, 0)
+            self.assertNotEqual(run(runtime).returncode, 0)
+            self.assertEqual(sql(f'ALTER ROLE {runtime} NOCREATEDB; GRANT "{u.username}" TO {runtime}').returncode, 0)
+            self.assertNotEqual(run(runtime).returncode, 0)
+            self.assertEqual(sql(f'REVOKE "{u.username}" FROM {runtime}; ALTER ROLE {runtime} SET default_transaction_read_only=on').returncode, 0)
+            self.assertNotEqual(run(runtime).returncode, 0)
+            self.assertEqual(sql(f'ALTER ROLE {runtime} RESET default_transaction_read_only').returncode, 0)
+            result = run(runtime)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(sql(f"SELECT has_table_privilege('{runtime}','evidence','INSERT')", fresh).stdout.strip(), "t")
+            repeated = run(runtime)
+            self.assertEqual(repeated.returncode, 0, repeated.stderr)
+            self.assertEqual(repeated.stdout, "")
+        finally:
+            sql(f'DROP DATABASE {database} WITH (FORCE)')
+            sql(f'DROP ROLE IF EXISTS {runtime}; DROP ROLE IF EXISTS {group}')
 
 
 if __name__ == "__main__":
