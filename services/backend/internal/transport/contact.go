@@ -87,6 +87,9 @@ func contactForm(db *sql.DB, limits contactLimits) http.HandlerFunc {
 		case errors.Is(err, errContactAddressBusy):
 			problem(w, 429, "You've sent several notes already. Please try again later, or write to hello@getkrith.com.")
 			return
+		case errors.Is(err, errContactKeyReused):
+			problem(w, 409, "That note was already sent with other words. Reload the page to send this one.")
+			return
 		case errors.Is(err, errContactBusy):
 			problem(w, 429, "We're receiving a lot of notes just now. Please try again later, or write to hello@getkrith.com.")
 			return
@@ -105,6 +108,7 @@ func contactForm(db *sql.DB, limits contactLimits) http.HandlerFunc {
 var (
 	errContactBusy        = errors.New("contact notes: the hourly limit is reached")
 	errContactAddressBusy = errors.New("contact notes: this address's hourly limit is reached")
+	errContactKeyReused   = errors.New("contact notes: a kept submission sent with other words")
 	contactSubmission     = regexp.MustCompile(`^[A-Za-z0-9-]{16,64}$`)
 )
 
@@ -114,7 +118,8 @@ func contactSender(address string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// keepContactNote stores a note, or finds the one a retry of the same submission already stored (kept is then false).
+// keepContactNote stores a note, or finds the one a retry of the same submission already stored (kept is then false); the
+// same key with other words is refused rather than answered with the earlier note.
 // It refuses a note once its sender, or everyone together, reached the hourly limit. Notes are counted and kept one at a
 // time, so a burst cannot pass the limits together, and only kept notes count. Digests over an hour old are cleared.
 func keepContactNote(ctx context.Context, db *sql.DB, limits contactLimits, sender, submission, name, email, firm, note string) (id int64, kept bool, err error) {
@@ -127,7 +132,10 @@ func keepContactNote(ctx context.Context, db *sql.DB, limits contactLimits, send
 		return 0, false, err
 	}
 	if submission != "" {
-		switch err = tx.QueryRowContext(ctx, `SELECT id FROM contact_notes WHERE submission=$1`, submission).Scan(&id); {
+		var same bool
+		switch err = tx.QueryRowContext(ctx, `SELECT id,(name,email,firm,note)=($2,$3,$4,$5) FROM contact_notes WHERE submission=$1`, submission, name, email, firm, note).Scan(&id, &same); {
+		case err == nil && !same:
+			return 0, false, errContactKeyReused
 		case err == nil:
 			return id, false, nil
 		case !errors.Is(err, sql.ErrNoRows):

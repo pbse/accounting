@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { apiBaseUrl } from "../../lib/api";
 
@@ -9,13 +9,17 @@ export const MAILBOX = "hello@getkrith.com";
 export function Contact() {
   const [state, setState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   const [sender, setSender] = useState({ name: "", email: "" });
-  // One key for this visit's note: if an answer is lost and the visitor sends again, the API returns the note it kept.
-  const [submission] = useState(() => crypto.randomUUID());
+  // One key per note as written: if an answer is lost and the visitor sends the same note again, the API returns the note
+  // it kept; an edited note is a new note with a new key.
+  const attempt = useRef<{ payload: string; submission: string }>(undefined);
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     if (!form.reportValidity()) return;
     const fields = Object.fromEntries(new FormData(form)) as Record<string, string>;
+    const payload = JSON.stringify(fields);
+    if (attempt.current?.payload !== payload) attempt.current = { payload, submission: crypto.randomUUID() };
+    const { submission } = attempt.current;
     setState("sending");
     try {
       const response = await fetch(`${apiBaseUrl}/v1/contact`, {

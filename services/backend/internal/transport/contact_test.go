@@ -154,6 +154,11 @@ func TestContactRetryReturnsTheKeptNote(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM contact_notes WHERE firm=$1`, marker).Scan(&notes); err != nil || notes != 1 {
 		t.Fatalf("one note kept: %d %v", notes, err)
 	}
+	// The same key with other words is not answered with the earlier note.
+	edited := strings.Replace(body, `"name":"Ana"`, `"name":"Ana Lima"`, 1)
+	if code, reply := sendContact(t, h, "retry-"+rand.Text(), edited); code != 409 {
+		t.Fatalf("an edited note under a kept key: %d %v", code, reply)
+	}
 	if code, _ := sendContact(t, h, "retry-x", `{"name":"Ana","email":"ana@firm.example","firm":"F","submission":"bad key!"}`); code != 400 {
 		t.Fatalf("a malformed submission key: got %d", code)
 	}

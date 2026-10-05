@@ -3182,4 +3182,6 @@ Pass 5 found the edge refusing the contact form with 503 while workspace sign-in
 
 Pass 6 found a retried note kept and forwarded twice, the per-address count living in API memory (reset when the container restarts), and the wordmark not returning to the top from `/#how`. Each visit's form now sends a submission key and a retry returns the kept note unforwarded; both limits are counted from the stored notes, with the sender kept only as an hour-long digest (the privacy notice says so); every navigation now places the page. Tests cover the retry, a restarted API and the hour.
 
+Pass 7 found that an edited note retried under the visit's key was answered with the earlier note; the page now keys each note as written, and the API refuses a kept key with other words (409, tested).
+
 Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.
