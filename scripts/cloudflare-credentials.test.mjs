@@ -135,7 +135,7 @@ if(args.includes('delete')){const name=args[args.indexOf('delete')+1];fs.writeFi
   for(const [app,value] of Object.entries(snapshot.workers)){assert.equal(value.deployment,'new-version');assert.ok(value.credentials.every(name=>credentials[app].includes(name)));}
   assert.ok(calls().every(args=>!args.includes('delete')));
   const wrong=run(JSON.stringify({edge:{deployment:'stale-version',remove:['OPENAI_API_KEY']}}));assert.equal(wrong.status,1);assert.match(wrong.stderr,/changed since inspection/);assert.ok(calls().every(args=>!args.includes('delete')));
-  for(const plan of [{scanner:{deployment:'new-version',remove:['CODEX_AUTH_JSON']}},{edge:{deployment:'new-version',remove:['OPENAI_API_KEY','OPENAI_API_KEY']}},{edge:{deployment:'new-version',remove:['credential-value-pasted-by-mistake']}}]) {
+  for(const plan of [{edge:{deployment:'new-version',remove:['DATABASE_URL']}},{scanner:{deployment:'new-version',remove:['CODEX_AUTH_JSON']}},{edge:{deployment:'new-version',remove:['OPENAI_API_KEY','OPENAI_API_KEY']}},{edge:{deployment:'new-version',remove:['credential-value-pasted-by-mistake']}}]) {
    result=run(JSON.stringify(plan));assert.equal(result.status,1);assert.ok(!result.stderr.includes('credential-value-pasted-by-mistake'));
   }
   result=run(JSON.stringify({edge:{deployment:'new-version',remove:['QBO_WEBHOOK_VERIFIER']},'context-machine':{deployment:'new-version',remove:['CODEX_AUTH_JSON']}}));assert.equal(result.status,0,result.stderr);
