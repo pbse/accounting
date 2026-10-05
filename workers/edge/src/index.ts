@@ -4,6 +4,8 @@ import { Container } from "@cloudflare/containers";
 export { ContainerProxy } from "@cloudflare/containers";
 import { adminPage, adminPath, forwardsToAPI, secureAdmin, staffGate } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
+import { EmailMessage } from "cloudflare:email";
+import { contactMessage, noteToForward } from "./contact";
 
 export class CapabilityAPI extends Container<Env> {
   defaultPort = 8080;
@@ -108,8 +110,33 @@ interface Env {
   PRODUCTION_POSTING_KINDS?: string;
   XERO_POSTING_KINDS?: string;
   AUTH_SESSION?: string;
+  // Notes from the public contact page are forwarded here (docs/marketing-site.md); unset, they are only kept.
+  CONTACT_FORWARD_ADDRESS?: string;
+  CONTACT_EMAIL?: SendEmail;
   API: DurableObjectNamespace<CapabilityAPI>;
   ASSETS: Fetcher;
+}
+
+// A note the API kept from the contact page goes on to our inbox. The visitor is answered at once and the email
+// follows; a note that cannot be forwarded is still kept, and the failure is logged without its contents.
+function forwardContact(response: Response, env: Env, ctx: ExecutionContext) {
+  const to = env.CONTACT_FORWARD_ADDRESS;
+  let host = "";
+  try {
+    host = new URL(env.PUBLIC_APP_URL ?? "").hostname;
+  } catch {
+    return;
+  }
+  if (!env.CONTACT_EMAIL || !to || !host) return;
+  const binding = env.CONTACT_EMAIL, from = `website@${host}`;
+  ctx.waitUntil(
+    response.clone().json()
+      .then(noteToForward)
+      .then(async (note) => {
+        if (note) await binding.send(new EmailMessage(from, to, contactMessage(note, from, to)));
+      })
+      .catch((error: unknown) => console.error("Contact note could not be forwarded:", error instanceof Error ? error.message : "unknown error")),
+  );
 }
 
 export default {
@@ -132,7 +159,7 @@ export default {
     }
     if (!response.ok) throw new Error("Durable evidence intake unavailable");
   },
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (forwardsToAPI(path)) {
       if (
@@ -148,7 +175,9 @@ export default {
       // ponytail: one API container; add bounded pooling after load measurement.
       const forwarded = uploadScanRequest(request, env.UPLOAD_SCAN_HOST, env.UPLOAD_SCAN_KEY);
       if (forwarded instanceof Response) return forwarded;
-      return env.API.getByName("reference-api").fetch(forwarded);
+      const response = await env.API.getByName("reference-api").fetch(forwarded);
+      if (path === "/v1/contact" && request.method === "POST" && response.status === 201) forwardContact(response, env, ctx);
+      return response;
     }
     if (path.startsWith("/internal/")) {
       return new Response("Not found", { status: 404 });

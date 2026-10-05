@@ -1,46 +1,125 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
-import { legalPages } from "./Legal";
+import { drawLandscape } from "./landscape";
 
+// The public site's frame (docs/marketing-site.md): a masthead that stays at the top, the page, and a footer that ends
+// in a pen-and-ink landscape.
 export function MarketingLayout() {
-  // The layout stays mounted between public pages, so a new page starts at its top. The braces matter: newer browsers
-  // return a Promise from scrollTo, and an effect that returns it hands React a cleanup that is not a function, which
-  // throws when the page changes and leaves it blank.
-  const { pathname } = useLocation();
+  const { pathname, hash } = useLocation();
+  const [scrolled, setScrolled] = useState(false);
+  const lastPath = useRef(pathname);
   useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [pathname]);
+    const update = () => setScrolled(window.scrollY > 8);
+    update();
+    window.addEventListener("scroll", update, { passive: true });
+    return () => window.removeEventListener("scroll", update);
+  }, []);
+  // The layout stays mounted between pages: a new page opens at its top, and a link to a section opens at that section.
+  useEffect(() => {
+    const newPage = lastPath.current !== pathname;
+    lastPath.current = pathname;
+    const target = hash ? document.getElementById(decodeURIComponent(hash.slice(1))) : null;
+    if (target) target.scrollIntoView({ behavior: newPage ? "instant" : "smooth" });
+    else if (newPage) window.scrollTo({ top: 0, behavior: "instant" });
+  }, [pathname, hash]);
   return (
-    <div className="marketing">
-      <a className="skip" href="#main">
+    <div className="k-site">
+      <a className="k-skip" href="#main">
         Skip to content
       </a>
-      <header className="public-header">
-        <Link className="brand" to="/" aria-label="Close home">
-          close<span> / for accounting firms</span>
-        </Link>
-        <nav aria-label="Main navigation" className="public-nav">
-          <NavLink to="/contact">Contact us</NavLink>
-          <NavLink className="button" to="/login">
-            Log in <span aria-hidden="true">↗</span>
-          </NavLink>
-        </nav>
+      <header className={scrolled ? "k-mast is-scrolled" : "k-mast"}>
+        <div className="k-col k-bar">
+          <Link className="k-logo" to="/" aria-label="Krith, home">
+            krith
+          </Link>
+          <nav className="k-nav" aria-label="Main">
+            <Link to="/#how">How it works</Link>
+            <NavLink to="/security">Security</NavLink>
+          </nav>
+          <div className="k-actions">
+            <NavLink className="k-login" to="/login">
+              Log in
+            </NavLink>
+            <Link className="k-pill" to="/contact">
+              Talk to us <span aria-hidden="true">→</span>
+            </Link>
+          </div>
+        </div>
       </header>
       <Outlet />
-      <footer className="public-footer">
-        <Link className="brand" to="/">
-          close
-        </Link>
-        <p>More prepared work. Your firm stays in control.</p>
-        <Link to="/contact">Reach out to us</Link>
-        <nav aria-label="Legal and data" className="public-legal">
-          {legalPages.map((page) => (
-            <Link key={page.to} to={page.to}>
-              {page.label}
+      <footer className="k-foot">
+        <div className="k-col k-foot-top">
+          <div>
+            <Link className="k-logo" to="/" aria-label="Krith, home">
+              krith
             </Link>
-          ))}
-        </nav>
+            <p className="k-tagline">The work of accounting, prepared for your signature.</p>
+          </div>
+          <nav aria-label="Krith">
+            <h3>Krith</h3>
+            <ul>
+              <li>
+                <Link to="/#how">How it works</Link>
+              </li>
+              <li>
+                <Link to="/security">Security</Link>
+              </li>
+            </ul>
+          </nav>
+          <nav aria-label="Company">
+            <h3>Company</h3>
+            <ul>
+              <li>
+                <Link to="/contact">Contact</Link>
+              </li>
+              <li>
+                <Link to="/login">Log in</Link>
+              </li>
+            </ul>
+          </nav>
+        </div>
+        <div className="k-col k-foot-base">
+          <span>
+            © {new Date().getFullYear()} Krith · <i>krith</i>, from the Sanskrit <i>kṛta</i>: done
+          </span>
+          <span>
+            Made with{" "}
+            <span className="k-heart" role="img" aria-label="love">
+              ♥
+            </span>{" "}
+            in NYC
+          </span>
+          <nav aria-label="Legal">
+            <Link to="/privacy">Privacy notice</Link>
+          </nav>
+        </div>
+        <Landscape />
       </footer>
     </div>
   );
+}
+
+function Landscape() {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const element = canvas.current!;
+    let width = 0, timer = 0;
+    const draw = () => {
+      const next = element.getBoundingClientRect().width;
+      if (next === width) return;
+      width = next;
+      drawLandscape(element);
+    };
+    draw();
+    const onResize = () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(draw, 180);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+  return <canvas className="k-engraving" ref={canvas} aria-hidden="true" />;
 }

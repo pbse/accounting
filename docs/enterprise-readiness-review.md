@@ -129,7 +129,7 @@ Configure an external monitor and alert receiver with a named responder. Perform
 
 **Type:** commercial launch work. **Owner:** founder/product with legal review.
 
-[Contact](../apps/frontend/src/features/marketing/Contact.tsx) still says the contact channel is coming soon. Provide a real sales/support route, named customer contact, explicit pilot scope, price, onboarding responsibilities and escalation process. The [legal pages](../apps/frontend/src/features/marketing/Legal.tsx) exist; complete the actual business identity, contact details, reviewed agreements, data terms and applicable subprocessor/retention commitments.
+The [contact page](../apps/frontend/src/features/marketing/Contact.tsx) now keeps each note and forwards it to Krith's inbox, and hello@getkrith.com is routed there (2026-10-05, [public site](marketing-site.md)). Still to provide: a named customer contact, explicit pilot scope, price, onboarding responsibilities and escalation process. The public site carries a [privacy notice](../apps/frontend/src/features/marketing/Privacy.tsx) and a [security page](../apps/frontend/src/features/marketing/Security.tsx); complete the actual business identity, reviewed agreements, data terms and subprocessor/retention commitments in each firm's written agreement.
 
 **Done when:** a prospect can request a demo, understand the supported scope, sign the reviewed terms, get onboarded and reach support. Manual invoicing is sufficient for initial pilots. A self-service billing system is not required to prove value.
 
