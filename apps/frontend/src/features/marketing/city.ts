@@ -72,7 +72,7 @@ export function startCity(el: CityElements): City {
   let cache = document.createElement("canvas"), cctx = cache.getContext("2d")!;
   let ink = "#121316", ink2 = "#55575e", blue = "#1f3fbf", paper = "#fafaf8";
   let phase: "idle" | "settle" | "live" | "still" = "idle";
-  let t0 = 0, raf = 0, inView = true, hover = -1, settled = 0, last = 0, safety = 0, shownOpen = -1, txCount = TRANSACTIONS, txDirty = false, userPaused = false, destroyed = false;
+  let t0 = 0, stoppedAt = 0, raf = 0, inView = true, hover = -1, settled = 0, last = 0, safety = 0, shownOpen = -1, txCount = TRANSACTIONS, txDirty = false, userPaused = false, destroyed = false;
   let amb: Particle[] = [], flashes: { s: Segment; t: number }[] = [];
   const work = { stage: "wait" as "wait" | "scan" | "rest", t: 0, b: null as Building | null, job: JOBS[0], start: 0, doneAt: 0, resolved: false, prev: [] as number[], n: 0, c: 0, r: 0 };
 
@@ -401,14 +401,30 @@ export function startCity(el: CityElements): City {
       if (txDirty) { txDirty = false; el.transactions.textContent = fmtInt(txCount); }
     }
     if (phase !== "still" && inView && !document.hidden && !userPaused && !destroyed) raf = requestAnimationFrame(frame);
+    else halt();
+  }
+  // The settling clock stands still while the plate is out of sight, and its safety finish waits with it.
+  function halt() {
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    if (phase === "settle" && !stoppedAt) { stoppedAt = performance.now(); clearTimeout(safety); }
+  }
+  // Should frames never come while the plate is in sight (some embedded previews), it finishes after 7.5 seconds of settling.
+  function armSafety() {
+    clearTimeout(safety);
+    safety = window.setTimeout(() => { if (phase === "settle") { bakeAll(); finishSettle(performance.now()); kick(); } }, Math.max(0, 7500 - (performance.now() - t0)));
   }
   function finishSettle(now: number) {
-    clearTimeout(safety); phase = "live";
+    clearTimeout(safety); stoppedAt = 0; phase = "live";
     dec.forEach((d) => (d.born = now + 250 + d.delay * 230));
     txCount = TRANSACTIONS; el.transactions.textContent = fmtInt(TRANSACTIONS);
     work.stage = "wait"; work.t = -1.4;
   }
-  function kick() { if (!raf && !destroyed && phase !== "still" && phase !== "idle" && inView && !document.hidden && !userPaused) { last = 0; raf = requestAnimationFrame(frame); } }
+  function kick() {
+    if (raf || destroyed || phase === "still" || phase === "idle" || !inView || document.hidden || userPaused) return;
+    if (stoppedAt) { t0 += performance.now() - stoppedAt; stoppedAt = 0; }
+    if (phase === "settle") armSafety();
+    last = 0; raf = requestAnimationFrame(frame);
+  }
   function repaint() { paintBase(); drawDecisions(performance.now()); }
   function still() {
     bakeAll(); phase = "still"; dec.forEach((d) => (d.born = -1e9)); repaint();
@@ -427,10 +443,10 @@ export function startCity(el: CityElements): City {
     if (destroyed || !build()) return;
     lastW = W;
     if (reduce || document.hidden) { still(); if (!reduce) phase = "live"; kick(); return; }
-    cctx.clearRect(0, 0, W, H); settled = 0; phase = "settle"; t0 = performance.now();
+    cctx.clearRect(0, 0, W, H); settled = 0; phase = "settle"; t0 = performance.now(); stoppedAt = 0;
     el.transactions.textContent = "0"; el.decisions.textContent = "0";
-    safety = window.setTimeout(() => { if (phase === "settle") { bakeAll(); finishSettle(performance.now()); kick(); } }, 7500);
     kick();
+    if (!raf) halt();
   }
   function rebuild() {
     const w = el.hero.getBoundingClientRect().width;
@@ -461,7 +477,7 @@ export function startCity(el: CityElements): City {
   const onMove = (e: PointerEvent) => { if (phase === "settle" || phase === "idle") return; const i = nearest(e); if (i !== hover) showCard(i); };
   const onDown = (e: PointerEvent) => { if (phase === "settle" || phase === "idle") return; showCard(nearest(e)); };
   const onLeave = () => { if (hover >= 0) showCard(-1); };
-  const onVisibility = () => { if (!document.hidden) { last = 0; kick(); } };
+  const onVisibility = () => { if (document.hidden) halt(); else kick(); };
   let resizeTimer = 0;
   const onResize = () => { clearTimeout(resizeTimer); resizeTimer = window.setTimeout(rebuild, 180); };
   el.canvas.addEventListener("pointermove", onMove);
@@ -469,7 +485,7 @@ export function startCity(el: CityElements): City {
   el.canvas.addEventListener("pointerleave", onLeave);
   document.addEventListener("visibilitychange", onVisibility);
   window.addEventListener("resize", onResize);
-  const sight = new IntersectionObserver((entries) => { inView = entries[0].isIntersecting; kick(); });
+  const sight = new IntersectionObserver((entries) => { inView = entries[0].isIntersecting; if (inView) kick(); else halt(); });
   sight.observe(el.hero);
 
   // The plate measures where the copy ends, so it starts once the fonts have settled.
