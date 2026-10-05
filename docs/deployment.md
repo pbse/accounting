@@ -94,6 +94,19 @@ The installer validates values, checks all destinations before writing, sends JS
 
 The helper's credential allowlists enforce these scopes. API mode and context-machine mode may retain credentials for both routes in Cloudflare; Worker forwarding exposes only the active route to app containers. Explicit standby removes the research service bindings and hides the token, without deleting installed credentials. Full runtime readiness validates database isolation and selected CLI configuration. Names-only preflight cannot verify stored values or live provider entitlement.
 
+### Inspect and remove obsolete bindings
+
+Old deploys installed empty credentials as real Cloudflare bindings. During cutover, remove only placeholders whose emptiness is established from the old deployment/transfer record, before activating optional features. Secret-name metadata cannot distinguish an empty legacy binding from a usable credential; do not delete a credential merely because its name appears here.
+
+The main-only **Inspect or remove Cloudflare credential bindings** workflow uses only Cloudflare deployment access. With an empty `plan`, it performs no writes and exports `cloudflare-credential-metadata`, containing names and current deployment IDs, never values. For an explicitly reviewed removal, supply a non-secret JSON plan mapping Worker scope names (`edge`, `queue`, `scanner`, `context-machine`) to the inspected `deployment` and `remove` credential-name list. Every scope/name/revision is checked before the first deletion; a secret installation or deployment since inspection refuses the operation. The job shares deployment concurrency. Avoid dashboard edits during it. A partial failure requires fresh inspection and a reviewed plan for the remaining names, not blind retries. No credential values belong in workflow inputs. Staging must have its own provisioned Workers and credentials before inspection.
+
+```json
+{"context-machine":{"deployment":"INSPECTED_DEPLOYMENT_ID","remove":["CODEX_AUTH_JSON"]}}
+```
+
+This example is deletion, not installation: use it only when that managed-login binding is confirmed obsolete/empty. Installing a new token/login remains the stdin helper above. Legacy cleanup is a required cutover step before removing GitHub runtime copies or enabling research; successful name metadata alone is not activation acceptance.
+
+
 ## Google and email onboarding
 
 Google sign-in identifies a person; it does not grant Drive or Gmail access. Ask for source access only when that person chooses it.
