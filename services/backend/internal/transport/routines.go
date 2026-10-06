@@ -211,6 +211,18 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 		}
 		return false, tx.Commit()
 	}
+	// A client the firm's roster says has left owes no new month: its hand-over stops, whether or not the month's close
+	// is already there.
+	var left bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, org, entity).Scan(&left); err != nil {
+		return false, err
+	}
+	if left {
+		if _, err = tx.ExecContext(ctx, `UPDATE close_routines SET stopped_at=now(),stopped_by='agent',stop_reason=$2 WHERE id=$1`, id, "Stopped because "+entity+" is inactive on the firm's roster."); err != nil {
+			return false, err
+		}
+		return false, tx.Commit()
+	}
 	if closeID == "" {
 		var count int
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM client_closes WHERE organization_id=$1`, org).Scan(&count); err != nil {
@@ -218,17 +230,6 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 		}
 		if count >= limit {
 			if _, err = tx.ExecContext(ctx, `UPDATE close_routines SET waiting=$2,checked_at=now() WHERE id=$1`, id, "The firm is at its limit of "+strconv.Itoa(limit)+" closes, so "+entity+" "+period+" is not open yet. I'll open it once there is room."); err != nil {
-				return false, err
-			}
-			return false, tx.Commit()
-		}
-		// A client the firm's roster says has left owes no new month: its hand-over stops instead of opening one.
-		var left bool
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, org, entity).Scan(&left); err != nil {
-			return false, err
-		}
-		if left {
-			if _, err = tx.ExecContext(ctx, `UPDATE close_routines SET stopped_at=now(),stopped_by='agent',stop_reason=$2 WHERE id=$1`, id, "Stopped because "+entity+" is inactive on the firm's roster."); err != nil {
 				return false, err
 			}
 			return false, tx.Commit()

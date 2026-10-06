@@ -217,13 +217,17 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	if body := call("user_b", partner, "POST", "/v1/closes/"+opened.ID+"/goal", map[string]any{"confirmed": true, "every_month": true}, 409); !strings.Contains(body, "inactive on the firm's roster") {
 		t.Fatalf("a monthly hand-over for an inactive client: %s", body)
 	}
+	// Delta's next month is already open (from before it left); its hand-over still stops rather than hand that over.
+	var deltaClose string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Delta',$2) RETURNING id::text`, org, ended).Scan(&deltaClose))
 	_, err = db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period) VALUES($1,'Delta','user_b',false,'review',$2)`, org, before)
 	must(err)
 	sweepCloseRoutines(context.Background(), db, time.Now())
 	var deltaStopped string
-	var deltaCloses int
-	must(db.QueryRow(`SELECT COALESCE(stop_reason,''),(SELECT count(*) FROM client_closes WHERE organization_id=$1 AND entity='Delta') FROM close_routines WHERE organization_id=$1 AND client_entity='Delta'`, org).Scan(&deltaStopped, &deltaCloses))
-	if deltaStopped != "Stopped because Delta is inactive on the firm's roster." || deltaCloses != 0 {
-		t.Fatalf("a hand-over for an inactive client stops without opening a month: %q %d", deltaStopped, deltaCloses)
+	var deltaCloses, deltaGoals int
+	must(db.QueryRow(`SELECT COALESCE(stop_reason,''),(SELECT count(*) FROM client_closes WHERE organization_id=$1 AND entity='Delta'),(SELECT count(*) FROM close_goals WHERE close_id::text=$2)
+ FROM close_routines WHERE organization_id=$1 AND client_entity='Delta'`, org, deltaClose).Scan(&deltaStopped, &deltaCloses, &deltaGoals))
+	if deltaStopped != "Stopped because Delta is inactive on the firm's roster." || deltaCloses != 1 || deltaGoals != 0 {
+		t.Fatalf("a hand-over for an inactive client stops, opening and handing over nothing: %q %d %d", deltaStopped, deltaCloses, deltaGoals)
 	}
 }

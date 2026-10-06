@@ -102,11 +102,11 @@ How a client joins and leaves the roster:
 - **Joins** when its takeover setup is confirmed (owing from its opening month), or when a firm administrator adds it. Confirming a setup again does not bring back a client an administrator marked inactive; only a roster change does.
 - **Leaves** when an administrator marks it inactive, or when its close is deleted for contract termination or at the client's request. An inactive client gets no new month by any route:
 - the new-close form refuses its next month, though its existing months still open;
-- a new monthly hand-over is refused, and a running one stops instead of opening a month;
+- a new monthly hand-over is refused, and a running one stops instead of opening a month or handing over one already open;
 - carrying its work into another month is refused, and the carry at sign-off skips it.
 
 An administrator reactivates it in Firm settings.
-- When the roster began, every client with a close was put on it, owing the months after its latest close, so older gaps are not reported. A client with a close in the three months before is active. Any other is listed inactive with "To confirm…", for an administrator to reactivate if it is still a client.
+- When the roster began, every client with a close was put on it. A client with a close in the three months before is active. It owes every month from its earliest close of the last twelve, so a month missing between its recent closes shows, while older history does not. Any other client is listed inactive with "To confirm…", for an administrator to reactivate if it is still a client.
 
 **Months not opened.** A month nobody opened shows in Work's own **Months not opened** section (the morning brief's `not_opened`) to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. A month the client's monthly hand-over is set to open still shows until a close exists, marked as the hand-over's.
 

@@ -39,12 +39,16 @@ ALTER TABLE close_templates ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON close_templates FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON close_templates FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
 
--- The roster starts with every client that has a close, each owing the months after its latest close, so gaps further
--- back are not reported as missing. A client with a close of one of the three months before this one is active; any other
--- is listed inactive for an administrator to confirm, rather than left off.
+-- The roster starts with every client that has a close. A client with a close of one of the three months before this one
+-- is active, owing every month from its earliest close of the last twelve, so a month missing between its recent closes
+-- shows while older history does not. Any other is listed inactive, from its latest close, for an administrator to
+-- confirm rather than left off.
 INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor)
 SELECT DISTINCT ON (c.organization_id,lower(c.entity)) c.organization_id,c.entity,
- c.period>=to_char(date_trunc('month',now()) - interval '3 months','YYYY-MM'),c.period,
+ c.period>=to_char(date_trunc('month',now()) - interval '3 months','YYYY-MM'),
+ CASE WHEN c.period>=to_char(date_trunc('month',now()) - interval '3 months','YYYY-MM')
+  THEN (SELECT min(e.period) FROM client_closes e WHERE e.organization_id=c.organization_id AND lower(e.entity)=lower(c.entity) AND e.period>=to_char(date_trunc('month',now()) - interval '12 months','YYYY-MM'))
+  ELSE c.period END,
  CASE WHEN c.period>=to_char(date_trunc('month',now()) - interval '3 months','YYYY-MM') THEN 'On the roster when it began: a close in the last three months'
   ELSE 'To confirm: no close in the three months before the roster began, so it is listed inactive until an administrator says it is still a client' END,'migration'
  FROM client_closes c
