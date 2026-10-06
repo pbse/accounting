@@ -90,6 +90,10 @@ const attentionQuery = `WITH scope AS (
  SELECT 'handoff:'||h.id,'handoff',g.close_id,h.created_at,h.created_by||' handed you '||h.document||CASE WHEN h.note<>'' THEN ': '||h.note ELSE '' END,''
   FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE g.close_id IN (SELECT id FROM scope) AND h.assignee=$3 AND h.closed_at IS NULL
  UNION ALL
+ SELECT 'close-handoff:'||o.id,'handoff',o.close_id,o.created_at,o.actor||' handed you this close'||CASE WHEN o.reason<>'' THEN ': '||o.reason ELSE '' END,''
+  FROM close_owner_changes o WHERE o.close_id IN (SELECT id FROM scope WHERE owner='mine') AND o.to_owner=$3 AND o.actor<>$3
+  AND o.id=(SELECT max(id) FROM close_owner_changes WHERE close_id=o.close_id)
+ UNION ALL
  SELECT 'handoff:'||h.id||':reminder','handoff',g.close_id,h.created_at+interval '2 days',h.document||' has been with you for at least 2 days, handed by '||h.created_by||'.',''
   FROM goal_handoffs h JOIN close_goals g ON g.id=h.goal_id WHERE g.close_id IN (SELECT id FROM scope) AND h.assignee=$3 AND h.closed_at IS NULL AND h.created_at<=now()-interval '2 days'
  UNION ALL

@@ -81,6 +81,33 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 		must(db.QueryRow(`SELECT owner FROM client_closes WHERE id=$1`, alpha).Scan(&o))
 		return o
 	}
+	handed := func(subject string, permissions []string) *closeHandover {
+		t.Helper()
+		var c struct{ Close savedClose }
+		must(json.Unmarshal([]byte(call(subject, permissions, "GET", "/v1/closes/"+alpha, nil, 200)), &c))
+		return c.Close.Handed
+	}
+	handedTo := func(subject string, permissions []string) string {
+		t.Helper()
+		var inbox struct {
+			Groups []struct {
+				Events []struct {
+					Key  string `json:"key"`
+					Kind string `json:"kind"`
+					Text string `json:"text"`
+				} `json:"events"`
+			} `json:"groups"`
+		}
+		must(json.Unmarshal([]byte(call(subject, permissions, "GET", "/v1/closes/attention", nil, 200)), &inbox))
+		for _, g := range inbox.Groups {
+			for _, e := range g.Events {
+				if e.Kind == "handoff" && strings.HasPrefix(e.Key, "close-handoff:") {
+					return e.Text
+				}
+			}
+		}
+		return ""
+	}
 	canAssign := func(subject string, permissions []string) bool {
 		t.Helper()
 		var c struct{ Close savedClose }
@@ -123,14 +150,24 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	}
 	plan("user_b", partner, "release", "", "", 409)
 	plan("user_b", partner, "take", "", "", 409)
+	// The new holder is told, in Attention and on the close, who handed it to them and why.
+	if got := handedTo("user_c", reviewer); got != "user_b handed you this close: Covering while I'm away" {
+		t.Fatalf("Cy's attention: %q", got)
+	}
+	if h := handed("user_c", reviewer); h == nil || h.By != "user_b" || h.Note != "Covering while I'm away" {
+		t.Fatalf("Cy's close page: %+v", h)
+	}
 	// A firm administrator reassigns it whoever holds it.
 	plan("user_a", admin, "assign", "user_b", "Back from leave", 200)
-	// A note is limited in characters, not bytes.
-	plan("user_b", partner, "assign", "user_c", strings.Repeat("é", 300), 200)
-	plan("user_c", reviewer, "assign", "user_b", "", 200)
 	if owner() != "user_b" {
 		t.Fatalf("the administrator gave it back to Bea: %s", owner())
 	}
+	if handedTo("user_c", reviewer) != "" || handed("user_c", reviewer) != nil || handedTo("user_b", partner) != "user_a handed you this close: Back from leave" {
+		t.Fatalf("only the current holder is told, of the hand-over that made them the holder: %q %+v %q", handedTo("user_c", reviewer), handed("user_c", reviewer), handedTo("user_b", partner))
+	}
+	// A note is limited in characters, not bytes.
+	plan("user_b", partner, "assign", "user_c", strings.Repeat("é", 300), 200)
+	plan("user_c", reviewer, "assign", "user_b", "", 200)
 	plan("user_b", partner, "keep", "", "", 200)
 	plan("user_b", partner, "release", "", "", 200)
 

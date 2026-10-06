@@ -3220,13 +3220,14 @@ What changed:
 - Migration 124 adds `close_owner_changes`, which records every change of hands: taken, released, handed over or reassigned, by whom, and with what note. The table has its tenant policy.
 - The Security center's and the staff console's activity show these changes (kinds `close.taken`, `close.released`, `close.assigned`). The staff console's kind filter gains `close`.
 - `GET /v1/closes/{id}` returns `can_assign`. The close page then offers **Hand the close to a teammate** (choose a teammate, add a note), which loads the same teammates list hand-offs use.
+- The new holder is told. Attention gains an event under the existing hand-off kind, relabelled **Work handed to you** so that saved notification preferences keep it ("user_b handed you this close: …"). The close page shows `handed` (who, when, the note). Both last while that person holds the close and the hand-over is its latest change.
 
 Checks:
 - `TestACloseChangesHandsAndEachChangeIsRecorded` (local PostgreSQL, WorkOS answered by a fixture):
   - A reviewer may hand over an unheld close; a viewer may not (no `can_assign`, the teammates list refused, assigning refused with 403). Once a partner takes the close, only the holder and an administrator see `can_assign`. An administrator who reviews no work still lists teammates.
   - These assignees are refused (422): a viewer granted the client, a reviewer without the client, an unknown subject, and the holder themselves ("To hold it yourself, take it"). So is a note over 500 characters.
   - A reviewer cannot hand over a close someone else holds (409, "They can hand it over, or ask a firm administrator").
-  - The holder hands the close to a reviewer assigned to the client. Afterwards the old holder can neither release nor take it, and an administrator reassigns it back.
+  - The holder hands the close to a reviewer assigned to the client. Afterwards the old holder can neither release nor take it. Cy's Attention and close page show who handed it and the note. An administrator then reassigns it back: Cy is no longer told, and Bea is told by the administrator, with that note.
   - A 300-character accented note is accepted. A kept plan records nothing. Exactly six changes are recorded, in order, with actors and notes. The Security center shows "Took", "Assigned … to user_c: Covering while I'm away", "Assigned … to user_b from user_c: Back from leave" and "Released".
 - `TestClosePlanningRanksWorkAndBulkApprovalChecksEachDraft` and `TestHandADocumentToATeammate` still pass.
 - `npm run check`, `npm test` (44 pass) and `npm run build` pass. CI's layout check walks the close page.
