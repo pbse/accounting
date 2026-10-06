@@ -2,7 +2,7 @@
 
 Email is optional. Local development works without Resend: approve a request and share its secure link manually. Provider checks use synthetic messages and a mocked HTTP transport; no live delivery has been validated.
 
-This page covers a firm's mail to its clients. Krith's own addresses are separate: hello@getkrith.com and notes from the public contact page reach Krith's inbox through Cloudflare Email Routing, never through a firm's Resend connection ([public site](marketing-site.md#the-contact-form)).
+This page covers a firm's mail to its clients. Krith's own mail is separate: getkrith.com's addresses, hello@getkrith.com among them, are hosted by Google Workspace, and notes from the public contact page are delivered there by Cloudflare's send binding, never through a firm's Resend connection ([public site](marketing-site.md#where-kriths-mail-goes)). Client replies use the subdomain `in.getkrith.com`, whose MX records stay Cloudflare's.
 
 ## Configure a hosted firm
 

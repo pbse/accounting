@@ -3185,3 +3185,22 @@ Pass 6 found a retried note kept and forwarded twice, the per-address count livi
 Pass 7 found that an edited note retried under the visit's key was answered with the earlier note; the page now keys each note as written, and the API refuses a kept key with other words (409, tested).
 
 Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.
+
+## Krith's mail moves to Google Workspace — 2026-10-05 (B12)
+
+The apex MX of getkrith.com now points to Google Workspace, and the team's mailbox is prashant@getkrith.com. Contact notes are forwarded there (`CONTACT_FORWARD_ADDRESS`, production variable updated), and hello@getkrith.com becomes a Google Workspace alias; [public site](marketing-site.md#where-kriths-mail-goes) records the arrangement and the apex records to keep. The privacy notice names Google Workspace as the team's email and no longer says Cloudflare receives mail sent to our addresses.
+
+Checked against Cloudflare and public DNS:
+- Google's five MX hosts, its DKIM key and the site verification record are published.
+- One apex SPF record includes both Google and Cloudflare, well within the ten-lookup limit.
+- Cloudflare's DKIM key is still published for the Worker's sends, and DMARC is `p=none`.
+- `in.getkrith.com` keeps Cloudflare's MX and SPF, and the client-reply rule still sends to the production Worker.
+- Resend's `mail.getkrith.com` records are unchanged.
+
+Email Routing stays enabled on the zone, and Cloudflare reports the apex as "misconfigured", as expected with Google's MX.
+
+Not yet done, and waiting on the owner:
+- prashant@getkrith.com must be added and verified as a Cloudflare destination address; until then the Worker cannot deliver notes, which stay kept.
+- The old Cloudflare hello@ rule (to a personal inbox, no longer reachable) is to be deleted.
+- The hello@ alias is to be added in Google Workspace.
+- After that, one contact note checks delivery end to end.
