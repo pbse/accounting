@@ -3334,6 +3334,8 @@ Each fix is tested.
 
 Pass 3 found that someone WorkOS signed in to another firm, or asked to choose among several organizations, could miss their own domain's firm. The address now decides the firm before WorkOS's choice is kept. Tests cover a person held only in another firm and a first-time signer claiming their domain's organization from a choice.
 
+Pass 4 found that an existing member's address was not checked for verification, and that a removed member from another domain got a session that could not work. Every sign-in now needs a verified address, and a removed member or suspended firm is refused at sign-in. Both are tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

@@ -483,6 +483,29 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("the domain's organization becomes Leo's firm: %q %v", stored, err)
 	}
 
+	// Every sign-in needs a verified address: a member whose address WorkOS no longer counts as verified is turned away.
+	f.mu.Lock()
+	u := f.users[erin]
+	u.EmailVerified = false
+	f.users[erin] = u
+	f.mu.Unlock()
+	if where, cookie := signIn(erin, "google"); where != "/login?error=unverified" || cookie != "" {
+		t.Fatalf("an existing member with an unverified address is refused: %s", where)
+	}
+	// A removed member from another domain (one the firm invited) is told so, not given a session that cannot work.
+	if _, err := raw.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,'Invited from another firm.',$3),($1,$2,false,'The engagement ended.',$3)`, elsewhere, kate, kate); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	ku := f.users[kate]
+	ku.Email = "kate@outside" + strings.ToLower(rand.Text()[:6]) + ".test"
+	f.users[kate] = ku
+	f.memberships = slices.DeleteFunc(f.memberships, func(m firmMembership) bool { return m.UserID == kate && m.OrganizationID == firm })
+	f.mu.Unlock()
+	if where, cookie := signIn(kate, "google"); where != "/login?error=removed" || cookie != "" {
+		t.Fatalf("a removed member from another domain is refused: %s", where)
+	}
+
 	// A person in two firms signs in to the firm of their address's domain.
 	f.mu.Lock()
 	other := firmMembership{ID: "om_other_" + ana, UserID: ana, OrganizationID: "org_ElsewhereFixture", Status: "active"}

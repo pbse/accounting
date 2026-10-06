@@ -91,7 +91,7 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		return nil, nil
 	})
 	tokens := func(session, refresh string) (int, any) {
-		return 200, map[string]any{"access_token": mint(session), "refresh_token": refresh, "user": map[string]string{"id": "user_a", "email": "a@firm.test"}, "organization_id": as}
+		return 200, map[string]any{"access_token": mint(session), "refresh_token": refresh, "user": map[string]any{"id": "user_a", "email": "a@firm.test", "email_verified": true}, "organization_id": as}
 	}
 	t.Setenv("WORKOS_CLIENT_ID", "client_fixture")
 	t.Setenv("WORKOS_ISSUER", "https://auth.example")

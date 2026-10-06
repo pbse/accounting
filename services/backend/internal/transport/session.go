@@ -198,6 +198,10 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 	if _, company := companyDomain(tokens.User.Email); !company {
 		return tokens, refusePersonal, nil
 	}
+	// Every session, not only a first one, needs an address WorkOS has verified.
+	if !tokens.User.EmailVerified {
+		return tokens, refuseUnverified, nil
+	}
 	if kind.staff {
 		return tokens, "", nil
 	}

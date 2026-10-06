@@ -286,18 +286,22 @@ func domainMember(ctx context.Context, db *sql.DB, org string, user signedInUser
 	if err != nil {
 		return refuseUnavailable
 	}
-	if recorded.Valid && recorded.String != domain {
-		return ""
+	if !enabled {
+		return refuseSuspended
 	}
-	// Someone the firm has already decided on needs nothing here; one it removed is told so.
+	// Someone the firm has already decided on needs nothing here, whatever their domain; one it removed is told so.
 	var granted sql.NullBool
 	if err = tx.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, org, user.ID).Scan(&granted); err != nil && err != sql.ErrNoRows {
 		return refuseUnavailable
 	}
 	if granted.Valid {
-		if !granted.Bool && recorded.Valid {
+		if !granted.Bool {
 			return refuseRemoved
 		}
+		return ""
+	}
+	// Anyone else from another domain came by invitation, which enrolls them on their first request.
+	if recorded.Valid && recorded.String != domain {
 		return ""
 	}
 	if !recorded.Valid {
