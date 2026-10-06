@@ -11,4 +11,5 @@ kept outside this repository. See [docs/acceptance-corpus.md](../../../../docs/a
 | `billed-to-another-company` | An invoice billed to another company is held for a person. |
 | `no-ledger-capture` | Without the month's ledger capture the agent cannot check the bill, so it asks a person. |
 | `held-document-blocks-signoff` | With the clean invoice's draft approved and the scope defined, the held invoice still keeps the close from being ready. |
+| `trial-balance-does-not-tie` | The same clean invoice, approved, but the month-end Trial Balance already holds 500.00 in Prepaid Expenses: with the draft it would not tie, so the close is not ready. |
 | `same-invoice-uploaded-twice` | The same bytes uploaded again are one document: no second piece of work. |

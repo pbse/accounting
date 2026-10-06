@@ -8,12 +8,13 @@ The release corpus required by the [build plan's accuracy contract](agent-first-
   - `services/backend/internal/acceptance`: the case format, scoring and report.
   - `transport.RunAcceptanceCase`: loads a case and drives the pipeline.
   - `cmd/acceptance`: the command line.
-- **A synthetic sample** in `services/backend/acceptance/sample`. It has six cases with recorded answers:
+- **A synthetic sample** in `services/backend/acceptance/sample`. It has seven cases with recorded answers:
   - one goes through alone and, once approved, leaves the close ready;
   - one is asked about a wrong reading;
   - one is held as the wrong client;
   - one is asked about for want of a ledger capture;
   - one has a held document that keeps an approved close from being ready;
+  - one has a Trial Balance that would not tie with its draft, so its approved close is blocked;
   - one uploads the same invoice twice.
 
   `TestTheSampleCorpusRunsThroughThePipeline` keeps it, and the harness, working.
@@ -32,8 +33,11 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
   "tags": ["wrong_client"],
   "setup": {
     "prepaid_procedure": {"method": "equal_full_months_v1", "expense_account": "Insurance", "prepaid_account": "Prepaid Expenses"},
-    "quickbooks": {"home_currency": "USD", "accounts": [{"id": "12", "name": "Insurance"}],
-                   "bills": [{"vendor": "Acme Insurance Co", "number": "INV-778", "amount": "1200.00", "date": "2026-09-03", "account_id": "12"}]}
+    "quickbooks": {"home_currency": "USD",
+                   "accounts": [{"id": "12", "name": "Insurance", "type": "Expense"}, {"id": "13", "name": "Prepaid Expenses", "type": "Other Current Asset"},
+                                {"id": "20", "name": "Accounts Payable", "type": "Accounts Payable"}],
+                   "bills": [{"vendor": "Acme Insurance Co", "number": "INV-778", "amount": "1200.00", "date": "2026-09-03", "account_id": "12"}],
+                   "trial_balance": [{"account_id": "12", "debit": "1200.00"}, {"account_id": "13"}, {"account_id": "20", "credit": "1200.00"}]}
   },
   "documents": [{"file": "invoice.pdf", "model": "invoice.model.json",
                  "label": {"work_type": "prepaid", "facts": {"amount": "1200.00"},
@@ -44,7 +48,7 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
 ```
 
 - **`split`.** `development` cases may guide changes. `held_out` cases are kept out of tuning and are reported separately. Leave out later facts and final adjustments from a historical case's inputs.
-- **`setup`.** The firm's configuration before the documents arrive: an enabled prepaid procedure, and a QuickBooks capture of the month (chart of accounts and bills). Other setup is added as cases need it.
+- **`setup`.** The firm's configuration before the documents arrive: an enabled prepaid procedure, and a QuickBooks capture of the month. The capture holds the chart of accounts (with QuickBooks account types), the month's bills and the month-end Trial Balance, which every real capture holds. Readiness ties the supported balances out against that Trial Balance, counting proposed entries, so a balance that would not tie blocks sign-off. Other setup is added as cases need it.
 - **`label`.** The accountant's judgment of the document, not of any reading:
   - `work_type`: `prepaid`, `accrual` and so on, or `none` for a document with no accounting work.
   - `facts`: the values a correct reading gives.

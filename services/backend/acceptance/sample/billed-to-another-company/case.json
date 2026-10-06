@@ -17,11 +17,18 @@
    "accounts": [
     {
      "id": "12",
-     "name": "Insurance"
+     "name": "Insurance",
+     "type": "Expense"
     },
     {
      "id": "13",
-     "name": "Prepaid Expenses"
+     "name": "Prepaid Expenses",
+     "type": "Other Current Asset"
+    },
+    {
+     "id": "20",
+     "name": "Accounts Payable",
+     "type": "Accounts Payable"
     }
    ],
    "bills": [
@@ -31,6 +38,19 @@
      "amount": "1200.00",
      "date": "2026-09-03",
      "account_id": "12"
+    }
+   ],
+   "trial_balance": [
+    {
+     "account_id": "12",
+     "debit": "1200.00"
+    },
+    {
+     "account_id": "13"
+    },
+    {
+     "account_id": "20",
+     "credit": "1200.00"
     }
    ]
   }

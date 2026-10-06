@@ -246,6 +246,7 @@ var agentFields = map[string][]string{
 
 // Amounts and dates must be what their quote prints; a misread value becomes a question, not a cited candidate.
 var quotedAmounts = []string{"amount", "remaining", "principal", "interest", "balance", "booked_balance", "salvage_value", "credit_amount", "estimate_amount", "annual_rate", "opening_principal", "closing_principal", "book_balance", "principal_due_next_12_months", "statement_opening", "statement_closing", "ledger_opening", "ledger_closing", "gross_wages", "employee_taxes", "employee_deductions", "net_pay", "employer_taxes", "employer_contributions", "provider_debits", "ledger_debits"}
+
 // AmountField reports whether a fact is an amount: one of the fields whose quote must print it as an amount.
 func AmountField(field string) bool { return slices.Contains(quotedAmounts, field) }
 

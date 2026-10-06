@@ -118,6 +118,24 @@ func TestLoadRefusesACaseItCannotScore(t *testing.T) {
 		}
 	}
 	dir = t.TempDir()
+	write("ledger/case.json", `{"id":"ledger","split":"development","client":"Harbor","period":"2026-09","setup":{"quickbooks":{"home_currency":"USD","accounts":[{"id":"12","name":"Insurance"}],"bills":[{"vendor":"Acme","number":"1","amount":"10","date":"2026-09-01","account_id":"99"}]}},"documents":[{"file":"a.txt","label":{"work_type":"prepaid"}}]}`)
+	write("ledger/a.txt", "Invoice")
+	_, err = Load(dir)
+	for _, want := range []string{"needs its month-end trial_balance", `bill 1 is booked to account "99"`} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("want %q in %v", want, err)
+		}
+	}
+	dir = t.TempDir()
+	write("tb/case.json", `{"id":"tb","split":"development","client":"Harbor","period":"2026-09","setup":{"quickbooks":{"home_currency":"USD","accounts":[{"id":"12","name":"Insurance"}],"trial_balance":[{"account_id":"12","debit":"1,200","credit":"1"},{"account_id":"7"}]}},"documents":[{"file":"a.txt","label":{"work_type":"prepaid"}}]}`)
+	write("tb/a.txt", "Invoice")
+	_, err = Load(dir)
+	for _, want := range []string{`"1,200" is not a decimal amount`, "a debit or a credit, not both", `trial balance account "7" is not in the chart`} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("want %q in %v", want, err)
+		}
+	}
+	dir = t.TempDir()
 	write("ready/case.json", `{"id":"ready","split":"development","client":"Harbor","period":"2026-09","setup":{},"expect_ready":true,"documents":[{"file":"a.txt","label":{"work_type":"prepaid"}}]}`)
 	write("ready/a.txt", "Invoice")
 	if _, err = Load(dir); err == nil || !strings.Contains(err.Error(), "a close expected ready needs its sign-off step") {

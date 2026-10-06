@@ -53,16 +53,27 @@ type Procedure struct {
 	PrepaidAccount string `json:"prepaid_account"`
 }
 
-// Ledger is a QuickBooks capture of the month: the chart of accounts and the month's bills.
+// Ledger is a QuickBooks capture of the month: the chart of accounts, the month's bills and the month-end Trial Balance
+// that readiness ties the supported balances out against.
 type Ledger struct {
 	HomeCurrency string    `json:"home_currency"`
 	Accounts     []Account `json:"accounts"`
 	Bills        []Bill    `json:"bills"`
+	TrialBalance []Balance `json:"trial_balance"`
 }
 
+// Account is a chart account; Type is its QuickBooks account type (Expense, Other Current Asset, Accounts Payable, …).
 type Account struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
+}
+
+// Balance is one Trial Balance row: an account's debit or credit balance at month-end; both empty is zero.
+type Balance struct {
+	AccountID string `json:"account_id"`
+	Debit     string `json:"debit,omitempty"`
+	Credit    string `json:"credit,omitempty"`
 }
 
 type Bill struct {
@@ -72,6 +83,40 @@ type Bill struct {
 	Date      string `json:"date"`
 	AccountID string `json:"account_id"`
 }
+
+// check refuses a capture the app could not have taken: every QuickBooks month-end capture holds the Trial Balance, and
+// each row names a chart account with a decimal balance on one side.
+func (l Ledger) check() []error {
+	var problems []error
+	accounts := map[string]bool{}
+	for _, a := range l.Accounts {
+		accounts[a.ID] = true
+	}
+	if len(l.TrialBalance) == 0 {
+		problems = append(problems, errors.New("a QuickBooks capture needs its month-end trial_balance: readiness ties the balances out against it"))
+	}
+	for _, b := range l.TrialBalance {
+		if !accounts[b.AccountID] {
+			problems = append(problems, fmt.Errorf("trial balance account %q is not in the chart", b.AccountID))
+		}
+		for _, v := range []string{b.Debit, b.Credit} {
+			if v != "" && !decimalPattern.MatchString(v) {
+				problems = append(problems, fmt.Errorf("trial balance account %s: %q is not a decimal amount", b.AccountID, v))
+			}
+		}
+		if b.Debit != "" && b.Credit != "" {
+			problems = append(problems, fmt.Errorf("trial balance account %s: a balance is a debit or a credit, not both", b.AccountID))
+		}
+	}
+	for _, b := range l.Bills {
+		if !accounts[b.AccountID] {
+			problems = append(problems, fmt.Errorf("bill %s is booked to account %q, which is not in the chart", b.Number, b.AccountID))
+		}
+	}
+	return problems
+}
+
+var decimalPattern = regexp.MustCompile(`^\d+(\.\d+)?$`)
 
 // Upload is a document as the upload route adds it: a workbook becomes the CSV text of its first sheet, named with .csv
 // added; anything else is its bytes. The app keeps one document per uploaded body.
@@ -174,6 +219,9 @@ func (c Case) check() error {
 	}
 	if c.Signoff != nil && strings.TrimSpace(c.Signoff.Description) == "" {
 		problems = append(problems, errors.New("a sign-off step says what sign-off covers"))
+	}
+	if l := c.Setup.QuickBooks; l != nil {
+		problems = append(problems, l.check()...)
 	}
 	if c.ExpectReady && c.Signoff == nil {
 		problems = append(problems, errors.New("a close expected ready needs its sign-off step: without one nothing defines the scope"))

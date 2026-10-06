@@ -194,9 +194,15 @@ func acceptanceSetup(ctx context.Context, db *sql.DB, org, closeID string, c acc
 	}
 	chart := []map[string]string{}
 	for _, a := range l.Accounts {
-		chart = append(chart, map[string]string{"Id": a.ID, "Name": a.Name})
+		chart = append(chart, map[string]string{"Id": a.ID, "Name": a.Name, "FullyQualifiedName": a.Name, "AccountType": a.Type})
 	}
-	payload, _ := json.Marshal(map[string]any{"period": c.Period, "source_id": snapshot, "accounts": chart, "reports": map[string]any{}})
+	// The month-end Trial Balance, in the report shape QuickBooks returns.
+	rows := []map[string]any{}
+	for _, b := range l.TrialBalance {
+		rows = append(rows, map[string]any{"type": "Data", "ColData": []map[string]string{{"id": b.AccountID, "value": accounts[b.AccountID]}, {"value": b.Debit}, {"value": b.Credit}}})
+	}
+	trialBalance := map[string]any{"Header": map[string]string{"Currency": l.HomeCurrency}, "Columns": map[string]any{"Column": []map[string]string{{"ColTitle": ""}, {"ColTitle": "Debit"}, {"ColTitle": "Credit"}}}, "Rows": map[string]any{"Row": rows}}
+	payload, _ := json.Marshal(map[string]any{"period": c.Period, "source_id": snapshot, "accounts": chart, "reports": map[string]any{"TrialBalance": trialBalance}})
 	_, err = db.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'acceptance',$3,$4,now(),now(),'acceptance')`, closeID, connection, rand.Text(), string(payload))
 	return err
 }

@@ -3199,7 +3199,7 @@ What changed:
   - Recorded runs replay an evidence-selection answer separately from the reading, for closes too large to read whole.
   - `-organization`/`-subject` run every case in the one firm, as the one person, that a Context Machine access profile serves.
 - **The agent's hold reason leads with the wrong client.** Found by the harness. In a close with two invoices, the other company's invoice was held only because "evidence in the close … was not used": the agent records the first check that stops it, and the billed-to check comes later. The person was never told the invoice is billed to someone else. Now a held job whose billed-to name is not the client or a confirmed alias says so first, followed by "it was also held because" and the original reason. The name counts only as the straight-through check would accept it: one candidate, cited from the invoice itself, on a bill-to line that ends with the name. The original text stays in the reason, so the re-check of jobs held for unused evidence still finds it. Nothing about what is prepared changes.
-- **A synthetic sample of six cases.** It is not the release corpus: that needs authorized client months and an independent accountant, and stays outside the repository.
+- **A synthetic sample of seven cases.** It is not the release corpus: that needs authorized client months and an independent accountant, and stays outside the repository.
 
 Checks:
 - `TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes` puts each outcome in its own count, including a document with no work and a duplicate kept as the earlier document. A wrong-client invoice held for a missing ledger capture is a missed exception, naming the reason it was held. A clean invoice held as billed to another company is a false exception. A labeled problem whose job failed is not processed (not held), and so is a clean document whose job still waits for evidence (a pending retry). Either fails the run, and the report gives the job's error. An entry with the wrong debit account and amount, and a job with one draft too many, each count as an incorrect draft, and the detail names the wrong fields. Exactly the six critical failures are listed, and the Markdown table matches.
@@ -3208,7 +3208,7 @@ Checks:
 - `TestOneFirmNeedsADistinctClientPerCase`: in one named firm, two cases sharing a client (ignoring case and spacing) are refused, and so is a firm ID the database would refuse.
 - `TestOnlyAmountsCompareByValue`: 1,200.00 matches 1200 as an amount, and so do a statement balance, a salvage value and gross wages (the fields the app itself treats as amounts), but invoice number 12 does not match 0012, nor account 012 match 12.
 - `TestDraftsAreMatchedAsAWhole`: labels `{amount 100}` and `{amount 100, debit Prepaid}` both match drafts Prepaid/100 and Other/100. Against two Other/100 drafts, exactly one labeled entry is unmatched.
-- `TestLoadRefusesACaseItCannotScore`: a malformed case is refused with each problem named. The problems are: id, split, client and month, a missing document, an unlabeled work type, repeated bytes not labeled duplicate, a sign-off step without a scope, an exception the harness has no sign for, and a case expected ready without a sign-off step.
+- `TestLoadRefusesACaseItCannotScore`: a malformed case is refused with each problem named. A QuickBooks capture without a Trial Balance is also refused, since every real capture holds one. The problems are: id, split, client and month, a missing document, an unlabeled work type, repeated bytes not labeled duplicate, a sign-off step without a scope, an exception the harness has no sign for, and a case expected ready without a sign-off step.
 - `TestWorkbooksAreComparedAsUploaded`: two workbooks with different bytes but the same first sheet upload as the same CSV, and the second must be labeled a duplicate.
 - `TestARecordedRunNeedsEveryKeptDocumentsAnswer`: only a kept document without an answer is named; the byte-for-byte repeat needs none.
 - `TestOnlyALocalDatabaseIsUsed`: localhost, loopback, sockets and a local key=value setting are accepted. A remote host, a remote `host=` parameter, a remote key=value setting, a private address, a remote fallback host, and a hostless URL with a remote `PGHOST` are refused.
@@ -3217,10 +3217,11 @@ Checks:
   - The reading of 12000.00 against the printed 1,200.00 is put to a person with the amount withheld.
   - The other company's invoice waits for a person.
   - The case without a ledger capture is put to a person.
-  - With its draft approved and the scope defined, the clean close has no blockers: it is ready, as labeled.
+  - With its draft approved and the scope defined, the clean close has no blockers: it is ready, as labeled. Its capture's Trial Balance (Insurance 1,200.00 debit, Prepaid Expenses 0) ties out once the proposed entry is counted.
+  - The same close with 500.00 already in Prepaid Expenses is blocked by exactly "Tie-out: Prepaid Expenses is 500.00 in the Trial Balance but 1100.00 in its support". Readiness therefore really ties the month out in the harness.
   - With the clean draft approved and the scope defined, a second invoice billed to another company still blocks sign-off ("needs confirmation"). Its reason now leads with "The invoice is billed to "Northwind Other Inc"". The clean invoice in that close also waits, because evidence in the close went unused.
   - The same invoice uploaded twice is one document, with one preparation job.
-  - Zero critical failures across six cases and eight documents; nothing is posted.
+  - Zero critical failures across seven cases and nine documents; nothing is posted.
   - Run in a named firm as its person, the clean invoice goes through the same way. Its job is created by that person, and the firm stays enabled for the next case.
 - `go run ./cmd/acceptance -corpus acceptance/sample` on a freshly migrated local database printed the same report and exited 0. Run again on that database, it refused, because the database now holds closes.
 

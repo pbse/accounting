@@ -72,7 +72,7 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 	}
 	report := acceptance.Score(cases, observed)
 	prepaid := report.Tallies["development"]["prepaid"]
-	if !report.Passed() || *prepaid != (acceptance.Tally{Documents: 8, Accepted: 2, Abstained: 3, CaughtExceptions: 3}) {
+	if !report.Passed() || *prepaid != (acceptance.Tally{Documents: 9, Accepted: 3, Abstained: 3, CaughtExceptions: 3}) {
 		t.Fatalf("sample corpus: %+v\n%s\n%+v", *prepaid, report.Markdown(), report.Observed)
 	}
 	straight := report.Observed["straight-through-prepaid"].Documents[0]
@@ -84,6 +84,11 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 	}
 	if ready := report.Observed["straight-through-prepaid"]; report.NotReady != 0 || len(ready.Blockers) != 0 {
 		t.Fatalf("with its draft approved and the scope defined, the clean close is ready: %+v", ready)
+	}
+	// The ready close tied out against its Trial Balance once its draft is counted; one already holding 500.00 in
+	// Prepaid Expenses would not, so it is blocked.
+	if blocked := report.Observed["trial-balance-does-not-tie"]; len(blocked.Blockers) != 1 || !strings.HasPrefix(blocked.Blockers[0], "Tie-out: Prepaid Expenses is 500.00 in the Trial Balance but 1100.00 in its support") {
+		t.Fatalf("a Trial Balance that does not tie blocks sign-off: %+v", blocked.Blockers)
 	}
 	held := report.Observed["held-document-blocks-signoff"]
 	if len(held.Blockers) == 0 || !strings.Contains(strings.Join(held.Blockers, " "), "needs confirmation") {
@@ -99,7 +104,7 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 	if len(twice.Documents) != 2 || twice.Duplicates != 0 || (twice.Documents[0].SameAs == "") == (twice.Documents[1].SameAs == "") {
 		t.Fatalf("the same invoice uploaded twice is one document: %+v", twice)
 	}
-	if md := report.Markdown(); !strings.Contains(md, "Critical failures: 0") || !strings.Contains(md, "| prepaid | 8 | 2 | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0 |") {
+	if md := report.Markdown(); !strings.Contains(md, "Critical failures: 0") || !strings.Contains(md, "| prepaid | 9 | 3 | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0 |") {
 		t.Fatalf("report:\n%s", md)
 	}
 }
