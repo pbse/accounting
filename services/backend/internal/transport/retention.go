@@ -267,9 +267,9 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			}
 		}
 		// The client the close belongs to, read before the close is deleted or any of the client's other names forgotten.
-		// The receipt keeps a digest of it, never the name, in the form aliases are kept in (case and punctuation set
-		// aside), so a month deleted under any of the client's names, or under a name later confirmed as another's
-		// alias, stays done on the roster.
+		// The receipt keeps digests of it, never the name: as it is, and in the form aliases are kept in (case and
+		// punctuation set aside), so a month deleted under any of the client's names, or under a name later confirmed as
+		// another's alias, stays done on the roster.
 		var client, plainClient string
 		if err = tx.QueryRowContext(r.Context(), `SELECT client_identity($1,$2),trim(regexp_replace(client_identity($1,$2),'[^[:alnum:]]+',' ','g'))`, organization(r), entity).Scan(&client, &plainClient); err != nil {
 			problem(w, 503, "Deletion stopped without committing.")
@@ -321,8 +321,8 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 		}
 		var receipt string
 		identity := preparation.Digest([]byte(organization(r) + "\x00" + strings.ToLower(entity) + "\x00" + period))
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text`, organization(r), id, identity, period, productionCount, subject(r), in.ReasonCode,
-			preparation.Digest([]byte(organization(r)+"\x00"+plainClient+"\x00"+period))).Scan(&receipt)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`, organization(r), id, identity, period, productionCount, subject(r), in.ReasonCode,
+			preparation.Digest([]byte(organization(r)+"\x00"+client+"\x00"+period)), preparation.Digest([]byte(organization(r)+"\x00"+plainClient+"\x00"+period))).Scan(&receipt)
 		if err != nil {
 			problem(w, 503, "Deletion stopped without committing. Refresh before retrying.")
 			return

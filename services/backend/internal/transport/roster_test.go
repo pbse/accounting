@@ -317,9 +317,9 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Iota", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 	// So is one deleted under "Pi, Inc." while it was its own client, once "pi inc" is confirmed as Pi's alias: the
-	// receipt's client digest sets case and punctuation aside, as aliases are kept.
+	// receipt's plain digest sets case and punctuation aside, as aliases are kept.
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Pi", "active": true, "since": ended, "reason": "A client"}, 200)
-	_, err = db.Exec(`INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest) VALUES($1,0,$2,$3,0,'fixture','retention_expired',$4)`,
+	_, err = db.Exec(`INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,0,$2,$3,0,'fixture','retention_expired',$2,$4)`,
 		org, preparation.Digest([]byte(org+"\x00pi, inc.\x00"+ended)), ended, preparation.Digest([]byte(org+"\x00pi inc\x00"+ended)))
 	must(err)
 	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Pi','pi inc','fixture',now())`, org)
@@ -328,6 +328,16 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		t.Fatalf("a month deleted under a punctuated name later confirmed as Pi's alias is done: %v", got)
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Pi", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+	// Without such an alias, two clients whose names differ only in punctuation stay apart: a month deleted for "tau co"
+	// is not done for "Tau-Co".
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Tau-Co", "active": true, "since": ended, "reason": "A client"}, 200)
+	_, err = db.Exec(`INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,0,$2,$3,0,'fixture','retention_expired',$2,$2)`,
+		org, preparation.Digest([]byte(org+"\x00tau co\x00"+ended)), ended)
+	must(err)
+	if got := brief("user_b", partner, "Tau-Co"); len(got) != 1 {
+		t.Fatalf("a month deleted for another client whose name differs only in punctuation is still owed: %v", got)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Tau-Co", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
 	// A receipt from before the roster holds only the digest of the close's own name: one deleted under Kappa's confirmed
 	// alias "Kappa Co" is matched through the alias.
