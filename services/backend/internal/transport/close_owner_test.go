@@ -35,9 +35,10 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	}
 	org := "org_Owner" + rand.Text()
 	// Partners review every client and reviewers only those granted to them; Dee is a viewer, who reviews nothing.
-	asFirm(t, map[string]string{"user_a": "partner", "user_b": "partner", "user_c": "reviewer", "user_d": "viewer", "user_e": "reviewer"}, org)
+	// Xi is on the board: their review comes with executive:read, which keeps them out of close work.
+	asFirm(t, map[string]string{"user_a": "partner", "user_b": "partner", "user_c": "reviewer", "user_d": "viewer", "user_e": "reviewer", "user_x": "board"}, org)
 	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Owner fixture')`,
-		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) SELECT $1,s,true,'Synthetic','fixture' FROM unnest(ARRAY['user_a','user_b','user_c','user_d','user_e']) s`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) SELECT $1,s,true,'Synthetic','fixture' FROM unnest(ARRAY['user_a','user_b','user_c','user_d','user_e','user_x']) s`,
 		`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Alpha',true,'Synthetic','fixture'),($1,'user_d','Alpha',true,'Synthetic','fixture')`} {
 		_, err = db.Exec(q, org)
 		must(err)
@@ -125,7 +126,7 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	if body := plan("user_d", viewer, "assign", "user_b", "", 403); !strings.Contains(body, "requires workpapers:review") {
 		t.Fatal(body)
 	}
-	if people := call("user_a", admin, "GET", "/v1/closes/"+alpha+"/people", nil, 200); !strings.Contains(people, `"user_c"`) {
+	if people := call("user_a", admin, "GET", "/v1/closes/"+alpha+"/people", nil, 200); !strings.Contains(people, `"user_c"`) || strings.Contains(people, `"user_x"`) {
 		t.Fatalf("an administrator who reviews nothing still sees whom to reassign to: %s", people)
 	}
 	plan("user_b", partner, "take", "", "", 200)
@@ -134,7 +135,7 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	}
 	// The new holder must be someone else who can review Alpha: not a viewer, even one granted the client, nor a reviewer
 	// without Alpha.
-	for _, to := range []string{"user_d", "user_e", "user_nobody"} {
+	for _, to := range []string{"user_d", "user_e", "user_x", "user_nobody"} {
 		if body := plan("user_b", partner, "assign", to, "", 422); !strings.Contains(body, "Choose a teammate who can review Alpha's work") {
 			t.Fatalf("%s: %s", to, body)
 		}

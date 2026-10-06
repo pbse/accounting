@@ -3215,7 +3215,7 @@ What changed:
 - `POST /v1/closes/{id}/planning` takes `assignment: "assign"` with an `assignee` and an optional note (500 characters at most).
   - Who may assign: someone who can hand work over, meaning a reviewer (`workpapers:review`) or a firm administrator (`clients:all` and `members:manage`, the Security center's rule). They must hold the close, or nobody does; an administrator may reassign it whoever holds it.
   - The teammates list (`GET /v1/closes/{id}/people`) follows the same rule, so an administrator who reviews no work can still choose whom to reassign to.
-  - The assignee must be someone else who can review the client, from the same list hand-offs use. Their membership and client assignment are rechecked under the firm's lock. The note's 500-character limit counts characters, not bytes.
+  - The assignee must be someone else who can review the client, from the same list hand-offs use. That list now leaves out members whose roles include `executive:read`: such members are kept to the executive view and could not open the close, for a document hand-off as well. Their membership and client assignment are rechecked under the firm's lock. The note's 500-character limit counts characters, not bytes.
   - Take and release are unchanged, except that a firm administrator may take a colleague's close over themselves. The close page offers **Take it over** to them.
 - The close's package (`manifest.json`) carries the whole history in `work_history.close_owner_changes`. The firm export links every close's package.
 - Migration 124 adds `close_owner_changes`, which records every change of hands: taken, released, handed over or reassigned, by whom, and with what note. The table has its tenant policy.
@@ -3226,7 +3226,7 @@ What changed:
 Checks:
 - `TestACloseChangesHandsAndEachChangeIsRecorded` (local PostgreSQL, WorkOS answered by a fixture):
   - A reviewer may hand over an unheld close; a viewer may not (no `can_assign`, the teammates list refused, assigning refused with 403). Once a partner takes the close, only the holder and an administrator see `can_assign`. An administrator who reviews no work still lists teammates.
-  - These assignees are refused (422): a viewer granted the client, a reviewer without the client, an unknown subject, and the holder themselves ("To hold it yourself, take it"). So is a note over 500 characters.
+  - These assignees are refused (422): a viewer granted the client, a reviewer without the client, a board member whose review comes with `executive:read` (also absent from the teammates list), an unknown subject, and the holder themselves ("To hold it yourself, take it"). So is a note over 500 characters.
   - A reviewer cannot hand over a close someone else holds (409, "They can hand it over, or ask a firm administrator").
   - The holder hands the close to a reviewer assigned to the client. Afterwards the old holder can neither release nor take it. Cy's Attention and close page show who handed it and the note. An administrator then reassigns it back: Cy is no longer told, and Bea is told by the administrator, with that note.
   - Cy cannot take the close from its holder; an administrator can, and then hands it on.
