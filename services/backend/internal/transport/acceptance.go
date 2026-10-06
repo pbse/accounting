@@ -207,12 +207,14 @@ func acceptanceSetup(ctx context.Context, db *sql.DB, org, closeID string, c acc
 	return err
 }
 
-// paperEntries is every journal entry a workpaper proposes, from the keys the tie-out reads them from (tie_out.go): the
-// month's entry, a loan's or payroll's several, a disposal's lines, and a settlement's refund and revenue drafts. A
-// workpaper with nothing to post (a one-month prepaid fully expensed) proposes none.
+// paperEntries is every journal entry a workpaper proposes, from every field of the one entry type the workpapers share
+// (prepaids.Adjustment): the month's entry, a reversing accrual's reversal, a loan's or payroll's several, a disposal's
+// lines, and a settlement's refund and revenue drafts. A workpaper with nothing to post (a one-month prepaid fully
+// expensed) proposes none.
 func paperEntries(raw []byte) ([]acceptance.Entry, error) {
 	var paper struct {
 		Proposal        *acceptance.Entry  `json:"proposal"`
+		Reversal        *acceptance.Entry  `json:"reversal"`
 		Proposals       []acceptance.Entry `json:"proposals"`
 		Disposal        []acceptance.Entry `json:"disposal"`
 		RefundProposal  *acceptance.Entry  `json:"refund_proposal"`
@@ -226,6 +228,9 @@ func paperEntries(raw []byte) ([]acceptance.Entry, error) {
 		entries = append(entries, *paper.Proposal)
 	}
 	entries = append(append(entries, paper.Proposals...), paper.Disposal...)
+	if paper.Reversal != nil {
+		entries = append(entries, *paper.Reversal)
+	}
 	for _, e := range []*acceptance.Entry{paper.RefundProposal, paper.RevenueProposal} {
 		if e != nil {
 			entries = append(entries, *e)
