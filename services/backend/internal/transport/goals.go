@@ -959,6 +959,16 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "The agent is unavailable.")
 				return
 			}
+			// A client the firm's roster says has left owes no new months to hand over.
+			var left bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, g.org, entity).Scan(&left); err != nil {
+				problem(w, 503, "The agent is unavailable.")
+				return
+			}
+			if left {
+				problem(w, 409, entity+" is inactive on the firm's roster, so it owes no new months. A firm administrator reactivates it in Firm settings.")
+				return
+			}
 		}
 		if refused := handOver(r.Context(), tx, &g, in.DueOn, text); refused != nil {
 			problem(w, refused.status, refused.message)

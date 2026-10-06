@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -45,7 +46,8 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM close_routines WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workflow_runs WHERE organization_id=$1`,
+			`DELETE FROM close_routines WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
 			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			if _, e := db.Exec(q, org); e != nil {
 				t.Errorf("cleanup %s: %v", q, e)
@@ -200,5 +202,24 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	must(json.Unmarshal([]byte(call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)), &roster))
 	if !roster.CanManage || roster.Clients[1].Active || roster.Clients[1].Reason != "Left the firm" {
 		t.Fatalf("the roster keeps the inactive client, last: %+v", roster.Clients)
+	}
+	// An inactive client gets no new month: not from the new-close route (its existing months still open), not from a
+	// new monthly hand-over, and a hand-over left running stops instead of opening one.
+	next := monthEnd(ended).AddDate(0, 0, 1).Format("2006-01")
+	if body := call("user_a", admin, "POST", "/v1/closes", map[string]string{"entity": "Beta", "period": next}, 409); !strings.Contains(body, "inactive on the firm's roster") {
+		t.Fatalf("a new month of an inactive client: %s", body)
+	}
+	call("user_a", admin, "POST", "/v1/closes", map[string]string{"entity": "Beta", "period": ended}, 200)
+	if body := call("user_b", partner, "POST", "/v1/closes/"+opened.ID+"/goal", map[string]any{"confirmed": true, "every_month": true}, 409); !strings.Contains(body, "inactive on the firm's roster") {
+		t.Fatalf("a monthly hand-over for an inactive client: %s", body)
+	}
+	_, err = db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period) VALUES($1,'Delta','user_b',false,'review',$2)`, org, before)
+	must(err)
+	sweepCloseRoutines(context.Background(), db, time.Now())
+	var deltaStopped string
+	var deltaCloses int
+	must(db.QueryRow(`SELECT COALESCE(stop_reason,''),(SELECT count(*) FROM client_closes WHERE organization_id=$1 AND entity='Delta') FROM close_routines WHERE organization_id=$1 AND client_entity='Delta'`, org).Scan(&deltaStopped, &deltaCloses))
+	if deltaStopped != "Stopped because Delta is inactive on the firm's roster." || deltaCloses != 0 {
+		t.Fatalf("a hand-over for an inactive client stops without opening a month: %q %d", deltaStopped, deltaCloses)
 	}
 }

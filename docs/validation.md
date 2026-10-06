@@ -3433,6 +3433,7 @@ What changed:
   - `GET /v1/closes/roster` (`clients:all`) shows the template, each client with its latest close and owed months, and, for administrators, the members who can hold closes.
   - `POST /v1/closes/roster` and `POST /v1/closes/close-template` are for firm administrators (`clients:all` and `members:manage`), with a reason. An owner must review the client's work; the template's must review every client.
 - **Carry-forward.** It applies the template to the next month it opens. It refuses a client that left the roster, and the carry at sign-off skips one without reporting a failure.
+- **An inactive client gets no new month by any route.** The new-close route refuses its next month (409; an existing month still opens). A new monthly hand-over is refused, and a running one stops itself instead of opening a month.
 - **"Yours"** on an owed month means the template's owner is the reader and they can still review.
 - **Joining and leaving.** Confirming a takeover setup puts a client never on the roster onto it from its opening month; confirming again does not reactivate one an administrator marked inactive. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
 - **Records.** Both tables are in the firm export, and `/readyz` waits for them.
@@ -3450,6 +3451,7 @@ Checks:
   - The roster lists each client with its owed months, and administrators see the members they can choose.
   - Once Cy loses his Beta assignment, Beta's month opens with its due date but no owner.
   - Marking Beta inactive ends what it owes and stops its monthly hand-over.
+  - Its next month is then refused by the new-close route while its existing month still opens. A monthly hand-over set up for it is refused. A hand-over left for the inactive Delta stops in the sweep with no month opened.
 - `TestCarryForwardRoundingLineageAndFreshReview` (extended): the month carry-forward opens takes the client's 3-day due date. Once the client leaves the roster, carrying forward is refused (409), and the carry at sign-off skips it.
 - `TestMonthlyHandOverOpensAndHandsOverEachNewMonth` (extended): the month a hand-over opens takes the template, and contract termination takes the client off the roster.
 - `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth` (extended): the client joins the roster from its opening month. Once marked inactive, confirming the setup again for another timezone leaves it inactive.

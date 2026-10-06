@@ -295,6 +295,16 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 				problem(w, 429, "This firm has reached its close limit. Archive or retain existing work according to policy before opening another period.")
 				return
 			}
+			// A client the firm's roster says has left owes no new month; its existing months still open.
+			var left bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, organization(r), input.Entity).Scan(&left); err != nil {
+				problem(w, 503, "Could not check the current close.")
+				return
+			}
+			if left {
+				problem(w, 409, input.Entity+" is inactive on the firm's roster. A firm administrator reactivates it in Firm settings before a new month is opened.")
+				return
+			}
 			// A client's first close in the firm is its opening month. A month opened earlier than that one, before its
 			// baseline is reviewed, becomes the opening month instead. A name that is a confirmed alias of more than one
 			// client is not guessed.

@@ -116,6 +116,8 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 	if active {
 		t.Fatal("a reconfirmed setup does not reactivate a client")
 	}
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES('local-development',$1,true,'2026-08','Back','fixture')`, entity)
+	must(err)
 	if b := blockers(); strings.Contains(b, "Confirm the takeover setup") {
 		t.Fatalf("a confirmed setup no longer holds the opening month: %s", b)
 	}
