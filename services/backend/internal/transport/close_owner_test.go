@@ -112,6 +112,12 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 		}
 		return ""
 	}
+	takeOver := func(subject string, permissions []string) bool {
+		t.Helper()
+		var c struct{ Close savedClose }
+		must(json.Unmarshal([]byte(call(subject, permissions, "GET", "/v1/closes/"+alpha, nil, 200)), &c))
+		return c.Close.CanTakeOver
+	}
 	canAssign := func(subject string, permissions []string) bool {
 		t.Helper()
 		var c struct{ Close savedClose }
@@ -169,9 +175,18 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	if handedTo("user_c", reviewer) != "" || handed("user_c", reviewer) != nil || handedTo("user_b", partner) != "user_a handed you this close: Back from leave" {
 		t.Fatalf("only the current holder is told, of the hand-over that made them the holder: %q %+v %q", handedTo("user_c", reviewer), handed("user_c", reviewer), handedTo("user_b", partner))
 	}
-	// An administrator may also take a colleague's close over themselves, which nobody else may.
+	// An administrator who reviews work may also take a colleague's close over themselves; one who reviews none, and anyone
+	// else, may not.
+	if body := plan("user_a", admin, "assign", "user_b", "", 409); !strings.Contains(body, "already holds this close") {
+		t.Fatalf("a hand-over to the holder: %s", body)
+	}
+	reviewingAdmin := append([]string{"workpapers:review"}, admin...)
 	plan("user_c", reviewer, "take", "", "", 409)
-	plan("user_a", append([]string{"workpapers:review"}, admin...), "take", "", "", 200)
+	plan("user_a", admin, "take", "", "", 409)
+	if takeOver("user_a", admin) || takeOver("user_c", reviewer) || !takeOver("user_a", reviewingAdmin) {
+		t.Fatal("only an administrator who reviews may take a held close over")
+	}
+	plan("user_a", reviewingAdmin, "take", "", "", 200)
 	plan("user_a", admin, "assign", "user_b", "", 200)
 	// A note is limited in characters, not bytes.
 	plan("user_b", partner, "assign", "user_c", strings.Repeat("é", 300), 200)

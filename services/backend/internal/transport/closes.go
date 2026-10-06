@@ -39,6 +39,8 @@ type savedClose struct {
 	OwnedByMe bool   `json:"owned_by_me,omitempty"`
 	// CanAssign says the reader may hand the close to a teammate: they hold it, nobody does, or they are a firm administrator.
 	CanAssign bool `json:"can_assign,omitempty"`
+	// CanTakeOver says the reader may take the close from the colleague who holds it: a firm administrator who reviews work.
+	CanTakeOver bool `json:"can_take_over,omitempty"`
 	// Handed is how the reader came to hold the close when someone else handed it to them: who, when, and their note.
 	Handed *closeHandover `json:"handed,omitempty"`
 	// Basis is the client's approved accounting basis; BasisScope says whether a client override sets it.
@@ -333,6 +335,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			return
 		}
 		item.CanAssign = !signed && subject(r) != "" && canHandOver(r) && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
+		item.CanTakeOver = item.Assigned && !item.OwnedByMe && canTakeOver(r)
 		if item.OwnedByMe {
 			var h closeHandover
 			var to string

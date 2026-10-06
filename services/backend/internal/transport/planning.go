@@ -101,7 +101,7 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 		next := owner
 		switch input.Assignment {
 		case "take":
-			if owner != "" && owner != me && !canManageMembers(r) {
+			if owner != "" && owner != me && !canTakeOver(r) {
 				problem(w, 409, "Someone else holds this close. They can release it, or ask a firm administrator.")
 				return
 			}
@@ -142,6 +142,10 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, to.Name+" can no longer review "+entity+"'s work. Choose another teammate.")
 				return
 			}
+			if to.Subject == owner {
+				problem(w, 409, to.Name+" already holds this close.")
+				return
+			}
 			next = to.Subject
 		}
 		if _, err = tx.ExecContext(r.Context(), `UPDATE client_closes SET due_on=NULLIF($2,'')::date,priority=$3,owner=$4 WHERE id::text=$1`, r.PathValue("id"), input.DueOn, input.Priority, next); err != nil {
@@ -172,4 +176,11 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 func canHandOver(r *http.Request) bool {
 	a := auth.Actor(r.Context())
 	return a != nil && (a.Organization == "" || slices.Contains(a.Permissions, "workpapers:review") || canManageMembers(r))
+}
+
+// canTakeOver is a firm administrator who reviews work, and so may take a colleague's close over themselves: the holder
+// must be able to do the close's work, which an administrator who reviews none could not.
+func canTakeOver(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return canManageMembers(r) && a != nil && slices.Contains(a.Permissions, "workpapers:review")
 }

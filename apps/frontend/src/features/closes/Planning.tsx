@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 
-export type Plan = { due_on?: string; priority?: string; owned_by_me?: boolean; assigned?: boolean; can_assign?: boolean; handed?: { by: string; note: string; at: string } };
+export type Plan = { due_on?: string; priority?: string; owned_by_me?: boolean; assigned?: boolean; can_assign?: boolean; can_take_over?: boolean; handed?: { by: string; note: string; at: string } };
 type Person = { subject: string; name: string };
 
 function days(due: string) {
@@ -76,8 +76,8 @@ export function PlanningControls({ closeId, plan, onSaved }: { closeId: string; 
           Release
         </button>
       ) : (
-        <button type="button" disabled={busy || (plan.assigned && !plan.can_assign)} onClick={() => void save("take")}>
-          {plan.assigned ? (plan.can_assign ? "Take it over" : "Held by a colleague") : "Assign to me"}
+        <button type="button" disabled={busy || (plan.assigned && !plan.can_take_over)} onClick={() => void save("take")}>
+          {plan.assigned ? (plan.can_take_over ? "Take it over" : "Held by a colleague") : "Assign to me"}
         </button>
       )}
       {plan.handed && (
