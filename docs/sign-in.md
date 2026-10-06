@@ -27,7 +27,7 @@ A person WorkOS placed in an organization the app has not registered goes throug
 Someone the firm removed is not let back in by their address, nor is anyone while the firm is suspended. A WorkOS membership that has been deactivated is never revived here, and one still pending (an invitation awaiting acceptance) gives no access until accepted. A membership is created only for someone joining for the first time: for a person the firm already enrolled, a WorkOS membership that was removed stays removed, and they are turned away. `firmFor` decides which firm a session is for, in this order:
 1. **A firm where they are a member or have accepted its invitation.** If WorkOS signs the person in to such a registered firm, they stay there. An invitation counts only once WorkOS shows it accepted by them; every open invitation is checked. An accountant a client's firm invited keeps working there, even when their own domain has a firm.
 2. **Their domain's registered firm.** Otherwise they go to it, joining if need be.
-3. **Another registered firm.** Otherwise they stay in the registered firm WorkOS holds them in.
+3. **Another registered firm.** Otherwise they stay in the registered firm WorkOS holds them in, unless that firm removed them.
 4. **Their domain's claim.** Otherwise the claim runs, which may create the firm or take over an organization WorkOS placed them in.
 
 When WorkOS asks which organization to use, the order is:

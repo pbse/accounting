@@ -270,7 +270,14 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, stri
 	case own != "":
 		return domainFirm(ctx, db, tokens.User)
 	case registered:
-		return held, domainMember(ctx, db, held, tokens.User)
+		// A firm that removed them does not hold them: their own domain's claim decides instead.
+		var removed bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND NOT granted)`, held, tokens.User.ID).Scan(&removed); err != nil {
+			return "", refuseUnavailable
+		}
+		if !removed {
+			return held, domainMember(ctx, db, held, tokens.User)
+		}
 	}
 	return domainFirm(ctx, db, tokens.User)
 }

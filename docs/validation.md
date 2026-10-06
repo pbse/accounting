@@ -3375,6 +3375,8 @@ Pass 13 found two gaps:
 
 Both are tested.
 
+Pass 14 found that a firm which had removed someone could still hold them when their own domain had no firm, so they could not set one up. A firm that removed the person now no longer holds them, and their domain's claim decides; tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:
