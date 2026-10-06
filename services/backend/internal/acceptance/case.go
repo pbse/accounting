@@ -81,13 +81,14 @@ type Document struct {
 }
 
 // Label is what the document should yield. WorkType is the work it supports (prepaid, accrual, …) or none. Facts are the
-// values a correct reading gives, by field; Draft is the entry a correct draft proposes. Exception names a material
+// values a correct reading gives, by field; Drafts are the entries correct preparation proposes, every one of them, when
+// the label judges drafts. Exception names a material
 // problem a person must see before anything goes on (wrong_client, missing_pages, …); a document whose bytes repeat an
 // earlier one's is labeled duplicate.
 type Label struct {
 	WorkType  string            `json:"work_type"`
 	Facts     map[string]string `json:"facts,omitempty"`
-	Draft     *Entry            `json:"draft,omitempty"`
+	Drafts    []Entry           `json:"drafts,omitempty"`
 	Exception string            `json:"exception,omitempty"`
 }
 

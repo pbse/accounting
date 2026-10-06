@@ -23,11 +23,13 @@
      "service_start": "2026-09-01",
      "service_end": "2027-08-31"
     },
-    "draft": {
-     "debit_account": "Prepaid Expenses",
-     "credit_account": "Insurance",
-     "amount": "1100.00"
-    }
+    "drafts": [
+     {
+      "debit_account": "Prepaid Expenses",
+      "credit_account": "Insurance",
+      "amount": "1100.00"
+     }
+    ]
    },
    "model": "acme-invoice.model.json"
   }

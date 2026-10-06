@@ -16,10 +16,9 @@ type Observed struct {
 	Facts     map[string]string `json:"facts"`
 	Questions int               `json:"questions"`
 	// Accepted means the agent went on without a person: the reading was confirmed by the agent itself.
-	Accepted bool   `json:"accepted"`
-	Drafts   int    `json:"drafts"`
-	Draft    *Entry `json:"draft"`  // the first draft's proposed entry
-	Reason   string `json:"reason"` // why the agent went on alone or waited for a person, as it recorded it
+	Accepted bool    `json:"accepted"`
+	Drafts   []Entry `json:"drafts"` // every draft the job prepared, in order, with its proposed entry
+	Reason   string  `json:"reason"` // why the agent went on alone or waited for a person, as it recorded it
 	// SameAs is the earlier document this one's bytes repeat: the app kept one document for both.
 	SameAs string `json:"same_as,omitempty"`
 }
@@ -42,8 +41,11 @@ type Tally struct {
 	FalseAcceptedFacts int `json:"false_accepted_facts"` // facts the agent went on with that the label contradicts
 	IncorrectDrafts    int `json:"incorrect_drafts"`     // drafts the agent made itself that the label contradicts
 	MissedExceptions   int `json:"missed_exceptions"`    // a material problem the agent went past
-	FalseExceptions    int `json:"false_exceptions"`     // refused or failed a document with nothing wrong
+	FalseExceptions    int `json:"false_exceptions"`     // refused a document with nothing wrong (as another client's, or as no work)
 	WrongProposals     int `json:"wrong_proposals"`      // wrong values put to a person, who would correct them
+	// Unprocessed documents never reached a decision: no job started, it failed, or it had not settled. They are neither
+	// caught problems nor abstentions, whatever their label.
+	Unprocessed int `json:"unprocessed"`
 }
 
 // Failure is one critical finding.
@@ -97,14 +99,14 @@ func Score(cases []Case, observed []CaseObserved) Report {
 			t.Documents++
 			label := d.Label
 			problem := label.Exception != "" || label.WorkType == "none"
+			// Held: the job settled waiting for a person, which is how a problem is caught or a clean document asked about.
+			held := got.JobState == "needs_confirmation" || got.JobState == "waiting_client" || got.JobState == "waiting_evidence"
 			switch {
 			case label.Exception == "duplicate" && got.SameAs != "":
 				t.CaughtExceptions++ // folded into the earlier document: no second piece of work
 			case problem && got.Accepted:
 				t.MissedExceptions++
 				fail(d.File, "missed_exception", fmt.Sprintf("the agent went on past %s", or(label.Exception, "a document with no accounting work")))
-			case problem:
-				t.CaughtExceptions++
 			case got.Accepted:
 				t.Accepted++
 				if got.Kind != label.WorkType {
@@ -117,20 +119,17 @@ func Score(cases []Case, observed []CaseObserved) Report {
 						fail(d.File, "false_accepted_fact", fmt.Sprintf("%s %q; the label says %q", field, got.Facts[field], want))
 					}
 				}
-				if want := label.Draft; want != nil {
-					drafted := Entry{}
-					if got.Draft != nil {
-						drafted = *got.Draft
-					}
-					for _, f := range []struct{ name, got, want string }{{"date", drafted.Date, want.Date}, {"debit account", drafted.DebitAccount, want.DebitAccount},
-						{"credit account", drafted.CreditAccount, want.CreditAccount}, {"amount", drafted.Amount, want.Amount}} {
-						if f.want != "" && !sameValue(f.got, f.want) {
-							t.IncorrectDrafts++
-							fail(d.File, "incorrect_draft", fmt.Sprintf("draft %s %q; the label says %q", f.name, f.got, f.want))
-						}
+				if label.Drafts != nil {
+					for _, problem := range compareDrafts(got.Drafts, label.Drafts) {
+						t.IncorrectDrafts++
+						fail(d.File, "incorrect_draft", problem)
 					}
 				}
-			case got.JobState == "" || got.JobState == "failed" || got.Engine == "identity_blocked" || got.Kind == "unsupported":
+			case !held:
+				t.Unprocessed++
+			case problem:
+				t.CaughtExceptions++
+			case got.Engine == "identity_blocked" || got.Kind == "unsupported":
 				t.FalseExceptions++
 			default:
 				t.Abstained++
@@ -197,7 +196,7 @@ func (r Report) Markdown() string {
 		if len(byType) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "\n## %s\n\n| Work type | Documents | Went on alone | Asked a person (nothing wrong) | Problems held | False accepted facts | Incorrect drafts | Missed problems | False exceptions | Wrong values put to a person |\n|---|---|---|---|---|---|---|---|---|---|\n", strings.ReplaceAll(split, "_", " "))
+		fmt.Fprintf(&b, "\n## %s\n\n| Work type | Documents | Went on alone | Asked a person (nothing wrong) | Problems held | False accepted facts | Incorrect drafts | Missed problems | False exceptions | Wrong values put to a person | Not processed |\n|---|---|---|---|---|---|---|---|---|---|---|\n", strings.ReplaceAll(split, "_", " "))
 		types := make([]string, 0, len(byType))
 		for k := range byType {
 			types = append(types, k)
@@ -205,7 +204,7 @@ func (r Report) Markdown() string {
 		slices.Sort(types)
 		for _, k := range types {
 			t := byType[k]
-			fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n", k, t.Documents, t.Accepted, t.Abstained, t.CaughtExceptions, t.FalseAcceptedFacts, t.IncorrectDrafts, t.MissedExceptions, t.FalseExceptions, t.WrongProposals)
+			fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d |\n", k, t.Documents, t.Accepted, t.Abstained, t.CaughtExceptions, t.FalseAcceptedFacts, t.IncorrectDrafts, t.MissedExceptions, t.FalseExceptions, t.WrongProposals, t.Unprocessed)
 		}
 	}
 	fmt.Fprintf(&b, "\nClose checks: %d falsely ready, %d expected ready but still blocked, %d posting attempt(s), %d duplicate job(s).\n", r.FalseReady, r.NotReady, r.ExternalActions, r.Duplicates)
@@ -220,4 +219,48 @@ func (r Report) Markdown() string {
 		}
 	}
 	return b.String()
+}
+
+// compareDrafts sets the drafts a job prepared against the label's: the same number, and each labeled entry matched by a
+// different draft on every field it gives. It returns one problem per missing or extra draft and per unmatched entry.
+func compareDrafts(got, want []Entry) []string {
+	problems := []string{}
+	if len(got) != len(want) {
+		problems = append(problems, fmt.Sprintf("%d draft(s); the label expects %d", len(got), len(want)))
+	}
+	used := make([]bool, len(got))
+	for _, w := range want {
+		match := -1
+		for i, g := range got {
+			if !used[i] && len(entryDifferences(g, w)) == 0 {
+				match = i
+				break
+			}
+		}
+		if match >= 0 {
+			used[match] = true
+			continue
+		}
+		closest := Entry{}
+		for i, g := range got {
+			if !used[i] {
+				closest = g
+				break
+			}
+		}
+		problems = append(problems, fmt.Sprintf("no draft matches the labeled entry: %s", strings.Join(entryDifferences(closest, w), "; ")))
+	}
+	return problems
+}
+
+// entryDifferences names each field the label gives that the entry does not match.
+func entryDifferences(got, want Entry) []string {
+	differences := []string{}
+	for _, f := range []struct{ name, got, want string }{{"date", got.Date, want.Date}, {"debit account", got.DebitAccount, want.DebitAccount},
+		{"credit account", got.CreditAccount, want.CreditAccount}, {"amount", got.Amount, want.Amount}} {
+		if f.want != "" && !sameValue(f.got, f.want) {
+			differences = append(differences, fmt.Sprintf("%s %q, the label says %q", f.name, f.got, f.want))
+		}
+	}
+	return differences
 }

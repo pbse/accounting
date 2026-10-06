@@ -3199,7 +3199,7 @@ What changed:
 - **A synthetic sample of six cases.** It is not the release corpus: that needs authorized client months and an independent accountant, and stays outside the repository.
 
 Checks:
-- `TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes` puts each outcome in its own count, including a document with no work and a duplicate kept as the earlier document. A draft with the right amount but the wrong debit account counts as an incorrect draft. Exactly the six critical failures are listed, and the Markdown table matches.
+- `TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes` puts each outcome in its own count, including a document with no work and a duplicate kept as the earlier document. A labeled problem whose job failed is counted as not processed, not as held. An entry with the wrong debit account and amount, and a job with one draft too many, each count as an incorrect draft, and the detail names the wrong fields. Exactly the six critical failures are listed, and the Markdown table matches.
 - `TestLoadRefusesACaseItCannotScore`: a malformed case (id, split, client and month, missing document, unlabeled work type, repeated bytes not labeled duplicate, a sign-off step without a scope) is refused with each problem named.
 - `TestOnlyALocalDatabaseIsUsed`: localhost, loopback, sockets and a local key=value setting are accepted. A remote host, a remote `host=` parameter, a remote key=value setting, a private address, a remote fallback host, and a hostless URL with a remote `PGHOST` are refused.
 - `TestTheSampleCorpusRunsThroughThePipeline` (local PostgreSQL, real pipeline, recorded answers):

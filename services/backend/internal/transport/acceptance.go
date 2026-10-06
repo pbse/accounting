@@ -220,16 +220,15 @@ func acceptanceObserve(ctx context.Context, db *sql.DB, closeID string, uploads 
 		o.Accepted = confirmedBy.String == "agent" && o.JobState == "completed"
 		var ids []string
 		json.Unmarshal([]byte(papers.String), &ids)
-		o.Drafts = len(ids)
-		if len(ids) > 0 {
+		o.Drafts = []acceptance.Entry{}
+		for _, paper := range ids {
 			var entry []byte
-			if err = db.QueryRowContext(ctx, `SELECT COALESCE(paper->'proposal','null'::jsonb) FROM workpapers WHERE id::text=$1`, ids[0]).Scan(&entry); err != nil {
+			if err = db.QueryRowContext(ctx, `SELECT COALESCE(paper->'proposal','{}'::jsonb) FROM workpapers WHERE id::text=$1`, paper).Scan(&entry); err != nil {
 				return observed, err
 			}
 			var e acceptance.Entry
-			if json.Unmarshal(entry, &e) == nil && e != (acceptance.Entry{}) {
-				o.Draft = &e
-			}
+			json.Unmarshal(entry, &e)
+			o.Drafts = append(o.Drafts, e)
 		}
 		observed.Documents = append(observed.Documents, o)
 		for _, again := range names[1:] {
