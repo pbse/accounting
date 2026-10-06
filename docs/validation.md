@@ -3424,15 +3424,15 @@ What changed:
   - `close_templates`: the firm's due days after month end, and its owner.
   - The roster starts with every client that has a close in the three months before. Each owes the months after its latest close, so older gaps are not reported.
 - **Owed months** (`owedMonths`). Every ended month, at most the last twelve, from a client's first owed month with no close is owed. It is shown to whoever can work on the client (`clients:all`, or an assignment). A month the client's monthly hand-over will open is left to it unless the hand-over is stuck waiting.
-  - The morning brief returns them as `not_opened`.
+  - The morning brief returns them as `not_opened`, narrowed by Work's client or month filter.
   - Work lists them under **Months not opened**, with **Open**.
 - **The template on new closes** (`applyCloseTemplate`). A close newly opened for an active roster client takes the client's override, else the template, whether it comes from the new-close route, **Open** or a monthly hand-over. That means a due date N days after the month ends, and an owner.
-  - A due date or owner the close already has is kept, and an owner no longer a member is skipped.
+  - A due date or owner the close already has is kept. The owner must still be able to do the work, judged from the firm's WorkOS roles. The new-close route reads them before taking any lock, and only when the template would assign someone; the monthly hand-over uses the roles its sweep read. Otherwise the close is dated but given no owner.
   - The owner is recorded in `close_owner_changes` by "monthly close template".
 - **Routes.**
   - `GET /v1/closes/roster` (`clients:all`) shows the template, each client with its latest close and owed months, and, for administrators, the members who can hold closes.
   - `POST /v1/closes/roster` and `POST /v1/closes/close-template` are for firm administrators (`clients:all` and `members:manage`), with a reason. An owner must review the client's work; the template's must review every client.
-- **Joining and leaving.** Confirming a takeover setup puts the client on the roster from its opening month. Deleting a close for contract termination or at the client's request takes it off.
+- **Joining and leaving.** Confirming a takeover setup puts the client on the roster from its opening month. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
 - **Records.** Both tables are in the firm export, and `/readyz` waits for them.
 - **UI.** Firm settings gains **Clients and monthly closes**: the template, the roster with owed months, and forms for administrators, offering only owners who can do the work. Work gains **Months not opened**.
 
@@ -3441,7 +3441,10 @@ Checks:
   - Only an administrator changes the template and the roster. A reviewer not reviewing every client cannot be the template's owner; a client's owner must be a member assigned to it.
   - Alpha owes the month after its last close, at the template's terms; Beta owes on its own terms. A reviewer assigned to Beta sees only Beta's month, as theirs.
   - Opening Alpha's month gives it the template's due date and owner, recorded as a change of hands by the template, and the month is no longer owed.
-  - The roster lists each client with its owed months. An inactive client owes nothing, and administrators see the members they can choose.
+  - Work's filter narrows the months (a name fragment, the month, or another client).
+  - The roster lists each client with its owed months, and administrators see the members they can choose.
+  - Once Cy loses his Beta assignment, Beta's month opens with its due date but no owner.
+  - Marking Beta inactive ends what it owes and stops its monthly hand-over.
 - `TestMonthlyHandOverOpensAndHandsOverEachNewMonth` (extended): the month a hand-over opens takes the template, and contract termination takes the client off the roster.
 - `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth` (extended): the client joins the roster from its opening month.
 - The full Go suite runs on a fresh local PostgreSQL with migrations applied twice. `npm run check`, `npm test` and `npm run build` pass.

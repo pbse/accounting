@@ -100,14 +100,15 @@ Every active client on the firm's roster owes a close each month (`client_roster
 
 How a client joins and leaves the roster:
 - **Joins** when its takeover setup is confirmed (owing from its opening month), or when a firm administrator adds it.
-- **Leaves** when an administrator marks it inactive, or when its close is deleted for contract termination or at the client's request.
+- **Leaves** when an administrator marks it inactive (which also stops its monthly hand-over), or when its close is deleted for contract termination or at the client's request.
 - When the roster began, every client with a close in the three months before was put on it. Each owes the months after its latest close, so older gaps are not reported.
 
-**Months not opened.** A month nobody opened shows in the morning brief's **Months not opened** to whoever can work on the client, until it is opened. A month the client's monthly hand-over will open is left to it unless the hand-over is stuck waiting.
+**Months not opened.** A month nobody opened shows in the morning brief's **Months not opened** to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. A month the client's monthly hand-over will open is left to it unless the hand-over is stuck waiting.
 
 **The template.** The firm's monthly close template (`close_templates`, `POST /v1/closes/close-template`) dates each month's close a number of days after the month ends, and gives it to an owner. A client's own entry can override either.
 - A close opened for an active roster client takes the template when it is created. That holds however it is opened: **Open** in Work, the new-close form, or a monthly hand-over.
-- A due date or owner it already has is kept. An owner no longer in the firm is skipped.
+- A due date or owner it already has is kept.
+- The owner must still be able to do the work when the close opens: a member whose WorkOS role reviews every client, or a reviewer still assigned to the client. Otherwise, or when the firm's roles cannot be read, the close gets its due date but no owner.
 - The owner is recorded as a change of hands by "monthly close template".
 - The template's owner must review every client; a client's own owner, that client.
 

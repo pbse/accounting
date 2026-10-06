@@ -45,7 +45,7 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		must(err)
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
+		for _, q := range []string{`DELETE FROM close_routines WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
 			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			if _, e := db.Exec(q, org); e != nil {
 				t.Errorf("cleanup %s: %v", q, e)
@@ -96,10 +96,10 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	type owed struct {
 		NotOpened []owedMonth `json:"not_opened"`
 	}
-	brief := func(subject string, permissions []string) []string {
+	brief := func(subject string, permissions []string, filter ...string) []string {
 		t.Helper()
 		var got owed
-		must(json.Unmarshal([]byte(call(subject, permissions, "GET", "/v1/closes/morning", nil, 200)), &got))
+		must(json.Unmarshal([]byte(call(subject, permissions, "GET", "/v1/closes/morning?client="+strings.Join(filter, ""), nil, 200)), &got))
 		out := []string{}
 		for _, o := range got.NotOpened {
 			out = append(out, o.Entity+" "+o.Period+" due "+o.DueOn+map[bool]string{true: " mine", false: ""}[o.Mine])
@@ -113,6 +113,10 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	if got := strings.Join(brief("user_c", reviewer), " | "); got != "Beta "+ended+" due "+due(5)+" mine" {
 		t.Fatalf("a reviewer sees the months of the clients assigned to them: %s", got)
+	}
+	// Work's client or month filter narrows them as it narrows the due closes.
+	if beta, month, other := brief("user_b", partner, "bet"), brief("user_b", partner, ended), brief("user_b", partner, "Gamma"); len(beta) != 1 || len(month) != 2 || len(other) != 0 {
+		t.Fatalf("filtered: %v %v %v", beta, month, other)
 	}
 
 	// Opening the month gives it the template's due date and owner, as a change of hands.
@@ -139,14 +143,6 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		roster.Clients[1].Entity != "Beta" || strings.Join(roster.Clients[1].Owed, ",") != ended || *roster.Clients[1].Owner != "user_c" || *roster.Clients[1].DueDays != 5 {
 		t.Fatalf("the roster: %+v", roster)
 	}
-	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "beta", "active": false, "since": ended, "reason": "Left the firm"}, 200)
-	if got := brief("user_b", partner); len(got) != 0 {
-		t.Fatalf("an inactive client owes nothing: %v", got)
-	}
-	must(json.Unmarshal([]byte(call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)), &roster))
-	if !roster.CanManage || roster.Clients[1].Active || roster.Clients[1].Reason != "Left the firm" {
-		t.Fatalf("the roster keeps the inactive client, last: %+v", roster.Clients)
-	}
 	// An administrator chooses owners from the members who can do the work.
 	var people struct {
 		People []rosterPerson `json:"people"`
@@ -158,5 +154,31 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "user_a:all user_b:all user_c:Beta" {
 		t.Fatalf("the people an administrator chooses owners from: %v", got)
+	}
+
+	// An owner who can no longer do the work is not given the month: Cy loses Beta, so its month opens dated but unheld.
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Beta',false,'Reassigned','fixture')`, org)
+	must(err)
+	must(json.Unmarshal([]byte(call("user_a", admin, "POST", "/v1/closes", map[string]string{"entity": "Beta", "period": ended}, 200)), &opened))
+	must(db.QueryRow(`SELECT due_on::text,owner FROM client_closes WHERE id::text=$1`, opened.ID).Scan(&dueOn, &holder))
+	if dueOn != due(5) || holder != "" {
+		t.Fatalf("Beta's month is dated but not given to Cy: %s %q", dueOn, holder)
+	}
+
+	// Marking a client inactive ends what it owes and stops its monthly hand-over.
+	_, err = db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period) VALUES($1,'Beta','user_b',false,'review',$2)`, org, ended)
+	must(err)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "beta", "active": false, "since": ended, "reason": "Left the firm"}, 200)
+	if got := brief("user_b", partner); len(got) != 0 {
+		t.Fatalf("an inactive client owes nothing: %v", got)
+	}
+	var stopped string
+	must(db.QueryRow(`SELECT COALESCE(stop_reason,'') FROM close_routines WHERE organization_id=$1 AND client_entity='Beta'`, org).Scan(&stopped))
+	if stopped != "Stopped when beta left the firm's roster: Left the firm" {
+		t.Fatalf("the client's monthly hand-over stops: %q", stopped)
+	}
+	must(json.Unmarshal([]byte(call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)), &roster))
+	if !roster.CanManage || roster.Clients[1].Active || roster.Clients[1].Reason != "Left the firm" {
+		t.Fatalf("the roster keeps the inactive client, last: %+v", roster.Clients)
 	}
 }

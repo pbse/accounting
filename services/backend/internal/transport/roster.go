@@ -23,16 +23,18 @@ const rosterTemplate = `LEFT JOIN LATERAL (SELECT due_days,owner FROM close_temp
 
 // applyCloseTemplate gives a newly opened close of an active roster client its month's due date (due_days after the
 // month ends) and owner, from the client's overrides or else the firm's template, recording the owner as a change of
-// hands. An owner who is no longer a member of the firm is not given the close. A close already dated or held keeps
-// what it has, and a close of a client not on the roster is left alone.
-func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string) error {
-	var period, owner string
+// hands. The owner must still be able to do the work, judged as mayAct judges it from the firm's WorkOS roles (nil for
+// the local development firm, which has none): a hosted firm whose roles could not be read gives the close no owner.
+// A close already dated or held keeps what it has, and a close of a client not on the roster is left alone.
+func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles map[string]reviewer) error {
+	var org, period, owner string
 	var dueDays sql.NullInt64
-	var member bool
-	err := tx.QueryRowContext(ctx, `SELECT c.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
- EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=c.organization_id AND m.subject=COALESCE(r.owner,t.owner,'') AND m.granted)
+	var member, assigned bool
+	err := tx.QueryRowContext(ctx, `SELECT c.organization_id,c.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
+ EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=c.organization_id AND m.subject=COALESCE(r.owner,t.owner,'') AND m.granted),
+ EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=COALESCE(r.owner,t.owner,'') AND lower(g.client_entity)=lower(c.entity) AND g.granted)
  FROM client_closes c JOIN current_client_roster r ON r.organization_id=c.organization_id AND lower(r.client_entity)=lower(c.entity) AND r.active `+rosterTemplate+`
- WHERE c.id::text=$1`, closeID).Scan(&period, &dueDays, &owner, &member)
+ WHERE c.id::text=$1`, closeID).Scan(&org, &period, &dueDays, &owner, &member, &assigned)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -45,7 +47,7 @@ func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string) error {
 			return err
 		}
 	}
-	if owner == "" || !member {
+	if owner == "" || (roles == nil && org != "local-development") || !mayAct(roles, owner, member, false, assigned) {
 		return nil
 	}
 	held, err := tx.ExecContext(ctx, `UPDATE client_closes SET owner=$2 WHERE id::text=$1 AND owner=''`, closeID, owner)
@@ -69,8 +71,9 @@ type owedMonth struct {
 
 // owedMonths lists, newest first, the months the active roster clients the reader can work on (firm: every client; else
 // those assigned to who) owe and have no close for: each ended month from the client's first owed month, at most the
-// last twelve. A month a client's monthly hand-over will open is left to it while the hand-over is not stuck waiting.
-func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm bool, who string) ([]owedMonth, error) {
+// last twelve, matching client (a name fragment or YYYY-MM, or "") as Work's filter does. A month a client's monthly
+// hand-over will open is left to it while the hand-over is not stuck waiting.
+func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm bool, who, client string) ([]owedMonth, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,'')
  FROM current_client_roster r `+rosterTemplate+`
  CROSS JOIN LATERAL (SELECT to_char(g,'YYYY-MM') AS period FROM generate_series(GREATEST(to_date(r.since,'YYYY-MM'),to_date($4,'YYYY-MM')-interval '11 months'),to_date($4,'YYYY-MM'),interval '1 month') g) m
@@ -78,7 +81,8 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
   AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(r.client_entity) AND g.granted))
   AND NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.organization_id=r.organization_id AND lower(c.entity)=lower(r.client_entity) AND c.period=m.period)
   AND NOT EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND lower(h.client_entity)=lower(r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)
- ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, endedMonth(now))
+  AND ($5='' OR r.client_entity ILIKE '%'||$5||'%' OR m.period=$5)
+ ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, endedMonth(now), client)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +204,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		var owed []owedMonth
 		if err == nil {
-			owed, err = owedMonths(r.Context(), tx, time.Now(), org, true, subject(r))
+			owed, err = owedMonths(r.Context(), tx, time.Now(), org, true, subject(r), "")
 		}
 		if err != nil {
 			problem(w, 503, "The client roster is unavailable.")
@@ -269,8 +273,20 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		if _, err := db.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-			organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r)); err != nil {
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The client roster could not be saved.")
+			return
+		}
+		defer tx.Rollback()
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+			organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r))
+		// A client that owes nothing more has no monthly hand-over to open its months.
+		if err == nil && !in.Active {
+			_, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND stopped_at IS NULL`,
+				organization(r), in.Entity, subject(r), "Stopped when "+in.Entity+" left the firm's roster: "+in.Reason)
+		}
+		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The client roster could not be saved.")
 			return
 		}

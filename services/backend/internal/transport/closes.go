@@ -260,6 +260,15 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 403, "You are not assigned to this client.")
 			return
 		}
+		// The firm's roles are read before any lock is taken, and only when the template would give the close an owner;
+		// roles that cannot be read give it none (applyCloseTemplate).
+		var roles map[string]reviewer
+		if org := organization(r); org != "local-development" {
+			var owner string
+			if e := db.QueryRowContext(r.Context(), `SELECT COALESCE(r.owner,t.owner,'') FROM current_client_roster r `+rosterTemplate+` WHERE r.organization_id=$1 AND lower(r.client_entity)=lower($2) AND r.active`, org, input.Entity).Scan(&owner); e == nil && owner != "" {
+				roles, _ = firmReviewers(r.Context(), org)
+			}
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Close storage unavailable.")
@@ -311,7 +320,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			}
 			// A new month of a roster client takes the firm's monthly close template: its due date and owner.
 			if err == nil {
-				err = applyCloseTemplate(r.Context(), tx, item.ID)
+				err = applyCloseTemplate(r.Context(), tx, item.ID, roles)
 			}
 		}
 		if err != nil {
