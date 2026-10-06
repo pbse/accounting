@@ -3325,6 +3325,11 @@ Codex (gpt-6-sol, high) pass 1:
 - **People WorkOS placed in an unregistered organization were left without access.** They now go through the domain's claim.
 - **A role change with an uncertain outcome could go unrecorded.** It is now recorded as pending first and settled from WorkOS.
 
+Pass 2 found three more:
+- **Joining by address could keep a role WorkOS already held.** Joiners are now set to Member unless the firm invited them; invitees who have not accepted are asked to.
+- **People past the first 200 could not be given a role.** The list now pages, fifty at a time.
+- **Each person was looked up in WorkOS one at a time.** Lookups now run eight at a time, and a firm's known members cause no lookup at sign-in.
+
 Each fix is tested.
 
 Production WorkOS has no users yet, so no one is locked out.

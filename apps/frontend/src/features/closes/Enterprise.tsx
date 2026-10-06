@@ -15,14 +15,16 @@ type RoleChange = { id: number; subject: string; from_role: string; to_role: str
 // The firm's people and their roles (docs/sign-in.md). Colleagues who sign in with the firm's company domain arrive
 // with the Member role, which opens nothing; an administrator gives each the role they need.
 function FirmPeople() {
-  const [page, setPage] = useState<{ people: Person[]; roles: RoleOption[]; changes: RoleChange[]; more: boolean }>();
+  const [page, setPage] = useState<{ people: Person[]; roles: RoleOption[]; changes: RoleChange[]; next: string }>();
   const [subject, setSubject] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  async function load() {
+  // The first page, or the next one after the people already shown.
+  async function load(after = "") {
     setBusy(true);
     try {
-      setPage(await workspaceRequest("/members/people"));
+      const next = await workspaceRequest(`/members/people${after ? `?after=${encodeURIComponent(after)}` : ""}`);
+      setPage((shown) => (after && shown ? { ...next, people: [...shown.people, ...next.people] } : next));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "The firm’s people are unavailable.");
     } finally {
@@ -73,7 +75,7 @@ function FirmPeople() {
           ))}
         </tbody>
       </table>
-      {page.more && <p>Only the first 200 people are listed.</p>}
+      {page.next && <p><button type="button" disabled={busy} onClick={() => void load(page.next)}>Show more people</button></p>}
       <form onSubmit={(event) => void change(event)}><fieldset disabled={busy}>
         <legend>Change a person’s role</legend>
         <label>Person

@@ -22,13 +22,13 @@ A firm the app already knows under that WorkOS organization (one set up by hand)
 
 ## Colleagues join as members with no access
 
-A person WorkOS placed in an organization the app has not registered goes through the same steps, so that organization becomes the firm. Anyone who later signs in with a verified address at the same domain joins that firm (`joinFirm`): a WorkOS membership with the **Member** role, which holds no permissions, and a record that they joined by their address (actor `company-domain`). They can sign in but open nothing until the firm's administrator gives them a role. WorkOS's own domain provisioning, which adds people at the organization's verified domain as members, ends in the same place: the API records them the first time they sign in (`domainMember`). A firm set up by hand without a recorded domain takes the domain then, if its WorkOS organization has that domain verified and no other firm holds it.
+A person WorkOS placed in an organization the app has not registered goes through the same steps, so that organization becomes the firm. Anyone who later signs in with a verified address at the same domain joins that firm (`joinFirm`): a WorkOS membership with the **Member** role, which holds no permissions, and a record that they joined by their address (actor `company-domain`). A role WorkOS held for them before is set to Member too: what they may open is the administrator's decision. Someone the firm invited is the exception: they join through the invitation, with its role, and are asked to accept it first if they have not. They can sign in but open nothing until the firm's administrator gives them a role. WorkOS's own domain provisioning, which adds people at the organization's verified domain as members, ends in the same place: the API records them the first time they sign in (`domainMember`). A firm set up by hand without a recorded domain takes the domain then, if its WorkOS organization has that domain verified and no other firm holds it.
 
 Someone the firm removed is not let back in by their address, nor is anyone while the firm is suspended. A WorkOS membership that has been deactivated is never revived here. A person in several organizations goes to the firm of their address's domain.
 
 ## Roles
 
-The firm's administrator manages roles in the workspace under **Security center → Firm operations and membership → People and roles**. It lists every person with their role and firm access. **Change role** gives a person a role, with a reason and confirmation:
+The firm's administrator manages roles in the workspace under **Security center → Firm operations and membership → People and roles**. It lists the firm's people, fifty at a time (**Show more people**), with their role and firm access. **Change role** gives a person a role, with a reason and confirmation:
 
 - Only a role whose permissions the administrator holds can be given, never one's own role.
 - WorkOS holds the role. The firm keeps each change in `member_role_changes`: before, after, why and by whom.
@@ -44,6 +44,7 @@ The callback sends the person back to `/login?error=…`, and the page explains 
 | Code | Meaning |
 | --- | --- |
 | `company` | A personal address |
+| `invited` | The firm invited this person and they have not accepted yet |
 | `hosting` | A new firm's domain whose mail is not hosted by Google Workspace or Microsoft 365 |
 | `unverified` | An address WorkOS has not verified |
 | `removed` | The firm removed this person, or WorkOS deactivated their membership |

@@ -8,7 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 // The firm's people and their roles (docs/sign-in.md). People who join by their company address arrive with the member
@@ -24,8 +27,13 @@ type firmPerson struct {
 	Access  string `json:"access"`
 }
 
-// mostPeople bounds the list: each person costs a WorkOS lookup.
-const mostPeople = 200
+// peoplePage is how many people the list shows at a time, each looked up in WorkOS, at most lookups at once.
+const (
+	peoplePage = 50
+	lookups    = 8
+)
+
+var workosCursor = regexp.MustCompile(`^[A-Za-z0-9_]{1,200}$`)
 
 func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/members/people", func(w http.ResponseWriter, r *http.Request) {
@@ -37,12 +45,27 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The firm's people need the server's WorkOS API key.")
 			return
 		}
-		org := organization(r)
-		memberships, err := workosList[firmMembership](r.Context(), "/user_management/organization_memberships", url.Values{"organization_id": {org}, "limit": {"100"}})
-		if err != nil {
+		org, after := organization(r), r.URL.Query().Get("after")
+		if after != "" && !workosCursor.MatchString(after) {
+			problem(w, 422, "That page of people is not available. Reload the list.")
+			return
+		}
+		// One page of WorkOS's memberships at a time; the list asks for the next with its cursor.
+		var page struct {
+			Data         []firmMembership `json:"data"`
+			ListMetadata struct {
+				After string `json:"after"`
+			} `json:"list_metadata"`
+		}
+		query := url.Values{"organization_id": {org}, "limit": {strconv.Itoa(peoplePage)}}
+		if after != "" {
+			query.Set("after", after)
+		}
+		if err := workos(r.Context(), "GET", "/user_management/organization_memberships?"+query.Encode(), nil, &page); err != nil {
 			problem(w, 502, "WorkOS could not list the firm's people. Try again.")
 			return
 		}
+		memberships := page.Data
 		roles, _, err := firmRoles(r.Context(), r)
 		if err != nil {
 			problem(w, 502, "WorkOS roles are unavailable.")
@@ -65,24 +88,36 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Member access unavailable.")
 			return
 		}
-		people := []firmPerson{}
-		for _, m := range memberships[:min(len(memberships), mostPeople)] {
-			var user struct {
-				Email     string `json:"email"`
-				FirstName string `json:"first_name"`
-				LastName  string `json:"last_name"`
-			}
-			if workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(m.UserID), nil, &user) != nil {
-				problem(w, 502, "WorkOS could not list the firm's people. Try again.")
-				return
-			}
-			state := "none"
-			if granted, decided := access[m.UserID]; decided {
-				state = map[bool]string{true: "granted", false: "revoked"}[granted]
-			}
-			people = append(people, firmPerson{m.UserID, user.Email, strings.TrimSpace(user.FirstName + " " + user.LastName), m.Role.Slug, m.Status, state})
+		// Each person's name and address, looked up a few at a time.
+		people := make([]firmPerson, len(memberships))
+		failed := make([]error, len(memberships))
+		slots := make(chan struct{}, lookups)
+		var wg sync.WaitGroup
+		for i, m := range memberships {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				slots <- struct{}{}
+				defer func() { <-slots }()
+				var user struct {
+					Email     string `json:"email"`
+					FirstName string `json:"first_name"`
+					LastName  string `json:"last_name"`
+				}
+				failed[i] = workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(m.UserID), nil, &user)
+				state := "none"
+				if granted, decided := access[m.UserID]; decided {
+					state = map[bool]string{true: "granted", false: "revoked"}[granted]
+				}
+				people[i] = firmPerson{m.UserID, user.Email, strings.TrimSpace(user.FirstName + " " + user.LastName), m.Role.Slug, m.Status, state}
+			}()
 		}
-		if err = settleRoleChanges(r.Context(), db, org, memberships); err != nil {
+		wg.Wait()
+		if errors.Join(failed...) != nil {
+			problem(w, 502, "WorkOS could not list the firm's people. Try again.")
+			return
+		}
+		if err = settleRoleChanges(r.Context(), db, org); err != nil {
 			problem(w, 503, "Role history unavailable.")
 			return
 		}
@@ -91,7 +126,7 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Role history unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"people": people, "roles": roles, "changes": json.RawMessage(changes), "more": len(memberships) > mostPeople})
+		jsonReply(w, 200, map[string]any{"people": people, "roles": roles, "changes": json.RawMessage(changes), "next": page.ListMetadata.After})
 	})
 	mux.HandleFunc("POST /v1/closes/members/role", func(w http.ResponseWriter, r *http.Request) {
 		if !canManageMembers(r) {
@@ -191,9 +226,9 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 	})
 }
 
-// settleRoleChanges settles changes WorkOS did not confirm from the role it now reports: the new role means the change
-// took; the old one, a minute on, means it did not.
-func settleRoleChanges(ctx context.Context, db *sql.DB, org string, memberships []firmMembership) error {
+// settleRoleChanges settles changes WorkOS did not confirm from the role it now reports for each person: the new role
+// means the change took; any other, a minute on, means it did not.
+func settleRoleChanges(ctx context.Context, db *sql.DB, org string) error {
 	rows, err := db.QueryContext(ctx, `SELECT id,subject,from_role,to_role,created_at<now()-interval '1 minute' FROM member_role_changes WHERE organization_id=$1 AND state='pending'`, org)
 	if err != nil {
 		return err
@@ -216,12 +251,17 @@ func settleRoleChanges(ctx context.Context, db *sql.DB, org string, memberships 
 		return rows.Err()
 	}
 	for _, p := range open {
+		held, err := workosList[firmMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {p.subject}, "organization_id": {org}, "limit": {"10"}})
+		if err != nil {
+			return err
+		}
 		state := ""
-		for _, m := range memberships {
-			if m.UserID == p.subject && m.Role.Slug == p.to {
+		if p.old {
+			state = "failed"
+		}
+		for _, m := range held {
+			if m.Role.Slug == p.to {
 				state = "applied"
-			} else if m.UserID == p.subject && p.old {
-				state = "failed"
 			}
 		}
 		if state != "" {

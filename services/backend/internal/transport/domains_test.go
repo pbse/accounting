@@ -213,7 +213,7 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	t.Cleanup(func() { hostedMail = realHosting })
 	t.Cleanup(func() {
 		for id := range f.orgs {
-			for _, q := range []string{`DELETE FROM auth_sessions WHERE organization_id=$1`, `DELETE FROM member_role_changes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			for _, q := range []string{`DELETE FROM member_invitations WHERE organization_id=$1`, `DELETE FROM auth_sessions WHERE organization_id=$1`, `DELETE FROM member_role_changes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 				if _, err := raw.Exec(q, id); err != nil {
 					t.Errorf("cleanup %s: %v", id, err)
 				}
@@ -337,6 +337,27 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("Erin is recorded as joining by her address: %q %v", actor, err)
 	}
 
+	// Someone WorkOS already holds at a higher role, joining by their address, is set to the member role: their role is
+	// the administrator's decision.
+	ivy := person("ivy", true, domain)
+	f.mu.Lock()
+	im := firmMembership{ID: "om_" + ivy, UserID: ivy, OrganizationID: firm, Status: "active"}
+	im.Role.Slug = "firm-admin"
+	f.memberships = append(f.memberships, im)
+	f.mu.Unlock()
+	if where, cookie := signIn(ivy, "google"); where != "/dashboard" || cookie == "" || f.membership(ivy, firm).Role.Slug != "member" {
+		t.Fatalf("Ivy joins as a member, whatever WorkOS held: %s %s", where, f.membership(ivy, firm).Role.Slug)
+	}
+
+	// Someone the firm invited joins through the invitation, with its role: before accepting it they are asked to.
+	jack := person("jack", true, domain)
+	if _, err := raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,state,invited_by,reason) VALUES($1,$2,'firm-admin','Firm admin','sending',$3,'Jack will run reviews.')`, firm, f.users[jack].Email, ana); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(jack, "google"); where != "/login?error=invited" || cookie != "" || f.membership(jack, firm) != nil {
+		t.Fatalf("an invited person is asked to accept the invitation first: %s", where)
+	}
+
 	// Someone WorkOS placed in its organization for their domain, which the app has not registered, makes that the firm.
 	placed := "placed" + strings.ToLower(rand.Text()[:8]) + ".test"
 	hosted[placed] = true
@@ -380,7 +401,7 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	var page struct {
 		People []firmPerson `json:"people"`
 	}
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != 3 {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != 4 {
 		t.Fatalf("the administrator lists the firm's people: %d %s", w.Code, w.Body.String())
 	}
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"staff-only","reason":"Give Erin a staff role.","confirmed":true}`); w.Code != 403 {

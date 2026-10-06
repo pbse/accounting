@@ -87,6 +87,7 @@ var hostedMail = func(ctx context.Context, domain string) (bool, error) {
 const (
 	refusePersonal    = "company"
 	refuseHosting     = "hosting"
+	refuseInvited     = "invited"
 	refuseUnverified  = "unverified"
 	refuseRemoved     = "removed"
 	refuseSuspended   = "suspended"
@@ -105,10 +106,10 @@ type firmMembership struct {
 
 var errMembershipInactive = errors.New("WorkOS membership is not active")
 
-// ensureMembership gives the person a WorkOS membership of the firm with this role, unless they already hold one. A
-// membership WorkOS has deactivated is never revived here; one they hold keeps its role unless raise is set, which the
-// firm's first administrator needs.
-func ensureMembership(ctx context.Context, org, user, role string, raise bool) error {
+// ensureMembership gives the person a WorkOS membership of the firm with this role. A membership WorkOS has deactivated
+// is never revived here; one they hold is set to the role when exact is set: the firm's first administrator, and someone
+// joining by their address, whose role is the administrator's decision whatever WorkOS held before.
+func ensureMembership(ctx context.Context, org, user, role string, exact bool) error {
 	held, err := workosList[firmMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {user}, "organization_id": {org}, "limit": {"100"}})
 	if err != nil {
 		return err
@@ -117,7 +118,7 @@ func ensureMembership(ctx context.Context, org, user, role string, raise bool) e
 		if m.Status != "active" && m.Status != "pending" {
 			return errMembershipInactive
 		}
-		if raise && m.Role.Slug != role {
+		if exact && m.Role.Slug != role {
 			return workos(ctx, "PUT", "/user_management/organization_memberships/"+url.PathEscape(m.ID), map[string]string{"role_slug": role}, nil)
 		}
 		return nil
@@ -221,7 +222,9 @@ func domainFirm(ctx context.Context, db *sql.DB, user signedInUser) (org, refusa
 }
 
 // joinFirm takes a person into the domain's firm as a member with no access: a WorkOS membership with the member role,
-// and the firm's record that they joined by their address. A removed person, or a suspended firm, stays out.
+// and the firm's record that they joined by their address. A removed person, or a suspended firm, stays out. Someone
+// the app has already decided on keeps their role, and someone the firm invited is enrolled by their invitation, with
+// its role; anyone else is set to the member role, whatever WorkOS held before.
 func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user signedInUser, domain string) string {
 	if !enabled {
 		return refuseSuspended
@@ -233,7 +236,23 @@ func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user si
 	if granted.Valid && !granted.Bool {
 		return refuseRemoved
 	}
-	switch err := ensureMembership(ctx, org, user.ID, "member", false); {
+	if !granted.Valid {
+		var invited bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND email=$2 AND state IN ('sending','pending','accepted'))`, org, strings.ToLower(strings.TrimSpace(user.Email))).Scan(&invited); err != nil {
+			return refuseUnavailable
+		}
+		if invited {
+			// Accepting the invitation is what gives them the membership it names.
+			switch membership, err := activeMembership(ctx, org, user.ID); {
+			case err != nil:
+				return refuseUnavailable
+			case membership.ID == "":
+				return refuseInvited
+			}
+			return ""
+		}
+	}
+	switch err := ensureMembership(ctx, org, user.ID, "member", !granted.Valid); {
 	case errors.Is(err, errMembershipInactive):
 		return refuseRemoved
 	case err != nil:
@@ -268,6 +287,17 @@ func domainMember(ctx context.Context, db *sql.DB, org string, user signedInUser
 		return refuseUnavailable
 	}
 	if recorded.Valid && recorded.String != domain {
+		return ""
+	}
+	// Someone the firm has already decided on needs nothing here; one it removed is told so.
+	var granted sql.NullBool
+	if err = tx.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, org, user.ID).Scan(&granted); err != nil && err != sql.ErrNoRows {
+		return refuseUnavailable
+	}
+	if granted.Valid {
+		if !granted.Bool && recorded.Valid {
+			return refuseRemoved
+		}
 		return ""
 	}
 	if !recorded.Valid {
