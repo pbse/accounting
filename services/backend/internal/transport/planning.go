@@ -88,8 +88,8 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var org, entity, owner string
-		switch err = tx.QueryRowContext(r.Context(), `SELECT organization_id,entity,owner FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&org, &entity, &owner); err {
+		var closeID, org, entity, owner string
+		switch err = tx.QueryRowContext(r.Context(), `SELECT id::text,organization_id,entity,owner FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID, &org, &entity, &owner); err {
 		case nil:
 		case sql.ErrNoRows:
 			problem(w, 404, "Close not found.")
@@ -115,6 +115,16 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 		case "assign":
 			if owner != "" && owner != me && !canManageMembers(r) {
 				problem(w, 409, "Someone else holds this close. They can hand it over, or ask a firm administrator.")
+				return
+			}
+			// As with a document, a signed-off close has no work to hand out until it is reopened.
+			signed, err := signedOff(r.Context(), tx, closeID)
+			if err != nil {
+				problem(w, 503, "Could not save the close plan.")
+				return
+			}
+			if signed {
+				problem(w, 409, "This close is signed off. Reopen it before handing it to a teammate.")
 				return
 			}
 			// The firm row serializes this with member and client-access decisions, as hand-offs do.

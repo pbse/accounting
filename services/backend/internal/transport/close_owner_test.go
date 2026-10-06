@@ -168,6 +168,14 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	// A note is limited in characters, not bytes.
 	plan("user_b", partner, "assign", "user_c", strings.Repeat("é", 300), 200)
 	plan("user_c", reviewer, "assign", "user_b", "", 200)
+	// A signed-off close is reopened before it is handed out.
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, alpha)
+	must(err)
+	if body := plan("user_b", partner, "assign", "user_c", "", 409); !strings.Contains(body, "signed off") || canAssign("user_b", partner) {
+		t.Fatalf("a signed-off close is not handed out: %s", body)
+	}
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'reopened','fixture','{}','More work','fixture')`, alpha)
+	must(err)
 	plan("user_b", partner, "keep", "", "", 200)
 	plan("user_b", partner, "release", "", "", 200)
 

@@ -327,7 +327,12 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 503, "Could not open the close.")
 			return
 		}
-		item.CanAssign = subject(r) != "" && canHandOver(r) && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
+		var signed bool
+		if err = db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT decision FROM close_signoffs WHERE close_id=$1 ORDER BY id DESC LIMIT 1),'')='signed_off'`, item.ID).Scan(&signed); err != nil {
+			problem(w, 503, "Could not open the close.")
+			return
+		}
+		item.CanAssign = !signed && subject(r) != "" && canHandOver(r) && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
 		if item.OwnedByMe {
 			var h closeHandover
 			var to string

@@ -3228,7 +3228,7 @@ Checks:
   - These assignees are refused (422): a viewer granted the client, a reviewer without the client, an unknown subject, and the holder themselves ("To hold it yourself, take it"). So is a note over 500 characters.
   - A reviewer cannot hand over a close someone else holds (409, "They can hand it over, or ask a firm administrator").
   - The holder hands the close to a reviewer assigned to the client. Afterwards the old holder can neither release nor take it. Cy's Attention and close page show who handed it and the note. An administrator then reassigns it back: Cy is no longer told, and Bea is told by the administrator, with that note.
-  - A 300-character accented note is accepted. A kept plan records nothing. Exactly six changes are recorded, in order, with actors and notes. The Security center shows "Took", "Assigned … to user_c: Covering while I'm away", "Assigned … to user_b from user_c: Back from leave" and "Released".
+  - A signed-off close is not handed out (409, and no `can_assign`); once reopened, it is again. A 300-character accented note is accepted. A kept plan records nothing. Exactly six changes are recorded, in order, with actors and notes. The Security center shows "Took", "Assigned … to user_c: Covering while I'm away", "Assigned … to user_b from user_c: Back from leave" and "Released".
 - `TestClosePlanningRanksWorkAndBulkApprovalChecksEachDraft` and `TestHandADocumentToATeammate` still pass.
 - `npm run check`, `npm test` (44 pass) and `npm run build` pass. CI's layout check walks the close page.
 
