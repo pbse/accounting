@@ -259,6 +259,15 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 				problem(w, 429, "This firm has reached its close limit. Archive or retain existing work according to policy before opening another period.")
 				return
 			}
+			// Read again under the firm lock, which roster changes take too: a client marked inactive meanwhile gets no month.
+			var left bool
+			if err == nil {
+				err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, organization(r), entity).Scan(&left)
+			}
+			if err == nil && left {
+				problem(w, 409, entity+" is inactive on the firm's roster. Reactivate it before carrying work into another month.")
+				return
+			}
 			if err == nil {
 				var created bool
 				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity,xmax=0`, entity, next, organization(r)).Scan(&target, &targetEntity, &created)

@@ -94,6 +94,10 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Beta", "active": true, "since": ended, "owner": nobody, "reason": "A client"}, 422)
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Beta", "active": true, "since": ended, "due_days": five, "owner": cy, "reason": "Cy's client"}, 200)
 	call("user_b", partner, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": true, "since": ended, "reason": "A client"}, 403)
+	// Every owed month is listed on each read, so the first is within the last five years.
+	if body := call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": true, "since": "0001-01", "reason": "A client"}, 422); !strings.Contains(body, "within the last five years") {
+		t.Fatal(body)
+	}
 
 	type owed struct {
 		NotOpened []owedMonth `json:"not_opened"`

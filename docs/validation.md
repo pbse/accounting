@@ -3432,6 +3432,7 @@ What changed:
 - **Routes.**
   - `GET /v1/closes/roster` (`clients:all`) shows the template, each client with its latest close and owed months, and, for administrators, the members who can hold closes.
   - `POST /v1/closes/roster` and `POST /v1/closes/close-template` are for firm administrators (`clients:all` and `members:manage`), with a reason. An owner must review the client's work; the template's must review every client.
+  - A first owed month must be within the last five years, since every owed month is listed on each read. A roster change takes the firm lock that opening a close takes, and carry-forward checks the roster again under it.
 - **Carry-forward.** It applies the template to the next month it opens. It refuses a client that left the roster, and the carry at sign-off skips one without reporting a failure.
 - **An inactive client gets no new month by any route.** The new-close route refuses its next month (409; an existing month still opens). A new monthly hand-over is refused, and a running one stops itself instead of opening a month.
 - **"Yours"** on an owed month means the template's owner is the reader and they can still review.

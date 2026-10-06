@@ -257,8 +257,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Enter the client's name (1–200 characters).")
 			return
 		}
-		if _, err := time.Parse("2006-01", in.Since); err != nil {
-			problem(w, 422, "Enter the first month the client owes a close as YYYY-MM.")
+		// Every owed month from the first is listed on each read, so the first is within the last five years.
+		since, err := time.Parse("2006-01", in.Since)
+		if now := time.Now().UTC(); err != nil || since.Before(time.Date(now.Year()-5, now.Month(), 1, 0, 0, 0, 0, time.UTC)) {
+			problem(w, 422, "Enter the first month the client owes a close as YYYY-MM, within the last five years.")
 			return
 		}
 		if in.Reason == "" || utf8.RuneCountInString(in.Reason) > 500 {
@@ -286,8 +288,12 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-			organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r))
+		// The firm lock, which opening a close takes, orders this with any month being opened for the client.
+		_, err = tx.ExecContext(r.Context(), `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organization(r))
+		if err == nil {
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+				organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r))
+		}
 		// A client that owes nothing more has no monthly hand-over to open its months.
 		if err == nil && !in.Active {
 			_, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND stopped_at IS NULL`,

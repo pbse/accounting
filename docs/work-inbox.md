@@ -118,7 +118,7 @@ An administrator reactivates it in Firm settings.
 - The owner is recorded as a change of hands by "monthly close template".
 - The template's owner must review every client; a client's own owner, that client.
 
-**Changes and records.** Only a firm administrator (`clients:all` and `members:manage`) changes the roster or the template, with a reason. Both are append-only histories and are part of the firm export.
+**Changes and records.** Only a firm administrator (`clients:all` and `members:manage`) changes the roster or the template, with a reason. A client's first owed month is within the last five years. A roster change takes the firm's lock, as opening a close does, so a month opened at the same moment honors it. Both are append-only histories and are part of the firm export.
 
 ## Work needing re-review
 
