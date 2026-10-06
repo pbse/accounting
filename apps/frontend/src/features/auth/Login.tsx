@@ -5,6 +5,7 @@ import { AccountAccess, authKitClientId, serverSession, serverSignInUrl, useSess
 // Why the server turned a sign-in away (docs/sign-in.md), in words.
 const refusals: Record<string, string> = {
   company: "That was a personal address. Personal accounts such as Gmail, Outlook.com or iCloud can’t sign in; use the account your firm gives you.",
+  hosting: "A workspace is set up by sign-in only for a firm whose mail runs on Google Workspace or Microsoft 365, and your firm’s doesn’t. Talk to us and we’ll set your firm up.",
   unverified: "Your email address isn’t verified yet. Verify it with Google or Microsoft, then sign in again.",
   removed: "Your firm’s administrator has removed your access. Ask them to restore it.",
   suspended: "Your firm’s workspace is paused. Talk to us to restore it.",

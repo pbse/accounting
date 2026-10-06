@@ -201,11 +201,19 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 	if kind.staff {
 		return tokens, "", nil
 	}
+	// A firm the app has not registered (WorkOS may have placed them in their domain's organization itself) goes through
+	// the domain's claim like no firm at all.
 	org, refusal := tokens.OrganizationID, ""
-	if org == "" || org == os.Getenv("PLATFORM_ORGANIZATION_ID") {
-		org, refusal = domainFirm(ctx, db, tokens.User)
-	} else {
+	var registered bool
+	if org != "" && org != os.Getenv("PLATFORM_ORGANIZATION_ID") {
+		if err := db.QueryRowContext(systemContext(ctx), `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1)`, org).Scan(&registered); err != nil {
+			return tokens, refuseUnavailable, nil
+		}
+	}
+	if registered {
 		refusal = domainMember(ctx, db, org, tokens.User)
+	} else {
+		org, refusal = domainFirm(ctx, db, tokens.User)
 	}
 	if refusal != "" || org == tokens.OrganizationID {
 		return tokens, refusal, nil

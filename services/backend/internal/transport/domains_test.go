@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"database/sql"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +47,7 @@ type fakeWorkOS struct {
 	orgs        map[string]string // id → domain
 	created     []string
 	roleChanges []string
+	put         string // how the next role change goes: "" applies it, "refuse" declines, "lost" applies it but the answer is lost
 }
 
 func (f *fakeWorkOS) token(t *testing.T, user, org string, permissions ...string) string {
@@ -141,11 +144,22 @@ func (f *fakeWorkOS) serve(t *testing.T, r *http.Request) (int, any) {
 		m.Role.Slug = str("role_slug")
 		f.memberships = append(f.memberships, m)
 		return 201, m
+	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/organizations/"):
+		domain := f.orgs[strings.TrimPrefix(r.URL.Path, "/organizations/")]
+		return 200, map[string]any{"domains": []map[string]string{{"domain": domain, "state": "verified"}}}
 	case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/user_management/organization_memberships/"):
+		outcome := f.put
+		f.put = ""
+		if outcome == "refuse" {
+			return 400, map[string]string{"code": "invalid_role"}
+		}
 		for i := range f.memberships {
 			if "/user_management/organization_memberships/"+f.memberships[i].ID == r.URL.Path {
 				f.memberships[i].Role.Slug = str("role_slug")
 				f.roleChanges = append(f.roleChanges, f.memberships[i].UserID+"→"+str("role_slug"))
+				if outcome == "lost" {
+					return 500, map[string]string{}
+				}
 				return 200, f.memberships[i]
 			}
 		}
@@ -192,6 +206,11 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		return id
 	}
 	ana, ben, carol, dave, erin := person("ana", true, domain), person("ben", true, domain), person("carol", true, "gmail.com"), person("dave", false, domain), person("erin", true, domain)
+	// Only the test's own company domains are run on Google Workspace or Microsoft 365.
+	hosted := map[string]bool{domain: true}
+	realHosting := hostedMail
+	hostedMail = func(_ context.Context, d string) (bool, error) { return hosted[d], nil }
+	t.Cleanup(func() { hostedMail = realHosting })
 	t.Cleanup(func() {
 		for id := range f.orgs {
 			for _, q := range []string{`DELETE FROM auth_sessions WHERE organization_id=$1`, `DELETE FROM member_role_changes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
@@ -294,6 +313,10 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	if where, cookie := signIn(dave, "google"); where != "/login?error=unverified" || cookie != "" {
 		t.Fatalf("an unverified address cannot join: %s", where)
 	}
+	frank := person("frank", true, "shared-mail"+strings.ToLower(rand.Text()[:6])+".test")
+	if where, cookie := signIn(frank, "google"); where != "/login?error=hosting" || cookie != "" || len(f.created) != 1 {
+		t.Fatalf("a domain not run on Google Workspace or Microsoft 365 creates no firm: %s %v", where, f.created)
+	}
 	if _, err := raw.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,false,'Left the firm; access removed.',$3)`, firm, ben, ana); err != nil {
 		t.Fatal(err)
 	}
@@ -314,6 +337,44 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("Erin is recorded as joining by her address: %q %v", actor, err)
 	}
 
+	// Someone WorkOS placed in its organization for their domain, which the app has not registered, makes that the firm.
+	placed := "placed" + strings.ToLower(rand.Text()[:8]) + ".test"
+	hosted[placed] = true
+	grace := person("grace", true, placed)
+	f.mu.Lock()
+	placedOrg := "org_Placed" + rand.Text()
+	f.orgs[placedOrg] = placed
+	gm := firmMembership{ID: "om_" + grace, UserID: grace, OrganizationID: placedOrg, Status: "active"}
+	gm.Role.Slug = "member"
+	f.memberships = append(f.memberships, gm)
+	f.mu.Unlock()
+	if where, cookie := signIn(grace, "google"); where != "/dashboard" || cookie == "" {
+		t.Fatalf("Grace, placed by WorkOS, signs in: %s", where)
+	}
+	if err := raw.QueryRow(`SELECT email_domain FROM organizations WHERE id=$1`, placedOrg).Scan(&stored); err != nil || stored != placed || f.membership(grace, placedOrg).Role.Slug != "firm-admin" {
+		t.Fatalf("WorkOS's organization becomes the firm, with Grace its administrator: %q %v", stored, err)
+	}
+
+	// A firm set up by hand, whose WorkOS organization has the domain verified, takes the domain when a colleague signs in.
+	handmade := "handmade" + strings.ToLower(rand.Text()[:8]) + ".test"
+	handOrg := "org_Hand" + rand.Text()
+	hank := person("hank", true, handmade)
+	f.mu.Lock()
+	f.orgs[handOrg] = handmade
+	hm := firmMembership{ID: "om_" + hank, UserID: hank, OrganizationID: handOrg, Status: "active"}
+	hm.Role.Slug = "member"
+	f.memberships = append(f.memberships, hm)
+	f.mu.Unlock()
+	if _, err := raw.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Hand-made firm')`, handOrg); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(hank, "google"); where != "/dashboard" || cookie == "" {
+		t.Fatalf("Hank signs in to the hand-made firm: %s", where)
+	}
+	if err := raw.QueryRow(`SELECT o.email_domain,m.actor FROM organizations o JOIN current_organization_members m ON m.organization_id=o.id AND m.subject=$2 WHERE o.id=$1`, handOrg, hank).Scan(&stored, &actor); err != nil || stored != handmade || actor != "company-domain" {
+		t.Fatalf("the hand-made firm takes its verified domain and Hank joins: %q %q %v", stored, actor, err)
+	}
+
 	// The administrator sees the firm's people and gives Erin a role; the change is recorded and reaches WorkOS.
 	w := call(anaCookie, "GET", "/v1/closes/members/people", "")
 	var page struct {
@@ -328,11 +389,29 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ana+`","role":"member","reason":"Step down from administrator.","confirmed":true}`); w.Code != 422 {
 		t.Fatalf("an administrator cannot change their own role: %d", w.Code)
 	}
-	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 200 {
-		t.Fatalf("the administrator gives Erin a role: %d %s", w.Code, w.Body.String())
+	role := `{"subject":"` + erin + `","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`
+	stateOf := func() string {
+		t.Helper()
+		var state string
+		if err := raw.QueryRow(`SELECT state FROM member_role_changes WHERE organization_id=$1 AND subject=$2 ORDER BY id DESC LIMIT 1`, firm, erin).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	f.put = "refuse"
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", role); w.Code != 502 || stateOf() != "failed" {
+		t.Fatalf("a change WorkOS refuses is recorded as failed: %d %s", w.Code, stateOf())
+	}
+	// WorkOS makes the change but its answer is lost: the record stays pending, and the list settles it from WorkOS.
+	f.put = "lost"
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", role); w.Code != 502 || stateOf() != "pending" {
+		t.Fatalf("an unconfirmed change stays pending: %d %s", w.Code, stateOf())
+	}
+	if w := call(anaCookie, "GET", "/v1/closes/members/people", ""); w.Code != 200 || stateOf() != "applied" {
+		t.Fatalf("the list settles the change from WorkOS's role: %d %s", w.Code, stateOf())
 	}
 	var from, to string
-	if err := raw.QueryRow(`SELECT from_role,to_role,actor FROM member_role_changes WHERE organization_id=$1 AND subject=$2`, firm, erin).Scan(&from, &to, &actor); err != nil || from != "member" || to != "firm-admin" || actor != ana || len(f.roleChanges) != 1 {
+	if err := raw.QueryRow(`SELECT from_role,to_role,actor FROM member_role_changes WHERE organization_id=$1 AND subject=$2 AND state='applied'`, firm, erin).Scan(&from, &to, &actor); err != nil || from != "member" || to != "firm-admin" || actor != ana || !slices.Equal(slices.DeleteFunc(slices.Clone(f.roleChanges), func(c string) bool { return !strings.HasPrefix(c, erin) }), []string{erin + "→firm-admin"}) {
 		t.Fatalf("the role change is recorded and made in WorkOS: %q %q %q %v %v", from, to, actor, f.roleChanges, err)
 	}
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 409 {

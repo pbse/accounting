@@ -3320,6 +3320,13 @@ Local checks:
 - `TestOnlyCompanyAddressesCount` and `TestSignInMakesOrJoinsTheFirmOfTheAddressDomain` pass against local PostgreSQL with a fake WorkOS.
 - `npm run check` passes.
 
+Codex (gpt-6-sol, high) pass 1:
+- **A personal-provider list cannot be complete.** A firm is now created only for a domain whose mail is hosted by Google Workspace or Microsoft 365, checked from its MX records.
+- **People WorkOS placed in an unregistered organization were left without access.** They now go through the domain's claim.
+- **A role change with an uncertain outcome could go unrecorded.** It is now recorded as pending first and settled from WorkOS.
+
+Each fix is tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

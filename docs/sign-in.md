@@ -5,6 +5,7 @@ People sign in to Krith with their firm's **Google Workspace** or **Microsoft 36
 ## Who may sign in
 
 - **Company addresses only.** A domain belonging to a personal mail provider is refused: Gmail, Outlook.com and Hotmail, Live, Yahoo, iCloud, Proton, GMX, Zoho Mail, Yandex, AOL, the large ISPs and the country variants of each (`companyDomain` in `services/backend/internal/transport/domains.go`). The login page says to use the firm's Google Workspace or Microsoft 365 account. Firm invitations to a personal address are refused for the same reason.
+- **Firms on Google Workspace or Microsoft 365.** No list of personal providers is complete, so a firm is created by sign-in only when the domain's mail is hosted by one of the two products the login page offers (its MX records point at Google or at Microsoft 365's `mail.protection.outlook.com`; `hostedMail`). A shared mail provider's domain fails, and a domain's MX records are set by whoever controls it. A firm whose mail goes through another gateway (Mimecast, Proofpoint and the like) is refused with `hosting` and set up by hand instead.
 - **Verified addresses only** create or join a firm. WorkOS's `email_verified` decides. This matters for Microsoft: a company's IT can set any address on its own accounts, so the address alone proves nothing until WorkOS has verified it (WorkOS requires email verification in this environment).
 
 ## The first person creates the firm
@@ -12,7 +13,7 @@ People sign in to Krith with their firm's **Google Workspace** or **Microsoft 36
 When someone with a verified company address signs in and belongs to no firm, the API (`domainFirm`):
 
 1. Takes the domain's lock, so two colleagues signing in at once make one firm.
-2. Finds or makes the WorkOS organization: one WorkOS already holds for the domain is used; otherwise it creates one named after the domain, with the domain marked verified.
+2. Checks that the domain's mail is hosted by Google Workspace or Microsoft 365, then finds or makes the WorkOS organization: one WorkOS already holds for the domain is used (one set up by hand, one WorkOS placed the person in, or one left by an attempt that failed); otherwise it creates one named after the domain, with the domain marked verified.
 3. Gives the person a WorkOS membership with the **Firm admin** role (`firm-admin`), raising an existing membership to it.
 4. Registers the firm (`organizations.email_domain`, migration 124) and records the person as its first member.
 5. Renews the sign-in into that organization, so their session carries the firm and its permissions.
@@ -21,7 +22,7 @@ A firm the app already knows under that WorkOS organization (one set up by hand)
 
 ## Colleagues join as members with no access
 
-Anyone who later signs in with a verified address at the same domain joins that firm (`joinFirm`): a WorkOS membership with the **Member** role, which holds no permissions, and a record that they joined by their address (actor `company-domain`). They can sign in but open nothing until the firm's administrator gives them a role. WorkOS's own domain provisioning, which adds people at the organization's verified domain as members, ends in the same place: the API records them the first time they sign in (`domainMember`).
+A person WorkOS placed in an organization the app has not registered goes through the same steps, so that organization becomes the firm. Anyone who later signs in with a verified address at the same domain joins that firm (`joinFirm`): a WorkOS membership with the **Member** role, which holds no permissions, and a record that they joined by their address (actor `company-domain`). They can sign in but open nothing until the firm's administrator gives them a role. WorkOS's own domain provisioning, which adds people at the organization's verified domain as members, ends in the same place: the API records them the first time they sign in (`domainMember`). A firm set up by hand without a recorded domain takes the domain then, if its WorkOS organization has that domain verified and no other firm holds it.
 
 Someone the firm removed is not let back in by their address, nor is anyone while the firm is suspended. A WorkOS membership that has been deactivated is never revived here. A person in several organizations goes to the firm of their address's domain.
 
@@ -31,6 +32,7 @@ The firm's administrator manages roles in the workspace under **Security center 
 
 - Only a role whose permissions the administrator holds can be given, never one's own role.
 - WorkOS holds the role. The firm keeps each change in `member_role_changes`: before, after, why and by whom.
+- The change is recorded as pending before WorkOS is asked. It is marked applied when WorkOS confirms, and failed when WorkOS refuses. When WorkOS's answer is lost, the next load of the list settles it from the role WorkOS reports: the new role means applied; the old one, a minute later, means failed. One change per person can be pending at a time.
 - The change takes effect when the person's session next renews, within five minutes.
 
 Endpoints: `GET /v1/closes/members/people` and `POST /v1/closes/members/role`. Both need `clients:all` and `members:manage`.
@@ -42,6 +44,7 @@ The callback sends the person back to `/login?error=…`, and the page explains 
 | Code | Meaning |
 | --- | --- |
 | `company` | A personal address |
+| `hosting` | A new firm's domain whose mail is not hosted by Google Workspace or Microsoft 365 |
 | `unverified` | An address WorkOS has not verified |
 | `removed` | The firm removed this person, or WorkOS deactivated their membership |
 | `suspended` | The firm is paused |
@@ -69,7 +72,10 @@ In GitHub (production environment variables): set `AUTH_SESSION=server`, then ru
 
 - the first person creates the firm, with its domain verified, and becomes its administrator;
 - a colleague joins as a member with no access;
-- Gmail, unverified and removed people are turned away;
+- Gmail, unverified, removed and non-hosted-domain people are turned away;
 - someone WorkOS provisioned by domain is recorded;
+- an organization WorkOS placed someone in becomes the firm;
+- a hand-made firm takes its verified domain;
 - the administrator lists people and changes a role, but not their own, and only to a role they hold;
+- a refused change is recorded as failed, and a change whose answer was lost settles as applied;
 - a person in two firms lands in their domain's firm.

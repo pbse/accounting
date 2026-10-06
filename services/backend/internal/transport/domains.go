@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // Firms by company email domain (docs/sign-in.md). Krith admits only company addresses: a personal provider's domain
@@ -57,9 +59,34 @@ func companyDomain(email string) (string, bool) {
 	return domain, true
 }
 
+// hostedMail says whether a domain's mail is hosted by Google Workspace or Microsoft 365. No list of personal providers
+// is complete, so a firm is created by sign-in only for a domain a company runs on one of the two products the login page
+// offers: a shared mail provider's domain is not, and a domain's MX records are set by whoever controls it. A firm
+// whose mail passes through another gateway is set up by hand instead.
+var hostedMail = func(ctx context.Context, domain string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	records, err := net.DefaultResolver.LookupMX(ctx, domain)
+	if err != nil {
+		var missing *net.DNSError
+		if errors.As(err, &missing) && missing.IsNotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, mx := range records {
+		host := strings.ToLower(strings.TrimSuffix(mx.Host, "."))
+		if host == "aspmx.l.google.com" || host == "smtp.google.com" || strings.HasSuffix(host, ".aspmx.l.google.com") || strings.HasSuffix(host, ".googlemail.com") || strings.HasSuffix(host, ".mail.protection.outlook.com") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Why a sign-in was turned away; the login page explains each in words.
 const (
 	refusePersonal    = "company"
+	refuseHosting     = "hosting"
 	refuseUnverified  = "unverified"
 	refuseRemoved     = "removed"
 	refuseSuspended   = "suspended"
@@ -130,8 +157,15 @@ func domainFirm(ctx context.Context, db *sql.DB, user signedInUser) (org, refusa
 	if err != sql.ErrNoRows {
 		return "", refuseUnavailable
 	}
-	// No firm has the domain yet. An organization WorkOS already holds for it (one set up by hand, or left by an
-	// attempt that failed after creating it) is used rather than a second one.
+	// No firm has the domain yet, so this sign-in would create one: only for a domain a company runs on Google Workspace
+	// or Microsoft 365. An organization WorkOS already holds for the domain (one set up by hand, one WorkOS placed them
+	// in, or one left by an attempt that failed after creating it) is used rather than a second one.
+	switch hosted, err := hostedMail(ctx, domain); {
+	case err != nil:
+		return "", refuseUnavailable
+	case !hosted:
+		return "", refuseHosting
+	}
 	var found []struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -228,12 +262,42 @@ func domainMember(ctx context.Context, db *sql.DB, org string, user signedInUser
 	}
 	defer tx.Rollback()
 	var enabled bool
-	err = tx.QueryRowContext(ctx, `SELECT enabled FROM organizations WHERE id=$1 AND email_domain=$2 FOR UPDATE`, org, domain).Scan(&enabled)
-	if err == sql.ErrNoRows {
-		return ""
-	}
+	var recorded sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT enabled,email_domain FROM organizations WHERE id=$1 FOR UPDATE`, org).Scan(&enabled, &recorded)
 	if err != nil {
 		return refuseUnavailable
+	}
+	if recorded.Valid && recorded.String != domain {
+		return ""
+	}
+	if !recorded.Valid {
+		// A firm set up by hand whose WorkOS organization has this domain verified (so WorkOS placed them in it) takes
+		// the domain, unless another firm already holds it; otherwise they came by invitation.
+		var o struct {
+			Domains []struct {
+				Domain string `json:"domain"`
+				State  string `json:"state"`
+			} `json:"domains"`
+		}
+		if workos(ctx, "GET", "/organizations/"+url.PathEscape(org), nil, &o) != nil {
+			return refuseUnavailable
+		}
+		verified := slices.ContainsFunc(o.Domains, func(d struct {
+			Domain string `json:"domain"`
+			State  string `json:"state"`
+		}) bool {
+			return strings.EqualFold(d.Domain, domain) && d.State == "verified"
+		})
+		if !verified {
+			return ""
+		}
+		taken, err := tx.ExecContext(ctx, `UPDATE organizations SET email_domain=$2 WHERE id=$1 AND email_domain IS NULL AND NOT EXISTS(SELECT 1 FROM organizations WHERE email_domain=$2)`, org, domain)
+		if err != nil {
+			return refuseUnavailable
+		}
+		if n, _ := taken.RowsAffected(); n == 0 {
+			return ""
+		}
 	}
 	if !user.EmailVerified {
 		return refuseUnverified

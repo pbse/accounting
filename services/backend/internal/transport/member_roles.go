@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -81,8 +82,12 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			}
 			people = append(people, firmPerson{m.UserID, user.Email, strings.TrimSpace(user.FirstName + " " + user.LastName), m.Role.Slug, m.Status, state})
 		}
+		if err = settleRoleChanges(r.Context(), db, org, memberships); err != nil {
+			problem(w, 503, "Role history unavailable.")
+			return
+		}
 		var changes []byte
-		if err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(c ORDER BY c.id DESC),'[]'::jsonb) FROM (SELECT id,subject,from_role,to_role,reason,actor,created_at FROM member_role_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 50) c`, org).Scan(&changes); err != nil {
+		if err = db.QueryRowContext(r.Context(), `SELECT COALESCE(jsonb_agg(c ORDER BY c.id DESC),'[]'::jsonb) FROM (SELECT id,subject,from_role,to_role,reason,actor,state,created_at FROM member_role_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 50) c`, org).Scan(&changes); err != nil {
 			problem(w, 503, "Role history unavailable.")
 			return
 		}
@@ -138,36 +143,94 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "They already have that role.")
 			return
 		}
+		// The change is recorded as pending before WorkOS is asked, so a change WorkOS makes is never left unrecorded.
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Role storage unavailable.")
 			return
 		}
 		defer tx.Rollback()
-		var enabled, actorStillMember bool
+		var enabled, actorStillMember, pending bool
 		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, org).Scan(&enabled); err != nil || !enabled {
 			problem(w, 403, "Organization unavailable.")
 			return
 		}
-		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, org, subject(r)).Scan(&actorStillMember); err != nil || !actorStillMember {
+		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted), EXISTS(SELECT 1 FROM member_role_changes WHERE organization_id=$1 AND subject=$3 AND state='pending')`, org, subject(r), in.Subject).Scan(&actorStillMember, &pending); err != nil || !actorStillMember {
 			problem(w, 403, "Your firm membership changed. No role was changed.")
 			return
 		}
-		if _, err = tx.ExecContext(r.Context(), `INSERT INTO member_role_changes(organization_id,subject,from_role,to_role,reason,actor) VALUES($1,$2,$3,$4,$5,$6)`,
-			org, in.Subject, membership.Role.Slug, in.Role, in.Reason, subject(r)); err != nil {
+		if pending {
+			problem(w, 409, "A role change for them is still being confirmed. Refresh the list in a moment.")
+			return
+		}
+		var change int64
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO member_role_changes(organization_id,subject,from_role,to_role,reason,actor) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,
+			org, in.Subject, membership.Role.Slug, in.Role, in.Reason, subject(r)).Scan(&change); err != nil || tx.Commit() != nil {
 			problem(w, 503, "Role storage unavailable.")
 			return
 		}
-		if err = workos(r.Context(), "PUT", "/user_management/organization_memberships/"+url.PathEscape(membership.ID), map[string]string{"role_slug": in.Role}, nil); err != nil {
-			problem(w, 502, "WorkOS did not change the role. Nothing was recorded; try again.")
-			return
+		settle := func(state string) error {
+			_, err := db.ExecContext(r.Context(), `UPDATE member_role_changes SET state=$2,settled_at=now() WHERE id=$1 AND state='pending'`, change, state)
+			return err
 		}
-		if tx.Commit() != nil {
-			problem(w, 503, "WorkOS changed the role, but the firm's record of it was not saved. Refresh before changing it again.")
+		err = workos(r.Context(), "PUT", "/user_management/organization_memberships/"+url.PathEscape(membership.ID), map[string]string{"role_slug": in.Role}, nil)
+		var refused statusError
+		switch {
+		case errors.As(err, &refused) && refused.code >= 400 && refused.code < 500:
+			settle("failed")
+			problem(w, 502, "WorkOS refused the role change; their role is unchanged.")
+			return
+		case err != nil:
+			problem(w, 502, "WorkOS did not confirm the change. Refresh the list in a moment to see whether it took effect.")
+			return
+		case settle("applied") != nil:
+			problem(w, 503, "WorkOS changed the role; the firm's record is confirmed when the list next loads.")
 			return
 		}
 		jsonReply(w, 200, map[string]string{"role": in.Role, "message": "Role changed. It takes effect when their session next renews, within five minutes."})
 	})
+}
+
+// settleRoleChanges settles changes WorkOS did not confirm from the role it now reports: the new role means the change
+// took; the old one, a minute on, means it did not.
+func settleRoleChanges(ctx context.Context, db *sql.DB, org string, memberships []firmMembership) error {
+	rows, err := db.QueryContext(ctx, `SELECT id,subject,from_role,to_role,created_at<now()-interval '1 minute' FROM member_role_changes WHERE organization_id=$1 AND state='pending'`, org)
+	if err != nil {
+		return err
+	}
+	type pending struct {
+		id                int64
+		subject, from, to string
+		old               bool
+	}
+	var open []pending
+	for rows.Next() {
+		var p pending
+		if err = rows.Scan(&p.id, &p.subject, &p.from, &p.to, &p.old); err != nil {
+			rows.Close()
+			return err
+		}
+		open = append(open, p)
+	}
+	if rows.Close(); rows.Err() != nil {
+		return rows.Err()
+	}
+	for _, p := range open {
+		state := ""
+		for _, m := range memberships {
+			if m.UserID == p.subject && m.Role.Slug == p.to {
+				state = "applied"
+			} else if m.UserID == p.subject && p.old {
+				state = "failed"
+			}
+		}
+		if state != "" {
+			if _, err = db.ExecContext(ctx, `UPDATE member_role_changes SET state=$2,settled_at=now() WHERE id=$1 AND state='pending'`, p.id, state); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // activeMembership is the person's active WorkOS membership of the firm, or an empty one when they have none.
