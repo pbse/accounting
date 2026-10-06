@@ -88,6 +88,20 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
+		// A hand-over locks the firm row before the close, as close deletion does: the firm row serializes it with member
+		// and client-access decisions, as hand-offs of a document are.
+		enabled := true
+		if input.Assignment == "assign" {
+			switch err = tx.QueryRowContext(r.Context(), `SELECT o.enabled FROM organizations o JOIN client_closes c ON c.organization_id=o.id WHERE c.id::text=$1 FOR SHARE OF o`, r.PathValue("id")).Scan(&enabled); err {
+			case nil:
+			case sql.ErrNoRows:
+				problem(w, 404, "Close not found.")
+				return
+			default:
+				problem(w, 503, "Could not save the close plan.")
+				return
+			}
+		}
 		var closeID, org, entity, owner string
 		switch err = tx.QueryRowContext(r.Context(), `SELECT id::text,organization_id,entity,owner FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID, &org, &entity, &owner); err {
 		case nil:
@@ -137,10 +151,8 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 			if reopenFirst() {
 				return
 			}
-			// The firm row serializes this with member and client-access decisions, as hand-offs do.
-			var allowed bool
-			err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR SHARE`, org).Scan(&allowed)
-			if err == nil && allowed {
+			allowed := enabled
+			if allowed {
 				err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)
  AND (NOT $3 OR EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($4) AND granted))`, org, to.Subject, to.viaGrant, entity).Scan(&allowed)
 			}
