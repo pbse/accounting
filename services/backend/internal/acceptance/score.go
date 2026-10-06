@@ -149,11 +149,14 @@ func Score(cases []Case, observed []CaseObserved) Report {
 			switch {
 			case label.Exception == "duplicate" && found(got):
 				t.CaughtExceptions++ // folded into the earlier document, whatever became of that one
-			case problem && got.Accepted:
-				t.MissedExceptions++
-				fail(d.File, "missed_exception", fmt.Sprintf("the agent went on past %s", or(label.Exception, "a document with no accounting work")))
 			case got.Accepted:
+				// Went on alone: a problem it went past is missed, and its facts and drafts are judged all the same, each
+				// failure in its own count.
 				t.Accepted++
+				if problem {
+					t.MissedExceptions++
+					fail(d.File, "missed_exception", fmt.Sprintf("the agent went on past %s", or(label.Exception, "a document with no accounting work")))
+				}
 				if got.Kind != label.WorkType {
 					t.IncorrectDrafts++
 					fail(d.File, "incorrect_draft", fmt.Sprintf("prepared as %s; the label says %s", or(got.Kind, "nothing"), label.WorkType))

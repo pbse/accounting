@@ -82,7 +82,7 @@ The command prints a Markdown report. It exits 1 on any critical failure, and on
 
 ## What is scored
 
-Every document counts once, in its split and its labeled work type:
+Every document counts once, in its split and its labeled work type. A document the agent went on with alone is judged on every count at once: a problem it went past, its facts and its drafts.
 
 | Count | Means | Critical |
 | --- | --- | --- |

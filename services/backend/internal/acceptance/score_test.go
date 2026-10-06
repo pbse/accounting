@@ -26,7 +26,7 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 		{File: "extra-draft.txt", JobState: "completed", Kind: "prepaid", Facts: good, Accepted: true, Drafts: append(right, Entry{DebitAccount: "Prepaid Expenses", Amount: "50.00"})},
 		{File: "asked.txt", JobState: "needs_confirmation", Kind: "prepaid", Facts: map[string]string{"amount": "1300.00"}},
 		{File: "held.txt", JobState: "needs_confirmation", Kind: "unsupported", Engine: "identity_blocked"},
-		{File: "missed.txt", JobState: "completed", Kind: "prepaid", Facts: good, Accepted: true, Drafts: right},
+		{File: "missed.txt", JobState: "completed", Kind: "prepaid", Facts: map[string]string{"amount": "1300.00", "service_start": "2026-09-01"}, Accepted: true, Drafts: right},
 		{File: "held-elsewhere.txt", JobState: "needs_confirmation", Kind: "prepaid", Facts: good, Reason: "Waiting for a person: the close has no current QuickBooks capture."},
 		{File: "refused.txt", JobState: "needs_confirmation", Kind: "prepaid", Engine: "openai", Reason: `Waiting for a person: The invoice is billed to "Harbour LLC", not the client or a confirmed alias.`},
 		{File: "unread.txt", JobState: "failed", Error: "no recorded preparation answer for unread.txt"},
@@ -39,7 +39,8 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 	dev := r.Tallies["development"]["prepaid"]
 	// A problem held for another reason (held-elsewhere.txt) is missed; one never decided on (unread.txt failed,
 	// pending.txt waits for a retry) is not processed.
-	if *dev != (Tally{Documents: 11, Accepted: 3, Abstained: 1, CaughtExceptions: 2, FalseAcceptedFacts: 1, IncorrectDrafts: 2, MissedExceptions: 2, FalseExceptions: 1, WrongProposals: 1, Unprocessed: 2}) {
+	// missed.txt, another client's invoice the agent went on with, is also judged for its wrong amount.
+	if *dev != (Tally{Documents: 11, Accepted: 4, Abstained: 1, CaughtExceptions: 2, FalseAcceptedFacts: 2, IncorrectDrafts: 2, MissedExceptions: 2, FalseExceptions: 1, WrongProposals: 1, Unprocessed: 2}) {
 		t.Fatalf("development prepaid tally: %+v", *dev)
 	}
 	if none := r.Tallies["development"]["none"]; none.Documents != 1 || none.CaughtExceptions != 1 {
@@ -52,7 +53,7 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 	for _, f := range r.Failures {
 		kinds = append(kinds, f.Case+":"+f.Document+":"+f.Kind)
 	}
-	if got := strings.Join(kinds, ","); got != "c1:wrong-amount.txt:false_accepted_fact,c1:wrong-amount.txt:incorrect_draft,c1:extra-draft.txt:incorrect_draft,c1:missed.txt:missed_exception,c1:held-elsewhere.txt:missed_exception,c2::false_ready,c2::external_action" {
+	if got := strings.Join(kinds, ","); got != "c1:wrong-amount.txt:false_accepted_fact,c1:wrong-amount.txt:incorrect_draft,c1:extra-draft.txt:incorrect_draft,c1:missed.txt:missed_exception,c1:missed.txt:false_accepted_fact,c1:held-elsewhere.txt:missed_exception,c2::false_ready,c2::external_action" {
 		t.Fatalf("critical failures: %s", got)
 	}
 	if detail := r.Failures[1].Detail; !strings.Contains(detail, `debit account "Insurance"`) || !strings.Contains(detail, `amount "11000.00"`) {
@@ -61,13 +62,13 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 	if detail := r.Failures[2].Detail; detail != "2 draft(s); the label expects 1" {
 		t.Fatalf("an extra draft is incorrect: %s", detail)
 	}
-	if detail := r.Failures[4].Detail; !strings.Contains(detail, "not for wrong_client: Waiting for a person: the close has no current QuickBooks capture") {
+	if detail := r.Failures[5].Detail; !strings.Contains(detail, "not for wrong_client: Waiting for a person: the close has no current QuickBooks capture") {
 		t.Fatalf("a problem held for another reason says so: %s", detail)
 	}
 	if r.Passed() || len(r.NotProcessed) != 2 || r.NotProcessed[0].Document != "unread.txt" || r.NotProcessed[1].Document != "pending.txt" {
 		t.Fatalf("a document never decided on fails the run: %+v", r.NotProcessed)
 	}
-	if md := r.Markdown(); !strings.Contains(md, "| prepaid | 11 | 3 | 1 | 2 | 1 | 2 | 2 | 1 | 1 | 2 |") || !strings.Contains(md, "Critical failures: 7. Not processed: 2.") ||
+	if md := r.Markdown(); !strings.Contains(md, "| prepaid | 11 | 4 | 1 | 2 | 2 | 2 | 2 | 1 | 1 | 2 |") || !strings.Contains(md, "Critical failures: 8. Not processed: 2.") ||
 		!strings.Contains(md, "- c1 / unread.txt: not_processed, job failed: no recorded preparation answer for unread.txt") || !strings.Contains(md, "- c1 / pending.txt: not_processed, job waiting_evidence") {
 		t.Fatalf("report:\n%s", md)
 	}
