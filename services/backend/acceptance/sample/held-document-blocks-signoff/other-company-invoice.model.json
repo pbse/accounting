@@ -1,0 +1,55 @@
+{
+ "kind": "prepaid",
+ "summary": "Insurance prepaid schedule",
+ "questions": [],
+ "sources": [
+  {
+   "id": "$primary",
+   "role": "invoice"
+  }
+ ],
+ "facts": [
+  {
+   "field": "amount",
+   "value": "1200.00",
+   "source_id": "$primary",
+   "quote": "Annual premium USD 1,200.00"
+  },
+  {
+   "field": "currency",
+   "value": "USD",
+   "source_id": "$primary",
+   "quote": "Annual premium USD 1,200.00"
+  },
+  {
+   "field": "service_start",
+   "value": "2026-09-01",
+   "source_id": "$primary",
+   "quote": "Coverage period 2026-09-01 to 2027-08-31"
+  },
+  {
+   "field": "service_end",
+   "value": "2027-08-31",
+   "source_id": "$primary",
+   "quote": "Coverage period 2026-09-01 to 2027-08-31"
+  },
+  {
+   "field": "vendor",
+   "value": "Acme Insurance Co",
+   "source_id": "$primary",
+   "quote": "Acme Insurance Co"
+  },
+  {
+   "field": "billed_to",
+   "value": "Northwind Other Inc",
+   "source_id": "$primary",
+   "quote": "Bill to: Northwind Other Inc"
+  },
+  {
+   "field": "invoice_number",
+   "value": "INV-778",
+   "source_id": "$primary",
+   "quote": "Invoice INV-778"
+  }
+ ]
+}

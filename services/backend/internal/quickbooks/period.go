@@ -587,20 +587,25 @@ func ReadSnapshot(ctx context.Context, env, realm, token, company, period string
 	if err != nil {
 		return nil, nil, err
 	}
-	snapshot := map[string]any{"environment": env, "realm": realm, "company_name": company, "accounts": accounts, "started_at": started, "completed_at": time.Now(), "scope": "Account records only; current balances are not a period-end ledger or atomic read."}
 	if period == "" {
-		return snapshot, nil, nil
+		return map[string]any{"environment": env, "realm": realm, "company_name": company, "accounts": accounts, "started_at": started, "completed_at": time.Now(), "scope": "Account records only; current balances are not a period-end ledger or atomic read."}, nil, nil
 	}
 	reports, err := PeriodReports(ctx, env, realm, token, period)
 	if err != nil {
 		return nil, nil, err
 	}
+	return PeriodSnapshot(env, realm, company, period, accounts, reports, started)
+}
+
+// PeriodSnapshot is a month-end capture as it is saved, from the account directory and the period reports read for it:
+// the snapshot, and the evidence that stands for it in the close (the whole snapshot, or an index of it when large).
+func PeriodSnapshot(env, realm, company, period string, accounts json.RawMessage, reports map[string]json.RawMessage, started time.Time) (map[string]any, []byte, error) {
 	coverage, err := Coverage(accounts, reports)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Account coverage could not be read.")
 	}
+	snapshot := map[string]any{"environment": env, "realm": realm, "company_name": company, "accounts": accounts, "started_at": started, "completed_at": time.Now()}
 	snapshot["period"], snapshot["basis"], snapshot["reports"], snapshot["coverage"] = period, "Accrual", reports, coverage
-	snapshot["completed_at"] = time.Now()
 	snapshot["scope"] = "Sequential account and period report reads, not an atomic or independently verified complete ledger. TransactionList contains reported transactions, not full transaction entities. Account CurrentBalance is current, not month-end. Coverage is proposed evidence needs, never approval or completeness."
 	full, err := json.Marshal(snapshot)
 	// The optional Statement of Cash Flows is left out rather than refuse a capture the required reports fit.

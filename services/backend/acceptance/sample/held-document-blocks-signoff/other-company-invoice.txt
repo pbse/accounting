@@ -1,0 +1,5 @@
+Acme Insurance Co
+Invoice INV-778
+Bill to: Northwind Other Inc
+Annual premium USD 1,200.00
+Coverage period 2026-09-01 to 2027-08-31

@@ -45,3 +45,37 @@ func TestSpreadsheetTextReadsTheFirstSheetAsCSV(t *testing.T) {
 		t.Fatal("a file that is not a workbook was read")
 	}
 }
+
+// A file is kept as the upload route keeps it: a workbook within the limit as its first sheet's CSV under a name that
+// fits, anything else (a larger workbook included) as sent for the route's own checks.
+func TestUploadContentKeepsWhatTheRouteKeeps(t *testing.T) {
+	var buf bytes.Buffer
+	z := zip.NewWriter(&buf)
+	for name, body := range map[string]string{
+		"xl/workbook.xml":            `<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet r:id="rId1"/></sheets></workbook>`,
+		"xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+		"xl/worksheets/sheet1.xml":   `<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>Insurance</t></is></c><c r="B1"><v>1200</v></c></row></sheetData></worksheet>`,
+	} {
+		w, _ := z.Create(name)
+		w.Write([]byte(body))
+	}
+	z.Close()
+	book := buf.Bytes()
+	if name, body, err := UploadContent("Schedule.XLSX", book); err != nil || name != "Schedule.XLSX.csv" || string(body) != "Insurance,1200\n" {
+		t.Fatalf("a workbook: %q %q %v", name, body, err)
+	}
+	long := strings.Repeat("é", 210) + ".xlsx"
+	if name, _, err := UploadContent(long, book); err != nil || len(name) > 200 || !strings.HasSuffix(name, ".csv") {
+		t.Fatalf("a long name is shortened to fit with .csv: %d %v", len(name), err)
+	}
+	if name, body, err := UploadContent("notes.txt", []byte("Hello")); err != nil || name != "notes.txt" || string(body) != "Hello" {
+		t.Fatalf("text is kept as sent: %q %q %v", name, body, err)
+	}
+	large := append(append([]byte{}, book...), make([]byte, MaxUpload)...)
+	if name, body, err := UploadContent("large.xlsx", large); err != nil || name != "large.xlsx" || len(body) != len(large) {
+		t.Fatalf("a workbook over the limit is kept as sent, for the route to refuse: %q %d %v", name, len(body), err)
+	}
+	if _, _, err := UploadContent("broken.xlsx", []byte("not a workbook")); err == nil {
+		t.Fatal("an unreadable workbook is an error")
+	}
+}
