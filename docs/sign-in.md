@@ -66,6 +66,7 @@ The callback sends the person back to `/login?error=…`, and the page explains 
 | Code | Meaning |
 | --- | --- |
 | `company` | A personal address |
+| `ask` | Their domain's organization is a firm registered under another domain; they join it by invitation |
 | `invited` | The firm invited this person and they have not accepted yet |
 | `hosting` | A new firm's domain whose mail is not hosted by Google Workspace or Microsoft 365 |
 | `unverified` | An address WorkOS has not verified |

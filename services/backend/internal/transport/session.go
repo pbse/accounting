@@ -254,7 +254,8 @@ func acceptedInvitation(ctx context.Context, db *sql.DB, firms []string, user si
 
 // acceptedInvitations is every one of these firms whose open invitation WorkOS shows this person accepted, newest first.
 func acceptedInvitations(ctx context.Context, db *sql.DB, firms []string, user signedInUser) ([]string, error) {
-	rows, err := db.QueryContext(systemContext(ctx), `SELECT organization_id,workos_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state='pending' AND workos_id IS NOT NULL AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC`,
+	rows, err := db.QueryContext(systemContext(ctx), `SELECT i.organization_id,i.workos_id FROM member_invitations i JOIN organizations o ON o.id=i.organization_id AND o.enabled
+		WHERE i.email=$1 AND i.organization_id=ANY($2) AND i.state='pending' AND i.workos_id IS NOT NULL AND (i.expires_at IS NULL OR i.expires_at>now()) ORDER BY i.created_at DESC`,
 		strings.ToLower(strings.TrimSpace(user.Email)), firms)
 	if err != nil {
 		return nil, err
@@ -468,10 +469,10 @@ func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind
 	}
 	var org string
 	if db.QueryRowContext(systemContext(ctx), `SELECT s.organization_id FROM auth_sessions s JOIN current_organization_members m ON m.organization_id=s.organization_id AND m.subject=s.subject AND m.granted
-		WHERE s.subject=$1 AND s.organization_id=ANY($2) ORDER BY s.created_at DESC LIMIT 1`, choice.User.ID, listed).Scan(&org) == nil {
+		JOIN organizations o ON o.id=s.organization_id AND o.enabled WHERE s.subject=$1 AND s.organization_id=ANY($2) ORDER BY s.created_at DESC LIMIT 1`, choice.User.ID, listed).Scan(&org) == nil {
 		return org
 	}
-	if db.QueryRowContext(systemContext(ctx), `SELECT id FROM organizations WHERE email_domain=$1 AND id=ANY($2)`, domain, listed).Scan(&org) == nil {
+	if db.QueryRowContext(systemContext(ctx), `SELECT id FROM organizations WHERE email_domain=$1 AND enabled AND id=ANY($2)`, domain, listed).Scan(&org) == nil {
 		return org
 	}
 	return listed[0]

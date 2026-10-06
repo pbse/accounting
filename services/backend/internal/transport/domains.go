@@ -89,6 +89,7 @@ const (
 	refusePersonal    = "company"
 	refuseHosting     = "hosting"
 	refuseInvited     = "invited"
+	refuseAsk         = "ask"
 	refuseUnverified  = "unverified"
 	refuseRemoved     = "removed"
 	refuseSuspended   = "suspended"
@@ -212,8 +213,13 @@ func domainFirm(ctx context.Context, db *sql.DB, user signedInUser) (org, refusa
 		return "", refuseUnavailable
 	}
 	// A firm the app already knows under that organization keeps its administrators: the domain is recorded and this
-	// person joins as a member like anyone else.
-	err = tx.QueryRowContext(ctx, `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, org).Scan(&enabled)
+	// person joins as a member like anyone else. A firm already registered under another domain admits people of this
+	// one only by invitation.
+	var recorded sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT enabled,email_domain FROM organizations WHERE id=$1 FOR UPDATE`, org).Scan(&enabled, &recorded)
+	if err == nil && recorded.Valid && recorded.String != domain {
+		return "", refuseAsk
+	}
 	if err == nil {
 		if _, err = tx.ExecContext(ctx, `UPDATE organizations SET email_domain=$2 WHERE id=$1 AND email_domain IS NULL`, org, domain); err != nil {
 			return "", refuseUnavailable

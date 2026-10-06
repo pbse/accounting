@@ -707,6 +707,22 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("Vic sets up his own domain's firm: %s %s", where, sessionOrg(vic))
 	}
 
+	// A firm registered under one domain whose WorkOS organization also carries another admits that other domain's
+	// people only by invitation.
+	alias := "alias" + strings.ToLower(rand.Text()[:8]) + ".test"
+	hosted[alias] = true
+	xena := person("xena", true, alias)
+	aliased := "org_Aliased" + rand.Text()
+	f.mu.Lock()
+	f.orgs[aliased] = alias
+	f.mu.Unlock()
+	if _, err := raw.Exec(`INSERT INTO organizations(id,name,email_domain) VALUES($1,'Aliased firm',$2)`, aliased, "main-"+alias); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(xena, "google"); where != "/login?error=ask" || cookie != "" || f.membership(xena, aliased) != nil {
+		t.Fatalf("a second domain's person is asked to get an invitation: %s", where)
+	}
+
 	// A firm set up by hand, not yet enrolled, keeps its WorkOS administrator (org:enroll) even when their mail runs
 	// through another gateway: they sign in to it and enroll it themselves.
 	gateway := "gateway" + strings.ToLower(rand.Text()[:8]) + ".test"

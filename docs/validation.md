@@ -3403,6 +3403,10 @@ Pass 20 found two gaps:
 
 Pass 21 found that the manual onboarding path no longer worked with the server-held session: a hand-made organization's administrator was pushed into the domain claim. An administrator holding `org:enroll` in an organization the app has not registered now signs in to it and enrolls it. Tested with a firm whose mail runs through another gateway.
 
+Pass 22 found two gaps:
+- **A second domain on a claimed organization let its people in without an invitation.** People of another domain in a firm registered under one domain now need an invitation (`ask`; tested).
+- **Automatic selection could pick a suspended firm.** It now considers only enabled firms.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:
