@@ -45,7 +45,7 @@ The firm's administrator manages roles in the workspace under **Security center 
 
 - Only a role whose permissions the administrator holds can be given, never one's own role.
 - Only someone with current firm access can be given a role; a removed person is enrolled again first.
-- Changes for a firm run one at a time. The person's role is read once the change holds the firm, and a change made from a stale list (the role it saw is no longer theirs) is refused.
+- A change is recorded under the firm's row lock, with the person's role read then. A person can have one change pending at a time, and a change made from a stale list (the role it saw is no longer theirs) is refused. Changes to different people are independent; their records are in the order they were made.
 - WorkOS holds the role. The firm keeps each change in `member_role_changes`: before, after, why and by whom.
 - The change is recorded as pending before WorkOS is asked. It is marked applied when WorkOS confirms, and failed when WorkOS refuses. When WorkOS's answer is lost, the next load of the list settles it from the role WorkOS reports: the new role means applied; the old one, a minute later, means failed; any other role (changed in WorkOS meanwhile) is recorded as unknown rather than guessed. One change per person can be pending at a time.
 - The change takes effect when the person's session next renews, within five minutes.

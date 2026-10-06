@@ -3393,6 +3393,10 @@ Pass 18 found four gaps:
 - **The role an administrator saw was optional on a role change.** It is now required.
 - **A firm named after a very long domain overflowed the name's 200-character limit.** The name is now bounded.
 
+Pass 19 found two things:
+- **A signed-in visitor on `/login` in WorkOS's browser-session mode had no way into the workspace.** Signed-in visitors now go straight there in either mode.
+- **The docs claimed every role change in a firm runs one at a time.** They now say precisely what is serialized: each person's changes, under the firm's lock, with the stale-role check.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

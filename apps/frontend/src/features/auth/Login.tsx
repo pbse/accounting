@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { AccountAccess, authKitClientId, serverSession, serverSignInUrl, useSession } from "./Auth";
 
@@ -14,6 +14,7 @@ const refusals: Record<string, string> = {
 };
 
 export function Login() {
+  const configured = Boolean(authKitClientId);
   return (
     <main id="main" className="k-col k-page">
       <div className="k-page-head">
@@ -22,15 +23,13 @@ export function Login() {
         <p className="k-lede">Sign in with your firm’s Google Workspace or Microsoft 365 account.</p>
       </div>
       <div className="k-signin">
-        {!authKitClientId ? (
+        {!configured ? (
           <>
             <p>Sign-in is not configured in this environment.</p>
             <Link to="/dashboard">Open the local workspace →</Link>
           </>
-        ) : serverSession ? (
-          <ProviderSignIn />
         ) : (
-          <AccountAccess />
+          <SignedInGoesToWork>{serverSession ? <ProviderSignIn /> : <AccountAccess />}</SignedInGoesToWork>
         )}
         <p className="k-fine">
           New to Krith? <Link to="/contact">Talk to us</Link>
@@ -40,16 +39,22 @@ export function Login() {
   );
 }
 
-// The server's sign-in: one button per provider, each going straight to it. A signed-in visitor goes to the workspace.
-function ProviderSignIn() {
-  const { user, isLoading, unavailable } = useSession();
+// Someone already signed in goes straight to the workspace, whichever session the environment uses.
+function SignedInGoesToWork({ children }: { children: ReactNode }) {
+  const { user } = useSession();
   const navigate = useNavigate();
-  const [params] = useSearchParams();
-  const refusal = refusals[params.get("error") ?? ""];
   useEffect(() => {
     if (user) navigate("/dashboard", { replace: true });
   }, [user, navigate]);
-  if (isLoading || user) return <p role="status">Checking your session…</p>;
+  return user ? <p role="status">Opening your workspace…</p> : children;
+}
+
+// The server's sign-in: one button per provider, each going straight to it.
+function ProviderSignIn() {
+  const { isLoading, unavailable } = useSession();
+  const [params] = useSearchParams();
+  const refusal = refusals[params.get("error") ?? ""];
+  if (isLoading) return <p role="status">Checking your session…</p>;
   return (
     <>
       {refusal && <p className="k-alert" role="alert">{refusal}</p>}
