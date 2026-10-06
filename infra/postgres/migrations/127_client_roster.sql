@@ -70,4 +70,38 @@ SELECT organization_id,name,active,CASE WHEN active THEN recent_first ELSE lates
  CASE WHEN active THEN 'On the roster when it began: a close in the last three months'
   ELSE 'To confirm: no close in the three months before the roster began, so it is listed inactive until an administrator says it is still a client' END,'migration'
  FROM recent;
+-- A receipt from before the roster holds only the digest of the deleted close's own name. Each is given the digest of
+-- the client that name is, where the name is one the firm has recorded anywhere (its closes, aliases, roster, access,
+-- connections, procedures and the like), so a month deleted under a spelling no close keeps stays done.
+WITH names AS (
+ SELECT organization_id,lower(entity) AS name FROM client_closes
+ UNION SELECT organization_id,alias FROM client_aliases
+ UNION SELECT organization_id,lower(client_entity) FROM client_aliases
+ UNION SELECT organization_id,lower(client_entity) FROM budget_versions
+ UNION SELECT organization_id,lower(client_entity) FROM cash_obligations
+ UNION SELECT organization_id,lower(client_entity) FROM cash_scenarios
+ UNION SELECT organization_id,lower(client_entity) FROM client_access
+ UNION SELECT organization_id,lower(client_entity) FROM close_routines
+ UNION SELECT organization_id,lower(client_entity) FROM collection_contact_preferences
+ UNION SELECT organization_id,lower(client_entity) FROM collection_messages
+ UNION SELECT organization_id,lower(client_entity) FROM customer_contact_authority
+ UNION SELECT organization_id,lower(client_entity) FROM open_item_actions
+ UNION SELECT organization_id,lower(client_entity) FROM procedure_drafts
+ UNION SELECT organization_id,lower(client_entity) FROM procedure_versions
+ UNION SELECT organization_id,lower(client_entity) FROM production_posting_grants
+ UNION SELECT organization_id,lower(client_entity) FROM quickbooks_connections
+ UNION SELECT organization_id,lower(client_entity) FROM standing_approvals
+ UNION SELECT organization_id,lower(client_entity) FROM stripe_connections
+ UNION SELECT organization_id,lower(client_entity) FROM xero_connections
+ UNION SELECT organization_id,lower(client_entity) FROM xero_posting_grants
+ UNION SELECT organization_id,lower(client_entity) FROM client_roster
+), matched AS (
+ SELECT DISTINCT ON (d.id) d.id,client_identity(n.organization_id,n.name) AS client
+ FROM close_deletion_receipts d JOIN names n ON n.organization_id=d.organization_id AND n.name<>''
+  AND d.entity_digest=encode(sha256(convert_to(n.organization_id,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex')
+ WHERE d.client_digest IS NULL
+ ORDER BY d.id
+)
+UPDATE close_deletion_receipts d SET client_digest=encode(sha256(convert_to(d.organization_id,'UTF8')||'\x00'::bytea||convert_to(m.client,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex')
+ FROM matched m WHERE d.id=m.id;
 COMMIT;
