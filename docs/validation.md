@@ -3311,7 +3311,7 @@ Not verified: the targets themselves. No load test and no timed hosted restore w
 The sign-in callback admits company addresses only; personal mail providers' domains are refused, and so are invitations to them. The first person with a verified address at a domain creates its firm:
 - a WorkOS organization with the domain verified;
 - a Firm admin membership;
-- `organizations.email_domain` (migration 124).
+- `organizations.email_domain` (migration 125).
 
 Later colleagues from the domain join as members with no access. Removed people, suspended firms and deactivated memberships stay out, and a person in several firms lands in their domain's firm. The firm's administrator gives roles under **People and roles**: only roles whose permissions they hold, never their own. Each change is recorded in `member_role_changes`.
 

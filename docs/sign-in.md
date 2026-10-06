@@ -15,7 +15,7 @@ When someone with a verified company address signs in and belongs to no firm, th
 1. Takes the domain's lock, so two colleagues signing in at once make one firm.
 2. Checks that the domain's mail is hosted by Google Workspace or Microsoft 365, then finds or makes the WorkOS organization: one WorkOS already holds for the domain is used (one set up by hand, one WorkOS placed the person in, or one left by an attempt that failed); otherwise it creates one named after the domain, with the domain marked verified.
 3. Gives the person a WorkOS membership with the **Firm admin** role (`firm-admin`), raising an existing membership to it.
-4. Registers the firm (`organizations.email_domain`, migration 124) and records the person as its first member.
+4. Registers the firm (`organizations.email_domain`, migration 125) and records the person as its first member.
 5. Renews the sign-in into that organization, so their session carries the firm and its permissions.
 
 A firm the app already knows under that WorkOS organization (one set up by hand) is not given a new administrator while it has members: the domain is recorded and the person joins as a member. A firm with no member yet (set up by hand and never enrolled, or one whose members were all removed) takes the person who arrives as its Firm admin, as a new firm does, so someone can always enroll people and give roles.
