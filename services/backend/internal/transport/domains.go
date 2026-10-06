@@ -105,6 +105,9 @@ type firmMembership struct {
 	} `json:"role"`
 }
 
+// everyStatus asks WorkOS for memberships in any state; it lists only active ones unless asked.
+const everyStatus = "active,inactive,pending"
+
 var (
 	errMembershipInactive = errors.New("WorkOS membership is not active")
 	errMembershipPending  = errors.New("WorkOS membership waits on an invitation")
@@ -116,7 +119,7 @@ var (
 // created only for someone joining for the first time (exact): for anyone the firm already enrolled, a membership
 // removed in WorkOS stays removed.
 func ensureMembership(ctx context.Context, org, user, role string, exact bool) error {
-	held, err := workosList[firmMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {user}, "organization_id": {org}, "limit": {"100"}})
+	held, err := workosList[firmMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {user}, "organization_id": {org}, "statuses": {everyStatus}, "limit": {"100"}})
 	if err != nil {
 		return err
 	}
@@ -191,14 +194,15 @@ func domainFirm(ctx context.Context, db *sql.DB, user signedInUser) (org, refusa
 	}](ctx, "/organizations", url.Values{"domains": {domain}, "limit": {"10"}}); err != nil {
 		return "", refuseUnavailable
 	}
-	name := domain
+	// The domain names the firm, within the name's limit, until its administrator renames it.
+	name := domain[:min(len(domain), 200)]
 	if len(found) > 0 {
-		org, name = found[0].ID, found[0].Name
+		org, name = found[0].ID, found[0].Name[:min(len(found[0].Name), 200)]
 	} else {
 		var created struct {
 			ID string `json:"id"`
 		}
-		body := map[string]any{"name": domain, "domain_data": []map[string]string{{"domain": domain, "state": "verified"}}}
+		body := map[string]any{"name": name, "domain_data": []map[string]string{{"domain": domain, "state": "verified"}}}
 		if workos(ctx, "POST", "/organizations", body, &created) != nil || !organizationID.MatchString(created.ID) {
 			return "", refuseUnavailable
 		}

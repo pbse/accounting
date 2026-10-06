@@ -216,29 +216,37 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 }
 
 // acceptedInvitation is, of these firms, one whose open invitation to this person WorkOS shows they have accepted: their
-// first sign-in after accepting it, before the app has enrolled them. Every such invitation is checked, newest first.
-func acceptedInvitation(ctx context.Context, db *sql.DB, firms []string, user signedInUser) string {
+// first sign-in after accepting it, before the app has enrolled them. Every such invitation is checked, newest first; a
+// check that cannot be made is an error, so no firm is chosen on incomplete evidence.
+func acceptedInvitation(ctx context.Context, db *sql.DB, firms []string, user signedInUser) (string, error) {
 	rows, err := db.QueryContext(systemContext(ctx), `SELECT organization_id,workos_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state='pending' AND workos_id IS NOT NULL AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC`,
 		strings.ToLower(strings.TrimSpace(user.Email)), firms)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	type open struct{ org, id string }
 	var invitations []open
 	for rows.Next() {
 		var o open
-		if rows.Scan(&o.org, &o.id) == nil {
-			invitations = append(invitations, o)
+		if err = rows.Scan(&o.org, &o.id); err != nil {
+			rows.Close()
+			return "", err
 		}
+		invitations = append(invitations, o)
 	}
-	rows.Close()
+	if rows.Close(); rows.Err() != nil {
+		return "", rows.Err()
+	}
 	for _, o := range invitations {
 		var sent workosInvitation
-		if workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(o.id), nil, &sent) == nil && sent.State == "accepted" && sent.AcceptedUserID == user.ID && sent.OrganizationID == o.org {
-			return o.org
+		if err := workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(o.id), nil, &sent); err != nil {
+			return "", err
+		}
+		if sent.State == "accepted" && sent.AcceptedUserID == user.ID && sent.OrganizationID == o.org {
+			return o.org, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // firmFor decides which firm a firm session is for. A registered firm WorkOS signed them in to keeps them when they are
@@ -256,7 +264,13 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, stri
 			held, tokens.User.ID).Scan(&registered, &belongs); err != nil {
 			return "", refuseUnavailable
 		}
-		belongs = belongs || registered && acceptedInvitation(ctx, db, []string{held}, tokens.User) == held
+		if registered && !belongs {
+			accepted, err := acceptedInvitation(ctx, db, []string{held}, tokens.User)
+			if err != nil {
+				return "", refuseUnavailable
+			}
+			belongs = accepted == held
+		}
 	}
 	if registered && belongs {
 		refusal, _ := domainMember(ctx, db, held, tokens.User)
@@ -307,7 +321,10 @@ func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind
 		return ""
 	}
 	domain, _ := companyDomain(choice.User.Email)
-	if org := acceptedInvitation(ctx, db, listed, choice.User); org != "" {
+	switch org, err := acceptedInvitation(ctx, db, listed, choice.User); {
+	case err != nil:
+		return ""
+	case org != "":
 		return org
 	}
 	var org string

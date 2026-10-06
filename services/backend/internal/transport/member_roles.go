@@ -57,7 +57,7 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 				After string `json:"after"`
 			} `json:"list_metadata"`
 		}
-		query := url.Values{"organization_id": {org}, "limit": {strconv.Itoa(peoplePage)}}
+		query := url.Values{"organization_id": {org}, "statuses": {everyStatus}, "limit": {strconv.Itoa(peoplePage)}}
 		if after != "" {
 			query.Set("after", after)
 		}
@@ -140,7 +140,7 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 		var in struct {
 			Subject string `json:"subject"`
 			Role    string `json:"role"`
-			// Current is the role the administrator saw; a different one now means someone changed it meanwhile.
+			// Current is the role the administrator saw, required; a different one now means someone changed it meanwhile.
 			Current   string `json:"current"`
 			Reason    string `json:"reason"`
 			Confirmed bool   `json:"confirmed"`
@@ -149,8 +149,8 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		in.Subject, in.Role, in.Reason = strings.TrimSpace(in.Subject), strings.TrimSpace(in.Role), strings.TrimSpace(in.Reason)
-		if !in.Confirmed || !workosUserID.MatchString(in.Subject) || in.Role == "" || len(in.Reason) < 10 || len(in.Reason) > 2000 {
-			problem(w, 422, "Choose the person and the role, give a reason of 10–2,000 characters and confirm.")
+		if !in.Confirmed || !workosUserID.MatchString(in.Subject) || in.Role == "" || in.Current == "" || len(in.Reason) < 10 || len(in.Reason) > 2000 {
+			problem(w, 422, "Choose the person and the role, give a reason of 10–2,000 characters and confirm. The request names the role you saw.")
 			return
 		}
 		if in.Subject == subject(r) {
@@ -207,7 +207,7 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 404, "That person has no active membership in the firm.")
 			return
 		}
-		if in.Current != "" && membership.Role.Slug != in.Current {
+		if membership.Role.Slug != in.Current {
 			problem(w, 409, "Their role changed since you loaded the list. Refresh and decide again.")
 			return
 		}
@@ -269,7 +269,7 @@ func settleRoleChanges(ctx context.Context, db *sql.DB, org string) error {
 		return rows.Err()
 	}
 	for _, p := range open {
-		held, err := workosList[firmMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {p.subject}, "organization_id": {org}, "limit": {"10"}})
+		held, err := workosList[firmMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {p.subject}, "organization_id": {org}, "statuses": {everyStatus}, "limit": {"10"}})
 		if err != nil {
 			return err
 		}

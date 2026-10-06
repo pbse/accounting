@@ -135,7 +135,12 @@ func (f *fakeWorkOS) serve(t *testing.T, r *http.Request) (int, any) {
 	case r.Method == "GET" && r.URL.Path == "/user_management/organization_memberships":
 		found := []firmMembership{}
 		for _, m := range f.memberships {
-			if (q.Get("user_id") == "" || m.UserID == q.Get("user_id")) && m.OrganizationID == q.Get("organization_id") && (q.Get("statuses") == "" || m.Status == q.Get("statuses")) {
+			// Like WorkOS, only active memberships unless other statuses are asked for (comma-separated).
+			statuses := []string{"active"}
+			if q.Get("statuses") != "" {
+				statuses = strings.Split(q.Get("statuses"), ",")
+			}
+			if (q.Get("user_id") == "" || m.UserID == q.Get("user_id")) && m.OrganizationID == q.Get("organization_id") && slices.Contains(statuses, m.Status) {
 				found = append(found, m)
 			}
 		}
@@ -460,16 +465,16 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != len(slices.DeleteFunc(slices.Clone(f.memberships), func(m firmMembership) bool { return m.OrganizationID != firm })) {
 		t.Fatalf("the administrator lists the firm's people: %d %s", w.Code, w.Body.String())
 	}
-	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"staff-only","reason":"Give Erin a staff role.","confirmed":true}`); w.Code != 403 {
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"staff-only","current":"member","reason":"Give Erin a staff role.","confirmed":true}`); w.Code != 403 {
 		t.Fatalf("a role with permissions the administrator lacks cannot be given: %d %s", w.Code, w.Body.String())
 	}
-	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ben+`","role":"firm-admin","reason":"Bring Ben back as admin.","confirmed":true}`); w.Code != 409 {
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ben+`","role":"firm-admin","current":"member","reason":"Bring Ben back as admin.","confirmed":true}`); w.Code != 409 {
 		t.Fatalf("a removed person cannot be given a role: %d %s", w.Code, w.Body.String())
 	}
-	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ana+`","role":"member","reason":"Step down from administrator.","confirmed":true}`); w.Code != 422 {
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ana+`","role":"member","current":"firm-admin","reason":"Step down from administrator.","confirmed":true}`); w.Code != 422 {
 		t.Fatalf("an administrator cannot change their own role: %d", w.Code)
 	}
-	role := `{"subject":"` + erin + `","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`
+	role := `{"subject":"` + erin + `","role":"firm-admin","current":"member","reason":"Erin runs the September closes.","confirmed":true}`
 	stateOf := func() string {
 		t.Helper()
 		var state string
@@ -477,6 +482,9 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 			t.Fatal(err)
 		}
 		return state
+	}
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 422 {
+		t.Fatalf("a change that does not name the role it saw is refused: %d", w.Code)
 	}
 	// A change made from a stale list (the role it saw is no longer theirs) is refused.
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","current":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 409 {
@@ -498,12 +506,12 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	if err := raw.QueryRow(`SELECT from_role,to_role,actor FROM member_role_changes WHERE organization_id=$1 AND subject=$2 AND state='applied'`, firm, erin).Scan(&from, &to, &actor); err != nil || from != "member" || to != "firm-admin" || actor != ana || !slices.Equal(slices.DeleteFunc(slices.Clone(f.roleChanges), func(c string) bool { return !strings.HasPrefix(c, erin) }), []string{erin + "→firm-admin"}) {
 		t.Fatalf("the role change is recorded and made in WorkOS: %q %q %q %v %v", from, to, actor, f.roleChanges, err)
 	}
-	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 409 {
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","current":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 409 {
 		t.Fatalf("giving the role they already have changes nothing: %d", w.Code)
 	}
 	// A lost change whose person WorkOS then shows in a third role is recorded as unknown, not guessed.
 	f.put = "lost"
-	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ivy+`","role":"firm-admin","reason":"Ivy takes the payroll closes.","confirmed":true}`); w.Code != 502 {
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ivy+`","role":"firm-admin","current":"member","reason":"Ivy takes the payroll closes.","confirmed":true}`); w.Code != 502 {
 		t.Fatalf("an unconfirmed change: %d %s", w.Code, w.Body.String())
 	}
 	f.mu.Lock()

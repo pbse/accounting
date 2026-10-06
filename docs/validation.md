@@ -3387,6 +3387,12 @@ Pass 16 found that two administrators changing one person's role at once could o
 
 Pass 17 found that joining by address read the firm without its row lock, so a concurrent removal could be overtaken. Joining now holds the firm's row lock, as administrators' member decisions do.
 
+Pass 18 found four gaps:
+- **A failed invitation lookup was treated as "no invitation".** It now stops the sign-in for a retry.
+- **Pending and inactive memberships were never seen.** WorkOS lists only active memberships unless asked, so they are now requested, comma-separated as WorkOS's SDK does. The test's fake WorkOS now mirrors that default.
+- **The role an administrator saw was optional on a role change.** It is now required.
+- **A firm named after a very long domain overflowed the name's 200-character limit.** The name is now bounded.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:
