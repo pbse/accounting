@@ -161,7 +161,8 @@ func domainFirm(ctx context.Context, db *sql.DB, user signedInUser) (org, refusa
 		return "", refuseUnavailable
 	}
 	var enabled bool
-	err = tx.QueryRowContext(ctx, `SELECT id,enabled FROM organizations WHERE email_domain=$1`, domain).Scan(&org, &enabled)
+	// The firm's row lock serializes this join with an administrator's member decisions, as their own handler does.
+	err = tx.QueryRowContext(ctx, `SELECT id,enabled FROM organizations WHERE email_domain=$1 FOR UPDATE`, domain).Scan(&org, &enabled)
 	if err == nil {
 		if refusal = joinFirm(ctx, tx, org, enabled, user, domain); refusal != "" {
 			return "", refusal

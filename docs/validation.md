@@ -3385,6 +3385,8 @@ Both are tested.
 
 Pass 16 found that two administrators changing one person's role at once could overwrite each other and record the wrong prior role. The role is now read under the firm's lock, and the page sends the role it showed, so a stale change is refused; tested.
 
+Pass 17 found that joining by address read the firm without its row lock, so a concurrent removal could be overtaken. Joining now holds the firm's row lock, as administrators' member decisions do.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:
