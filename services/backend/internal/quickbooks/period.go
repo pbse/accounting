@@ -201,6 +201,33 @@ type CoverageItem struct {
 	ReportLocations []string `json:"report_locations"`
 }
 
+// NewCoverageItem is an account's evidence need, whichever ledger it is read from: kind is reconciliation (a bank or card
+// account), prepaid, accrual or accountant_review, each with its reason and the evidence it asks for.
+func NewCoverageItem(id, name, kind, location string) CoverageItem {
+	item := CoverageItem{AccountID: id, Name: name, Kind: kind, Location: location}
+	switch kind {
+	case "reconciliation":
+		item.Reason = "Bank or credit-card account requires independent evidence before reconciliation can be proposed."
+		item.Question = "Provide this month's complete independent statement and an account-specific ledger CSV (id,date,amount), verified opening/closing balances and page count. Report rows are not automatically converted to reconciliation transactions."
+	case "prepaid":
+		item.Reason = "Prepaid account is a candidate for schedule review; the ledger does not prove invoice service terms."
+		item.Question = "Provide invoices and existing schedules with service dates, currency, original booking, credits and prior adjustments. A client accountant must approve any treatment beyond the established methods."
+	case "accrual":
+		item.Reason = "The account name suggests an accrued liability; its activity and invoices still need review."
+		item.Question = "Provide incurred-service evidence, supported closing liability, current booked balance and any prior estimate or actual invoice. Confirm the client's approved method before preparing."
+	default:
+		item.Kind = "accountant_review"
+		item.Reason = "No supported preparation selected for this account type."
+		item.Question = "Review period activity and balances; define any required work or explicitly document exclusion from the close scope."
+	}
+	return item
+}
+
+// MissingAccount is an account a Trial Balance reports that the account capture lacks.
+func MissingAccount(id, name, location string) CoverageItem {
+	return CoverageItem{AccountID: id, Name: name, Kind: "accountant_review", Reason: "Trial balance references an account missing from the account capture.", Question: "Resolve the inconsistent account inventory and recapture before preparing this account.", Location: location, ReportLocations: []string{location}}
+}
+
 // Account classification proposes evidence needs; it never proves that work is
 // required, satisfied or immaterial. Inactive accounts remain in scope.
 func Coverage(accounts json.RawMessage, reports map[string]json.RawMessage) ([]CoverageItem, error) {
@@ -214,22 +241,16 @@ func Coverage(accounts json.RawMessage, reports map[string]json.RawMessage) ([]C
 	items := []CoverageItem{}
 	byID := map[string]int{}
 	for index, a := range rows {
-		item := CoverageItem{AccountID: a.ID, Name: a.Name, Kind: "accountant_review", Reason: "No supported preparation selected for this account type.", Question: "Review period activity and balances; define any required work or explicitly document exclusion from the close scope.", Location: fmt.Sprintf("accounts[%d]", index)}
+		kind := "accountant_review"
 		switch {
 		case a.AccountType == "Bank" || a.AccountType == "Credit Card":
-			item.Kind = "reconciliation"
-			item.Reason = "Bank or credit-card account requires independent evidence before reconciliation can be proposed."
-			item.Question = "Provide this month's complete independent statement and an account-specific ledger CSV (id,date,amount), verified opening/closing balances and page count. Report rows are not automatically converted to reconciliation transactions."
+			kind = "reconciliation"
 		case a.AccountSubType == "PrepaidExpenses":
-			item.Kind = "prepaid"
-			item.Reason = "Prepaid account is a candidate for schedule review; the ledger does not prove invoice service terms."
-			item.Question = "Provide invoices and existing schedules with service dates, currency, original booking, credits and prior adjustments. A client accountant must approve any treatment beyond the established methods."
+			kind = "prepaid"
 		case a.AccountType == "Other Current Liability" && strings.Contains(strings.ToLower(a.Name), "accru"):
-			item.Kind = "accrual"
-			item.Reason = "The account name suggests an accrued liability; its activity and invoices still need review."
-			item.Question = "Provide incurred-service evidence, supported closing liability, current booked balance and any prior estimate or actual invoice. Confirm the client's approved method before preparing."
+			kind = "accrual"
 		}
-		items = append(items, item)
+		items = append(items, NewCoverageItem(a.ID, a.Name, kind, fmt.Sprintf("accounts[%d]", index)))
 		byID[a.ID] = index
 	}
 	// TrialBalance data-row account IDs link coverage to reported balances.
@@ -248,7 +269,7 @@ func Coverage(accounts json.RawMessage, reports map[string]json.RawMessage) ([]C
 					items[i].ReportLocations = append(items[i].ReportLocations, location)
 				} else {
 					byID[id] = len(items)
-					items = append(items, CoverageItem{AccountID: id, Name: row.ColData[0].Value, Kind: "accountant_review", Reason: "Trial balance references an account missing from the account capture.", Question: "Resolve the inconsistent account inventory and recapture before preparing this account.", Location: location, ReportLocations: []string{location}})
+					items = append(items, MissingAccount(id, row.ColData[0].Value, location))
 				}
 			}
 			visit(row.Rows, location+".Rows")

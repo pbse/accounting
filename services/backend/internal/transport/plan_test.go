@@ -137,14 +137,14 @@ func TestPlanReadsTheBooksTheLedgerReadsUse(t *testing.T) {
 		must(db.QueryRow(query, closeID).Scan(&at))
 		return at.UTC().Format("Jan 2")
 	}
-	if s := plan(); s["books"].State != "none" || s["accounts"].Text != "Account coverage needs a QuickBooks capture of the month." {
+	if s := plan(); s["books"].State != "none" || s["accounts"].Text != "Account coverage needs a QuickBooks or Xero capture of the month." {
 		t.Fatalf("without a ledger the plan covers the documents only: %+v", s)
 	}
 	must(db.QueryRow(`INSERT INTO xero_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,tenant_id) SELECT id,organization_id,entity,'fixture','active',$2,now(),'t-1' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&xeroID))
 	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1',$3,'d','{}','fixture',now()-interval '1 hour')`, closeID, xeroID, period)
 	must(err)
-	if s := plan(); s["books"].Text != "Read from Xero's Trial Balance captured "+day(`SELECT captured_at FROM xero_snapshots WHERE close_id=$1`)+". I read it again each day." || !strings.Contains(s["accounts"].Text, "for this Xero close") || s["review"].Text != "Waits on the documents." {
-		t.Fatalf("a Xero capture is read and account coverage says why it is not checked: %+v", s)
+	if s := plan(); s["books"].Text != "Read from Xero's Trial Balance captured "+day(`SELECT captured_at FROM xero_snapshots WHERE close_id=$1`)+". I read it again each day." || s["accounts"].Text != "Waits on a new Xero capture: these accounts come from an out-of-date one." || s["review"].Text != "Waits on the documents." {
+		t.Fatalf("a Xero capture is read, and its accounts wait on a capture that can be read: %+v", s)
 	}
 	// A QuickBooks capture older than Xero's is not the one the ledger reads use; a newer one is.
 	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt',$2,'Synthetic ledger','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&evidence))

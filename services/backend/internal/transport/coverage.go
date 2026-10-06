@@ -89,7 +89,7 @@ func currentCoverage(ctx context.Context, tx *sql.Tx, closeID string) (coverageV
 		Excluded bool
 		Reason   string
 	}{}
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT ON (account_id) account_id,id::text,job_ids,excluded,reason FROM coverage_bindings WHERE close_id=$1 AND snapshot_id::text=$2 ORDER BY account_id,coverage_bindings.id DESC`, closeID, out.SnapshotID)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT ON (account_id) account_id,id::text,job_ids,excluded,reason FROM coverage_bindings WHERE close_id=$1 AND `+bindingCapture("coverage_bindings")+`=$2 ORDER BY account_id,coverage_bindings.id DESC`, closeID, out.SnapshotID)
 	if err != nil {
 		return out, err
 	}
@@ -316,7 +316,7 @@ func registerCoverage(mux *http.ServeMux, db *sql.DB) {
 			if in.Jobs == nil {
 				ids = []byte("[]")
 			}
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO coverage_bindings(close_id,snapshot_id,account_id,job_ids,excluded,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7)`, closeID, view.SnapshotID, in.AccountID, string(ids), in.Excluded, in.Reason, actor)
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO coverage_bindings(close_id,snapshot_id,xero_snapshot_id,account_id,job_ids,excluded,reason,actor) VALUES($1,`+captureColumns("$2")+`,$3,$4,$5,$6,$7)`, closeID, view.SnapshotID, in.AccountID, string(ids), in.Excluded, in.Reason, actor)
 		case "request":
 			recipient, e := mail.ParseAddress(strings.TrimSpace(in.Recipient))
 			if e != nil || recipient.Address != strings.TrimSpace(in.Recipient) || len(in.Recipient) > 254 || len(strings.TrimSpace(in.Body)) == 0 || len(in.Body) > 20000 || len(in.Accounts) == 0 || len(in.Accounts) > 20 {

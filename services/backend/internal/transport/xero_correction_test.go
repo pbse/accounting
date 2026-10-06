@@ -295,7 +295,9 @@ func TestXeroBillLineIsRecodedOnceAfterIndependentApproval(t *testing.T) {
 	}
 	set(`UPDATE xero_corrections SET verified_at=now()-interval '10 minutes' WHERE close_id=$1`, closeID)
 	capture("-5 minutes")
-	if got := blockers(); strings.Contains(got, "Xero") {
+	// This synthetic capture holds transactions alone, so its account coverage, which needs the Trial Balance, waits on
+	// another capture; the correction's own blocker is what clears.
+	if got := blockers(); strings.Contains(got, "Capture Xero again") {
 		t.Fatalf("a newer capture clears the correction's blocker: %s", got)
 	}
 	call(accountant, "POST", path, execute, 422)

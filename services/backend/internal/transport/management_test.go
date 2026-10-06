@@ -225,7 +225,8 @@ func TestManagementPackReadsTheCapturedReports(t *testing.T) {
 	if got := status(); got != "signed_off" {
 		t.Fatalf("the capture the sign-off was made over is signed off: %s", got)
 	}
-	// A newer Xero capture, which the signed digest does not bind, leaves the sign-off standing but stays provisional.
+	// A newer Xero capture is the books' capture: its accounts, which the signed digest binds as it binds a QuickBooks
+	// capture's, need the sign-off reopened, and the pack shows them provisionally.
 	defer db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, closeID)
 	defer db.Exec(`DELETE FROM xero_connections WHERE close_id=$1`, closeID)
 	var xeroConnection string
@@ -238,24 +239,22 @@ func TestManagementPackReadsTheCapturedReports(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d',$3,'fixture',now()+interval '1 minute')`, closeID, xeroConnection, xeroPayload)
 	must(err)
 	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
-	if got := status(); got != "provisional" || current.State != "signed_off" {
-		t.Fatalf("a capture newer than a sign-off that still stands is provisional: %s (readiness %s)", got, current.State)
+	if got := status(); got != "provisional" || current.State != "reopen_required" {
+		t.Fatalf("a newer Xero capture needs the sign-off reopened, and the pack is provisional: %s (readiness %s)", got, current.State)
 	}
 
-	// Readiness binds the QuickBooks capture with the highest ID; a pack showing a different capture is not covered.
+	// Readiness binds the QuickBooks capture taken last, as the pack and the tie-out read it.
 	_, err = db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, closeID)
 	must(err)
 	if got := status(); got != "signed_off" {
 		t.Fatalf("the signed QuickBooks capture is shown again: %s", got)
 	}
+	// A capture saved later but taken earlier is neither: the sign-off still stands and covers the pack.
 	_, err = db.Exec(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123',$3,$4,now()-interval '2 hours',now()-interval '1 hour','fixture')`, closeID, connection, rand.Text(), payload)
 	must(err)
 	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
-	call("POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "reopen", "note": "Recapture", "confirmed": true})
-	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
-	call("POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "sign", "note": "Signed over the later-ID capture", "confirmed": true})
-	if got := status(); got != "provisional" {
-		t.Fatalf("a sign-off bound to another capture does not cover the one shown: %s", got)
+	if got := status(); got != "signed_off" || current.State != "signed_off" {
+		t.Fatalf("a capture taken earlier changes neither the sign-off nor the pack: %s (readiness %s)", got, current.State)
 	}
 }
 

@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/quickbooks"
+	"close.local/backend/internal/xero"
 )
 
 type cancellableJob struct {
@@ -78,11 +81,62 @@ func preparationInventory(ctx context.Context, tx *sql.Tx, closeID string) ([]by
 
 // The latest ledger capture is pinned alongside the upload jobs, not disguised
 // as an invoice job. Its absence is explicit and never means complete coverage.
+//
+// The capture is the books', chosen as the tie-out chooses them: the latest QuickBooks period capture (by capture time)
+// of the connection the books are read from (quickbooksReading), unless the close's latest Xero capture is newer. A QuickBooks capture reads exactly as it was stored, so its JSON, and the
+// sign-offs whose digests include it, never change. A Xero capture's coverage is proposed from it on read
+// (xero.Coverage), so every Xero capture has one; it is named "xero:<id>" (snapshot IDs of the two providers would
+// otherwise collide) and is stale once its connection is no longer active, when it is of another month than the
+// close's, or when it cannot be read.
 func ledgerCoverage(ctx context.Context, tx *sql.Tx, closeID string) (json.RawMessage, error) {
 	var raw json.RawMessage
-	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('snapshot_id',s.id::text,'digest',s.digest,'source_id',s.payload->>'source_id','period',s.payload->>'period','captured_at',s.captured_at,'items',s.payload->'coverage','stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id=$1 AND s.payload ? 'period' ORDER BY s.id DESC LIMIT 1),'null'::jsonb)`, closeID).Scan(&raw)
-	return raw, err
+	var quickbooksAt sql.NullTime
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT jsonb_build_object('snapshot_id',s.id::text,'digest',s.digest,'source_id',s.payload->>'source_id','period',s.payload->>'period','captured_at',s.captured_at,'items',s.payload->'coverage','stale',e.id IS NULL OR e.superseded_by IS NOT NULL OR x.state<>'active') FROM quickbooks_snapshots s JOIN quickbooks_connections x ON x.id=s.connection_id LEFT JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1),'null'::jsonb),
+ (SELECT s.captured_at FROM quickbooks_snapshots s WHERE s.close_id=$1 AND s.payload ? 'period' AND `+quickbooksReading+` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1)`, closeID).Scan(&raw, &quickbooksAt)
+	if err != nil {
+		return raw, err
+	}
+	var id, digest, period string
+	var at time.Time
+	var stale bool
+	var payload []byte
+	err = tx.QueryRowContext(ctx, `SELECT s.id::text,s.digest,s.period,s.captured_at,x.state<>'active' OR s.period<>c.period,jsonb_build_object('accounts',s.payload->'accounts','trial_balance',s.payload->'trial_balance')
+ FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id JOIN client_closes c ON c.id=s.close_id WHERE s.close_id=$1 ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID).Scan(&id, &digest, &period, &at, &stale, &payload)
+	if err == sql.ErrNoRows || (err == nil && quickbooksAt.Valid && !at.After(quickbooksAt.Time)) {
+		return raw, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	// A capture it cannot read proposes nothing it could be taken to cover: one item, stale, that only capturing the
+	// month again resolves.
+	items, err := xero.Coverage(payload)
+	if err != nil {
+		stale = true
+		items = []quickbooks.CoverageItem{{Name: "the Xero capture", Kind: "accountant_review", Reason: "The Xero capture cannot be read: " + err.Error() + ".", Question: "Capture the month from Xero again."}}
+	}
+	return json.Marshal(map[string]any{"source": "xero", "snapshot_id": xeroCapture + id, "digest": digest, "source_id": "", "period": period, "captured_at": at.UTC(), "items": items, "stale": stale})
 }
+
+// quickbooksReading is SQL limiting QuickBooks snapshot s to the connection the books are read from, as the tie-out does:
+// the production company unless disconnected, else the sandbox one, or any while the client has none. For a client with
+// one connection it chooses what it always did.
+const quickbooksReading = `s.connection_id=COALESCE(` + quickbooks.ReadingConnectionBefore + `s.close_id` + quickbooks.ReadingConnectionAfter + `,s.connection_id)`
+
+// xeroCapture prefixes a Xero capture's ID wherever coverage names its capture.
+const xeroCapture = "xero:"
+
+// bindingCapture is SQL naming the capture of coverage binding (or hand-off) t as coverage names it: a QuickBooks
+// snapshot's ID, or "xero:" and a Xero snapshot's.
+func bindingCapture(t string) string {
+	return `COALESCE('` + xeroCapture + `'||` + t + `.xero_snapshot_id,` + t + `.snapshot_id::text)`
+}
+
+// captureColumns is SQL for the snapshot_id and xero_snapshot_id values of the capture coverage names in parameter p.
+func captureColumns(p string) string {
+	return `CASE WHEN starts_with(` + p + `::text,'` + xeroCapture + `') THEN NULL ELSE NULLIF(` + p + `::text,'')::bigint END,CASE WHEN starts_with(` + p + `::text,'` + xeroCapture + `') THEN substr(` + p + `::text,` + "6" + `)::bigint END`
+}
+
 func scopeSources(inventory []byte) []byte {
 	var sources []struct {
 		JobID    string `json:"job_id"`

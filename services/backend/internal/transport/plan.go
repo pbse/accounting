@@ -183,25 +183,30 @@ func goalPlan(p goalProgress, b booksRead, closeID, entity, period, finish strin
 		}
 	}
 	accounts := planStep{Key: "accounts", Title: "Cover every account", Link: base + "#coverage-work"}
+	// The accounts come from the books' capture, QuickBooks' or Xero's (ledgerCoverage).
+	capture := "QuickBooks"
+	if p.accounts != nil && strings.HasPrefix(p.accounts.SnapshotID, xeroCapture) {
+		capture = "Xero"
+	}
 	switch {
 	case p.accounts != nil && p.accounts.Stale:
-		accounts.State, accounts.Text = "waits", "Waits on a new QuickBooks capture: these accounts come from an out-of-date one."
+		accounts.State, accounts.Text = "waits", "Waits on a new "+capture+" capture: these accounts come from an out-of-date one."
 	case p.Coverage != nil && p.Coverage.Open == 0:
-		accounts.State, accounts.Text = "done", fmt.Sprintf("All %d accounts in the QuickBooks capture are resolved or excluded.", p.Coverage.Total)
+		accounts.State, accounts.Text = "done", fmt.Sprintf("All %d accounts in the %s capture are resolved or excluded.", p.Coverage.Total, capture)
 	case p.Coverage != nil:
-		accounts.State, accounts.Text = "you", fmt.Sprintf("%d of %d accounts in the QuickBooks capture still need a coverage decision or resolution.", p.Coverage.Open, p.Coverage.Total)
+		accounts.State, accounts.Text = "you", fmt.Sprintf("%d of %d accounts in the %s capture still need a coverage decision or resolution.", p.Coverage.Open, p.Coverage.Total, capture)
 		// A review goal's finish covers the documents, so its accounts are a note for sign-off.
 		if finish == "review" {
 			accounts.State, accounts.Text = "none", "Before sign-off, "+accounts.Text
 		}
 	case p.limited:
 		accounts.State, accounts.Text = "unknown", "This close has more than 100 intake jobs, more than account coverage reads, so its accounts are not shown."
-	case b.source == "xero":
-		accounts.State, accounts.Text = "none", "Account coverage comes from QuickBooks captures, so for this Xero close only the uploaded documents are covered."
 	case b.quickbooks != "":
 		accounts.State, accounts.Text = "waits", "Waits on the month's QuickBooks capture."
+	case b.xero != "":
+		accounts.State, accounts.Text = "waits", "Waits on the month's Xero capture."
 	default:
-		accounts.State, accounts.Text = "none", "Account coverage needs a QuickBooks capture of the month."
+		accounts.State, accounts.Text = "none", "Account coverage needs a QuickBooks or Xero capture of the month."
 	}
 	review := planStep{Key: "review", Title: "Get every draft ready for review", Link: base + "?tab=workpapers"}
 	switch {
