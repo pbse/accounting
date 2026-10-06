@@ -1,6 +1,6 @@
 // Command acceptance runs a corpus of labeled client-months through the real pipeline and scores the result
 // (docs/acceptance-corpus.md). It only uses a local, migrated database holding no closes, so its queue steps take no one
-// else's work and nothing hosted is touched; it exits 1 when the run finds a critical failure.
+// else's work and nothing hosted is touched. It exits 1 when the run finds a critical failure or leaves a document undecided.
 //
 //	acceptance -corpus DIR [-database URL] [-model recorded|live] [-report report.json]
 package main
@@ -43,6 +43,12 @@ func main() {
 		if live, err = llm.FromEnv(); err != nil {
 			log.Fatal(err)
 		}
+	} else {
+		for _, c := range cases {
+			if err = c.RecordedComplete(); err != nil {
+				log.Fatal(err)
+			}
+		}
 	}
 	db, err := transport.OpenTenantDB(*database, "*")
 	if err != nil {
@@ -79,7 +85,7 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	if report.Critical() > 0 {
+	if !report.Passed() {
 		os.Exit(1)
 	}
 }

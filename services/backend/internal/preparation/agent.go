@@ -883,6 +883,23 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 			}
 		}
 		if reason != "" {
+			// An invoice billed to another company says so first, whatever else held it, so the person is told the
+			// material problem rather than only the first check that stopped the agent.
+			billed := ""
+			for _, f := range proposal.Facts {
+				if f.Field == "billed_to" {
+					billed = f.Value
+				}
+			}
+			if billed != "" && !strings.HasPrefix(reason, "The invoice is billed to") {
+				aliases, e := ClientAliases(persist, finish, closeID)
+				if e != nil {
+					return true, e
+				}
+				if e = BilledToClient(billed, entity, aliases); e != nil {
+					reason = e.Error() + "; it was also held because " + reason
+				}
+			}
 			straight = "Waiting for a person: " + reason + "."
 		}
 		if reason == "" {

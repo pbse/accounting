@@ -154,6 +154,9 @@ func (c Case) check() error {
 	if c.Signoff != nil && strings.TrimSpace(c.Signoff.Description) == "" {
 		problems = append(problems, errors.New("a sign-off step says what sign-off covers"))
 	}
+	if c.ExpectReady && c.Signoff == nil {
+		problems = append(problems, errors.New("a close expected ready needs its sign-off step: without one nothing defines the scope"))
+	}
 	if len(c.Documents) == 0 {
 		problems = append(problems, errors.New("a case needs at least one document"))
 	}
@@ -181,6 +184,9 @@ func (c Case) check() error {
 		}
 		if strings.TrimSpace(d.Label.WorkType) == "" {
 			problems = append(problems, fmt.Errorf("document %s: label its work type, or none", d.File))
+		}
+		if _, known := Exceptions[d.Label.Exception]; d.Label.Exception != "" && !known {
+			problems = append(problems, fmt.Errorf("document %s: the harness cannot yet tell whether the app found %q; known: %s", d.File, d.Label.Exception, strings.Join(sortedKeys(Exceptions), ", ")))
 		}
 	}
 	return errors.Join(problems...)

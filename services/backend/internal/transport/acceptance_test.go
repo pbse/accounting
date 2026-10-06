@@ -50,7 +50,7 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 	}
 	report := acceptance.Score(cases, observed)
 	prepaid := report.Tallies["development"]["prepaid"]
-	if report.Critical() != 0 || *prepaid != (acceptance.Tally{Documents: 8, Accepted: 2, Abstained: 3, CaughtExceptions: 3}) {
+	if !report.Passed() || *prepaid != (acceptance.Tally{Documents: 8, Accepted: 2, Abstained: 3, CaughtExceptions: 3}) {
 		t.Fatalf("sample corpus: %+v\n%s\n%+v", *prepaid, report.Markdown(), report.Observed)
 	}
 	straight := report.Observed["straight-through-prepaid"].Documents[0]
@@ -63,8 +63,15 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 	if ready := report.Observed["straight-through-prepaid"]; report.NotReady != 0 || len(ready.Blockers) != 0 {
 		t.Fatalf("with its draft approved and the scope defined, the clean close is ready: %+v", ready)
 	}
-	if held := report.Observed["held-document-blocks-signoff"]; len(held.Blockers) == 0 || !strings.Contains(strings.Join(held.Blockers, " "), "needs confirmation") {
+	held := report.Observed["held-document-blocks-signoff"]
+	if len(held.Blockers) == 0 || !strings.Contains(strings.Join(held.Blockers, " "), "needs confirmation") {
 		t.Fatalf("a held document keeps the close from being ready: %+v", held.Blockers)
+	}
+	// Held first because the clean invoice went unused, the other company's invoice still leads with whose it is.
+	for _, d := range held.Documents {
+		if d.File == "other-company-invoice.txt" && (!strings.HasPrefix(d.Reason, `Waiting for a person: The invoice is billed to "Northwind Other Inc"`) || !strings.Contains(d.Reason, "it was also held because evidence in the close (acme-invoice.txt) was not used")) {
+			t.Fatalf("the other company's invoice names the wrong client first: %s", d.Reason)
+		}
 	}
 	twice := report.Observed["same-invoice-uploaded-twice"]
 	if len(twice.Documents) != 2 || twice.Duplicates != 0 || (twice.Documents[0].SameAs == "") == (twice.Documents[1].SameAs == "") {

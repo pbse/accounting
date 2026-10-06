@@ -58,7 +58,8 @@ type Failure struct {
 
 // Report is a run's result: tallies by split and work type, the case-level checks, and every critical failure. Critical
 // failures (false accepted facts, incorrect drafts, missed exceptions, false-ready closes, external actions and
-// duplicates) fail the run; abstentions and false exceptions are reported with their denominators but do not.
+// duplicates) fail the run, and so does any document the pipeline never decided on: the run has not evaluated it.
+// Abstentions and false exceptions are reported with their denominators but do not fail it.
 type Report struct {
 	Cases           int                          `json:"cases"`
 	Tallies         map[string]map[string]*Tally `json:"tallies"` // split → work type → tally
@@ -67,15 +68,34 @@ type Report struct {
 	ExternalActions int                          `json:"external_actions"`
 	Duplicates      int                          `json:"duplicates"`
 	Failures        []Failure                    `json:"failures"`
+	NotProcessed    []Failure                    `json:"not_processed"`
 	Observed        map[string]CaseObserved      `json:"observed"`
 }
 
 // Critical is how many critical failures the run found.
 func (r Report) Critical() int { return len(r.Failures) }
 
+// Passed is a run with no critical failure in which every document was decided on.
+func (r Report) Passed() bool { return len(r.Failures) == 0 && len(r.NotProcessed) == 0 }
+
+// Exceptions are the labeled problems the harness can score, each with the app's own sign that it found that problem.
+// A held document counts as a caught problem only when that sign shows: holding it for another reason (say a missing
+// ledger capture) leaves the person uninformed, so it is a missed exception. Add a problem here with its sign.
+var Exceptions = map[string]func(Observed) bool{
+	// The identity block, or the straight-through check that refuses another company's name as billed to.
+	"wrong_client": func(o Observed) bool {
+		return o.Engine == "identity_blocked" || strings.Contains(o.Reason, "is billed to")
+	},
+	// The same bytes again are one document: no second piece of work.
+	"duplicate": func(o Observed) bool { return o.SameAs != "" },
+}
+
+// noWork is the sign that a document with no accounting work was read as such.
+func noWork(o Observed) bool { return o.Kind == "unsupported" }
+
 // Score compares each case's observations with its labels.
 func Score(cases []Case, observed []CaseObserved) Report {
-	r := Report{Cases: len(cases), Tallies: map[string]map[string]*Tally{}, Failures: []Failure{}, Observed: map[string]CaseObserved{}}
+	r := Report{Cases: len(cases), Tallies: map[string]map[string]*Tally{}, Failures: []Failure{}, NotProcessed: []Failure{}, Observed: map[string]CaseObserved{}}
 	for i, c := range cases {
 		o := observed[i]
 		r.Observed[c.ID] = o
@@ -101,9 +121,13 @@ func Score(cases []Case, observed []CaseObserved) Report {
 			problem := label.Exception != "" || label.WorkType == "none"
 			// Held: the job settled waiting for a person, which is how a problem is caught or a clean document asked about.
 			held := got.JobState == "needs_confirmation" || got.JobState == "waiting_client" || got.JobState == "waiting_evidence"
+			found := noWork
+			if label.Exception != "" {
+				found = Exceptions[label.Exception]
+			}
 			switch {
-			case label.Exception == "duplicate" && got.SameAs != "":
-				t.CaughtExceptions++ // folded into the earlier document: no second piece of work
+			case label.Exception == "duplicate" && found(got):
+				t.CaughtExceptions++ // folded into the earlier document, whatever became of that one
 			case problem && got.Accepted:
 				t.MissedExceptions++
 				fail(d.File, "missed_exception", fmt.Sprintf("the agent went on past %s", or(label.Exception, "a document with no accounting work")))
@@ -127,8 +151,12 @@ func Score(cases []Case, observed []CaseObserved) Report {
 				}
 			case !held:
 				t.Unprocessed++
-			case problem:
+				r.NotProcessed = append(r.NotProcessed, Failure{Case: c.ID, Document: d.File, Kind: "not_processed", Detail: fmt.Sprintf("job %s", or(got.JobState, "never started"))})
+			case problem && found != nil && found(got):
 				t.CaughtExceptions++
+			case problem:
+				t.MissedExceptions++
+				fail(d.File, "missed_exception", fmt.Sprintf("held, but not for %s: %s", or(label.Exception, "having no accounting work"), or(got.Reason, "no reason recorded")))
 			case got.Engine == "identity_blocked" || got.Kind == "unsupported":
 				t.FalseExceptions++
 			default:
@@ -171,7 +199,7 @@ func sameValue(got, want string) bool {
 	return strings.EqualFold(strings.Join(strings.Fields(g), " "), strings.Join(strings.Fields(w), " "))
 }
 
-func sortedKeys(m map[string]string) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -190,7 +218,7 @@ func or(s, otherwise string) string {
 // Markdown is the report for people: a table per split, the case-level checks and every critical failure.
 func (r Report) Markdown() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Acceptance run\n\n%d case(s). Critical failures: %d.\n", r.Cases, r.Critical())
+	fmt.Fprintf(&b, "# Acceptance run\n\n%d case(s). Critical failures: %d. Not processed: %d.\n", r.Cases, r.Critical(), len(r.NotProcessed))
 	for _, split := range []string{"development", "held_out"} {
 		byType := r.Tallies[split]
 		if len(byType) == 0 {
@@ -208,9 +236,15 @@ func (r Report) Markdown() string {
 		}
 	}
 	fmt.Fprintf(&b, "\nClose checks: %d falsely ready, %d expected ready but still blocked, %d posting attempt(s), %d duplicate job(s).\n", r.FalseReady, r.NotReady, r.ExternalActions, r.Duplicates)
-	if len(r.Failures) > 0 {
-		b.WriteString("\n## Critical failures\n\n")
-		for _, f := range r.Failures {
+	for _, section := range []struct {
+		title    string
+		failures []Failure
+	}{{"Critical failures", r.Failures}, {"Not processed", r.NotProcessed}} {
+		if len(section.failures) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n## %s\n\n", section.title)
+		for _, f := range section.failures {
 			where := f.Case
 			if f.Document != "" {
 				where += " / " + f.Document
@@ -222,33 +256,49 @@ func (r Report) Markdown() string {
 }
 
 // compareDrafts sets the drafts a job prepared against the label's: the same number, and each labeled entry matched by a
-// different draft on every field it gives. It returns one problem per missing or extra draft and per unmatched entry.
+// different draft on every field it gives (a full matching, so a broad label never takes the draft a narrower one needs).
+// It returns one problem for a wrong count and one per labeled entry left unmatched.
 func compareDrafts(got, want []Entry) []string {
 	problems := []string{}
 	if len(got) != len(want) {
 		problems = append(problems, fmt.Sprintf("%d draft(s); the label expects %d", len(got), len(want)))
 	}
-	used := make([]bool, len(got))
-	for _, w := range want {
-		match := -1
-		for i, g := range got {
-			if !used[i] && len(entryDifferences(g, w)) == 0 {
-				match = i
-				break
+	owner := make([]int, len(got)) // the labeled entry each draft is matched to, or -1
+	for i := range owner {
+		owner[i] = -1
+	}
+	var assign func(w int, seen []bool) bool
+	assign = func(w int, seen []bool) bool {
+		for g := range got {
+			if seen[g] || len(entryDifferences(got[g], want[w])) > 0 {
+				continue
+			}
+			seen[g] = true
+			if owner[g] < 0 || assign(owner[g], seen) {
+				owner[g] = w
+				return true
 			}
 		}
-		if match >= 0 {
-			used[match] = true
-			continue
+		return false
+	}
+	unmatched := []int{}
+	for w := range want {
+		if !assign(w, make([]bool, len(got))) {
+			unmatched = append(unmatched, w)
 		}
+	}
+	spare := []Entry{}
+	for g, w := range owner {
+		if w < 0 {
+			spare = append(spare, got[g])
+		}
+	}
+	for i, w := range unmatched {
 		closest := Entry{}
-		for i, g := range got {
-			if !used[i] {
-				closest = g
-				break
-			}
+		if i < len(spare) {
+			closest = spare[i]
 		}
-		problems = append(problems, fmt.Sprintf("no draft matches the labeled entry: %s", strings.Join(entryDifferences(closest, w), "; ")))
+		problems = append(problems, fmt.Sprintf("no draft matches the labeled entry: %s", strings.Join(entryDifferences(closest, want[w]), "; ")))
 	}
 	return problems
 }

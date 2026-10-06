@@ -49,8 +49,12 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
   - `work_type`: `prepaid`, `accrual` and so on, or `none` for a document with no accounting work.
   - `facts`: the values a correct reading gives.
   - `drafts`: every entry correct preparation proposes, each with `date`, `debit_account`, `credit_account` and `amount`. A field left out is not judged; leaving out `drafts` leaves the drafts unjudged.
-  - `exception`: a material problem a person must see before anything goes on, such as `wrong_client` or `missing_pages`. A file whose bytes repeat an earlier one's is one document to the app, so it must be labeled `duplicate`, and the case is refused otherwise.
-- **`signoff`.** The accountant's part once the agent is done, applied after the pipeline settles and recorded as "acceptance reviewer". With `approve_drafts`, every current draft is approved; the scope is defined as covering every draft. Readiness is then read as sign-off reads it. Without `signoff`, nothing defines the scope, so the close is never ready, and `expect_ready` must be false.
+  - `exception`: a material problem a person must see before anything goes on. A problem counts as caught only when the app's own sign for it shows, so the harness accepts only problems it has a sign for:
+    - `wrong_client`: the identity block, or a hold reason naming the invoice as billed to someone other than the client.
+    - `duplicate`: a file whose bytes repeat an earlier one's, kept by the app as that document. Such a file must be labeled `duplicate`, and the case is refused otherwise.
+
+    Other problems the plan requires (an OCR decimal error, missing pages, conflicting totals) are added to `acceptance.Exceptions` with their sign as the app learns to report them. Until then, a case can still label the facts and drafts of such a document.
+- **`signoff`.** The accountant's part once the agent is done, applied after the pipeline settles and recorded as "acceptance reviewer". With `approve_drafts`, every current draft is approved; the scope is defined as covering every draft. Readiness is then read as sign-off reads it. Without `signoff`, nothing defines the scope, so the close is never ready: a case with `expect_ready` true and no `signoff` is refused.
 - **`expect_ready`.** Whether the accountant's label says the close may be signed off once that is done.
 - **`model`.** A recorded answer, in the model's answer shape. `"$primary"` stands for this document's evidence ID, and `"$source:<file>"` for another document's. Its quotes must be lines of the document, as a real reading's are.
 
@@ -64,11 +68,11 @@ go run ./cmd/acceptance -corpus ../path/to/corpus -database postgres://…@127.0
 ```
 
 - **Model.**
-  - `-model recorded` replays each document's recorded answer. It tests everything around the model.
+  - `-model recorded` replays each document's recorded answer. It tests everything around the model. Every document the app keeps needs one, and the command refuses the corpus otherwise.
   - `-model live` reads with the model configured in the environment (the same settings as the API: `LLM_PROVIDER`, `OPENAI_*` or `CONTEXT_MACHINE_*`). The release corpus is run this way, with the configured model version.
 - **PDFs** need `pdftotext`, `pdfinfo` and `tesseract`. Run PDF cases where those exist, such as the [release-check image](operations.md#release-revision-check).
 
-The command prints a Markdown report and exits 1 on any critical failure. `-report` writes the full report as JSON, including every document's observed outcome.
+The command prints a Markdown report. It exits 1 on any critical failure, and on any document the pipeline never decided on, since the run has not evaluated it. `-report` writes the full report as JSON, including every document's observed outcome.
 
 ## What is scored
 
@@ -78,13 +82,13 @@ Every document counts once, in its split and its labeled work type:
 | --- | --- | --- |
 | Went on alone | The agent confirmed the reading itself and prepared the work | — |
 | Asked a person (nothing wrong) | An abstention: a clean document put to a person. It is reported because a high rate fails the coverage and effort gates. | no |
-| Problems held | A document with a labeled exception whose job settled waiting for a person, or a duplicate kept as the earlier document | — |
+| Problems held | A document with a labeled exception whose job settled waiting for a person with the app's sign for that problem, or a duplicate kept as the earlier document | — |
 | False accepted facts | A fact the agent went on with that the label contradicts (one per field) | **yes** |
-| Incorrect drafts | Work the agent prepared alone that is of the wrong kind, has more or fewer drafts than the label, or has a labeled entry no draft matches on date, accounts and amount (one per problem) | **yes** |
-| Missed problems | A labeled exception, or a document with no work, that the agent went past | **yes** |
+| Incorrect drafts | Work the agent prepared alone that is of the wrong kind, has more or fewer drafts than the label, or has a labeled entry no draft matches on date, accounts and amount, each draft matching at most one entry (one per problem) | **yes** |
+| Missed problems | A labeled exception, or a document with no work, that the agent went past, or held without its sign (for another reason, so the person was not told) | **yes** |
 | False exceptions | A clean document refused (for example as another client's, or as no work) | no |
 | Wrong values put to a person | Wrong values a person would have to correct | no |
-| Not processed | No job started, it failed, or it had not settled. Nothing was decided, so a labeled problem here is not counted as held. | no, but reported |
+| Not processed | No job started, it failed, or it had not settled. Nothing was decided, so a labeled problem here is not counted as held. | fails the run |
 
 Per case it also counts:
 - **False-ready closes** (critical): nothing blocks sign-off while the label says the close is not ready.
