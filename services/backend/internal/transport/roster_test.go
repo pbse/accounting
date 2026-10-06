@@ -204,6 +204,28 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		t.Fatalf("its latest decision covers both names: %v", got)
 	}
 
+	// A month opened under a client's confirmed alias goes to its owner as the client's own would, and deactivating the
+	// client stops a hand-over set up under the alias.
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Zeta',true,'Synthetic','fixture')`, org)
+	must(err)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Zeta", "active": true, "since": ended, "owner": cy, "reason": "Cy's client"}, 200)
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Zeta','zeta co','fixture',now()-interval '1 day')`, org)
+	must(err)
+	var zeta savedClose
+	must(json.Unmarshal([]byte(call("user_a", admin, "POST", "/v1/closes", map[string]string{"entity": "Zeta Co", "period": ended}, 200)), &zeta))
+	must(db.QueryRow(`SELECT owner FROM client_closes WHERE id::text=$1`, zeta.ID).Scan(&holder))
+	if holder != "user_c" {
+		t.Fatalf("Zeta's owner holds the month opened under its alias: %q", holder)
+	}
+	_, err = db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period) VALUES($1,'Zeta Co','user_b',false,'review',$2)`, org, ended)
+	must(err)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Zeta", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+	var zetaStopped bool
+	must(db.QueryRow(`SELECT stopped_at IS NOT NULL FROM close_routines WHERE organization_id=$1 AND client_entity='Zeta Co'`, org).Scan(&zetaStopped))
+	if !zetaStopped {
+		t.Fatal("deactivating Zeta stops the hand-over set up under its alias")
+	}
+
 	// A client can have no due date even though the template sets one.
 	zero := 0
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": true, "since": ended, "due_days": zero, "reason": "No deadline"}, 200)

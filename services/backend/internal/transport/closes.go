@@ -260,14 +260,11 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 403, "You are not assigned to this client.")
 			return
 		}
-		// The firm's roles are read before any lock is taken, and only when the template would give the close an owner;
-		// roles that cannot be read give it none (applyCloseTemplate).
+		// The firm's roles are read before any lock is taken, for the owner the template may give the close; roles that
+		// cannot be read give it none (applyCloseTemplate).
 		var roles map[string]reviewer
 		if org := organization(r); org != "local-development" {
-			var owner string
-			if e := db.QueryRowContext(r.Context(), `SELECT COALESCE(r.owner,t.owner,'') FROM current_client_roster r `+rosterTemplate+` WHERE `+rosterMatch("$1", "$2")+` AND r.active`, org, input.Entity).Scan(&owner); e == nil && owner != "" {
-				roles, _ = firmReviewers(r.Context(), org)
-			}
+			roles, _ = firmReviewers(r.Context(), org)
 		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {

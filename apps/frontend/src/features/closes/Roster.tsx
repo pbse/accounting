@@ -46,6 +46,7 @@ export function ClientRoster() {
         )}
         , unless the client's own entry says otherwise.
       </p>
+      {error && <p role="alert">{error} Showing the last roster read.</p>}
       {roster.people_unavailable && <p role="alert">{roster.people_unavailable}</p>}
       {roster.can_manage && <TemplateForm key={t?.at ?? "none"} template={t} people={people.filter((p) => p.firm_wide)} onSaved={() => setRefresh((n) => n + 1)} />}
       {roster.clients.length === 0 ? (

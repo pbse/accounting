@@ -41,7 +41,7 @@ func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles m
 	var member, assigned bool
 	err := tx.QueryRowContext(ctx, `SELECT c.organization_id,c.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
  EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=c.organization_id AND m.subject=COALESCE(r.owner,t.owner,'') AND m.granted),
- EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=COALESCE(r.owner,t.owner,'') AND lower(g.client_entity)=lower(c.entity) AND g.granted)
+ EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=COALESCE(r.owner,t.owner,'') AND client_identity(g.organization_id,g.client_entity)=client_identity(c.organization_id,c.entity) AND g.granted)
  FROM client_closes c JOIN current_client_roster r ON `+rosterMatch("c.organization_id", "c.entity")+` AND r.active `+rosterTemplate+`
  WHERE c.id::text=$1`, closeID).Scan(&org, &period, &dueDays, &owner, &member, &assigned)
 	if err == sql.ErrNoRows {
@@ -314,7 +314,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		// A client that owes nothing more has no monthly hand-over to open its months.
 		if err == nil && !in.Active {
-			_, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND stopped_at IS NULL`,
+			_, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND stopped_at IS NULL`,
 				organization(r), in.Entity, subject(r), "Stopped when "+in.Entity+" left the firm's roster: "+in.Reason)
 		}
 		if err != nil || tx.Commit() != nil {

@@ -83,14 +83,11 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 				return
 			}
 		}
-		// A next month this opens takes the firm's monthly close template; the firm's roles are read before any lock is
-		// taken, and only when the template would give the close an owner.
+		// A next month this opens takes the firm's monthly close template; the firm's roles, for the owner it may give the
+		// close, are read before any lock is taken.
 		var roles map[string]reviewer
 		if org := organization(r); r.Method == "POST" && org != "local-development" {
-			var owner string
-			if e := db.QueryRowContext(r.Context(), `SELECT COALESCE(r.owner,t.owner,'') FROM client_closes c JOIN current_client_roster r ON `+rosterMatch("c.organization_id", "c.entity")+` AND r.active `+rosterTemplate+` WHERE c.id::text=$1`, r.PathValue("id")).Scan(&owner); e == nil && owner != "" {
-				roles, _ = firmReviewers(r.Context(), org)
-			}
+			roles, _ = firmReviewers(r.Context(), org)
 		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
