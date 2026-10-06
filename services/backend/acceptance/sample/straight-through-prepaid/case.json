@@ -18,17 +18,20 @@
     {
      "id": "12",
      "name": "Insurance",
-     "type": "Expense"
+     "type": "Expense",
+     "subtype": "Insurance"
     },
     {
      "id": "13",
      "name": "Prepaid Expenses",
-     "type": "Other Current Asset"
+     "type": "Other Current Asset",
+     "subtype": "PrepaidExpenses"
     },
     {
      "id": "20",
      "name": "Accounts Payable",
-     "type": "Accounts Payable"
+     "type": "Accounts Payable",
+     "subtype": "AccountsPayable"
     }
    ],
    "bills": [
@@ -79,6 +82,22 @@
  "expect_ready": true,
  "signoff": {
   "description": "Prepaid insurance for September",
-  "approve_drafts": true
+  "approve_drafts": true,
+  "coverage": [
+   {
+    "account_id": "13",
+    "documents": [
+     "acme-invoice.txt"
+    ]
+   },
+   {
+    "account_id": "12",
+    "exclude": "Period expense: September's insurance cost is reviewed with the invoice."
+   },
+   {
+    "account_id": "20",
+    "exclude": "Payables are reviewed in the aging, outside this close's scope."
+   }
+  ]
  }
 }

@@ -1,19 +1,23 @@
 package transport
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"close.local/backend/internal/acceptance"
 	"close.local/backend/internal/auth"
 	"close.local/backend/internal/documents"
 	"close.local/backend/internal/llm"
 	"close.local/backend/internal/preparation"
+	"close.local/backend/internal/quickbooks"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -111,7 +115,7 @@ func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, firm 
 		}
 	}
 	if s := c.Signoff; s != nil {
-		if err = acceptanceSignoff(ctx, db, closeID, *s); err != nil {
+		if err = acceptanceSignoff(ctx, db, closeID, *s, uploads); err != nil {
 			return observed, fmt.Errorf("case %s sign-off: %w", c.ID, err)
 		}
 	}
@@ -119,11 +123,37 @@ func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, firm 
 }
 
 // acceptanceSignoff does the accountant's part once the agent is done, recorded under "acceptance reviewer": approve every
-// current draft, when the case asks, and define what sign-off covers (every draft). Readiness then reads as sign-off would.
-func acceptanceSignoff(ctx context.Context, db *sql.DB, closeID string, s acceptance.Signoff) error {
+// current draft, when the case asks; decide the capture's coverage, binding each account to its documents' work or
+// excluding it with the case's reason; and define what sign-off covers (every draft). Readiness then reads as sign-off
+// would. uploads lists each evidence ID's files.
+func acceptanceSignoff(ctx context.Context, db *sql.DB, closeID string, s acceptance.Signoff, uploads map[string][]string) error {
 	if s.ApproveDrafts {
 		if _, err := db.ExecContext(ctx, `INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) SELECT id,digest,'approved','Approved in the acceptance run','acceptance reviewer'
  FROM workpapers w WHERE close_id=$1 AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`, closeID); err != nil {
+			return err
+		}
+	}
+	evidence := map[string]string{}
+	for id, files := range uploads {
+		for _, file := range files {
+			evidence[file] = id
+		}
+	}
+	for _, decision := range s.Coverage {
+		jobs := []string{}
+		for _, file := range decision.Documents {
+			var job string
+			if err := db.QueryRowContext(ctx, `SELECT j.id::text FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE i.source_id::text=$1 AND j.state<>'cancelled' ORDER BY j.id DESC LIMIT 1`, evidence[file]).Scan(&job); err != nil {
+				return fmt.Errorf("coverage for account %s: %s has no work: %w", decision.AccountID, file, err)
+			}
+			if !slices.Contains(jobs, job) {
+				jobs = append(jobs, job)
+			}
+		}
+		ids, _ := json.Marshal(jobs)
+		reason := cmp.Or(decision.Exclude, "Covered by the case's documents in the acceptance run")
+		if _, err := db.ExecContext(ctx, `INSERT INTO coverage_bindings(close_id,snapshot_id,account_id,job_ids,excluded,reason,actor) SELECT $1,s.id,$2,$3,$4,$5,'acceptance reviewer' FROM quickbooks_snapshots s
+ WHERE s.close_id=$1 AND s.payload ? 'period' ORDER BY s.captured_at DESC,s.id DESC LIMIT 1`, closeID, decision.AccountID, string(ids), decision.Exclude != "", reason); err != nil {
 			return err
 		}
 	}
@@ -169,41 +199,58 @@ func acceptanceSetup(ctx context.Context, db *sql.DB, org, closeID string, c acc
 		err := db.QueryRowContext(ctx, `INSERT INTO evidence(close_id,name,digest,content,created_by,extraction_state) VALUES($1,$2,$3,$4,'acceptance','ready') RETURNING id::text`, closeID, name, preparation.Digest([]byte(body)), body).Scan(&id)
 		return id, err
 	}
-	var err error
-	if captured, err = evidence("QuickBooks transactions "+c.Period, "acceptance capture "+closeID); err != nil {
-		return err
-	}
-	if err = db.QueryRowContext(ctx, `INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,started_at,finished_at,payload) VALUES($1,$2,$3,'acceptance','completed',$4,now()-interval '1 hour',now()-interval '1 hour','{}') RETURNING id::text`,
-		closeID, connection, c.Period, captured).Scan(&syncID); err != nil {
-		return err
-	}
 	accounts := map[string]string{}
 	for _, a := range l.Accounts {
 		accounts[a.ID] = a.Name
 	}
+	// The month's transactions as the sync keeps them: one row per bill, and in the close an index of the capture.
+	records := make([]string, len(l.Bills))
 	for i, b := range l.Bills {
-		record, _ := json.Marshal(map[string]any{"DocNumber": b.Number, "TotalAmt": json.Number(b.Amount), "VendorRef": map[string]string{"value": fmt.Sprint(100 + i), "name": b.Vendor},
+		raw, _ := json.Marshal(map[string]any{"DocNumber": b.Number, "TotalAmt": json.Number(b.Amount), "VendorRef": map[string]string{"value": fmt.Sprint(100 + i), "name": b.Vendor},
 			"Line": []map[string]any{{"Amount": json.Number(b.Amount), "AccountBasedExpenseLineDetail": map[string]any{"AccountRef": map[string]string{"value": b.AccountID, "name": accounts[b.AccountID]}}}}})
+		records[i] = string(raw)
+	}
+	all, _ := json.Marshal(records)
+	counts := map[string]int{"Bill": len(l.Bills)}
+	index, _ := json.Marshal(map[string]any{"source": "quickbooks_transactions", "period": c.Period, "realm": "acceptance", "counts": counts, "capture_digest": preparation.Digest(all)})
+	var err error
+	if captured, err = evidence("QuickBooks transactions "+c.Period, string(index)); err != nil {
+		return err
+	}
+	summary, _ := json.Marshal(map[string]any{"counts": counts})
+	if err = db.QueryRowContext(ctx, `INSERT INTO quickbooks_entity_syncs(close_id,connection_id,period,requested_by,state,evidence_id,started_at,finished_at,payload) VALUES($1,$2,$3,'acceptance','completed',$4,now()-interval '1 hour',now()-interval '1 hour',$5) RETURNING id::text`,
+		closeID, connection, c.Period, captured, string(summary)).Scan(&syncID); err != nil {
+		return err
+	}
+	for i, b := range l.Bills {
 		if _, err = db.ExecContext(ctx, `INSERT INTO quickbooks_transaction_rows(sync_id,kind,provider_id,revision,txn_date,provider_updated_at,currency,amount,record) VALUES($1,'Bill',$2,'1',$3,now(),$4,$5,$6)`,
-			syncID, fmt.Sprint(1000+i), b.Date, l.HomeCurrency, b.Amount, string(record)); err != nil {
+			syncID, fmt.Sprint(1000+i), b.Date, l.HomeCurrency, b.Amount, records[i]); err != nil {
 			return err
 		}
 	}
-	if snapshot, err = evidence("QuickBooks "+c.Period+" accrual period evidence.txt", "acceptance period snapshot "+closeID); err != nil {
-		return err
-	}
+	// The month-end capture, assembled by the code a real capture uses (quickbooks.PeriodSnapshot) from the chart and the
+	// Trial Balance in the report shape QuickBooks returns; its evidence is what a real capture puts in the close.
 	chart := []map[string]string{}
 	for _, a := range l.Accounts {
-		chart = append(chart, map[string]string{"Id": a.ID, "Name": a.Name, "FullyQualifiedName": a.Name, "AccountType": a.Type})
+		chart = append(chart, map[string]string{"Id": a.ID, "Name": a.Name, "FullyQualifiedName": a.Name, "AccountType": a.Type, "AccountSubType": a.Subtype})
 	}
-	// The month-end Trial Balance, in the report shape QuickBooks returns.
 	rows := []map[string]any{}
 	for _, b := range l.TrialBalance {
 		rows = append(rows, map[string]any{"type": "Data", "ColData": []map[string]string{{"id": b.AccountID, "value": accounts[b.AccountID]}, {"value": b.Debit}, {"value": b.Credit}}})
 	}
-	trialBalance := map[string]any{"Header": map[string]string{"Currency": l.HomeCurrency}, "Columns": map[string]any{"Column": []map[string]string{{"ColTitle": ""}, {"ColTitle": "Debit"}, {"ColTitle": "Credit"}}}, "Rows": map[string]any{"Row": rows}}
-	payload, _ := json.Marshal(map[string]any{"period": c.Period, "source_id": snapshot, "accounts": chart, "reports": map[string]any{"TrialBalance": trialBalance}})
-	_, err = db.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'acceptance',$3,$4,now(),now(),'acceptance')`, closeID, connection, rand.Text(), string(payload))
+	directory, _ := json.Marshal(chart)
+	trialBalance, _ := json.Marshal(map[string]any{"Header": map[string]string{"Currency": l.HomeCurrency}, "Columns": map[string]any{"Column": []map[string]string{{"ColTitle": ""}, {"ColTitle": "Debit"}, {"ColTitle": "Credit"}}}, "Rows": map[string]any{"Row": rows}})
+	started := time.Now()
+	captureSnapshot, body, err := quickbooks.PeriodSnapshot("sandbox", "acceptance", c.Client, c.Period, directory, map[string]json.RawMessage{"TrialBalance": trialBalance}, started)
+	if err != nil {
+		return err
+	}
+	if snapshot, err = evidence("QuickBooks "+c.Period+" accrual period evidence.txt", string(body)); err != nil {
+		return err
+	}
+	captureSnapshot["source_id"] = snapshot
+	payload, _ := json.Marshal(captureSnapshot)
+	_, err = db.ExecContext(ctx, `INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'acceptance',$3,$4,$5,now(),'acceptance')`, closeID, connection, rand.Text(), string(payload), started)
 	return err
 }
 

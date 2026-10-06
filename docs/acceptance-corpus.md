@@ -34,21 +34,25 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
   "setup": {
     "prepaid_procedure": {"method": "equal_full_months_v1", "expense_account": "Insurance", "prepaid_account": "Prepaid Expenses"},
     "quickbooks": {"home_currency": "USD",
-                   "accounts": [{"id": "12", "name": "Insurance", "type": "Expense"}, {"id": "13", "name": "Prepaid Expenses", "type": "Other Current Asset"},
-                                {"id": "20", "name": "Accounts Payable", "type": "Accounts Payable"}],
+                   "accounts": [{"id": "12", "name": "Insurance", "type": "Expense", "subtype": "Insurance"},
+                                {"id": "13", "name": "Prepaid Expenses", "type": "Other Current Asset", "subtype": "PrepaidExpenses"},
+                                {"id": "20", "name": "Accounts Payable", "type": "Accounts Payable", "subtype": "AccountsPayable"}],
                    "bills": [{"vendor": "Acme Insurance Co", "number": "INV-778", "amount": "1200.00", "date": "2026-09-03", "account_id": "12"}],
                    "trial_balance": [{"account_id": "12", "debit": "1200.00"}, {"account_id": "13"}, {"account_id": "20", "credit": "1200.00"}]}
   },
   "documents": [{"file": "invoice.pdf", "model": "invoice.model.json",
                  "label": {"work_type": "prepaid", "facts": {"amount": "1200.00"},
                            "drafts": [{"debit_account": "Prepaid Expenses", "credit_account": "Insurance", "amount": "1100.00"}]}}],
-  "signoff": {"description": "Prepaid insurance for September", "approve_drafts": true},
+  "signoff": {"description": "Prepaid insurance for September", "approve_drafts": true,
+              "coverage": [{"account_id": "13", "documents": ["invoice.pdf"]},
+                           {"account_id": "12", "exclude": "Period expense: reviewed with the invoice."},
+                           {"account_id": "20", "exclude": "Payables are reviewed in the aging, outside this close."}]},
   "expect_ready": true
 }
 ```
 
 - **`split`.** `development` cases may guide changes. `held_out` cases are kept out of tuning and are reported separately. Leave out later facts and final adjustments from a historical case's inputs.
-- **`setup`.** The firm's configuration before the documents arrive: an enabled prepaid procedure, and a QuickBooks capture of the month. The capture holds the chart of accounts (with QuickBooks account types), the month's bills and the month-end Trial Balance, which every real capture holds. Readiness ties the supported balances out against that Trial Balance, counting proposed entries, so a balance that would not tie blocks sign-off. Other setup is added as cases need it.
+- **`setup`.** The firm's configuration before the documents arrive: an enabled prepaid procedure, and a QuickBooks capture of the month. The capture holds the chart of accounts (with QuickBooks account types and subtypes), the month's bills and the month-end Trial Balance, which every real capture holds. It is assembled by the code a real capture uses (`quickbooks.PeriodSnapshot`), so the model reads the same capture evidence, and the capture asks the same coverage questions per account. Readiness ties the supported balances out against that Trial Balance, counting proposed entries, so a balance that would not tie blocks sign-off. Other setup is added as cases need it.
 - **`label`.** The accountant's judgment of the document, not of any reading:
   - `work_type`: `prepaid`, `accrual` and so on, or `none` for a document with no accounting work.
   - `facts`: the values a correct reading gives.
@@ -58,7 +62,7 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
     - `duplicate`: a file whose uploaded bytes repeat an earlier one's, kept by the app as that document. A workbook is compared as the CSV of its first sheet, as it is uploaded: the harness and the upload route share that conversion, and a file over the route's 5 MiB limit is refused. Such a file must be labeled `duplicate`, and the case is refused otherwise.
 
     Other problems the plan requires (an OCR decimal error, missing pages, conflicting totals) are added to `acceptance.Exceptions` with their sign as the app learns to report them. Until then, a case can still label the facts and drafts of such a document.
-- **`signoff`.** The accountant's part once the agent is done, applied after the pipeline settles and recorded as "acceptance reviewer". With `approve_drafts`, every current draft is approved; the scope is defined as covering every draft. Readiness is then read as sign-off reads it. Without `signoff`, nothing defines the scope, so the close is never ready: a case with `expect_ready` true and no `signoff` is refused.
+- **`signoff`.** The accountant's part once the agent is done, applied after the pipeline settles and recorded as "acceptance reviewer". With `approve_drafts`, every current draft is approved. `coverage` gives the accountant's answer to each account the capture asks about: the documents whose work supports it, or the reason it is excluded. An account left unanswered keeps blocking sign-off. The scope is defined as covering every draft. Readiness is then read as sign-off reads it. Without `signoff`, nothing defines the scope, so the close is never ready: a case with `expect_ready` true and no `signoff` is refused.
 - **`expect_ready`.** Whether the accountant's label says the close may be signed off once that is done.
 - **`selection`.** A recorded evidence-selection answer, `{"selected_ids": ["$primary", "$source:<file>"]}`. It is needed only when the close is too large to read whole: more than 20 sources, or 128 KiB of text. The model then first chooses what to read with this document; without a recorded selection, that document's job fails and the run reports it as not processed, with the reason.
 - **`model`.** A recorded answer, in the model's answer shape. `"$primary"` stands for this document's evidence ID, and `"$source:<file>"` for another document's. Its quotes must be lines of the document, as a real reading's are.

@@ -36,8 +36,17 @@ type Case struct {
 
 // Signoff is the accountant's part before sign-off, simulated after the pipeline settles.
 type Signoff struct {
-	Description   string `json:"description"`
-	ApproveDrafts bool   `json:"approve_drafts"`
+	Description   string     `json:"description"`
+	ApproveDrafts bool       `json:"approve_drafts"`
+	Coverage      []Coverage `json:"coverage,omitempty"`
+}
+
+// Coverage is the accountant's decision for one account the month-end capture asks about: the documents whose work
+// supports it, or why it is left out of the close.
+type Coverage struct {
+	AccountID string   `json:"account_id"`
+	Documents []string `json:"documents,omitempty"`
+	Exclude   string   `json:"exclude,omitempty"`
 }
 
 // Setup is the firm configuration the case needs before its documents arrive.
@@ -62,11 +71,13 @@ type Ledger struct {
 	TrialBalance []Balance `json:"trial_balance"`
 }
 
-// Account is a chart account; Type is its QuickBooks account type (Expense, Other Current Asset, Accounts Payable, …).
+// Account is a chart account with its QuickBooks account type and subtype (Other Current Asset and PrepaidExpenses,
+// Expense and Insurance, …), which decide what the capture asks the close to cover for it.
 type Account struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type,omitempty"`
+	Subtype string `json:"subtype,omitempty"`
 }
 
 // Balance is one Trial Balance row: an account's debit or credit balance at month-end; both empty is zero.
@@ -219,6 +230,30 @@ func (c Case) check() error {
 	}
 	if l := c.Setup.QuickBooks; l != nil {
 		problems = append(problems, l.check()...)
+	}
+	if s := c.Signoff; s != nil {
+		chart, files := map[string]bool{}, map[string]bool{}
+		if l := c.Setup.QuickBooks; l != nil {
+			for _, a := range l.Accounts {
+				chart[a.ID] = true
+			}
+		}
+		for _, d := range c.Documents {
+			files[d.File] = true
+		}
+		for _, decision := range s.Coverage {
+			if !chart[decision.AccountID] {
+				problems = append(problems, fmt.Errorf("coverage for account %q: not in the ledger capture's chart", decision.AccountID))
+			}
+			if (len(decision.Documents) == 0) == (strings.TrimSpace(decision.Exclude) == "") {
+				problems = append(problems, fmt.Errorf("coverage for account %s: give its documents or the reason it is excluded, not both", decision.AccountID))
+			}
+			for _, file := range decision.Documents {
+				if !files[file] {
+					problems = append(problems, fmt.Errorf("coverage for account %s: %s is not a document of the case", decision.AccountID, file))
+				}
+			}
+		}
 	}
 	if c.ExpectReady && c.Signoff == nil {
 		problems = append(problems, errors.New("a close expected ready needs its sign-off step: without one nothing defines the scope"))

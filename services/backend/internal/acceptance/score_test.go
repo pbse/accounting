@@ -137,10 +137,13 @@ func TestLoadRefusesACaseItCannotScore(t *testing.T) {
 		}
 	}
 	dir = t.TempDir()
-	write("ledger/case.json", `{"id":"ledger","split":"development","client":"Harbor","period":"2026-09","setup":{"quickbooks":{"home_currency":"USD","accounts":[{"id":"12","name":"Insurance"}],"bills":[{"vendor":"Acme","number":"1","amount":"10","date":"2026-09-01","account_id":"99"}]}},"documents":[{"file":"a.txt","label":{"work_type":"prepaid"}}]}`)
+	write("ledger/case.json", `{"id":"ledger","split":"development","client":"Harbor","period":"2026-09","setup":{"quickbooks":{"home_currency":"USD","accounts":[{"id":"12","name":"Insurance"}],"bills":[{"vendor":"Acme","number":"1","amount":"10","date":"2026-09-01","account_id":"99"}]}},"documents":[{"file":"a.txt","label":{"work_type":"prepaid"}}],
+		"signoff":{"description":"September","coverage":[{"account_id":"99","documents":["nope.txt"],"exclude":"Out of scope"},{"account_id":"12"}]}}`)
 	write("ledger/a.txt", "Invoice")
 	_, err = Load(dir)
-	for _, want := range []string{"needs its month-end trial_balance", `bill 1 is booked to account "99"`} {
+	for _, want := range []string{"needs its month-end trial_balance", `bill 1 is booked to account "99"`, `coverage for account "99": not in the ledger capture's chart`,
+		"coverage for account 99: give its documents or the reason it is excluded, not both", "coverage for account 99: nope.txt is not a document of the case",
+		"coverage for account 12: give its documents or the reason it is excluded, not both"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("want %q in %v", want, err)
 		}

@@ -18,17 +18,20 @@
     {
      "id": "12",
      "name": "Insurance",
-     "type": "Expense"
+     "type": "Expense",
+     "subtype": "Insurance"
     },
     {
      "id": "13",
      "name": "Prepaid Expenses",
-     "type": "Other Current Asset"
+     "type": "Other Current Asset",
+     "subtype": "PrepaidExpenses"
     },
     {
      "id": "20",
      "name": "Accounts Payable",
-     "type": "Accounts Payable"
+     "type": "Accounts Payable",
+     "subtype": "AccountsPayable"
     }
    ],
    "bills": [
