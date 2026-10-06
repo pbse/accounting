@@ -195,6 +195,12 @@ func TestWorkbooksAreComparedAsUploaded(t *testing.T) {
 	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "b.xlsx repeats a.xlsx byte for byte as uploaded") {
 		t.Fatalf("the second workbook is the same upload: %v", err)
 	}
+	if err := writeFile(dir+"/wb/b.xlsx", string(make([]byte, 5*1024*1024+1))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "b.xlsx is over the upload route's 5 MiB limit") {
+		t.Fatalf("a file the route refuses: %v", err)
+	}
 }
 
 // A recorded run needs an answer for every document the app keeps; a byte-for-byte repeat is kept as the earlier one.

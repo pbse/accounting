@@ -118,20 +118,17 @@ func (l Ledger) check() []error {
 
 var decimalPattern = regexp.MustCompile(`^\d+(\.\d+)?$`)
 
-// Upload is a document as the upload route adds it: a workbook becomes the CSV text of its first sheet, named with .csv
-// added; anything else is its bytes. The app keeps one document per uploaded body.
+// Upload is a document as the upload route adds it (documents.UploadContent): a workbook becomes the CSV text of its
+// first sheet, named with .csv added; anything else is its bytes. A file over the route's limit is refused, as the
+// route refuses it. The app keeps one document per uploaded body.
 func (c Case) Upload(file string) (name string, body []byte, err error) {
 	if body, err = os.ReadFile(filepath.Join(c.Dir, file)); err != nil {
 		return "", nil, err
 	}
-	if !strings.HasSuffix(strings.ToLower(file), ".xlsx") {
-		return file, body, nil
+	if len(body) > documents.MaxUpload {
+		return "", nil, fmt.Errorf("%s is over the upload route's 5 MiB limit", file)
 	}
-	text, err := documents.SpreadsheetText(body)
-	if err != nil {
-		return "", nil, err
-	}
-	return file + ".csv", []byte(text), nil
+	return documents.UploadContent(file, body)
 }
 
 // Document is one file of the case with its accountant's label. Model names a recorded model answer, replayed in
