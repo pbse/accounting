@@ -3347,6 +3347,12 @@ Each is tested.
 
 Pass 7 noted that a client already assigned to a joiner's user ID shows that client's closes before any role is given. A client assignment is the administrator's own grant; the docs and the screen now say so ("opens nothing until you give them a role or assign them clients"). Assignments still give access whatever the role, for every member.
 
+Pass 8 found two gaps:
+- **A removed person could be given a role.** Role changes now need the person's current firm access.
+- **An invitee WorkOS had placed by domain was let in before accepting.** Such an invitee is now asked to accept until WorkOS shows the invitation accepted by them.
+
+Both are tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

@@ -238,12 +238,24 @@ func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user si
 		return refuseRemoved
 	}
 	if !granted.Valid {
-		var invited bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND email=$2 AND state IN ('sending','pending','accepted'))`, org, strings.ToLower(strings.TrimSpace(user.Email))).Scan(&invited); err != nil {
+		var invitation sql.NullString
+		err := tx.QueryRowContext(ctx, `SELECT COALESCE(workos_id,'') FROM member_invitations WHERE organization_id=$1 AND email=$2 AND state IN ('sending','pending','accepted') ORDER BY created_at DESC LIMIT 1`, org, strings.ToLower(strings.TrimSpace(user.Email))).Scan(&invitation)
+		if err != nil && err != sql.ErrNoRows {
 			return refuseUnavailable
 		}
-		if invited {
-			// Accepting the invitation is what gives them the membership it names.
+		if invitation.Valid {
+			// The firm invited them: they join by accepting it, which the app's invitation enrollment then records. Until
+			// WorkOS shows it accepted by them, with their membership active, they are asked to accept it.
+			if invitation.String == "" {
+				return refuseInvited
+			}
+			var sent workosInvitation
+			if workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(invitation.String), nil, &sent) != nil {
+				return refuseUnavailable
+			}
+			if sent.State != "accepted" || sent.AcceptedUserID != user.ID {
+				return refuseInvited
+			}
 			switch membership, err := activeMembership(ctx, org, user.ID); {
 			case err != nil:
 				return refuseUnavailable

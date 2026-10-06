@@ -186,6 +186,7 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 		}
 		defer tx.Rollback()
 		var enabled, actorStillMember, pending bool
+		var targetAccess sql.NullBool
 		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR UPDATE`, org).Scan(&enabled); err != nil || !enabled {
 			problem(w, 403, "Organization unavailable.")
 			return
@@ -196,6 +197,15 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 		}
 		if pending {
 			problem(w, 409, "A role change for them is still being confirmed. Refresh the list in a moment.")
+			return
+		}
+		// A role is given only to someone with firm access: one for a removed person would come back with them unseen.
+		if err = tx.QueryRowContext(r.Context(), `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, org, in.Subject).Scan(&targetAccess); err != nil && err != sql.ErrNoRows {
+			problem(w, 503, "Member access unavailable.")
+			return
+		}
+		if !targetAccess.Valid || !targetAccess.Bool {
+			problem(w, 409, "They have no firm access. Enroll them first; then give them a role.")
 			return
 		}
 		var change int64

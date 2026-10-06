@@ -46,6 +46,7 @@ type fakeWorkOS struct {
 	memberships []firmMembership
 	orgs        map[string]string // id → domain
 	created     []string
+	invitations map[string]map[string]string // WorkOS invitation id → its state and who accepted it
 	roleChanges []string
 	put         string // how the next role change goes: "" applies it, "refuse" declines, "lost" applies it but the answer is lost
 }
@@ -164,6 +165,11 @@ func (f *fakeWorkOS) serve(t *testing.T, r *http.Request) (int, any) {
 			}
 		}
 		return 404, map[string]string{}
+	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/user_management/invitations/"):
+		if inv, ok := f.invitations[strings.TrimPrefix(r.URL.Path, "/user_management/invitations/")]; ok {
+			return 200, inv
+		}
+		return 404, map[string]string{}
 	case strings.HasPrefix(r.URL.Path, "/user_management/users/"):
 		u := f.users[strings.TrimPrefix(r.URL.Path, "/user_management/users/")]
 		return 200, map[string]any{"id": u.ID, "email": u.Email, "email_verified": u.EmailVerified, "first_name": strings.Split(u.Email, "@")[0], "last_name": ""}
@@ -199,7 +205,7 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	domain := "acme" + strings.ToLower(rand.Text()[:8]) + ".test"
-	f := &fakeWorkOS{key: key, orgs: map[string]string{}, users: map[string]signedInUser{}}
+	f := &fakeWorkOS{key: key, orgs: map[string]string{}, users: map[string]signedInUser{}, invitations: map[string]map[string]string{}}
 	person := func(name string, verified bool, at string) string {
 		id := "user_" + name + strings.ToLower(rand.Text()[:6])
 		f.users[id] = signedInUser{ID: id, Email: name + "@" + at, EmailVerified: verified}
@@ -362,6 +368,28 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("an invited person is asked to accept the invitation first: %s", where)
 	}
 
+	// WorkOS may give an invitee a membership by their domain before they accept the invitation; they are still asked.
+	oscar := person("oscar", true, domain)
+	invitation := "invitation_" + rand.Text()
+	f.mu.Lock()
+	om := firmMembership{ID: "om_" + oscar, UserID: oscar, OrganizationID: firm, Status: "active"}
+	om.Role.Slug = "member"
+	f.memberships = append(f.memberships, om)
+	f.invitations[invitation] = map[string]string{"id": invitation, "state": "pending", "organization_id": firm, "email": f.users[oscar].Email}
+	f.mu.Unlock()
+	if _, err := raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,$2,'member','Member',$3,'pending',$4,'Oscar joins the team.',now()+interval '7 days')`, firm, f.users[oscar].Email, invitation, ana); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(oscar, "google"); where != "/login?error=invited" || cookie != "" {
+		t.Fatalf("an invitee WorkOS placed by domain is asked to accept first: %s", where)
+	}
+	f.mu.Lock()
+	f.invitations[invitation]["state"], f.invitations[invitation]["accepted_user_id"] = "accepted", oscar
+	f.mu.Unlock()
+	if where, cookie := signIn(oscar, "google"); where != "/dashboard" || cookie == "" {
+		t.Fatalf("once accepted, the invitee signs in: %s", where)
+	}
+
 	// Someone WorkOS placed in its organization for their domain, which the app has not registered, makes that the firm.
 	placed := "placed" + strings.ToLower(rand.Text()[:8]) + ".test"
 	hosted[placed] = true
@@ -405,11 +433,14 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	var page struct {
 		People []firmPerson `json:"people"`
 	}
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != 4 {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != 5 {
 		t.Fatalf("the administrator lists the firm's people: %d %s", w.Code, w.Body.String())
 	}
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"staff-only","reason":"Give Erin a staff role.","confirmed":true}`); w.Code != 403 {
 		t.Fatalf("a role with permissions the administrator lacks cannot be given: %d %s", w.Code, w.Body.String())
+	}
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ben+`","role":"firm-admin","reason":"Bring Ben back as admin.","confirmed":true}`); w.Code != 409 {
+		t.Fatalf("a removed person cannot be given a role: %d %s", w.Code, w.Body.String())
 	}
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ana+`","role":"member","reason":"Step down from administrator.","confirmed":true}`); w.Code != 422 {
 		t.Fatalf("an administrator cannot change their own role: %d", w.Code)
