@@ -156,21 +156,35 @@ func TestXeroCoverageAsksEveryAccountBeforeSignOff(t *testing.T) {
 		t.Fatal("a Xero close whose bank statement is requested waits on statements")
 	}
 
-	// A capture of another month does not propose this month's scope.
+	// A capture of another month does not propose this month's scope: its accounts are stale until September is captured.
 	second := capture("2026-08", month, "1 hour")
 	takeover.Content.Scope.Items, takeover.Content.Scope.Unavailable = nil, ""
 	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/takeover-setup", nil, 200), &takeover))
-	if v := view(); v.SnapshotID != "xero:"+second || current() || waiting() || len(takeover.Content.Scope.Items) != 0 || !strings.Contains(takeover.Content.Scope.Unavailable, "capture this month again") {
+	if v := view(); v.SnapshotID != "xero:"+second || !v.Stale || !strings.Contains(states(v), "a-bank:reconciliation:source_changed") || current() || waiting() || len(takeover.Content.Scope.Items) != 0 || !strings.Contains(strings.ToLower(takeover.Content.Scope.Unavailable), "capture this month again") {
 		t.Fatalf("a newer capture replaces the first; an August one is not September's: %s %+v", v.SnapshotID, takeover.Content.Scope)
 	}
 
-	// A newer QuickBooks capture is the books' capture, as the ledger reads use it.
-	var evidence, quickbooksConnection, quickbooksID string
+	// The books' QuickBooks capture is the production company's, as the ledger reads use it: a newer sandbox capture does
+	// not displace the Xero capture, while a newer production one does.
+	var evidence string
 	must(db.QueryRow(`INSERT INTO evidence(close_id,name,digest,content,created_by) VALUES($1,'ledger.txt',$2,'Synthetic ledger','fixture') RETURNING id::text`, closeID, rand.Text()).Scan(&evidence))
-	must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm) SELECT id,organization_id,entity,'fixture','active',$2,now(),'123' FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text()).Scan(&quickbooksConnection))
-	must(db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,'123',$3,jsonb_build_object('period','2026-09','source_id',$4::text,'coverage',jsonb_build_array(jsonb_build_object('account_id','q-1','name','Checking','kind','reconciliation'))),now(),now()-interval '30 minutes','fixture') RETURNING id::text`, closeID, quickbooksConnection, rand.Text(), evidence).Scan(&quickbooksID))
+	quickbooksCapture := func(environment, ago string) string {
+		t.Helper()
+		var connection, id string
+		if db.QueryRow(`SELECT id::text FROM quickbooks_connections WHERE close_id=$1 AND environment=$2`, closeID, environment).Scan(&connection) == sql.ErrNoRows {
+			must(db.QueryRow(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,environment) SELECT id,organization_id,entity,'fixture','active',$2,now(),$3,$3 FROM client_closes WHERE id=$1 RETURNING id::text`, closeID, rand.Text(), environment).Scan(&connection))
+		}
+		must(db.QueryRow(`INSERT INTO quickbooks_snapshots(close_id,connection_id,realm,digest,payload,started_at,captured_at,actor) VALUES($1,$2,$5,$3,jsonb_build_object('period','2026-09','source_id',$4::text,'coverage',jsonb_build_array(jsonb_build_object('account_id','q-1','name','Checking','kind','reconciliation'))),now(),now()-$6::interval,'fixture') RETURNING id::text`, closeID, connection, rand.Text(), evidence, environment, ago).Scan(&id))
+		return id
+	}
+	quickbooksCapture("production", "3 hours")
+	quickbooksCapture("sandbox", "30 minutes")
+	if v := view(); v.SnapshotID != "xero:"+second {
+		t.Fatalf("a sandbox capture is not the books' while a production company is connected: %s", v.SnapshotID)
+	}
+	quickbooksID := quickbooksCapture("production", "10 minutes")
 	if v := view(); v.SnapshotID != quickbooksID || states(v) != "q-1:reconciliation:missing_evidence" {
-		t.Fatalf("the newer QuickBooks capture is in use: %s %s", v.SnapshotID, states(v))
+		t.Fatalf("the newer production capture is in use: %s %s", v.SnapshotID, states(v))
 	}
 	v = view()
 	call("POST", "/v1/closes/"+closeID+"/coverage", map[string]any{"action": "bind", "digest": v.Digest, "account_id": "q-1", "excluded": true, "reason": "Reconciled by the client's bookkeeper.", "confirmed": true}, 200)

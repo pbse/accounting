@@ -111,10 +111,11 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 	if flags != "2026-07=false,2026-08=true" {
 		t.Fatalf("the confirmed opening month stays the opening month: %s", flags)
 	}
-	// Once production is connected the books are read from it, so the sandbox capture no longer proposes the scope.
+	// Once production is connected the books are read from it, so the sandbox capture no longer proposes the scope: the
+	// production company has no capture of the month yet.
 	_, err = db.Exec(`INSERT INTO quickbooks_connections(close_id,organization_id,client_entity,actor,state,oauth_digest,oauth_expires_at,realm,company_name,environment) SELECT id,organization_id,entity,'fixture','active',$2,now(),'555','Acme Live','production' FROM client_closes WHERE id::text=$1`, opening.ID, rand.Text())
 	must(err)
-	if live := read(); len(live.Content.Companies) != 1 || live.Content.Companies[0].Company != "555" || !strings.Contains(live.Content.Scope.Unavailable, "not of the company the books are read from") {
+	if live := read(); len(live.Content.Companies) != 1 || live.Content.Companies[0].Company != "555" || !strings.Contains(live.Content.Scope.Unavailable, "No QuickBooks or Xero capture of this month yet") {
 		t.Fatalf("the scope comes only from a capture of the company the books are read from: %+v", live.Content)
 	}
 }

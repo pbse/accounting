@@ -23,8 +23,15 @@ type syncClaim struct {
 // ReadingConnection is SQL for the connection a client's books are read from: its production connection
 // unless disconnected, else its sandbox one. close is a SQL expression for the close's id.
 func ReadingConnection(close string) string {
-	return `(SELECT r.id FROM quickbooks_connections r JOIN client_closes rc ON rc.organization_id=r.organization_id AND lower(r.client_entity)=lower(rc.entity) WHERE rc.id=` + close + ` AND r.state<>'disconnected' ORDER BY r.environment='production' DESC,r.id DESC LIMIT 1)`
+	return ReadingConnectionBefore + close + ReadingConnectionAfter
 }
+
+// ReadingConnectionBefore and ReadingConnectionAfter enclose SQL for a close's ID to give ReadingConnection's SQL, for
+// SQL that must stay a constant.
+const (
+	ReadingConnectionBefore = `(SELECT r.id FROM quickbooks_connections r JOIN client_closes rc ON rc.organization_id=r.organization_id AND lower(r.client_entity)=lower(rc.entity) WHERE rc.id=`
+	ReadingConnectionAfter  = ` AND r.state<>'disconnected' ORDER BY r.environment='production' DESC,r.id DESC LIMIT 1)`
+)
 
 func scheduleSync(ctx context.Context, db *sql.DB) error {
 	if !OAuthConfigured() && !OAuthConfiguredFor("production") {

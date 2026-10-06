@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"close.local/backend/internal/quickbooks"
 )
 
 // The context is the selected work and the close's evidence less unrelated scheduled ledger captures: an upload or review changes it.
@@ -154,10 +156,11 @@ func FreshClientRequest(ctx context.Context, tx *sql.Tx, closeID, requestID stri
 
 // requestCapture is SQL over work_requests q and request_drafts d: a consolidated request's ledger capture is still the
 // close's books' capture, chosen as coverage chooses it (transport's ledgerCoverage): the latest QuickBooks period
-// capture, unless the latest Xero capture, named "xero:<id>", is newer. A QuickBooks capture also needs its current
+// capture of the connection the books are read from, unless the latest Xero capture, named "xero:<id>", is newer. A QuickBooks capture also needs its current
 // source and an active connection; a Xero capture, an active connection.
 const requestCapture = `q.coverage_scope->>'snapshot_id'=(SELECT CASE WHEN xs.id IS NOT NULL AND (qs.id IS NULL OR xs.captured_at>qs.captured_at) THEN 'xero:'||xs.id ELSE qs.id::text END
-  FROM (SELECT 1) one LEFT JOIN LATERAL (SELECT id,captured_at FROM quickbooks_snapshots WHERE close_id=d.close_id AND payload ? 'period' ORDER BY quickbooks_snapshots.id DESC LIMIT 1) qs ON true
+  FROM (SELECT 1) one LEFT JOIN LATERAL (SELECT s.id,s.captured_at FROM quickbooks_snapshots s WHERE s.close_id=d.close_id AND s.payload ? 'period'
+   AND s.connection_id=COALESCE(` + quickbooks.ReadingConnectionBefore + `s.close_id` + quickbooks.ReadingConnectionAfter + `,s.connection_id) ORDER BY s.id DESC LIMIT 1) qs ON true
   LEFT JOIN LATERAL (SELECT id,captured_at FROM xero_snapshots WHERE close_id=d.close_id ORDER BY captured_at DESC,xero_snapshots.id DESC LIMIT 1) xs ON true)
  AND (EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')
   OR EXISTS(SELECT 1 FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE 'xero:'||s.id=q.coverage_scope->>'snapshot_id' AND x.state='active'))`
