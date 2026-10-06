@@ -13,7 +13,7 @@ type RoleOption = { slug: string; name: string; description: string; permissions
 type RoleChange = { id: number; subject: string; from_role: string; to_role: string; reason: string; actor: string; state: "pending" | "applied" | "failed"; created_at: string };
 
 // The firm's people and their roles (docs/sign-in.md). Colleagues who sign in with the firm's company domain arrive
-// with the Member role, which opens nothing; an administrator gives each the role they need.
+// with the Member role, which opens nothing until an administrator gives them a role or assigns them clients.
 function FirmPeople() {
   const [page, setPage] = useState<{ people: Person[]; roles: RoleOption[]; changes: RoleChange[]; next: string }>();
   const [subject, setSubject] = useState("");
@@ -62,7 +62,7 @@ function FirmPeople() {
   return (
     <section>
       <h3>People and roles</h3>
-      <p>Colleagues who sign in with the firm’s company domain join with the Member role, which opens nothing until you give them a role. A role change takes effect within five minutes.</p>
+      <p>Colleagues who sign in with the firm’s company domain join with the Member role, which opens nothing until you give them a role or assign them clients. A role change takes effect within five minutes.</p>
       <table>
         <thead><tr><th>Person</th><th>Role</th><th>Firm access</th></tr></thead>
         <tbody>

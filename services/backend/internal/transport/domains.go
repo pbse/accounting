@@ -16,7 +16,7 @@ import (
 // Firms by company email domain (docs/sign-in.md). Krith admits only company addresses: a personal provider's domain
 // (Gmail, Outlook.com, iCloud and the like) cannot sign in. The first person with a verified address at a company
 // domain creates that domain's firm, as its administrator; anyone who signs in later with a verified address at the
-// same domain joins it as a member with no access until the firm's administrator gives them a role.
+// same domain joins it as a member with no access until the firm's administrator gives them a role or assigns them clients.
 
 // personalDomains are mail providers anyone can sign up to, so an address there says nothing about a firm.
 var personalDomains = map[string]bool{}
@@ -261,7 +261,7 @@ func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user si
 	}
 	if !granted.Valid {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,$3,'company-domain')`,
-			org, user.ID, "Joined with a verified address at "+domain+"; no access until an administrator gives a role"); err != nil {
+			org, user.ID, "Joined with a verified address at "+domain+"; no access until an administrator gives a role or assigns clients"); err != nil {
 			return refuseUnavailable
 		}
 	}

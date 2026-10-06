@@ -3345,6 +3345,8 @@ Pass 6 found three gaps:
 
 Each is tested.
 
+Pass 7 noted that a client already assigned to a joiner's user ID shows that client's closes before any role is given. A client assignment is the administrator's own grant; the docs and the screen now say so ("opens nothing until you give them a role or assign them clients"). Assignments still give access whatever the role, for every member.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

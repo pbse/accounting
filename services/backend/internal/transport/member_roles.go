@@ -15,7 +15,7 @@ import (
 )
 
 // The firm's people and their roles (docs/sign-in.md). People who join by their company address arrive with the member
-// role, which opens nothing; the firm's administrator gives each one a role here. WorkOS holds the role; the firm keeps
+// role, which opens nothing until the firm's administrator gives them a role here or assigns them clients. WorkOS holds the role; the firm keeps
 // the record of who gave which role, and why.
 
 type firmPerson struct {
