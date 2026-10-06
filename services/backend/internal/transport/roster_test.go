@@ -244,6 +244,24 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Eta", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
+	// A month owed and not opened, due by the end of the week, counts with the due closes, apart: Rho's is due the day
+	// after its month ends, so it is overdue or due today whenever this runs.
+	dueCounts := func() map[string]int {
+		var got struct {
+			DueCounts map[string]int `json:"due_counts"`
+		}
+		must(json.Unmarshal([]byte(call("user_b", partner, "GET", "/v1/closes/morning?client=Rho", nil, 200)), &got))
+		return got.DueCounts
+	}
+	if c := dueCounts(); c["not_opened_overdue"]+c["not_opened_upcoming"] != 0 {
+		t.Fatalf("no unopened month of Rho is due before it joins: %v", c)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": true, "since": ended, "due_days": 1, "reason": "A client"}, 200)
+	if c := dueCounts(); c["not_opened_overdue"]+c["not_opened_upcoming"] != 1 || c["overdue"]+c["upcoming"] != 0 {
+		t.Fatalf("Rho's unopened month counts as due, apart from the due closes: %v", c)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+
 	// A month whose close was deleted under the retention policy was done: it is not owed again.
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Theta", "active": true, "since": ended, "reason": "A client"}, 200)
 	if got := brief("user_b", partner, "Theta"); len(got) != 1 {

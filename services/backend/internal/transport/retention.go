@@ -297,11 +297,19 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 503, "Deletion stopped without committing.")
 				return
 			}
-			// The client leaves the firm's roster, so no later month is reported as owed: every name it is on the roster
-			// under, its confirmed aliases included, before those aliases are forgotten below.
+			// The client leaves the firm's roster, so no later month is reported as owed and none can be opened: every name it
+			// goes by is left inactive — its roster entries', its closes', its confirmed aliases' and its own — before those
+			// aliases are forgotten below, after which each is a name of its own.
 			if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor)
- SELECT n.organization_id,n.client_entity,false,n.since,$3,$4 FROM (SELECT DISTINCT ON (lower(r.client_entity)) r.* FROM client_roster r WHERE `+rosterMatch("$1", "$2")+` ORDER BY lower(r.client_entity),r.id DESC) n WHERE n.active`,
-				organization(r), entity, "Left the roster when "+entity+"'s close was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")", subject(r)); err != nil {
+ SELECT $1,n.name,false,COALESCE(n.since,$5),$3,$4 FROM (SELECT DISTINCT ON (lower(k.name)) k.name,l.since,l.active
+  FROM (SELECT r.client_entity AS name,1 AS rank FROM client_roster r WHERE r.organization_id=$1 AND client_identity(r.organization_id,r.client_entity)=$6
+   UNION ALL SELECT c.entity,2 FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=$6
+   UNION ALL SELECT $2::text,2
+   UNION ALL SELECT a.alias,3 FROM client_aliases a WHERE a.organization_id=$1 AND a.retired_at IS NULL AND lower(a.client_entity)=$6
+   UNION ALL SELECT $6::text,4) k
+  LEFT JOIN LATERAL (SELECT r.since,r.active FROM client_roster r WHERE r.organization_id=$1 AND lower(r.client_entity)=lower(k.name) ORDER BY r.id DESC LIMIT 1) l ON true
+  ORDER BY lower(k.name),k.rank) n WHERE n.active IS DISTINCT FROM false`,
+				organization(r), entity, "Left the roster when "+entity+"'s close was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")", subject(r), period, client); err != nil {
 				problem(w, 503, "Deletion stopped without committing.")
 				return
 			}

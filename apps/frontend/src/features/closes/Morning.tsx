@@ -17,7 +17,8 @@ export type Morning = {
   model_check: { model: string; reasoning_effort?: string | null; close_id: string; kept: number; scored: number; checked_at: string } | null;
   as_of: string;
   due: Obligation[];
-  due_counts: { overdue: number; upcoming: number; no_due_date: number };
+  // not_opened_*: months owed and not opened, dated overdue or within a week, listed under Months not opened.
+  due_counts: { overdue: number; upcoming: number; no_due_date: number; not_opened_overdue?: number; not_opened_upcoming?: number };
   not_opened: Unopened[];
 };
 
