@@ -19,6 +19,12 @@ Earlier pages (`/subprocessors`, `/ai`, `/data-retention`, `/pilot-terms`) were 
 
 **Accuracy rule.** Every statement on Security and Privacy follows what the service does today; when the code changes, change the page and the privacy notice's date. Names, firms and figures on the home page are illustrative and labelled so.
 
+## Pages in the HTML itself
+
+The app draws every page in the browser, so its built `index.html` alone is an empty shell. A visitor or checker that does not run JavaScript would see a blank page, so the build also writes the home, security and privacy pages as static HTML: `npm run build -w @close/frontend` ends with `npm run prerender`, which renders `src/prerender.tsx` (the same routes as the app, `features/marketing/routes.tsx`) into `dist/static-home.html`, `security.html` and `privacy.html`. Cloudflare serves `/security` and `/privacy` from those files; the edge worker serves `/` from `static-home.html` and redirects `/static-home` to `/` (both in `run_worker_first`), because `index.html` stays the shell every app route loads. `/contact` stays the shell: its form sends only from the app. In the browser the app then renders the same page over the static copy, so it looks the same once loaded. A render must not read `window` (the build renders without a browser); effects may. `public/robots.txt` keeps crawlers off the workspace, admin, client request and sign-in pages.
+
+Plain `http://` is redirected to `https://` by the zone's **Always Use HTTPS** setting in Cloudflare (SSL/TLS → Edge Certificates), not by the worker, which does not run for most static pages.
+
 ## Design
 
 - **Two inks on white paper.** Black is what Krith prepares; blue (`--blue`, #1F3FBF) is what people decide: the decisions in the hero, "Signed by you", the reviewer's signature and every "Talk to us". Light only, by design.

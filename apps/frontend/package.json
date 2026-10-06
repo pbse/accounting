@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && npm run prerender",
+    "prerender": "vite build --ssr src/prerender.tsx --outDir .prerender && node prerender.mjs",
     "check": "tsc --noEmit"
   },
   "dependencies": {
