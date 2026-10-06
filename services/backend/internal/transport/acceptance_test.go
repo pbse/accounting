@@ -118,6 +118,7 @@ func TestEveryProposedEntryIsObserved(t *testing.T) {
 	for paper, want := range map[string][]string{
 		`{"status":"ok","proposal":null}`:                                                                            {},
 		`{"proposal":` + entry("1100.00") + `}`:                                                                      {"1100.00"},
+		`{"proposal":` + entry("400") + `,"reversal":` + entry("-400") + `}`:                                         {"400", "-400"},
 		`{"proposals":[` + entry("10") + `,` + entry("20") + `]}`:                                                    {"10", "20"},
 		`{"proposal":` + entry("5") + `,"disposal":[` + entry("6") + `]}`:                                            {"5", "6"},
 		`{"proposal":` + entry("1") + `,"refund_proposal":` + entry("2") + `,"revenue_proposal":` + entry("3") + `}`: {"1", "2", "3"},
