@@ -3206,3 +3206,29 @@ Not yet done, and waiting on the owner:
 - After that, the variable moves to prashant@getkrith.com with a production deploy, and one contact note checks delivery end to end.
 
 The browser layout check's plan-editor step failed intermittently in CI (PRs 271 and 274) at phone width. It offered a content grant before the console had loaded the grant held from the desktop pass, so the check opened a second one. That replaced the first and closed the plan already revealed under it. The step now reads what the editor shows until it opens: it opens at most one grant, only when the API says none is held for the check's firm, and waits for it to exist before looking again. When a held grant does not show (its list still loading, or its request failed) or the automatic reveal does not come, it reveals with a reason after five seconds. Ten local runs passed with 76 page views. Two of them started with no grant held, as in CI.
+
+## B02: handing a close to a teammate, and reassignment (2026-10-05)
+
+Request: phase A's B01/B02 foundations. B02 requires "Support reassignment" ([build plan](agent-first-build-plan.md#b02--reliable-portfolio-and-one-decision-queue)). A close could only be taken while unheld or released by its owner. The refusal told people to "ask a firm administrator", but no administrator could do anything.
+
+What changed:
+- `POST /v1/closes/{id}/planning` takes `assignment: "assign"` with an `assignee` and an optional note (500 characters at most).
+  - Who may assign: the holder, or anyone while nobody holds the close. A firm administrator (`clients:all` and `members:manage`, the Security center's rule) may reassign whoever holds it.
+  - The assignee must be someone else who can review the client, from the same list hand-offs use. Their membership and client assignment are rechecked under the firm's lock.
+  - Take and release are unchanged.
+- Migration 124 adds `close_owner_changes`, which records every change of hands: taken, released, handed over or reassigned, by whom, and with what note. The table has its tenant policy.
+- The Security center's and the staff console's activity show these changes (kinds `close.taken`, `close.released`, `close.assigned`). The staff console's kind filter gains `close`.
+- `GET /v1/closes/{id}` returns `can_assign`. The close page then offers **Hand the close to a teammate** (choose a teammate, add a note), which loads the same teammates list hand-offs use.
+
+Checks:
+- `TestACloseChangesHandsAndEachChangeIsRecorded` (local PostgreSQL, WorkOS answered by a fixture):
+  - Anyone may hand over an unheld close. Once a partner takes it, only the holder and an administrator see `can_assign`.
+  - These assignees are refused (422): a viewer granted the client, a reviewer without the client, an unknown subject, and the holder themselves ("To hold it yourself, take it"). So is a note over 500 characters.
+  - A reviewer cannot hand over a close someone else holds (409, "They can hand it over, or ask a firm administrator").
+  - The holder hands the close to a reviewer assigned to the client. Afterwards the old holder can neither release nor take it, and an administrator reassigns it back.
+  - A kept plan records nothing. Exactly four changes are recorded, in order, with actors and notes. The Security center shows "Took", "Assigned … to user_c: Covering while I'm away", "Assigned … to user_b from user_c: Back from leave" and "Released".
+- `TestClosePlanningRanksWorkAndBulkApprovalChecksEachDraft` and `TestHandADocumentToATeammate` still pass.
+- `npm run check`, `npm test` (44 pass) and `npm run build` pass. CI's layout check walks the close page.
+
+Not verified: the hand-over picker in a browser against a real WorkOS firm. Locally there are no teammates to offer.
+

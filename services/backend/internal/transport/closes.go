@@ -37,6 +37,8 @@ type savedClose struct {
 	Priority  string `json:"priority,omitempty"`
 	Assigned  bool   `json:"assigned,omitempty"`
 	OwnedByMe bool   `json:"owned_by_me,omitempty"`
+	// CanAssign says the reader may hand the close to a teammate: they hold it, nobody does, or they are a firm administrator.
+	CanAssign bool `json:"can_assign,omitempty"`
 	// Basis is the client's approved accounting basis; BasisScope says whether a client override sets it.
 	Basis      string               `json:"basis,omitempty"`
 	BasisScope string               `json:"basis_scope,omitempty"`
@@ -317,6 +319,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 503, "Could not open the close.")
 			return
 		}
+		item.CanAssign = subject(r) != "" && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
 		rows, err := db.QueryContext(r.Context(), `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE close_id=$1 ORDER BY workpaper_review_state.id DESC LIMIT 101`, item.ID)
 		if err != nil {
 			problem(w, 503, "Could not open workpapers.")
