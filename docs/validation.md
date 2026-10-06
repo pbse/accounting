@@ -3441,7 +3441,10 @@ What changed:
 - **An inactive client gets no new month by any route.** The new-close route refuses its next month (409; an existing month still opens). A new monthly hand-over is refused, and a running one stops itself instead of opening a month or handing over one already open.
 - **Client identity.** The current roster is one entry per client identity, so a name later confirmed as an alias merges with its client. Roster entries match closes by `client_identity`: in owed months, the template, the inactive guards, takeover, retention and the latest close. A month opened under a confirmed alias counts as the client's, and the roster refuses an alias as a second client.
 - **"Yours"** on an owed month means the template's owner is the reader and they can still review.
-- **Joining and leaving.** Confirming a takeover setup puts a client never on the roster onto it from its opening month; confirming again does not reactivate one an administrator marked inactive. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
+- **Joining and leaving.** Confirming a takeover setup puts a client never on the roster onto it from its opening month; confirming again does not reactivate one an administrator marked inactive.
+  - Deleting a close for contract termination or at the client's request takes every name the client is on the roster under off it, its confirmed aliases included. This happens before those aliases are forgotten, so a former alias is not left as a client still owing months.
+  - The deletion stops hand-overs under the client's aliases too.
+  - A month's hand-over flag also matches routines by client identity. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
 - **Records.** Both tables are in the firm export, and `/readyz` waits for them.
 - **UI.** Each roster form resets when its entry changes, so one administrator's edit cannot silently reverse another's. A failed refresh says so beside the last roster read. Firm settings gains **Clients and monthly closes**: the template, the roster with owed months, and forms for administrators, offering only owners who can do the work. Work gains **Months not opened**.
 
@@ -3463,7 +3466,7 @@ Checks:
   - Marking Beta inactive ends what it owes and stops its monthly hand-over.
   - Its next month is then refused by the new-close route while its existing month still opens. A monthly hand-over set up for it is refused. A hand-over left for the inactive Delta, whose next month was already open, stops in the sweep without handing that month to the agent.
 - `TestCarryForwardRoundingLineageAndFreshReview` (extended): the month carry-forward opens takes the client's 3-day due date. Once the client leaves the roster, carrying forward is refused (409), and the carry at sign-off skips it.
-- `TestMonthlyHandOverOpensAndHandsOverEachNewMonth` (extended): the month a hand-over opens takes the template, and contract termination takes the client off the roster.
+- `TestMonthlyHandOverOpensAndHandsOverEachNewMonth` (extended): the month a hand-over opens takes the template. Contract termination takes the client off the roster, including the name "Alpha Group" confirmed as its alias; no active entry remains.
 - `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth` (extended): the client joins the roster from its opening month. Once marked inactive, confirming the setup again for another timezone leaves it inactive.
 - The full Go suite runs on a fresh local PostgreSQL with migrations applied twice. `npm run check`, `npm test` and `npm run build` pass.
 

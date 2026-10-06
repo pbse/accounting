@@ -61,7 +61,7 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_routines WHERE organization_id=$1`,
 			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
-			`DELETE FROM close_deletion_receipts WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
+			`DELETE FROM close_deletion_receipts WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
 			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
@@ -229,7 +229,18 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	call("user_admin", admin, "POST", "/v1/closes/"+signed+"/retention", map[string]any{"retain_until": "2000-01-01", "legal_hold": false, "expected_version": 0, "reason": "Approved synthetic retention policy", "confirmed": true}, 200)
 	var retention retentionStatus
 	must(json.Unmarshal(call("user_admin", admin, "GET", "/v1/closes/"+signed+"/retention", nil, 200), &retention))
+	// Alpha is also on the roster under a name since confirmed as its alias: leaving takes every name off, so the alias,
+	// forgotten with the relationship, is not left behind as a client that still owes months.
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Alpha','alpha group','fixture',now()-interval '1 day')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Alpha Group',true,$2,'Synthetic','fixture')`, org, month(0))
+	must(err)
 	call("user_admin", admin, "POST", "/v1/closes/"+signed+"/delete", map[string]any{"expected_version": retention.Version, "entity": "Alpha", "period": month(2), "reason_code": "contract_termination", "confirmed": true}, 200)
+	var stillActive int
+	must(db.QueryRow(`SELECT count(*) FROM current_client_roster WHERE organization_id=$1 AND active`, org).Scan(&stillActive))
+	if stillActive != 0 {
+		t.Fatalf("every name the client was on the roster under leaves with it: %d still active", stillActive)
+	}
 	if read(setUp).Routine != nil {
 		t.Fatal("contract termination stops the client's monthly hand-over")
 	}

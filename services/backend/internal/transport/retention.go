@@ -273,17 +273,19 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 		// Ending the relationship or the client's request ends the client's monthly hand-over and forgets the other
 		// names its documents use.
 		if in.ReasonCode == "contract_termination" || in.ReasonCode == "client_request" {
-			if _, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND stopped_at IS NULL`, organization(r), entity, subject(r), "Stopped when "+entity+" "+period+" was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")."); err != nil {
+			if _, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND stopped_at IS NULL`, organization(r), entity, subject(r), "Stopped when "+entity+" "+period+" was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")."); err != nil {
+				problem(w, 503, "Deletion stopped without committing.")
+				return
+			}
+			// The client leaves the firm's roster, so no later month is reported as owed: every name it is on the roster
+			// under, its confirmed aliases included, before those aliases are forgotten below.
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor)
+ SELECT n.organization_id,n.client_entity,false,n.since,$3,$4 FROM (SELECT DISTINCT ON (lower(r.client_entity)) r.* FROM client_roster r WHERE `+rosterMatch("$1", "$2")+` ORDER BY lower(r.client_entity),r.id DESC) n WHERE n.active`,
+				organization(r), entity, "Left the roster when "+entity+"'s close was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")", subject(r)); err != nil {
 				problem(w, 503, "Deletion stopped without committing.")
 				return
 			}
 			if _, err = tx.ExecContext(r.Context(), `DELETE FROM client_aliases WHERE organization_id=$1 AND lower(client_entity)=lower($2)`, organization(r), entity); err != nil {
-				problem(w, 503, "Deletion stopped without committing.")
-				return
-			}
-			// The client leaves the firm's roster, so no later month is reported as owed.
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) SELECT r.organization_id,r.client_entity,false,r.since,$3,$4 FROM current_client_roster r
- WHERE `+rosterMatch("$1", "$2")+` AND r.active`, organization(r), entity, "Left the roster when "+entity+"'s close was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")", subject(r)); err != nil {
 				problem(w, 503, "Deletion stopped without committing.")
 				return
 			}
