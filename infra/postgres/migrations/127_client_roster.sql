@@ -47,8 +47,8 @@ ALTER TABLE close_templates ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON close_templates FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON close_templates FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
 
--- A deletion receipt also keeps a digest of the client the close belonged to (its client identity when deleted), never
--- the name, so a month deleted under any of a client's names stays done on the roster. Older receipts have only the
+-- A deletion receipt also keeps a digest of the client the close belonged to (its client identity when deleted, with
+-- case and punctuation set aside as aliases are kept), never the name, so a month deleted under any of a client's names stays done on the roster. Older receipts have only the
 -- digest of the close's own name.
 ALTER TABLE close_deletion_receipts ADD COLUMN client_digest text CHECK (length(client_digest)=64);
 
@@ -102,6 +102,6 @@ WITH names AS (
  WHERE d.client_digest IS NULL
  ORDER BY d.id
 )
-UPDATE close_deletion_receipts d SET client_digest=encode(sha256(convert_to(d.organization_id,'UTF8')||'\x00'::bytea||convert_to(m.client,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex')
+UPDATE close_deletion_receipts d SET client_digest=encode(sha256(convert_to(d.organization_id,'UTF8')||'\x00'::bytea||convert_to(trim(regexp_replace(m.client,'[^[:alnum:]]+',' ','g')),'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex')
  FROM matched m WHERE d.id=m.id;
 COMMIT;
