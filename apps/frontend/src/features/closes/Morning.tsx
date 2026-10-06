@@ -89,9 +89,9 @@ export function NotOpened({ months }: { months: Unopened[] }) {
   }
   return (
     <section aria-label="Months not opened">
-      <p>
-        <strong>{count(months.length, "month", "months")} not opened</strong> that the firm's roster says are owed:
-      </p>
+      <SectionHeader title="Months not opened" id="months-not-opened">
+        <small>{count(months.length, "month", "months")} the firm's roster says are owed that nobody has opened, newest first.</small>
+      </SectionHeader>
       <ul>
         {months.map((m) => (
           <li key={`${m.entity}:${m.period}`}>

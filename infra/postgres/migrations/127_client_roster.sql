@@ -38,11 +38,14 @@ ALTER TABLE close_templates ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON close_templates FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON close_templates FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
 
--- The roster starts with every client that has a close of one of the three months before this one: each owes the months
--- after its latest close, so gaps further back are not reported as missing.
+-- The roster starts with every client that has a close, each owing the months after its latest close, so gaps further
+-- back are not reported as missing. A client with a close of one of the three months before this one is active; any other
+-- is listed inactive for an administrator to confirm, rather than left off.
 INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor)
-SELECT DISTINCT ON (c.organization_id,lower(c.entity)) c.organization_id,c.entity,true,c.period,'On the roster when it began: a close in the last three months','migration'
+SELECT DISTINCT ON (c.organization_id,lower(c.entity)) c.organization_id,c.entity,
+ c.period>=to_char(date_trunc('month',now()) - interval '3 months','YYYY-MM'),c.period,
+ CASE WHEN c.period>=to_char(date_trunc('month',now()) - interval '3 months','YYYY-MM') THEN 'On the roster when it began: a close in the last three months'
+  ELSE 'To confirm: no close in the three months before the roster began, so it is listed inactive until an administrator says it is still a client' END,'migration'
  FROM client_closes c
- WHERE c.period>=to_char(date_trunc('month',now()) - interval '3 months','YYYY-MM')
  ORDER BY c.organization_id,lower(c.entity),c.period DESC,c.id DESC;
 COMMIT;

@@ -336,7 +336,6 @@ export function Work({
           <SectionHeader title="Due in 7 days" id="due-closes">
             <small>Overdue or due within a week and not signed off, or changed since sign-off. {morning.due_counts.no_due_date > 0 && `${morning.due_counts.no_due_date} outstanding ${morning.due_counts.no_due_date === 1 ? "close has" : "closes have"} no due date.`}</small>
           </SectionHeader>
-          <NotOpened months={morning.not_opened ?? []} />
           <RowList label="Due closes">
             {morning.due.length === 0 && <p className="empty">No outstanding close is overdue or due within 7 days.</p>}
             {morning.due.map((item) => (
@@ -348,6 +347,7 @@ export function Work({
               </Link>
             ))}
           </RowList>
+          <NotOpened months={morning.not_opened ?? []} />
         </>
       )}
       {loaded && (

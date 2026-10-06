@@ -107,6 +107,15 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 		t.Fatalf("the client owes from its opening month: %s", since)
 	}
 	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "America/New_York", "confirmed": true}, 409)
+	// Confirming the setup again (here for another timezone) leaves a client an administrator marked inactive inactive.
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES('local-development',$1,false,'2026-08','Left the firm','fixture')`, entity)
+	must(err)
+	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "Europe/London", "confirmed": true}, 200)
+	var active bool
+	must(db.QueryRow(`SELECT active FROM current_client_roster WHERE client_entity=$1`, entity).Scan(&active))
+	if active {
+		t.Fatal("a reconfirmed setup does not reactivate a client")
+	}
 	if b := blockers(); strings.Contains(b, "Confirm the takeover setup") {
 		t.Fatalf("a confirmed setup no longer holds the opening month: %s", b)
 	}

@@ -12,7 +12,7 @@ import (
 )
 
 // The firm's client roster and monthly close template (B01/B02, migration 127). Every active client on the roster owes
-// a close for each ended month from the month it joined; a month no close was opened for is listed until it is opened
+// a close for each ended month from the first month it owes; a month no close was opened for is listed until it is opened
 // (owedMonths), so an obligation nobody started still shows. A month's close takes the template's due date and owner,
 // unless the client's own entry overrides them (applyCloseTemplate). A client joins the roster when it is taken over or
 // a firm administrator adds it, and leaves when an administrator marks it inactive or its close is deleted because the
@@ -70,13 +70,13 @@ type owedMonth struct {
 }
 
 // owedMonths lists, newest first, the months the active roster clients the reader can work on (firm: every client; else
-// those assigned to who) owe and have no close for: each ended month from the client's first owed month, at most the
-// last twelve, matching client (a name fragment or YYYY-MM, or "") as Work's filter does. A month a client's monthly
+// those assigned to who) owe and have no close for: each ended month from the client's first owed month, matching
+// client (a name fragment or YYYY-MM, or "") as Work's filter does. A month a client's monthly
 // hand-over will open is left to it while the hand-over is not stuck waiting.
 func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm bool, who, client string) ([]owedMonth, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,'')
  FROM current_client_roster r `+rosterTemplate+`
- CROSS JOIN LATERAL (SELECT to_char(g,'YYYY-MM') AS period FROM generate_series(GREATEST(to_date(r.since,'YYYY-MM'),to_date($4,'YYYY-MM')-interval '11 months'),to_date($4,'YYYY-MM'),interval '1 month') g) m
+ CROSS JOIN LATERAL (SELECT to_char(g,'YYYY-MM') AS period FROM generate_series(to_date(r.since,'YYYY-MM'),to_date($4,'YYYY-MM'),interval '1 month') g) m
  WHERE r.organization_id=$1 AND r.active
   AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(r.client_entity) AND g.granted))
   AND NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.organization_id=r.organization_id AND lower(c.entity)=lower(r.client_entity) AND c.period=m.period)

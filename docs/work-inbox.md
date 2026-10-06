@@ -95,15 +95,15 @@ The review queue can approve up to 20 drafts at once, but only drafts that chang
 
 Every active client on the firm's roster owes a close each month (`client_roster`, migration 127). The **Clients and monthly closes** section of Firm settings (`GET`/`POST /v1/closes/roster`) shows each client:
 - whether it is active, and the first month it owes;
-- its latest close, and the ended months it owes that nobody opened (at most the last twelve);
+- its latest close, and every ended month it owes that nobody opened;
 - any terms of its own.
 
 How a client joins and leaves the roster:
-- **Joins** when its takeover setup is confirmed (owing from its opening month), or when a firm administrator adds it.
+- **Joins** when its takeover setup is confirmed (owing from its opening month), or when a firm administrator adds it. Confirming a setup again does not bring back a client an administrator marked inactive; only a roster change does.
 - **Leaves** when an administrator marks it inactive (which also stops its monthly hand-over), or when its close is deleted for contract termination or at the client's request.
-- When the roster began, every client with a close in the three months before was put on it. Each owes the months after its latest close, so older gaps are not reported.
+- When the roster began, every client with a close was put on it, owing the months after its latest close, so older gaps are not reported. A client with a close in the three months before is active. Any other is listed inactive with "To confirm…", for an administrator to reactivate if it is still a client.
 
-**Months not opened.** A month nobody opened shows in the morning brief's **Months not opened** to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. A month the client's monthly hand-over will open is left to it unless the hand-over is stuck waiting.
+**Months not opened.** A month nobody opened shows in Work's own **Months not opened** section (the morning brief's `not_opened`) to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. A month the client's monthly hand-over will open is left to it unless the hand-over is stuck waiting.
 
 **The template.** The firm's monthly close template (`close_templates`, `POST /v1/closes/close-template`) dates each month's close a number of days after the month ends, and gives it to an owner. A client's own entry can override either.
 - A close opened for an active roster client takes the template when it is created. That holds however it is opened: **Open** in Work, the new-close form, or a monthly hand-over.
