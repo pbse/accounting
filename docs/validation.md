@@ -3397,6 +3397,10 @@ Pass 19 found two things:
 - **A signed-in visitor on `/login` in WorkOS's browser-session mode had no way into the workspace.** Signed-in visitors now go straight there in either mode.
 - **The docs claimed every role change in a firm runs one at a time.** They now say precisely what is serialized: each person's changes, under the firm's lock, with the stale-role check.
 
+Pass 20 found two gaps:
+- **No way to choose between firms.** A person working in more than one firm could not reach the one they wanted. Sign-in now asks such a person which firm to open: a ten-minute sealed choice, `GET /v1/auth/choices` and `POST /v1/auth/choose`, tested end to end. The test also caught that an unverified address was offered the choice before being refused; it is now refused first.
+- **Signing in from `/dashboard` skipped the provider choice.** It now goes through the login page.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

@@ -30,14 +30,19 @@ Someone the firm removed is not let back in by their address, nor is anyone whil
 3. **Another registered firm.** Otherwise they stay in the registered firm WorkOS holds them in, only if it admits them there (a firm set up by hand whose WorkOS organization has their domain verified); one that removed them or has not admitted them does not hold them.
 4. **Their domain's claim.** Otherwise the claim runs, which may create the firm or take over an organization WorkOS placed them in.
 
-When WorkOS asks which organization to use, the order is:
-1. a firm whose invitation WorkOS shows they have accepted (their first sign-in after accepting);
-2. the firm they last signed in to where they are still a member;
+**Choosing a firm.** When WorkOS asks which organization to use and the person works in more than one firm (holds its access, or has accepted its invitation), the login page asks them which to open (`/login?choose=1`).
+- The pending sign-in waits, sealed in a ten-minute HttpOnly cookie.
+- `GET /v1/auth/choices` lists their firms.
+- `POST /v1/auth/choose` finishes the sign-in into the one they pick, under the same rules. Only from the site itself, and only one of the listed firms.
+
+With a single such firm, the order is:
+1. a firm whose invitation WorkOS shows accepted;
+2. the firm they last signed in to;
 3. their domain's firm.
 
 An invitation not yet accepted never takes them away from a firm they work in.
 
-Every firm session starts from a token issued after the firm is settled, so it carries the role the person holds after joining. Switching between firms within a session is not offered yet.
+Every firm session starts from a token issued after the firm is settled, so it carries the role the person holds after joining. Switching firms within a session is not offered: sign out and sign in again to choose.
 
 ## Roles
 

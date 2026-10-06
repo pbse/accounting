@@ -1500,7 +1500,8 @@ html:has(.k-site) {
   gap: 12px;
   width: min(100%, 340px);
 }
-.k-signin a.k-provider {
+.k-signin a.k-provider,
+.k-signin button.k-provider {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1514,11 +1515,13 @@ html:has(.k-site) {
   text-decoration: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.k-signin a.k-provider:hover {
+.k-signin a.k-provider:hover,
+.k-signin button.k-provider:hover {
   border-color: var(--ink-3);
   box-shadow: var(--shadow);
 }
-.k-signin a.k-provider:focus-visible {
+.k-signin a.k-provider:focus-visible,
+.k-signin button.k-provider:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 3px;
 }

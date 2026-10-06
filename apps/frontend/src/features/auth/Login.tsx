@@ -1,5 +1,6 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
+import { apiBaseUrl } from "../../lib/api";
 import { AccountAccess, authKitClientId, serverSession, serverSignInUrl, useSession } from "./Auth";
 
 // Why the server turned a sign-in away (docs/sign-in.md), in words.
@@ -15,6 +16,7 @@ const refusals: Record<string, string> = {
 
 export function Login() {
   const configured = Boolean(authKitClientId);
+  const [params] = useSearchParams();
   return (
     <main id="main" className="k-col k-page">
       <div className="k-page-head">
@@ -28,6 +30,8 @@ export function Login() {
             <p>Sign-in is not configured in this environment.</p>
             <Link to="/dashboard">Open the local workspace →</Link>
           </>
+        ) : serverSession && params.get("choose") ? (
+          <FirmChoice />
         ) : (
           <SignedInGoesToWork>{serverSession ? <ProviderSignIn /> : <AccountAccess />}</SignedInGoesToWork>
         )}
@@ -49,21 +53,22 @@ function SignedInGoesToWork({ children }: { children: ReactNode }) {
   return user ? <p role="status">Opening your workspace…</p> : children;
 }
 
-// The server's sign-in: one button per provider, each going straight to it.
+// The server's sign-in: one button per provider, each going straight to it, and back to where sign-in began.
 function ProviderSignIn() {
   const { isLoading, unavailable } = useSession();
   const [params] = useSearchParams();
   const refusal = refusals[params.get("error") ?? ""];
+  const back = params.get("return")?.startsWith("/dashboard") ? params.get("return")! : "/dashboard";
   if (isLoading) return <p role="status">Checking your session…</p>;
   return (
     <>
       {refusal && <p className="k-alert" role="alert">{refusal}</p>}
       {unavailable && <p className="k-alert" role="alert">{refusals.unavailable}</p>}
       <div className="k-providers">
-        <a className="k-provider" href={serverSignInUrl("google")}>
+        <a className="k-provider" href={serverSignInUrl("google", back)}>
           <GoogleMark /> Continue with Google
         </a>
-        <a className="k-provider" href={serverSignInUrl("microsoft")}>
+        <a className="k-provider" href={serverSignInUrl("microsoft", back)}>
           <MicrosoftMark /> Continue with Microsoft
         </a>
       </div>
@@ -94,5 +99,47 @@ function MicrosoftMark() {
       <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
       <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
     </svg>
+  );
+}
+
+// Someone who works in several firms picks the one to open; their answer finishes the sign-in.
+function FirmChoice() {
+  const [choice, setChoice] = useState<{ firms: { id: string; name: string }[]; email: string } | "expired">();
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    fetch(`${apiBaseUrl}/v1/auth/choices`)
+      .then(async (response) => setChoice(response.ok ? await response.json() : "expired"))
+      .catch(() => setChoice("expired"));
+  }, []);
+  async function choose(organization: string) {
+    setBusy(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/v1/auth/choose`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ organization }) });
+      if (!response.ok) throw new Error();
+      window.location.assign((await response.json()).location);
+    } catch {
+      setChoice("expired");
+      setBusy(false);
+    }
+  }
+  if (!choice) return <p role="status">Loading your firms…</p>;
+  if (choice === "expired")
+    return (
+      <>
+        <p className="k-alert" role="alert">This choice expired. Sign in again.</p>
+        <Link to="/login">Back to sign-in →</Link>
+      </>
+    );
+  return (
+    <>
+      <p>You work in more than one firm{choice.email ? ` as ${choice.email}` : ""}. Which would you like to open?</p>
+      <div className="k-providers">
+        {choice.firms.map((firm) => (
+          <button key={firm.id} type="button" className="k-provider" disabled={busy} onClick={() => void choose(firm.id)}>
+            {firm.name}
+          </button>
+        ))}
+      </div>
+    </>
   );
 }

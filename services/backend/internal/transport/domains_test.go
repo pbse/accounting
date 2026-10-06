@@ -250,6 +250,7 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	handler := apiWithStore(db, "")
 
 	// signIn runs the round trip with a provider button and returns where it lands and the session cookie, if any.
+	var choiceValue string // the firm choice the last sign-in asked for, if any
 	signIn := func(user, provider string) (string, string) {
 		t.Helper()
 		start := httptest.NewRecorder()
@@ -270,6 +271,9 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		for _, c := range w.Result().Cookies() {
 			if c.Name == sessionCookie && c.MaxAge > 0 {
 				return w.Header().Get("Location"), c.Value
+			}
+			if c.Name == choiceCookie && c.MaxAge > 0 {
+				choiceValue = c.Value
 			}
 		}
 		return w.Header().Get("Location"), ""
@@ -653,8 +657,38 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	f.mu.Lock()
 	f.invitations[pending]["state"], f.invitations[pending]["accepted_user_id"] = "accepted", erin
 	f.mu.Unlock()
-	if where, cookie := signIn(erin, "google"); where != "/dashboard" || cookie == "" || sessionOrg(erin) != inviting {
-		t.Fatalf("Erin, having accepted, signs in to the inviting firm: %s %s", where, sessionOrg(erin))
+	// Now Erin works in two firms: she is asked which, and her answer finishes the sign-in.
+	if where, cookie := signIn(erin, "google"); where != "/login?choose=1" || cookie != "" || choiceValue == "" {
+		t.Fatalf("Erin, in two firms, is asked which: %s", where)
+	}
+	ask := func(method, path, body, origin string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, "https://app.example.test"+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		r.AddCookie(&http.Cookie{Name: choiceCookie, Value: choiceValue})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	var listed struct {
+		Firms []struct{ ID, Name string } `json:"firms"`
+	}
+	if w := ask("GET", "/v1/auth/choices", "", ""); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &listed) != nil || len(listed.Firms) != 2 {
+		t.Fatalf("her two firms are listed: %d %s", w.Code, w.Body.String())
+	}
+	if w := ask("POST", "/v1/auth/choose", `{"organization":"`+inviting+`"}`, "https://evil.example"); w.Code != 403 {
+		t.Fatalf("another site cannot answer the choice: %d", w.Code)
+	}
+	if w := ask("POST", "/v1/auth/choose", `{"organization":"`+elsewhere+`"}`, "https://app.example.test"); w.Code != 404 {
+		t.Fatalf("a firm she does not work in cannot be chosen: %d", w.Code)
+	}
+	answer := ask("POST", "/v1/auth/choose", `{"organization":"`+inviting+`"}`, "https://app.example.test")
+	var chosen struct{ Location string }
+	if w, b := answer.Code, answer.Body.String(); w != 200 || json.Unmarshal(answer.Body.Bytes(), &chosen) != nil || chosen.Location != "/dashboard" || sessionOrg(erin) != inviting {
+		t.Fatalf("Erin chooses the inviting firm: %d %s %s", w, b, sessionOrg(erin))
 	}
 
 	// A firm WorkOS placed someone in, which has not admitted them, does not hold them: their own domain decides.

@@ -32,8 +32,9 @@ function ClientSession({ children }: { children: ReactNode }) {
 export function serverSignInUrl(provider?: "google" | "microsoft", back = "/dashboard") {
   return `${apiBaseUrl}/v1/auth/login?${new URLSearchParams({ ...(provider ? { provider } : {}), return: back })}`;
 }
+// Signing in from anywhere goes through the login page, with its Google and Microsoft choice, and back here after.
 function startServerSignIn() {
-  window.location.assign(serverSignInUrl(undefined, window.location.pathname + window.location.search));
+  window.location.assign(`/login?${new URLSearchParams({ return: window.location.pathname + window.location.search })}`);
 }
 async function endServerSession() {
   const response = await fetch(`${apiBaseUrl}/v1/auth/logout`, { method: "POST" });

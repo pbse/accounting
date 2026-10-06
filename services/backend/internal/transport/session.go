@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ const (
 	sessionCookie = "__Host-close_session"
 	staffCookie   = "__Host-close_staff"
 	loginCookie   = "__Host-close_login"
+	choiceCookie  = "__Host-close_choice"
 	sessionDays   = 30
 )
 
@@ -179,22 +181,42 @@ func systemContext(ctx context.Context) context.Context {
 // firmTokens exchanges the sign-in code and settles which organization the session is for. Only a company address may
 // sign in. A person in several organizations goes to the firm of their address's domain; a person in no firm finds or
 // creates it (domainFirm), and the session is then renewed into it. A refusal names why for the login page.
-func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind sessionKind, code string) (workosTokens, string, error) {
+func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind sessionKind, code string) (workosTokens, string, *firmChoice, error) {
 	tokens, _, err := c.authenticate(ctx, map[string]string{"grant_type": "authorization_code", "code": code})
 	var choice *organizationChoice
 	if errors.As(err, &choice) {
 		if _, company := companyDomain(choice.User.Email); !company {
-			return tokens, refusePersonal, nil
+			return tokens, refusePersonal, nil, nil
+		}
+		if !choice.User.EmailVerified {
+			return tokens, refuseUnverified, nil, nil
+		}
+		if !kind.staff {
+			// Someone who works in several of these firms picks one; the app does not guess between them.
+			firms, err := workingFirms(ctx, db, choice)
+			if err != nil {
+				return tokens, refuseUnavailable, nil, nil
+			}
+			if len(firms) > 1 {
+				return tokens, "", &firmChoice{Token: choice.Token, User: choice.User, Firms: firms}, nil
+			}
 		}
 		org := c.chosenOrganization(ctx, db, kind, choice)
 		if org == "" {
-			return tokens, refuseUnavailable, nil
+			return tokens, refuseUnavailable, nil, nil
 		}
 		tokens, _, err = c.authenticate(ctx, map[string]string{"grant_type": "urn:workos:oauth:grant-type:organization-selection", "pending_authentication_token": choice.Token, "organization_id": org})
 	}
 	if err != nil {
-		return tokens, "", err
+		return tokens, "", nil, err
 	}
+	tokens, refusal, err := c.settle(ctx, db, kind, tokens)
+	return tokens, refusal, nil, err
+}
+
+// settle applies the sign-in rules to tokens WorkOS issued and, for a firm session, settles its firm (firmFor) and
+// renews the tokens into it.
+func (c *sessionConfig) settle(ctx context.Context, db *sql.DB, kind sessionKind, tokens workosTokens) (workosTokens, string, error) {
 	if _, company := companyDomain(tokens.User.Email); !company {
 		return tokens, refusePersonal, nil
 	}
@@ -211,7 +233,7 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 	}
 	// The session starts from a token issued now, for the settled firm, so it carries the role the person holds after
 	// joining (someone set to Member keeps nothing WorkOS gave them before).
-	tokens, _, err = c.authenticate(ctx, map[string]string{"grant_type": "refresh_token", "refresh_token": tokens.RefreshToken, "organization_id": org})
+	tokens, _, err := c.authenticate(ctx, map[string]string{"grant_type": "refresh_token", "refresh_token": tokens.RefreshToken, "organization_id": org})
 	return tokens, "", err
 }
 
@@ -219,10 +241,19 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 // first sign-in after accepting it, before the app has enrolled them. Every such invitation is checked, newest first; a
 // check that cannot be made is an error, so no firm is chosen on incomplete evidence.
 func acceptedInvitation(ctx context.Context, db *sql.DB, firms []string, user signedInUser) (string, error) {
+	accepted, err := acceptedInvitations(ctx, db, firms, user)
+	if err != nil || len(accepted) == 0 {
+		return "", err
+	}
+	return accepted[0], nil
+}
+
+// acceptedInvitations is every one of these firms whose open invitation WorkOS shows this person accepted, newest first.
+func acceptedInvitations(ctx context.Context, db *sql.DB, firms []string, user signedInUser) ([]string, error) {
 	rows, err := db.QueryContext(systemContext(ctx), `SELECT organization_id,workos_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state='pending' AND workos_id IS NOT NULL AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC`,
 		strings.ToLower(strings.TrimSpace(user.Email)), firms)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	type open struct{ org, id string }
 	var invitations []open
@@ -230,23 +261,113 @@ func acceptedInvitation(ctx context.Context, db *sql.DB, firms []string, user si
 		var o open
 		if err = rows.Scan(&o.org, &o.id); err != nil {
 			rows.Close()
-			return "", err
+			return nil, err
 		}
 		invitations = append(invitations, o)
 	}
 	if rows.Close(); rows.Err() != nil {
-		return "", rows.Err()
+		return nil, rows.Err()
 	}
+	accepted := []string{}
 	for _, o := range invitations {
 		var sent workosInvitation
 		if err := workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(o.id), nil, &sent); err != nil {
-			return "", err
+			return nil, err
 		}
-		if sent.State == "accepted" && sent.AcceptedUserID == user.ID && sent.OrganizationID == o.org {
-			return o.org, nil
+		if sent.State == "accepted" && sent.AcceptedUserID == user.ID && sent.OrganizationID == o.org && !slices.Contains(accepted, o.org) {
+			accepted = append(accepted, o.org)
 		}
 	}
-	return "", nil
+	return accepted, nil
+}
+
+// firmChoice is a sign-in waiting for the person to pick one of the firms they work in, sealed in a short-lived cookie.
+type firmChoice struct {
+	Token   string       `json:"token"`
+	User    signedInUser `json:"user"`
+	Firms   []string     `json:"firms"`
+	Back    string       `json:"back"`
+	Expires time.Time    `json:"expires"`
+}
+
+func openChoice(r *http.Request) *firmChoice {
+	cookie, err := r.Cookie(choiceCookie)
+	if err != nil {
+		return nil
+	}
+	sealed, err := base64.RawURLEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		return nil
+	}
+	raw, err := secrets.Open("auth-session:choice", sealed)
+	var choice firmChoice
+	if err != nil || json.Unmarshal(raw, &choice) != nil || time.Now().After(choice.Expires) || !firmSession.returnPath(choice.Back) {
+		return nil
+	}
+	return &choice
+}
+
+// workingFirms are the registered, enabled firms among those WorkOS lists where the person holds firm access or has
+// accepted the firm's invitation.
+func workingFirms(ctx context.Context, db *sql.DB, choice *organizationChoice) ([]string, error) {
+	listed := []string{}
+	for _, o := range choice.Organizations {
+		if o.ID != os.Getenv("PLATFORM_ORGANIZATION_ID") && organizationID.MatchString(o.ID) {
+			listed = append(listed, o.ID)
+		}
+	}
+	rows, err := db.QueryContext(systemContext(ctx), `SELECT o.id FROM organizations o WHERE o.id=ANY($1) AND o.enabled AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=o.id AND m.subject=$2 AND m.granted)`, listed, choice.User.ID)
+	if err != nil {
+		return nil, err
+	}
+	firms := []string{}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		firms = append(firms, id)
+	}
+	if rows.Close(); rows.Err() != nil {
+		return nil, rows.Err()
+	}
+	accepted, err := acceptedInvitations(ctx, db, listed, choice.User)
+	if err != nil {
+		return nil, err
+	}
+	for _, org := range accepted {
+		if !slices.Contains(firms, org) {
+			firms = append(firms, org)
+		}
+	}
+	return firms, nil
+}
+
+// startSession verifies the firm's tokens and opens the session: the sealed tokens in auth_sessions, and the browser's
+// HttpOnly cookie. It answers the request itself when it cannot.
+func (c *sessionConfig) startSession(w http.ResponseWriter, r *http.Request, db *sql.DB, kind sessionKind, check *auth.Verifier, tokens workosTokens) bool {
+	claims, err := check.Verify(r.Context(), tokens.AccessToken)
+	if err != nil || claims.Subject != tokens.User.ID || claims.ExpiresAt == nil || !kind.owns(claims.Organization) {
+		problem(w, 401, "The sign-in could not be verified.")
+		return false
+	}
+	refresh, err := secrets.Seal("auth-session:refresh", []byte(tokens.RefreshToken))
+	access, accessErr := secrets.Seal("auth-session:access", []byte(tokens.AccessToken))
+	if err != nil || accessErr != nil {
+		problem(w, 503, "Sessions are unavailable.")
+		return false
+	}
+	id, ctx := randomToken(), systemContext(r.Context())
+	_, err = db.ExecContext(ctx, `INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+make_interval(days=>$9))`,
+		hashToken(id), claims.Subject, claims.Organization, claims.Session, tokens.User.Email, refresh, access, claims.ExpiresAt.Time, sessionDays)
+	if err != nil {
+		problem(w, 503, "Sessions are unavailable.")
+		return false
+	}
+	db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE expires_at<now() OR revoked_at<now()-interval '1 day'`)
+	setCookie(w, kind.cookie, id, sessionDays*24*60*60)
+	return true
 }
 
 // firmFor decides which firm a firm session is for. A registered firm WorkOS signed them in to keeps them when they are
@@ -385,7 +506,20 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			problem(w, 400, "This sign-in expired or did not start here. Start again from the sign-in page.")
 			return
 		}
-		tokens, refusal, err := c.firmTokens(r.Context(), db, kind, r.URL.Query().Get("code"))
+		tokens, refusal, choice, err := c.firmTokens(r.Context(), db, kind, r.URL.Query().Get("code"))
+		if choice != nil {
+			// They work in several firms: the login page asks which, and the sign-in finishes with their answer.
+			choice.Back, choice.Expires = back, time.Now().Add(10*time.Minute)
+			raw, _ := json.Marshal(choice)
+			sealed, err := secrets.Seal("auth-session:choice", raw)
+			if err != nil {
+				problem(w, 503, "Sessions are unavailable.")
+				return
+			}
+			setCookie(w, choiceCookie, base64.RawURLEncoding.EncodeToString(sealed), 600)
+			http.Redirect(w, r, "/login?choose=1", http.StatusFound)
+			return
+		}
 		if refusal != "" {
 			// The login page says why, in words; nothing about the person goes in the address.
 			http.Redirect(w, r, "/login?error="+refusal, http.StatusFound)
@@ -395,27 +529,59 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			problem(w, 502, "WorkOS could not complete the sign-in. Try again.")
 			return
 		}
-		claims, err := check.Verify(r.Context(), tokens.AccessToken)
-		if err != nil || claims.Subject != tokens.User.ID || claims.ExpiresAt == nil || !kind.owns(claims.Organization) {
-			problem(w, 401, "The sign-in could not be verified.")
+		if c.startSession(w, r, db, kind, check, tokens) {
+			http.Redirect(w, r, back, http.StatusFound)
+		}
+	})
+	mux.HandleFunc("GET /v1/auth/choices", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		choice := openChoice(r)
+		if choice == nil {
+			problem(w, 404, "This choice expired. Sign in again.")
 			return
 		}
-		refresh, err := secrets.Seal("auth-session:refresh", []byte(tokens.RefreshToken))
-		access, accessErr := secrets.Seal("auth-session:access", []byte(tokens.AccessToken))
-		if err != nil || accessErr != nil {
-			problem(w, 503, "Sessions are unavailable.")
+		var raw []byte
+		if err := db.QueryRowContext(systemContext(r.Context()), `SELECT COALESCE(jsonb_agg(jsonb_build_object('id',id,'name',name) ORDER BY name),'[]'::jsonb) FROM organizations WHERE id=ANY($1)`, choice.Firms).Scan(&raw); err != nil {
+			problem(w, 503, "Your firms could not be listed. Try again.")
 			return
 		}
-		id, ctx := randomToken(), systemContext(r.Context())
-		_, err = db.ExecContext(ctx, `INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+make_interval(days=>$9))`,
-			hashToken(id), claims.Subject, claims.Organization, claims.Session, tokens.User.Email, refresh, access, claims.ExpiresAt.Time, sessionDays)
+		jsonReply(w, 200, map[string]any{"firms": json.RawMessage(raw), "email": choice.User.Email})
+	})
+	mux.HandleFunc("POST /v1/auth/choose", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Header.Get("Origin") != c.app {
+			problem(w, 403, "Choose your firm from the sign-in page.")
+			return
+		}
+		var in struct {
+			Organization string `json:"organization"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		choice := openChoice(r)
+		if choice == nil || !slices.Contains(choice.Firms, in.Organization) {
+			problem(w, 404, "This choice expired. Sign in again.")
+			return
+		}
+		setCookie(w, choiceCookie, "", -1)
+		tokens, _, err := c.authenticate(r.Context(), map[string]string{"grant_type": "urn:workos:oauth:grant-type:organization-selection", "pending_authentication_token": choice.Token, "organization_id": in.Organization})
 		if err != nil {
-			problem(w, 503, "Sessions are unavailable.")
+			problem(w, 502, "WorkOS could not complete the sign-in. Sign in again.")
 			return
 		}
-		db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE expires_at<now() OR revoked_at<now()-interval '1 day'`)
-		setCookie(w, kind.cookie, id, sessionDays*24*60*60)
-		http.Redirect(w, r, back, http.StatusFound)
+		tokens, refusal, err := c.settle(r.Context(), db, firmSession, tokens)
+		if refusal != "" {
+			jsonReply(w, 200, map[string]string{"location": "/login?error=" + refusal})
+			return
+		}
+		if err != nil {
+			problem(w, 502, "WorkOS could not complete the sign-in. Sign in again.")
+			return
+		}
+		if c.startSession(w, r, db, firmSession, verifier, tokens) {
+			jsonReply(w, 200, map[string]string{"location": choice.Back})
+		}
 	})
 	mux.HandleFunc("GET /v1/auth/session", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
