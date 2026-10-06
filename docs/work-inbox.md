@@ -100,13 +100,14 @@ Every active client on the firm's roster owes a close each month (`client_roster
 
 How a client joins and leaves the roster:
 - **Joins** when its takeover setup is confirmed (owing from its opening month), or when a firm administrator adds it. Confirming a setup again does not bring back a client an administrator marked inactive; only a roster change does.
-- **Leaves** when an administrator marks it inactive (which also stops its monthly hand-over), or when its close is deleted for contract termination or at the client's request.
+- **Leaves** when an administrator marks it inactive, or when its close is deleted for contract termination or at the client's request. Leaving also stops its monthly hand-over and carry-forward: carrying its work into another month is refused, and the carry at sign-off skips it.
 - When the roster began, every client with a close was put on it, owing the months after its latest close, so older gaps are not reported. A client with a close in the three months before is active. Any other is listed inactive with "To confirm…", for an administrator to reactivate if it is still a client.
 
 **Months not opened.** A month nobody opened shows in Work's own **Months not opened** section (the morning brief's `not_opened`) to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. A month the client's monthly hand-over is set to open still shows until a close exists, marked as the hand-over's.
 
 **The template.** The firm's monthly close template (`close_templates`, `POST /v1/closes/close-template`) dates each month's close a number of days after the month ends, and gives it to an owner. A client's own entry can override either.
-- A close opened for an active roster client takes the template when it is created. That holds however it is opened: **Open** in Work, the new-close form, or a monthly hand-over.
+- A close opened for an active roster client takes the template when it is created. That holds however it is opened: **Open** in Work, the new-close form, a monthly hand-over, or carry-forward into the next month.
+- A client's own entry can set no due date even when the template has one.
 - A due date or owner it already has is kept.
 - The owner must still be able to do the work when the close opens: a member whose WorkOS role reviews every client, or a reviewer still assigned to the client. Otherwise, or when the firm's roles cannot be read, the close gets its due date but no owner.
 - The owner is recorded as a change of hands by "monthly close template".
@@ -219,7 +220,7 @@ The firm's Work page opens with a morning brief (`GET /v1/closes/morning`, MCP `
 - **In the past 24 hours:** month-end snapshots the schedule captured, new drafts prepared (a person's revisions and hand-saved drafts are not counted), and carried schedules approved under standing approvals (matched exactly to their grant and granter). It is a rolling day, not "since you last looked".
 - **Needs a person today:** each close's drafts to approve or fix, documents to confirm, failed documents to retry, a missing month-end snapshot for an ended month (QuickBooks or Xero), Daily Books questions new since the close was last reviewed, a change since sign-off, a sign-off that could not be rechecked, an overdue date, and an unsigned close from before last month. Closes are ranked by how much is waiting and the top 20 are shown, with the total. The brief says how many other outstanding closes have none of these waiting; tie-out and changes stay on each close.
 - **Due in 7 days:** the outstanding closes overdue or due within a week, soonest first, each with its sign-off state, plus the count without a due date. The Work card counts this list.
-- **Months not opened:** the months the firm's roster says an active client owes and nobody has opened (see [the client roster](#the-client-roster-and-monthly-template)), with the due date the template would give and whether it would be yours. **Open** creates the close on the template's terms.
+- **Months not opened:** the months the firm's roster says an active client owes and nobody has opened (see [the client roster](#the-client-roster-and-monthly-template)), with the due date the template would give and whether it would be yours (the template's owner, still able to review). **Open** creates the close on the template's terms.
 
 Below it, **Handed to the agent** lists the delegated closes you can see and where each stands ([close goals](close-coordinator.md#hand-the-close-to-the-agent)).
 

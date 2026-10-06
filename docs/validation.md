@@ -3420,18 +3420,20 @@ Request: phase A's B01/B02 foundations. B02 says to "show all required obligatio
 
 What changed:
 - **Migration 127.** Two append-only histories, read through their latest rows, each with tenant read/add policies:
-  - `client_roster`: whether a client is active, its first owed month, and its optional due-day and owner overrides;
+  - `client_roster`: whether a client is active, its first owed month, and its optional due-day and owner overrides (0 days and '' for an explicit "none");
   - `close_templates`: the firm's due days after month end, and its owner.
   - The roster starts with every client that has a close, owing the months after its latest close, so older gaps are not reported. A client with a close in the three months before is active. Any other is listed inactive with a "To confirm" reason, rather than left off. A scratch database migrated through 126, given a recent and an eight-month-old client, then migrated to 127, showed exactly that.
 - **Owed months** (`owedMonths`). Every ended month from a client's first owed month with no close is owed, however old. It is shown to whoever can work on the client (`clients:all`, or an assignment). A month the client's monthly hand-over is set to open still shows, marked `hand_over`, until a close exists, however late the hand-over is.
   - The morning brief returns them as `not_opened`, narrowed by Work's client or month filter.
   - Work lists them in their own **Months not opened** section, apart from **Due in 7 days**, with **Open**.
-- **The template on new closes** (`applyCloseTemplate`). A close newly opened for an active roster client takes the client's override, else the template, whether it comes from the new-close route, **Open** or a monthly hand-over. That means a due date N days after the month ends, and an owner.
+- **The template on new closes** (`applyCloseTemplate`). A close newly opened for an active roster client takes the client's override, else the template, whether it comes from the new-close route, **Open**, a monthly hand-over or carry-forward. That means a due date N days after the month ends, and an owner.
   - A due date or owner the close already has is kept. The owner must still be able to do the work, judged from the firm's WorkOS roles. The new-close route reads them before taking any lock, and only when the template would assign someone; the monthly hand-over uses the roles its sweep read. Otherwise the close is dated but given no owner.
   - The owner is recorded in `close_owner_changes` by "monthly close template".
 - **Routes.**
   - `GET /v1/closes/roster` (`clients:all`) shows the template, each client with its latest close and owed months, and, for administrators, the members who can hold closes.
   - `POST /v1/closes/roster` and `POST /v1/closes/close-template` are for firm administrators (`clients:all` and `members:manage`), with a reason. An owner must review the client's work; the template's must review every client.
+- **Carry-forward.** It applies the template to the next month it opens. It refuses a client that left the roster, and the carry at sign-off skips one without reporting a failure.
+- **"Yours"** on an owed month means the template's owner is the reader and they can still review.
 - **Joining and leaving.** Confirming a takeover setup puts a client never on the roster onto it from its opening month; confirming again does not reactivate one an administrator marked inactive. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
 - **Records.** Both tables are in the firm export, and `/readyz` waits for them.
 - **UI.** Firm settings gains **Clients and monthly closes**: the template, the roster with owed months, and forms for administrators, offering only owners who can do the work. Work gains **Months not opened**.
@@ -3443,9 +3445,12 @@ Checks:
   - Opening Alpha's month gives it the template's due date and owner, recorded as a change of hands by the template, and the month is no longer owed.
   - A month Alpha's monthly hand-over is set to open still shows, marked as the hand-over's.
   - Work's filter narrows the months (a name fragment, the month, or another client).
+  - Bea without review permission is not shown Alpha's month as hers.
+  - A client with an explicit "no due date" has none, though the template sets one.
   - The roster lists each client with its owed months, and administrators see the members they can choose.
   - Once Cy loses his Beta assignment, Beta's month opens with its due date but no owner.
   - Marking Beta inactive ends what it owes and stops its monthly hand-over.
+- `TestCarryForwardRoundingLineageAndFreshReview` (extended): the month carry-forward opens takes the client's 3-day due date. Once the client leaves the roster, carrying forward is refused (409), and the carry at sign-off skips it.
 - `TestMonthlyHandOverOpensAndHandsOverEachNewMonth` (extended): the month a hand-over opens takes the template, and contract termination takes the client off the roster.
 - `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth` (extended): the client joins the roster from its opening month. Once marked inactive, confirming the setup again for another timezone leaves it inactive.
 - The full Go suite runs on a fresh local PostgreSQL with migrations applied twice. `npm run check`, `npm test` and `npm run build` pass.

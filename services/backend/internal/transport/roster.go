@@ -6,9 +6,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"close.local/backend/internal/auth"
 )
 
 // The firm's client roster and monthly close template (B01/B02, migration 127). Every active client on the roster owes
@@ -41,7 +44,7 @@ func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles m
 	if err != nil {
 		return err
 	}
-	if dueDays.Valid {
+	if dueDays.Valid && dueDays.Int64 > 0 {
 		due := monthEnd(period).AddDate(0, 0, int(dueDays.Int64)).Format("2006-01-02")
 		if _, err = tx.ExecContext(ctx, `UPDATE client_closes SET due_on=$2::date WHERE id::text=$1 AND due_on IS NULL`, closeID, due); err != nil {
 			return err
@@ -75,7 +78,7 @@ type owedMonth struct {
 // those assigned to who) owe and have no close for: each ended month from the client's first owed month, matching
 // client (a name fragment or YYYY-MM, or "") as Work's filter does. A month the client's monthly hand-over is set to
 // open, and not stuck waiting, is marked as the hand-over's.
-func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm bool, who, client string) ([]owedMonth, error) {
+func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm, review bool, who, client string) ([]owedMonth, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
   EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND lower(h.client_entity)=lower(r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)
  FROM current_client_roster r `+rosterTemplate+`
@@ -97,10 +100,12 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
 		if err = rows.Scan(&o.Entity, &o.Period, &dueDays, &owner, &o.HandOver); err != nil {
 			return nil, err
 		}
-		if dueDays.Valid {
+		if dueDays.Valid && dueDays.Int64 > 0 {
 			o.DueOn = monthEnd(o.Period).AddDate(0, 0, int(dueDays.Int64)).Format("2006-01-02")
 		}
-		o.Mine = owner != "" && owner == who
+		// Yours when the template would give it to you and you can do the work now: the months listed are of clients you
+		// can work on, so it is your own review permission that is left to check.
+		o.Mine = owner != "" && owner == who && review
 		out = append(out, o)
 	}
 	return out, rows.Err()
@@ -206,7 +211,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		var owed []owedMonth
 		if err == nil {
-			owed, err = owedMonths(r.Context(), tx, time.Now(), org, true, subject(r), "")
+			owed, err = owedMonths(r.Context(), tx, time.Now(), org, true, canReview(r), subject(r), "")
 		}
 		if err != nil {
 			problem(w, 503, "The client roster is unavailable.")
@@ -260,8 +265,8 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Give a reason (1–500 characters).")
 			return
 		}
-		if in.DueDays != nil && (*in.DueDays < 1 || *in.DueDays > 60) {
-			problem(w, 422, "A close is due 1–60 days after its month ends.")
+		if in.DueDays != nil && (*in.DueDays < 0 || *in.DueDays > 60) {
+			problem(w, 422, "A close is due 1–60 days after its month ends, or 0 for no due date.")
 			return
 		}
 		if in.Owner != nil && *in.Owner != "" {
@@ -384,4 +389,10 @@ func rosterPeople(ctx context.Context, tx *sql.Tx, org string) ([]rosterPerson, 
 		}
 	}
 	return out, nil
+}
+
+// canReview is a reader who reviews work: with workpapers:review, or anyone without an organization (local development).
+func canReview(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return a != nil && (a.Organization == "" || slices.Contains(a.Permissions, "workpapers:review"))
 }

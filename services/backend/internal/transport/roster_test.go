@@ -114,6 +114,10 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	if got := strings.Join(brief("user_c", reviewer), " | "); got != "Beta "+ended+" due "+due(5)+" mine" {
 		t.Fatalf("a reviewer sees the months of the clients assigned to them: %s", got)
 	}
+	// A month is yours only while you can do the work: Bea without review permission is not shown Alpha's as hers.
+	if got := strings.Join(brief("user_b", []string{"clients:all"}), " | "); strings.Contains(got, "mine") {
+		t.Fatalf("not yours without review permission: %s", got)
+	}
 	// A month the client's monthly hand-over is set to open still shows, as the hand-over's, until a close exists.
 	_, err = db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period) VALUES($1,'Alpha','user_b',false,'review',$2)`, org, before)
 	must(err)
@@ -163,6 +167,14 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	if strings.Join(got, " ") != "user_a:all user_b:all user_c:Beta" {
 		t.Fatalf("the people an administrator chooses owners from: %v", got)
 	}
+
+	// A client can have no due date even though the template sets one.
+	zero := 0
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": true, "since": ended, "due_days": zero, "reason": "No deadline"}, 200)
+	if got := strings.Join(brief("user_b", partner, "Delta"), " | "); got != "Delta "+ended+" due  mine" {
+		t.Fatalf("a client with no due date: %s", got)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
 	// An owner who can no longer do the work is not given the month: Cy loses Beta, so its month opens dated but unheld.
 	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Beta',false,'Reassigned','fixture')`, org)

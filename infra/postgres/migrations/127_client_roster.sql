@@ -3,14 +3,15 @@ BEGIN;
 -- owner each month's close takes. Both are histories whose latest row per client (or per firm) is current.
 --
 -- A roster row says whether the client is active, the first month it owes (since), and its explicit overrides of the
--- firm template: due_days and owner, NULL to follow the template ('' owner: nobody, whatever the template says).
+-- firm template: due_days and owner, NULL to follow the template (due_days 0: no due date, and '' owner: nobody,
+-- whatever the template says).
 CREATE TABLE client_roster (
  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
  organization_id text NOT NULL REFERENCES organizations(id),
  client_entity text NOT NULL CHECK (length(client_entity) BETWEEN 1 AND 200),
  active boolean NOT NULL,
  since text NOT NULL CHECK (since ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
- due_days integer CHECK (due_days BETWEEN 1 AND 60),
+ due_days integer CHECK (due_days BETWEEN 0 AND 60),
  owner text CHECK (length(owner) <= 200),
  reason text NOT NULL CHECK (length(reason) BETWEEN 1 AND 500),
  actor text NOT NULL,

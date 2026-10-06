@@ -254,7 +254,7 @@ func morning(db *sql.DB) http.HandlerFunc {
 		}
 		slices.SortStableFunc(due, func(a, b obligation) int { return strings.Compare(a.DueOn, b.DueOn) })
 		// Months the firm's roster says are owed and nobody has opened: they show here until opened.
-		unopened, err := owedMonths(ctx, tx, now, organization(r), firmAccess(r), subject(r), client)
+		unopened, err := owedMonths(ctx, tx, now, organization(r), firmAccess(r), canReview(r), subject(r), client)
 		if err != nil {
 			problem(w, 503, "Morning brief unavailable.")
 			return

@@ -60,7 +60,7 @@ export function ClientRoster() {
               {(c.due_days !== null || c.owner !== null) && (
                 <small>
                   {" "}
-                  · own terms: {c.due_days !== null ? `due ${c.due_days} days after month end` : "the template's due date"}, {c.owner === null ? "the template's owner" : c.owner ? name(c.owner) : "no owner"}
+                  · own terms: {c.due_days === null ? "the template's due date" : c.due_days === 0 ? "no due date" : `due ${c.due_days} days after month end`}, {c.owner === null ? "the template's owner" : c.owner ? name(c.owner) : "no owner"}
                 </small>
               )}
               <small> · {c.reason} ({c.actor}, {new Date(c.at).toLocaleDateString()})</small>
@@ -171,6 +171,7 @@ function ClientForm({ client, people, onSaved }: { client?: Client; people: Pers
         Due
         <select value={due} onChange={(e) => setDue(e.target.value)}>
           <option value="template">As the firm template</option>
+          <option value="0">No due date</option>
           {days.map((n) => <option key={n} value={n}>{n} {n === 1 ? "day" : "days"} after month end</option>)}
         </select>
       </label>

@@ -83,6 +83,15 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 				return
 			}
 		}
+		// A next month this opens takes the firm's monthly close template; the firm's roles are read before any lock is
+		// taken, and only when the template would give the close an owner.
+		var roles map[string]reviewer
+		if org := organization(r); r.Method == "POST" && org != "local-development" {
+			var owner string
+			if e := db.QueryRowContext(r.Context(), `SELECT COALESCE(r.owner,t.owner,'') FROM client_closes c JOIN current_client_roster r ON r.organization_id=c.organization_id AND lower(r.client_entity)=lower(c.entity) AND r.active `+rosterTemplate+` WHERE c.id::text=$1`, r.PathValue("id")).Scan(&owner); e == nil && owner != "" {
+				roles, _ = firmReviewers(r.Context(), org)
+			}
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Carry-forward unavailable.")
@@ -93,6 +102,18 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID, &entity, &period); err != nil {
 			problem(w, 404, "Close not found.")
 			return
+		}
+		// A client the firm's roster says has left owes no more months, so no work is carried into one.
+		if r.Method == "POST" {
+			var left bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, organization(r), entity).Scan(&left); err != nil {
+				problem(w, 503, "Carry-forward unavailable.")
+				return
+			}
+			if left {
+				problem(w, 409, entity+" is inactive on the firm's roster. Reactivate it before carrying work into another month.")
+				return
+			}
 		}
 		date, e := time.Parse("2006-01", period)
 		if e != nil {
@@ -239,7 +260,11 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 				return
 			}
 			if err == nil {
-				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity`, entity, next, organization(r)).Scan(&target, &targetEntity)
+				var created bool
+				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity,xmax=0`, entity, next, organization(r)).Scan(&target, &targetEntity, &created)
+				if err == nil && created {
+					err = applyCloseTemplate(r.Context(), tx, target, roles)
+				}
 			}
 		}
 		if err != nil {
@@ -364,6 +389,14 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 // next-month preparation, through the same preview and carry-forward rules as the page, as the requesting
 // reviewer. It returns how many were queued, or false when the carry-forward could not run.
 func autoCarry(db *sql.DB, r *http.Request, closeID string) (int, bool) {
+	// A client the firm's roster says has left gets no next month; that is not a failure to report.
+	var left bool
+	if err := db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_closes c JOIN current_client_roster r ON r.organization_id=c.organization_id AND lower(r.client_entity)=lower(c.entity) AND NOT r.active WHERE c.id::text=$1)`, closeID).Scan(&left); err != nil {
+		return 0, false
+	}
+	if left {
+		return 0, true
+	}
 	carry := carryHandler(db)
 	call := func(method string, body []byte) *httptest.ResponseRecorder {
 		req, _ := http.NewRequestWithContext(r.Context(), method, "/v1/closes/"+closeID+"/carry-forward", bytes.NewReader(body))
