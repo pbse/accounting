@@ -29,7 +29,7 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 	entity := "Setup " + rand.Text()
 	defer func() {
 		for _, q := range []string{`DELETE FROM procedure_versions WHERE client_entity=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`,
-			`DELETE FROM quickbooks_connections WHERE client_entity=$1`, `DELETE FROM client_closes WHERE entity=$1`} {
+			`DELETE FROM quickbooks_connections WHERE client_entity=$1`, `DELETE FROM client_closes WHERE entity=$1`, `DELETE FROM client_roster WHERE client_entity=$1`} {
 			db.Exec(q, entity)
 		}
 	}()
@@ -99,8 +99,44 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 		t.Fatalf("the company the books are read from and the basis are confirmed: %+v", current)
 	}
 	call("POST", path, map[string]any{"digest": first.Digest, "timezone": "America/New_York", "confirmed": true}, 409)
+	// The firm's monthly template dates each close 4 days after its month ends.
+	_, err = db.Exec(`INSERT INTO close_templates(organization_id,due_days,owner,reason,actor) VALUES('local-development',4,'','Synthetic','fixture')`)
+	must(err)
+	defer db.Exec(`DELETE FROM close_templates WHERE organization_id='local-development'`)
 	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "America/New_York", "confirmed": true}, 200)
+	// The client taken over joins the firm's roster, owing a close each month from its opening month, and its opening
+	// close takes the template.
+	var openingDue string
+	must(db.QueryRow(`SELECT COALESCE(due_on::text,'') FROM client_closes WHERE entity=$1 AND period='2026-08'`, entity).Scan(&openingDue))
+	if openingDue != "2026-09-04" {
+		t.Fatalf("the opening close takes the template: %q", openingDue)
+	}
+	var since string
+	must(db.QueryRow(`SELECT since FROM current_client_roster WHERE client_entity=$1 AND active`, entity).Scan(&since))
+	if since != "2026-08" {
+		t.Fatalf("the client owes from its opening month: %s", since)
+	}
 	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "America/New_York", "confirmed": true}, 409)
+	// Confirming the setup again (here for another timezone) leaves a client an administrator marked inactive inactive.
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES('local-development',$1,false,'2026-08','Left the firm','fixture')`, entity)
+	must(err)
+	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "Europe/London", "confirmed": true}, 200)
+	var active bool
+	must(db.QueryRow(`SELECT active FROM current_client_roster WHERE client_entity=$1`, entity).Scan(&active))
+	if active {
+		t.Fatal("a reconfirmed setup does not reactivate a client")
+	}
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES('local-development',$1,true,'2026-08','Back','fixture')`, entity)
+	must(err)
+	// Only the first confirmation applies the template: a due date since cleared stays cleared when the setup is
+	// confirmed again, with the client active.
+	_, err = db.Exec(`UPDATE client_closes SET due_on=NULL WHERE entity=$1 AND period='2026-08'`, entity)
+	must(err)
+	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "America/Chicago", "confirmed": true}, 200)
+	must(db.QueryRow(`SELECT COALESCE(due_on::text,'') FROM client_closes WHERE entity=$1 AND period='2026-08'`, entity).Scan(&openingDue))
+	if openingDue != "" {
+		t.Fatalf("a later confirmation leaves the opening close as its people left it: %q", openingDue)
+	}
 	if b := blockers(); strings.Contains(b, "Confirm the takeover setup") {
 		t.Fatalf("a confirmed setup no longer holds the opening month: %s", b)
 	}

@@ -143,6 +143,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerRecurringAccrual(mux, db)
 	registerReadiness(mux, db)
 	registerPlanning(mux, db)
+	registerRoster(mux, db)
 	registerEffort(mux, db)
 	registerIndependence(mux, db)
 	registerAgentAccess(mux, db)
@@ -259,6 +260,10 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 403, "You are not assigned to this client.")
 			return
 		}
+		// The firm's roles, for the owner the template may give the close, are read before any lock is taken when the
+		// firm names an owner; roles that cannot be read give it none (applyCloseTemplate).
+		roles := templateRoles(organization(r))
+		warmTemplateRoles(r.Context(), db, organization(r), roles)
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Close storage unavailable.")
@@ -285,6 +290,16 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 				problem(w, 429, "This firm has reached its close limit. Archive or retain existing work according to policy before opening another period.")
 				return
 			}
+			// A client the firm's roster says has left owes no new month; its existing months still open.
+			var left bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT `+rosterLeft("$1", "$2"), organization(r), input.Entity).Scan(&left); err != nil {
+				problem(w, 503, "Could not check the current close.")
+				return
+			}
+			if left {
+				problem(w, 409, input.Entity+" is inactive on the firm's roster. A firm administrator reactivates it in Firm settings before a new month is opened.")
+				return
+			}
 			// A client's first close in the firm is its opening month. A month opened earlier than that one, before its
 			// baseline is reviewed, becomes the opening month instead. A name that is a confirmed alias of more than one
 			// client is not guessed.
@@ -307,6 +322,10 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			}
 			if err == nil {
 				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id,takeover) VALUES($1,$2,$3,$4) RETURNING id::text,entity,period`, input.Entity, input.Period, organization(r), first).Scan(&item.ID, &item.Entity, &item.Period)
+			}
+			// A new month of a roster client takes the firm's monthly close template: its due date and owner.
+			if err == nil {
+				err = applyCloseTemplate(r.Context(), tx, item.ID, roles)
 			}
 		}
 		if err != nil {

@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"close.local/backend/internal/preparation"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -61,7 +62,7 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_routines WHERE organization_id=$1`,
 			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
-			`DELETE FROM close_deletion_receipts WHERE organization_id=$1`,
+			`DELETE FROM close_deletion_receipts WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
 			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
@@ -125,6 +126,13 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	call("user_a", reviewer, "POST", "/v1/closes/"+setUp+"/goal/stop", map[string]string{"reason": "Checking the routine"}, 200)
 	call("user_a", reviewer, "POST", "/v1/closes/"+setUp+"/goal", map[string]any{"confirmed": true, "every_month": true}, 409)
 
+	// Alpha is on the firm's roster, whose monthly close template dates each month 7 days after it ends and gives it to
+	// the administrator.
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Alpha',true,$2,'Synthetic','fixture')`, org, month(0))
+	must(err)
+	_, err = db.Exec(`INSERT INTO close_templates(organization_id,due_days,owner,reason,actor) VALUES($1,7,'user_admin','Synthetic','fixture')`, org)
+	must(err)
+
 	// When the next month ends its close is opened and handed over once; a stopped goal is not restarted.
 	sweepCloseRoutines(ctx, db, on(1, 15))
 	if closeOf(month(1)) != "" {
@@ -136,6 +144,11 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	next := closeOf(month(1))
 	if next == "" || goals(next) != 1 {
 		t.Fatalf("the ended month's close is opened and handed over: %q %d", next, goals(next))
+	}
+	var dueOn, owner string
+	must(db.QueryRow(`SELECT due_on::text,owner FROM client_closes WHERE id::text=$1`, next).Scan(&dueOn, &owner))
+	if dueOn != monthEnd(month(1)).AddDate(0, 0, 7).Format("2006-01-02") || owner != "user_admin" {
+		t.Fatalf("the month the routine opens takes the firm's template: %s %s", dueOn, owner)
 	}
 	var by string
 	must(db.QueryRow(`SELECT r.started_by FROM workflow_runs r JOIN close_goals g ON r.idempotency_key='goal:'||g.id AND r.workflow='close_goal' WHERE g.close_id::text=$1`, next).Scan(&by))
@@ -217,9 +230,63 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	call("user_admin", admin, "POST", "/v1/closes/"+signed+"/retention", map[string]any{"retain_until": "2000-01-01", "legal_hold": false, "expected_version": 0, "reason": "Approved synthetic retention policy", "confirmed": true}, 200)
 	var retention retentionStatus
 	must(json.Unmarshal(call("user_admin", admin, "GET", "/v1/closes/"+signed+"/retention", nil, 200), &retention))
+	// Alpha is also on the roster under a name since confirmed as its alias: leaving takes every name off, so the alias,
+	// forgotten with the relationship, is not left behind as a client that still owes months.
+	// "Alpha Holdings" and "Alpha, Inc." (kept as "alpha inc"), other confirmed aliases, are on no roster entry.
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Alpha','alpha group','fixture',now()-interval '1 day'),($1,'Alpha','alpha holdings','fixture',now()-interval '1 day'),($1,'Alpha','alpha inc','fixture',now()-interval '1 day')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Alpha Group',true,$2,'Synthetic','fixture')`, org, month(0))
+	must(err)
 	call("user_admin", admin, "POST", "/v1/closes/"+signed+"/delete", map[string]any{"expected_version": retention.Version, "entity": "Alpha", "period": month(2), "reason_code": "contract_termination", "confirmed": true}, 200)
+	// The receipt keeps the digest of the client the close belonged to, read before its aliases were forgotten.
+	var clientDigest string
+	must(db.QueryRow(`SELECT COALESCE(client_digest,'') FROM close_deletion_receipts WHERE organization_id=$1 AND period=$2`, org, month(2)).Scan(&clientDigest))
+	if clientDigest != preparation.Digest([]byte(org+"\x00alpha\x00"+month(2))) {
+		t.Fatalf("the receipt keeps the client's digest: %q", clientDigest)
+	}
+	var stillActive int
+	must(db.QueryRow(`SELECT count(*) FROM current_client_roster WHERE organization_id=$1 AND active`, org).Scan(&stillActive))
+	if stillActive != 0 {
+		t.Fatalf("every name the client was on the roster under leaves with it: %d still active", stillActive)
+	}
 	if read(setUp).Routine != nil {
 		t.Fatal("contract termination stops the client's monthly hand-over")
+	}
+	// The forgotten alias is a name of its own now, left inactive: no new month is opened under it either.
+	for _, name := range []string{"Alpha Holdings", "Alpha, Inc."} {
+		if body := string(call("user_admin", admin, "POST", "/v1/closes", map[string]string{"entity": name, "period": month(5)}, 409)); !strings.Contains(body, "inactive on the firm's roster") {
+			t.Fatalf("a departed client's forgotten alias %s stays inactive: %s", name, body)
+		}
+	}
+	var active bool
+	var left string
+	must(db.QueryRow(`SELECT active,reason FROM current_client_roster WHERE organization_id=$1 AND client_entity='Alpha'`, org).Scan(&active, &left))
+	if active || !strings.Contains(left, "contract termination") {
+		t.Fatalf("contract termination takes the client off the roster: %v %s", active, left)
+	}
+
+	// Mu has a close from before "mu" was confirmed as an alias of Nu, so Mu is its own client. Deleting that close,
+	// its last, does not hand the name to Nu: the alias is retired, Nu's roster entry stays as it was, and the receipt
+	// keeps Mu's own digest.
+	var mu string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Mu',$2) RETURNING id::text`, org, month(2)).Scan(&mu))
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, mu)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Nu','mu','fixture',now())`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Nu',true,$2,'Synthetic','fixture'),($1,'Mu',false,$3,'Synthetic','fixture')`, org, month(0), month(2))
+	must(err)
+	call("user_admin", admin, "POST", "/v1/closes/"+mu+"/retention", map[string]any{"retain_until": "2000-01-01", "legal_hold": false, "expected_version": 0, "reason": "Approved synthetic retention policy", "confirmed": true}, 200)
+	must(json.Unmarshal(call("user_admin", admin, "GET", "/v1/closes/"+mu+"/retention", nil, 200), &retention))
+	call("user_admin", admin, "POST", "/v1/closes/"+mu+"/delete", map[string]any{"expected_version": retention.Version, "entity": "Mu", "period": month(2), "reason_code": "retention_expired", "confirmed": true}, 200)
+	var aliasLive int
+	var nuActive bool
+	var nuSince, muDigest string
+	must(db.QueryRow(`SELECT count(*) FROM client_aliases WHERE organization_id=$1 AND alias='mu' AND retired_at IS NULL`, org).Scan(&aliasLive))
+	must(db.QueryRow(`SELECT active,since FROM current_client_roster WHERE organization_id=$1 AND client_entity='Nu'`, org).Scan(&nuActive, &nuSince))
+	must(db.QueryRow(`SELECT COALESCE(client_digest,'') FROM close_deletion_receipts WHERE organization_id=$1 AND close_id=$2::bigint`, org, mu).Scan(&muDigest))
+	if aliasLive != 0 || !nuActive || nuSince != month(0) || muDigest != preparation.Digest([]byte(org+"\x00mu\x00"+month(2))) {
+		t.Fatalf("deleting Mu's last close leaves the name Mu's: alias live %d, Nu %v %s, receipt %q", aliasLive, nuActive, nuSince, muDigest)
 	}
 }
 

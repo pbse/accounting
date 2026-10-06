@@ -91,6 +91,37 @@ Work ranks jobs by what they need first (decisions and failures, then blocked or
 
 The review queue can approve up to 20 drafts at once, but only drafts that change nothing in the ledger and carry no reviewer judgment: no proposed adjustment, no open questions, no reviewer-chosen or in-transit payouts and no reviewer classifications. Everything else says why it needs individual review. The confirmation lists every draft, its effect and exceptions, the total effect and your authority. Each draft is rechecked inside its own transaction with fresh firm, membership and client-access checks, so a stale or inaccessible draft is refused while the others proceed. Apply migration 038 with the API and worker stopped; `/readyz` checks it.
 
+## The client roster and monthly template
+
+Every active client on the firm's roster owes a close each month (`client_roster`, migration 127). The **Clients and monthly closes** section of Firm settings (`GET`/`POST /v1/closes/roster`) shows each client:
+- whether it is active, and the first month it owes;
+- its latest close, and every ended month it owes that nobody opened;
+- any terms of its own.
+
+How a client joins and leaves the roster:
+- **Joins** when its takeover setup is confirmed (owing from its opening month, and its opening close takes the template), or when a firm administrator adds it. Confirming a setup again does not bring back a client an administrator marked inactive; only a roster change does.
+- **Leaves** when an administrator marks it inactive, or when its close is deleted for contract termination or at the client's request. An inactive client gets no new month by any route:
+- the new-close form refuses its next month, though its existing months still open;
+- a new monthly hand-over is refused, and a running one stops instead of opening a month or handing over one already open;
+- carrying its work into another month is refused, and the carry at sign-off skips it.
+
+An administrator reactivates it in Firm settings.
+- When the roster began, every client with a close was put on it. A client with a close in the three months before is active. It owes every month from its earliest close of the last twelve, so a month missing between its recent closes shows, while older history does not. Any other client is listed inactive with "To confirm…", for an administrator to reactivate if it is still a client.
+
+**Months not opened.** A month nobody opened shows in Work's own **Months not opened** section (the morning brief's `not_opened`) to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. The "Due in 7 days" tile also counts the months not opened that are overdue or due within the week, and says how many those are. Its section lists them under the due closes, each with its Open button. A month whose close was deleted under the retention policy was done, and is not owed again. Deleting a close never changes which client its name belongs to. A month the client's monthly hand-over is set to open still shows until a close exists, marked as the hand-over's.
+
+**The template.** The firm's monthly close template (`close_templates`, `POST /v1/closes/close-template`) dates each month's close a number of days after the month ends, and gives it to an owner. A client's own entry can override either.
+- A close opened for an active roster client takes the template when it is created. That holds however it is opened: **Open** in Work, the new-close form, a monthly hand-over, or carry-forward into the next month.
+- A client's own entry can set no due date even when the template has one.
+- A due date or owner it already has is kept.
+- The owner must still be able to do the work when the close opens: a member whose WorkOS role reviews every client, or a reviewer still assigned to the client. Otherwise, or when the firm's roles cannot be read, the close gets its due date but no owner.
+- The owner is recorded as a change of hands by "monthly close template".
+- The template's owner must review every client; a client's own owner, that client.
+
+**Client identity.** The roster names each client by its own name, and matches closes by client identity, as opening months does elsewhere. Client assignments are matched by name, as access to a client's closes is, so the roster never shows or gives anyone a month they cannot open. A month opened under a confirmed alias of the client counts as the client's, and the roster refuses an alias as a second client. A name added on its own and later confirmed as an alias of a rostered client becomes that client: one entry, shown under the client's own name, whose latest decision covers both names.
+
+**Changes and records.** Only a firm administrator (`clients:all` and `members:manage`) changes the roster or the template, with a reason, and only from the entry as it stands: a change made from an entry someone has since changed is refused; in the local development firm, anyone may. A new or changed first owed month is within the last five years; an entry keeping its first month can still be changed. A roster change takes the firm's lock, as opening a close does, so a month opened at the same moment honors it. Both are append-only histories and are part of the firm export.
+
 ## Work needing re-review
 
 **Work needing re-review** lists current drafts whose review was reopened through an explicit link: a cited source that changed or was replaced, or a changed predecessor in a carried schedule or recurring accrual. Below it, **May need re-review** predicts drafts that no link reaches: an approved, un-revised draft in an open (not signed-off) close whose balance-sheet account (a prepaid, liability, loan, owner, settlement bank or reconciled account, matched by name) has a transaction in the latest QuickBooks capture that QuickBooks updated after the approval. It names the transaction, the account and both times, and counts such transactions. The update may not change the balance, so the approval stands; the draft leaves the list once it is approved again after the update or revised. Above it, **No longer ties** lists each approved draft in an open close whose account differs from what the approved work supports (the [tie-out](#balance-sheet-tie-out)'s own "differs") in a Trial Balance captured after the approval, whether or not a transaction was updated: the account, the Trial Balance balance, the supported balance and the difference, one line per account. That difference already blocks sign-off; the approval stands until it is reviewed again, and a draft listed there is not repeated below. It ties out, one short read each, up to 10 open closes that have an approval older than their newest Trial Balance (the one the tie-out uses), newest first, and says when there are more to check; a close whose tie-out cannot be computed is left out, and its own tie-out says why. Expense and revenue accounts, Xero captures and procedure changes are not predicted.
@@ -196,6 +227,7 @@ The firm's Work page opens with a morning brief (`GET /v1/closes/morning`, MCP `
 - **In the past 24 hours:** month-end snapshots the schedule captured, new drafts prepared (a person's revisions and hand-saved drafts are not counted), and carried schedules approved under standing approvals (matched exactly to their grant and granter). It is a rolling day, not "since you last looked".
 - **Needs a person today:** each close's drafts to approve or fix, documents to confirm, failed documents to retry, a missing month-end snapshot for an ended month (QuickBooks or Xero), Daily Books questions new since the close was last reviewed, a change since sign-off, a sign-off that could not be rechecked, an overdue date, and an unsigned close from before last month. Closes are ranked by how much is waiting and the top 20 are shown, with the total. The brief says how many other outstanding closes have none of these waiting; tie-out and changes stay on each close.
 - **Due in 7 days:** the outstanding closes overdue or due within a week, soonest first, each with its sign-off state, plus the count without a due date. The Work card counts this list.
+- **Months not opened:** the months the firm's roster says an active client owes and nobody has opened (see [the client roster](#the-client-roster-and-monthly-template)), with the due date the template would give and whether it would be yours (the template's owner, still able to review). **Open** creates the close on the template's terms.
 
 Below it, **Handed to the agent** lists the delegated closes you can see and where each stands ([close goals](close-coordinator.md#hand-the-close-to-the-agent)).
 

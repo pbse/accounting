@@ -253,8 +253,25 @@ func morning(db *sql.DB) http.HandlerFunc {
 			}
 		}
 		slices.SortStableFunc(due, func(a, b obligation) int { return strings.Compare(a.DueOn, b.DueOn) })
-		jsonReply(w, 200, map[string]any{"since": now.Add(-24 * time.Hour), "as_of": now, "overnight": map[string]int{"month_end_snapshots": snapshots, "drafts_prepared": drafts, "standing_approvals": standing},
+		// Months the firm's roster says are owed and nobody has opened: they show here until opened. Those overdue or due
+		// within a week are counted with the due closes, apart.
+		unopened, err := owedMonths(ctx, tx, now, organization(r), firmAccess(r), canReview(r), subject(r), client)
+		if err != nil {
+			problem(w, 503, "Morning brief unavailable.")
+			return
+		}
+		dueUnopened, unopenedOverdue := []owedMonth{}, 0
+		for _, o := range unopened {
+			if o.DueOn != "" && o.DueOn <= week {
+				dueUnopened = append(dueUnopened, o)
+				if o.DueOn < today {
+					unopenedOverdue++
+				}
+			}
+		}
+		slices.SortStableFunc(dueUnopened, func(a, b owedMonth) int { return strings.Compare(a.DueOn, b.DueOn) })
+		jsonReply(w, 200, map[string]any{"not_opened": unopened, "due_not_opened": dueUnopened, "since": now.Add(-24 * time.Hour), "as_of": now, "overnight": map[string]int{"month_end_snapshots": snapshots, "drafts_prepared": drafts, "standing_approvals": standing},
 			"closes": shown, "needing": len(needing), "quiet": len(closes) - len(needing), "model_check": check,
-			"due": due, "due_counts": map[string]int{"overdue": overdue, "upcoming": len(due) - overdue, "no_due_date": undated}})
+			"due": due, "due_counts": map[string]int{"overdue": overdue, "upcoming": len(due) - overdue, "no_due_date": undated, "not_opened_overdue": unopenedOverdue, "not_opened_upcoming": len(dueUnopened) - unopenedOverdue}})
 	}
 }

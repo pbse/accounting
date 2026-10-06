@@ -5,6 +5,7 @@ import { AgentAccess } from "./AgentAccess";
 import { isEnrollmentError } from "./ClosesList";
 import { EmailSettings } from "./Email";
 import { FirmEnrollment } from "./Enterprise";
+import { ClientRoster } from "./Roster";
 import { workspaceRequest } from "./workspace";
 
 type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; investigations: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
@@ -416,6 +417,7 @@ export default function Firm() {
       <WrittenAnswers />
       <Materiality />
       <ReminderRule />
+      <ClientRoster />
       <SupportAndExit />
           <p>
             People, client assignments, agent grants, connected services and recent changes are in the <Link to="/dashboard/security">Security center</Link>. Request or give up your own agent access here.

@@ -83,6 +83,12 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 				return
 			}
 		}
+		// A next month this opens takes the firm's monthly close template; the firm's roles, for the owner it may give the
+		// close, are read before any lock is taken when the firm names an owner.
+		roles := templateRoles(organization(r))
+		if r.Method == "POST" {
+			warmTemplateRoles(r.Context(), db, organization(r), roles)
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Carry-forward unavailable.")
@@ -93,6 +99,18 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 		if err = tx.QueryRowContext(r.Context(), `SELECT id::text,entity,period FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID, &entity, &period); err != nil {
 			problem(w, 404, "Close not found.")
 			return
+		}
+		// A client the firm's roster says has left owes no more months, so no work is carried into one.
+		if r.Method == "POST" {
+			var left bool
+			if err = tx.QueryRowContext(r.Context(), `SELECT `+rosterLeft("$1", "$2"), organization(r), entity).Scan(&left); err != nil {
+				problem(w, 503, "Carry-forward unavailable.")
+				return
+			}
+			if left {
+				problem(w, 409, entity+" is inactive on the firm's roster. Reactivate it before carrying work into another month.")
+				return
+			}
 		}
 		date, e := time.Parse("2006-01", period)
 		if e != nil {
@@ -238,12 +256,32 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 				problem(w, 429, "This firm has reached its close limit. Archive or retain existing work according to policy before opening another period.")
 				return
 			}
+
 			if err == nil {
-				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity`, entity, next, organization(r)).Scan(&target, &targetEntity)
+				var created bool
+				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,entity,xmax=0`, entity, next, organization(r)).Scan(&target, &targetEntity, &created)
+				if err == nil && created {
+					err = applyCloseTemplate(r.Context(), tx, target, roles)
+				}
 			}
 		}
 		if err != nil {
 			problem(w, 503, "Could not create the next close.")
+			return
+		}
+		// Read again under the firm lock, which roster changes take, whether the month was opened here or already open, in a
+		// statement of its own so it sees a change that committed while it waited: a client marked inactive meanwhile gets
+		// no work carried into it.
+		var left bool
+		if _, err = tx.ExecContext(r.Context(), `SELECT 1 FROM organizations WHERE id=$1 FOR SHARE`, organization(r)); err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT `+rosterLeft("$1", "$2"), organization(r), entity).Scan(&left)
+		}
+		if err != nil {
+			problem(w, 503, "Carry-forward unavailable.")
+			return
+		}
+		if left {
+			problem(w, 409, entity+" is inactive on the firm's roster. Reactivate it before carrying work into another month.")
 			return
 		}
 		var lastDecision string
@@ -364,6 +402,14 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 // next-month preparation, through the same preview and carry-forward rules as the page, as the requesting
 // reviewer. It returns how many were queued, or false when the carry-forward could not run.
 func autoCarry(db *sql.DB, r *http.Request, closeID string) (int, bool) {
+	// A client the firm's roster says has left gets no next month; that is not a failure to report.
+	var left bool
+	if err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT `+rosterLeft("c.organization_id", "c.entity")+` FROM client_closes c WHERE c.id::text=$1),false)`, closeID).Scan(&left); err != nil {
+		return 0, false
+	}
+	if left {
+		return 0, true
+	}
 	carry := carryHandler(db)
 	call := func(method string, body []byte) *httptest.ResponseRecorder {
 		req, _ := http.NewRequestWithContext(r.Context(), method, "/v1/closes/"+closeID+"/carry-forward", bytes.NewReader(body))
