@@ -14,7 +14,9 @@ import (
 	"close.local/backend/internal/auth"
 )
 
-// The firm's client roster and monthly close template (B01/B02, migration 127). Every active client on the roster owes
+// The firm's client roster and monthly close template (B01/B02, migration 127). Roster entries are matched to closes by
+// client identity (rosterMatch), so a confirmed alias is the client; client assignments are matched by name, as access to
+// a client's closes is (clientAccess, closeAccess), so the roster never shows or gives anyone work they cannot open. Every active client on the roster owes
 // a close for each ended month from the first month it owes; a month no close was opened for is listed until it is opened
 // (owedMonths), so an obligation nobody started still shows. A month's close takes the template's due date and owner,
 // unless the client's own entry overrides them (applyCloseTemplate). A client joins the roster when it is taken over or
@@ -41,7 +43,7 @@ func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles m
 	var member, assigned bool
 	err := tx.QueryRowContext(ctx, `SELECT c.organization_id,c.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
  EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=c.organization_id AND m.subject=COALESCE(r.owner,t.owner,'') AND m.granted),
- EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=COALESCE(r.owner,t.owner,'') AND client_identity(g.organization_id,g.client_entity)=client_identity(c.organization_id,c.entity) AND g.granted)
+ EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=COALESCE(r.owner,t.owner,'') AND lower(g.client_entity)=lower(c.entity) AND g.granted)
  FROM client_closes c JOIN current_client_roster r ON `+rosterMatch("c.organization_id", "c.entity")+` AND r.active `+rosterTemplate+`
  WHERE c.id::text=$1`, closeID).Scan(&org, &period, &dueDays, &owner, &member, &assigned)
 	if err == sql.ErrNoRows {
@@ -96,7 +98,7 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
  FROM current_client_roster r `+rosterTemplate+`
  CROSS JOIN LATERAL (SELECT to_char(g,'YYYY-MM') AS period FROM generate_series(to_date(r.since,'YYYY-MM'),to_date($4,'YYYY-MM'),interval '1 month') g) m
  WHERE r.organization_id=$1 AND r.active
-  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND client_identity(g.organization_id,g.client_entity)=client_identity(r.organization_id,r.client_entity) AND g.granted))
+  AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(r.client_entity) AND g.granted))
   AND NOT EXISTS(SELECT 1 FROM opened o WHERE o.client=client_identity(r.organization_id,r.client_entity) AND o.period=m.period)
   AND ($5='' OR r.client_entity ILIKE '%'||$5||'%' OR m.period=$5)
  ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, endedMonth(now), client)
@@ -134,7 +136,7 @@ func rosterOwner(ctx context.Context, db *sql.DB, r *http.Request, entity, subje
 	}
 	var member, assigned bool
 	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted),
- EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND client_identity(organization_id,client_entity)=client_identity($1,$3) AND granted)`, org, subject, entity).Scan(&member, &assigned)
+ EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, subject, entity).Scan(&member, &assigned)
 	if err != nil || !member {
 		return "", false, err
 	}
@@ -378,8 +380,8 @@ type rosterPerson struct {
 // rosterPeople is the granted members who can hold closes, as rosterOwner judges them, with the clients assigned to
 // each; in the local development firm, which need not record members, the reader is one of them.
 func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPerson, error) {
-	// Each assigned client is named by its client identity (lowercase), as the roster's clients match it.
-	rows, err := tx.QueryContext(ctx, `SELECT m.subject,COALESCE((SELECT jsonb_agg(DISTINCT client_identity(g.organization_id,g.client_entity)) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),'[]'::jsonb)
+	// Each assigned client is named as its assignment names it (lowercase), as access to a client's closes is granted.
+	rows, err := tx.QueryContext(ctx, `SELECT m.subject,COALESCE((SELECT jsonb_agg(DISTINCT lower(g.client_entity)) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),'[]'::jsonb)
  FROM current_organization_members m WHERE m.organization_id=$1 AND m.granted ORDER BY m.subject`, org)
 	if err != nil {
 		return nil, err

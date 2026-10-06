@@ -3,7 +3,7 @@ import { workspaceRequest } from "./workspace";
 
 type Template = { due_days: number | null; owner: string; reason: string; actor: string; at: string } | null;
 type Client = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; last_period: string; owed: string[] };
-// clients are the client identities (lowercase names) a reviewer is assigned to.
+// clients are the names (lowercase) a reviewer is assigned to, as access to a client's closes is granted.
 type Person = { subject: string; name: string; firm_wide: boolean; clients: string[] };
 type Roster = { template: Template; clients: Client[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
 
