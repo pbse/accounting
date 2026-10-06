@@ -98,12 +98,29 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Could not save the close plan.")
 			return
 		}
+		// As with a document, a signed-off close is not handed out, nor taken from a colleague, until it is reopened.
+		reopenFirst := func() bool {
+			signed, err := signedOff(r.Context(), tx, closeID)
+			if err != nil {
+				problem(w, 503, "Could not save the close plan.")
+				return true
+			}
+			if signed {
+				problem(w, 409, "This close is signed off. Reopen it before handing it to a teammate.")
+			}
+			return signed
+		}
 		next := owner
 		switch input.Assignment {
 		case "take":
-			if owner != "" && owner != me && !canTakeOver(r) {
-				problem(w, 409, "Someone else holds this close. They can release it, or ask a firm administrator.")
-				return
+			if owner != "" && owner != me {
+				if !canTakeOver(r) {
+					problem(w, 409, "Someone else holds this close. They can release it, or ask a firm administrator.")
+					return
+				}
+				if reopenFirst() {
+					return
+				}
 			}
 			next = me
 		case "release":
@@ -117,14 +134,7 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Someone else holds this close. They can hand it over, or ask a firm administrator.")
 				return
 			}
-			// As with a document, a signed-off close has no work to hand out until it is reopened.
-			signed, err := signedOff(r.Context(), tx, closeID)
-			if err != nil {
-				problem(w, 503, "Could not save the close plan.")
-				return
-			}
-			if signed {
-				problem(w, 409, "This close is signed off. Reopen it before handing it to a teammate.")
+			if reopenFirst() {
 				return
 			}
 			// The firm row serializes this with member and client-access decisions, as hand-offs do.

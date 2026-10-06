@@ -3232,7 +3232,7 @@ Checks:
   - The holder hands the close to a reviewer assigned to the client. Afterwards the old holder can neither release nor take it. Cy's Attention and close page show who handed it and the note. An administrator then reassigns it back: Cy is no longer told, and Bea is told by the administrator, with that note.
   - A hand-over to the current holder is refused. Cy cannot take the close from its holder, and neither can an administrator who reviews nothing (no `can_take_over`). An administrator who reviews can, and then hands it on.
   - The close's package holds all eight changes, with their actors and notes.
-  - A signed-off close is not handed out (409, and no `can_assign`); once reopened, it is again. A 300-character accented note is accepted. A kept plan records nothing. Exactly eight changes are recorded, in order, with actors and notes. The Security center shows "Took", "Took … from user_b", "Assigned … to user_c: Covering while I'm away", "Assigned … to user_b from user_c: Back from leave" and "Released".
+  - A signed-off close is neither handed out nor taken over (409, and no `can_assign` or `can_take_over`); once reopened, it is again. A 300-character accented note is accepted. A kept plan records nothing. Exactly eight changes are recorded, in order, with actors and notes. The Security center shows "Took", "Took … from user_b", "Assigned … to user_c: Covering while I'm away", "Assigned … to user_b from user_c: Back from leave" and "Released".
 - `TestClosePlanningRanksWorkAndBulkApprovalChecksEachDraft` and `TestHandADocumentToATeammate` still pass.
 - `npm run check`, `npm test` (44 pass) and `npm run build` pass. CI's layout check walks the close page.
 

@@ -197,6 +197,9 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	if body := plan("user_b", partner, "assign", "user_c", "", 409); !strings.Contains(body, "signed off") || canAssign("user_b", partner) {
 		t.Fatalf("a signed-off close is not handed out: %s", body)
 	}
+	if body := plan("user_a", reviewingAdmin, "take", "", "", 409); !strings.Contains(body, "signed off") || takeOver("user_a", reviewingAdmin) {
+		t.Fatalf("nor taken over: %s", body)
+	}
 	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'reopened','fixture','{}','More work','fixture')`, alpha)
 	must(err)
 	plan("user_b", partner, "keep", "", "", 200)

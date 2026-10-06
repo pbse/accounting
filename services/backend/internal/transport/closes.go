@@ -335,7 +335,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			return
 		}
 		item.CanAssign = !signed && subject(r) != "" && canHandOver(r) && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
-		item.CanTakeOver = item.Assigned && !item.OwnedByMe && canTakeOver(r)
+		item.CanTakeOver = !signed && item.Assigned && !item.OwnedByMe && canTakeOver(r)
 		if item.OwnedByMe {
 			var h closeHandover
 			var to string
