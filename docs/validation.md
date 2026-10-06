@@ -3447,7 +3447,7 @@ What changed:
   - The deletion stops hand-overs under the client's aliases too.
   - A month's hand-over flag also matches routines by client identity. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
 - **Records.** Both tables are in the firm export, and `/readyz` waits for them.
-- **UI.** The add-client form offers reviewers assigned to the name being typed. Each roster form resets when its entry changes, so one administrator's edit cannot silently reverse another's. A failed refresh says so beside the last roster read. Firm settings gains **Clients and monthly closes**: the template, the roster with owed months, and forms for administrators, offering only owners who can do the work. Work gains **Months not opened**.
+- **UI.** The add-client form offers reviewers assigned to the name being typed. Each roster form resets when its entry changes (keyed on the entry's revision), so one administrator's edit cannot silently reverse another's. A failed refresh says so beside the last roster read. Firm settings gains **Clients and monthly closes**: the template, the roster with owed months, and forms for administrators, offering only owners who can do the work. Work gains **Months not opened**.
 
 Checks:
 - `TestTheRosterListsEveryMonthOwed` (local PostgreSQL, WorkOS answered by a fixture):
@@ -3462,7 +3462,8 @@ Checks:
   - "Epsilon Partners", added on its own and then confirmed as an alias of Epsilon, merges with it into one entry owing one month, shown as Epsilon. Epsilon's later deactivation covers both names.
   - A month opened under Zeta's alias "Zeta Co" takes the template's due date. It is not given to Cy, who is assigned to "Zeta" and so cannot open a close named "Zeta Co". Deactivating Zeta stops a hand-over set up under "Zeta Co".
   - A name with no entry of its own has left when an inactive entry has its name once case and punctuation are set aside (`rosterLeft`, used by every inactive guard): "Omega, Co." is refused while only "omega co" is inactive, and opens once its own entry is active.
-  - Rho's unopened month, due the day after its month ends, counts in Morning's `due_counts` as `not_opened_overdue` or `not_opened_upcoming`, apart from the due closes. Work's "Due in 7 days" tile adds these and says how many are not opened.
+  - Rho's unopened month, due two days after its month ends, counts in Morning's `due_counts` as `not_opened_overdue` or `not_opened_upcoming`, apart from the due closes. It is listed in `due_not_opened`, soonest first. Work's "Due in 7 days" tile adds these and says how many are not opened. The section it leads to lists the due closes and then these months, each with its Open button, so the tile and the lists reconcile.
+  - Each roster change is a new revision (`rev`, the entry's row) even within the same second. The roster forms are keyed on it, so a refresh always resets them to the newest entry.
   - Theta's month is no longer owed once a deletion receipt records its close deleted under the retention policy. The receipt's digest is computed in SQL exactly as Go computes it.
   - Iota's month is no longer owed when its close was opened under the alias "Iota Co." and deleted: the receipt's client digest matches.
   - Xi owes its month while "Xi Partners", under which a month was deleted when it was its own client, is another client. Once "xi partners" is confirmed as Xi's alias, that month is done: a receipt's client digest is compared with every name the firm knows the client by.

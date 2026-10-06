@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { workspaceRequest } from "./workspace";
 
-type Template = { due_days: number | null; owner: string; reason: string; actor: string; at: string } | null;
-type Client = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; last_period: string; owed: string[] };
+// rev changes with every change, so a form keyed on it resets to the newest entry.
+type Template = { due_days: number | null; owner: string; reason: string; actor: string; at: string; rev: string } | null;
+type Client = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; rev: string; last_period: string; owed: string[] };
 // clients are the names (lowercase) a reviewer is assigned to, as access to a client's closes is granted.
 type Person = { subject: string; name: string; firm_wide: boolean; clients: string[] };
 type Roster = { template: Template; clients: Client[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
@@ -49,7 +50,7 @@ export function ClientRoster() {
       </p>
       {error && <p role="alert">{error} Showing the last roster read.</p>}
       {roster.people_unavailable && <p role="alert">{roster.people_unavailable}</p>}
-      {roster.can_manage && <TemplateForm key={t?.at ?? "none"} template={t} people={people.filter((p) => p.firm_wide)} onSaved={() => setRefresh((n) => n + 1)} />}
+      {roster.can_manage && <TemplateForm key={t?.rev ?? "none"} template={t} people={people.filter((p) => p.firm_wide)} onSaved={() => setRefresh((n) => n + 1)} />}
       {roster.clients.length === 0 ? (
         <p className="empty">No client is on the roster yet. A client joins when it is taken over, or when a firm administrator adds it.</p>
       ) : (
@@ -66,7 +67,7 @@ export function ClientRoster() {
                 </small>
               )}
               <small> · {c.reason} ({c.actor}, {new Date(c.at).toLocaleDateString()})</small>
-              {roster.can_manage && <ClientForm key={`${c.entity}:${c.at}`} client={c} people={people} onSaved={() => setRefresh((n) => n + 1)} />}
+              {roster.can_manage && <ClientForm key={`${c.entity}:${c.rev}`} client={c} people={people} onSaved={() => setRefresh((n) => n + 1)} />}
             </li>
           ))}
         </ul>

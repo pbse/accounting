@@ -246,19 +246,38 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 
 	// A month owed and not opened, due by the end of the week, counts with the due closes, apart: Rho's is due the day
 	// after its month ends, so it is overdue or due today whenever this runs.
+	var listed []owedMonth
 	dueCounts := func() map[string]int {
 		var got struct {
-			DueCounts map[string]int `json:"due_counts"`
+			DueCounts    map[string]int `json:"due_counts"`
+			DueNotOpened []owedMonth    `json:"due_not_opened"`
 		}
 		must(json.Unmarshal([]byte(call("user_b", partner, "GET", "/v1/closes/morning?client=Rho", nil, 200)), &got))
+		listed = got.DueNotOpened
 		return got.DueCounts
+	}
+	rev := func() string {
+		var got struct{ Clients []rosterClient }
+		must(json.Unmarshal([]byte(call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)), &got))
+		for _, c := range got.Clients {
+			if c.Entity == "Rho" {
+				return c.Rev
+			}
+		}
+		return ""
 	}
 	if c := dueCounts(); c["not_opened_overdue"]+c["not_opened_upcoming"] != 0 {
 		t.Fatalf("no unopened month of Rho is due before it joins: %v", c)
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": true, "since": ended, "due_days": 1, "reason": "A client"}, 200)
-	if c := dueCounts(); c["not_opened_overdue"]+c["not_opened_upcoming"] != 1 || c["overdue"]+c["upcoming"] != 0 {
-		t.Fatalf("Rho's unopened month counts as due, apart from the due closes: %v", c)
+	first := rev()
+	// Each change is a new revision, however soon after the last, so a form keyed on it resets.
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": true, "since": ended, "due_days": 2, "reason": "Two days"}, 200)
+	if again := rev(); first == "" || again == first {
+		t.Fatalf("each roster change is a new revision: %q then %q", first, again)
+	}
+	if c := dueCounts(); c["not_opened_overdue"]+c["not_opened_upcoming"] != 1 || c["overdue"]+c["upcoming"] != 0 || len(listed) != 1 || listed[0].Entity != "Rho" || listed[0].DueOn != due(2) {
+		t.Fatalf("Rho's unopened month counts as due, apart from the due closes, and is listed with them: %v %+v", c, listed)
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 

@@ -341,10 +341,10 @@ export function Work({
       {!closeId && morning && (
         <>
           <SectionHeader title="Due in 7 days" id="due-closes">
-            <small>Overdue or due within a week and not signed off, or changed since sign-off. {unopenedDue > 0 && `${unopenedDue} more ${unopenedDue === 1 ? "is" : "are"} due by then and not opened, under Months not opened. `}{morning.due_counts.no_due_date > 0 && `${morning.due_counts.no_due_date} outstanding ${morning.due_counts.no_due_date === 1 ? "close has" : "closes have"} no due date.`}</small>
+            <small>Overdue or due within a week and not signed off, or changed since sign-off. {unopenedDue > 0 && `${unopenedDue} more ${unopenedDue === 1 ? "month is" : "months are"} due by then and not opened, listed below the closes. `}{morning.due_counts.no_due_date > 0 && `${morning.due_counts.no_due_date} outstanding ${morning.due_counts.no_due_date === 1 ? "close has" : "closes have"} no due date.`}</small>
           </SectionHeader>
           <RowList label="Due closes">
-            {morning.due.length === 0 && <p className="empty">No outstanding close is overdue or due within 7 days.</p>}
+            {morning.due.length === 0 && <p className="empty">No opened close is overdue or due within 7 days.</p>}
             {morning.due.map((item) => (
               <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
                 <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`Due ${item.due_on}`} />
@@ -354,6 +354,7 @@ export function Work({
               </Link>
             ))}
           </RowList>
+          <NotOpened months={morning.due_not_opened ?? []} due />
           <NotOpened months={morning.not_opened ?? []} />
         </>
       )}

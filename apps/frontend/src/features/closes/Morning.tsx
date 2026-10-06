@@ -20,6 +20,8 @@ export type Morning = {
   // not_opened_*: months owed and not opened, dated overdue or within a week, listed under Months not opened.
   due_counts: { overdue: number; upcoming: number; no_due_date: number; not_opened_overdue?: number; not_opened_upcoming?: number };
   not_opened: Unopened[];
+  // The months not opened that due_counts counts: overdue or due within a week, soonest first.
+  due_not_opened?: Unopened[];
 };
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -73,7 +75,9 @@ export function MorningBrief({ brief, error }: { brief?: Morning; error: string 
 
 // The months the firm's roster says are owed and nobody opened, including one a monthly hand-over has yet to open. Opening
 // one gives it the firm's monthly template.
-export function NotOpened({ months }: { months: Unopened[] }) {
+// Months owed and not opened, each with a button to open it. Work lists them all, newest first, and those due within
+// the week again under its due closes (due set), soonest first.
+export function NotOpened({ months, due }: { months: Unopened[]; due?: boolean }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
@@ -90,10 +94,14 @@ export function NotOpened({ months }: { months: Unopened[] }) {
     }
   }
   return (
-    <section aria-label="Months not opened">
-      <SectionHeader title="Months not opened" id="months-not-opened">
-        <small>{count(months.length, "month", "months")} the firm's roster says are owed that nobody has opened, newest first.</small>
-      </SectionHeader>
+    <section aria-label={due ? "Due and not opened" : "Months not opened"}>
+      {due ? (
+        <h3>Due and not opened</h3>
+      ) : (
+        <SectionHeader title="Months not opened" id="months-not-opened">
+          <small>{count(months.length, "month", "months")} the firm's roster says are owed that nobody has opened, newest first.</small>
+        </SectionHeader>
+      )}
       <ul>
         {months.map((m) => (
           <li key={`${m.entity}:${m.period}`}>

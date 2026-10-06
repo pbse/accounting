@@ -180,6 +180,7 @@ type rosterClient struct {
 	Reason     string   `json:"reason"`
 	Actor      string   `json:"actor"`
 	At         string   `json:"at"`
+	Rev        string   `json:"rev"` // the entry's row, new with every change
 	LastPeriod string   `json:"last_period"`
 	Owed       []string `json:"owed"`
 }
@@ -199,11 +200,11 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		org := organization(r)
 		var template map[string]any
 		var dueDays sql.NullInt64
-		var owner, reason, actor string
+		var owner, reason, actor, rev string
 		var at time.Time
-		switch err = tx.QueryRowContext(r.Context(), `SELECT due_days,owner,reason,actor,created_at FROM close_templates WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&dueDays, &owner, &reason, &actor, &at); err {
+		switch err = tx.QueryRowContext(r.Context(), `SELECT due_days,owner,reason,actor,created_at,id::text FROM close_templates WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&dueDays, &owner, &reason, &actor, &at, &rev); err {
 		case nil:
-			template = map[string]any{"due_days": nil, "owner": owner, "reason": reason, "actor": actor, "at": at}
+			template = map[string]any{"due_days": nil, "owner": owner, "reason": reason, "actor": actor, "at": at, "rev": rev}
 			if dueDays.Valid {
 				template["due_days"] = dueDays.Int64
 			}
@@ -212,7 +213,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "The client roster is unavailable.")
 			return
 		}
-		rows, err := tx.QueryContext(r.Context(), `SELECT r.client_entity,r.active,r.since,r.due_days,r.owner,r.reason,r.actor,r.created_at,
+		rows, err := tx.QueryContext(r.Context(), `SELECT r.client_entity,r.active,r.since,r.due_days,r.owner,r.reason,r.actor,r.created_at,r.id::text,
  COALESCE((SELECT max(c.period) FROM client_closes c WHERE c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)),'')
  FROM current_client_roster r WHERE r.organization_id=$1 ORDER BY NOT r.active,lower(r.client_entity)`, org)
 		if err != nil {
@@ -225,7 +226,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			var due sql.NullInt64
 			var override sql.NullString
 			var when time.Time
-			if err = rows.Scan(&c.Entity, &c.Active, &c.Since, &due, &override, &c.Reason, &c.Actor, &when, &c.LastPeriod); err != nil {
+			if err = rows.Scan(&c.Entity, &c.Active, &c.Since, &due, &override, &c.Reason, &c.Actor, &when, &c.Rev, &c.LastPeriod); err != nil {
 				break
 			}
 			if due.Valid {
