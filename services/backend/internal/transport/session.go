@@ -213,36 +213,43 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 	return tokens, "", err
 }
 
-// firmFor decides which firm a firm session is for, by the person's address first: the firm registered for their
-// domain (joined if need be); else a registered firm WorkOS already holds them in (one that invited them); else their
-// domain's claim, which may create the firm or take over an organization WorkOS placed them in.
+// firmFor decides which firm a firm session is for. A registered firm WorkOS signed them in to keeps them when that
+// firm has decided on them or invited them (an accountant a client's firm invited stays there). Otherwise their
+// address decides: the firm registered for their domain (joined if need be); else a registered firm WorkOS holds them
+// in; else their domain's claim, which may create the firm or take over an organization WorkOS placed them in.
 func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, string) {
+	ctx = systemContext(ctx)
 	domain, _ := companyDomain(tokens.User.Email)
+	held := tokens.OrganizationID
+	var registered, belongs bool
 	var own string
-	if err := db.QueryRowContext(systemContext(ctx), `SELECT id FROM organizations WHERE email_domain=$1`, domain).Scan(&own); err != nil && err != sql.ErrNoRows {
+	if held != "" && held != os.Getenv("PLATFORM_ORGANIZATION_ID") {
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1),
+			EXISTS(SELECT 1 FROM organization_member_access WHERE organization_id=$1 AND subject=$2) OR EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND email=$3 AND state IN ('sending','pending','accepted'))`,
+			held, tokens.User.ID, strings.ToLower(strings.TrimSpace(tokens.User.Email))).Scan(&registered, &belongs); err != nil {
+			return "", refuseUnavailable
+		}
+	}
+	if registered && belongs {
+		return held, domainMember(ctx, db, held, tokens.User)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT id FROM organizations WHERE email_domain=$1`, domain).Scan(&own); err != nil && err != sql.ErrNoRows {
 		return "", refuseUnavailable
 	}
-	held := tokens.OrganizationID
 	switch {
 	case own != "" && own == held:
 		return held, domainMember(ctx, db, held, tokens.User)
 	case own != "":
 		return domainFirm(ctx, db, tokens.User)
-	case held != "" && held != os.Getenv("PLATFORM_ORGANIZATION_ID"):
-		var registered bool
-		if err := db.QueryRowContext(systemContext(ctx), `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1)`, held).Scan(&registered); err != nil {
-			return "", refuseUnavailable
-		}
-		if registered {
-			return held, domainMember(ctx, db, held, tokens.User)
-		}
+	case registered:
+		return held, domainMember(ctx, db, held, tokens.User)
 	}
 	return domainFirm(ctx, db, tokens.User)
 }
 
 // chosenOrganization answers WorkOS asking which organization a person in several signs in to. Staff sign in to the
-// platform's. For a firm session any of theirs completes the sign-in, since firmFor then settles the firm by their
-// address and the session is renewed into it; their domain's registered firm is preferred, so no renewal is needed.
+// platform's. For a firm session, a firm that invited them comes first, then their domain's registered firm; failing
+// both, any of theirs completes the sign-in, and firmFor settles the firm, renewing the session into it if need be.
 func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind sessionKind, choice *organizationChoice) string {
 	platform := os.Getenv("PLATFORM_ORGANIZATION_ID")
 	listed := []string{}
@@ -259,6 +266,9 @@ func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind
 	}
 	domain, _ := companyDomain(choice.User.Email)
 	var org string
+	if db.QueryRowContext(systemContext(ctx), `SELECT organization_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state IN ('sending','pending','accepted') ORDER BY created_at DESC LIMIT 1`, strings.ToLower(strings.TrimSpace(choice.User.Email)), listed).Scan(&org) == nil {
+		return org
+	}
 	if db.QueryRowContext(systemContext(ctx), `SELECT id FROM organizations WHERE email_domain=$1 AND id=ANY($2)`, domain, listed).Scan(&org) == nil {
 		return org
 	}

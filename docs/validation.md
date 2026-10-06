@@ -3336,6 +3336,8 @@ Pass 3 found that someone WorkOS signed in to another firm, or asked to choose a
 
 Pass 4 found that an existing member's address was not checked for verification, and that a removed member from another domain got a session that could not work. Every sign-in now needs a verified address, and a removed member or suspended firm is refused at sign-in. Both are tested.
 
+Pass 5 found that preferring the domain's firm would pull an accountant invited by another firm away from it. A firm that has decided on or invited the person now keeps them, ahead of their domain's firm; tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

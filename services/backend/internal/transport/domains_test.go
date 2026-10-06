@@ -483,6 +483,25 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("the domain's organization becomes Leo's firm: %q %v", stored, err)
 	}
 
+	// Someone a firm in another domain invited stays in that firm, though their own domain has a firm too.
+	mia := person("mia", true, domain)
+	inviting := "org_Inviting" + rand.Text()
+	f.mu.Lock()
+	f.orgs[inviting] = "inviting-" + domain
+	mm := firmMembership{ID: "om_" + mia, UserID: mia, OrganizationID: inviting, Status: "active"}
+	mm.Role.Slug = "member"
+	f.memberships = append(f.memberships, mm)
+	f.mu.Unlock()
+	if _, err := raw.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Inviting firm')`, inviting); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,state,invited_by,reason) VALUES($1,$2,'member','Member','sending',$3,'Mia keeps our books.')`, inviting, f.users[mia].Email, ana); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(mia, "google"); where != "/dashboard" || cookie == "" || sessionOrg(mia) != inviting || f.membership(mia, firm) != nil {
+		t.Fatalf("Mia stays in the firm that invited her: %s %s", where, sessionOrg(mia))
+	}
+
 	// Every sign-in needs a verified address: a member whose address WorkOS no longer counts as verified is turned away.
 	f.mu.Lock()
 	u := f.users[erin]
