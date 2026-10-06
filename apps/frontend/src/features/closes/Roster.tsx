@@ -90,6 +90,9 @@ function TemplateForm({ template, people, onSaved, onFailed }: { template: Templ
   const [owner, setOwner] = useState(template?.owner ?? "");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  // An owner who has since lost the membership or role to hold every client's closes is shown as such, and must be
+  // replaced before the template is saved.
+  const ineligible = owner !== "" && !people.some((p) => p.subject === owner);
   async function save() {
     setBusy(true);
     try {
@@ -116,14 +119,16 @@ function TemplateForm({ template, people, onSaved, onFailed }: { template: Templ
         Owner
         <select value={owner} onChange={(e) => setOwner(e.target.value)}>
           <option value="">Nobody</option>
+          {ineligible && <option value={owner}>{owner}: can no longer hold these closes</option>}
           {people.map((p) => <option key={p.subject} value={p.subject}>{p.name}</option>)}
         </select>
       </label>
+      {ineligible && <p className="note">The template's owner can no longer hold every client's closes. Choose another owner, or nobody, to save.</p>}
       <label>
         Reason for the change
         <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
       </label>
-      <button type="button" disabled={busy || !reason.trim()} onClick={() => void save()}>Save template</button>
+      <button type="button" disabled={busy || !reason.trim() || ineligible} onClick={() => void save()}>Save template</button>
     </details>
   );
 }
@@ -140,6 +145,9 @@ function ClientForm({ client, people, onSaved, onFailed }: { client?: Client; pe
   // Owners who can do this client's work: a role reviewing every client, or a reviewer assigned to it.
   const named = entity.trim().toLowerCase();
   const owners = people.filter((p) => p.firm_wide || (named !== "" && p.clients.includes(named)));
+  // An owner who has since lost the membership, role or assignment to do this client's work is shown as such, and must
+  // be replaced before the entry is saved.
+  const ineligible = owner !== "template" && owner !== "" && !owners.some((p) => p.subject === owner);
   async function save() {
     setBusy(true);
     try {
@@ -190,14 +198,16 @@ function ClientForm({ client, people, onSaved, onFailed }: { client?: Client; pe
         <select value={owner} onChange={(e) => setOwner(e.target.value)}>
           <option value="template">As the firm template</option>
           <option value="">Nobody</option>
+          {ineligible && <option value={owner}>{owner}: can no longer hold these closes</option>}
           {owners.map((p) => <option key={p.subject} value={p.subject}>{p.name}</option>)}
         </select>
       </label>
+      {ineligible && <p className="note">This owner can no longer do {entity.trim() || "this client"}'s work. Choose another owner, nobody, or the template's to save.</p>}
       <label>
         Reason
         <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
       </label>
-      <button type="button" disabled={busy || !reason.trim() || !entity.trim() || !since} onClick={() => void save()}>
+      <button type="button" disabled={busy || !reason.trim() || !entity.trim() || !since || ineligible} onClick={() => void save()}>
         {client ? "Save" : "Add client"}
       </button>
     </details>
