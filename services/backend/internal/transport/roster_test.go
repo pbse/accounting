@@ -171,7 +171,7 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	for _, p := range people.People {
 		got = append(got, p.Subject+":"+map[bool]string{true: "all", false: strings.Join(p.Clients, ",")}[p.FirmWide])
 	}
-	if strings.Join(got, " ") != "user_a:all user_b:all user_c:Beta" {
+	if strings.Join(got, " ") != "user_a:all user_b:all user_c:beta" {
 		t.Fatalf("the people an administrator chooses owners from: %v", got)
 	}
 
@@ -226,6 +226,18 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	if !zetaStopped {
 		t.Fatal("deactivating Zeta stops the hand-over set up under its alias")
 	}
+
+	// An assignment recorded under a client's confirmed alias is an assignment to the client: Cy, assigned "Eta Co", can
+	// own Eta and sees its month.
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Eta','eta co','fixture',now()-interval '1 day')`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Eta Co',true,'Synthetic','fixture')`, org)
+	must(err)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Eta", "active": true, "since": ended, "owner": cy, "reason": "Cy's client"}, 200)
+	if got := brief("user_c", reviewer, "Eta"); !slices.Contains(got, "Eta "+ended+" due "+due(10)+" mine") {
+		t.Fatalf("Cy sees Eta's month, as his: %s", got)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Eta", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
 	// A client can have no due date even though the template sets one.
 	zero := 0

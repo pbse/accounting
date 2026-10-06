@@ -3446,7 +3446,7 @@ What changed:
   - The deletion stops hand-overs under the client's aliases too.
   - A month's hand-over flag also matches routines by client identity. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
 - **Records.** Both tables are in the firm export, and `/readyz` waits for them.
-- **UI.** Each roster form resets when its entry changes, so one administrator's edit cannot silently reverse another's. A failed refresh says so beside the last roster read. Firm settings gains **Clients and monthly closes**: the template, the roster with owed months, and forms for administrators, offering only owners who can do the work. Work gains **Months not opened**.
+- **UI.** The add-client form offers reviewers assigned to the name being typed. Each roster form resets when its entry changes, so one administrator's edit cannot silently reverse another's. A failed refresh says so beside the last roster read. Firm settings gains **Clients and monthly closes**: the template, the roster with owed months, and forms for administrators, offering only owners who can do the work. Work gains **Months not opened**.
 
 Checks:
 - `TestTheRosterListsEveryMonthOwed` (local PostgreSQL, WorkOS answered by a fixture):
@@ -3460,6 +3460,7 @@ Checks:
   - Gamma's month opened under its confirmed alias "Gamma Group" is no longer owed, and "Gamma Group" is refused as a roster entry.
   - "Epsilon Partners", added on its own and then confirmed as an alias of Epsilon, merges with it into one entry owing one month, shown as Epsilon. Epsilon's later deactivation covers both names.
   - A month opened under Zeta's alias "Zeta Co" goes to Zeta's owner, Cy, who is assigned to "Zeta". Deactivating Zeta stops a hand-over set up under "Zeta Co".
+  - Cy, assigned under Eta's alias "Eta Co", is accepted as Eta's owner and sees Eta's month as his. Assignments are matched by client identity in the owed months, owner checks and the people list.
 - `TestLocalDevelopmentManagesTheRoster`: the local development firm adds a client and manages its roster. It records no members, so its reader is offered as an owner, can be the template's owner, and is given the month opened.
   - The roster lists each client with its owed months, and administrators see the members they can choose.
   - Once Cy loses his Beta assignment, Beta's month opens with its due date but no owner.

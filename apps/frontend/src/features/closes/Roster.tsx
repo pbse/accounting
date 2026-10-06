@@ -3,6 +3,7 @@ import { workspaceRequest } from "./workspace";
 
 type Template = { due_days: number | null; owner: string; reason: string; actor: string; at: string } | null;
 type Client = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; last_period: string; owed: string[] };
+// clients are the client identities (lowercase names) a reviewer is assigned to.
 type Person = { subject: string; name: string; firm_wide: boolean; clients: string[] };
 type Roster = { template: Template; clients: Client[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
 
@@ -65,12 +66,12 @@ export function ClientRoster() {
                 </small>
               )}
               <small> · {c.reason} ({c.actor}, {new Date(c.at).toLocaleDateString()})</small>
-              {roster.can_manage && <ClientForm key={`${c.entity}:${c.at}`} client={c} people={people.filter((p) => p.firm_wide || p.clients.some((e) => e.toLowerCase() === c.entity.toLowerCase()))} onSaved={() => setRefresh((n) => n + 1)} />}
+              {roster.can_manage && <ClientForm key={`${c.entity}:${c.at}`} client={c} people={people} onSaved={() => setRefresh((n) => n + 1)} />}
             </li>
           ))}
         </ul>
       )}
-      {roster.can_manage ? <ClientForm people={people.filter((p) => p.firm_wide)} onSaved={() => setRefresh((n) => n + 1)} /> : <p className="note">A firm administrator with clients:all and members:manage changes the roster and the template.</p>}
+      {roster.can_manage ? <ClientForm people={people} onSaved={() => setRefresh((n) => n + 1)} /> : <p className="note">A firm administrator with clients:all and members:manage changes the roster and the template.</p>}
     </section>
   );
 }
@@ -131,6 +132,9 @@ function ClientForm({ client, people, onSaved }: { client?: Client; people: Pers
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  // Owners who can do this client's work: a role reviewing every client, or a reviewer assigned to it.
+  const named = entity.trim().toLowerCase();
+  const owners = people.filter((p) => p.firm_wide || (named !== "" && p.clients.includes(named)));
   async function save() {
     setBusy(true);
     setMessage("");
@@ -181,7 +185,7 @@ function ClientForm({ client, people, onSaved }: { client?: Client; people: Pers
         <select value={owner} onChange={(e) => setOwner(e.target.value)}>
           <option value="template">As the firm template</option>
           <option value="">Nobody</option>
-          {people.map((p) => <option key={p.subject} value={p.subject}>{p.name}</option>)}
+          {owners.map((p) => <option key={p.subject} value={p.subject}>{p.name}</option>)}
         </select>
       </label>
       <label>
