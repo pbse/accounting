@@ -28,7 +28,7 @@ export function fractalNoise(x: number, y: number): number {
 
 export const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 export const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-export const prefersReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+export const prefersReducedMotion = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // Colours come from the site's tokens, so the drawings follow the stylesheet.
 export function token(element: Element, name: string, fallback: string): string {

@@ -185,6 +185,9 @@ export default {
       if (refused) return secureAdmin(refused);
       return secureAdmin(await env.ASSETS.fetch(adminPage(path) ? new Request(new URL("/admin/index.html", request.url), request) : request));
     }
+    // The home page comes with its words already in the HTML (apps/frontend/prerender.mjs); index.html stays the empty
+    // shell every app route loads.
+    if (path === "/") return env.ASSETS.fetch(new Request(new URL("/static-home", request.url), request));
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;

@@ -1,11 +1,6 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Route, Routes, useSearchParams } from "react-router";
-import { MarketingLayout } from "./features/marketing/Layout";
-import { Home } from "./features/marketing/Home";
-import { Contact } from "./features/marketing/Contact";
-import { Security } from "./features/marketing/Security";
-import { Privacy } from "./features/marketing/Privacy";
-import { NotFound } from "./features/marketing/NotFound";
+import { marketingRoutes } from "./features/marketing/routes";
 import { Login } from "./features/auth/Login";
 import { WorkspaceGate } from "./features/dashboard/Access";
 import { EffortTracker } from "./features/closes/Effort";
@@ -57,14 +52,7 @@ export function App() {
       >
         <Routes>
           <Route path="request" element={<ClientRequest />} />
-          <Route element={<MarketingLayout />}>
-            <Route index element={<Home />} />
-            <Route path="contact" element={<Contact />} />
-            <Route path="security" element={<Security />} />
-            <Route path="privacy" element={<Privacy />} />
-            <Route path="login" element={<Login />} />
-            <Route path="*" element={<NotFound />} />
-          </Route>
+          {marketingRoutes(<Route path="login" element={<Login />} />)}
           <Route path="dashboard" element={<WorkspaceLayout />}>
             <Route index element={<Gated><Dashboard view="work" /></Gated>} />
             <Route path="close" element={<Dashboard view="close" />} />
