@@ -3185,3 +3185,23 @@ Pass 6 found a retried note kept and forwarded twice, the per-address count livi
 Pass 7 found that an edited note retried under the visit's key was answered with the earlier note; the page now keys each note as written, and the API refuses a kept key with other words (409, tested).
 
 Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.
+
+## Phase A: operating targets and the release-revision check (2026-10-05)
+
+Request: start phase A of the [build plan](agent-first-build-plan.md#delivery-sequence-and-launch-gates) (B12 controls), with the owner's decisions:
+- backups are Neon's own point-in-time history, with no backup code here;
+- the pilot is 3 firms;
+- outside monitoring is deferred;
+- Prashant Bansal owns every control.
+
+What changed:
+- **Targets.** [Operations](operations.md#recovery-and-capacity-targets) now sets RPO 5 minutes for an incident noticed within Neon's 6-hour history window, RTO 4 hours, and the pilot's capacity (3 firms, 50 clients, 150 closes and 3,000 documents a month, 15 people at once), with the owner named. It also records the Neon Free plan's limits from the project's own record (2026-10-05): PostgreSQL 18, 6 hours of history, 1 GiB storage of which about 40 MB is used, and 100 CU-hours a month. About 31 CU-hours were used in the first five days of October, so the database would be suspended mid-month; this is to be resolved before the pilot. The owner restores, because a Neon restore keeps a backup branch and agents never create one.
+- **Release-revision check.** `scripts/release-check.sh [revision]` exports the revision with `git archive` and runs its full Go suite in the Dockerfile's new `release-test` stage: Debian bookworm, like the runtime, with the same `poppler-utils` and `tesseract-ocr`. It runs against a disposable PostgreSQL 18 migrated twice, one package at a time. The deployed image is unchanged; it is still the last stage.
+
+Checks:
+- `scripts/release-check.sh` at `439a227258f1bbcc4f9e9b7c8234101089041d90` passed: PostgreSQL 18.6, Go 1.27.1, pdftotext 22.12.0, tesseract 5.3.0, every package ok. This includes the PDF and OCR tests (`TestExtractMixedPDF`, `TestPackagePreservesBothWorkpapersAndEscapesSources`) that cannot run on a machine without poppler.
+- The first runs showed three things, fixed in the script:
+  - Copying only the backend into the image left tests that read the workflows or `infra/postgres` without their files, and let the model-gateway scan walk the container's whole filesystem. The revision is now mounted whole.
+  - Running packages in parallel against one database let a transport test take the `firm_health_check` test's queued preparation job (`TestAccountingMethodsDurableReviewAndSourceInvalidation`: "calculation failed queued"). Packages now run one at a time. CI's faster parallel run on Ubuntu and PostgreSQL 17 is unchanged and can still meet this.
+
+Not verified: the targets themselves. No load test and no timed hosted restore with provider reconciliation have been run.
