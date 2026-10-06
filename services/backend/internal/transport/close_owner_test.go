@@ -26,7 +26,7 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -44,12 +44,14 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	}
 	var alpha string
 	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha','2026-09') RETURNING id::text`, org).Scan(&alpha))
-	defer func() {
-		for _, q := range []string{`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`,
-			`DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
-			db.Exec(q, org)
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM client_closes WHERE organization_id=$1`,
+			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			if _, err := db.Exec(q, org); err != nil {
+				t.Errorf("cleanup %s: %v", q, err)
+			}
 		}
-	}()
+	})
 	store := savedCloses(db, strings.Repeat("a", 32))
 	call := func(subject string, permissions []string, method, path string, body any, want int) string {
 		t.Helper()
