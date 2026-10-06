@@ -3332,6 +3332,8 @@ Pass 2 found three more:
 
 Each fix is tested.
 
+Pass 3 found that someone WorkOS signed in to another firm, or asked to choose among several organizations, could miss their own domain's firm. The address now decides the firm before WorkOS's choice is kept. Tests cover a person held only in another firm and a first-time signer claiming their domain's organization from a choice.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

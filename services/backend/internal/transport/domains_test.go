@@ -439,6 +439,50 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("giving the role they already have changes nothing: %d", w.Code)
 	}
 
+	sessionOrg := func(user string) string {
+		t.Helper()
+		var org string
+		if err := raw.QueryRow(`SELECT organization_id FROM auth_sessions WHERE subject=$1 ORDER BY created_at DESC LIMIT 1`, user).Scan(&org); err != nil {
+			t.Fatal(err)
+		}
+		return org
+	}
+	// Someone WorkOS holds only in another registered firm (one that invited them) joins their own domain's firm.
+	kate := person("kate", true, domain)
+	elsewhere := "org_Elsewhere" + rand.Text()
+	f.mu.Lock()
+	f.orgs[elsewhere] = "elsewhere-" + domain
+	km := firmMembership{ID: "om_" + kate, UserID: kate, OrganizationID: elsewhere, Status: "active"}
+	km.Role.Slug = "member"
+	f.memberships = append(f.memberships, km)
+	f.mu.Unlock()
+	if _, err := raw.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Another firm')`, elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(kate, "google"); where != "/dashboard" || cookie == "" || sessionOrg(kate) != firm || f.membership(kate, firm) == nil {
+		t.Fatalf("Kate lands in her own domain's firm: %s %s", where, sessionOrg(kate))
+	}
+
+	// A first-time signer WorkOS asks to choose between organizations claims the one for their domain.
+	second := "second" + strings.ToLower(rand.Text()[:8]) + ".test"
+	hosted[second] = true
+	leo := person("leo", true, second)
+	secondOrg, unrelated := "org_Second"+rand.Text(), "org_Unrelated"+rand.Text()
+	f.mu.Lock()
+	f.orgs[secondOrg], f.orgs[unrelated] = second, "unrelated-"+second
+	for _, o := range []string{unrelated, secondOrg} {
+		m := firmMembership{ID: "om_" + leo + o, UserID: leo, OrganizationID: o, Status: "active"}
+		m.Role.Slug = "member"
+		f.memberships = append(f.memberships, m)
+	}
+	f.mu.Unlock()
+	if where, cookie := signIn(leo, "microsoft"); where != "/dashboard" || cookie == "" || sessionOrg(leo) != secondOrg {
+		t.Fatalf("Leo claims his domain's organization: %s %s", where, sessionOrg(leo))
+	}
+	if err := raw.QueryRow(`SELECT email_domain FROM organizations WHERE id=$1`, secondOrg).Scan(&stored); err != nil || stored != second || f.membership(leo, secondOrg).Role.Slug != "firm-admin" {
+		t.Fatalf("the domain's organization becomes Leo's firm: %q %v", stored, err)
+	}
+
 	// A person in two firms signs in to the firm of their address's domain.
 	f.mu.Lock()
 	other := firmMembership{ID: "om_other_" + ana, UserID: ana, OrganizationID: "org_ElsewhereFixture", Status: "active"}

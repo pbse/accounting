@@ -24,7 +24,10 @@ A firm the app already knows under that WorkOS organization (one set up by hand)
 
 A person WorkOS placed in an organization the app has not registered goes through the same steps, so that organization becomes the firm. Anyone who later signs in with a verified address at the same domain joins that firm (`joinFirm`): a WorkOS membership with the **Member** role, which holds no permissions, and a record that they joined by their address (actor `company-domain`). A role WorkOS held for them before is set to Member too: what they may open is the administrator's decision. Someone the firm invited is the exception: they join through the invitation, with its role, and are asked to accept it first if they have not. They can sign in but open nothing until the firm's administrator gives them a role. WorkOS's own domain provisioning, which adds people at the organization's verified domain as members, ends in the same place: the API records them the first time they sign in (`domainMember`). A firm set up by hand without a recorded domain takes the domain then, if its WorkOS organization has that domain verified and no other firm holds it.
 
-Someone the firm removed is not let back in by their address, nor is anyone while the firm is suspended. A WorkOS membership that has been deactivated is never revived here. A person in several organizations goes to the firm of their address's domain.
+Someone the firm removed is not let back in by their address, nor is anyone while the firm is suspended. A WorkOS membership that has been deactivated is never revived here. The address decides the firm (`firmFor`):
+- **The domain has a registered firm.** The person goes there, joining if need be, even when WorkOS signed them in to another firm or asked which organization to use.
+- **The domain has no firm yet.** The person stays in the registered firm WorkOS holds them in (one that invited them).
+- **Otherwise.** The domain's claim runs, which may create the firm or take over an organization WorkOS placed them in.
 
 ## Roles
 
