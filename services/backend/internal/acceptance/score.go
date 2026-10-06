@@ -5,6 +5,8 @@ import (
 	"math/big"
 	"slices"
 	"strings"
+
+	"close.local/backend/internal/preparation"
 )
 
 // Observed is what the pipeline did with one document.
@@ -205,11 +207,11 @@ func Score(cases []Case, observed []CaseObserved) Report {
 	return r
 }
 
-// sameValue compares a field as an accountant would: an amount by value (1,200.00 is 1200), anything else as text
-// ignoring case and spacing, so invoice number 0012 is not 12.
+// sameValue compares a field as an accountant would: an amount (as the app defines its amount fields) by value, so
+// 1,200.00 is 1200; anything else as text ignoring case and spacing, so invoice number 0012 is not 12.
 func sameValue(field, got, want string) bool {
 	g, w := strings.TrimSpace(got), strings.TrimSpace(want)
-	if field == "amount" || strings.HasSuffix(field, "_amount") || strings.HasSuffix(field, "_balance") {
+	if preparation.AmountField(field) {
 		gr, gok := new(big.Rat).SetString(strings.ReplaceAll(g, ",", ""))
 		wr, wok := new(big.Rat).SetString(strings.ReplaceAll(w, ",", ""))
 		if gok && wok {

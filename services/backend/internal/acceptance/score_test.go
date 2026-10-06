@@ -79,6 +79,7 @@ func TestOnlyAmountsCompareByValue(t *testing.T) {
 		field, got, want string
 		same             bool
 	}{{"amount", "1,200.00", "1200", true}, {"booked_balance", "-50.0", "-50", true}, {"credit_amount", "10", "10.01", false},
+		{"statement_opening", "1,200.00", "1200", true}, {"salvage_value", "0.00", "0", true}, {"gross_wages", "5,000", "5000.00", true},
 		{"invoice_number", "12", "0012", false}, {"debit account", "012", "12", false}, {"vendor", "Acme  co", "ACME Co", true}} {
 		if sameValue(c.field, c.got, c.want) != c.same {
 			t.Errorf("%s %q against %q", c.field, c.got, c.want)

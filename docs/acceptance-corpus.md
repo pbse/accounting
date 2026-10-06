@@ -98,7 +98,7 @@ Per case it also counts:
 - **Posting attempts of any kind** (critical): preparation makes none.
 - **Documents with more than one live preparation job** (critical).
 
-Amounts compare by value (1,200.00 is 1200). Everything else, identifiers included, compares as text ignoring case and spacing, so invoice number 0012 is not 12.
+Amounts (the fields the app reads as amounts, from invoice amounts to statement balances and gross wages) compare by value: 1,200.00 is 1200. Everything else, identifiers included, compares as text ignoring case and spacing, so invoice number 0012 is not 12.
 
 ## Not covered yet
 
