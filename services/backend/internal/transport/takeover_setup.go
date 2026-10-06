@@ -189,7 +189,12 @@ func registerTakeoverSetup(mux *http.ServeMux, db *sql.DB) {
 		}
 		saved, _ := json.Marshal(content)
 		var id string
-		if err = tx.QueryRowContext(r.Context(), `INSERT INTO takeover_setups(organization_id,close_id,digest,content,timezone,confirmed_by) VALUES($1,$2::bigint,$3,$4,$5,$6) RETURNING id::text`, org, r.PathValue("id"), digest, string(saved), in.Timezone, who).Scan(&id); err != nil || tx.Commit() != nil {
+		if err = tx.QueryRowContext(r.Context(), `INSERT INTO takeover_setups(organization_id,close_id,digest,content,timezone,confirmed_by) VALUES($1,$2::bigint,$3,$4,$5,$6) RETURNING id::text`, org, r.PathValue("id"), digest, string(saved), in.Timezone, who).Scan(&id); err == nil {
+			// A client taken over joins the firm's roster, owing a close each month from its opening month.
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) SELECT c.organization_id,c.entity,true,c.period,'Taken over from '||c.period,$2
+ FROM client_closes c WHERE c.id::text=$1 AND NOT EXISTS(SELECT 1 FROM current_client_roster r WHERE r.organization_id=c.organization_id AND lower(r.client_entity)=lower(c.entity) AND r.active)`, r.PathValue("id"), who)
+		}
+		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The takeover setup could not be saved.")
 			return
 		}

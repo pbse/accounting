@@ -143,6 +143,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerRecurringAccrual(mux, db)
 	registerReadiness(mux, db)
 	registerPlanning(mux, db)
+	registerRoster(mux, db)
 	registerEffort(mux, db)
 	registerIndependence(mux, db)
 	registerAgentAccess(mux, db)
@@ -307,6 +308,10 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			}
 			if err == nil {
 				err = tx.QueryRowContext(r.Context(), `INSERT INTO client_closes(entity,period,organization_id,takeover) VALUES($1,$2,$3,$4) RETURNING id::text,entity,period`, input.Entity, input.Period, organization(r), first).Scan(&item.ID, &item.Entity, &item.Period)
+			}
+			// A new month of a roster client takes the firm's monthly close template: its due date and owner.
+			if err == nil {
+				err = applyCloseTemplate(r.Context(), tx, item.ID)
 			}
 		}
 		if err != nil {

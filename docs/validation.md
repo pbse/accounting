@@ -3413,3 +3413,38 @@ Production still needs the owner to:
 1. Create the Google OAuth client and the Entra application and enter them in WorkOS.
 2. Turn off password and passkey sign-in.
 3. Set `AUTH_SESSION=server`.
+
+## B01/B02: the client roster and the firm's monthly close template (2026-10-06)
+
+Request: phase A's B01/B02 foundations. B02 says to "show all required obligations, including undelegated clients… Support reassignment and recurring firm templates". Before this, a client whose month nobody opened showed nowhere, unless it had a monthly hand-over. The user chose "Firm template + roster": a firm-level monthly template with a due day and a default owner applies to every active client. A client becomes active at takeover, and an accountant marks it inactive when it leaves. Missing months show in Morning and Work.
+
+What changed:
+- **Migration 127.** Two append-only histories, read through their latest rows, each with tenant read/add policies:
+  - `client_roster`: whether a client is active, its first owed month, and its optional due-day and owner overrides;
+  - `close_templates`: the firm's due days after month end, and its owner.
+  - The roster starts with every client that has a close in the three months before. Each owes the months after its latest close, so older gaps are not reported.
+- **Owed months** (`owedMonths`). Every ended month, at most the last twelve, from a client's first owed month with no close is owed. It is shown to whoever can work on the client (`clients:all`, or an assignment). A month the client's monthly hand-over will open is left to it unless the hand-over is stuck waiting.
+  - The morning brief returns them as `not_opened`.
+  - Work lists them under **Months not opened**, with **Open**.
+- **The template on new closes** (`applyCloseTemplate`). A close newly opened for an active roster client takes the client's override, else the template, whether it comes from the new-close route, **Open** or a monthly hand-over. That means a due date N days after the month ends, and an owner.
+  - A due date or owner the close already has is kept, and an owner no longer a member is skipped.
+  - The owner is recorded in `close_owner_changes` by "monthly close template".
+- **Routes.**
+  - `GET /v1/closes/roster` (`clients:all`) shows the template, each client with its latest close and owed months, and, for administrators, the members who can hold closes.
+  - `POST /v1/closes/roster` and `POST /v1/closes/close-template` are for firm administrators (`clients:all` and `members:manage`), with a reason. An owner must review the client's work; the template's must review every client.
+- **Joining and leaving.** Confirming a takeover setup puts the client on the roster from its opening month. Deleting a close for contract termination or at the client's request takes it off.
+- **Records.** Both tables are in the firm export, and `/readyz` waits for them.
+- **UI.** Firm settings gains **Clients and monthly closes**: the template, the roster with owed months, and forms for administrators, offering only owners who can do the work. Work gains **Months not opened**.
+
+Checks:
+- `TestTheRosterListsEveryMonthOwed` (local PostgreSQL, WorkOS answered by a fixture):
+  - Only an administrator changes the template and the roster. A reviewer not reviewing every client cannot be the template's owner; a client's owner must be a member assigned to it.
+  - Alpha owes the month after its last close, at the template's terms; Beta owes on its own terms. A reviewer assigned to Beta sees only Beta's month, as theirs.
+  - Opening Alpha's month gives it the template's due date and owner, recorded as a change of hands by the template, and the month is no longer owed.
+  - The roster lists each client with its owed months. An inactive client owes nothing, and administrators see the members they can choose.
+- `TestMonthlyHandOverOpensAndHandsOverEachNewMonth` (extended): the month a hand-over opens takes the template, and contract termination takes the client off the roster.
+- `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth` (extended): the client joins the roster from its opening month.
+- The full Go suite runs on a fresh local PostgreSQL with migrations applied twice. `npm run check`, `npm test` and `npm run build` pass.
+
+Not verified in a browser against a real WorkOS firm.
+

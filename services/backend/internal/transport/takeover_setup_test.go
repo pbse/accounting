@@ -29,7 +29,7 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 	entity := "Setup " + rand.Text()
 	defer func() {
 		for _, q := range []string{`DELETE FROM procedure_versions WHERE client_entity=$1`, `DELETE FROM quickbooks_snapshots WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`, `DELETE FROM evidence WHERE close_id IN (SELECT id FROM client_closes WHERE entity=$1)`,
-			`DELETE FROM quickbooks_connections WHERE client_entity=$1`, `DELETE FROM client_closes WHERE entity=$1`} {
+			`DELETE FROM quickbooks_connections WHERE client_entity=$1`, `DELETE FROM client_closes WHERE entity=$1`, `DELETE FROM client_roster WHERE client_entity=$1`} {
 			db.Exec(q, entity)
 		}
 	}()
@@ -100,6 +100,12 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 	}
 	call("POST", path, map[string]any{"digest": first.Digest, "timezone": "America/New_York", "confirmed": true}, 409)
 	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "America/New_York", "confirmed": true}, 200)
+	// The client taken over joins the firm's roster, owing a close each month from its opening month.
+	var since string
+	must(db.QueryRow(`SELECT since FROM current_client_roster WHERE client_entity=$1 AND active`, entity).Scan(&since))
+	if since != "2026-08" {
+		t.Fatalf("the client owes from its opening month: %s", since)
+	}
 	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "America/New_York", "confirmed": true}, 409)
 	if b := blockers(); strings.Contains(b, "Confirm the takeover setup") {
 		t.Fatalf("a confirmed setup no longer holds the opening month: %s", b)

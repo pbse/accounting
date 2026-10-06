@@ -222,8 +222,15 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 			}
 			return false, tx.Commit()
 		}
-		if err = tx.QueryRowContext(ctx, `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text`, entity, period, org).Scan(&closeID); err != nil {
+		// A close this opens (not one already there) takes the firm's monthly close template.
+		var opened bool
+		if err = tx.QueryRowContext(ctx, `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,xmax=0`, entity, period, org).Scan(&closeID, &opened); err != nil {
 			return false, err
+		}
+		if opened {
+			if err = applyCloseTemplate(ctx, tx, closeID); err != nil {
+				return false, err
+			}
 		}
 	}
 	signed, err := signedOff(ctx, tx, closeID)

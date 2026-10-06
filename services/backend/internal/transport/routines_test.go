@@ -61,7 +61,7 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
 			`DELETE FROM close_routines WHERE organization_id=$1`,
 			`DELETE FROM close_signoffs WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`,
-			`DELETE FROM close_deletion_receipts WHERE organization_id=$1`,
+			`DELETE FROM close_deletion_receipts WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
 			`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM workflow_runs WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			db.Exec(q, org)
 		}
@@ -125,6 +125,13 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	call("user_a", reviewer, "POST", "/v1/closes/"+setUp+"/goal/stop", map[string]string{"reason": "Checking the routine"}, 200)
 	call("user_a", reviewer, "POST", "/v1/closes/"+setUp+"/goal", map[string]any{"confirmed": true, "every_month": true}, 409)
 
+	// Alpha is on the firm's roster, whose monthly close template dates each month 7 days after it ends and gives it to
+	// the administrator.
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Alpha',true,$2,'Synthetic','fixture')`, org, month(0))
+	must(err)
+	_, err = db.Exec(`INSERT INTO close_templates(organization_id,due_days,owner,reason,actor) VALUES($1,7,'user_admin','Synthetic','fixture')`, org)
+	must(err)
+
 	// When the next month ends its close is opened and handed over once; a stopped goal is not restarted.
 	sweepCloseRoutines(ctx, db, on(1, 15))
 	if closeOf(month(1)) != "" {
@@ -136,6 +143,11 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	next := closeOf(month(1))
 	if next == "" || goals(next) != 1 {
 		t.Fatalf("the ended month's close is opened and handed over: %q %d", next, goals(next))
+	}
+	var dueOn, owner string
+	must(db.QueryRow(`SELECT due_on::text,owner FROM client_closes WHERE id::text=$1`, next).Scan(&dueOn, &owner))
+	if dueOn != monthEnd(month(1)).AddDate(0, 0, 7).Format("2006-01-02") || owner != "user_admin" {
+		t.Fatalf("the month the routine opens takes the firm's template: %s %s", dueOn, owner)
 	}
 	var by string
 	must(db.QueryRow(`SELECT r.started_by FROM workflow_runs r JOIN close_goals g ON r.idempotency_key='goal:'||g.id AND r.workflow='close_goal' WHERE g.close_id::text=$1`, next).Scan(&by))
@@ -220,6 +232,12 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	call("user_admin", admin, "POST", "/v1/closes/"+signed+"/delete", map[string]any{"expected_version": retention.Version, "entity": "Alpha", "period": month(2), "reason_code": "contract_termination", "confirmed": true}, 200)
 	if read(setUp).Routine != nil {
 		t.Fatal("contract termination stops the client's monthly hand-over")
+	}
+	var active bool
+	var left string
+	must(db.QueryRow(`SELECT active,reason FROM current_client_roster WHERE organization_id=$1 AND client_entity='Alpha'`, org).Scan(&active, &left))
+	if active || !strings.Contains(left, "contract termination") {
+		t.Fatalf("contract termination takes the client off the roster: %v %s", active, left)
 	}
 }
 

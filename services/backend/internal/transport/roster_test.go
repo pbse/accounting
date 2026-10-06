@@ -1,0 +1,162 @@
+package transport
+
+import (
+	"bytes"
+	"crypto/rand"
+	"database/sql"
+	"encoding/json"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"close.local/backend/internal/auth"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// Every active client on the firm's roster owes a close each ended month: a month nobody opened shows in the morning
+// brief, to whoever can work on the client, until it is opened; opened, it takes the firm's monthly close template (the
+// client's own overrides first). Only a firm administrator changes the roster and the template, with an owner who can do
+// the work; a client marked inactive owes nothing more.
+func TestTheRosterListsEveryMonthOwed(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	org := "org_Roster" + rand.Text()
+	// Ann and Bea review every client; Cy reviews only Beta, which he is assigned to.
+	asFirm(t, map[string]string{"user_a": "partner", "user_b": "partner", "user_c": "reviewer"}, org)
+	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Roster fixture')`,
+		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) SELECT $1,s,true,'Synthetic','fixture' FROM unnest(ARRAY['user_a','user_b','user_c']) s`,
+		`INSERT INTO client_access(organization_id,subject,client_entity,granted,reason,actor) VALUES($1,'user_c','Beta',true,'Synthetic','fixture')`} {
+		_, err = db.Exec(q, org)
+		must(err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{`DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
+			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+			if _, e := db.Exec(q, org); e != nil {
+				t.Errorf("cleanup %s: %v", q, e)
+			}
+		}
+	})
+	ended := endedMonth(time.Now())
+	before := monthEnd(ended).AddDate(0, -1, 0).Format("2006-01")
+	_, err = db.Exec(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Alpha',$2)`, org, before)
+	must(err)
+
+	store := savedCloses(db, strings.Repeat("a", 32))
+	call := func(subject string, permissions []string, method, path string, body any, want int) string {
+		t.Helper()
+		var reader *bytes.Reader
+		if body == nil {
+			reader = bytes.NewReader(nil)
+		} else {
+			raw, _ := json.Marshal(body)
+			reader = bytes.NewReader(raw)
+		}
+		r := httptest.NewRequest(method, path, reader).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org, Permissions: permissions}))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		store.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s %s %v: %d %s", subject, method, path, body, w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	admin := []string{"workpapers:review", "clients:all", "members:manage"}
+	partner, reviewer := []string{"workpapers:review", "clients:all"}, []string{"workpapers:review"}
+	ten, five := 10, 5
+	cy, nobody := "user_c", "user_x"
+
+	// The template's owner must review every client; a client's own owner, that client.
+	call("user_b", partner, "POST", "/v1/closes/close-template", map[string]any{"due_days": ten, "owner": "user_b", "reason": "Monthly closes"}, 403)
+	if body := call("user_a", admin, "POST", "/v1/closes/close-template", map[string]any{"due_days": ten, "owner": "user_c", "reason": "Monthly closes"}, 422); !strings.Contains(body, "reviews every client") {
+		t.Fatal(body)
+	}
+	call("user_a", admin, "POST", "/v1/closes/close-template", map[string]any{"due_days": ten, "owner": "user_b", "reason": "Monthly closes"}, 200)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Alpha", "active": true, "since": before, "reason": "A client"}, 200)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Gamma", "active": true, "since": ended, "owner": cy, "reason": "A client"}, 422)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Beta", "active": true, "since": ended, "owner": nobody, "reason": "A client"}, 422)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Beta", "active": true, "since": ended, "due_days": five, "owner": cy, "reason": "Cy's client"}, 200)
+	call("user_b", partner, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": true, "since": ended, "reason": "A client"}, 403)
+
+	type owed struct {
+		NotOpened []owedMonth `json:"not_opened"`
+	}
+	brief := func(subject string, permissions []string) []string {
+		t.Helper()
+		var got owed
+		must(json.Unmarshal([]byte(call(subject, permissions, "GET", "/v1/closes/morning", nil, 200)), &got))
+		out := []string{}
+		for _, o := range got.NotOpened {
+			out = append(out, o.Entity+" "+o.Period+" due "+o.DueOn+map[bool]string{true: " mine", false: ""}[o.Mine])
+		}
+		return out
+	}
+	due := func(days int) string { return monthEnd(ended).AddDate(0, 0, days).Format("2006-01-02") }
+	// Alpha owes the month after its last close; Beta, from the month it joined, on its own terms.
+	if got := strings.Join(brief("user_b", partner), " | "); got != "Alpha "+ended+" due "+due(10)+" mine | Beta "+ended+" due "+due(5) {
+		t.Fatalf("the months owed and not opened: %s", got)
+	}
+	if got := strings.Join(brief("user_c", reviewer), " | "); got != "Beta "+ended+" due "+due(5)+" mine" {
+		t.Fatalf("a reviewer sees the months of the clients assigned to them: %s", got)
+	}
+
+	// Opening the month gives it the template's due date and owner, as a change of hands.
+	var opened savedClose
+	must(json.Unmarshal([]byte(call("user_a", admin, "POST", "/v1/closes", map[string]string{"entity": "Alpha", "period": ended}, 200)), &opened))
+	var dueOn, holder, actor string
+	must(db.QueryRow(`SELECT c.due_on::text,c.owner,o.actor FROM client_closes c JOIN close_owner_changes o ON o.close_id=c.id WHERE c.id::text=$1`, opened.ID).Scan(&dueOn, &holder, &actor))
+	if dueOn != due(10) || holder != "user_b" || actor != "monthly close template" {
+		t.Fatalf("the opened month takes the template: %s %s %s", dueOn, holder, actor)
+	}
+	if got := strings.Join(brief("user_b", partner), " | "); got != "Beta "+ended+" due "+due(5) {
+		t.Fatalf("an opened month is no longer owed: %s", got)
+	}
+
+	// The roster shows each client with the months it owes; marking one inactive ends what it owes.
+	var roster struct {
+		Template  map[string]any `json:"template"`
+		Clients   []rosterClient `json:"clients"`
+		CanManage bool           `json:"can_manage"`
+	}
+	call("user_c", reviewer, "GET", "/v1/closes/roster", nil, 403)
+	must(json.Unmarshal([]byte(call("user_b", partner, "GET", "/v1/closes/roster", nil, 200)), &roster))
+	if roster.CanManage || roster.Template["owner"] != "user_b" || len(roster.Clients) != 2 || roster.Clients[0].Entity != "Alpha" || roster.Clients[0].LastPeriod != ended ||
+		roster.Clients[1].Entity != "Beta" || strings.Join(roster.Clients[1].Owed, ",") != ended || *roster.Clients[1].Owner != "user_c" || *roster.Clients[1].DueDays != 5 {
+		t.Fatalf("the roster: %+v", roster)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "beta", "active": false, "since": ended, "reason": "Left the firm"}, 200)
+	if got := brief("user_b", partner); len(got) != 0 {
+		t.Fatalf("an inactive client owes nothing: %v", got)
+	}
+	must(json.Unmarshal([]byte(call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)), &roster))
+	if !roster.CanManage || roster.Clients[1].Active || roster.Clients[1].Reason != "Left the firm" {
+		t.Fatalf("the roster keeps the inactive client, last: %+v", roster.Clients)
+	}
+	// An administrator chooses owners from the members who can do the work.
+	var people struct {
+		People []rosterPerson `json:"people"`
+	}
+	must(json.Unmarshal([]byte(call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)), &people))
+	got := []string{}
+	for _, p := range people.People {
+		got = append(got, p.Subject+":"+map[bool]string{true: "all", false: strings.Join(p.Clients, ",")}[p.FirmWide])
+	}
+	if strings.Join(got, " ") != "user_a:all user_b:all user_c:Beta" {
+		t.Fatalf("the people an administrator chooses owners from: %v", got)
+	}
+}
