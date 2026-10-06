@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -196,8 +197,8 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Epsilon Partners", "active": true, "since": ended, "reason": "A client"}, 200)
 	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) VALUES($1,'Epsilon','epsilon partners','fixture')`, org)
 	must(err)
-	if got := brief("user_b", partner, "Epsilon"); len(got) != 1 {
-		t.Fatalf("a confirmed alias is one client, owing one month: %v", got)
+	if got := brief("user_b", partner, "Epsilon"); len(got) != 1 || !strings.HasPrefix(got[0], "Epsilon "+ended) {
+		t.Fatalf("a confirmed alias is one client, owing one month under its own name: %v", got)
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Epsilon", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 	if got := brief("user_b", partner, "Epsilon"); len(got) != 0 {
@@ -312,8 +313,35 @@ func TestLocalDevelopmentManagesTheRoster(t *testing.T) {
 		}
 		return w.Body.String()
 	}
-	call("POST", "/v1/closes/roster", map[string]any{"entity": entity, "active": true, "since": endedMonth(time.Now()), "reason": "Local client"}, 200)
-	if body := call("GET", "/v1/closes/roster", nil, 200); !strings.Contains(body, `"can_manage":true`) || !strings.Contains(body, entity) {
-		t.Fatalf("the local roster: %s", body)
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM close_templates WHERE organization_id='local-development'`)
+		db.Exec(`DELETE FROM client_closes WHERE entity=$1`, entity)
+	})
+	ended := endedMonth(time.Now())
+	call("POST", "/v1/closes/roster", map[string]any{"entity": entity, "active": true, "since": ended, "reason": "Local client"}, 200)
+	var roster struct {
+		CanManage bool           `json:"can_manage"`
+		Clients   []rosterClient `json:"clients"`
+		People    []rosterPerson `json:"people"`
+	}
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	must(json.Unmarshal([]byte(call("GET", "/v1/closes/roster", nil, 200)), &roster))
+	if !roster.CanManage || len(roster.People) == 0 || !slices.ContainsFunc(roster.Clients, func(c rosterClient) bool { return c.Entity == entity }) {
+		t.Fatalf("the local roster offers its reader as an owner: %+v", roster)
+	}
+	// The local firm records no members; its reader can still be the template's owner and is given the month opened.
+	me := roster.People[len(roster.People)-1].Subject
+	call("POST", "/v1/closes/close-template", map[string]any{"due_days": 2, "owner": me, "reason": "Local template"}, 200)
+	var opened savedClose
+	must(json.Unmarshal([]byte(call("POST", "/v1/closes", map[string]string{"entity": entity, "period": ended}, 200)), &opened))
+	var owner string
+	must(db.QueryRow(`SELECT owner FROM client_closes WHERE id::text=$1`, opened.ID).Scan(&owner))
+	if owner != me {
+		t.Fatalf("the local template's owner holds the month: %q, want %q", owner, me)
 	}
 }

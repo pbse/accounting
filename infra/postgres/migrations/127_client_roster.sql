@@ -19,8 +19,14 @@ CREATE TABLE client_roster (
 );
 CREATE INDEX client_roster_current ON client_roster(organization_id,lower(client_entity),id DESC);
 -- The current entry of each client is its latest row by client identity, so a name later confirmed as an alias of a
--- rostered client is that client, whichever name its latest decision used.
-CREATE VIEW current_client_roster WITH (security_invoker=true) AS SELECT DISTINCT ON (organization_id,client_identity(organization_id,client_entity)) * FROM client_roster ORDER BY organization_id,client_identity(organization_id,client_entity),id DESC;
+-- rostered client is that client, whichever name its latest decision used. It is shown under the client's own name.
+CREATE VIEW current_client_roster WITH (security_invoker=true) AS
+ SELECT DISTINCT ON (r.organization_id,i.client) r.id,r.organization_id,
+  CASE WHEN i.client=lower(r.client_entity) THEN r.client_entity
+   ELSE COALESCE((SELECT min(a.client_entity) FROM client_aliases a WHERE a.organization_id=r.organization_id AND a.retired_at IS NULL AND lower(a.client_entity)=i.client),r.client_entity) END AS client_entity,
+  r.active,r.since,r.due_days,r.owner,r.reason,r.actor,r.created_at
+ FROM client_roster r CROSS JOIN LATERAL (SELECT client_identity(r.organization_id,r.client_entity) AS client) i
+ ORDER BY r.organization_id,i.client,r.id DESC;
 ALTER TABLE client_roster ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON client_roster FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON client_roster FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));

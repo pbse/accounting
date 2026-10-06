@@ -3439,7 +3439,7 @@ What changed:
   - A first owed month must be within the last five years, since every owed month is listed on each read. A roster change takes the firm lock that opening a close takes. Setting up a monthly hand-over, and carry-forward into a new or existing month, check the roster again under that lock, in a statement of their own so they see a change committed while they waited.
 - **Carry-forward.** It applies the template to the next month it opens. It refuses a client that left the roster, and the carry at sign-off skips one without reporting a failure.
 - **An inactive client gets no new month by any route.** The new-close route refuses its next month (409; an existing month still opens). A new monthly hand-over is refused, and a running one stops itself instead of opening a month or handing over one already open.
-- **Client identity.** The current roster is one entry per client identity, so a name later confirmed as an alias merges with its client. Roster entries match closes by `client_identity`: in owed months, the template, the inactive guards, takeover, retention and the latest close. A month opened under a confirmed alias counts as the client's, and the roster refuses an alias as a second client.
+- **Client identity.** The current roster is one entry per client identity, so a name later confirmed as an alias merges with its client. The entry is shown under the client's own name, with its latest terms. Roster entries match closes by `client_identity`: in owed months, the template, the inactive guards, takeover, retention and the latest close. A month opened under a confirmed alias counts as the client's, and the roster refuses an alias as a second client.
 - **"Yours"** on an owed month means the template's owner is the reader and they can still review.
 - **Joining and leaving.** Confirming a takeover setup puts a client never on the roster onto it from its opening month; confirming again does not reactivate one an administrator marked inactive.
   - Deleting a close for contract termination or at the client's request takes every name the client is on the roster under off it, its confirmed aliases included. This happens before those aliases are forgotten, so a former alias is not left as a client still owing months.
@@ -3458,9 +3458,9 @@ Checks:
   - Bea without review permission is not shown Alpha's month as hers.
   - A client with an explicit "no due date" has none, though the template sets one.
   - Gamma's month opened under its confirmed alias "Gamma Group" is no longer owed, and "Gamma Group" is refused as a roster entry.
-  - "Epsilon Partners", added on its own and then confirmed as an alias of Epsilon, merges with it into one entry owing one month. Epsilon's later deactivation covers both names.
+  - "Epsilon Partners", added on its own and then confirmed as an alias of Epsilon, merges with it into one entry owing one month, shown as Epsilon. Epsilon's later deactivation covers both names.
   - A month opened under Zeta's alias "Zeta Co" goes to Zeta's owner, Cy, who is assigned to "Zeta". Deactivating Zeta stops a hand-over set up under "Zeta Co".
-- `TestLocalDevelopmentManagesTheRoster`: the local development firm adds a client and manages its roster.
+- `TestLocalDevelopmentManagesTheRoster`: the local development firm adds a client and manages its roster. It records no members, so its reader is offered as an owner, can be the template's owner, and is given the month opened.
   - The roster lists each client with its owed months, and administrators see the members they can choose.
   - Once Cy loses his Beta assignment, Beta's month opens with its due date but no owner.
   - Marking Beta inactive ends what it owes and stops its monthly hand-over.

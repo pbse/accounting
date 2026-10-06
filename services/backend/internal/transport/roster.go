@@ -56,6 +56,10 @@ func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles m
 			return err
 		}
 	}
+	// The local development firm has no WorkOS and need not record its members.
+	if org == "local-development" {
+		member = true
+	}
 	if owner == "" || (roles == nil && org != "local-development") || !mayAct(roles, owner, member, false, assigned) {
 		return nil
 	}
@@ -125,14 +129,14 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
 // takes any member.
 func rosterOwner(ctx context.Context, db *sql.DB, r *http.Request, entity, subject string) (string, bool, error) {
 	org := organization(r)
+	if org == "local-development" {
+		return subject, true, nil
+	}
 	var member, assigned bool
 	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted),
  EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, subject, entity).Scan(&member, &assigned)
 	if err != nil || !member {
 		return "", false, err
-	}
-	if org == "local-development" {
-		return subject, true, nil
 	}
 	reviewers, err := firmReviewers(ctx, org)
 	if err != nil {
@@ -234,7 +238,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		// An administrator chooses owners from the members who can do the work: a role reviewing every client (any
 		// client, and the template), or a reviewer, for the clients assigned to them.
 		if canManageRoster(r) {
-			people, err := rosterPeople(r.Context(), tx, org)
+			people, err := rosterPeople(r.Context(), tx, org, subject(r))
 			if err != nil {
 				out["people_unavailable"] = "Teammates are unavailable right now."
 			} else {
@@ -372,8 +376,8 @@ type rosterPerson struct {
 }
 
 // rosterPeople is the granted members who can hold closes, as rosterOwner judges them, with the clients assigned to
-// each.
-func rosterPeople(ctx context.Context, tx *sql.Tx, org string) ([]rosterPerson, error) {
+// each; in the local development firm, which need not record members, the reader is one of them.
+func rosterPeople(ctx context.Context, tx *sql.Tx, org, who string) ([]rosterPerson, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT m.subject,COALESCE((SELECT jsonb_agg(g.client_entity ORDER BY lower(g.client_entity)) FROM current_client_access g WHERE g.organization_id=m.organization_id AND g.subject=m.subject AND g.granted),'[]'::jsonb)
  FROM current_organization_members m WHERE m.organization_id=$1 AND m.granted ORDER BY m.subject`, org)
 	if err != nil {
@@ -396,6 +400,9 @@ func rosterPeople(ctx context.Context, tx *sql.Tx, org string) ([]rosterPerson, 
 		return nil, err
 	}
 	if org == "local-development" {
+		if who != "" && !slices.ContainsFunc(members, func(p rosterPerson) bool { return p.Subject == who }) {
+			members = append(members, rosterPerson{Subject: who, Name: who, Clients: []string{}})
+		}
 		for i := range members {
 			members[i].FirmWide = true
 		}
