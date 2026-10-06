@@ -266,14 +266,51 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		// The client the close belongs to, read before the close is deleted or any of the client's other names forgotten.
+		// The receipt keeps digests of it, never the name: as it is, and in the form aliases are kept in (case and
+		// punctuation set aside), so a month deleted under any of the client's names, or under a name later confirmed as
+		// another's alias, stays done on the roster.
+		var client, plainClient string
+		if err = tx.QueryRowContext(r.Context(), `SELECT client_identity($1,$2),trim(regexp_replace(client_identity($1,$2),'[^[:alnum:]]+',' ','g'))`, organization(r), entity).Scan(&client, &plainClient); err != nil {
+			problem(w, 503, "Deletion stopped without committing.")
+			return
+		}
 		if _, err = tx.ExecContext(r.Context(), `DELETE FROM client_closes WHERE id::text=$1 AND organization_id=$2`, id, organization(r)); err != nil {
+			problem(w, 503, "Deletion stopped without committing.")
+			return
+		}
+		// A name keeps its own client while it has a close from before it was confirmed as another client's alias. A
+		// deletion never changes which client a name belongs to: when this close was the last such, the alias that would
+		// now take effect is retired, so the client's roster entry, hand-overs and months stay its own.
+		var after string
+		if err = tx.QueryRowContext(r.Context(), `SELECT client_identity($1,$2)`, organization(r), entity).Scan(&after); err == nil && after != client {
+			_, err = tx.ExecContext(r.Context(), `UPDATE client_aliases SET retired_by=$3,retired_at=now(),retire_reason=$4 WHERE organization_id=$1 AND retired_at IS NULL AND alias=trim(regexp_replace(lower($2),'[^[:alnum:]]+',' ','g'))`,
+				organization(r), entity, subject(r), "Retired when the last close that kept this name its own client was deleted, so the name stays its own client")
+		}
+		if err != nil {
 			problem(w, 503, "Deletion stopped without committing.")
 			return
 		}
 		// Ending the relationship or the client's request ends the client's monthly hand-over and forgets the other
 		// names its documents use.
 		if in.ReasonCode == "contract_termination" || in.ReasonCode == "client_request" {
-			if _, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND stopped_at IS NULL`, organization(r), entity, subject(r), "Stopped when "+entity+" "+period+" was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")."); err != nil {
+			if _, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND stopped_at IS NULL`, organization(r), entity, subject(r), "Stopped when "+entity+" "+period+" was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")."); err != nil {
+				problem(w, 503, "Deletion stopped without committing.")
+				return
+			}
+			// The client leaves the firm's roster, so no later month is reported as owed and none can be opened: every name it
+			// goes by is left inactive — its roster entries', its closes', its confirmed aliases' and its own — before those
+			// aliases are forgotten below, after which each is a name of its own.
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor)
+ SELECT $1,n.name,false,COALESCE(n.since,$5),$3,$4 FROM (SELECT DISTINCT ON (lower(k.name)) k.name,l.since,l.active
+  FROM (SELECT r.client_entity AS name,1 AS rank FROM client_roster r WHERE r.organization_id=$1 AND client_identity(r.organization_id,r.client_entity)=$6
+   UNION ALL SELECT c.entity,2 FROM client_closes c WHERE c.organization_id=$1 AND client_identity(c.organization_id,c.entity)=$6
+   UNION ALL SELECT $2::text,2
+   UNION ALL SELECT a.alias,3 FROM client_aliases a WHERE a.organization_id=$1 AND a.retired_at IS NULL AND lower(a.client_entity)=$6
+   UNION ALL SELECT $6::text,4) k
+  LEFT JOIN LATERAL (SELECT r.since,r.active FROM client_roster r WHERE r.organization_id=$1 AND lower(r.client_entity)=lower(k.name) ORDER BY r.id DESC LIMIT 1) l ON true
+  ORDER BY lower(k.name),k.rank) n WHERE n.active IS DISTINCT FROM false`,
+				organization(r), entity, "Left the roster when "+entity+"'s close was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")", subject(r), period, client); err != nil {
 				problem(w, 503, "Deletion stopped without committing.")
 				return
 			}
@@ -284,7 +321,8 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 		}
 		var receipt string
 		identity := preparation.Digest([]byte(organization(r) + "\x00" + strings.ToLower(entity) + "\x00" + period))
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, organization(r), id, identity, period, productionCount, subject(r), in.ReasonCode).Scan(&receipt)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest,plain_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`, organization(r), id, identity, period, productionCount, subject(r), in.ReasonCode,
+			preparation.Digest([]byte(organization(r)+"\x00"+client+"\x00"+period)), preparation.Digest([]byte(organization(r)+"\x00"+plainClient+"\x00"+period))).Scan(&receipt)
 		if err != nil {
 			problem(w, 503, "Deletion stopped without committing. Refresh before retrying.")
 			return

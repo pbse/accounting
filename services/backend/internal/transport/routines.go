@@ -211,6 +211,18 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 		}
 		return false, tx.Commit()
 	}
+	// A client the firm's roster says has left owes no new month: its hand-over stops, whether or not the month's close
+	// is already there.
+	var left bool
+	if err = tx.QueryRowContext(ctx, `SELECT `+rosterLeft("$1", "$2"), org, entity).Scan(&left); err != nil {
+		return false, err
+	}
+	if left {
+		if _, err = tx.ExecContext(ctx, `UPDATE close_routines SET stopped_at=now(),stopped_by='agent',stop_reason=$2 WHERE id=$1`, id, "Stopped because "+entity+" is inactive on the firm's roster."); err != nil {
+			return false, err
+		}
+		return false, tx.Commit()
+	}
 	if closeID == "" {
 		var count int
 		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM client_closes WHERE organization_id=$1`, org).Scan(&count); err != nil {
@@ -222,8 +234,15 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 			}
 			return false, tx.Commit()
 		}
-		if err = tx.QueryRowContext(ctx, `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text`, entity, period, org).Scan(&closeID); err != nil {
+		// A close this opens (not one already there) takes the firm's monthly close template.
+		var opened bool
+		if err = tx.QueryRowContext(ctx, `INSERT INTO client_closes(entity,period,organization_id) VALUES($1,$2,$3) ON CONFLICT(organization_id,lower(entity),period) DO UPDATE SET entity=client_closes.entity RETURNING id::text,xmax=0`, entity, period, org).Scan(&closeID, &opened); err != nil {
 			return false, err
+		}
+		if opened {
+			if err = applyCloseTemplate(ctx, tx, closeID, func(context.Context) map[string]reviewer { return roles }); err != nil {
+				return false, err
+			}
 		}
 	}
 	signed, err := signedOff(ctx, tx, closeID)

@@ -12,7 +12,7 @@ import { StatGroup, StatTile } from "@close/ui/components/StatTile";
 import { SourceReview, type Source } from "./Evidence";
 import { PlanChips, type Plan } from "./Planning";
 import { workspaceRequest } from "./workspace";
-import { MorningBrief, type Morning } from "./Morning";
+import { MorningBrief, NotOpened, type Morning } from "./Morning";
 import { DelegatedCloses } from "./Goal";
 import { Setup } from "./Setup";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
@@ -258,6 +258,9 @@ export function Work({
     setMorningError("");
   };
   const dueCounts = morning?.due_counts;
+  // The due tile counts the due closes and the months owed by then that nobody has opened.
+  const unopenedOverdue = dueCounts?.not_opened_overdue ?? 0;
+  const unopenedDue = unopenedOverdue + (dueCounts?.not_opened_upcoming ?? 0);
   const visiblePredicted = predicted.items.filter(item => !untied.items.some(u => u.workpaper_id === item.workpaper_id));
   const show = (view: string) => {
     setFilter(view);
@@ -308,10 +311,14 @@ export function Work({
             <StatTile icon="waiting" tone="teal" label="Waiting on clients" value={counts.waiting_client} caption="Approved requests awaiting a reply" onClick={() => show("waiting_client")} />
             <StatTile
               icon="accrual"
-              tone={dueCounts?.overdue ? "red" : "gray"}
+              tone={dueCounts?.overdue || unopenedOverdue ? "red" : "gray"}
               label="Due in 7 days"
-              value={dueCounts && dueCounts.overdue + dueCounts.upcoming}
-              caption={dueCounts ? `${dueCounts.overdue} overdue · ${dueCounts.upcoming} upcoming · ${dueCounts.no_due_date} without a due date` : "Closes not yet signed off, or changed since sign-off"}
+              value={dueCounts && dueCounts.overdue + dueCounts.upcoming + unopenedDue}
+              caption={
+                dueCounts
+                  ? `${dueCounts.overdue + unopenedOverdue} overdue · ${dueCounts.upcoming + unopenedDue - unopenedOverdue} upcoming${unopenedDue ? ` · ${unopenedDue} not opened` : ""} · ${dueCounts.no_due_date} without a due date`
+                  : "Closes not yet signed off, or changed since sign-off"
+              }
               onClick={() => document.getElementById("due-closes")?.scrollIntoView({ block: "start" })}
             />
             <StatTile icon="blocked" tone="red" label="Blocked" value={counts.blocked} caption="Failed, replaced or unsupported work" onClick={() => show("blocked")} />
@@ -334,10 +341,10 @@ export function Work({
       {!closeId && morning && (
         <>
           <SectionHeader title="Due in 7 days" id="due-closes">
-            <small>Overdue or due within a week and not signed off, or changed since sign-off. {morning.due_counts.no_due_date > 0 && `${morning.due_counts.no_due_date} outstanding ${morning.due_counts.no_due_date === 1 ? "close has" : "closes have"} no due date.`}</small>
+            <small>Overdue or due within a week and not signed off, or changed since sign-off. {unopenedDue > 0 && `${unopenedDue} more ${unopenedDue === 1 ? "month is" : "months are"} due by then and not opened, listed below the closes. `}{morning.due_counts.no_due_date > 0 && `${morning.due_counts.no_due_date} outstanding ${morning.due_counts.no_due_date === 1 ? "close has" : "closes have"} no due date.`}</small>
           </SectionHeader>
           <RowList label="Due closes">
-            {morning.due.length === 0 && <p className="empty">No outstanding close is overdue or due within 7 days.</p>}
+            {morning.due.length === 0 && <p className="empty">No opened close is overdue or due within 7 days.</p>}
             {morning.due.map((item) => (
               <Link className="row" key={item.close_id} to={`/dashboard/closes/${item.close_id}`}>
                 <EntityCell name={item.entity} title={`${item.entity} · ${item.period}`} detail={`Due ${item.due_on}`} />
@@ -347,6 +354,8 @@ export function Work({
               </Link>
             ))}
           </RowList>
+          <NotOpened months={morning.due_not_opened ?? []} due />
+          <NotOpened months={morning.not_opened ?? []} />
         </>
       )}
       {loaded && (

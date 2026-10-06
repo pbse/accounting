@@ -45,7 +45,14 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 		if _, e := db.Exec("DELETE FROM procedure_versions WHERE lower(client_entity)=lower($1)", entity); e != nil {
 			t.Error(e)
 		}
+		if _, e := db.Exec("DELETE FROM client_roster WHERE lower(client_entity)=lower($1)", entity); e != nil {
+			t.Error(e)
+		}
 	}()
+	// The client is on the firm's roster, due 3 days after each month ends: a month carry-forward opens takes that.
+	if _, err = db.Exec("INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,reason,actor) VALUES('local-development',$1,true,'2026-12',3,'Synthetic','fixture')", entity); err != nil {
+		t.Fatal(err)
+	}
 	sources := []preparation.Source{}
 	for _, name := range []string{"invoice.txt", "mapping.txt"} {
 		var id string
@@ -140,6 +147,10 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 		return result.CloseID, result.Jobs[0]
 	}
 	january, job := apply(origin, selected)
+	var januaryDue string
+	if err = db.QueryRow("SELECT COALESCE(due_on::text,'') FROM client_closes WHERE id::text=$1", january).Scan(&januaryDue); err != nil || januaryDue != "2027-02-03" {
+		t.Fatalf("the month carry-forward opens takes the roster's terms: %q %v", januaryDue, err)
+	}
 	var procedureID string
 	if err = db.QueryRow("INSERT INTO procedure_versions(organization_id,client_entity,kind,instructions,enabled,reason,actor) SELECT organization_id,entity,'prepaid','Synthetic current procedure',true,'Synthetic approval','fixture' FROM client_closes WHERE id=$1 RETURNING id::text", origin).Scan(&procedureID); err != nil {
 		t.Fatal(err)
@@ -294,6 +305,17 @@ func TestCarryForwardRoundingLineageAndFreshReview(t *testing.T) {
 	approve(august, asset, "approved")
 	if items := preview(august); len(items) != 1 || !items[0].Eligible {
 		t.Fatalf("the half month after the useful life must carry forward: %+v", items)
+	}
+	// A client that has left the roster owes no more months: carrying work forward is refused, and the carry at sign-off
+	// skips it without reporting a failure.
+	if _, err = db.Exec("INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES('local-development',$1,false,'2026-12','Left the firm','fixture')", entity); err != nil {
+		t.Fatal(err)
+	}
+	if body := call("POST", "/v1/closes/"+august+"/carry-forward", map[string]any{"confirmed": true, "items": preview(august)}, 409); !strings.Contains(string(body), "inactive on the firm's roster") {
+		t.Fatalf("carrying a departed client's work forward: %s", body)
+	}
+	if carried, ok := autoCarry(db, httptest.NewRequest("POST", "/", nil), august); carried != 0 || !ok {
+		t.Fatalf("the carry at sign-off skips a departed client: %d %v", carried, ok)
 	}
 }
 
