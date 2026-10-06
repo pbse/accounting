@@ -61,26 +61,28 @@ func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles m
 }
 
 // owedMonth is a month an active roster client owes a close for and none was opened: due when the template would date
-// it, and mine when it would go to the reader.
+// it, mine when it would go to the reader, and hand_over when the client's monthly hand-over is set to open it (it still
+// shows until a close exists, however late the hand-over is).
 type owedMonth struct {
-	Entity string `json:"entity"`
-	Period string `json:"period"`
-	DueOn  string `json:"due_on"`
-	Mine   bool   `json:"mine"`
+	Entity   string `json:"entity"`
+	Period   string `json:"period"`
+	DueOn    string `json:"due_on"`
+	Mine     bool   `json:"mine"`
+	HandOver bool   `json:"hand_over"`
 }
 
 // owedMonths lists, newest first, the months the active roster clients the reader can work on (firm: every client; else
 // those assigned to who) owe and have no close for: each ended month from the client's first owed month, matching
-// client (a name fragment or YYYY-MM, or "") as Work's filter does. A month a client's monthly
-// hand-over will open is left to it while the hand-over is not stuck waiting.
+// client (a name fragment or YYYY-MM, or "") as Work's filter does. A month the client's monthly hand-over is set to
+// open, and not stuck waiting, is marked as the hand-over's.
 func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm bool, who, client string) ([]owedMonth, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,'')
+	rows, err := tx.QueryContext(ctx, `SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
+  EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND lower(h.client_entity)=lower(r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)
  FROM current_client_roster r `+rosterTemplate+`
  CROSS JOIN LATERAL (SELECT to_char(g,'YYYY-MM') AS period FROM generate_series(to_date(r.since,'YYYY-MM'),to_date($4,'YYYY-MM'),interval '1 month') g) m
  WHERE r.organization_id=$1 AND r.active
   AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(r.client_entity) AND g.granted))
   AND NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.organization_id=r.organization_id AND lower(c.entity)=lower(r.client_entity) AND c.period=m.period)
-  AND NOT EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND lower(h.client_entity)=lower(r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)
   AND ($5='' OR r.client_entity ILIKE '%'||$5||'%' OR m.period=$5)
  ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, endedMonth(now), client)
 	if err != nil {
@@ -92,7 +94,7 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
 		var o owedMonth
 		var dueDays sql.NullInt64
 		var owner string
-		if err = rows.Scan(&o.Entity, &o.Period, &dueDays, &owner); err != nil {
+		if err = rows.Scan(&o.Entity, &o.Period, &dueDays, &owner, &o.HandOver); err != nil {
 			return nil, err
 		}
 		if dueDays.Valid {

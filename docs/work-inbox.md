@@ -103,7 +103,7 @@ How a client joins and leaves the roster:
 - **Leaves** when an administrator marks it inactive (which also stops its monthly hand-over), or when its close is deleted for contract termination or at the client's request.
 - When the roster began, every client with a close was put on it, owing the months after its latest close, so older gaps are not reported. A client with a close in the three months before is active. Any other is listed inactive with "To confirm…", for an administrator to reactivate if it is still a client.
 
-**Months not opened.** A month nobody opened shows in Work's own **Months not opened** section (the morning brief's `not_opened`) to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. A month the client's monthly hand-over will open is left to it unless the hand-over is stuck waiting.
+**Months not opened.** A month nobody opened shows in Work's own **Months not opened** section (the morning brief's `not_opened`) to whoever can work on the client, until it is opened. It is narrowed by Work's client or month filter, as the due closes are. A month the client's monthly hand-over is set to open still shows until a close exists, marked as the hand-over's.
 
 **The template.** The firm's monthly close template (`close_templates`, `POST /v1/closes/close-template`) dates each month's close a number of days after the month ends, and gives it to an owner. A client's own entry can override either.
 - A close opened for an active roster client takes the template when it is created. That holds however it is opened: **Open** in Work, the new-close form, or a monthly hand-over.

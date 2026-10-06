@@ -7,7 +7,7 @@ import { workspaceRequest } from "./workspace";
 export type Obligation = { close_id: string; entity: string; period: string; due_on: string; state: "open" | "reopen_required" | "unknown" };
 // A month a roster client owes a close for that nobody opened: due when the firm's template would date it, and mine when
 // the template would give it to the reader.
-export type Unopened = { entity: string; period: string; due_on: string; mine: boolean };
+export type Unopened = { entity: string; period: string; due_on: string; mine: boolean; hand_over: boolean };
 
 export type Morning = {
   overnight: { month_end_snapshots: number; drafts_prepared: number; standing_approvals: number };
@@ -70,7 +70,8 @@ export function MorningBrief({ brief, error }: { brief?: Morning; error: string 
   );
 }
 
-// The months the firm's roster says are owed and nobody opened. Opening one gives it the firm's monthly template.
+// The months the firm's roster says are owed and nobody opened, including one a monthly hand-over has yet to open. Opening
+// one gives it the firm's monthly template.
 export function NotOpened({ months }: { months: Unopened[] }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -97,7 +98,8 @@ export function NotOpened({ months }: { months: Unopened[] }) {
           <li key={`${m.entity}:${m.period}`}>
             {m.entity} · {m.period}
             {m.due_on && ` · due ${m.due_on}`}
-            {m.mine && " · yours"}{" "}
+            {m.mine && " · yours"}
+            {m.hand_over && " · the monthly hand-over is set to open it"}{" "}
             <button type="button" disabled={busy !== ""} onClick={() => void open(m)}>
               {busy === `${m.entity}:${m.period}` ? "Opening…" : `Open ${m.period}`}
             </button>

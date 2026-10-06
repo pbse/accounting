@@ -3423,7 +3423,7 @@ What changed:
   - `client_roster`: whether a client is active, its first owed month, and its optional due-day and owner overrides;
   - `close_templates`: the firm's due days after month end, and its owner.
   - The roster starts with every client that has a close, owing the months after its latest close, so older gaps are not reported. A client with a close in the three months before is active. Any other is listed inactive with a "To confirm" reason, rather than left off. A scratch database migrated through 126, given a recent and an eight-month-old client, then migrated to 127, showed exactly that.
-- **Owed months** (`owedMonths`). Every ended month from a client's first owed month with no close is owed, however old. It is shown to whoever can work on the client (`clients:all`, or an assignment). A month the client's monthly hand-over will open is left to it unless the hand-over is stuck waiting.
+- **Owed months** (`owedMonths`). Every ended month from a client's first owed month with no close is owed, however old. It is shown to whoever can work on the client (`clients:all`, or an assignment). A month the client's monthly hand-over is set to open still shows, marked `hand_over`, until a close exists, however late the hand-over is.
   - The morning brief returns them as `not_opened`, narrowed by Work's client or month filter.
   - Work lists them in their own **Months not opened** section, apart from **Due in 7 days**, with **Open**.
 - **The template on new closes** (`applyCloseTemplate`). A close newly opened for an active roster client takes the client's override, else the template, whether it comes from the new-close route, **Open** or a monthly hand-over. That means a due date N days after the month ends, and an owner.
@@ -3441,6 +3441,7 @@ Checks:
   - Only an administrator changes the template and the roster. A reviewer not reviewing every client cannot be the template's owner; a client's owner must be a member assigned to it.
   - Alpha owes the month after its last close, at the template's terms; Beta owes on its own terms. A reviewer assigned to Beta sees only Beta's month, as theirs.
   - Opening Alpha's month gives it the template's due date and owner, recorded as a change of hands by the template, and the month is no longer owed.
+  - A month Alpha's monthly hand-over is set to open still shows, marked as the hand-over's.
   - Work's filter narrows the months (a name fragment, the month, or another client).
   - The roster lists each client with its owed months, and administrators see the members they can choose.
   - Once Cy loses his Beta assignment, Beta's month opens with its due date but no owner.

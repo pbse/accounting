@@ -102,7 +102,7 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		must(json.Unmarshal([]byte(call(subject, permissions, "GET", "/v1/closes/morning?client="+strings.Join(filter, ""), nil, 200)), &got))
 		out := []string{}
 		for _, o := range got.NotOpened {
-			out = append(out, o.Entity+" "+o.Period+" due "+o.DueOn+map[bool]string{true: " mine", false: ""}[o.Mine])
+			out = append(out, o.Entity+" "+o.Period+" due "+o.DueOn+map[bool]string{true: " mine", false: ""}[o.Mine]+map[bool]string{true: " by hand-over", false: ""}[o.HandOver])
 		}
 		return out
 	}
@@ -114,6 +114,14 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	if got := strings.Join(brief("user_c", reviewer), " | "); got != "Beta "+ended+" due "+due(5)+" mine" {
 		t.Fatalf("a reviewer sees the months of the clients assigned to them: %s", got)
 	}
+	// A month the client's monthly hand-over is set to open still shows, as the hand-over's, until a close exists.
+	_, err = db.Exec(`INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,last_period) VALUES($1,'Alpha','user_b',false,'review',$2)`, org, before)
+	must(err)
+	if got := strings.Join(brief("user_b", partner, "Alpha"), " | "); got != "Alpha "+ended+" due "+due(10)+" mine by hand-over" {
+		t.Fatalf("a month the hand-over has yet to open: %s", got)
+	}
+	_, err = db.Exec(`DELETE FROM close_routines WHERE organization_id=$1 AND client_entity='Alpha'`, org)
+	must(err)
 	// Work's client or month filter narrows them as it narrows the due closes.
 	if beta, month, other := brief("user_b", partner, "bet"), brief("user_b", partner, ended), brief("user_b", partner, "Gamma"); len(beta) != 1 || len(month) != 2 || len(other) != 0 {
 		t.Fatalf("filtered: %v %v %v", beta, month, other)
