@@ -24,6 +24,51 @@ For each close, a firm data administrator (`clients:all`, `data:manage`) records
 
 **Partner support and exit.** Platform staff name each firm's support owner on its page in the staff console (`platform:operate`, a reason; audited as `firm.support_owner`), and the firm sees the name under **Support and your records** in Firm settings. Staff record our team's setup and service time there too, on the firm itself (before or beside any close) or on one of its closes by ID (`effort.assistance`); it is reported to the firm apart from its own time (migration 121). A firm data administrator (`clients:all`, `data:manage`) downloads the firm's own records at any time from the same section (`GET /v1/closes/firm-export`): its settings, people, access and policy history, procedures, client aliases, routines, takeover setups, opening baselines and their cleanup, budgets, cash scenarios and obligations, collection authority and contact preferences, email settlements, posting grants, acceptances, email senders and connections without their secrets, and every close with where its review package and binder download. It is one consistent snapshot; past 64 MiB it is refused rather than cut short.
 
+## Recovery and capacity targets
+
+These are the targets [phase A](agent-first-build-plan.md#delivery-sequence-and-launch-gates) requires before testing (set 2026-10-05). **Owner of every control below: Prashant Bansal**, until someone else is named here. A target is what the release must be shown to meet; none is demonstrated yet.
+
+**Recovery.** The production database is Neon project `account` (PostgreSQL 18, Free plan). Backups are Neon's own point-in-time history; this repository adds no backup code (the owner's decision).
+
+| Target | Value | Rests on |
+| --- | --- | --- |
+| RPO (data that can be lost) | **5 minutes**, for an incident noticed within **6 hours** | Neon's point-in-time restore. The Free plan keeps 6 hours of history (`history_retention_seconds` 21600); an incident noticed later cannot be undone that way. Only the project's one manual snapshot, if one was taken, reaches further back. |
+| RTO (time to serve again) | **4 hours** | Restoring in Neon, then [restoring without repeating external actions](#restore-without-repeating-external-actions) (provider history reconciled before workers resume). |
+
+- **Who restores.** The owner restores from the Neon console. A Neon restore keeps a backup branch, and agents never create Neon branches ([AGENTS.md](../AGENTS.md)), so no agent performs or rehearses it.
+- **Secrets.** Encrypted connections and queued email need the same `SECRETS_KEY`, kept in Cloudflare's credential store apart from the database.
+- **Rehearsal.** A timed hosted rehearsal with provider reconciliation is still needed to show these targets are met (B12). [Runnable local rehearsal](#runnable-local-rehearsal) covers schema and data only.
+
+**Capacity: the pilot.** The release is sized and tested for:
+
+| Measure | Target |
+| --- | --- |
+| Firms | 3 |
+| Clients | 50 in all |
+| Closes | 150 a month |
+| Documents | 3,000 a month |
+| People signed in at once | 15 |
+
+Current limits:
+- **Firm caps.** 500 closes and 250 active preparation jobs per firm, above the pilot.
+- **Neon storage.** The Free plan allows 1 GiB per branch; about 40 MB is used (2026-10-05).
+- **Neon compute.** The database may scale to 2 CU, but the Free plan allows **100 CU-hours a month**. The worker keeps the database awake: about 31 CU-hours were used in the first five days of October, roughly 186 a month. Neon suspends the database once the month's allowance is spent, which on that pace is around the middle of the month. **This must be resolved before the pilot**, by a paid plan or by keeping the database asleep when idle.
+
+No load test has been run yet.
+
+**Monitoring: open, and required before partners operate.** The owner set the outside uptime monitor and alert receiver aside for now (2026-10-05). They remain a launch requirement ([B12](agent-first-build-plan.md#b12--hosted-operation-and-partner-onboarding)): a dead worker cannot send its own alert, so until a monitor checks `GET /healthz/worker` from outside, a stopped worker goes unnoticed. `/readyz` and `OPERATIONS_ALERT_WEBHOOK_URL` are ready for the same setup.
+
+## Release revision check
+
+`scripts/release-check.sh` runs the backend's full test suite for the checked-out revision in the release image's environment. Phase A asks for this ("full PDF/OCR and local-PostgreSQL checks reproduced for the release revision"):
+- **Image.** The `release-test` stage of `services/backend/Dockerfile` uses the same Debian release and document tools as the runtime stage (`poppler-utils`, `tesseract-ocr`).
+- **Database.** A disposable PostgreSQL 18 container, production's major version. It is migrated twice, so a migration that cannot run on an already migrated database fails. Packages share it, so they run one at a time (`-p 1`): a test that works the preparation queue never takes another package's job.
+- **Revision.** `scripts/release-check.sh [revision]`, default `HEAD`. The revision is exported with `git archive` and mounted read-only, so uncommitted changes never count.
+- **Requirements.** Docker and `psql`.
+- **Output.** It prints the revision and tool versions, and exits non-zero if any test fails.
+
+Record the run in [validation](validation.md). CI keeps its faster check on Ubuntu with PostgreSQL 17, which does not replace this one.
+
 ## Backup
 
 Use the managed PostgreSQL provider's encrypted point-in-time backups plus a tested retention policy. Restrict backup access: database backups contain client documents, replies, audit records and encrypted provider payloads. Keep the encryption key in a separate recoverable secret store. A database dump without the correct `SECRETS_KEY` cannot recover encrypted connections or queued email payloads.
@@ -44,7 +89,7 @@ The operator chooses the protected output location and retention. This example i
 3. Verify organization ownership, client assignments, source hashes, original documents, review/sign-off history, preparation jobs, scope records and provider receipts. Test two-firm denied access using the API before opening traffic.
 4. Review all email and posting attempts against provider history **before enabling workers**. A backup can precede an external action that actually succeeded. Database state alone cannot distinguish this case. Stable email keys only deduplicate within the provider's finite window; an old backup can reset the recorded first-attempt time. Do not let restored queued emails run automatically. Keep delivery disabled until each uncertain record is reconciled. An email the provider's records show was sent is settled as accepted with its message ID, and an unknown one the provider never received as failed, by platform staff with `POST /v1/admin/firms/{id}/emails/{email}/settle` (`platform:operate`, the state seen, the provider evidence and a reason; audited as `email.settle`, also while the firm is suspended). **Settle** on **Stuck work** in the staff console does this for the unknown and stopped emails it lists. A queued email the provider has not received is left to send.
 5. Preparation calculations can resume using their durable identities after source/readback checks. OCR and model requests may incur repeat work/cost after recovery; do not confuse that with a repeated ledger write.
-6. Record actual recovery time and the latest recovered transaction time. Only a timed hosted rehearsal with provider reconciliation can establish the deployment's RTO/RPO. Neither target is claimed by this repository.
+6. Record actual recovery time and the latest recovered transaction time. Only a timed hosted rehearsal with provider reconciliation can show the deployment meets its [targets](#recovery-and-capacity-targets); none is shown yet.
 
 ## Runnable local rehearsal
 
