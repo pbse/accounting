@@ -8,7 +8,15 @@ The release corpus required by the [build plan's accuracy contract](agent-first-
   - `services/backend/internal/acceptance`: the case format, scoring and report.
   - `transport.RunAcceptanceCase`: loads a case and drives the pipeline.
   - `cmd/acceptance`: the command line.
-- **A synthetic sample** in `services/backend/acceptance/sample`. It has four cases with recorded answers: one goes through alone, one is asked about a wrong reading, one is held as the wrong client, one is asked about for want of a ledger capture. `TestTheSampleCorpusRunsThroughThePipeline` keeps it, and the harness, working.
+- **A synthetic sample** in `services/backend/acceptance/sample`. It has six cases with recorded answers:
+  - one goes through alone and, once approved, leaves the close ready;
+  - one is asked about a wrong reading;
+  - one is held as the wrong client;
+  - one is asked about for want of a ledger capture;
+  - one has a held document that keeps an approved close from being ready;
+  - one uploads the same invoice twice.
+
+  `TestTheSampleCorpusRunsThroughThePipeline` keeps it, and the harness, working.
 - **Not yet assembled: the release corpus itself.** It needs authorized, de-identified client months (roughly 20 client-months and 100 documents across at least two periods, as a planning floor) and an independent accountant's labels. It is kept **outside this repository**, because it holds client data.
 
 ## A case
@@ -27,8 +35,11 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
     "quickbooks": {"home_currency": "USD", "accounts": [{"id": "12", "name": "Insurance"}],
                    "bills": [{"vendor": "Acme Insurance Co", "number": "INV-778", "amount": "1200.00", "date": "2026-09-03", "account_id": "12"}]}
   },
-  "documents": [{"file": "invoice.pdf", "label": {"work_type": "prepaid", "facts": {"amount": "1200.00"}, "draft_amount": "1100.00", "exception": ""}, "model": "invoice.model.json"}],
-  "expect_ready": false
+  "documents": [{"file": "invoice.pdf", "model": "invoice.model.json",
+                 "label": {"work_type": "prepaid", "facts": {"amount": "1200.00"},
+                           "draft": {"debit_account": "Prepaid Expenses", "credit_account": "Insurance", "amount": "1100.00"}}}],
+  "signoff": {"description": "Prepaid insurance for September", "approve_drafts": true},
+  "expect_ready": true
 }
 ```
 
@@ -37,8 +48,10 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
 - **`label`.** The accountant's judgment of the document, not of any reading:
   - `work_type`: `prepaid`, `accrual` and so on, or `none` for a document with no accounting work.
   - `facts`: the values a correct reading gives.
-  - `draft_amount`: the entry a correct draft proposes.
-  - `exception`: a material problem a person must see before anything goes on, such as `wrong_client`, `duplicate` or `missing_pages`.
+  - `draft`: the entry a correct draft proposes: `date`, `debit_account`, `credit_account` and `amount`. A field left out is not judged.
+  - `exception`: a material problem a person must see before anything goes on, such as `wrong_client` or `missing_pages`. A file whose bytes repeat an earlier one's is one document to the app, so it must be labeled `duplicate`, and the case is refused otherwise.
+- **`signoff`.** The accountant's part once the agent is done, applied after the pipeline settles and recorded as "acceptance reviewer". With `approve_drafts`, every current draft is approved; the scope is defined as covering every draft. Readiness is then read as sign-off reads it. Without `signoff`, nothing defines the scope, so the close is never ready, and `expect_ready` must be false.
+- **`expect_ready`.** Whether the accountant's label says the close may be signed off once that is done.
 - **`model`.** A recorded answer, in the model's answer shape. `"$primary"` stands for this document's evidence ID, and `"$source:<file>"` for another document's. Its quotes must be lines of the document, as a real reading's are.
 
 ## Running it
@@ -65,9 +78,9 @@ Every document counts once, in its split and its labeled work type:
 | --- | --- | --- |
 | Went on alone | The agent confirmed the reading itself and prepared the work | — |
 | Asked a person (nothing wrong) | An abstention: a clean document put to a person. It is reported because a high rate fails the coverage and effort gates. | no |
-| Problems held | A document with a labeled exception that waited for a person | — |
+| Problems held | A document with a labeled exception that waited for a person, or a duplicate kept as the earlier document | — |
 | False accepted facts | A fact the agent went on with that the label contradicts (one per field) | **yes** |
-| Incorrect drafts | Work the agent prepared alone, of the wrong kind or with the wrong entry | **yes** |
+| Incorrect drafts | Work the agent prepared alone, of the wrong kind, or whose entry differs from the label in date, either account or amount (one per field) | **yes** |
 | Missed problems | A labeled exception, or a document with no work, that the agent went past | **yes** |
 | False exceptions | A clean document refused, failed or blocked (for example as another client's) | no |
 | Wrong values put to a person | Wrong values a person would have to correct | no |

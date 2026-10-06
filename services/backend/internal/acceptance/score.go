@@ -16,10 +16,12 @@ type Observed struct {
 	Facts     map[string]string `json:"facts"`
 	Questions int               `json:"questions"`
 	// Accepted means the agent went on without a person: the reading was confirmed by the agent itself.
-	Accepted    bool   `json:"accepted"`
-	Drafts      int    `json:"drafts"`
-	DraftAmount string `json:"draft_amount"` // the first draft's proposed entry, or ""
-	Reason      string `json:"reason"`       // why the agent went on alone or waited for a person, as it recorded it
+	Accepted bool   `json:"accepted"`
+	Drafts   int    `json:"drafts"`
+	Draft    *Entry `json:"draft"`  // the first draft's proposed entry
+	Reason   string `json:"reason"` // why the agent went on alone or waited for a person, as it recorded it
+	// SameAs is the earlier document this one's bytes repeat: the app kept one document for both.
+	SameAs string `json:"same_as,omitempty"`
 }
 
 // CaseObserved is what the pipeline did with one case.
@@ -96,6 +98,8 @@ func Score(cases []Case, observed []CaseObserved) Report {
 			label := d.Label
 			problem := label.Exception != "" || label.WorkType == "none"
 			switch {
+			case label.Exception == "duplicate" && got.SameAs != "":
+				t.CaughtExceptions++ // folded into the earlier document: no second piece of work
 			case problem && got.Accepted:
 				t.MissedExceptions++
 				fail(d.File, "missed_exception", fmt.Sprintf("the agent went on past %s", or(label.Exception, "a document with no accounting work")))
@@ -113,9 +117,18 @@ func Score(cases []Case, observed []CaseObserved) Report {
 						fail(d.File, "false_accepted_fact", fmt.Sprintf("%s %q; the label says %q", field, got.Facts[field], want))
 					}
 				}
-				if label.DraftAmount != "" && !sameValue(got.DraftAmount, label.DraftAmount) {
-					t.IncorrectDrafts++
-					fail(d.File, "incorrect_draft", fmt.Sprintf("draft amount %q; the label says %q", got.DraftAmount, label.DraftAmount))
+				if want := label.Draft; want != nil {
+					drafted := Entry{}
+					if got.Draft != nil {
+						drafted = *got.Draft
+					}
+					for _, f := range []struct{ name, got, want string }{{"date", drafted.Date, want.Date}, {"debit account", drafted.DebitAccount, want.DebitAccount},
+						{"credit account", drafted.CreditAccount, want.CreditAccount}, {"amount", drafted.Amount, want.Amount}} {
+						if f.want != "" && !sameValue(f.got, f.want) {
+							t.IncorrectDrafts++
+							fail(d.File, "incorrect_draft", fmt.Sprintf("draft %s %q; the label says %q", f.name, f.got, f.want))
+						}
+					}
 				}
 			case got.JobState == "" || got.JobState == "failed" || got.Engine == "identity_blocked" || got.Kind == "unsupported":
 				t.FalseExceptions++

@@ -40,8 +40,9 @@ func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, model
 		return observed, fmt.Errorf("case %s setup: %w", c.ID, err)
 	}
 
-	// The documents arrive together, as one upload of several files would.
-	files := map[string]string{}
+	// The documents arrive together, as one upload of several files would. A file whose bytes repeat an earlier one's is
+	// kept as that document, as the app keeps it: files lists every file under its evidence ID, the first first.
+	files, uploads := map[string]string{}, map[string][]string{}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return observed, err
@@ -71,7 +72,10 @@ func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, model
 		if refused != nil {
 			return observed, fmt.Errorf("case %s: %s: %s", c.ID, d.File, refused.message)
 		}
-		files[id] = d.File
+		if _, ok := files[id]; !ok {
+			files[id] = d.File
+		}
+		uploads[id] = append(uploads[id], d.File)
 	}
 	if err = tx.Commit(); err != nil {
 		return observed, err
@@ -102,7 +106,26 @@ func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, model
 			break
 		}
 	}
-	return acceptanceObserve(ctx, db, closeID, files)
+	if s := c.Signoff; s != nil {
+		if err = acceptanceSignoff(ctx, db, closeID, *s); err != nil {
+			return observed, fmt.Errorf("case %s sign-off: %w", c.ID, err)
+		}
+	}
+	return acceptanceObserve(ctx, db, closeID, uploads)
+}
+
+// acceptanceSignoff does the accountant's part once the agent is done, recorded under "acceptance reviewer": approve every
+// current draft, when the case asks, and define what sign-off covers (every draft). Readiness then reads as sign-off would.
+func acceptanceSignoff(ctx context.Context, db *sql.DB, closeID string, s acceptance.Signoff) error {
+	if s.ApproveDrafts {
+		if _, err := db.ExecContext(ctx, `INSERT INTO workpaper_reviews(workpaper_id,paper_digest,decision,note,actor) SELECT id,digest,'approved','Approved in the acceptance run','acceptance reviewer'
+ FROM workpapers w WHERE close_id=$1 AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`, closeID); err != nil {
+			return err
+		}
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO close_scopes(close_id,scope,actor) SELECT $1,jsonb_build_object('description',$2::text,'required_papers',COALESCE(jsonb_agg(id::text ORDER BY id),'[]'::jsonb),'external_steps','[]'::jsonb),'acceptance reviewer'
+ FROM workpapers w WHERE close_id=$1 AND NOT EXISTS(SELECT 1 FROM workpapers n WHERE n.close_id=w.close_id AND n.paper->>'revises'=w.id::text)`, closeID, s.Description)
+	return err
 }
 
 // acceptanceSetup gives the case's firm the procedure and ledger capture the case describes, as a firm would set them up.
@@ -174,11 +197,12 @@ func acceptanceSetup(ctx context.Context, db *sql.DB, org, closeID string, c acc
 	return err
 }
 
-// acceptanceObserve reads back what the pipeline did with each document and with the close.
-func acceptanceObserve(ctx context.Context, db *sql.DB, closeID string, files map[string]string) (acceptance.CaseObserved, error) {
+// acceptanceObserve reads back what the pipeline did with each document and with the close. uploads lists each evidence
+// ID's files, the first first; a later file is the same document and is observed as it, noting which it repeats.
+func acceptanceObserve(ctx context.Context, db *sql.DB, closeID string, uploads map[string][]string) (acceptance.CaseObserved, error) {
 	observed := acceptance.CaseObserved{Documents: []acceptance.Observed{}, Blockers: []string{}}
-	for id, file := range files {
-		o := acceptance.Observed{File: file, Facts: map[string]string{}}
+	for id, names := range uploads {
+		o := acceptance.Observed{File: names[0], Facts: map[string]string{}}
 		var proposal []byte
 		var confirmedBy, papers, reason sql.NullString
 		err := db.QueryRowContext(ctx, `SELECT j.state,COALESCE(i.proposal,'{}'::jsonb),i.confirmed_by,j.workpaper_ids::text,i.agent_checkpoint->>'straight_through' FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id
@@ -198,13 +222,21 @@ func acceptanceObserve(ctx context.Context, db *sql.DB, closeID string, files ma
 		json.Unmarshal([]byte(papers.String), &ids)
 		o.Drafts = len(ids)
 		if len(ids) > 0 {
-			var amount sql.NullString
-			if err = db.QueryRowContext(ctx, `SELECT paper->'proposal'->>'amount' FROM workpapers WHERE id::text=$1`, ids[0]).Scan(&amount); err != nil {
+			var entry []byte
+			if err = db.QueryRowContext(ctx, `SELECT COALESCE(paper->'proposal','null'::jsonb) FROM workpapers WHERE id::text=$1`, ids[0]).Scan(&entry); err != nil {
 				return observed, err
 			}
-			o.DraftAmount = amount.String
+			var e acceptance.Entry
+			if json.Unmarshal(entry, &e) == nil && e != (acceptance.Entry{}) {
+				o.Draft = &e
+			}
 		}
 		observed.Documents = append(observed.Documents, o)
+		for _, again := range names[1:] {
+			repeat := o
+			repeat.File, repeat.SameAs = again, names[0]
+			observed.Documents = append(observed.Documents, repeat)
+		}
 	}
 	if err := db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM production_postings WHERE close_id=$1)+(SELECT count(*) FROM sandbox_postings WHERE close_id=$1)+(SELECT count(*) FROM xero_postings WHERE close_id=$1)
  +(SELECT count(*) FROM vendor_credit_postings WHERE close_id=$1)+(SELECT count(*) FROM bill_corrections WHERE close_id=$1)+(SELECT count(*) FROM credit_applications WHERE close_id=$1)+(SELECT count(*) FROM xero_corrections WHERE close_id=$1),

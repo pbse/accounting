@@ -18,15 +18,24 @@ import (
 
 // Case is one client-month.
 type Case struct {
-	ID          string     `json:"id"`
-	Split       string     `json:"split"` // development, or held_out for cases kept out of tuning
-	Client      string     `json:"client"`
-	Period      string     `json:"period"`
-	Tags        []string   `json:"tags,omitempty"` // what the case exercises, such as wrong_client or ocr_decimal
-	Setup       Setup      `json:"setup"`
-	Documents   []Document `json:"documents"`
-	ExpectReady bool       `json:"expect_ready"`
-	Dir         string     `json:"-"`
+	ID        string     `json:"id"`
+	Split     string     `json:"split"` // development, or held_out for cases kept out of tuning
+	Client    string     `json:"client"`
+	Period    string     `json:"period"`
+	Tags      []string   `json:"tags,omitempty"` // what the case exercises, such as wrong_client or ocr_decimal
+	Setup     Setup      `json:"setup"`
+	Documents []Document `json:"documents"`
+	// Signoff, when present, is what the accountant does once the agent is done: approve every draft and define what
+	// sign-off covers. Readiness is then read as sign-off would read it, so a false "ready" can show.
+	Signoff     *Signoff `json:"signoff,omitempty"`
+	ExpectReady bool     `json:"expect_ready"`
+	Dir         string   `json:"-"`
+}
+
+// Signoff is the accountant's part before sign-off, simulated after the pipeline settles.
+type Signoff struct {
+	Description   string `json:"description"`
+	ApproveDrafts bool   `json:"approve_drafts"`
 }
 
 // Setup is the firm configuration the case needs before its documents arrive.
@@ -72,13 +81,22 @@ type Document struct {
 }
 
 // Label is what the document should yield. WorkType is the work it supports (prepaid, accrual, …) or none. Facts are the
-// values a correct reading gives, by field; DraftAmount is the month's entry a correct draft proposes. Exception names a
-// material problem a person must see before anything goes on (wrong_client, ocr_decimal, duplicate, …).
+// values a correct reading gives, by field; Draft is the entry a correct draft proposes. Exception names a material
+// problem a person must see before anything goes on (wrong_client, missing_pages, …); a document whose bytes repeat an
+// earlier one's is labeled duplicate.
 type Label struct {
-	WorkType    string            `json:"work_type"`
-	Facts       map[string]string `json:"facts,omitempty"`
-	DraftAmount string            `json:"draft_amount,omitempty"`
-	Exception   string            `json:"exception,omitempty"`
+	WorkType  string            `json:"work_type"`
+	Facts     map[string]string `json:"facts,omitempty"`
+	Draft     *Entry            `json:"draft,omitempty"`
+	Exception string            `json:"exception,omitempty"`
+}
+
+// Entry is a proposed journal entry; a label leaves out the fields it does not judge.
+type Entry struct {
+	Date          string `json:"date,omitempty"`
+	DebitAccount  string `json:"debit_account,omitempty"`
+	CreditAccount string `json:"credit_account,omitempty"`
+	Amount        string `json:"amount,omitempty"`
 }
 
 var (
@@ -132,18 +150,28 @@ func (c Case) check() error {
 	if strings.TrimSpace(c.Client) == "" || !periodPattern.MatchString(c.Period) {
 		problems = append(problems, errors.New("a case needs its client and its month (YYYY-MM)"))
 	}
+	if c.Signoff != nil && strings.TrimSpace(c.Signoff.Description) == "" {
+		problems = append(problems, errors.New("a sign-off step says what sign-off covers"))
+	}
 	if len(c.Documents) == 0 {
 		problems = append(problems, errors.New("a case needs at least one document"))
 	}
-	files := map[string]bool{}
+	files, bodies := map[string]bool{}, map[string]string{}
 	for _, d := range c.Documents {
 		if d.File == "" || filepath.Base(d.File) != d.File || files[d.File] {
 			problems = append(problems, fmt.Errorf("document %q: a file name in the case's directory, once", d.File))
 			continue
 		}
 		files[d.File] = true
-		if _, err := os.Stat(filepath.Join(c.Dir, d.File)); err != nil {
+		body, err := os.ReadFile(filepath.Join(c.Dir, d.File))
+		if err != nil {
 			problems = append(problems, fmt.Errorf("document %s: %w", d.File, err))
+		}
+		// The same bytes uploaded again are one document to the app; the label must say the copy is a duplicate.
+		if earlier, ok := bodies[string(body)]; ok && err == nil && d.Label.Exception != "duplicate" {
+			problems = append(problems, fmt.Errorf("document %s repeats %s byte for byte: label it a duplicate", d.File, earlier))
+		} else if !ok && err == nil {
+			bodies[string(body)] = d.File
 		}
 		if d.Model != "" {
 			if _, err := os.Stat(filepath.Join(c.Dir, d.Model)); err != nil || filepath.Base(d.Model) != d.Model {

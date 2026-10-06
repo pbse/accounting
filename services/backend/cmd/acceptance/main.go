@@ -12,12 +12,13 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/url"
 	"os"
+	"strings"
 
 	"close.local/backend/internal/acceptance"
 	"close.local/backend/internal/llm"
 	"close.local/backend/internal/transport"
+	"github.com/jackc/pgx/v5"
 )
 
 func main() {
@@ -83,16 +84,21 @@ func main() {
 	}
 }
 
-// local refuses any database that is not on this machine: the run creates firms and works the whole queue.
+// local refuses any database that is not on this machine: the run creates firms and works the whole queue. It checks
+// every host the driver would connect to, as it resolves them, including PGHOST and the other PG settings.
 func local(database string) error {
-	u, err := url.Parse(database)
-	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
-		return fmt.Errorf("give the database as a postgres:// URL")
+	config, err := pgx.ParseConfig(database)
+	if err != nil {
+		return fmt.Errorf("the database setting does not parse: %w", err)
 	}
-	for _, host := range []string{u.Hostname(), u.Query().Get("host")} {
+	hosts := []string{config.Host}
+	for _, fallback := range config.Fallbacks {
+		hosts = append(hosts, fallback.Host)
+	}
+	for _, host := range hosts {
 		ip := net.ParseIP(host)
-		if host != "" && host != "localhost" && !(ip != nil && ip.IsLoopback()) && !(len(host) > 0 && host[0] == '/') {
-			return fmt.Errorf("the acceptance run uses only a local database (localhost, a loopback address or a socket), not %s", host)
+		if host != "localhost" && !(ip != nil && ip.IsLoopback()) && !strings.HasPrefix(host, "/") {
+			return fmt.Errorf("the acceptance run uses only a local database (localhost, a loopback address or a socket), not %q", host)
 		}
 	}
 	return nil
