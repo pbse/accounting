@@ -553,20 +553,28 @@ func totalLineShows(invoice string, cents int64) bool {
 var billToLabels, notBillTo = []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}
 
 // CitedBilledTo is the billed-to name as the straight-through check accepts it: one candidate, cited from the invoice
-// itself, on a line labelled as the bill-to that ends with the name. It is "" for anything less, so a weaker reading
-// never has a held invoice called another company's.
-func CitedBilledTo(p Proposal) string {
-	primary := ""
+// itself, on a line labelled as the bill-to that ends with the name, and that name the whole of a bill-to line the
+// invoice's text prints (sources holds the read evidence), so a quote cut short ("Bill to: Harbor" from "Bill to:
+// Harbor Fixture LLC") names no one. It is "" for anything less, so a weaker reading never has a held invoice called
+// another company's.
+func CitedBilledTo(p Proposal, sources []IntakeSource) string {
+	primary, invoice := "", ""
 	for _, s := range p.Sources {
 		if s.Role == "invoice" {
 			primary = s.ID
 		}
 	}
+	for _, s := range sources {
+		if s.ID == primary {
+			invoice = s.Content
+		}
+	}
 	for _, f := range p.Facts {
-		if f.Field != "billed_to" || f.Value == "" || len(f.Candidates) != 1 || primary == "" || f.Candidates[0].SourceID != primary {
+		if f.Field != "billed_to" || f.Value == "" || len(f.Candidates) != 1 || invoice == "" || f.Candidates[0].SourceID != primary {
 			continue
 		}
-		if quote := f.Candidates[0].Quote; endsLine(quote, f.Value) && labelledLine(quote, f.Value, billToLabels, notBillTo) {
+		quote := f.Candidates[0].Quote
+		if endsLine(quote, f.Value) && labelledLine(quote, f.Value, billToLabels, notBillTo) && billToNames(invoice)[documents.NormalizeEntity(f.Value)] {
 			return f.Value
 		}
 	}

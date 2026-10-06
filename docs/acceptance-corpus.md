@@ -74,11 +74,11 @@ go run ./cmd/acceptance -corpus ../path/to/corpus -database postgres://…@127.0
 
 - **Model.**
   - `-model recorded` replays each document's recorded answer. It tests everything around the model. Every document the app keeps needs one, and the command refuses the corpus otherwise.
-  - `-model live` reads with the model configured in the environment (the same settings as the API: `LLM_PROVIDER`, `OPENAI_*` or `CONTEXT_MACHINE_*`). The release corpus is run this way, with the configured model version.
+  - `-model live` reads with the model configured in the environment (the same settings as the API: `LLM_PROVIDER`, `OPENAI_*` or `CONTEXT_MACHINE_*`). The release corpus is run this way, with the configured model version. The command refuses to start unless the reading and evidence-selection models are configured, since the pipeline would otherwise fall back to local reading.
 - **Firm.** By default each case is a firm of its own, worked as "acceptance" and disabled afterwards. Context Machine reads only for the firm and person its access profile serves (`CONTEXT_MACHINE_PROFILES`). A live run through it therefore passes `-organization org_… -subject …` with that firm and person, and every case becomes a close of that one firm. A client has one close a month and one ledger connection there, so no two cases may share a client; the command refuses such a corpus. Run those cases separately, each on a fresh database. Each case's unfinished jobs are cancelled once it has been observed.
 - **PDFs** need `pdftotext`, `pdfinfo` and `tesseract`. Run PDF cases where those exist, such as the [release-check image](operations.md#release-revision-check).
 
-The command prints a Markdown report. It exits 1 on any critical failure, and on any document the pipeline never decided on, since the run has not evaluated it. `-report` writes the full report as JSON, including every document's observed outcome.
+The command prints a Markdown report. It exits 1 on any critical failure, and on any document the pipeline never decided on, since the run has not evaluated it. Abstentions and expected-ready closes still blocked do not fail a run. They are reported with their denominators for the coverage and effort gates, where a uselessly high rate cannot pass. `-report` writes the full report as JSON, including every document's observed outcome.
 
 ## What is scored
 

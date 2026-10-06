@@ -50,6 +50,12 @@ func main() {
 		if live, err = llm.FromEnv(); err != nil {
 			log.Fatal(err)
 		}
+		// Without these routes the pipeline falls back to local reading, and the run would not be of the model at all.
+		for _, purpose := range []string{"preparation", "evidence_selection"} {
+			if llm.Model(llm.WithClient(context.Background(), live), purpose) == "" {
+				log.Fatalf("-model live needs the %s model configured (LLM_PROVIDER with its OPENAI_* or CONTEXT_MACHINE_* settings)", purpose)
+			}
+		}
 	} else {
 		for _, c := range cases {
 			if err = c.RecordedComplete(); err != nil {
