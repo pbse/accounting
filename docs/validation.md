@@ -3186,6 +3186,27 @@ Pass 7 found that an edited note retried under the visit's key was answered with
 
 Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.
 
+## Krith's mail moves to Google Workspace — 2026-10-05 (B12)
+
+The apex MX of getkrith.com now points to Google Workspace, and the team's mailbox is prashant@getkrith.com. Contact notes are to be forwarded there and hello@getkrith.com is to become a Google Workspace alias; [public site](marketing-site.md#where-kriths-mail-goes) records the arrangement and the apex records to keep. The privacy notice names Google (Workspace and Gmail, true before and after the switch) as the team's email and no longer says Cloudflare receives mail sent to our addresses. Until the owner adds the hello@ alias in Google Workspace, mail to the published hello@getkrith.com bounces; that is the first step to finish.
+
+Checked against Cloudflare and public DNS:
+- Google's five MX hosts, its DKIM key and the site verification record are published.
+- One apex SPF record includes both Google and Cloudflare, well within the ten-lookup limit.
+- Cloudflare's DKIM key is still published for the Worker's sends, and DMARC is `p=none`.
+- `in.getkrith.com` keeps Cloudflare's MX and SPF, and the client-reply rule still sends to the production Worker.
+- Resend's `mail.getkrith.com` records are unchanged.
+
+Email Routing stays enabled on the zone, and Cloudflare reports the apex as "misconfigured", as expected with Google's MX.
+
+Not yet done, and waiting on the owner:
+- prashant@getkrith.com must be added and verified as a Cloudflare destination address. Until then the Worker cannot send there, so `CONTACT_FORWARD_ADDRESS` stays on the verified personal inbox and notes are not left undelivered. Claude's attempt to add the destination and delete the old rule was refused by its permission policy; both are for the owner.
+- The old Cloudflare hello@ rule (to a personal inbox, no longer reachable) is to be deleted.
+- The hello@ alias is to be added in Google Workspace.
+- After that, the variable moves to prashant@getkrith.com with a production deploy, and one contact note checks delivery end to end.
+
+The browser layout check's plan-editor step failed intermittently in CI (PRs 271 and 274) at phone width. It offered a content grant before the console had loaded the grant held from the desktop pass, so the check opened a second one. That replaced the first and closed the plan already revealed under it. The step now reads what the editor shows until it opens: it opens at most one grant, only when the API says none is held for the check's firm, and waits for it to exist before looking again. When a held grant does not show (its list still loading, or its request failed) or the automatic reveal does not come, it reveals with a reason after five seconds. Ten local runs passed with 76 page views. Two of them started with no grant held, as in CI.
+
 ## Phase A: the acceptance corpus harness (2026-10-05)
 
 Request: phase A of the [build plan](agent-first-build-plan.md#delivery-sequence-and-launch-gates) requires an acceptance corpus. The plan prefers "a small versioned replay harness over a new evaluation platform".
