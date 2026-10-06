@@ -3185,3 +3185,29 @@ Pass 6 found a retried note kept and forwarded twice, the per-address count livi
 Pass 7 found that an edited note retried under the visit's key was answered with the earlier note; the page now keys each note as written, and the API refuses a kept key with other words (409, tested).
 
 Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is verified, the rule forwarding hello@getkrith.com to it is active, and the production variable `CONTACT_FORWARD_ADDRESS` is set. Delivery of a contact note in production is checked after deploy.
+
+## Phase A: the acceptance corpus harness (2026-10-05)
+
+Request: phase A of the [build plan](agent-first-build-plan.md#delivery-sequence-and-launch-gates) requires an acceptance corpus. The plan prefers "a small versioned replay harness over a new evaluation platform".
+
+What changed:
+- **The harness** ([acceptance corpus](acceptance-corpus.md)).
+  - A case format: a client-month's documents with an accountant's labels, the firm setup it needs, and recorded model answers.
+  - `transport.RunAcceptanceCase` loads a case as a firm of its own. It adds the documents as an upload would (a workbook becomes CSV text, files are checked as the route checks them), then works extraction, reading and preparation to quiescence and reads back every outcome. The case's firm is disabled afterwards.
+  - Scoring by split and work type with denominators. Critical failures (false accepted facts, incorrect drafts, missed problems, false-ready closes, posting attempts, duplicate jobs) fail the run.
+  - `cmd/acceptance` uses only a local database that holds no closes. It runs with `-model recorded` or `-model live`.
+- **A synthetic sample of four cases.** It is not the release corpus: that needs authorized client months and an independent accountant, and stays outside the repository.
+
+Checks:
+- `TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes` puts each outcome in its own count, including a document with no work. Exactly the five critical failures are listed, and the Markdown table matches.
+- `TestLoadRefusesACaseItCannotScore`: a malformed case (id, split, client and month, missing document, unlabeled work type) is refused with each problem named.
+- `TestOnlyALocalDatabaseIsUsed`: localhost, loopback and sockets are accepted. A remote host, a remote `host=` parameter, a key=value string and a private address are refused.
+- `TestTheSampleCorpusRunsThroughThePipeline` (local PostgreSQL, real pipeline, recorded answers):
+  - The clean invoice is prepared without confirmation. Its bill was booked to Insurance, so the draft moves 1,100.00 to Prepaid Expenses. The harness caught my first label of 100.00 as an incorrect draft, and the label was corrected.
+  - The reading of 12000.00 against the printed 1,200.00 is put to a person with the amount withheld.
+  - The other company's invoice waits for a person.
+  - The case without a ledger capture is put to a person.
+  - Zero critical failures; nothing is posted.
+- `go run ./cmd/acceptance -corpus acceptance/sample` on a freshly migrated local database printed the same report and exited 0. Run again on that database, it refused, because the database now holds closes.
+
+Not verified: a live-model run, and any real client corpus. Neither exists yet.

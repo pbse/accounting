@@ -1,0 +1,32 @@
+{
+ "id": "no-ledger-capture",
+ "split": "development",
+ "client": "Harbor Fixture LLC",
+ "period": "2026-09",
+ "tags": [
+  "missing_ledger"
+ ],
+ "setup": {
+  "prepaid_procedure": {
+   "method": "equal_full_months_v1",
+   "expense_account": "Insurance",
+   "prepaid_account": "Prepaid Expenses"
+  }
+ },
+ "documents": [
+  {
+   "file": "acme-invoice.txt",
+   "label": {
+    "work_type": "prepaid",
+    "facts": {
+     "amount": "1200.00",
+     "service_start": "2026-09-01",
+     "service_end": "2027-08-31"
+    },
+    "draft_amount": "1100.00"
+   },
+   "model": "acme-invoice.model.json"
+  }
+ ],
+ "expect_ready": false
+}
