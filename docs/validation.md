@@ -3212,9 +3212,10 @@ The browser layout check's plan-editor step failed intermittently in CI (PRs 271
 Request: phase A's B01 foundations ("The agent proposes scope and mappings… The system cannot declare complete coverage by excluding accounts it could not understand"). The user chose to build Xero coverage next. Until now, coverage read only QuickBooks captures. A close whose books are read from Xero had no account questions, so it could be signed off without any account being decided. Its takeover setup said the scope was "not available for Xero".
 
 What changed:
-- **The books' capture.** `ledgerCoverage` chooses the capture as the tie-out does: the latest QuickBooks period capture of the connection the books are read from, unless the close's latest Xero capture is newer. That connection is the production company unless disconnected, else the sandbox one, or any while none is connected.
+- **The books' capture.** `ledgerCoverage` chooses the capture as the tie-out does: the latest QuickBooks period capture of the connection the books are read from, by capture time, unless the close's latest Xero capture is newer. That connection is the production company unless disconnected, else the sandbox one, or any while none is connected.
   - The request currency check (`requestCapture`) chooses the same way.
-  - A client with one QuickBooks connection gets the same snapshot from the same query, so its coverage JSON, and its sign-off digests, are unchanged.
+  - A client with one QuickBooks connection, whose captures' IDs follow their capture times as they do in practice, gets the same snapshot. Its coverage JSON, and its sign-off digests, are unchanged.
+  - Where IDs and times disagree, coverage now follows the capture taken last, as the tie-out and the management pack already do. Before, it followed the highest ID, and the pack showed one capture while the sign-off bound another.
   - A client with both a sandbox and a production company now has the production company's coverage. Before, a newer sandbox capture's was used, which was the wrong company's.
   - A Xero capture's coverage is proposed when read, by the new `xero.Coverage`, so earlier captures have it too. It is named `xero:<id>`, since the two providers' snapshot IDs could collide. It is stale once its connection is not active, or when the capture is of another month than the close's. Its accounts then block sign-off as "source changed" and refuse decisions until the month is captured.
   - A Xero capture that cannot be read becomes one stale item, "the Xero capture". That covers a missing Trial Balance and an account list that is missing, empty, or has an account without its own ID, which would otherwise drop accounts the Trial Balance does not list. It blocks sign-off and cannot be bound or excluded until the month is captured again.
@@ -3246,7 +3247,7 @@ Checks:
 - `TestHandAXeroAccountToATeammate`: the hand-off names the Xero capture, stays open on it, and closes when the account is decided or a new capture replaces it.
 - These existing tests were updated:
   - `TestPlanReadsTheBooksTheLedgerReadsUse`: its `{}` Xero fixture is now an unreadable capture whose accounts wait.
-  - `TestManagementPackReadsTheCapturedReports`: a newer Xero capture now needs the sign-off reopened, as a newer QuickBooks capture does.
+  - `TestManagementPackReadsTheCapturedReports`: a newer Xero capture now needs the sign-off reopened, as a newer QuickBooks capture does. A QuickBooks capture saved later but taken earlier no longer splits the sign-off from the pack: both follow the capture taken last.
   - `TestXeroBillLineIsRecodedOnceAfterIndependentApproval`: it checks the correction's own blocker.
   - `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth`: the new wording. Once production is connected, the sandbox capture no longer proposes the scope: the production company has no capture of the month yet. A missing capture still does not block sign-off by itself, as before.
 - The full Go suite runs on a fresh local PostgreSQL with migrations applied twice. `npm run check`, `npm test` and `npm run build` pass.

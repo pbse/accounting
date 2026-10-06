@@ -34,7 +34,7 @@ var portfolioFiller = strings.Fields("all the closes close clients client work e
 // types BANK (xero.Coverage).
 const waitingStatements = `(EXISTS(SELECT 1 FROM preparation_jobs j JOIN preparation_intakes i ON i.job_id=j.id WHERE j.close_id=c.id AND j.state='waiting_client' AND i.proposal->>'kind'='reconciliation')
  OR EXISTS(SELECT 1 FROM work_requests q JOIN request_drafts d ON d.id=q.draft_id
-  CROSS JOIN LATERAL (SELECT s.id,s.payload->'coverage' AS coverage FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND ` + quickbooksReading + ` ORDER BY s.id DESC LIMIT 1) snap
+  CROSS JOIN LATERAL (SELECT s.id,s.payload->'coverage' AS coverage FROM quickbooks_snapshots s WHERE s.close_id=c.id AND s.payload ? 'period' AND ` + quickbooksReading + ` ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) snap
   WHERE d.close_id=c.id AND q.coverage_scope->>'snapshot_id'=snap.id::text AND ` + preparation.RequestCoverageIsCurrent + `
   AND EXISTS(SELECT 1 FROM client_request_links l WHERE l.request_id=q.id AND l.used_at IS NULL AND l.revoked_at IS NULL AND l.expires_at>now())
   AND EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(q.coverage_scope->'bindings')='array' THEN q.coverage_scope->'bindings' ELSE '[]' END) b

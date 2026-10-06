@@ -186,6 +186,11 @@ func TestXeroCoverageAsksEveryAccountBeforeSignOff(t *testing.T) {
 	if v := view(); v.SnapshotID != quickbooksID || states(v) != "q-1:reconciliation:missing_evidence" {
 		t.Fatalf("the newer production capture is in use: %s %s", v.SnapshotID, states(v))
 	}
+	// The latest capture by time is the books', whatever the IDs: a production capture saved later but taken earlier is not.
+	quickbooksCapture("production", "20 minutes")
+	if v := view(); v.SnapshotID != quickbooksID {
+		t.Fatalf("the capture taken last is in use: %s", v.SnapshotID)
+	}
 	// A later sandbox capture, even with the higher ID, is not the books': a request on the production capture stays
 	// current, and the portfolio lists the close as waiting on its statement.
 	quickbooksCapture("sandbox", "5 minutes")
