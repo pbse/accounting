@@ -29,7 +29,7 @@ Paths are relative to `services/backend/internal/`.
 - whether the server enables it, and for which clients;
 - its owner, fallback and stated limitation.
 
-An administrator records the sandbox-check and accountant-acceptance stages there (`POST /v1/closes/security/operations`, migration 111). This document is the cross-provider view the app does not give: email, the model provider, uploads and identity as well as the ledgers, and what remains unproven everywhere.
+An administrator records the sandbox-check and accountant-acceptance stages there (`POST /v1/closes/security/operations`, migration 111). It covers QuickBooks, Xero and Stripe operations only. This document is the cross-provider view the app does not give: email, the model provider, uploads and identity as well as the ledgers, and what remains unproven everywhere.
 
 ## QuickBooks Online
 
@@ -147,7 +147,7 @@ Ordered by what they risk. Each live check needs credentials the user installs t
    - one Drive selection;
    - one Cloudflare scan verdict.
 
-   Record each in the Security view as well.
+   Record each with its date in [validation](validation.md). For QuickBooks, Xero and Stripe operations, also record the sandbox-check and acceptance stages in the Security view, which takes only those three providers.
 2. **Production `prepaid` posting is on by default without a sandbox record.** Decide whether the default becomes none, matching Xero, or record the sandbox check.
 3. **Not every file is scanned.** Direct uploads, Drive files and fetched Stripe reports skip the malware scan that forwarded and client-request files get.
 4. **A failed Xero refresh does not hold sign-off** the way a stopped QuickBooks refresh does.
