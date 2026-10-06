@@ -281,6 +281,22 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Kappa", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
+	// A month deleted under a name that was then its own client is done for the client that name is later confirmed as an
+	// alias of.
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Xi", "active": true, "since": ended, "reason": "A client"}, 200)
+	_, err = db.Exec(`INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest) VALUES($1,0,$2,$3,0,'fixture','retention_expired',$2)`,
+		org, preparation.Digest([]byte(org+"\x00xi partners\x00"+ended)), ended)
+	must(err)
+	if got := brief("user_b", partner, "Xi"); len(got) != 1 {
+		t.Fatalf("Xi owes its month while Xi Partners is another client: %v", got)
+	}
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Xi','xi partners','fixture',now())`, org)
+	must(err)
+	if got := brief("user_b", partner, "Xi"); len(got) != 0 {
+		t.Fatalf("a month deleted under a name later confirmed as Xi's alias is done: %v", got)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Xi", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+
 	// An entry whose first month is now over five years old can still be changed while it keeps that month, but not moved
 	// to another that old.
 	old := time.Now().UTC().AddDate(-6, 0, 0).Format("2006-01")

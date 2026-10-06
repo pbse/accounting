@@ -3463,6 +3463,7 @@ Checks:
   - A month opened under Zeta's alias "Zeta Co" takes the template's due date. It is not given to Cy, who is assigned to "Zeta" and so cannot open a close named "Zeta Co". Deactivating Zeta stops a hand-over set up under "Zeta Co".
   - Theta's month is no longer owed once a deletion receipt records its close deleted under the retention policy. The receipt's digest is computed in SQL exactly as Go computes it.
   - Iota's month is no longer owed when its close was opened under the alias "Iota Co." and deleted: the receipt's client digest matches.
+  - Xi owes its month while "Xi Partners", under which a month was deleted when it was its own client, is another client. Once "xi partners" is confirmed as Xi's alias, that month is done: a receipt's client digest is compared with every name the firm knows the client by.
   - Kappa's month is no longer owed when a pre-roster receipt, with only the name digest, records a close deleted under its confirmed alias "Kappa Co".
   - Lambda's entry, whose first month is six years old, can still be changed while it keeps that month. Moving it to another month that old is refused (422).
   - Cy, assigned only under Eta's alias "Eta Co", is refused as Eta's owner and not shown Eta's month: he cannot open closes named Eta.

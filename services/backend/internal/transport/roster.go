@@ -93,14 +93,15 @@ type owedMonth struct {
 // open, and not stuck waiting, is marked as the hand-over's.
 func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm, review bool, who, client string) ([]owedMonth, error) {
 	// Months are matched by client identity, so a month opened under a confirmed alias of the client counts. A deleted
-	// month is matched through its receipt, which holds digests, never names: of the client identity (client_digest), or,
-	// on a receipt from before the roster, of the close's own name, compared with every name the firm knows the client by
-	// (its closes', its confirmed aliases' and its roster entries').
+	// month is matched through its receipt, which holds digests, never names: of the client the close belonged to
+	// (client_digest), which may since have been confirmed as an alias of this one, or, on a receipt from before the
+	// roster, of the close's own name. Both are compared with every name the firm knows the client by (its closes', its
+	// confirmed aliases' and its roster entries').
 	rows, err := tx.QueryContext(ctx, `WITH opened AS (SELECT DISTINCT client_identity(c.organization_id,c.entity) AS client,c.period FROM client_closes c WHERE c.organization_id=$1),
  names AS (SELECT client_identity($1,n.name) AS client,n.name FROM (SELECT lower(c.entity) AS name FROM client_closes c WHERE c.organization_id=$1
   UNION SELECT a.alias FROM client_aliases a WHERE a.organization_id=$1 AND a.retired_at IS NULL
   UNION SELECT lower(r.client_entity) FROM client_roster r WHERE r.organization_id=$1) n),
- done AS (SELECT n.client,d.period FROM close_deletion_receipts d JOIN names n ON d.client_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.client,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex') OR (d.client_digest IS NULL AND d.entity_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex'))
+ done AS (SELECT n.client,d.period FROM close_deletion_receipts d JOIN names n ON d.client_digest IN (encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.client,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex'),encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex')) OR (d.client_digest IS NULL AND d.entity_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex'))
   WHERE d.organization_id=$1 AND d.period>=(SELECT min(since) FROM current_client_roster WHERE organization_id=$1 AND active))
  SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
   EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND client_identity(h.organization_id,h.client_entity)=client_identity(r.organization_id,r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)
