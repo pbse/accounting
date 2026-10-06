@@ -33,4 +33,12 @@ func TestCoverageProposesEachXeroAccountsNeed(t *testing.T) {
 	if _, err = Coverage(json.RawMessage(`{"accounts":{"Accounts":[]}}`)); err == nil {
 		t.Fatal("a capture without its Trial Balance is unreadable")
 	}
+	// So is one whose account list is missing, empty, or has an account without its own ID.
+	tb := `"trial_balance":{"Reports":[{"Rows":[]}]}`
+	for _, accounts := range []string{`{` + tb + `}`, `{"accounts":{"Accounts":[]},` + tb + `}`, `{"accounts":{"Accounts":[{"Name":"No ID"}]},` + tb + `}`,
+		`{"accounts":{"Accounts":[{"AccountID":"a","Name":"One"},{"AccountID":"a","Name":"Two"}]},` + tb + `}`} {
+		if _, err = Coverage(json.RawMessage(accounts)); err == nil {
+			t.Errorf("an account list it cannot vouch for: %s", accounts)
+		}
+	}
 }

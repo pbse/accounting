@@ -186,6 +186,21 @@ func TestXeroCoverageAsksEveryAccountBeforeSignOff(t *testing.T) {
 	if v := view(); v.SnapshotID != quickbooksID || states(v) != "q-1:reconciliation:missing_evidence" {
 		t.Fatalf("the newer production capture is in use: %s %s", v.SnapshotID, states(v))
 	}
+	// A later sandbox capture, even with the higher ID, is not the books': a request on the production capture stays
+	// current, and the portfolio lists the close as waiting on its statement.
+	quickbooksCapture("sandbox", "5 minutes")
+	var bankDraft, bankRequest string
+	must(db.QueryRow(`INSERT INTO request_drafts(close_id,body,workpaper_ids,context_digest,created_by) VALUES($1,'Please send the checking statement.','[]','synthetic','fixture') RETURNING id::text`, closeID).Scan(&bankDraft))
+	bankScope, _ := json.Marshal(map[string]any{"snapshot_id": quickbooksID, "bindings": []map[string]string{{"account_id": "q-1", "id": ""}}, "jobs": []string{}})
+	must(db.QueryRow(`INSERT INTO work_requests(draft_id,revision,recipient,approved_by,coverage_scope) VALUES($1,0,'client@example.test','fixture',$2) RETURNING id::text`, bankDraft, string(bankScope)).Scan(&bankRequest))
+	tx, err = db.Begin()
+	must(err)
+	_, err = issueLink(context.Background(), tx, bankRequest, "fixture", rand.Text())
+	must(err)
+	must(tx.Commit())
+	if v := view(); v.SnapshotID != quickbooksID || !waiting() {
+		t.Fatalf("the production capture stays in use and its statement request is waiting: %s", v.SnapshotID)
+	}
 	v = view()
 	call("POST", "/v1/closes/"+closeID+"/coverage", map[string]any{"action": "bind", "digest": v.Digest, "account_id": "q-1", "excluded": true, "reason": "Reconciled by the client's bookkeeper.", "confirmed": true}, 200)
 	// The QuickBooks decision is signed exactly as before Xero decisions existed: no Xero key on its row.

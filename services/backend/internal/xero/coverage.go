@@ -26,6 +26,18 @@ func Coverage(payload json.RawMessage) ([]quickbooks.CoverageItem, error) {
 	if json.Unmarshal(payload, &snapshot) != nil || len(snapshot.TrialBalance.Reports) != 1 {
 		return nil, errors.New("Xero snapshot is unreadable")
 	}
+	// An account inventory the capture cannot vouch for would drop accounts the Trial Balance does not list: every
+	// account needs its own ID.
+	seen := map[string]bool{}
+	for _, a := range snapshot.Accounts.Accounts {
+		if a.AccountID == "" || seen[a.AccountID] {
+			return nil, errors.New("Xero snapshot's account list has an account without its own ID")
+		}
+		seen[a.AccountID] = true
+	}
+	if len(seen) == 0 {
+		return nil, errors.New("Xero snapshot has no account list")
+	}
 	items := []quickbooks.CoverageItem{}
 	byID := map[string]int{}
 	for index, a := range snapshot.Accounts.Accounts {
