@@ -3188,7 +3188,7 @@ Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is ve
 
 ## Krith's mail moves to Google Workspace — 2026-10-05 (B12)
 
-The apex MX of getkrith.com now points to Google Workspace, and the team's mailbox is prashant@getkrith.com. Contact notes are to be forwarded there and hello@getkrith.com is to become a Google Workspace alias; [public site](marketing-site.md#where-kriths-mail-goes) records the arrangement and the apex records to keep. The privacy notice names Google Workspace as the team's email and no longer says Cloudflare receives mail sent to our addresses.
+The apex MX of getkrith.com now points to Google Workspace, and the team's mailbox is prashant@getkrith.com. Contact notes are to be forwarded there and hello@getkrith.com is to become a Google Workspace alias; [public site](marketing-site.md#where-kriths-mail-goes) records the arrangement and the apex records to keep. The privacy notice names Google (Workspace and Gmail, true before and after the switch) as the team's email and no longer says Cloudflare receives mail sent to our addresses. Until the owner adds the hello@ alias in Google Workspace, mail to the published hello@getkrith.com bounces; that is the first step to finish.
 
 Checked against Cloudflare and public DNS:
 - Google's five MX hosts, its DKIM key and the site verification record are published.

@@ -11,7 +11,7 @@ const PROVIDERS = [
   { name: "WorkOS", does: "Sign-in, roles and invitations." },
   { name: "OpenAI or Anthropic", does: "AI reading of documents. Your firm’s workspace names the provider it uses." },
   { name: "Resend", does: "Sends emails a person at the firm has approved, through the firm’s own sender." },
-  { name: "Google Workspace", does: "Our team’s email, which receives mail sent to our addresses and the notes sent through our contact page." },
+  { name: "Google (Workspace and Gmail)", does: "Our team’s email, which receives mail sent to our addresses and the notes sent through our contact page." },
 ];
 
 export function Privacy() {
