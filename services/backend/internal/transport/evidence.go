@@ -48,19 +48,15 @@ func registerEvidence(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer file.Close()
-		body, err := io.ReadAll(io.LimitReader(file, 5242881))
+		body, err := io.ReadAll(io.LimitReader(file, documents.MaxUpload+1))
 		name := h.Filename
 		// An Excel workbook is kept as CSV text of its first sheet, under its name with .csv added.
-		if strings.HasSuffix(strings.ToLower(name), ".xlsx") && err == nil && len(body) <= 5*1024*1024 {
-			text, e := documents.SpreadsheetText(body)
-			if e != nil {
+		if err == nil {
+			var e error
+			if name, body, e = documents.UploadContent(name, body); e != nil {
 				problem(w, 422, "The workbook could not be read: "+e.Error()+". Save the sheet as CSV and upload that.")
 				return
 			}
-			for len(name)+4 > 200 {
-				name = string([]rune(name)[:len([]rune(name))-1])
-			}
-			name, body = name+".csv", []byte(text)
 		}
 		pdf := strings.HasSuffix(strings.ToLower(name), ".pdf")
 		invalid := err != nil || !validEvidenceFile(name, body)

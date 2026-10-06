@@ -68,6 +68,9 @@ const activityEvents = `
  UNION ALL SELECT e.created_at,e.created_by,'agent.evidence','Agent '||e.agent||' added evidence '||e.name||' to '||c.entity||' '||c.period FROM evidence e JOIN client_closes c ON c.id=e.close_id WHERE c.organization_id=$1 AND e.agent IS NOT NULL
  UNION ALL SELECT j.created_at,j.created_by,'agent.preparation','Agent '||j.agent||' started preparation #'||j.id||' in '||c.entity||' '||c.period FROM preparation_jobs j JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=$1 AND j.agent IS NOT NULL
  UNION ALL SELECT p.created_at,p.actor,'agent.prepared','Agent '||p.agent||' prepared '||c.entity||' '||c.period FROM close_preparations p JOIN client_closes c ON c.id=p.close_id WHERE c.organization_id=$1 AND p.agent IS NOT NULL
+ UNION ALL SELECT o.created_at,o.actor,CASE WHEN o.to_owner='' THEN 'close.released' WHEN o.to_owner=o.actor THEN 'close.taken' ELSE 'close.assigned' END,
+  CASE WHEN o.to_owner='' THEN 'Released ' WHEN o.to_owner=o.actor THEN 'Took ' ELSE 'Assigned ' END||c.entity||' '||c.period||CASE WHEN o.to_owner NOT IN ('',o.actor) THEN ' to '||o.to_owner ELSE '' END
+  ||CASE WHEN o.from_owner NOT IN ('',o.actor) THEN ' from '||o.from_owner ELSE '' END||CASE WHEN o.reason<>'' THEN ': '||o.reason ELSE '' END FROM close_owner_changes o JOIN client_closes c ON c.id=o.close_id WHERE c.organization_id=$1
  UNION ALL SELECT d.created_at,d.created_by,'agent.request_draft','Agent '||d.agent||' drafted a client request in '||c.entity||' '||c.period FROM request_drafts d JOIN client_closes c ON c.id=d.close_id WHERE c.organization_id=$1 AND d.agent IS NOT NULL
  UNION ALL SELECT a.created_at,a.requested_by,'agent.approval_request','Agent '||a.agent||' asked for approval of draft #'||a.workpaper_id||' in '||c.entity||' '||c.period FROM approval_requests a JOIN client_closes c ON c.id=a.close_id WHERE c.organization_id=$1 AND a.agent IS NOT NULL`
 

@@ -10,7 +10,7 @@ import (
 // firmExportTables are the firm's own records outside any close's package, each ordered by its key, with the columns
 // left out (secrets).
 var firmExportTables = []struct{ table, order string }{
-	{"organization_member_access", "id"}, {"client_access", "id"}, {"agent_access", "id"}, {"organization_policy_changes", "id"},
+	{"organization_member_access", "id"}, {"member_role_changes", "id"}, {"client_access", "id"}, {"agent_access", "id"}, {"organization_policy_changes", "id"},
 	{"procedure_versions", "id"}, {"procedure_drafts", "id"}, {"client_aliases", "confirmed_at"}, {"close_routines", "id"},
 	{"takeover_setups", "id"}, {"opening_baselines", "id"}, {"opening_cleanup_resolutions", "id"},
 	{"budget_versions", "id"}, {"cash_scenarios", "id"}, {"cash_obligations", "id"}, {"standing_approvals", "id"}, {"open_item_actions", "id"},

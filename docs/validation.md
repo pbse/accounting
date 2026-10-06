@@ -3207,6 +3207,213 @@ Not yet done, and waiting on the owner:
 
 The browser layout check's plan-editor step failed intermittently in CI (PRs 271 and 274) at phone width. It offered a content grant before the console had loaded the grant held from the desktop pass, so the check opened a second one. That replaced the first and closed the plan already revealed under it. The step now reads what the editor shows until it opens: it opens at most one grant, only when the API says none is held for the check's firm, and waits for it to exist before looking again. When a held grant does not show (its list still loading, or its request failed) or the automatic reveal does not come, it reveals with a reason after five seconds. Ten local runs passed with 76 page views. Two of them started with no grant held, as in CI.
 
+## Phase A: the acceptance corpus harness (2026-10-05)
+
+Request: phase A of the [build plan](agent-first-build-plan.md#delivery-sequence-and-launch-gates) requires an acceptance corpus. The plan prefers "a small versioned replay harness over a new evaluation platform".
+
+What changed:
+- **The harness** ([acceptance corpus](acceptance-corpus.md)).
+  - A case format: a client-month's documents with an accountant's labels (facts, the full proposed entry, any exception), the firm setup it needs, the accountant's sign-off step, and recorded model answers.
+  - A case's ledger capture is assembled by the code a real capture uses: `quickbooks.PeriodSnapshot`, split out of `ReadSnapshot` without changing it. It gives the same capture evidence text and the same coverage questions. The transactions evidence is the sync's index of the capture.
+  - `transport.RunAcceptanceCase` loads a case as a firm of its own. It adds the documents as an upload would (a workbook becomes CSV text, files are checked as the route checks them, repeated bytes are kept as one document), then works extraction, reading and preparation to quiescence. It then does the case's sign-off step (approve the drafts, answer the capture's coverage, define the scope) and reads back every outcome and the close's readiness. The case's firm is disabled afterwards.
+  - Scoring by split and work type with denominators. Critical failures (false accepted facts, incorrect drafts, missed problems, false-ready closes, posting attempts, duplicate jobs) fail the run.
+  - `cmd/acceptance` uses only a local database that holds no closes; the host is checked as the driver resolves it, `PGHOST` included. It runs with `-model recorded` or `-model live`.
+  - Recorded runs replay an evidence-selection answer separately from the reading, for closes too large to read whole.
+  - `-organization`/`-subject` run every case in the one firm, as the one person, that a Context Machine access profile serves.
+- **The agent's hold reason leads with the wrong client.** Found by the harness. In a close with two invoices, the other company's invoice was held only because "evidence in the close … was not used": the agent records the first check that stops it, and the billed-to check comes later. The person was never told the invoice is billed to someone else. Now a held job whose billed-to name is not the client or a confirmed alias says so first, followed by "it was also held because" and the original reason. The name counts only as the straight-through check would accept it: one candidate, cited from the invoice itself, on a bill-to line that ends with the name. It must also be the whole name on a bill-to line of the invoice's text, so a quote cut short ("Bill to: Harbor" from "Bill to: Harbor Fixture LLC") names no one, and neither does an invoice with two bill-to names. The original text stays in the reason, so the re-check of jobs held for unused evidence still finds it. Nothing about what is prepared changes.
+- **A synthetic sample of seven cases.** It is not the release corpus: that needs authorized client months and an independent accountant, and stays outside the repository.
+
+Checks:
+- `TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes` puts each outcome in its own count, including a document with no work and a duplicate kept as the earlier document. A wrong-client invoice held for a missing ledger capture is a missed exception, naming the reason it was held. One the agent went on with is a missed exception and, for its wrong amount, a false accepted fact too. A clean invoice held as billed to another company is a false exception. A labeled problem whose job failed is not processed (not held), and so is a clean document whose job still waits for evidence (a pending retry). Either fails the run, and the report gives the job's error. An entry with the wrong debit account and amount, and a job with one draft too many, each count as an incorrect draft, and the detail names the wrong fields. Exactly the six critical failures are listed, and the Markdown table matches.
+- `TestRecordedAnswersFollowTheRequestsPurpose`: a selection request gets the recorded selection with real evidence IDs, and a reading gets the reading. A document with no recorded selection fails its selection request rather than receiving its reading.
+- `TestCitedBilledToIsTheInvoicesOwnBillToLine`: the invoice's own "Bill to:" line names the company. No one is named by a ship-to line, a quote naming someone else, a longer name, a name cut short of the invoice's full bill-to line, an invoice billing two names, a supporting document, two candidates, no reading, or a missing invoice text.
+- `go run ./cmd/acceptance -model live` with no model configured refuses: "-model live needs the preparation model configured".
+- `TestOneFirmNeedsADistinctClientPerCase`: in one named firm, two cases sharing a client (ignoring case and spacing) are refused, and so is a firm ID the database would refuse.
+- `TestEveryProposedEntryIsObserved`: a null proposal gives no entry. A single proposal, an accrual's proposal and reversal, a loan's or payroll's list, a disposal's lines, and a settlement's refund and revenue drafts each give every entry.
+- `TestTheWrongClientSignIsTheBillToRefusal`: the bill-to refusal, alone or followed by another reason, and the identity block are the wrong-client sign. A rejected citation ("the cited line does not say the invoice is billed to that name") and an unread billed-to are not.
+- `TestOnlyAmountsCompareByValue`: 1,200.00 matches 1200 as an amount, and so do a statement balance, a salvage value and gross wages (the fields the app itself treats as amounts), but invoice number 12 does not match 0012, nor account 012 match 12.
+- `TestDraftsAreMatchedAsAWhole`: labels `{amount 100}` and `{amount 100, debit Prepaid}` both match drafts Prepaid/100 and Other/100. Against two Other/100 drafts, exactly one labeled entry is unmatched.
+- `TestLoadRefusesACaseItCannotScore`: a malformed case is refused with each problem named. A QuickBooks capture without a Trial Balance is also refused, since every real capture holds one. So is a coverage answer for an account outside the chart, one with both documents and an exclusion (or neither), and one naming a file that is not in the case. The problems are: id, split, client and month, a missing document, an unlabeled work type, repeated bytes not labeled duplicate, a sign-off step without a scope, an exception the harness has no sign for, and a case expected ready without a sign-off step.
+- `TestWorkbooksAreComparedAsUploaded`: two workbooks with different bytes but the same first sheet upload as the same CSV, and the second must be labeled a duplicate. A file over the route's 5 MiB limit is refused.
+- `TestUploadContentKeepsWhatTheRouteKeeps`: the route and the harness share one conversion. A workbook within the limit becomes its first sheet's CSV, with a long name shortened to fit ".csv". Text, and a workbook over the limit, are kept as sent for the route to refuse; an unreadable workbook is an error. The evidence route's own test still passes.
+- `TestARecordedRunNeedsEveryKeptDocumentsAnswer`: only a kept document without an answer is named; the byte-for-byte repeat needs none.
+- `TestOnlyALocalDatabaseIsUsed`: localhost, loopback, sockets and a local key=value setting are accepted. A remote host, a remote `host=` parameter, a remote key=value setting, a private address, a remote fallback host, and a hostless URL with a remote `PGHOST` are refused.
+- `TestTheSampleCorpusRunsThroughThePipeline` (local PostgreSQL, real pipeline, recorded answers):
+  - The clean invoice is prepared without confirmation. Its bill was booked to Insurance, so the draft moves 1,100.00 to Prepaid Expenses. The harness caught my first label of 100.00 as an incorrect draft, and the label was corrected.
+  - The reading of 12000.00 against the printed 1,200.00 is put to a person with the amount withheld.
+  - The other company's invoice waits for a person.
+  - The case without a ledger capture is put to a person.
+  - With its draft approved, its coverage answered (Prepaid Expenses bound to the invoice's work, Insurance and Accounts Payable excluded with reasons) and the scope defined, the clean close has no blockers: it is ready, as labeled. Before the coverage answers were added, the same close was blocked by "Coverage for … missing evidence" for each account, as a real close would be. Its capture's Trial Balance (Insurance 1,200.00 debit, Prepaid Expenses 0) ties out once the proposed entry is counted.
+  - The same close with 500.00 already in Prepaid Expenses is blocked by exactly "Tie-out: Prepaid Expenses is 500.00 in the Trial Balance but 1100.00 in its support". Readiness therefore really ties the month out in the harness.
+  - With the clean draft approved and the scope defined, a second invoice billed to another company still blocks sign-off ("needs confirmation"). Its reason now leads with "The invoice is billed to "Northwind Other Inc"". The clean invoice in that close also waits, because evidence in the close went unused.
+  - The same invoice uploaded twice is one document, with one preparation job.
+  - Zero critical failures across seven cases and nine documents; nothing is posted.
+  - Run in a named firm as its person, the clean invoice goes through the same way. Its job is created by that person, and the firm stays enabled for the next case.
+- `go run ./cmd/acceptance -corpus acceptance/sample` on a freshly migrated local database printed the same report and exited 0. Run again on that database, it refused, because the database now holds closes.
+
+Not verified: a live-model run, and any real client corpus. Neither exists yet.
+
+## B02: handing a close to a teammate, and reassignment (2026-10-05)
+
+Request: phase A's B01/B02 foundations. B02 requires "Support reassignment" ([build plan](agent-first-build-plan.md#b02--reliable-portfolio-and-one-decision-queue)). A close could only be taken while unheld or released by its owner. The refusal told people to "ask a firm administrator", but no administrator could do anything.
+
+What changed:
+- `POST /v1/closes/{id}/planning` takes `assignment: "assign"` with an `assignee` and an optional note (500 characters at most).
+  - Who may assign: someone who can hand work over, meaning a reviewer (`workpapers:review`) or a firm administrator (`clients:all` and `members:manage`, the Security center's rule). They must hold the close, or nobody does; an administrator may reassign it whoever holds it.
+  - The teammates list (`GET /v1/closes/{id}/people`) follows the same rule, so an administrator who reviews no work can still choose whom to reassign to.
+  - The assignee must be someone else who can review the client, from the same list hand-offs use. That list now leaves out members whose roles include `executive:read`: such members are kept to the executive view and could not open the close, for a document hand-off as well. Their membership and client assignment are rechecked under the firm's lock, taken before the close's as close deletion takes them. The note's 500-character limit counts characters, not bytes.
+  - Take and release are unchanged, except that a firm administrator who also reviews work may take a colleague's close over themselves (`can_take_over`, and **Take it over** on the close page). An administrator who reviews none may reassign the close but not hold it.
+  - A hand-over to the current holder is refused (409, "already holds this close") rather than reported as done.
+- The close's package (`manifest.json`) carries the whole history in `work_history.close_owner_changes`. The firm export links every close's package.
+- Migration 124 adds `close_owner_changes`, which records every change of hands: taken, released, handed over or reassigned, by whom, and with what note. The table has its tenant policy, and `/readyz` waits for it.
+- The Security center's and the staff console's activity show these changes (kinds `close.taken`, `close.released`, `close.assigned`). The staff console's kind filter gains `close`.
+- `GET /v1/closes/{id}` returns `can_assign`. The close page then offers **Hand the close to a teammate** (choose a teammate, add a note), which loads the same teammates list hand-offs use.
+- The new holder is told. Attention gains an event under the existing hand-off kind, relabelled **Work handed to you** so that saved notification preferences keep it ("user_b handed you this close: …"). The close page shows `handed` (who, when, the note). Both last while that person holds the close and the hand-over is its latest change.
+
+Checks:
+- `TestACloseChangesHandsAndEachChangeIsRecorded` (local PostgreSQL, WorkOS answered by a fixture):
+  - A reviewer may hand over an unheld close; a viewer may not (no `can_assign`, the teammates list refused, assigning refused with 403). Once a partner takes the close, only the holder and an administrator see `can_assign`. An administrator who reviews no work still lists teammates.
+  - These assignees are refused (422): a viewer granted the client, a reviewer without the client, a board member whose review comes with `executive:read` (also absent from the teammates list), an unknown subject, and the holder themselves ("To hold it yourself, take it"). So is a note over 500 characters.
+  - A reviewer cannot hand over a close someone else holds (409, "They can hand it over, or ask a firm administrator").
+  - The holder hands the close to a reviewer assigned to the client. Afterwards the old holder can neither release nor take it. Cy's Attention and close page show who handed it and the note. An administrator then reassigns it back: Cy is no longer told, and Bea is told by the administrator, with that note.
+  - A hand-over to the current holder is refused. Cy cannot take the close from its holder, and neither can an administrator who reviews nothing (no `can_take_over`). An administrator who reviews can, and then hands it on.
+  - The close's package holds all eight changes, with their actors and notes.
+  - A signed-off close is neither handed out nor taken over (409, and no `can_assign` or `can_take_over`); once reopened, it is again. A 300-character accented note is accepted. A kept plan records nothing. Exactly eight changes are recorded, in order, with actors and notes. The Security center shows "Took", "Took … from user_b", "Assigned … to user_c: Covering while I'm away", "Assigned … to user_b from user_c: Back from leave" and "Released".
+- `TestClosePlanningRanksWorkAndBulkApprovalChecksEachDraft` and `TestHandADocumentToATeammate` still pass.
+- `npm run check`, `npm test` (44 pass) and `npm run build` pass. CI's layout check walks the close page.
+
+Not verified: the hand-over picker in a browser against a real WorkOS firm. Locally there are no teammates to offer.
+
+## Phase A: operating targets and the release-revision check (2026-10-05)
+
+Request: start phase A of the [build plan](agent-first-build-plan.md#delivery-sequence-and-launch-gates) (B12 controls), with the owner's decisions:
+- backups are Neon's own point-in-time history, with no backup code here;
+- the pilot is 3 firms;
+- outside monitoring is set aside for now, though it stays required before partners operate;
+- Prashant Bansal owns every control.
+
+What changed:
+- **Targets.** [Operations](operations.md#recovery-and-capacity-targets) now sets RPO 5 minutes for an incident noticed within Neon's 6-hour history window, RTO 4 hours, and the pilot's capacity (3 firms, 50 clients, 150 closes and 3,000 documents a month, 15 people at once), with the owner named. It also records the Neon Free plan's limits from the project's own record (2026-10-05): PostgreSQL 18, 6 hours of history, 1 GiB storage of which about 40 MB is used, and 100 CU-hours a month. About 31 CU-hours were used in the first five days of October, so the database would be suspended mid-month; this is to be resolved before the pilot. The owner restores, because a Neon restore keeps a backup branch and agents never create one.
+- **Release-revision check.** `scripts/release-check.sh [revision]` exports the revision with `git archive` and runs its full Go suite in the Dockerfile's new `release-test` stage: Debian bookworm, like the runtime, with the same `poppler-utils` and `tesseract-ocr`. It runs against a disposable PostgreSQL 18 migrated twice, one package at a time. The deployed image is unchanged; it is still the last stage.
+
+Checks:
+- `scripts/release-check.sh` at `439a227258f1bbcc4f9e9b7c8234101089041d90` passed: PostgreSQL 18.6, Go 1.27.1, pdftotext 22.12.0, tesseract 5.3.0, every package ok. This includes the PDF and OCR tests (`TestExtractMixedPDF`, `TestPackagePreservesBothWorkpapersAndEscapesSources`) that cannot run on a machine without poppler.
+- The first runs showed three things, fixed in the script:
+  - Copying only the backend into the image left tests that read the workflows or `infra/postgres` without their files, and let the model-gateway scan walk the container's whole filesystem. The revision is now mounted whole.
+  - Running packages in parallel against one database let a transport test take the `firm_health_check` test's queued preparation job (`TestAccountingMethodsDurableReviewAndSourceInvalidation`: "calculation failed queued"). Packages now run one at a time. CI's faster parallel run on Ubuntu and PostgreSQL 17 is unchanged and can still meet this.
+
+Not verified: the targets themselves. No load test and no timed hosted restore with provider reconciliation have been run.
+
+## Sign-in with Google or Microsoft, firms by company domain — 2026-10-05 (B12)
+
+`/login` now has **Continue with Google** and **Continue with Microsoft**, each going straight to the provider through WorkOS. The **Open the workspace** link and the AuthKit wording are gone; the link is kept only where sign-in is not configured, for local development. A signed-in visitor goes straight to the workspace. All of it needs the server-held session ([sign-in](sign-in.md)).
+
+The sign-in callback admits company addresses only; personal mail providers' domains are refused, and so are invitations to them. The first person with a verified address at a domain creates its firm:
+- a WorkOS organization with the domain verified;
+- a Firm admin membership;
+- `organizations.email_domain` (migration 125).
+
+Later colleagues from the domain join as members with no access. Removed people, suspended firms and deactivated memberships stay out, and a person in several firms lands in their domain's firm. The firm's administrator gives roles under **People and roles**: only roles whose permissions they hold, never their own. Each change is recorded in `member_role_changes`.
+
+Local checks:
+- Go build, vet, and the existing session, organization, invitation and export tests pass.
+- `TestOnlyCompanyAddressesCount` and `TestSignInMakesOrJoinsTheFirmOfTheAddressDomain` pass against local PostgreSQL with a fake WorkOS.
+- `npm run check` passes.
+
+Codex (gpt-6-sol, high) pass 1:
+- **A personal-provider list cannot be complete.** A firm is now created only for a domain whose mail is hosted by Google Workspace or Microsoft 365, checked from its MX records.
+- **People WorkOS placed in an unregistered organization were left without access.** They now go through the domain's claim.
+- **A role change with an uncertain outcome could go unrecorded.** It is now recorded as pending first and settled from WorkOS.
+
+Pass 2 found three more:
+- **Joining by address could keep a role WorkOS already held.** Joiners are now set to Member unless the firm invited them; invitees who have not accepted are asked to.
+- **People past the first 200 could not be given a role.** The list now pages, fifty at a time.
+- **Each person was looked up in WorkOS one at a time.** Lookups now run eight at a time, and a firm's known members cause no lookup at sign-in.
+
+Each fix is tested.
+
+Pass 3 found that someone WorkOS signed in to another firm, or asked to choose among several organizations, could miss their own domain's firm. The address now decides the firm before WorkOS's choice is kept. Tests cover a person held only in another firm and a first-time signer claiming their domain's organization from a choice.
+
+Pass 4 found that an existing member's address was not checked for verification, and that a removed member from another domain got a session that could not work. Every sign-in now needs a verified address, and a removed member or suspended firm is refused at sign-in. Both are tested.
+
+Pass 5 found that preferring the domain's firm would pull an accountant invited by another firm away from it. A firm that has decided on or invited the person now keeps them, ahead of their domain's firm; tested.
+
+Pass 6 found three gaps:
+- **A session could keep the role WorkOS held before a joiner was set to Member.** Every firm session now starts from a token issued after the firm is settled.
+- **A firm that had removed someone could still hold them.** Only current membership or an open invitation now keeps a person in a firm.
+- **`yahoo.com.au` counted as a company domain.** Two-label country suffixes are now caught.
+
+Each is tested.
+
+Pass 7 noted that a client already assigned to a joiner's user ID shows that client's closes before any role is given. A client assignment is the administrator's own grant; the docs and the screen now say so ("opens nothing until you give them a role or assign them clients"). Assignments still give access whatever the role, for every member.
+
+Pass 8 found two gaps:
+- **A removed person could be given a role.** Role changes now need the person's current firm access.
+- **An invitee WorkOS had placed by domain was let in before accepting.** Such an invitee is now asked to accept until WorkOS shows the invitation accepted by them.
+
+Both are tested.
+
+Pass 9 found two gaps:
+- **A firm set up by hand with no member yet would have demoted its intended administrator.** The first person into a firm with no member now becomes its Firm admin.
+- **An expired invitation still blocked joining by address.** Expired invitations are now ignored.
+
+Both are tested.
+
+Pass 10 found that a pending invitation from another firm could keep a member out of the firm they work in. Only an invitation WorkOS shows accepted now comes first; tested.
+
+Pass 11 found that an unaccepted invitation still counted when WorkOS signed someone in to the inviting firm, and that only the newest invitation was checked. Only invitations WorkOS shows accepted now count, and all open ones are checked; tested with an accepted invitee, an unaccepted one, and a person with an accepted and a newer pending invitation.
+
+Pass 12 found two gaps:
+- **A pending WorkOS membership could be recorded as access.** A pending membership now asks the person to accept their invitation.
+- **Session renewal did not recheck the address.** An unverified or non-company address now ends the session at renewal.
+
+Both are tested.
+
+Pass 13 found two gaps:
+- **Signing in recreated a WorkOS membership an administrator had removed.** Memberships are now created only for first-time joiners.
+- **Only the newest twenty invitations were checked.** All are checked now.
+
+Both are tested.
+
+Pass 14 found that a firm which had removed someone could still hold them when their own domain had no firm, so they could not set one up. A firm that removed the person now no longer holds them, and their domain's claim decides; tested.
+
+Pass 15 found two gaps:
+- **A firm WorkOS chose, which had not admitted the person, could still hold them.** Only admission in that firm now keeps them.
+- **A lost role change showing a third role was recorded as failed.** It is now recorded as unknown.
+
+Both are tested.
+
+Pass 16 found that two administrators changing one person's role at once could overwrite each other and record the wrong prior role. The role is now read under the firm's lock, and the page sends the role it showed, so a stale change is refused; tested.
+
+Pass 17 found that joining by address read the firm without its row lock, so a concurrent removal could be overtaken. Joining now holds the firm's row lock, as administrators' member decisions do.
+
+Pass 18 found four gaps:
+- **A failed invitation lookup was treated as "no invitation".** It now stops the sign-in for a retry.
+- **Pending and inactive memberships were never seen.** WorkOS lists only active memberships unless asked, so they are now requested, comma-separated as WorkOS's SDK does. The test's fake WorkOS now mirrors that default.
+- **The role an administrator saw was optional on a role change.** It is now required.
+- **A firm named after a very long domain overflowed the name's 200-character limit.** The name is now bounded.
+
+Pass 19 found two things:
+- **A signed-in visitor on `/login` in WorkOS's browser-session mode had no way into the workspace.** Signed-in visitors now go straight there in either mode.
+- **The docs claimed every role change in a firm runs one at a time.** They now say precisely what is serialized: each person's changes, under the firm's lock, with the stale-role check.
+
+Pass 20 found two gaps:
+- **No way to choose between firms.** A person working in more than one firm could not reach the one they wanted. Sign-in now asks such a person which firm to open: a ten-minute sealed choice, `GET /v1/auth/choices` and `POST /v1/auth/choose`, tested end to end. The test also caught that an unverified address was offered the choice before being refused; it is now refused first.
+- **Signing in from `/dashboard` skipped the provider choice.** It now goes through the login page.
+
+Pass 21 found that the manual onboarding path no longer worked with the server-held session: a hand-made organization's administrator was pushed into the domain claim. An administrator holding `org:enroll` in an organization the app has not registered now signs in to it and enrolls it. Tested with a firm whose mail runs through another gateway.
+
+Pass 22 found two gaps:
+- **A second domain on a claimed organization let its people in without an invitation.** People of another domain in a firm registered under one domain now need an invitation (`ask`; tested).
+- **Automatic selection could pick a suspended firm.** It now considers only enabled firms.
+
+Production WorkOS has no users yet, so no one is locked out.
+
+Production still needs the owner to:
+1. Create the Google OAuth client and the Entra application and enter them in WorkOS.
+2. Turn off password and passkey sign-in.
+3. Set `AUTH_SESSION=server`.
+
 ## B01/B03: account coverage for Xero clients (2026-10-05)
 
 Request: phase A's B01 foundations ("The agent proposes scope and mappings… The system cannot declare complete coverage by excluding accounts it could not understand"). The user chose to build Xero coverage next. Until now, coverage read only QuickBooks captures. A close whose books are read from Xero had no account questions, so it could be signed off without any account being decided. Its takeover setup said the scope was "not available for Xero".

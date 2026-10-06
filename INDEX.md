@@ -23,6 +23,7 @@ Start here to find the governing plan, implementation details and acceptance evi
 | [Enterprise readiness review](docs/enterprise-readiness-review.md) | Supporting technical inventory, earlier recommendations and dated local test results. Narrower scope/deferrals are superseded by the build plan. |
 | [Original product requirements](docs/product-requirements.md) | Original customer/problem definition, requirement IDs, boundaries and success targets. Read for provenance; the build plan extends its scope. |
 | [PRD review](docs/prd-review.md) | Earlier interpretation of the PRD and foundation design decisions; historical planning context. |
+| [Acceptance corpus](docs/acceptance-corpus.md) | The release corpus's case format, how to run it through the real pipeline and how a run is scored (phase A). The real corpus holds client data and stays outside the repository. |
 | [Validation history](docs/validation.md) | Dated commands/results, exercised behavior and explicit unverified areas. Consult before claiming a feature is validated. |
 
 ## Find documents by build package
@@ -90,6 +91,7 @@ These are pointers into the existing implementation, not evidence that a package
 | --- | --- |
 | [Onboarding](docs/onboarding.md) | Local/hosted setup, supported journeys and staging acceptance matrix. |
 | [Public site](docs/marketing-site.md) | getkrith.com's pages and links, its design, the hero and agents animations, and the contact form's storage and email forwarding. |
+| [Sign-in](docs/sign-in.md) | Google and Microsoft sign-in, company addresses only, firms created and joined by company domain, and roles. |
 | [Auth and sandbox staging](docs/auth-sandbox-staging.md) | Hosted sign-in/session modes, sandbox authority and verification. |
 | [Cloudflare upload scanning](docs/cloudflare-upload-scanning.md) | Required PDF scanning, TXT/CSV scanner, quarantine/release and deployment. |
 | [Deployment](docs/deployment.md) | Environments, configuration/secrets, migrations, deployment workflows, costs and activation gaps. |

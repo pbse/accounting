@@ -154,7 +154,9 @@ func firmReviewers(ctx context.Context, org string) (map[string]reviewer, error)
 			p = append(p, held[each.Slug]...)
 		}
 		r := reviewer{name: cmp.Or(strings.TrimSpace(m.User.FirstName+" "+m.User.LastName), m.User.Email)}
-		if m.Status == "active" && slices.Contains(p, "workpapers:review") {
+		// Anyone holding executive:read is kept to the executive view (executive) and cannot open a close, whatever else
+		// their roles grant, so they are nobody's teammate for close work.
+		if m.Status == "active" && slices.Contains(p, "workpapers:review") && !slices.Contains(p, "executive:read") {
 			r.review, r.firmWide = true, slices.Contains(p, "clients:all")
 		}
 		out[m.UserID] = r
@@ -331,8 +333,11 @@ func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress, 
 }
 
 func registerHandoffs(mux *http.ServeMux, db *sql.DB) {
+	// Teammates are listed to whoever may hand them work: reviewers handing a document, and firm administrators
+	// reassigning a close.
 	mux.HandleFunc("GET /v1/closes/{id}/people", func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := reviewActor(w, r); !ok {
+		if !canHandOver(r) {
+			problem(w, 403, "Your organization role lacks workpapers:review.")
 			return
 		}
 		var entity string

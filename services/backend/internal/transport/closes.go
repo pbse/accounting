@@ -37,10 +37,22 @@ type savedClose struct {
 	Priority  string `json:"priority,omitempty"`
 	Assigned  bool   `json:"assigned,omitempty"`
 	OwnedByMe bool   `json:"owned_by_me,omitempty"`
+	// CanAssign says the reader may hand the close to a teammate: they hold it, nobody does, or they are a firm administrator.
+	CanAssign bool `json:"can_assign,omitempty"`
+	// CanTakeOver says the reader may take the close from the colleague who holds it: a firm administrator who reviews work.
+	CanTakeOver bool `json:"can_take_over,omitempty"`
+	// Handed is how the reader came to hold the close when someone else handed it to them: who, when, and their note.
+	Handed *closeHandover `json:"handed,omitempty"`
 	// Basis is the client's approved accounting basis; BasisScope says whether a client override sets it.
 	Basis      string               `json:"basis,omitempty"`
 	BasisScope string               `json:"basis_scope,omitempty"`
 	Profile    *preparation.Profile `json:"profile,omitempty"`
+}
+
+type closeHandover struct {
+	By   string    `json:"by"`
+	Note string    `json:"note"`
+	At   time.Time `json:"at"`
 }
 
 const closePlanning = `COALESCE(due_on::text,''),priority,owner<>'',owner<>'' AND owner=`
@@ -138,6 +150,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerProcedureLearning(mux, db)
 	registerAccess(mux, db)
 	registerMembers(mux, db)
+	registerMemberRoles(mux, db)
 	registerOrganizationRevocation(mux, db)
 	registerRetention(mux, db)
 	registerOperations(mux, db)
@@ -316,6 +329,25 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		if err != nil {
 			problem(w, 503, "Could not open the close.")
 			return
+		}
+		var signed bool
+		if err = db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT decision FROM close_signoffs WHERE close_id=$1 ORDER BY id DESC LIMIT 1),'')='signed_off'`, item.ID).Scan(&signed); err != nil {
+			problem(w, 503, "Could not open the close.")
+			return
+		}
+		item.CanAssign = !signed && subject(r) != "" && canHandOver(r) && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
+		item.CanTakeOver = !signed && item.Assigned && !item.OwnedByMe && canTakeOver(r)
+		if item.OwnedByMe {
+			var h closeHandover
+			var to string
+			err = db.QueryRowContext(r.Context(), `SELECT actor,reason,created_at,to_owner FROM close_owner_changes WHERE close_id=$1 ORDER BY id DESC LIMIT 1`, item.ID).Scan(&h.By, &h.Note, &h.At, &to)
+			if err != nil && err != sql.ErrNoRows {
+				problem(w, 503, "Could not open the close.")
+				return
+			}
+			if err == nil && to == subject(r) && h.By != to {
+				item.Handed = &h
+			}
 		}
 		rows, err := db.QueryContext(r.Context(), `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE close_id=$1 ORDER BY workpaper_review_state.id DESC LIMIT 101`, item.ID)
 		if err != nil {

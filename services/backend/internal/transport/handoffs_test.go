@@ -38,7 +38,7 @@ func (w workosPages) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // asFirm answers WorkOS for the firms as if each member held the role named: a partner reviews every client, a reviewer
-// only those granted to them.
+// only those granted to them, and a board member's review comes with executive:read, which keeps them to the executive view.
 func asFirm(t *testing.T, roles map[string]string, orgs ...string) {
 	t.Setenv("WORKOS_API_KEY", "sk_test_synthetic")
 	members := []string{}
@@ -47,7 +47,7 @@ func asFirm(t *testing.T, roles map[string]string, orgs ...string) {
 	}
 	pages := map[string]string{"/user_management/organization_memberships?after=": `{"data":[` + strings.Join(members, ",") + `]}`}
 	for _, org := range orgs {
-		pages["/authorization/organizations/"+org+"/roles?after="] = `{"data":[{"slug":"partner","permissions":["workpapers:review","clients:all"]},{"slug":"reviewer","permissions":["workpapers:review"]}]}`
+		pages["/authorization/organizations/"+org+"/roles?after="] = `{"data":[{"slug":"partner","permissions":["workpapers:review","clients:all"]},{"slug":"reviewer","permissions":["workpapers:review"]},{"slug":"board","permissions":["workpapers:review","clients:all","executive:read"]}]}`
 	}
 	original := http.DefaultTransport
 	http.DefaultTransport = workosPages{next: original, pages: pages}
