@@ -215,8 +215,34 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 	return tokens, "", err
 }
 
+// acceptedInvitation is, of these firms, one whose open invitation to this person WorkOS shows they have accepted: their
+// first sign-in after accepting it, before the app has enrolled them. Every such invitation is checked, newest first.
+func acceptedInvitation(ctx context.Context, db *sql.DB, firms []string, user signedInUser) string {
+	rows, err := db.QueryContext(systemContext(ctx), `SELECT organization_id,workos_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state='pending' AND workos_id IS NOT NULL AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC LIMIT 20`,
+		strings.ToLower(strings.TrimSpace(user.Email)), firms)
+	if err != nil {
+		return ""
+	}
+	type open struct{ org, id string }
+	var invitations []open
+	for rows.Next() {
+		var o open
+		if rows.Scan(&o.org, &o.id) == nil {
+			invitations = append(invitations, o)
+		}
+	}
+	rows.Close()
+	for _, o := range invitations {
+		var sent workosInvitation
+		if workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(o.id), nil, &sent) == nil && sent.State == "accepted" && sent.AcceptedUserID == user.ID && sent.OrganizationID == o.org {
+			return o.org
+		}
+	}
+	return ""
+}
+
 // firmFor decides which firm a firm session is for. A registered firm WorkOS signed them in to keeps them when they are
-// a member there or it has an open invitation for them (an accountant a client's firm invited stays there). Otherwise their
+// a member there or have accepted its invitation (an accountant a client's firm invited stays there). Otherwise their
 // address decides: the firm registered for their domain (joined if need be); else a registered firm WorkOS holds them
 // in; else their domain's claim, which may create the firm or take over an organization WorkOS placed them in.
 func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, string) {
@@ -226,11 +252,11 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, stri
 	var registered, belongs bool
 	var own string
 	if held != "" && held != os.Getenv("PLATFORM_ORGANIZATION_ID") {
-		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1),
-			EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) OR EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND email=$3 AND state IN ('sending','pending') AND (expires_at IS NULL OR expires_at>now()))`,
-			held, tokens.User.ID, strings.ToLower(strings.TrimSpace(tokens.User.Email))).Scan(&registered, &belongs); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1), EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`,
+			held, tokens.User.ID).Scan(&registered, &belongs); err != nil {
 			return "", refuseUnavailable
 		}
+		belongs = belongs || registered && acceptedInvitation(ctx, db, []string{held}, tokens.User) == held
 	}
 	if registered && belongs {
 		return held, domainMember(ctx, db, held, tokens.User)
@@ -269,13 +295,10 @@ func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind
 		return ""
 	}
 	domain, _ := companyDomain(choice.User.Email)
-	var org, invitation string
-	if db.QueryRowContext(systemContext(ctx), `SELECT organization_id,workos_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state='pending' AND workos_id IS NOT NULL AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC LIMIT 1`, strings.ToLower(strings.TrimSpace(choice.User.Email)), listed).Scan(&org, &invitation) == nil {
-		var sent workosInvitation
-		if workos(ctx, "GET", "/user_management/invitations/"+url.PathEscape(invitation), nil, &sent) == nil && sent.State == "accepted" && sent.AcceptedUserID == choice.User.ID && sent.OrganizationID == org {
-			return org
-		}
+	if org := acceptedInvitation(ctx, db, listed, choice.User); org != "" {
+		return org
 	}
+	var org string
 	if db.QueryRowContext(systemContext(ctx), `SELECT s.organization_id FROM auth_sessions s JOIN current_organization_members m ON m.organization_id=s.organization_id AND m.subject=s.subject AND m.granted
 		WHERE s.subject=$1 AND s.organization_id=ANY($2) ORDER BY s.created_at DESC LIMIT 1`, choice.User.ID, listed).Scan(&org) == nil {
 		return org

@@ -539,11 +539,45 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	if _, err := raw.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Inviting firm')`, inviting); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,state,invited_by,reason) VALUES($1,$2,'member','Member','sending',$3,'Mia keeps our books.')`, inviting, f.users[mia].Email, ana); err != nil {
-		t.Fatal(err)
+	invite := func(org, user, reason, state string) string {
+		t.Helper()
+		id := "invitation_" + rand.Text()
+		f.mu.Lock()
+		f.invitations[id] = map[string]string{"id": id, "state": state, "organization_id": org, "accepted_user_id": map[bool]string{true: user}[state == "accepted"]}
+		f.mu.Unlock()
+		if _, err := raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at,created_at) VALUES($1,$2,'member','Member',$3,'pending',$4,$5,now()+interval '7 days',clock_timestamp())`, org, f.users[user].Email, id, ana, reason); err != nil {
+			t.Fatal(err)
+		}
+		return id
 	}
+	invite(inviting, mia, "Mia keeps our books.", "accepted")
 	if where, cookie := signIn(mia, "google"); where != "/dashboard" || cookie == "" || sessionOrg(mia) != inviting || f.membership(mia, firm) != nil {
-		t.Fatalf("Mia stays in the firm that invited her: %s %s", where, sessionOrg(mia))
+		t.Fatalf("Mia, having accepted, stays in the firm that invited her: %s %s", where, sessionOrg(mia))
+	}
+	// Someone WorkOS placed in the inviting firm before they accepted goes to their own domain's firm instead.
+	rita := person("rita", true, domain)
+	f.mu.Lock()
+	rm := firmMembership{ID: "om_" + rita, UserID: rita, OrganizationID: inviting, Status: "active"}
+	rm.Role.Slug = "member"
+	f.memberships = append(f.memberships, rm)
+	f.mu.Unlock()
+	invite(inviting, rita, "Rita may help with payroll.", "pending")
+	if where, cookie := signIn(rita, "google"); where != "/dashboard" || cookie == "" || sessionOrg(rita) != firm {
+		t.Fatalf("Rita, not having accepted, lands in her own domain's firm: %s %s", where, sessionOrg(rita))
+	}
+	// Of several invitations, the one accepted decides, though a newer one is still pending.
+	sam := person("sam", true, "outside"+strings.ToLower(rand.Text()[:6])+".test")
+	f.mu.Lock()
+	for _, o := range []string{inviting, elsewhere} {
+		m := firmMembership{ID: "om_" + sam + o, UserID: sam, OrganizationID: o, Status: "active"}
+		m.Role.Slug = "member"
+		f.memberships = append(f.memberships, m)
+	}
+	f.mu.Unlock()
+	invite(inviting, sam, "Sam reviews our reconciliations.", "accepted")
+	invite(elsewhere, sam, "Sam may join us later.", "pending")
+	if where, cookie := signIn(sam, "google"); where != "/dashboard" || cookie == "" || sessionOrg(sam) != inviting {
+		t.Fatalf("Sam lands in the firm whose invitation he accepted: %s %s", where, sessionOrg(sam))
 	}
 
 	// Someone a client's firm removed, signed in by WorkOS to that firm, still reaches their own domain's firm.
