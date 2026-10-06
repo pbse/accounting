@@ -22,7 +22,7 @@ const kindLabels: Record<string, string> = {
   email: "Undelivered request emails",
   unanswered: "Unanswered requests to follow up",
   goal: "Delegated closes that need you",
-  handoff: "Documents handed to you",
+  handoff: "Work handed to you",
 };
 const views = { all: "All", mine: "Assigned to me", unread: "Unread", snoozed: "Snoozed" } as const;
 

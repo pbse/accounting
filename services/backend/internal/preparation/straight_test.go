@@ -362,3 +362,40 @@ func straightThroughEngineChecks(t *testing.T, engine string) {
 		}
 	}
 }
+
+// Only a bill-to line the invoice itself prints names who it bills: not a ship-to line, a supporting document, a quote
+// that does not end with the name, one cut short of the line's whole name, or a reading with two candidates.
+func TestCitedBilledToIsTheInvoicesOwnBillToLine(t *testing.T) {
+	invoice := "Acme Insurance Co\nBill to: Northwind Other Inc\nShip to: Northwind Other Inc\nAnnual premium USD 1,200.00"
+	read := []IntakeSource{{Source: Source{ID: "1"}, Content: invoice}, {Source: Source{ID: "2"}, Content: "Bill to: Northwind Other Inc"}}
+	billed := func(value, quote, source string, candidates int) Proposal {
+		f := Fact{Field: "billed_to", Label: "billed to", Value: value}
+		for range candidates {
+			f.Candidates = append(f.Candidates, Candidate{Value: f.Value, SourceID: source, Quote: quote})
+		}
+		return Proposal{Sources: []Source{{ID: "1", Role: "invoice"}, {ID: "2", Role: "evidence"}}, Facts: []Fact{f}}
+	}
+	if got := CitedBilledTo(billed("Northwind Other Inc", "Bill to: Northwind Other Inc", "1", 1), read); got != "Northwind Other Inc" {
+		t.Fatalf("the invoice's bill-to line: %q", got)
+	}
+	for name, p := range map[string]Proposal{
+		"ship-to line":        billed("Northwind Other Inc", "Ship to: Northwind Other Inc", "1", 1),
+		"no name in quote":    billed("Northwind Other Inc", "Bill to: Harbor Fixture LLC", "1", 1),
+		"longer name":         billed("Northwind Other Inc", "Bill to: Northwind Other Inc Holdings", "1", 1),
+		"cut short":           billed("Northwind", "Bill to: Northwind", "1", 1),
+		"supporting document": billed("Northwind Other Inc", "Bill to: Northwind Other Inc", "2", 1),
+		"two candidates":      billed("Northwind Other Inc", "Bill to: Northwind Other Inc", "1", 2),
+		"not read":            billed("Northwind Other Inc", "", "1", 0),
+	} {
+		if got := CitedBilledTo(p, read); got != "" {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	if got := CitedBilledTo(billed("Northwind Other Inc", "Bill to: Northwind Other Inc", "1", 1), nil); got != "" {
+		t.Errorf("without the invoice's text: %q", got)
+	}
+	two := []IntakeSource{{Source: Source{ID: "1"}, Content: "Acme Insurance Co\nBill to: Harbor Fixture LLC\nBill to: Northwind Other Inc"}}
+	if got := CitedBilledTo(billed("Northwind Other Inc", "Bill to: Northwind Other Inc", "1", 1), two); got != "" {
+		t.Errorf("an invoice billing two names bills neither for certain: %q", got)
+	}
+}

@@ -23,6 +23,7 @@ Start here to find the governing plan, implementation details and acceptance evi
 | [Enterprise readiness review](docs/enterprise-readiness-review.md) | Supporting technical inventory, earlier recommendations and dated local test results. Narrower scope/deferrals are superseded by the build plan. |
 | [Original product requirements](docs/product-requirements.md) | Original customer/problem definition, requirement IDs, boundaries and success targets. Read for provenance; the build plan extends its scope. |
 | [PRD review](docs/prd-review.md) | Earlier interpretation of the PRD and foundation design decisions; historical planning context. |
+| [Acceptance corpus](docs/acceptance-corpus.md) | The release corpus's case format, how to run it through the real pipeline and how a run is scored (phase A). The real corpus holds client data and stays outside the repository. |
 | [Validation history](docs/validation.md) | Dated commands/results, exercised behavior and explicit unverified areas. Consult before claiming a feature is validated. |
 
 ## Find documents by build package

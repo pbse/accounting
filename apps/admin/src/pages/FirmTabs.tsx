@@ -120,7 +120,7 @@ export function FirmPeople({ firm, onChanged }: { firm: string; onChanged: () =>
 }
 
 type Event = { at: string; actor: string; kind: string; text: string; masked: boolean };
-const kinds = ["", "member", "client", "invitation", "agent_access", "agent.", "posting", "quickbooks", "xero", "stripe", "email", "workflow", "firm"];
+const kinds = ["", "member", "client", "close", "invitation", "agent_access", "agent.", "posting", "quickbooks", "xero", "stripe", "email", "workflow", "firm"];
 
 export function FirmActivity({ firm }: { firm: string }) {
   const [kind, setKind] = useState("");

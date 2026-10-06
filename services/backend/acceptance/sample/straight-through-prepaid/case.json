@@ -1,0 +1,103 @@
+{
+ "id": "straight-through-prepaid",
+ "split": "development",
+ "client": "Harbor Fixture LLC",
+ "period": "2026-09",
+ "tags": [
+  "straight_through"
+ ],
+ "setup": {
+  "prepaid_procedure": {
+   "method": "equal_full_months_v1",
+   "expense_account": "Insurance",
+   "prepaid_account": "Prepaid Expenses"
+  },
+  "quickbooks": {
+   "home_currency": "USD",
+   "accounts": [
+    {
+     "id": "12",
+     "name": "Insurance",
+     "type": "Expense",
+     "subtype": "Insurance"
+    },
+    {
+     "id": "13",
+     "name": "Prepaid Expenses",
+     "type": "Other Current Asset",
+     "subtype": "PrepaidExpenses"
+    },
+    {
+     "id": "20",
+     "name": "Accounts Payable",
+     "type": "Accounts Payable",
+     "subtype": "AccountsPayable"
+    }
+   ],
+   "bills": [
+    {
+     "vendor": "Acme Insurance Co",
+     "number": "INV-778",
+     "amount": "1200.00",
+     "date": "2026-09-03",
+     "account_id": "12"
+    }
+   ],
+   "trial_balance": [
+    {
+     "account_id": "12",
+     "debit": "1200.00"
+    },
+    {
+     "account_id": "13"
+    },
+    {
+     "account_id": "20",
+     "credit": "1200.00"
+    }
+   ]
+  }
+ },
+ "documents": [
+  {
+   "file": "acme-invoice.txt",
+   "label": {
+    "work_type": "prepaid",
+    "facts": {
+     "amount": "1200.00",
+     "service_start": "2026-09-01",
+     "service_end": "2027-08-31"
+    },
+    "drafts": [
+     {
+      "debit_account": "Prepaid Expenses",
+      "credit_account": "Insurance",
+      "amount": "1100.00"
+     }
+    ]
+   },
+   "model": "acme-invoice.model.json"
+  }
+ ],
+ "expect_ready": true,
+ "signoff": {
+  "description": "Prepaid insurance for September",
+  "approve_drafts": true,
+  "coverage": [
+   {
+    "account_id": "13",
+    "documents": [
+     "acme-invoice.txt"
+    ]
+   },
+   {
+    "account_id": "12",
+    "exclude": "Period expense: September's insurance cost is reviewed with the invoice."
+   },
+   {
+    "account_id": "20",
+    "exclude": "Payables are reviewed in the aging, outside this close's scope."
+   }
+  ]
+ }
+}

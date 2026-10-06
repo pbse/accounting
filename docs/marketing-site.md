@@ -40,16 +40,27 @@ Four agents (Collector, Matcher, Investigator, Preparer), shown as collaborators
 2. The API accepts the form from `FRONTEND_ORIGIN` when the site and API are on different origins (the route is in its CORS preflight list). It needs no sign-in, and a visitor's ended workspace session does not stand in the way. It refuses a note without a name, a plain email address or a firm, or with control characters in a one-line field, or a note over 4,000 characters. A filled-in trap field is thanked and dropped. It allows five kept notes an hour from one address and sixty an hour in all. Both counts are taken from the stored notes, one note at a time under an advisory lock, so a burst cannot pass them together and a restarted API still holds them; only kept notes count. The address (Cloudflare's `CF-Connecting-IP`) is stored only as a one-way digest, cleared once its note is an hour old, as the privacy notice says. The page sends one `submission` key per note as written (an edit makes a new key): a retry after a lost answer returns the note already kept, with `forward: false`, so nothing is kept or forwarded twice, and a kept key sent with other words is refused (409). The note is kept in `contact_notes` (migration 123; platform rows only, under row-level security) and returned.
 3. The edge Worker (`workers/edge/src/index.ts`, `contact.ts`) forwards each kept note through Cloudflare Email Routing's `send_email` binding `CONTACT_EMAIL`, from `website@<PUBLIC_APP_URL host>` to `CONTACT_FORWARD_ADDRESS`, with the visitor as Reply-To. Every header value is encoded and carries no line break. The visitor gets their answer at once; a failed forward is logged without its contents and the note stays kept.
 
-Mail sent to **hello@getkrith.com** reaches the same inbox through an Email Routing rule.
+### Where Krith's mail goes
 
-### Cloudflare setup (once per zone)
+Since 2026-10-05, getkrith.com's mail is hosted by **Google Workspace**: the apex MX records are Google's, and the team's mailbox is prashant@getkrith.com. **hello@getkrith.com** belongs in Google too, as an alias of that mailbox set in the Google Admin console: Cloudflare no longer sees apex mail. Contact notes go to the same mailbox once Cloudflare has verified it as a destination; until then `CONTACT_FORWARD_ADDRESS` stays on the verified personal inbox, so no note goes undelivered in between. The checklist below says what is done.
 
-All four were done on 2026-10-05:
+Cloudflare Email Routing stays enabled on the zone for two other jobs: client replies at `replies@in.getkrith.com`, a subdomain whose MX records are Cloudflare's ([email delivery](email-delivery.md)), and the Worker's contact-note sends. Because the apex MX is Google's, Cloudflare reports the apex as "misconfigured". That is expected: never accept Cloudflare's offer to fix or re-add the apex records, which would replace Google's MX and stop the team's mail. Keep these records at the apex:
 
-- Email Routing enabled on getkrith.com, with the apex MX and SPF records Cloudflare adds.
-- The forwarding inbox added as a destination address and **verified by its owner** (Cloudflare emails a link). Until then neither the rule nor the Worker can deliver to it.
-- A routing rule: `hello@getkrith.com` → forward to that inbox.
-- The production GitHub variable `CONTACT_FORWARD_ADDRESS` set to that inbox. Without it notes are kept but not forwarded.
+| Record | Value | Why |
+| --- | --- | --- |
+| MX `getkrith.com` | Google's five `aspmx` hosts | Team mail |
+| TXT `getkrith.com` | `v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all` (one SPF record) | Google's mail, and the Worker's sends as website@getkrith.com |
+| TXT `google._domainkey` | Google's DKIM key | Google's signature |
+| TXT `cf2024-1._domainkey` | Cloudflare's DKIM key | The Worker's signature |
+| TXT `_dmarc` | `v=DMARC1; p=none;` | Monitoring only, for now |
+
+### Cloudflare and Google setup
+
+- Email Routing enabled on getkrith.com (done 2026-10-05) and on `in.getkrith.com` (done 2026-10-04).
+- **To do (owner):** add prashant@getkrith.com as a Cloudflare destination address and verify it from the link Cloudflare emails. The Worker can send only to a verified destination.
+- **To do (owner):** delete the Cloudflare routing rule for hello@. It forwarded to a personal inbox and stopped receiving mail when the MX moved to Google.
+- **To do (owner):** add hello@getkrith.com in Google Workspace as an alias of prashant@getkrith.com. Until then, mail to hello@ bounces.
+- **Then:** set the production GitHub variable `CONTACT_FORWARD_ADDRESS` to prashant@getkrith.com and run Deploy production; a variable reaches the Worker only with a deploy. It points to the verified personal inbox meanwhile. Without it, notes are kept but not forwarded. Then send one contact note and confirm it arrives.
 
 The inbox is a convenience; the record is the staff console's **Contact notes** page (`platform:read`), which lists every kept note newest first. A note whose email failed, or that arrived while `CONTACT_FORWARD_ADDRESS` was unset, is read and answered there.
 

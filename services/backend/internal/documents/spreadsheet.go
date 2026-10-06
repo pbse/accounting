@@ -16,6 +16,26 @@ import (
 	"time"
 )
 
+// MaxUpload is the most an uploaded file may hold: a larger one is refused as sent.
+const MaxUpload = 5 * 1024 * 1024
+
+// UploadContent is a file as the upload route keeps it: an Excel workbook (.xlsx) within MaxUpload becomes the CSV
+// text of its first sheet, under its name (shortened to fit 200 characters) with .csv added; anything else is kept as
+// sent, for the route's own checks to accept or refuse. The error is a workbook that cannot be read.
+func UploadContent(name string, body []byte) (string, []byte, error) {
+	if !strings.HasSuffix(strings.ToLower(name), ".xlsx") || len(body) > MaxUpload {
+		return name, body, nil
+	}
+	text, err := SpreadsheetText(body)
+	if err != nil {
+		return name, body, err
+	}
+	for len(name)+4 > 200 {
+		name = string([]rune(name)[:len([]rune(name))-1])
+	}
+	return name + ".csv", []byte(text), nil
+}
+
 // SpreadsheetText reads the first sheet of an Excel workbook (.xlsx) as CSV text: cell values as shown in their columns,
 // shared and inline strings, and cells formatted as dates written as YYYY-MM-DD. Formulas give their cached values.
 func SpreadsheetText(body []byte) (string, error) {
