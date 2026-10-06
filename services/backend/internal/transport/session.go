@@ -218,7 +218,7 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 // acceptedInvitation is, of these firms, one whose open invitation to this person WorkOS shows they have accepted: their
 // first sign-in after accepting it, before the app has enrolled them. Every such invitation is checked, newest first.
 func acceptedInvitation(ctx context.Context, db *sql.DB, firms []string, user signedInUser) string {
-	rows, err := db.QueryContext(systemContext(ctx), `SELECT organization_id,workos_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state='pending' AND workos_id IS NOT NULL AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC LIMIT 20`,
+	rows, err := db.QueryContext(systemContext(ctx), `SELECT organization_id,workos_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state='pending' AND workos_id IS NOT NULL AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC`,
 		strings.ToLower(strings.TrimSpace(user.Email)), firms)
 	if err != nil {
 		return ""

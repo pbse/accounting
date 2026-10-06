@@ -3369,6 +3369,12 @@ Pass 12 found two gaps:
 
 Both are tested.
 
+Pass 13 found two gaps:
+- **Signing in recreated a WorkOS membership an administrator had removed.** Memberships are now created only for first-time joiners.
+- **Only the newest twenty invitations were checked.** All are checked now.
+
+Both are tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

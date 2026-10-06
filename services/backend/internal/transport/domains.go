@@ -112,7 +112,9 @@ var (
 
 // ensureMembership gives the person a WorkOS membership of the firm with this role. A membership WorkOS has deactivated
 // is never revived here; one they hold is set to the role when exact is set: the firm's first administrator, and someone
-// joining by their address, whose role is the administrator's decision whatever WorkOS held before.
+// joining by their address, whose role is the administrator's decision whatever WorkOS held before. A membership is
+// created only for someone joining for the first time (exact): for anyone the firm already enrolled, a membership
+// removed in WorkOS stays removed.
 func ensureMembership(ctx context.Context, org, user, role string, exact bool) error {
 	held, err := workosList[firmMembership](ctx, "/user_management/organization_memberships", url.Values{"user_id": {user}, "organization_id": {org}, "limit": {"100"}})
 	if err != nil {
@@ -130,6 +132,9 @@ func ensureMembership(ctx context.Context, org, user, role string, exact bool) e
 			return workos(ctx, "PUT", "/user_management/organization_memberships/"+url.PathEscape(m.ID), map[string]string{"role_slug": role}, nil)
 		}
 		return nil
+	}
+	if !exact {
+		return errMembershipInactive
 	}
 	return workos(ctx, "POST", "/user_management/organization_memberships", map[string]string{"user_id": user, "organization_id": org, "role_slug": role}, nil)
 }

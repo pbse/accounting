@@ -667,6 +667,14 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("the session is for her domain's firm: %q %v", org, err)
 	}
 
+	// Someone the firm enrolled whose WorkOS membership was removed is not given a new one by signing in.
+	f.mu.Lock()
+	f.memberships = slices.DeleteFunc(f.memberships, func(m firmMembership) bool { return m.UserID == quinn && m.OrganizationID == firm })
+	f.mu.Unlock()
+	if where, cookie := signIn(quinn, "google"); where != "/login?error=removed" || cookie != "" || f.membership(quinn, firm) != nil {
+		t.Fatalf("a membership removed in WorkOS stays removed: %s", where)
+	}
+
 	// Renewing a session keeps the sign-in rules: once WorkOS stops counting Ivy's address as verified, her session ends.
 	if w := call(ivyCookie, "GET", "/v1/closes", ""); w.Code != 200 {
 		t.Fatalf("Ivy's session works before: %d %s", w.Code, w.Body.String())
