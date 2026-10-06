@@ -56,7 +56,7 @@ Current limits:
 
 No load test has been run yet.
 
-**Monitoring.** An outside uptime monitor and an alert receiver are deferred by the owner's decision (2026-10-05). `GET /healthz/worker`, `/readyz` and `OPERATIONS_ALERT_WEBHOOK_URL` are ready for them.
+**Monitoring: open, and required before partners operate.** The owner set the outside uptime monitor and alert receiver aside for now (2026-10-05). They remain a launch requirement ([B12](agent-first-build-plan.md#b12--hosted-operation-and-partner-onboarding)): a dead worker cannot send its own alert, so until a monitor checks `GET /healthz/worker` from outside, a stopped worker goes unnoticed. `/readyz` and `OPERATIONS_ALERT_WEBHOOK_URL` are ready for the same setup.
 
 ## Release revision check
 

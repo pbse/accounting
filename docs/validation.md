@@ -3191,7 +3191,7 @@ Cloudflare: Email Routing is enabled on getkrith.com, the forwarding inbox is ve
 Request: start phase A of the [build plan](agent-first-build-plan.md#delivery-sequence-and-launch-gates) (B12 controls), with the owner's decisions:
 - backups are Neon's own point-in-time history, with no backup code here;
 - the pilot is 3 firms;
-- outside monitoring is deferred;
+- outside monitoring is set aside for now, though it stays required before partners operate;
 - Prashant Bansal owns every control.
 
 What changed:
