@@ -975,6 +975,20 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if in.EveryMonth {
+			// Read again under the firm lock, which roster changes take, in a statement of its own so it sees a change that
+			// committed while it waited: a client marked inactive meanwhile gets no hand-over.
+			var left bool
+			if _, err = tx.ExecContext(r.Context(), `SELECT 1 FROM organizations WHERE id=$1 FOR SHARE`, g.org); err == nil {
+				err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, g.org, entity).Scan(&left)
+			}
+			if err != nil {
+				problem(w, 503, "The agent is unavailable.")
+				return
+			}
+			if left {
+				problem(w, 409, entity+" is inactive on the firm's roster, so it owes no new months. A firm administrator reactivates it in Firm settings.")
+				return
+			}
 			// Months that ended before the hand-over was set up are not new; it starts after this close or with the current month.
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO close_routines(organization_id,client_entity,author,via_grant,finish,due_days,last_period) VALUES($1,$2,$3,$4,$5,$6,$7)`, g.org, entity, actor, !firmAccess(r), in.Finish, dueDays, max(period, endedMonth(time.Now())))
 			if err != nil {

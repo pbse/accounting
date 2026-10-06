@@ -3422,10 +3422,11 @@ What changed:
 - **Migration 127.** Two append-only histories, read through their latest rows, each with tenant read/add policies:
   - `client_roster`: whether a client is active, its first owed month, and its optional due-day and owner overrides (0 days and '' for an explicit "none");
   - `close_templates`: the firm's due days after month end, and its owner.
-  - The roster starts with every client that has a close.
+  - The roster starts with every client that has a close, one entry per client identity, so closes under a confirmed alias belong to the client. The entry takes the client's own name where a close used it.
     - A client with a close in the three months before is active, owing every month from its earliest close of the last twelve. A month missing between its recent closes shows; older history does not.
     - Any other client is listed inactive with a "To confirm" reason, from its latest close, rather than left off.
     - A scratch database was migrated through 126 and given two clients: one with closes 20, 5 and 2 months back, and one with a close 8 months back. After migration 127 the first was active from 5 months back, so the months between show. The second was inactive "to confirm".
+    - Another scratch database was given "Acme" closes under its own name and under its confirmed alias "Acme Holdings". It got one entry, "Acme", active from its earliest recent close.
 - **Owed months** (`owedMonths`). Every ended month from a client's first owed month with no close is owed, however old. It is shown to whoever can work on the client (`clients:all`, or an assignment). A month the client's monthly hand-over is set to open still shows, marked `hand_over`, until a close exists, however late the hand-over is.
   - The morning brief returns them as `not_opened`, narrowed by Work's client or month filter.
   - Work lists them in their own **Months not opened** section, apart from **Due in 7 days**, with **Open**.
@@ -3435,7 +3436,7 @@ What changed:
 - **Routes.**
   - `GET /v1/closes/roster` (`clients:all`) shows the template, each client with its latest close and owed months, and, for administrators, the members who can hold closes.
   - `POST /v1/closes/roster` and `POST /v1/closes/close-template` are for firm administrators (`clients:all` and `members:manage`), with a reason. An owner must review the client's work; the template's must review every client.
-  - A first owed month must be within the last five years, since every owed month is listed on each read. A roster change takes the firm lock that opening a close takes, and carry-forward checks the roster again under it.
+  - A first owed month must be within the last five years, since every owed month is listed on each read. A roster change takes the firm lock that opening a close takes. Setting up a monthly hand-over, and carry-forward into a new or existing month, check the roster again under that lock, in a statement of their own so they see a change committed while they waited.
 - **Carry-forward.** It applies the template to the next month it opens. It refuses a client that left the roster, and the carry at sign-off skips one without reporting a failure.
 - **An inactive client gets no new month by any route.** The new-close route refuses its next month (409; an existing month still opens). A new monthly hand-over is refused, and a running one stops itself instead of opening a month or handing over one already open.
 - **Client identity.** Roster entries match closes by `client_identity`: in owed months, the template, the inactive guards, takeover, retention and the latest close. A month opened under a confirmed alias counts as the client's, and the roster refuses an alias as a second client.
