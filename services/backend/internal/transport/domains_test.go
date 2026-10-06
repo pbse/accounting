@@ -560,6 +560,27 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("Nora, removed from another firm, lands in her own domain's firm: %s %s", where, sessionOrg(nora))
 	}
 
+	// A pending invitation from another firm never keeps a member out of the firm they work in; once accepted, it wins.
+	pending := "invitation_" + rand.Text()
+	f.mu.Lock()
+	pm := firmMembership{ID: "om_" + erin + inviting, UserID: erin, OrganizationID: inviting, Status: "active"}
+	pm.Role.Slug = "member"
+	f.memberships = append(f.memberships, pm)
+	f.invitations[pending] = map[string]string{"id": pending, "state": "pending", "organization_id": inviting}
+	f.mu.Unlock()
+	if _, err := raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,$2,'member','Member',$3,'pending',$4,'Erin helps with our books.',now()+interval '7 days')`, inviting, f.users[erin].Email, pending, ana); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(erin, "google"); where != "/dashboard" || cookie == "" || sessionOrg(erin) != firm {
+		t.Fatalf("Erin, invited elsewhere but not yet accepted, signs in to her firm: %s %s", where, sessionOrg(erin))
+	}
+	f.mu.Lock()
+	f.invitations[pending]["state"], f.invitations[pending]["accepted_user_id"] = "accepted", erin
+	f.mu.Unlock()
+	if where, cookie := signIn(erin, "google"); where != "/dashboard" || cookie == "" || sessionOrg(erin) != inviting {
+		t.Fatalf("Erin, having accepted, signs in to the inviting firm: %s %s", where, sessionOrg(erin))
+	}
+
 	// Every sign-in needs a verified address: a member whose address WorkOS no longer counts as verified is turned away.
 	f.mu.Lock()
 	u := f.users[erin]

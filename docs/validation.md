@@ -3359,6 +3359,8 @@ Pass 9 found two gaps:
 
 Both are tested.
 
+Pass 10 found that a pending invitation from another firm could keep a member out of the firm they work in. Only an invitation WorkOS shows accepted now comes first; tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

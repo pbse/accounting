@@ -31,9 +31,11 @@ Someone the firm removed is not let back in by their address, nor is anyone whil
 4. **Their domain's claim.** Otherwise the claim runs, which may create the firm or take over an organization WorkOS placed them in.
 
 When WorkOS asks which organization to use, the order is:
-1. a firm with an open invitation;
+1. a firm whose invitation WorkOS shows they have accepted (their first sign-in after accepting);
 2. the firm they last signed in to where they are still a member;
 3. their domain's firm.
+
+An invitation not yet accepted never takes them away from a firm they work in.
 
 Every firm session starts from a token issued after the firm is settled, so it carries the role the person holds after joining. Switching between firms within a session is not offered yet.
 
