@@ -100,7 +100,7 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
  names AS (SELECT client_identity($1,n.name) AS client,n.name FROM (SELECT lower(c.entity) AS name FROM client_closes c WHERE c.organization_id=$1
   UNION SELECT a.alias FROM client_aliases a WHERE a.organization_id=$1 AND a.retired_at IS NULL
   UNION SELECT lower(r.client_entity) FROM client_roster r WHERE r.organization_id=$1) n),
- done AS (SELECT n.client,d.period FROM close_deletion_receipts d JOIN names n ON d.client_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.client,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex') OR d.entity_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex')
+ done AS (SELECT n.client,d.period FROM close_deletion_receipts d JOIN names n ON d.client_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.client,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex') OR (d.client_digest IS NULL AND d.entity_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex'))
   WHERE d.organization_id=$1 AND d.period>=(SELECT min(since) FROM current_client_roster WHERE organization_id=$1 AND active))
  SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
   EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND client_identity(h.organization_id,h.client_entity)=client_identity(r.organization_id,r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)

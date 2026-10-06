@@ -266,14 +266,27 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
+		// The client the close belongs to, read before the close is deleted or any of the client's other names forgotten.
+		// The receipt keeps a digest of it, never the name, so a month deleted under any of the client's names stays done
+		// on the roster.
+		var client string
+		if err = tx.QueryRowContext(r.Context(), `SELECT client_identity($1,$2)`, organization(r), entity).Scan(&client); err != nil {
+			problem(w, 503, "Deletion stopped without committing.")
+			return
+		}
 		if _, err = tx.ExecContext(r.Context(), `DELETE FROM client_closes WHERE id::text=$1 AND organization_id=$2`, id, organization(r)); err != nil {
 			problem(w, 503, "Deletion stopped without committing.")
 			return
 		}
-		// The client the close belongs to, read before its other names may be forgotten below. The receipt keeps a digest
-		// of it, never the name, so a month deleted under any of the client's names stays done on the roster.
-		var client string
-		if err = tx.QueryRowContext(r.Context(), `SELECT client_identity($1,$2)`, organization(r), entity).Scan(&client); err != nil {
+		// A name keeps its own client while it has a close from before it was confirmed as another client's alias. A
+		// deletion never changes which client a name belongs to: when this close was the last such, the alias that would
+		// now take effect is retired, so the client's roster entry, hand-overs and months stay its own.
+		var after string
+		if err = tx.QueryRowContext(r.Context(), `SELECT client_identity($1,$2)`, organization(r), entity).Scan(&after); err == nil && after != client {
+			_, err = tx.ExecContext(r.Context(), `UPDATE client_aliases SET retired_by=$3,retired_at=now(),retire_reason=$4 WHERE organization_id=$1 AND retired_at IS NULL AND alias=trim(regexp_replace(lower($2),'[^[:alnum:]]+',' ','g'))`,
+				organization(r), entity, subject(r), "Retired when the last close that kept this name its own client was deleted, so the name stays its own client")
+		}
+		if err != nil {
 			problem(w, 503, "Deletion stopped without committing.")
 			return
 		}

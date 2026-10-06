@@ -257,6 +257,30 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	if active || !strings.Contains(left, "contract termination") {
 		t.Fatalf("contract termination takes the client off the roster: %v %s", active, left)
 	}
+
+	// Mu has a close from before "mu" was confirmed as an alias of Nu, so Mu is its own client. Deleting that close,
+	// its last, does not hand the name to Nu: the alias is retired, Nu's roster entry stays as it was, and the receipt
+	// keeps Mu's own digest.
+	var mu string
+	must(db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Mu',$2) RETURNING id::text`, org, month(2)).Scan(&mu))
+	_, err = db.Exec(`INSERT INTO close_signoffs(close_id,decision,snapshot_digest,snapshot,note,actor) VALUES($1,'signed_off','fixture','{}','Done','fixture')`, mu)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Nu','mu','fixture',now())`, org)
+	must(err)
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Nu',true,$2,'Synthetic','fixture'),($1,'Mu',false,$3,'Synthetic','fixture')`, org, month(0), month(2))
+	must(err)
+	call("user_admin", admin, "POST", "/v1/closes/"+mu+"/retention", map[string]any{"retain_until": "2000-01-01", "legal_hold": false, "expected_version": 0, "reason": "Approved synthetic retention policy", "confirmed": true}, 200)
+	must(json.Unmarshal(call("user_admin", admin, "GET", "/v1/closes/"+mu+"/retention", nil, 200), &retention))
+	call("user_admin", admin, "POST", "/v1/closes/"+mu+"/delete", map[string]any{"expected_version": retention.Version, "entity": "Mu", "period": month(2), "reason_code": "retention_expired", "confirmed": true}, 200)
+	var aliasLive int
+	var nuActive bool
+	var nuSince, muDigest string
+	must(db.QueryRow(`SELECT count(*) FROM client_aliases WHERE organization_id=$1 AND alias='mu' AND retired_at IS NULL`, org).Scan(&aliasLive))
+	must(db.QueryRow(`SELECT active,since FROM current_client_roster WHERE organization_id=$1 AND client_entity='Nu'`, org).Scan(&nuActive, &nuSince))
+	must(db.QueryRow(`SELECT COALESCE(client_digest,'') FROM close_deletion_receipts WHERE organization_id=$1 AND close_id=$2::bigint`, org, mu).Scan(&muDigest))
+	if aliasLive != 0 || !nuActive || nuSince != month(0) || muDigest != preparation.Digest([]byte(org+"\x00mu\x00"+month(2))) {
+		t.Fatalf("deleting Mu's last close leaves the name Mu's: alias live %d, Nu %v %s, receipt %q", aliasLive, nuActive, nuSince, muDigest)
+	}
 }
 
 func TestMonthlyHandOversTakeTurns(t *testing.T) {
