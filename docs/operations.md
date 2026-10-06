@@ -62,8 +62,9 @@ No load test has been run yet.
 
 `scripts/release-check.sh` runs the backend's full test suite for the checked-out revision in the release image's environment. Phase A asks for this ("full PDF/OCR and local-PostgreSQL checks reproduced for the release revision"):
 - **Image.** The `release-test` stage of `services/backend/Dockerfile` uses the same Debian release and document tools as the runtime stage (`poppler-utils`, `tesseract-ocr`).
-- **Database.** A disposable PostgreSQL 18 container, production's major version. It is migrated twice, so a migration that cannot run on an already migrated database fails.
-- **Requirements.** Docker and `psql`. The checkout must have no uncommitted backend or migration changes, because the result is for a revision.
+- **Database.** A disposable PostgreSQL 18 container, production's major version. It is migrated twice, so a migration that cannot run on an already migrated database fails. Packages share it, so they run one at a time (`-p 1`): a test that works the preparation queue never takes another package's job.
+- **Revision.** `scripts/release-check.sh [revision]`, default `HEAD`. The revision is exported with `git archive` and mounted read-only, so uncommitted changes never count.
+- **Requirements.** Docker and `psql`.
 - **Output.** It prints the revision and tool versions, and exits non-zero if any test fails.
 
 Record the run in [validation](validation.md). CI keeps its faster check on Ubuntu with PostgreSQL 17, which does not replace this one.
