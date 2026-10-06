@@ -29,6 +29,15 @@ func rosterMatch(org, name string) string {
 	return `r.organization_id=` + org + ` AND client_identity(r.organization_id,r.client_entity)=client_identity(` + org + `,` + name + `)`
 }
 
+// rosterLeft is SQL, true when the client named name has left the firm's roster: its own entry, matched by client
+// identity, is inactive; or, with no entry of its own, an inactive entry has its name once case and punctuation are set
+// aside, as a departed client's forgotten alias is kept (client_aliases holds only that form of the name).
+func rosterLeft(org, name string) string {
+	plain := func(s string) string { return `trim(regexp_replace(lower(` + s + `),'[^[:alnum:]]+',' ','g'))` }
+	return `COALESCE((SELECT NOT r.active FROM current_client_roster r WHERE ` + rosterMatch(org, name) + ` LIMIT 1),
+ EXISTS(SELECT 1 FROM current_client_roster r WHERE r.organization_id=` + org + ` AND NOT r.active AND ` + plain("r.client_entity") + `=` + plain(name) + `))`
+}
+
 // rosterTemplate is SQL, over a current_client_roster row r, for the firm's current template t.
 const rosterTemplate = `LEFT JOIN LATERAL (SELECT due_days,owner FROM close_templates WHERE organization_id=r.organization_id ORDER BY id DESC LIMIT 1) t ON true`
 

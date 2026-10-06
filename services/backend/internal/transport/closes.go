@@ -294,7 +294,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			}
 			// A client the firm's roster says has left owes no new month; its existing months still open.
 			var left bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, organization(r), input.Entity).Scan(&left); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT `+rosterLeft("$1", "$2"), organization(r), input.Entity).Scan(&left); err != nil {
 				problem(w, 503, "Could not check the current close.")
 				return
 			}

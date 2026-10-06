@@ -961,7 +961,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			}
 			// A client the firm's roster says has left owes no new months to hand over.
 			var left bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, g.org, entity).Scan(&left); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT `+rosterLeft("$1", "$2"), g.org, entity).Scan(&left); err != nil {
 				problem(w, 503, "The agent is unavailable.")
 				return
 			}
@@ -979,7 +979,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			// committed while it waited: a client marked inactive meanwhile gets no hand-over.
 			var left bool
 			if _, err = tx.ExecContext(r.Context(), `SELECT 1 FROM organizations WHERE id=$1 FOR SHARE`, g.org); err == nil {
-				err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, g.org, entity).Scan(&left)
+				err = tx.QueryRowContext(r.Context(), `SELECT `+rosterLeft("$1", "$2"), g.org, entity).Scan(&left)
 			}
 			if err != nil {
 				problem(w, 503, "The agent is unavailable.")

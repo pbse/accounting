@@ -315,6 +315,14 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Xi", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
+	// A name with no entry of its own has left when an inactive entry has its name once case and punctuation are set
+	// aside; its own active entry, once it has one, decides.
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "omega co", "active": false, "since": ended, "reason": "Left"}, 200)
+	call("user_b", partner, "POST", "/v1/closes", map[string]string{"entity": "Omega, Co.", "period": ended}, 409)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Omega, Co.", "active": true, "since": ended, "reason": "Back"}, 200)
+	call("user_b", partner, "POST", "/v1/closes", map[string]string{"entity": "Omega, Co.", "period": ended}, 200)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Omega, Co.", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+
 	// An entry whose first month is now over five years old can still be changed while it keeps that month, but not moved
 	// to another that old.
 	old := time.Now().UTC().AddDate(-6, 0, 0).Format("2006-01")

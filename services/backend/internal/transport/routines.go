@@ -214,7 +214,7 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 	// A client the firm's roster says has left owes no new month: its hand-over stops, whether or not the month's close
 	// is already there.
 	var left bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, org, entity).Scan(&left); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT `+rosterLeft("$1", "$2"), org, entity).Scan(&left); err != nil {
 		return false, err
 	}
 	if left {

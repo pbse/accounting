@@ -103,7 +103,7 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 		// A client the firm's roster says has left owes no more months, so no work is carried into one.
 		if r.Method == "POST" {
 			var left bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, organization(r), entity).Scan(&left); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT `+rosterLeft("$1", "$2"), organization(r), entity).Scan(&left); err != nil {
 				problem(w, 503, "Carry-forward unavailable.")
 				return
 			}
@@ -274,7 +274,7 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 		// no work carried into it.
 		var left bool
 		if _, err = tx.ExecContext(r.Context(), `SELECT 1 FROM organizations WHERE id=$1 FOR SHARE`, organization(r)); err == nil {
-			err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, organization(r), entity).Scan(&left)
+			err = tx.QueryRowContext(r.Context(), `SELECT `+rosterLeft("$1", "$2"), organization(r), entity).Scan(&left)
 		}
 		if err != nil {
 			problem(w, 503, "Carry-forward unavailable.")
@@ -404,7 +404,7 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 func autoCarry(db *sql.DB, r *http.Request, closeID string) (int, bool) {
 	// A client the firm's roster says has left gets no next month; that is not a failure to report.
 	var left bool
-	if err := db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_closes c JOIN current_client_roster r ON `+rosterMatch("c.organization_id", "c.entity")+` AND NOT r.active WHERE c.id::text=$1)`, closeID).Scan(&left); err != nil {
+	if err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT `+rosterLeft("c.organization_id", "c.entity")+` FROM client_closes c WHERE c.id::text=$1),false)`, closeID).Scan(&left); err != nil {
 		return 0, false
 	}
 	if left {

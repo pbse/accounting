@@ -232,8 +232,8 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	must(json.Unmarshal(call("user_admin", admin, "GET", "/v1/closes/"+signed+"/retention", nil, 200), &retention))
 	// Alpha is also on the roster under a name since confirmed as its alias: leaving takes every name off, so the alias,
 	// forgotten with the relationship, is not left behind as a client that still owes months.
-	// "Alpha Holdings", another confirmed alias, is on no roster entry.
-	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Alpha','alpha group','fixture',now()-interval '1 day'),($1,'Alpha','alpha holdings','fixture',now()-interval '1 day')`, org)
+	// "Alpha Holdings" and "Alpha, Inc." (kept as "alpha inc"), other confirmed aliases, are on no roster entry.
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Alpha','alpha group','fixture',now()-interval '1 day'),($1,'Alpha','alpha holdings','fixture',now()-interval '1 day'),($1,'Alpha','alpha inc','fixture',now()-interval '1 day')`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Alpha Group',true,$2,'Synthetic','fixture')`, org, month(0))
 	must(err)
@@ -253,8 +253,10 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 		t.Fatal("contract termination stops the client's monthly hand-over")
 	}
 	// The forgotten alias is a name of its own now, left inactive: no new month is opened under it either.
-	if body := string(call("user_admin", admin, "POST", "/v1/closes", map[string]string{"entity": "Alpha Holdings", "period": month(5)}, 409)); !strings.Contains(body, "inactive on the firm's roster") {
-		t.Fatalf("a departed client's forgotten alias stays inactive: %s", body)
+	for _, name := range []string{"Alpha Holdings", "Alpha, Inc."} {
+		if body := string(call("user_admin", admin, "POST", "/v1/closes", map[string]string{"entity": name, "period": month(5)}, 409)); !strings.Contains(body, "inactive on the firm's roster") {
+			t.Fatalf("a departed client's forgotten alias %s stays inactive: %s", name, body)
+		}
 	}
 	var active bool
 	var left string
