@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 
 	"close.local/backend/internal/acceptance"
@@ -26,8 +27,10 @@ func main() {
 	database := flag.String("database", os.Getenv("ACCEPTANCE_DATABASE_URL"), "a local, migrated PostgreSQL database holding no closes")
 	model := flag.String("model", "recorded", "recorded: replay each document's recorded answer; live: the model configured in the environment")
 	reportPath := flag.String("report", "", "write the full report, with every observation, as JSON here")
+	organization := flag.String("organization", "", "run every case as a close of this firm, as the person -subject; for a live Context Machine run, the firm and person its access profile serves")
+	subject := flag.String("subject", "", "the person the cases are worked as, with -organization")
 	flag.Parse()
-	if *corpus == "" || *database == "" || (*model != "recorded" && *model != "live") {
+	if *corpus == "" || *database == "" || (*model != "recorded" && *model != "live") || (*organization == "") != (*subject == "") {
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -36,6 +39,10 @@ func main() {
 	}
 	cases, err := acceptance.Load(*corpus)
 	if err != nil {
+		log.Fatal(err)
+	}
+	firm := transport.AcceptanceFirm{Organization: *organization, Subject: *subject}
+	if err = oneFirm(firm, cases); err != nil {
 		log.Fatal(err)
 	}
 	var live *llm.Client
@@ -66,7 +73,7 @@ func main() {
 	}
 	observed := []acceptance.CaseObserved{}
 	for _, c := range cases {
-		o, err := transport.RunAcceptanceCase(ctx, db, c, func(files map[string]string) (*llm.Client, error) {
+		o, err := transport.RunAcceptanceCase(ctx, db, c, firm, func(files map[string]string) (*llm.Client, error) {
 			if live != nil {
 				return live, nil
 			}
@@ -88,6 +95,26 @@ func main() {
 	if !report.Passed() {
 		os.Exit(1)
 	}
+}
+
+// oneFirm refuses a corpus that cannot run inside one named firm: there each case is a close of that firm, and a client
+// has one close a month and one ledger connection, so no two cases may share a client.
+func oneFirm(firm transport.AcceptanceFirm, cases []acceptance.Case) error {
+	if firm.Organization == "" {
+		return nil
+	}
+	if !regexp.MustCompile(`^org_[A-Za-z0-9]+$`).MatchString(firm.Organization) {
+		return fmt.Errorf("-organization %q is not a firm ID (org_ and letters or digits)", firm.Organization)
+	}
+	clients := map[string]string{}
+	for _, c := range cases {
+		key := strings.ToLower(strings.TrimSpace(c.Client))
+		if earlier, ok := clients[key]; ok {
+			return fmt.Errorf("cases %s and %s share the client %q: in one firm, run them separately, each on a fresh database", earlier, c.ID, c.Client)
+		}
+		clients[key] = c.ID
+	}
+	return nil
 }
 
 // local refuses any database that is not on this machine: the run creates firms and works the whole queue. It checks

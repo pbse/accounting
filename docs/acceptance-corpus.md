@@ -56,6 +56,7 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
     Other problems the plan requires (an OCR decimal error, missing pages, conflicting totals) are added to `acceptance.Exceptions` with their sign as the app learns to report them. Until then, a case can still label the facts and drafts of such a document.
 - **`signoff`.** The accountant's part once the agent is done, applied after the pipeline settles and recorded as "acceptance reviewer". With `approve_drafts`, every current draft is approved; the scope is defined as covering every draft. Readiness is then read as sign-off reads it. Without `signoff`, nothing defines the scope, so the close is never ready: a case with `expect_ready` true and no `signoff` is refused.
 - **`expect_ready`.** Whether the accountant's label says the close may be signed off once that is done.
+- **`selection`.** A recorded evidence-selection answer, `{"selected_ids": ["$primary", "$source:<file>"]}`. It is needed only when the close is too large to read whole: more than 20 sources, or 128 KiB of text. The model then first chooses what to read with this document; without a recorded selection, that document's job fails and the run reports it as not processed, with the reason.
 - **`model`.** A recorded answer, in the model's answer shape. `"$primary"` stands for this document's evidence ID, and `"$source:<file>"` for another document's. Its quotes must be lines of the document, as a real reading's are.
 
 ## Running it
@@ -70,6 +71,7 @@ go run ./cmd/acceptance -corpus ../path/to/corpus -database postgres://…@127.0
 - **Model.**
   - `-model recorded` replays each document's recorded answer. It tests everything around the model. Every document the app keeps needs one, and the command refuses the corpus otherwise.
   - `-model live` reads with the model configured in the environment (the same settings as the API: `LLM_PROVIDER`, `OPENAI_*` or `CONTEXT_MACHINE_*`). The release corpus is run this way, with the configured model version.
+- **Firm.** By default each case is a firm of its own, worked as "acceptance" and disabled afterwards. Context Machine reads only for the firm and person its access profile serves (`CONTEXT_MACHINE_PROFILES`). A live run through it therefore passes `-organization org_… -subject …` with that firm and person, and every case becomes a close of that one firm. A client has one close a month and one ledger connection there, so no two cases may share a client; the command refuses such a corpus. Run those cases separately, each on a fresh database. Each case's unfinished jobs are cancelled once it has been observed.
 - **PDFs** need `pdftotext`, `pdfinfo` and `tesseract`. Run PDF cases where those exist, such as the [release-check image](operations.md#release-revision-check).
 
 The command prints a Markdown report. It exits 1 on any critical failure, and on any document the pipeline never decided on, since the run has not evaluated it. `-report` writes the full report as JSON, including every document's observed outcome.
@@ -86,9 +88,9 @@ Every document counts once, in its split and its labeled work type:
 | False accepted facts | A fact the agent went on with that the label contradicts (one per field) | **yes** |
 | Incorrect drafts | Work the agent prepared alone that is of the wrong kind, has more or fewer drafts than the label, or has a labeled entry no draft matches on date, accounts and amount, each draft matching at most one entry (one per problem) | **yes** |
 | Missed problems | A labeled exception, or a document with no work, that the agent went past, or held without its sign (for another reason, so the person was not told) | **yes** |
-| False exceptions | A clean document refused (for example as another client's, or as no work) | no |
+| False exceptions | A clean document refused as no work, or flagged with a problem's sign (as another client's) | no |
 | Wrong values put to a person | Wrong values a person would have to correct | no |
-| Not processed | No job started, it failed, or it had not settled. Nothing was decided, so a labeled problem here is not counted as held. | fails the run |
+| Not processed | No job started, it failed (the report gives the job's error), or it had not settled. Nothing was decided, so a labeled problem here is not counted as held. | fails the run |
 
 Per case it also counts:
 - **False-ready closes** (critical): nothing blocks sign-off while the label says the close is not ready.

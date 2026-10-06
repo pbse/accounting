@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"os"
 	"strings"
@@ -40,9 +41,30 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 			db.Exec(q)
 		}
 	})
+	// In a named firm, as a live Context Machine run uses, the case is a close of that firm worked as its person, and the
+	// firm stays enabled for the next case.
+	firm := AcceptanceFirm{Organization: "org_AcceptanceShared" + strings.ToLower(rand.Text()[:8]), Subject: "user_owner"}
+	for _, c := range cases {
+		if c.ID != "straight-through-prepaid" {
+			continue
+		}
+		o, err := RunAcceptanceCase(context.Background(), db, c, firm, func(files map[string]string) (*llm.Client, error) { return c.Recorded(files) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		var enabled bool
+		var actor string
+		if err = db.QueryRow(`SELECT o.enabled,j.created_by FROM organizations o JOIN client_closes c ON c.organization_id=o.id JOIN preparation_jobs j ON j.close_id=c.id WHERE o.id=$1`, firm.Organization).Scan(&enabled, &actor); err != nil {
+			t.Fatal(err)
+		}
+		if one := acceptance.Score([]acceptance.Case{c}, []acceptance.CaseObserved{o}); !one.Passed() || !o.Documents[0].Accepted || !enabled || actor != "user_owner" {
+			t.Fatalf("in a named firm: enabled %v, worked as %q, %+v", enabled, actor, o)
+		}
+	}
+
 	observed := []acceptance.CaseObserved{}
 	for _, c := range cases {
-		o, err := RunAcceptanceCase(context.Background(), db, c, func(files map[string]string) (*llm.Client, error) { return c.Recorded(files) })
+		o, err := RunAcceptanceCase(context.Background(), db, c, AcceptanceFirm{}, func(files map[string]string) (*llm.Client, error) { return c.Recorded(files) })
 		if err != nil {
 			t.Fatal(err)
 		}

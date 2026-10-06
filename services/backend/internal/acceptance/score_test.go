@@ -26,7 +26,7 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 		{File: "held.txt", JobState: "needs_confirmation", Kind: "unsupported", Engine: "identity_blocked"},
 		{File: "missed.txt", JobState: "completed", Kind: "prepaid", Facts: good, Accepted: true, Drafts: right},
 		{File: "held-elsewhere.txt", JobState: "needs_confirmation", Kind: "prepaid", Facts: good, Reason: "Waiting for a person: the close has no current QuickBooks capture."},
-		{File: "refused.txt", JobState: "needs_confirmation", Kind: "unsupported", Engine: "identity_blocked"},
+		{File: "refused.txt", JobState: "needs_confirmation", Kind: "prepaid", Engine: "openai", Reason: `Waiting for a person: The invoice is billed to "Harbour LLC", not the client or a confirmed alias.`},
 		{File: "unread.txt", JobState: "failed"},
 		{File: "letter.txt", JobState: "needs_confirmation", Kind: "unsupported"},
 		{File: "again.txt", JobState: "completed", Kind: "prepaid", Facts: good, Accepted: true, SameAs: "right.txt"},

@@ -19,22 +19,36 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// RunAcceptanceCase loads one corpus case into db as a firm of its own, adds its documents as an upload would, drives
-// extraction, reading and preparation until nothing is left to do, and reports what happened (docs/acceptance-corpus.md).
-// model gives the reading model once the documents have their evidence IDs (each ID's file); it may return nil to read
-// without a model. The case's firm is disabled afterwards, so later cases' queue steps never take its leftover work.
-// The steps take work from the whole database, so db must hold nothing else that is waiting.
-func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, model func(files map[string]string) (*llm.Client, error)) (acceptance.CaseObserved, error) {
+// AcceptanceFirm is the firm a run's cases are loaded into. Left empty, each case gets a firm of its own, worked as
+// "acceptance" and disabled afterwards. A live run through Context Machine names instead the firm and person its access
+// profile serves, since that provider reads only for them: every case is then a close of that one firm (so no two cases
+// may share a client), and each case's unfinished work is cancelled once observed.
+type AcceptanceFirm struct{ Organization, Subject string }
+
+// RunAcceptanceCase loads one corpus case into db, adds its documents as an upload would, drives extraction, reading and
+// preparation until nothing is left to do, and reports what happened (docs/acceptance-corpus.md). model gives the reading
+// model once the documents have their evidence IDs (each ID's file); it may return nil to read without a model. After
+// the case, its firm is disabled or, in a named firm, its unfinished jobs cancelled, so later cases' queue steps never
+// take its leftover work. The steps take work from the whole database, so db must hold nothing else that is waiting.
+func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, firm AcceptanceFirm, model func(files map[string]string) (*llm.Client, error)) (acceptance.CaseObserved, error) {
 	var observed acceptance.CaseObserved
-	org := "org_Acceptance" + rand.Text()
-	if _, err := db.ExecContext(ctx, `INSERT INTO organizations(id,name,max_model_calls_per_day) VALUES($1,$2,100000)`, org, "Acceptance "+c.ID); err != nil {
+	org, subject := firm.Organization, firm.Subject
+	if org == "" {
+		org, subject = "org_Acceptance"+rand.Text(), "acceptance"
+		if _, err := db.ExecContext(ctx, `INSERT INTO organizations(id,name,max_model_calls_per_day) VALUES($1,$2,100000)`, org, "Acceptance "+c.ID); err != nil {
+			return observed, err
+		}
+		defer db.ExecContext(context.WithoutCancel(ctx), `UPDATE organizations SET enabled=false WHERE id=$1`, org)
+	} else if _, err := db.ExecContext(ctx, `INSERT INTO organizations(id,name,max_model_calls_per_day) VALUES($1,'Acceptance run',100000) ON CONFLICT (id) DO NOTHING`, org); err != nil {
 		return observed, err
 	}
-	defer db.ExecContext(context.WithoutCancel(ctx), `UPDATE organizations SET enabled=false WHERE id=$1`, org)
-	ctx = auth.WithActor(ctx, &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "acceptance"}, Organization: org})
+	ctx = auth.WithActor(ctx, &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: subject}, Organization: org})
 	var closeID string
 	if err := db.QueryRowContext(ctx, `INSERT INTO client_closes(organization_id,entity,period) VALUES($1,$2,$3) RETURNING id::text`, org, c.Client, c.Period).Scan(&closeID); err != nil {
 		return observed, err
+	}
+	if firm.Organization != "" {
+		defer db.ExecContext(context.WithoutCancel(ctx), `UPDATE preparation_jobs SET state='cancelled' WHERE close_id::text=$1 AND state IN ('queued','waiting_evidence','interpreting')`, closeID)
 	}
 	if err := acceptanceSetup(ctx, db, org, closeID, c); err != nil {
 		return observed, fmt.Errorf("case %s setup: %w", c.ID, err)
@@ -205,8 +219,8 @@ func acceptanceObserve(ctx context.Context, db *sql.DB, closeID string, uploads 
 		o := acceptance.Observed{File: names[0], Facts: map[string]string{}}
 		var proposal []byte
 		var confirmedBy, papers, reason sql.NullString
-		err := db.QueryRowContext(ctx, `SELECT j.state,COALESCE(i.proposal,'{}'::jsonb),i.confirmed_by,j.workpaper_ids::text,i.agent_checkpoint->>'straight_through' FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id
- WHERE i.source_id::text=$1 AND j.state<>'cancelled' ORDER BY j.id DESC LIMIT 1`, id).Scan(&o.JobState, &proposal, &confirmedBy, &papers, &reason)
+		err := db.QueryRowContext(ctx, `SELECT j.state,j.error,COALESCE(i.proposal,'{}'::jsonb),i.confirmed_by,j.workpaper_ids::text,i.agent_checkpoint->>'straight_through' FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id
+ WHERE i.source_id::text=$1 AND j.state<>'cancelled' ORDER BY j.id DESC LIMIT 1`, id).Scan(&o.JobState, &o.Error, &proposal, &confirmedBy, &papers, &reason)
 		o.Reason = reason.String
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return observed, err

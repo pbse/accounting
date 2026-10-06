@@ -26,19 +26,22 @@ func (c Case) Recorded(ids map[string]string) (*llm.Client, error) {
 	if err := c.RecordedComplete(); err != nil {
 		return nil, err
 	}
-	answers := map[string]string{}
+	// Each document's recorded answers, by the request's purpose: its reading, and its evidence selection if recorded.
+	answers := map[string]map[string]string{"preparation": {}, "evidence_selection": {}}
 	for _, d := range c.Documents {
-		if d.Model == "" {
-			continue
+		for purpose, file := range map[string]string{"preparation": d.Model, "evidence_selection": d.Selection} {
+			if file == "" {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(c.Dir, file))
+			if err != nil {
+				return nil, err
+			}
+			if !json.Valid(raw) {
+				return nil, fmt.Errorf("case %s: recorded answer %s is not JSON", c.ID, file)
+			}
+			answers[purpose][d.File] = string(raw)
 		}
-		raw, err := os.ReadFile(filepath.Join(c.Dir, d.Model))
-		if err != nil {
-			return nil, err
-		}
-		if !json.Valid(raw) {
-			return nil, fmt.Errorf("case %s: recorded answer %s is not JSON", c.ID, d.Model)
-		}
-		answers[d.File] = string(raw)
 	}
 	reply := func(status int, body any) *http.Response {
 		raw, _ := json.Marshal(body)
@@ -50,6 +53,11 @@ func (c Case) Recorded(ids map[string]string) (*llm.Client, error) {
 			Input []struct {
 				Content string `json:"content"`
 			} `json:"input"`
+			Text struct {
+				Format struct {
+					Name string `json:"name"`
+				} `json:"format"`
+			} `json:"text"`
 		}
 		json.Unmarshal(raw, &request)
 		var given struct {
@@ -58,9 +66,13 @@ func (c Case) Recorded(ids map[string]string) (*llm.Client, error) {
 		for _, item := range request.Input {
 			json.Unmarshal([]byte(item.Content), &given)
 		}
-		answer, ok := answers[ids[given.Primary]]
+		purpose := "preparation"
+		if request.Text.Format.Name == "evidence_selection" {
+			purpose = "evidence_selection"
+		}
+		answer, ok := answers[purpose][ids[given.Primary]]
 		if !ok {
-			return reply(400, map[string]any{"error": map[string]string{"message": "no recorded answer for this reading"}}), nil
+			return reply(400, map[string]any{"error": map[string]string{"message": "no recorded " + purpose + " answer for " + ids[given.Primary]}}), nil
 		}
 		answer = strings.ReplaceAll(answer, `"$primary"`, strconv.Quote(given.Primary))
 		for id, file := range ids {

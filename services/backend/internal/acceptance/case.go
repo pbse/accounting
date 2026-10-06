@@ -78,6 +78,9 @@ type Document struct {
 	File  string `json:"file"`
 	Label Label  `json:"label"`
 	Model string `json:"model,omitempty"`
+	// Selection is the recorded evidence-selection answer, needed when the close is too large to read whole (more than 20
+	// sources or 128 KiB of text) and the model first chooses what to read with this document.
+	Selection string `json:"selection,omitempty"`
 }
 
 // Label is what the document should yield. WorkType is the work it supports (prepaid, accrual, …) or none. Facts are the
@@ -177,9 +180,12 @@ func (c Case) check() error {
 		} else if !ok && err == nil {
 			bodies[string(body)] = d.File
 		}
-		if d.Model != "" {
-			if _, err := os.Stat(filepath.Join(c.Dir, d.Model)); err != nil || filepath.Base(d.Model) != d.Model {
-				problems = append(problems, fmt.Errorf("document %s: recorded answer %q is not a file beside it", d.File, d.Model))
+		for _, recorded := range []string{d.Model, d.Selection} {
+			if recorded == "" {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(c.Dir, recorded)); err != nil || filepath.Base(recorded) != recorded {
+				problems = append(problems, fmt.Errorf("document %s: recorded answer %q is not a file beside it", d.File, recorded))
 			}
 		}
 		if strings.TrimSpace(d.Label.WorkType) == "" {

@@ -362,3 +362,30 @@ func straightThroughEngineChecks(t *testing.T, engine string) {
 		}
 	}
 }
+
+// Only a bill-to line the invoice itself prints names who it bills: not a ship-to line, a supporting document, a quote
+// that does not end with the name, or a reading with two candidates.
+func TestCitedBilledToIsTheInvoicesOwnBillToLine(t *testing.T) {
+	billed := func(quote, source string, candidates int) Proposal {
+		f := Fact{Field: "billed_to", Label: "billed to", Value: "Northwind Other Inc"}
+		for range candidates {
+			f.Candidates = append(f.Candidates, Candidate{Value: f.Value, SourceID: source, Quote: quote})
+		}
+		return Proposal{Sources: []Source{{ID: "1", Role: "invoice"}, {ID: "2", Role: "evidence"}}, Facts: []Fact{f}}
+	}
+	if got := CitedBilledTo(billed("Bill to: Northwind Other Inc", "1", 1)); got != "Northwind Other Inc" {
+		t.Fatalf("the invoice's bill-to line: %q", got)
+	}
+	for name, p := range map[string]Proposal{
+		"ship-to line":        billed("Ship to: Northwind Other Inc", "1", 1),
+		"no name in quote":    billed("Bill to: Harbor Fixture LLC", "1", 1),
+		"longer name":         billed("Bill to: Northwind Other Inc Holdings", "1", 1),
+		"supporting document": billed("Bill to: Northwind Other Inc", "2", 1),
+		"two candidates":      billed("Bill to: Northwind Other Inc", "1", 2),
+		"not read":            billed("", "1", 0),
+	} {
+		if got := CitedBilledTo(p); got != "" {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}

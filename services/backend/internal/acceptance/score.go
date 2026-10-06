@@ -19,6 +19,7 @@ type Observed struct {
 	Accepted bool    `json:"accepted"`
 	Drafts   []Entry `json:"drafts"` // every draft the job prepared, in order, with its proposed entry
 	Reason   string  `json:"reason"` // why the agent went on alone or waited for a person, as it recorded it
+	Error    string  `json:"error"`  // why the job failed, when it did
 	// SameAs is the earlier document this one's bytes repeat: the app kept one document for both.
 	SameAs string `json:"same_as,omitempty"`
 }
@@ -90,6 +91,17 @@ var Exceptions = map[string]func(Observed) bool{
 	"duplicate": func(o Observed) bool { return o.SameAs != "" },
 }
 
+// flagged reports whether the app raised any problem it has a sign for (other than keeping a repeat as one document):
+// on a clean document, that is a false exception.
+func flagged(o Observed) bool {
+	for name, found := range Exceptions {
+		if name != "duplicate" && found(o) {
+			return true
+		}
+	}
+	return false
+}
+
 // noWork is the sign that a document with no accounting work was read as such.
 func noWork(o Observed) bool { return o.Kind == "unsupported" }
 
@@ -151,13 +163,17 @@ func Score(cases []Case, observed []CaseObserved) Report {
 				}
 			case !held:
 				t.Unprocessed++
-				r.NotProcessed = append(r.NotProcessed, Failure{Case: c.ID, Document: d.File, Kind: "not_processed", Detail: fmt.Sprintf("job %s", or(got.JobState, "never started"))})
+				detail := "job " + or(got.JobState, "never started")
+				if got.Error != "" {
+					detail += ": " + got.Error
+				}
+				r.NotProcessed = append(r.NotProcessed, Failure{Case: c.ID, Document: d.File, Kind: "not_processed", Detail: detail})
 			case problem && found != nil && found(got):
 				t.CaughtExceptions++
 			case problem:
 				t.MissedExceptions++
 				fail(d.File, "missed_exception", fmt.Sprintf("held, but not for %s: %s", or(label.Exception, "having no accounting work"), or(got.Reason, "no reason recorded")))
-			case got.Engine == "identity_blocked" || got.Kind == "unsupported":
+			case got.Kind == "unsupported" || flagged(got):
 				t.FalseExceptions++
 			default:
 				t.Abstained++

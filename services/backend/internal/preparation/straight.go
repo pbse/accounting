@@ -144,7 +144,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		if f.Field == "vendor" && !issuerLine(f.Candidates[0].Quote, f.Value, invoice) {
 			return Plan{}, "the cited line does not name the vendor as the invoice's issuer"
 		}
-		if f.Field == "billed_to" && !labelledLine(f.Candidates[0].Quote, f.Value, []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}) {
+		if f.Field == "billed_to" && !labelledLine(f.Candidates[0].Quote, f.Value, billToLabels, notBillTo) {
 			return Plan{}, "the cited line does not say the invoice is billed to that name"
 		}
 		facts[f.Field] = f.Value
@@ -548,11 +548,36 @@ func totalLineShows(invoice string, cents int64) bool {
 }
 
 // billToNames is the set of distinct names the invoice bills, read from lines whose label is a bill-to label.
+// billToLabels name the line that says who an invoice bills; notBillTo mark a line that names someone else (an issuer,
+// a ship-to or a contact).
+var billToLabels, notBillTo = []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}
+
+// CitedBilledTo is the billed-to name as the straight-through check accepts it: one candidate, cited from the invoice
+// itself, on a line labelled as the bill-to that ends with the name. It is "" for anything less, so a weaker reading
+// never has a held invoice called another company's.
+func CitedBilledTo(p Proposal) string {
+	primary := ""
+	for _, s := range p.Sources {
+		if s.Role == "invoice" {
+			primary = s.ID
+		}
+	}
+	for _, f := range p.Facts {
+		if f.Field != "billed_to" || f.Value == "" || len(f.Candidates) != 1 || primary == "" || f.Candidates[0].SourceID != primary {
+			continue
+		}
+		if quote := f.Candidates[0].Quote; endsLine(quote, f.Value) && labelledLine(quote, f.Value, billToLabels, notBillTo) {
+			return f.Value
+		}
+	}
+	return ""
+}
+
 func billToNames(invoice string) map[string]bool {
 	names := map[string]bool{}
 	for _, line := range strings.Split(invoice, "\n") {
 		normal := documents.NormalizeEntity(line)
-		for _, label := range []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"} {
+		for _, label := range billToLabels {
 			if name := strings.TrimSpace(strings.TrimPrefix(normal, label)); strings.HasPrefix(normal, label+" ") && name != "" {
 				names[name] = true
 			}
