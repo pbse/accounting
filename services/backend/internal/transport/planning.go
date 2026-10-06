@@ -13,8 +13,8 @@ import (
 
 // Planning is scheduling metadata for ranking work; it never grants review or posting authority. Who holds a close can
 // change hands: a person takes an unheld close or releases their own; whoever holds it (anyone, while nobody does) hands
-// it to a teammate who can review the client; a firm administrator (canManageMembers) reassigns it whoever holds it. Each
-// change is recorded.
+// it to a teammate who can review the client; a firm administrator (canManageMembers) reassigns it, or takes it over, whoever
+// holds it. Each change is recorded.
 func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /v1/closes/{id}/planning", func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
@@ -101,7 +101,7 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 		next := owner
 		switch input.Assignment {
 		case "take":
-			if owner != "" && owner != me {
+			if owner != "" && owner != me && !canManageMembers(r) {
 				problem(w, 409, "Someone else holds this close. They can release it, or ask a firm administrator.")
 				return
 			}

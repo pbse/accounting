@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/rand"
 	"database/sql"
@@ -165,6 +166,10 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	if handedTo("user_c", reviewer) != "" || handed("user_c", reviewer) != nil || handedTo("user_b", partner) != "user_a handed you this close: Back from leave" {
 		t.Fatalf("only the current holder is told, of the hand-over that made them the holder: %q %+v %q", handedTo("user_c", reviewer), handed("user_c", reviewer), handedTo("user_b", partner))
 	}
+	// An administrator may also take a colleague's close over themselves, which nobody else may.
+	plan("user_c", reviewer, "take", "", "", 409)
+	plan("user_a", append([]string{"workpapers:review"}, admin...), "take", "", "", 200)
+	plan("user_a", admin, "assign", "user_b", "", 200)
 	// A note is limited in characters, not bytes.
 	plan("user_b", partner, "assign", "user_c", strings.Repeat("é", 300), 200)
 	plan("user_c", reviewer, "assign", "user_b", "", 200)
@@ -188,11 +193,30 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 		changes = append(changes, from+">"+to+" by "+actor+" "+reason)
 	}
 	rows.Close()
-	if got := strings.Join(changes, " | "); got != ">user_b by user_b  | user_b>user_c by user_b Covering while I'm away | user_c>user_b by user_a Back from leave | user_b>user_c by user_b "+strings.Repeat("é", 300)+" | user_c>user_b by user_c  | user_b> by user_b " {
+	if got := strings.Join(changes, " | "); got != ">user_b by user_b  | user_b>user_c by user_b Covering while I'm away | user_c>user_b by user_a Back from leave | user_b>user_a by user_a  | user_a>user_b by user_a  | user_b>user_c by user_b "+strings.Repeat("é", 300)+" | user_c>user_b by user_c  | user_b> by user_b " {
 		t.Fatalf("each change of hands is recorded, and a kept plan is none: %s", got)
 	}
+	// The close's package keeps the whole history of who held it.
+	var pack struct {
+		WorkHistory struct {
+			CloseOwnerChanges []struct {
+				ToOwner string `json:"to_owner"`
+				Actor   string `json:"actor"`
+				Reason  string `json:"reason"`
+			} `json:"close_owner_changes"`
+		} `json:"work_history"`
+	}
+	archive := call("user_b", partner, "GET", "/v1/closes/"+alpha+"/export", nil, 200)
+	zipped, err := zip.NewReader(strings.NewReader(archive), int64(len(archive)))
+	must(err)
+	manifest, err := zipped.Open("manifest.json")
+	must(err)
+	must(json.NewDecoder(manifest).Decode(&pack))
+	if held := pack.WorkHistory.CloseOwnerChanges; len(held) != 8 || held[1].ToOwner != "user_c" || held[1].Reason != "Covering while I'm away" || held[2].Actor != "user_a" {
+		t.Fatalf("the close package holds every change of hands: %+v", held)
+	}
 	activity := call("user_a", admin, "GET", "/v1/closes/security", nil, 200)
-	for _, want := range []string{"Took Alpha 2026-09", "Assigned Alpha 2026-09 to user_c: Covering while I'm away", "Assigned Alpha 2026-09 to user_b from user_c: Back from leave", "Released Alpha 2026-09"} {
+	for _, want := range []string{"Took Alpha 2026-09", "Took Alpha 2026-09 from user_b", "Assigned Alpha 2026-09 to user_c: Covering while I'm away", "Assigned Alpha 2026-09 to user_b from user_c: Back from leave", "Released Alpha 2026-09"} {
 		if !strings.Contains(activity, want) {
 			t.Fatalf("the Security center shows %q: %s", want, activity)
 		}

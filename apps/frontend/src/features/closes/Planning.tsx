@@ -76,8 +76,8 @@ export function PlanningControls({ closeId, plan, onSaved }: { closeId: string; 
           Release
         </button>
       ) : (
-        <button type="button" disabled={busy || plan.assigned} onClick={() => void save("take")}>
-          {plan.assigned ? "Held by a colleague" : "Assign to me"}
+        <button type="button" disabled={busy || (plan.assigned && !plan.can_assign)} onClick={() => void save("take")}>
+          {plan.assigned ? (plan.can_assign ? "Take it over" : "Held by a colleague") : "Assign to me"}
         </button>
       )}
       {plan.handed && (
