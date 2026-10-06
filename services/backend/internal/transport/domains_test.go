@@ -390,6 +390,15 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("once accepted, the invitee signs in: %s", where)
 	}
 
+	// An expired invitation does not stand in the way of joining by address.
+	quinn := person("quinn", true, domain)
+	if _, err := raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,$2,'member','Member',$3,'pending',$4,'Quinn was invited last month.',now()-interval '1 day')`, firm, f.users[quinn].Email, "invitation_"+rand.Text(), ana); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(quinn, "google"); where != "/dashboard" || cookie == "" || f.membership(quinn, firm) == nil {
+		t.Fatalf("Quinn, whose invitation expired, joins by her address: %s", where)
+	}
+
 	// Someone WorkOS placed in its organization for their domain, which the app has not registered, makes that the firm.
 	placed := "placed" + strings.ToLower(rand.Text()[:8]) + ".test"
 	hosted[placed] = true
@@ -424,8 +433,8 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	if where, cookie := signIn(hank, "google"); where != "/dashboard" || cookie == "" {
 		t.Fatalf("Hank signs in to the hand-made firm: %s", where)
 	}
-	if err := raw.QueryRow(`SELECT o.email_domain,m.actor FROM organizations o JOIN current_organization_members m ON m.organization_id=o.id AND m.subject=$2 WHERE o.id=$1`, handOrg, hank).Scan(&stored, &actor); err != nil || stored != handmade || actor != "company-domain" {
-		t.Fatalf("the hand-made firm takes its verified domain and Hank joins: %q %q %v", stored, actor, err)
+	if err := raw.QueryRow(`SELECT o.email_domain,m.actor FROM organizations o JOIN current_organization_members m ON m.organization_id=o.id AND m.subject=$2 WHERE o.id=$1`, handOrg, hank).Scan(&stored, &actor); err != nil || stored != handmade || actor != hank || f.membership(hank, handOrg).Role.Slug != "firm-admin" {
+		t.Fatalf("the hand-made firm, with no member yet, takes its verified domain and Hank as its administrator: %q %q %v", stored, actor, err)
 	}
 
 	// The administrator sees the firm's people and gives Erin a role; the change is recorded and reaches WorkOS.
@@ -433,7 +442,7 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	var page struct {
 		People []firmPerson `json:"people"`
 	}
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != 5 {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != len(slices.DeleteFunc(slices.Clone(f.memberships), func(m firmMembership) bool { return m.OrganizationID != firm })) {
 		t.Fatalf("the administrator lists the firm's people: %d %s", w.Code, w.Body.String())
 	}
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"staff-only","reason":"Give Erin a staff role.","confirmed":true}`); w.Code != 403 {

@@ -227,7 +227,7 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, stri
 	var own string
 	if held != "" && held != os.Getenv("PLATFORM_ORGANIZATION_ID") {
 		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1),
-			EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) OR EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND email=$3 AND state IN ('sending','pending'))`,
+			EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) OR EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND email=$3 AND state IN ('sending','pending') AND (expires_at IS NULL OR expires_at>now()))`,
 			held, tokens.User.ID, strings.ToLower(strings.TrimSpace(tokens.User.Email))).Scan(&registered, &belongs); err != nil {
 			return "", refuseUnavailable
 		}
@@ -269,7 +269,7 @@ func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind
 	}
 	domain, _ := companyDomain(choice.User.Email)
 	var org string
-	if db.QueryRowContext(systemContext(ctx), `SELECT organization_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state IN ('sending','pending') ORDER BY created_at DESC LIMIT 1`, strings.ToLower(strings.TrimSpace(choice.User.Email)), listed).Scan(&org) == nil {
+	if db.QueryRowContext(systemContext(ctx), `SELECT organization_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state IN ('sending','pending') AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC LIMIT 1`, strings.ToLower(strings.TrimSpace(choice.User.Email)), listed).Scan(&org) == nil {
 		return org
 	}
 	if db.QueryRowContext(systemContext(ctx), `SELECT s.organization_id FROM auth_sessions s JOIN current_organization_members m ON m.organization_id=s.organization_id AND m.subject=s.subject AND m.granted

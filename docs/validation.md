@@ -3353,6 +3353,12 @@ Pass 8 found two gaps:
 
 Both are tested.
 
+Pass 9 found two gaps:
+- **A firm set up by hand with no member yet would have demoted its intended administrator.** The first person into a firm with no member now becomes its Firm admin.
+- **An expired invitation still blocked joining by address.** Expired invitations are now ignored.
+
+Both are tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

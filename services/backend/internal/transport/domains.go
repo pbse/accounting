@@ -239,7 +239,7 @@ func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user si
 	}
 	if !granted.Valid {
 		var invitation sql.NullString
-		err := tx.QueryRowContext(ctx, `SELECT COALESCE(workos_id,'') FROM member_invitations WHERE organization_id=$1 AND email=$2 AND state IN ('sending','pending','accepted') ORDER BY created_at DESC LIMIT 1`, org, strings.ToLower(strings.TrimSpace(user.Email))).Scan(&invitation)
+		err := tx.QueryRowContext(ctx, `SELECT COALESCE(workos_id,'') FROM member_invitations WHERE organization_id=$1 AND email=$2 AND state IN ('sending','pending','accepted') AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at DESC LIMIT 1`, org, strings.ToLower(strings.TrimSpace(user.Email))).Scan(&invitation)
 		if err != nil && err != sql.ErrNoRows {
 			return refuseUnavailable
 		}
@@ -265,15 +265,26 @@ func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user si
 			return ""
 		}
 	}
-	switch err := ensureMembership(ctx, org, user.ID, "member", !granted.Valid); {
+	// A firm with no member yet (one set up by hand and never enrolled, or one whose members were all removed) takes
+	// the person who arrives as its administrator, as a new firm does: otherwise no one could enroll or give roles.
+	role, actor, reason := "member", "company-domain", "Joined with a verified address at "+domain+"; no access until an administrator gives a role or assigns clients"
+	if !granted.Valid {
+		var empty bool
+		if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND granted)`, org).Scan(&empty); err != nil {
+			return refuseUnavailable
+		}
+		if empty {
+			role, actor, reason = "firm-admin", user.ID, "First member of the firm, by a verified address at "+domain
+		}
+	}
+	switch err := ensureMembership(ctx, org, user.ID, role, !granted.Valid); {
 	case errors.Is(err, errMembershipInactive):
 		return refuseRemoved
 	case err != nil:
 		return refuseUnavailable
 	}
 	if !granted.Valid {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,$3,'company-domain')`,
-			org, user.ID, "Joined with a verified address at "+domain+"; no access until an administrator gives a role or assigns clients"); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,$3,$4)`, org, user.ID, reason, actor); err != nil {
 			return refuseUnavailable
 		}
 	}
