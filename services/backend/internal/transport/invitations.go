@@ -284,6 +284,10 @@ func registerInvitations(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		email := strings.ToLower(address.Address)
+		if _, company := companyDomain(email); !company {
+			problem(w, 422, "Krith accepts company email addresses only. Invite the person at their firm's address, not a personal one such as Gmail.")
+			return
+		}
 		_, allowed, err := firmRoles(r.Context(), r)
 		if err != nil {
 			problem(w, 502, "WorkOS roles are unavailable.")

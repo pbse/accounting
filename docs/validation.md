@@ -3303,3 +3303,113 @@ Checks:
   - Running packages in parallel against one database let a transport test take the `firm_health_check` test's queued preparation job (`TestAccountingMethodsDurableReviewAndSourceInvalidation`: "calculation failed queued"). Packages now run one at a time. CI's faster parallel run on Ubuntu and PostgreSQL 17 is unchanged and can still meet this.
 
 Not verified: the targets themselves. No load test and no timed hosted restore with provider reconciliation have been run.
+
+## Sign-in with Google or Microsoft, firms by company domain — 2026-10-05 (B12)
+
+`/login` now has **Continue with Google** and **Continue with Microsoft**, each going straight to the provider through WorkOS. The **Open the workspace** link and the AuthKit wording are gone; the link is kept only where sign-in is not configured, for local development. A signed-in visitor goes straight to the workspace. All of it needs the server-held session ([sign-in](sign-in.md)).
+
+The sign-in callback admits company addresses only; personal mail providers' domains are refused, and so are invitations to them. The first person with a verified address at a domain creates its firm:
+- a WorkOS organization with the domain verified;
+- a Firm admin membership;
+- `organizations.email_domain` (migration 125).
+
+Later colleagues from the domain join as members with no access. Removed people, suspended firms and deactivated memberships stay out, and a person in several firms lands in their domain's firm. The firm's administrator gives roles under **People and roles**: only roles whose permissions they hold, never their own. Each change is recorded in `member_role_changes`.
+
+Local checks:
+- Go build, vet, and the existing session, organization, invitation and export tests pass.
+- `TestOnlyCompanyAddressesCount` and `TestSignInMakesOrJoinsTheFirmOfTheAddressDomain` pass against local PostgreSQL with a fake WorkOS.
+- `npm run check` passes.
+
+Codex (gpt-6-sol, high) pass 1:
+- **A personal-provider list cannot be complete.** A firm is now created only for a domain whose mail is hosted by Google Workspace or Microsoft 365, checked from its MX records.
+- **People WorkOS placed in an unregistered organization were left without access.** They now go through the domain's claim.
+- **A role change with an uncertain outcome could go unrecorded.** It is now recorded as pending first and settled from WorkOS.
+
+Pass 2 found three more:
+- **Joining by address could keep a role WorkOS already held.** Joiners are now set to Member unless the firm invited them; invitees who have not accepted are asked to.
+- **People past the first 200 could not be given a role.** The list now pages, fifty at a time.
+- **Each person was looked up in WorkOS one at a time.** Lookups now run eight at a time, and a firm's known members cause no lookup at sign-in.
+
+Each fix is tested.
+
+Pass 3 found that someone WorkOS signed in to another firm, or asked to choose among several organizations, could miss their own domain's firm. The address now decides the firm before WorkOS's choice is kept. Tests cover a person held only in another firm and a first-time signer claiming their domain's organization from a choice.
+
+Pass 4 found that an existing member's address was not checked for verification, and that a removed member from another domain got a session that could not work. Every sign-in now needs a verified address, and a removed member or suspended firm is refused at sign-in. Both are tested.
+
+Pass 5 found that preferring the domain's firm would pull an accountant invited by another firm away from it. A firm that has decided on or invited the person now keeps them, ahead of their domain's firm; tested.
+
+Pass 6 found three gaps:
+- **A session could keep the role WorkOS held before a joiner was set to Member.** Every firm session now starts from a token issued after the firm is settled.
+- **A firm that had removed someone could still hold them.** Only current membership or an open invitation now keeps a person in a firm.
+- **`yahoo.com.au` counted as a company domain.** Two-label country suffixes are now caught.
+
+Each is tested.
+
+Pass 7 noted that a client already assigned to a joiner's user ID shows that client's closes before any role is given. A client assignment is the administrator's own grant; the docs and the screen now say so ("opens nothing until you give them a role or assign them clients"). Assignments still give access whatever the role, for every member.
+
+Pass 8 found two gaps:
+- **A removed person could be given a role.** Role changes now need the person's current firm access.
+- **An invitee WorkOS had placed by domain was let in before accepting.** Such an invitee is now asked to accept until WorkOS shows the invitation accepted by them.
+
+Both are tested.
+
+Pass 9 found two gaps:
+- **A firm set up by hand with no member yet would have demoted its intended administrator.** The first person into a firm with no member now becomes its Firm admin.
+- **An expired invitation still blocked joining by address.** Expired invitations are now ignored.
+
+Both are tested.
+
+Pass 10 found that a pending invitation from another firm could keep a member out of the firm they work in. Only an invitation WorkOS shows accepted now comes first; tested.
+
+Pass 11 found that an unaccepted invitation still counted when WorkOS signed someone in to the inviting firm, and that only the newest invitation was checked. Only invitations WorkOS shows accepted now count, and all open ones are checked; tested with an accepted invitee, an unaccepted one, and a person with an accepted and a newer pending invitation.
+
+Pass 12 found two gaps:
+- **A pending WorkOS membership could be recorded as access.** A pending membership now asks the person to accept their invitation.
+- **Session renewal did not recheck the address.** An unverified or non-company address now ends the session at renewal.
+
+Both are tested.
+
+Pass 13 found two gaps:
+- **Signing in recreated a WorkOS membership an administrator had removed.** Memberships are now created only for first-time joiners.
+- **Only the newest twenty invitations were checked.** All are checked now.
+
+Both are tested.
+
+Pass 14 found that a firm which had removed someone could still hold them when their own domain had no firm, so they could not set one up. A firm that removed the person now no longer holds them, and their domain's claim decides; tested.
+
+Pass 15 found two gaps:
+- **A firm WorkOS chose, which had not admitted the person, could still hold them.** Only admission in that firm now keeps them.
+- **A lost role change showing a third role was recorded as failed.** It is now recorded as unknown.
+
+Both are tested.
+
+Pass 16 found that two administrators changing one person's role at once could overwrite each other and record the wrong prior role. The role is now read under the firm's lock, and the page sends the role it showed, so a stale change is refused; tested.
+
+Pass 17 found that joining by address read the firm without its row lock, so a concurrent removal could be overtaken. Joining now holds the firm's row lock, as administrators' member decisions do.
+
+Pass 18 found four gaps:
+- **A failed invitation lookup was treated as "no invitation".** It now stops the sign-in for a retry.
+- **Pending and inactive memberships were never seen.** WorkOS lists only active memberships unless asked, so they are now requested, comma-separated as WorkOS's SDK does. The test's fake WorkOS now mirrors that default.
+- **The role an administrator saw was optional on a role change.** It is now required.
+- **A firm named after a very long domain overflowed the name's 200-character limit.** The name is now bounded.
+
+Pass 19 found two things:
+- **A signed-in visitor on `/login` in WorkOS's browser-session mode had no way into the workspace.** Signed-in visitors now go straight there in either mode.
+- **The docs claimed every role change in a firm runs one at a time.** They now say precisely what is serialized: each person's changes, under the firm's lock, with the stale-role check.
+
+Pass 20 found two gaps:
+- **No way to choose between firms.** A person working in more than one firm could not reach the one they wanted. Sign-in now asks such a person which firm to open: a ten-minute sealed choice, `GET /v1/auth/choices` and `POST /v1/auth/choose`, tested end to end. The test also caught that an unverified address was offered the choice before being refused; it is now refused first.
+- **Signing in from `/dashboard` skipped the provider choice.** It now goes through the login page.
+
+Pass 21 found that the manual onboarding path no longer worked with the server-held session: a hand-made organization's administrator was pushed into the domain claim. An administrator holding `org:enroll` in an organization the app has not registered now signs in to it and enrolls it. Tested with a firm whose mail runs through another gateway.
+
+Pass 22 found two gaps:
+- **A second domain on a claimed organization let its people in without an invitation.** People of another domain in a firm registered under one domain now need an invitation (`ask`; tested).
+- **Automatic selection could pick a suspended firm.** It now considers only enabled firms.
+
+Production WorkOS has no users yet, so no one is locked out.
+
+Production still needs the owner to:
+1. Create the Google OAuth client and the Entra application and enter them in WorkOS.
+2. Turn off password and passkey sign-in.
+3. Set `AUTH_SESSION=server`.

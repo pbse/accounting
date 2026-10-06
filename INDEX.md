@@ -91,6 +91,7 @@ These are pointers into the existing implementation, not evidence that a package
 | --- | --- |
 | [Onboarding](docs/onboarding.md) | Local/hosted setup, supported journeys and staging acceptance matrix. |
 | [Public site](docs/marketing-site.md) | getkrith.com's pages and links, its design, the hero and agents animations, and the contact form's storage and email forwarding. |
+| [Sign-in](docs/sign-in.md) | Google and Microsoft sign-in, company addresses only, firms created and joined by company domain, and roles. |
 | [Auth and sandbox staging](docs/auth-sandbox-staging.md) | Hosted sign-in/session modes, sandbox authority and verification. |
 | [Cloudflare upload scanning](docs/cloudflare-upload-scanning.md) | Required PDF scanning, TXT/CSV scanner, quarantine/release and deployment. |
 | [Deployment](docs/deployment.md) | Environments, configuration/secrets, migrations, deployment workflows, costs and activation gaps. |

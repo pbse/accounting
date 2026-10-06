@@ -4,10 +4,10 @@ WorkOS AuthKit is the implemented hosted identity provider. The application supp
 
 ## Configure WorkOS
 
-1. Use separate WorkOS staging and production environments. Enable Google sign-in and the desired email login option. Choose the sign-in session below: the provided auth domain is enough with `AUTH_SESSION=server`; `AUTH_SESSION=client` needs a paid custom authentication domain in production.
+1. Use separate WorkOS staging and production environments. Enable Google and Microsoft sign-in and turn off password and passkey sign-in ([sign-in](sign-in.md#setup-once-per-environment)). Choose the sign-in session below: the provided auth domain is enough with `AUTH_SESSION=server`; `AUTH_SESSION=client` needs a paid custom authentication domain in production.
 2. Register the frontend origin, `/login` on that origin as redirect/login URI, and the origin as sign-out URI. Configure the firm's MFA policy in WorkOS.
 3. Set backend `WORKOS_CLIENT_ID` and exact `WORKOS_ISSUER`. Frontend uses `VITE_WORKOS_CLIENT_ID` and `VITE_WORKOS_API_HOSTNAME`; Compose and GitHub derive these from the root/environment WorkOS settings. Copy the environment's hostname and issuer, not values from an unverified incoming token.
-4. Create a WorkOS organization for each accounting firm and invite staff. Give the first administrator `org:enroll`, `members:manage` and `clients:all`, then sign in and enroll the firm in the app.
+4. With `AUTH_SESSION=server`, firms create themselves from their company domain at first sign-in, and colleagues join as members ([sign-in](sign-in.md)). Otherwise, create a WorkOS organization for each accounting firm and invite staff; give the first administrator `org:enroll`, `members:manage` and `clients:all`, then sign in and enroll the firm in the app.
 5. Record active application memberships and client assignments. WorkOS role assignment alone does not enroll an application member. Keep `clients:all` for intended firm staff; client accountants get explicit assignments plus action permissions. [Permissions](firm-procedures.md#permissions)
 6. Leave `WORKOS_ORGANIZATION_ID` empty for multi-firm SaaS. Setting it deliberately restricts accepted sessions to one firm and identifies the owner of the legacy global sandbox configuration.
 
