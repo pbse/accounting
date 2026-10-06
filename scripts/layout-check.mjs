@@ -130,7 +130,8 @@ async function revealPlan(page) {
   // staff member already holds (from the desktop pass); opening another would replace that grant and close a plan
   // already revealed under it. So a grant is opened only when the API says none is held for the check's firm.
   const deadline = Date.now() + 30000;
-  let asked = 0;
+  const holding = async () => ((await call("/v1/admin/grants")).grants ?? []).some((g) => g.organization === firm);
+  let asked = 0, opened = false;
   while (Date.now() < deadline) {
     const state = await page.evaluate(() => {
       const main = document.querySelector(".app-main");
@@ -141,12 +142,15 @@ async function revealPlan(page) {
       return "waiting";
     });
     if (state === "open") return;
-    const held = state === "grant" && ((await call("/v1/admin/grants")).grants ?? []).some((g) => g.organization === firm);
-    if (state === "grant" && !held) {
+    if (state === "grant" && !opened && !(await holding())) {
+      // Open one grant, and wait for it to exist before looking again, so a slow answer is not submitted twice.
       const grant = page.locator(".app-main details", { hasText: "Open a content grant" });
       await grant.evaluate((details) => (details.open = true));
       await grant.locator("input").fill(reason);
       await grant.locator('button:has-text("Open grant")').click();
+      opened = true;
+      const until = Date.now() + 15000;
+      while (Date.now() < until && !(await holding())) await page.waitForTimeout(250);
     } else if (state !== "waiting" && Date.now() - asked > 5000) {
       // A grant is held but not yet shown or used (the console's grants list may be loading, or its request failed):
       // give the automatic reveal a moment, then reveal with a reason, which needs no grant.
