@@ -126,21 +126,40 @@ const styles = () =>
 // grant as a person would, reveals the plan if the page still asks, and waits for the editor itself.
 async function revealPlan(page) {
   const reason = "Browser layout check of the plan editor";
-  const asking = (text) => page.evaluate((text) => [...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes(text)), text);
-  if (await asking("Open a content grant")) {
-    const grant = page.locator(".app-main details", { hasText: "Open a content grant" });
-    await grant.evaluate((details) => (details.open = true));
-    await grant.locator("input").fill(reason);
-    await grant.locator('button:has-text("Open grant")').click();
-    await page.waitForFunction(() => ![...document.querySelectorAll(".app-main summary")].some((s) => s.textContent.includes("Open a content grant")), null, { timeout: 15000 });
+  // Act on what the editor shows until it opens. The grants list loads after the page, so it can offer a grant the
+  // staff member already holds (from the desktop pass); opening another would replace that grant and close a plan
+  // already revealed under it. So a grant is opened only when the API says none is held for the check's firm.
+  const deadline = Date.now() + 30000;
+  let asked = 0;
+  while (Date.now() < deadline) {
+    const state = await page.evaluate(() => {
+      const main = document.querySelector(".app-main");
+      if ([...main.querySelectorAll("button")].some((b) => b.textContent.includes("Add a step"))) return "open";
+      const summaries = [...main.querySelectorAll("summary")].map((s) => s.textContent);
+      if (summaries.some((t) => t.includes("Open a content grant"))) return "grant";
+      if (summaries.some((t) => t.includes("Reveal client content"))) return "reveal";
+      return "waiting";
+    });
+    if (state === "open") return;
+    if (state === "grant" && !((await call("/v1/admin/grants")).grants ?? []).some((g) => g.organization === firm)) {
+      const grant = page.locator(".app-main details", { hasText: "Open a content grant" });
+      await grant.evaluate((details) => (details.open = true));
+      await grant.locator("input").fill(reason);
+      await grant.locator('button:has-text("Open grant")').click();
+    } else if (state === "reveal" && Date.now() - asked > 5000) {
+      // Held a grant but not revealed under it yet: give the automatic reveal a moment, then reveal with a reason.
+      if (!asked) asked = Date.now();
+      else {
+        const reveal = page.locator(".app-main details", { hasText: "Reveal client content" });
+        await reveal.evaluate((details) => (details.open = true));
+        await reveal.locator("input").fill(reason);
+        await reveal.locator('button:has-text("Reveal client content")').click();
+        asked = Date.now();
+      }
+    }
+    await page.waitForTimeout(250);
   }
-  if (await asking("Reveal client content")) {
-    const reveal = page.locator(".app-main details", { hasText: "Reveal client content" });
-    await reveal.evaluate((details) => (details.open = true));
-    await reveal.locator("input").fill(reason);
-    await reveal.locator('button:has-text("Reveal client content")').click();
-  }
-  await page.waitForSelector('.app-main button:has-text("Add a step")', { timeout: 15000 });
+  throw new Error("the plan editor did not open");
 }
 
 const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : { channel: "chrome" });

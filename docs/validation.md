@@ -3204,3 +3204,5 @@ Not yet done, and waiting on the owner:
 - The old Cloudflare hello@ rule (to a personal inbox, no longer reachable) is to be deleted.
 - The hello@ alias is to be added in Google Workspace.
 - After that, the variable moves to prashant@getkrith.com with a production deploy, and one contact note checks delivery end to end.
+
+The browser layout check's plan-editor step failed intermittently in CI (PRs 271 and 274) at phone width. It offered a content grant before the console had loaded the grant held from the desktop pass, so the check opened a second one. That replaced the first and closed the plan already revealed under it. The step now reads what the editor shows until it opens: it opens a grant only when the API says none is held for the check's firm, and reveals with a reason when the automatic reveal does not come. Four consecutive local runs passed with 76 page views, the first with no grant held, as in CI.
