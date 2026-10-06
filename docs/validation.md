@@ -3429,7 +3429,7 @@ What changed:
 - **`xero.Coverage`.** `BANK` → reconciliation, `PREPAYMENT` → prepaid, a `CURRLIAB` account named as an accrual → accrual, anything else → accountant review. A Trial Balance account missing from the capture is flagged.
   - Each kind's reason and question come from `quickbooks.NewCoverageItem`, shared with `quickbooks.Coverage`.
   - A golden test, also run unchanged against main before the change, shows `quickbooks.Coverage` produces byte-identical output.
-- **Migration 125.** `coverage_bindings` and `goal_handoffs` gain `xero_snapshot_id`. Each names exactly one capture, enforced by checks; `/readyz` waits for both columns.
+- **Migration 126.** `coverage_bindings` and `goal_handoffs` gain `xero_snapshot_id`. Each names exactly one capture, enforced by checks; `/readyz` waits for both columns.
   - Readiness signs a QuickBooks binding's row without the new key, so a QuickBooks sign-off made before the migration still matches.
 - **Every coverage path follows the capture in use:**
   - coverage decisions and requests;
