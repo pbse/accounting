@@ -47,7 +47,7 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workflow_runs WHERE organization_id=$1`,
-			`DELETE FROM close_routines WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
+			`DELETE FROM close_routines WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
 			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			if _, e := db.Exec(q, org); e != nil {
 				t.Errorf("cleanup %s: %v", q, e)
@@ -173,6 +173,23 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	if strings.Join(got, " ") != "user_a:all user_b:all user_c:Beta" {
 		t.Fatalf("the people an administrator chooses owners from: %v", got)
 	}
+
+	// A month opened under a confirmed alias of the client is the client's; the roster names the client by its own name.
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Gamma", "active": true, "since": ended, "reason": "A client"}, 200)
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) VALUES($1,'Gamma','gamma group','fixture')`, org)
+	must(err)
+	if got := brief("user_b", partner, "Gamma"); len(got) != 1 {
+		t.Fatalf("Gamma owes its month: %v", got)
+	}
+	_, err = db.Exec(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Gamma Group',$2)`, org, ended)
+	must(err)
+	if got := brief("user_b", partner, "Gamma"); len(got) != 0 {
+		t.Fatalf("a month opened under the client's alias is the client's: %v", got)
+	}
+	if body := call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Gamma Group", "active": true, "since": ended, "reason": "A client"}, 422); !strings.Contains(body, "confirmed alias of gamma") {
+		t.Fatalf("an alias is not a second client: %s", body)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Gamma", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
 	// A client can have no due date even though the template sets one.
 	zero := 0

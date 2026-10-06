@@ -3438,6 +3438,7 @@ What changed:
   - A first owed month must be within the last five years, since every owed month is listed on each read. A roster change takes the firm lock that opening a close takes, and carry-forward checks the roster again under it.
 - **Carry-forward.** It applies the template to the next month it opens. It refuses a client that left the roster, and the carry at sign-off skips one without reporting a failure.
 - **An inactive client gets no new month by any route.** The new-close route refuses its next month (409; an existing month still opens). A new monthly hand-over is refused, and a running one stops itself instead of opening a month or handing over one already open.
+- **Client identity.** Roster entries match closes by `client_identity`: in owed months, the template, the inactive guards, takeover, retention and the latest close. A month opened under a confirmed alias counts as the client's, and the roster refuses an alias as a second client.
 - **"Yours"** on an owed month means the template's owner is the reader and they can still review.
 - **Joining and leaving.** Confirming a takeover setup puts a client never on the roster onto it from its opening month; confirming again does not reactivate one an administrator marked inactive. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
 - **Records.** Both tables are in the firm export, and `/readyz` waits for them.
@@ -3452,6 +3453,7 @@ Checks:
   - Work's filter narrows the months (a name fragment, the month, or another client).
   - Bea without review permission is not shown Alpha's month as hers.
   - A client with an explicit "no due date" has none, though the template sets one.
+  - Gamma's month opened under its confirmed alias "Gamma Group" is no longer owed, and "Gamma Group" is refused as a roster entry.
   - The roster lists each client with its owed months, and administrators see the members they can choose.
   - Once Cy loses his Beta assignment, Beta's month opens with its due date but no owner.
   - Marking Beta inactive ends what it owes and stops its monthly hand-over.

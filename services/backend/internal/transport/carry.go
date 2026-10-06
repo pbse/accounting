@@ -88,7 +88,7 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 		var roles map[string]reviewer
 		if org := organization(r); r.Method == "POST" && org != "local-development" {
 			var owner string
-			if e := db.QueryRowContext(r.Context(), `SELECT COALESCE(r.owner,t.owner,'') FROM client_closes c JOIN current_client_roster r ON r.organization_id=c.organization_id AND lower(r.client_entity)=lower(c.entity) AND r.active `+rosterTemplate+` WHERE c.id::text=$1`, r.PathValue("id")).Scan(&owner); e == nil && owner != "" {
+			if e := db.QueryRowContext(r.Context(), `SELECT COALESCE(r.owner,t.owner,'') FROM client_closes c JOIN current_client_roster r ON `+rosterMatch("c.organization_id", "c.entity")+` AND r.active `+rosterTemplate+` WHERE c.id::text=$1`, r.PathValue("id")).Scan(&owner); e == nil && owner != "" {
 				roles, _ = firmReviewers(r.Context(), org)
 			}
 		}
@@ -106,7 +106,7 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 		// A client the firm's roster says has left owes no more months, so no work is carried into one.
 		if r.Method == "POST" {
 			var left bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, organization(r), entity).Scan(&left); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, organization(r), entity).Scan(&left); err != nil {
 				problem(w, 503, "Carry-forward unavailable.")
 				return
 			}
@@ -262,7 +262,7 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 			// Read again under the firm lock, which roster changes take too: a client marked inactive meanwhile gets no month.
 			var left bool
 			if err == nil {
-				err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, organization(r), entity).Scan(&left)
+				err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, organization(r), entity).Scan(&left)
 			}
 			if err == nil && left {
 				problem(w, 409, entity+" is inactive on the firm's roster. Reactivate it before carrying work into another month.")
@@ -400,7 +400,7 @@ func registerCarry(mux *http.ServeMux, db *sql.DB) {
 func autoCarry(db *sql.DB, r *http.Request, closeID string) (int, bool) {
 	// A client the firm's roster says has left gets no next month; that is not a failure to report.
 	var left bool
-	if err := db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_closes c JOIN current_client_roster r ON r.organization_id=c.organization_id AND lower(r.client_entity)=lower(c.entity) AND NOT r.active WHERE c.id::text=$1)`, closeID).Scan(&left); err != nil {
+	if err := db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM client_closes c JOIN current_client_roster r ON `+rosterMatch("c.organization_id", "c.entity")+` AND NOT r.active WHERE c.id::text=$1)`, closeID).Scan(&left); err != nil {
 		return 0, false
 	}
 	if left {

@@ -961,7 +961,7 @@ func registerGoals(mux *http.ServeMux, db *sql.DB) {
 			}
 			// A client the firm's roster says has left owes no new months to hand over.
 			var left bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, g.org, entity).Scan(&left); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, g.org, entity).Scan(&left); err != nil {
 				problem(w, 503, "The agent is unavailable.")
 				return
 			}

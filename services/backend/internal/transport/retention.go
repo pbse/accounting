@@ -282,8 +282,8 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			// The client leaves the firm's roster, so no later month is reported as owed.
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) SELECT organization_id,client_entity,false,since,$3,$4 FROM current_client_roster
- WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND active`, organization(r), entity, "Left the roster when "+entity+"'s close was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")", subject(r)); err != nil {
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) SELECT r.organization_id,r.client_entity,false,r.since,$3,$4 FROM current_client_roster r
+ WHERE `+rosterMatch("$1", "$2")+` AND r.active`, organization(r), entity, "Left the roster when "+entity+"'s close was deleted ("+strings.ReplaceAll(in.ReasonCode, "_", " ")+")", subject(r)); err != nil {
 				problem(w, 503, "Deletion stopped without committing.")
 				return
 			}

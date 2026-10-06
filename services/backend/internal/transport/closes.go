@@ -265,7 +265,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 		var roles map[string]reviewer
 		if org := organization(r); org != "local-development" {
 			var owner string
-			if e := db.QueryRowContext(r.Context(), `SELECT COALESCE(r.owner,t.owner,'') FROM current_client_roster r `+rosterTemplate+` WHERE r.organization_id=$1 AND lower(r.client_entity)=lower($2) AND r.active`, org, input.Entity).Scan(&owner); e == nil && owner != "" {
+			if e := db.QueryRowContext(r.Context(), `SELECT COALESCE(r.owner,t.owner,'') FROM current_client_roster r `+rosterTemplate+` WHERE `+rosterMatch("$1", "$2")+` AND r.active`, org, input.Entity).Scan(&owner); e == nil && owner != "" {
 				roles, _ = firmReviewers(r.Context(), org)
 			}
 		}
@@ -297,7 +297,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			}
 			// A client the firm's roster says has left owes no new month; its existing months still open.
 			var left bool
-			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster WHERE organization_id=$1 AND lower(client_entity)=lower($2) AND NOT active)`, organization(r), input.Entity).Scan(&left); err != nil {
+			if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+` AND NOT r.active)`, organization(r), input.Entity).Scan(&left); err != nil {
 				problem(w, 503, "Could not check the current close.")
 				return
 			}

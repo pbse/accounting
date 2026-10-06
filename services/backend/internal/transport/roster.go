@@ -21,6 +21,12 @@ import (
 // a firm administrator adds it, and leaves when an administrator marks it inactive or its close is deleted because the
 // relationship ended.
 
+// rosterMatch is SQL for roster row r being the entry of the client name names in firm org. Clients are matched by
+// client_identity, so a name that is a confirmed alias of a client is that client.
+func rosterMatch(org, name string) string {
+	return `r.organization_id=` + org + ` AND client_identity(r.organization_id,r.client_entity)=client_identity(` + org + `,` + name + `)`
+}
+
 // rosterTemplate is SQL, over a current_client_roster row r, for the firm's current template t.
 const rosterTemplate = `LEFT JOIN LATERAL (SELECT due_days,owner FROM close_templates WHERE organization_id=r.organization_id ORDER BY id DESC LIMIT 1) t ON true`
 
@@ -36,7 +42,7 @@ func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles m
 	err := tx.QueryRowContext(ctx, `SELECT c.organization_id,c.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
  EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=c.organization_id AND m.subject=COALESCE(r.owner,t.owner,'') AND m.granted),
  EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=COALESCE(r.owner,t.owner,'') AND lower(g.client_entity)=lower(c.entity) AND g.granted)
- FROM client_closes c JOIN current_client_roster r ON r.organization_id=c.organization_id AND lower(r.client_entity)=lower(c.entity) AND r.active `+rosterTemplate+`
+ FROM client_closes c JOIN current_client_roster r ON `+rosterMatch("c.organization_id", "c.entity")+` AND r.active `+rosterTemplate+`
  WHERE c.id::text=$1`, closeID).Scan(&org, &period, &dueDays, &owner, &member, &assigned)
 	if err == sql.ErrNoRows {
 		return nil
@@ -79,13 +85,15 @@ type owedMonth struct {
 // client (a name fragment or YYYY-MM, or "") as Work's filter does. A month the client's monthly hand-over is set to
 // open, and not stuck waiting, is marked as the hand-over's.
 func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm, review bool, who, client string) ([]owedMonth, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
+	// Months are matched by client identity, so a month opened under a confirmed alias of the client counts.
+	rows, err := tx.QueryContext(ctx, `WITH opened AS (SELECT DISTINCT client_identity(c.organization_id,c.entity) AS client,c.period FROM client_closes c WHERE c.organization_id=$1)
+ SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
   EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND lower(h.client_entity)=lower(r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)
  FROM current_client_roster r `+rosterTemplate+`
  CROSS JOIN LATERAL (SELECT to_char(g,'YYYY-MM') AS period FROM generate_series(to_date(r.since,'YYYY-MM'),to_date($4,'YYYY-MM'),interval '1 month') g) m
  WHERE r.organization_id=$1 AND r.active
   AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(r.client_entity) AND g.granted))
-  AND NOT EXISTS(SELECT 1 FROM client_closes c WHERE c.organization_id=r.organization_id AND lower(c.entity)=lower(r.client_entity) AND c.period=m.period)
+  AND NOT EXISTS(SELECT 1 FROM opened o WHERE o.client=client_identity(r.organization_id,r.client_entity) AND o.period=m.period)
   AND ($5='' OR r.client_entity ILIKE '%'||$5||'%' OR m.period=$5)
  ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, endedMonth(now), client)
 	if err != nil {
@@ -179,7 +187,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		rows, err := tx.QueryContext(r.Context(), `SELECT r.client_entity,r.active,r.since,r.due_days,r.owner,r.reason,r.actor,r.created_at,
- COALESCE((SELECT max(c.period) FROM client_closes c WHERE c.organization_id=r.organization_id AND lower(c.entity)=lower(r.client_entity)),'')
+ COALESCE((SELECT max(c.period) FROM client_closes c WHERE c.organization_id=r.organization_id AND client_identity(c.organization_id,c.entity)=client_identity(r.organization_id,r.client_entity)),'')
  FROM current_client_roster r WHERE r.organization_id=$1 ORDER BY NOT r.active,lower(r.client_entity)`, org)
 		if err != nil {
 			problem(w, 503, "The client roster is unavailable.")
@@ -269,6 +277,16 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		if in.DueDays != nil && (*in.DueDays < 0 || *in.DueDays > 60) {
 			problem(w, 422, "A close is due 1–60 days after its month ends, or 0 for no due date.")
+			return
+		}
+		// The roster names each client once, by its own name: a confirmed alias of a client is that client.
+		var client string
+		if err := db.QueryRowContext(r.Context(), `SELECT client_identity($1,$2)`, organization(r), in.Entity).Scan(&client); err != nil {
+			problem(w, 503, "The client roster could not be saved.")
+			return
+		}
+		if client != strings.ToLower(in.Entity) {
+			problem(w, 422, in.Entity+" is a confirmed alias of "+client+". Use the client's own name.")
 			return
 		}
 		if in.Owner != nil && *in.Owner != "" {
