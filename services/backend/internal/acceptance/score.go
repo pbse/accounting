@@ -131,8 +131,9 @@ func Score(cases []Case, observed []CaseObserved) Report {
 			t.Documents++
 			label := d.Label
 			problem := label.Exception != "" || label.WorkType == "none"
-			// Held: the job settled waiting for a person, which is how a problem is caught or a clean document asked about.
-			held := got.JobState == "needs_confirmation" || got.JobState == "waiting_client" || got.JobState == "waiting_evidence"
+			// Held: the job settled waiting for a person (or the client), which is how a problem is caught or a clean document
+			// asked about. Waiting for evidence is not a decision: the job is pending a read or a retry.
+			held := got.JobState == "needs_confirmation" || got.JobState == "waiting_client"
 			found := noWork
 			if label.Exception != "" {
 				found = Exceptions[label.Exception]
@@ -150,7 +151,7 @@ func Score(cases []Case, observed []CaseObserved) Report {
 					fail(d.File, "incorrect_draft", fmt.Sprintf("prepared as %s; the label says %s", or(got.Kind, "nothing"), label.WorkType))
 				}
 				for _, field := range sortedKeys(label.Facts) {
-					if want := label.Facts[field]; !sameValue(got.Facts[field], want) {
+					if want := label.Facts[field]; !sameValue(field, got.Facts[field], want) {
 						t.FalseAcceptedFacts++
 						fail(d.File, "false_accepted_fact", fmt.Sprintf("%s %q; the label says %q", field, got.Facts[field], want))
 					}
@@ -178,7 +179,7 @@ func Score(cases []Case, observed []CaseObserved) Report {
 			default:
 				t.Abstained++
 				for _, field := range sortedKeys(label.Facts) {
-					if value, ok := got.Facts[field]; ok && value != "" && !sameValue(value, label.Facts[field]) {
+					if value, ok := got.Facts[field]; ok && value != "" && !sameValue(field, value, label.Facts[field]) {
 						t.WrongProposals++
 					}
 				}
@@ -204,13 +205,16 @@ func Score(cases []Case, observed []CaseObserved) Report {
 	return r
 }
 
-// sameValue compares a fact as an accountant would: amounts by value, anything else ignoring case and spacing.
-func sameValue(got, want string) bool {
+// sameValue compares a field as an accountant would: an amount by value (1,200.00 is 1200), anything else as text
+// ignoring case and spacing, so invoice number 0012 is not 12.
+func sameValue(field, got, want string) bool {
 	g, w := strings.TrimSpace(got), strings.TrimSpace(want)
-	gr, gok := new(big.Rat).SetString(strings.ReplaceAll(g, ",", ""))
-	wr, wok := new(big.Rat).SetString(strings.ReplaceAll(w, ",", ""))
-	if gok && wok {
-		return gr.Cmp(wr) == 0
+	if field == "amount" || strings.HasSuffix(field, "_amount") || strings.HasSuffix(field, "_balance") {
+		gr, gok := new(big.Rat).SetString(strings.ReplaceAll(g, ",", ""))
+		wr, wok := new(big.Rat).SetString(strings.ReplaceAll(w, ",", ""))
+		if gok && wok {
+			return gr.Cmp(wr) == 0
+		}
 	}
 	return strings.EqualFold(strings.Join(strings.Fields(g), " "), strings.Join(strings.Fields(w), " "))
 }
@@ -324,7 +328,7 @@ func entryDifferences(got, want Entry) []string {
 	differences := []string{}
 	for _, f := range []struct{ name, got, want string }{{"date", got.Date, want.Date}, {"debit account", got.DebitAccount, want.DebitAccount},
 		{"credit account", got.CreditAccount, want.CreditAccount}, {"amount", got.Amount, want.Amount}} {
-		if f.want != "" && !sameValue(f.got, f.want) {
+		if f.want != "" && !sameValue(f.name, f.got, f.want) {
 			differences = append(differences, fmt.Sprintf("%s %q, the label says %q", f.name, f.got, f.want))
 		}
 	}

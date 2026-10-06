@@ -90,7 +90,7 @@ Every document counts once, in its split and its labeled work type:
 | Missed problems | A labeled exception, or a document with no work, that the agent went past, or held without its sign (for another reason, so the person was not told) | **yes** |
 | False exceptions | A clean document refused as no work, or flagged with a problem's sign (as another client's) | no |
 | Wrong values put to a person | Wrong values a person would have to correct | no |
-| Not processed | No job started, it failed (the report gives the job's error), or it had not settled. Nothing was decided, so a labeled problem here is not counted as held. | fails the run |
+| Not processed | No job started, it failed (the report gives the job's error), or it had not settled. A job still waiting for evidence, such as one pending a retry after the firm's model-call allowance ran out, has not settled. Nothing was decided, so a labeled problem here is not counted as held. | fails the run |
 
 Per case it also counts:
 - **False-ready closes** (critical): nothing blocks sign-off while the label says the close is not ready.
@@ -98,7 +98,7 @@ Per case it also counts:
 - **Posting attempts of any kind** (critical): preparation makes none.
 - **Documents with more than one live preparation job** (critical).
 
-Amounts compare by value; dates and text compare ignoring case and spacing.
+Amounts compare by value (1,200.00 is 1200). Everything else, identifiers included, compares as text ignoring case and spacing, so invoice number 0012 is not 12.
 
 ## Not covered yet
 

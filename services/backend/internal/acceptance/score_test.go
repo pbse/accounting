@@ -15,7 +15,7 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 	cases := []Case{{ID: "c1", Split: "development", Documents: []Document{
 		prepaid("right.txt", ""), prepaid("wrong-amount.txt", ""), prepaid("extra-draft.txt", ""), prepaid("asked.txt", ""),
 		prepaid("held.txt", "wrong_client"), prepaid("missed.txt", "wrong_client"), prepaid("held-elsewhere.txt", "wrong_client"), prepaid("refused.txt", ""),
-		prepaid("unread.txt", "wrong_client"),
+		prepaid("unread.txt", "wrong_client"), prepaid("pending.txt", ""),
 		{File: "letter.txt", Label: Label{WorkType: "none"}}, prepaid("again.txt", "duplicate"),
 	}}, {ID: "c2", Split: "held_out", ExpectReady: false, Documents: []Document{prepaid("ok.txt", "")}}}
 	good := map[string]string{"amount": "1,200.00", "service_start": "2026-09-01"}
@@ -29,15 +29,17 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 		{File: "missed.txt", JobState: "completed", Kind: "prepaid", Facts: good, Accepted: true, Drafts: right},
 		{File: "held-elsewhere.txt", JobState: "needs_confirmation", Kind: "prepaid", Facts: good, Reason: "Waiting for a person: the close has no current QuickBooks capture."},
 		{File: "refused.txt", JobState: "needs_confirmation", Kind: "prepaid", Engine: "openai", Reason: `Waiting for a person: The invoice is billed to "Harbour LLC", not the client or a confirmed alias.`},
-		{File: "unread.txt", JobState: "failed"},
+		{File: "unread.txt", JobState: "failed", Error: "no recorded preparation answer for unread.txt"},
+		{File: "pending.txt", JobState: "waiting_evidence"},
 		{File: "letter.txt", JobState: "needs_confirmation", Kind: "unsupported"},
 		{File: "again.txt", JobState: "completed", Kind: "prepaid", Facts: good, Accepted: true, SameAs: "right.txt"},
 	}}, {ReadinessState: "open", ExternalActions: 1, Documents: []Observed{{File: "ok.txt", JobState: "completed", Kind: "prepaid", Facts: good, Accepted: true, Drafts: right}}}}
 
 	r := Score(cases, observed)
 	dev := r.Tallies["development"]["prepaid"]
-	// A problem held for another reason (held-elsewhere.txt) is missed; one never decided on (unread.txt) is not processed.
-	if *dev != (Tally{Documents: 10, Accepted: 3, Abstained: 1, CaughtExceptions: 2, FalseAcceptedFacts: 1, IncorrectDrafts: 2, MissedExceptions: 2, FalseExceptions: 1, WrongProposals: 1, Unprocessed: 1}) {
+	// A problem held for another reason (held-elsewhere.txt) is missed; one never decided on (unread.txt failed,
+	// pending.txt waits for a retry) is not processed.
+	if *dev != (Tally{Documents: 11, Accepted: 3, Abstained: 1, CaughtExceptions: 2, FalseAcceptedFacts: 1, IncorrectDrafts: 2, MissedExceptions: 2, FalseExceptions: 1, WrongProposals: 1, Unprocessed: 2}) {
 		t.Fatalf("development prepaid tally: %+v", *dev)
 	}
 	if none := r.Tallies["development"]["none"]; none.Documents != 1 || none.CaughtExceptions != 1 {
@@ -62,11 +64,25 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 	if detail := r.Failures[4].Detail; !strings.Contains(detail, "not for wrong_client: Waiting for a person: the close has no current QuickBooks capture") {
 		t.Fatalf("a problem held for another reason says so: %s", detail)
 	}
-	if r.Passed() || len(r.NotProcessed) != 1 || r.NotProcessed[0].Document != "unread.txt" {
+	if r.Passed() || len(r.NotProcessed) != 2 || r.NotProcessed[0].Document != "unread.txt" || r.NotProcessed[1].Document != "pending.txt" {
 		t.Fatalf("a document never decided on fails the run: %+v", r.NotProcessed)
 	}
-	if md := r.Markdown(); !strings.Contains(md, "| prepaid | 10 | 3 | 1 | 2 | 1 | 2 | 2 | 1 | 1 | 1 |") || !strings.Contains(md, "Critical failures: 7. Not processed: 1.") || !strings.Contains(md, "- c1 / unread.txt: not_processed, job failed") {
+	if md := r.Markdown(); !strings.Contains(md, "| prepaid | 11 | 3 | 1 | 2 | 1 | 2 | 2 | 1 | 1 | 2 |") || !strings.Contains(md, "Critical failures: 7. Not processed: 2.") ||
+		!strings.Contains(md, "- c1 / unread.txt: not_processed, job failed: no recorded preparation answer for unread.txt") || !strings.Contains(md, "- c1 / pending.txt: not_processed, job waiting_evidence") {
 		t.Fatalf("report:\n%s", md)
+	}
+}
+
+// Only amounts compare by value; an identifier is text, so a reading that drops its leading zeros is wrong.
+func TestOnlyAmountsCompareByValue(t *testing.T) {
+	for _, c := range []struct {
+		field, got, want string
+		same             bool
+	}{{"amount", "1,200.00", "1200", true}, {"booked_balance", "-50.0", "-50", true}, {"credit_amount", "10", "10.01", false},
+		{"invoice_number", "12", "0012", false}, {"debit account", "012", "12", false}, {"vendor", "Acme  co", "ACME Co", true}} {
+		if sameValue(c.field, c.got, c.want) != c.same {
+			t.Errorf("%s %q against %q", c.field, c.got, c.want)
+		}
 	}
 }
 
