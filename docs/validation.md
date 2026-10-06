@@ -3363,6 +3363,12 @@ Pass 10 found that a pending invitation from another firm could keep a member ou
 
 Pass 11 found that an unaccepted invitation still counted when WorkOS signed someone in to the inviting firm, and that only the newest invitation was checked. Only invitations WorkOS shows accepted now count, and all open ones are checked; tested with an accepted invitee, an unaccepted one, and a person with an accepted and a newer pending invitation.
 
+Pass 12 found two gaps:
+- **A pending WorkOS membership could be recorded as access.** A pending membership now asks the person to accept their invitation.
+- **Session renewal did not recheck the address.** An unverified or non-company address now ends the session at renewal.
+
+Both are tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

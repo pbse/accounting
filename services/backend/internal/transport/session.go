@@ -547,7 +547,8 @@ func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, kind sessio
 		}
 		return "", 503
 	}
-	if err != nil || claims.Subject != subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil {
+	// Renewal keeps the sign-in rules: an address WorkOS no longer counts as verified, or one no longer a company's, ends it.
+	if _, company := companyDomain(tokens.User.Email); err != nil || claims.Subject != subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil || !tokens.User.EmailVerified || !company {
 		return end()
 	}
 	newAccess, err := secrets.Seal("auth-session:access", []byte(tokens.AccessToken))

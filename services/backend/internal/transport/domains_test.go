@@ -390,6 +390,21 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		t.Fatalf("once accepted, the invitee signs in: %s", where)
 	}
 
+	// A membership WorkOS holds as pending (an invitation awaiting acceptance) gives no access.
+	uma := person("uma", true, domain)
+	f.mu.Lock()
+	um := firmMembership{ID: "om_" + uma, UserID: uma, OrganizationID: firm, Status: "pending"}
+	um.Role.Slug = "member"
+	f.memberships = append(f.memberships, um)
+	f.mu.Unlock()
+	if where, cookie := signIn(uma, "google"); where != "/login?error=invited" || cookie != "" {
+		t.Fatalf("a pending membership is asked to accept its invitation: %s", where)
+	}
+	var umaAccess int
+	if err := raw.QueryRow(`SELECT count(*) FROM organization_member_access WHERE subject=$1`, uma).Scan(&umaAccess); err != nil || umaAccess != 0 {
+		t.Fatalf("no access is recorded for a pending membership: %d %v", umaAccess, err)
+	}
+
 	// An expired invitation does not stand in the way of joining by address.
 	quinn := person("quinn", true, domain)
 	if _, err := raw.Exec(`INSERT INTO member_invitations(organization_id,email,role_slug,role_name,workos_id,state,invited_by,reason,expires_at) VALUES($1,$2,'member','Member',$3,'pending',$4,'Quinn was invited last month.',now()-interval '1 day')`, firm, f.users[quinn].Email, "invitation_"+rand.Text(), ana); err != nil {
@@ -650,5 +665,21 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	var org string
 	if err := raw.QueryRow(`SELECT organization_id FROM auth_sessions WHERE id_hash=(SELECT id_hash FROM auth_sessions WHERE subject=$1 ORDER BY created_at DESC LIMIT 1)`, ana).Scan(&org); err != nil || org != firm {
 		t.Fatalf("the session is for her domain's firm: %q %v", org, err)
+	}
+
+	// Renewing a session keeps the sign-in rules: once WorkOS stops counting Ivy's address as verified, her session ends.
+	if w := call(ivyCookie, "GET", "/v1/closes", ""); w.Code != 200 {
+		t.Fatalf("Ivy's session works before: %d %s", w.Code, w.Body.String())
+	}
+	f.mu.Lock()
+	iu := f.users[ivy]
+	iu.EmailVerified = false
+	f.users[ivy] = iu
+	f.mu.Unlock()
+	if _, err := raw.Exec(`UPDATE auth_sessions SET access_expires_at=now() WHERE id_hash=$1`, hashToken(ivyCookie)); err != nil {
+		t.Fatal(err)
+	}
+	if w := call(ivyCookie, "GET", "/v1/closes", ""); w.Code != 401 {
+		t.Fatalf("a renewal for an unverified address ends the session: %d", w.Code)
 	}
 }

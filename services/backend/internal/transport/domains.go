@@ -105,7 +105,10 @@ type firmMembership struct {
 	} `json:"role"`
 }
 
-var errMembershipInactive = errors.New("WorkOS membership is not active")
+var (
+	errMembershipInactive = errors.New("WorkOS membership is not active")
+	errMembershipPending  = errors.New("WorkOS membership waits on an invitation")
+)
 
 // ensureMembership gives the person a WorkOS membership of the firm with this role. A membership WorkOS has deactivated
 // is never revived here; one they hold is set to the role when exact is set: the firm's first administrator, and someone
@@ -116,7 +119,11 @@ func ensureMembership(ctx context.Context, org, user, role string, exact bool) e
 		return err
 	}
 	for _, m := range held {
-		if m.Status != "active" && m.Status != "pending" {
+		switch m.Status {
+		case "pending":
+			return errMembershipPending
+		case "active":
+		default:
 			return errMembershipInactive
 		}
 		if exact && m.Role.Slug != role {
@@ -209,7 +216,10 @@ func domainFirm(ctx context.Context, db *sql.DB, user signedInUser) (org, refusa
 	if err != sql.ErrNoRows {
 		return "", refuseUnavailable
 	}
-	if ensureMembership(ctx, org, user.ID, "firm-admin", true) != nil {
+	switch err := ensureMembership(ctx, org, user.ID, "firm-admin", true); {
+	case errors.Is(err, errMembershipPending):
+		return "", refuseInvited
+	case err != nil:
 		return "", refuseUnavailable
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO organizations(id,name,email_domain) VALUES($1,$2,$3)`, org, name, domain); err != nil {
@@ -278,6 +288,8 @@ func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user si
 		}
 	}
 	switch err := ensureMembership(ctx, org, user.ID, role, !granted.Valid); {
+	case errors.Is(err, errMembershipPending):
+		return refuseInvited
 	case errors.Is(err, errMembershipInactive):
 		return refuseRemoved
 	case err != nil:
