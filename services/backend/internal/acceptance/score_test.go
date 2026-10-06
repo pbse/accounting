@@ -73,6 +73,24 @@ func TestScoreCountsEachOutcomeAndFailsOnlyOnCriticalOnes(t *testing.T) {
 	}
 }
 
+// Only the bill-to check's refusal of another company's name is the wrong-client sign, not a rejected citation.
+func TestTheWrongClientSignIsTheBillToRefusal(t *testing.T) {
+	found := Exceptions["wrong_client"]
+	for reason, want := range map[string]bool{
+		`Waiting for a person: The invoice is billed to "Northwind", not the client or a confirmed alias; a person confirms the facts.`:                                          true,
+		`Waiting for a person: The invoice is billed to "Northwind", not the client or a confirmed alias; it was also held because the close has no current QuickBooks capture.`: true,
+		"Waiting for a person: the cited line does not say the invoice is billed to that name.":                                                                                  false,
+		"Waiting for a person: the billed to was not read from the source.":                                                                                                      false,
+	} {
+		if found(Observed{Engine: "openai", Reason: reason}) != want {
+			t.Errorf("%s: want %v", reason, want)
+		}
+	}
+	if !found(Observed{Engine: "identity_blocked"}) {
+		t.Error("the identity block is the sign too")
+	}
+}
+
 // Only amounts compare by value; an identifier is text, so a reading that drops its leading zeros is wrong.
 func TestOnlyAmountsCompareByValue(t *testing.T) {
 	for _, c := range []struct {

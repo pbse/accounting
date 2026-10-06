@@ -3,6 +3,7 @@ package acceptance
 import (
 	"fmt"
 	"math/big"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -85,13 +86,18 @@ func (r Report) Passed() bool { return len(r.Failures) == 0 && len(r.NotProcesse
 // A held document counts as a caught problem only when that sign shows: holding it for another reason (say a missing
 // ledger capture) leaves the person uninformed, so it is a missed exception. Add a problem here with its sign.
 var Exceptions = map[string]func(Observed) bool{
-	// The identity block, or the straight-through check that refuses another company's name as billed to.
+	// The identity block, or the hold that leads with the bill-to check's refusal of another company's name; not a
+	// rejected citation, which tells the person nothing about whose invoice it is.
 	"wrong_client": func(o Observed) bool {
-		return o.Engine == "identity_blocked" || strings.Contains(o.Reason, "is billed to")
+		return o.Engine == "identity_blocked" || wrongClientReason.MatchString(o.Reason)
 	},
 	// The same bytes again are one document: no second piece of work.
 	"duplicate": func(o Observed) bool { return o.SameAs != "" },
 }
+
+// wrongClientReason is the agent's hold reason when the invoice it read bills someone other than the client
+// (preparation.BilledToClient), whatever else held it.
+var wrongClientReason = regexp.MustCompile(`^Waiting for a person: The invoice is billed to ".+", not the client or a confirmed alias`)
 
 // flagged reports whether the app raised any problem it has a sign for (other than keeping a repeat as one document):
 // on a clean document, that is a false exception.
