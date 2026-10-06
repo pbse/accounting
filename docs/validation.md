@@ -3461,3 +3461,13 @@ Checks:
 
 Not verified: a live Xero company's chart. Only synthetic captures were used.
 
+## Phase A: provider capability inventory (2026-10-06)
+
+Request: the build plan's phase A "provider capability inventory". [Provider capabilities](provider-capabilities.md) records, for each integration-contract row, what `main` does and how far each capability is proven.
+
+- **Method.** The provider code paths, their tests and the dated records here were read on `main` (after #278) and spot-checked. Checked by hand: the QuickBooks scheduler's reading connection, the default production posting kinds, the absence of a scan on direct upload, the .xlsx conversion, the absence of revocation calls, the model name the OpenAI client reads, and that Xero readiness adds no refresh blocker. No provider was called.
+- **Finding.** No provider capability has a dated live verification. The inventory lists the live checks that would establish one, and the gaps by risk.
+- **Corrections.** [Source sync and forwarding](source-sync-and-forwarding.md) no longer calls automatic QuickBooks checks sandbox-only, or implies that direct uploads are scanned.
+
+Not verified: everything marked synthetic in the inventory, against a real provider.
+
