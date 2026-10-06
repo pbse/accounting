@@ -38,7 +38,11 @@ const (
 	sessionDays   = 30
 )
 
-type sessionConfig struct{ clientID, secret, app string }
+type sessionConfig struct {
+	clientID, secret, app string
+	// firms checks a firm's tokens during sign-in (set by register).
+	firms *auth.Verifier
+}
 
 // serverSessions reads AUTH_SESSION: nil in client mode, or an error when server mode lacks a setting or the value is
 // unknown, so a half-configured server mode stops the API instead of leaving sign-in broken.
@@ -227,7 +231,7 @@ func (c *sessionConfig) settle(ctx context.Context, db *sql.DB, kind sessionKind
 	if kind.staff {
 		return tokens, "", nil
 	}
-	org, refusal := firmFor(ctx, db, tokens)
+	org, refusal := firmFor(ctx, db, tokens, c.enrolling(ctx, tokens))
 	if refusal != "" {
 		return tokens, refusal, nil
 	}
@@ -279,6 +283,15 @@ func acceptedInvitations(ctx context.Context, db *sql.DB, firms []string, user s
 		}
 	}
 	return accepted, nil
+}
+
+// enrolling says whether WorkOS signed the person in to an organization with the authority to enroll it as a firm.
+func (c *sessionConfig) enrolling(ctx context.Context, tokens workosTokens) bool {
+	if c.firms == nil || tokens.OrganizationID == "" || tokens.OrganizationID == os.Getenv("PLATFORM_ORGANIZATION_ID") {
+		return false
+	}
+	claims, err := c.firms.Verify(ctx, tokens.AccessToken)
+	return err == nil && claims.Subject == tokens.User.ID && claims.Organization == tokens.OrganizationID && slices.Contains(claims.Permissions, "org:enroll")
 }
 
 // firmChoice is a sign-in waiting for the person to pick one of the firms they work in, sealed in a short-lived cookie.
@@ -374,7 +387,7 @@ func (c *sessionConfig) startSession(w http.ResponseWriter, r *http.Request, db 
 // a member there or have accepted its invitation (an accountant a client's firm invited stays there). Otherwise their
 // address decides: the firm registered for their domain (joined if need be); else a registered firm WorkOS holds them
 // in; else their domain's claim, which may create the firm or take over an organization WorkOS placed them in.
-func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, string) {
+func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens, enrolling bool) (string, string) {
 	ctx = systemContext(ctx)
 	domain, _ := companyDomain(tokens.User.Email)
 	held := tokens.OrganizationID
@@ -396,6 +409,11 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, stri
 	if registered && belongs {
 		refusal, _ := domainMember(ctx, db, held, tokens.User)
 		return held, refusal
+	}
+	// A firm set up by hand begins as a WorkOS organization whose administrator holds org:enroll: they sign in to it as
+	// it is, and enroll it in the app themselves; the workspace stays closed to them until they do.
+	if !registered && enrolling {
+		return held, ""
 	}
 	if err := db.QueryRowContext(ctx, `SELECT id FROM organizations WHERE email_domain=$1`, domain).Scan(&own); err != nil && err != sql.ErrNoRows {
 		return "", refuseUnavailable
@@ -460,6 +478,7 @@ func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind
 }
 
 func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.Verifier) {
+	c.firms = verifier
 	staff := staffVerifier()
 	mux.HandleFunc("GET /v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		kind := kindOf(r)

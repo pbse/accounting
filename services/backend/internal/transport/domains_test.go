@@ -112,6 +112,8 @@ func (f *fakeWorkOS) serve(t *testing.T, r *http.Request) (int, any) {
 		perms := []string{}
 		if m := f.membership(user, org); m != nil && m.Role.Slug == "firm-admin" {
 			perms = adminPermissions
+		} else if m != nil && m.Role.Slug == "enroller" {
+			perms = []string{"org:enroll", "members:manage", "clients:all"}
 		}
 		return 200, map[string]any{"access_token": f.token(t, user, org, perms...), "refresh_token": "refresh-" + user, "organization_id": org, "user": f.users[user]}
 	case r.Method == "GET" && r.URL.Path == "/organizations":
@@ -703,6 +705,26 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	beforeVic := len(f.created)
 	if where, cookie := signIn(vic, "google"); where != "/dashboard" || cookie == "" || len(f.created) != beforeVic+1 || sessionOrg(vic) != f.created[len(f.created)-1] {
 		t.Fatalf("Vic sets up his own domain's firm: %s %s", where, sessionOrg(vic))
+	}
+
+	// A firm set up by hand, not yet enrolled, keeps its WorkOS administrator (org:enroll) even when their mail runs
+	// through another gateway: they sign in to it and enroll it themselves.
+	gateway := "gateway" + strings.ToLower(rand.Text()[:8]) + ".test"
+	wren := person("wren", true, gateway)
+	manual := "org_Manual" + rand.Text()
+	f.mu.Lock()
+	f.orgs[manual] = gateway
+	wm := firmMembership{ID: "om_" + wren, UserID: wren, OrganizationID: manual, Status: "active"}
+	wm.Role.Slug = "enroller"
+	f.memberships = append(f.memberships, wm)
+	f.mu.Unlock()
+	beforeWren := len(f.created)
+	where, wrenCookie := signIn(wren, "google")
+	if where != "/dashboard" || wrenCookie == "" || sessionOrg(wren) != manual || len(f.created) != beforeWren {
+		t.Fatalf("Wren signs in to the hand-made organization: %s %s", where, sessionOrg(wren))
+	}
+	if w := call(wrenCookie, "POST", "/v1/organizations/enroll", `{"name":"Gateway firm","reason":"Enroll our firm in Krith.","confirmed":true}`); w.Code != 201 {
+		t.Fatalf("and enrolls it: %d %s", w.Code, w.Body.String())
 	}
 
 	// Every sign-in needs a verified address: a member whose address WorkOS no longer counts as verified is turned away.

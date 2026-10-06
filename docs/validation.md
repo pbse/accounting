@@ -3401,6 +3401,8 @@ Pass 20 found two gaps:
 - **No way to choose between firms.** A person working in more than one firm could not reach the one they wanted. Sign-in now asks such a person which firm to open: a ten-minute sealed choice, `GET /v1/auth/choices` and `POST /v1/auth/choose`, tested end to end. The test also caught that an unverified address was offered the choice before being refused; it is now refused first.
 - **Signing in from `/dashboard` skipped the provider choice.** It now goes through the login page.
 
+Pass 21 found that the manual onboarding path no longer worked with the server-held session: a hand-made organization's administrator was pushed into the domain claim. An administrator holding `org:enroll` in an organization the app has not registered now signs in to it and enrolls it. Tested with a firm whose mail runs through another gateway.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:
