@@ -207,6 +207,33 @@ func acceptanceSetup(ctx context.Context, db *sql.DB, org, closeID string, c acc
 	return err
 }
 
+// paperEntries is every journal entry a workpaper proposes, from the keys the tie-out reads them from (tie_out.go): the
+// month's entry, a loan's or payroll's several, a disposal's lines, and a settlement's refund and revenue drafts. A
+// workpaper with nothing to post (a one-month prepaid fully expensed) proposes none.
+func paperEntries(raw []byte) ([]acceptance.Entry, error) {
+	var paper struct {
+		Proposal        *acceptance.Entry  `json:"proposal"`
+		Proposals       []acceptance.Entry `json:"proposals"`
+		Disposal        []acceptance.Entry `json:"disposal"`
+		RefundProposal  *acceptance.Entry  `json:"refund_proposal"`
+		RevenueProposal *acceptance.Entry  `json:"revenue_proposal"`
+	}
+	if err := json.Unmarshal(raw, &paper); err != nil {
+		return nil, err
+	}
+	entries := []acceptance.Entry{}
+	if paper.Proposal != nil {
+		entries = append(entries, *paper.Proposal)
+	}
+	entries = append(append(entries, paper.Proposals...), paper.Disposal...)
+	for _, e := range []*acceptance.Entry{paper.RefundProposal, paper.RevenueProposal} {
+		if e != nil {
+			entries = append(entries, *e)
+		}
+	}
+	return entries, nil
+}
+
 // acceptanceObserve reads back what the pipeline did with each document and with the close. uploads lists each evidence
 // ID's files, the first first; a later file is the same document and is observed as it, noting which it repeats.
 func acceptanceObserve(ctx context.Context, db *sql.DB, closeID string, uploads map[string][]string) (acceptance.CaseObserved, error) {
@@ -232,13 +259,15 @@ func acceptanceObserve(ctx context.Context, db *sql.DB, closeID string, uploads 
 		json.Unmarshal([]byte(papers.String), &ids)
 		o.Drafts = []acceptance.Entry{}
 		for _, paper := range ids {
-			var entry []byte
-			if err = db.QueryRowContext(ctx, `SELECT COALESCE(paper->'proposal','{}'::jsonb) FROM workpapers WHERE id::text=$1`, paper).Scan(&entry); err != nil {
+			var raw []byte
+			if err = db.QueryRowContext(ctx, `SELECT paper FROM workpapers WHERE id::text=$1`, paper).Scan(&raw); err != nil {
 				return observed, err
 			}
-			var e acceptance.Entry
-			json.Unmarshal(entry, &e)
-			o.Drafts = append(o.Drafts, e)
+			entries, err := paperEntries(raw)
+			if err != nil {
+				return observed, fmt.Errorf("workpaper %s: %w", paper, err)
+			}
+			o.Drafts = append(o.Drafts, entries...)
 		}
 		observed.Documents = append(observed.Documents, o)
 		for _, again := range names[1:] {

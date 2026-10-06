@@ -108,3 +108,27 @@ func TestTheSampleCorpusRunsThroughThePipeline(t *testing.T) {
 		t.Fatalf("report:\n%s", md)
 	}
 }
+
+// Every entry a workpaper proposes is observed, in whichever key its kind keeps it, and none from a workpaper with
+// nothing to post.
+func TestEveryProposedEntryIsObserved(t *testing.T) {
+	entry := func(amount string) string {
+		return `{"date":"2026-09-30","debit_account":"Prepaid Expenses","credit_account":"Insurance","amount":"` + amount + `"}`
+	}
+	for paper, want := range map[string][]string{
+		`{"status":"ok","proposal":null}`:                                                                            {},
+		`{"proposal":` + entry("1100.00") + `}`:                                                                      {"1100.00"},
+		`{"proposals":[` + entry("10") + `,` + entry("20") + `]}`:                                                    {"10", "20"},
+		`{"proposal":` + entry("5") + `,"disposal":[` + entry("6") + `]}`:                                            {"5", "6"},
+		`{"proposal":` + entry("1") + `,"refund_proposal":` + entry("2") + `,"revenue_proposal":` + entry("3") + `}`: {"1", "2", "3"},
+	} {
+		entries, err := paperEntries([]byte(paper))
+		got := []string{}
+		for _, e := range entries {
+			got = append(got, e.Amount)
+		}
+		if err != nil || strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s: %v %v", paper, got, err)
+		}
+	}
+}

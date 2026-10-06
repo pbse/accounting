@@ -20,7 +20,7 @@ type Observed struct {
 	Questions int               `json:"questions"`
 	// Accepted means the agent went on without a person: the reading was confirmed by the agent itself.
 	Accepted bool    `json:"accepted"`
-	Drafts   []Entry `json:"drafts"` // every draft the job prepared, in order, with its proposed entry
+	Drafts   []Entry `json:"drafts"` // every entry the job's workpapers propose, in order
 	Reason   string  `json:"reason"` // why the agent went on alone or waited for a person, as it recorded it
 	Error    string  `json:"error"`  // why the job failed, when it did
 	// SameAs is the earlier document this one's bytes repeat: the app kept one document for both.

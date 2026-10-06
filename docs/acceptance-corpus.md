@@ -52,7 +52,7 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
 - **`label`.** The accountant's judgment of the document, not of any reading:
   - `work_type`: `prepaid`, `accrual` and so on, or `none` for a document with no accounting work.
   - `facts`: the values a correct reading gives.
-  - `drafts`: every entry correct preparation proposes, each with `date`, `debit_account`, `credit_account` and `amount`. A field left out is not judged; leaving out `drafts` leaves the drafts unjudged.
+  - `drafts`: every journal entry correct preparation proposes, across its workpapers (a loan's or payroll's several entries, a disposal's lines and a settlement's refund and revenue drafts included), each with `date`, `debit_account`, `credit_account` and `amount`. A field left out is not judged. `"drafts": []` says nothing is to be posted (a one-month prepaid fully expensed, say); leaving out `drafts` leaves the drafts unjudged.
   - `exception`: a material problem a person must see before anything goes on. A problem counts as caught only when the app's own sign for it shows, so the harness accepts only problems it has a sign for:
     - `wrong_client`: the identity block, or a hold reason that leads with "The invoice is billed to "…", not the client or a confirmed alias". A rejected bill-to citation is not the sign: it tells the person nothing about whose invoice it is.
     - `duplicate`: a file whose uploaded bytes repeat an earlier one's, kept by the app as that document. A workbook is compared as the CSV of its first sheet, as it is uploaded. Such a file must be labeled `duplicate`, and the case is refused otherwise.
