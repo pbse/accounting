@@ -42,7 +42,7 @@ Four agents (Collector, Matcher, Investigator, Preparer), shown as collaborators
 
 ### Where Krith's mail goes
 
-Since 2026-10-05, getkrith.com's mail is hosted by **Google Workspace**: the apex MX records are Google's, and the team's mailbox is prashant@getkrith.com. **hello@getkrith.com** is an alias of that mailbox, set in the Google Admin console, not in Cloudflare. Contact notes are forwarded to the same mailbox (`CONTACT_FORWARD_ADDRESS=prashant@getkrith.com`).
+Since 2026-10-05, getkrith.com's mail is hosted by **Google Workspace**: the apex MX records are Google's, and the team's mailbox is prashant@getkrith.com. **hello@getkrith.com** belongs in Google too, as an alias of that mailbox set in the Google Admin console: Cloudflare no longer sees apex mail. Contact notes go to the same mailbox once Cloudflare has verified it as a destination; until then `CONTACT_FORWARD_ADDRESS` stays on the verified personal inbox, so no note goes undelivered in between. The checklist below says what is done.
 
 Cloudflare Email Routing stays enabled on the zone for two other jobs: client replies at `replies@in.getkrith.com`, a subdomain whose MX records are Cloudflare's ([email delivery](email-delivery.md)), and the Worker's contact-note sends. Because the apex MX is Google's, Cloudflare reports the apex as "misconfigured". That is expected: never accept Cloudflare's offer to fix or re-add the apex records, which would replace Google's MX and stop the team's mail. Keep these records at the apex:
 
@@ -57,10 +57,10 @@ Cloudflare Email Routing stays enabled on the zone for two other jobs: client re
 ### Cloudflare and Google setup
 
 - Email Routing enabled on getkrith.com (done 2026-10-05) and on `in.getkrith.com` (done 2026-10-04).
-- **prashant@getkrith.com added as a Cloudflare destination address and verified by its owner** (Cloudflare emails a link). The Worker can send only to a verified destination, so until then notes are kept but not delivered.
-- No Cloudflare routing rule for hello@; the earlier rule to a personal inbox stopped receiving mail when the MX moved to Google, and is to be deleted.
-- hello@getkrith.com added in Google Workspace as an alias of prashant@getkrith.com.
-- The production GitHub variable `CONTACT_FORWARD_ADDRESS` set to prashant@getkrith.com (done 2026-10-05). Without it notes are kept but not forwarded; a change reaches the Worker with the next production deploy.
+- **To do (owner):** add prashant@getkrith.com as a Cloudflare destination address and verify it from the link Cloudflare emails. The Worker can send only to a verified destination.
+- **To do (owner):** delete the Cloudflare routing rule for hello@. It forwarded to a personal inbox and stopped receiving mail when the MX moved to Google.
+- **To do (owner):** add hello@getkrith.com in Google Workspace as an alias of prashant@getkrith.com. Until then, mail to hello@ bounces.
+- **Then:** set the production GitHub variable `CONTACT_FORWARD_ADDRESS` to prashant@getkrith.com and run Deploy production; a variable reaches the Worker only with a deploy. It points to the verified personal inbox meanwhile. Without it, notes are kept but not forwarded. Then send one contact note and confirm it arrives.
 
 The inbox is a convenience; the record is the staff console's **Contact notes** page (`platform:read`), which lists every kept note newest first. A note whose email failed, or that arrived while `CONTACT_FORWARD_ADDRESS` was unset, is read and answered there.
 
