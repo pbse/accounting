@@ -478,6 +478,10 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		}
 		return state
 	}
+	// A change made from a stale list (the role it saw is no longer theirs) is refused.
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","current":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 409 {
+		t.Fatalf("a change from a stale view is refused: %d %s", w.Code, w.Body.String())
+	}
 	f.put = "refuse"
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", role); w.Code != 502 || stateOf() != "failed" {
 		t.Fatalf("a change WorkOS refuses is recorded as failed: %d %s", w.Code, stateOf())

@@ -138,8 +138,10 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		var in struct {
-			Subject   string `json:"subject"`
-			Role      string `json:"role"`
+			Subject string `json:"subject"`
+			Role    string `json:"role"`
+			// Current is the role the administrator saw; a different one now means someone changed it meanwhile.
+			Current   string `json:"current"`
 			Reason    string `json:"reason"`
 			Confirmed bool   `json:"confirmed"`
 		}
@@ -165,20 +167,8 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		org := organization(r)
-		membership, err := activeMembership(r.Context(), org, in.Subject)
-		if err != nil {
-			problem(w, 502, "WorkOS could not find the membership. Try again.")
-			return
-		}
-		if membership.ID == "" {
-			problem(w, 404, "That person has no active membership in the firm.")
-			return
-		}
-		if membership.Role.Slug == in.Role {
-			problem(w, 409, "They already have that role.")
-			return
-		}
 		// The change is recorded as pending before WorkOS is asked, so a change WorkOS makes is never left unrecorded.
+		// Changes for a firm run one at a time under its row lock, and the person's role is read only once it is held.
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Role storage unavailable.")
@@ -206,6 +196,23 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 		}
 		if !targetAccess.Valid || !targetAccess.Bool {
 			problem(w, 409, "They have no firm access. Enroll them first; then give them a role.")
+			return
+		}
+		membership, err := activeMembership(r.Context(), org, in.Subject)
+		if err != nil {
+			problem(w, 502, "WorkOS could not find the membership. Try again.")
+			return
+		}
+		if membership.ID == "" {
+			problem(w, 404, "That person has no active membership in the firm.")
+			return
+		}
+		if in.Current != "" && membership.Role.Slug != in.Current {
+			problem(w, 409, "Their role changed since you loaded the list. Refresh and decide again.")
+			return
+		}
+		if membership.Role.Slug == in.Role {
+			problem(w, 409, "They already have that role.")
 			return
 		}
 		var change int64

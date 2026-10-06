@@ -41,7 +41,8 @@ function FirmPeople() {
     setBusy(true);
     setMessage("");
     try {
-      const result = await workspaceRequest("/members/role", { subject, role: data.get("role"), reason: data.get("reason"), confirmed: data.get("confirmed") === "on" });
+      const current = page?.people.find((person) => person.subject === subject)?.role ?? "";
+      const result = await workspaceRequest("/members/role", { subject, role: data.get("role"), current, reason: data.get("reason"), confirmed: data.get("confirmed") === "on" });
       setMessage(result.message);
       form.reset();
       setSubject("");
