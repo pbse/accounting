@@ -150,6 +150,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	registerProcedureLearning(mux, db)
 	registerAccess(mux, db)
 	registerMembers(mux, db)
+	registerMemberRoles(mux, db)
 	registerOrganizationRevocation(mux, db)
 	registerRetention(mux, db)
 	registerOperations(mux, db)

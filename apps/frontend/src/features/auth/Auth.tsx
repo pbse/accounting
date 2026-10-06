@@ -6,7 +6,7 @@ export const authKitClientId = import.meta.env.VITE_WORKOS_CLIENT_ID as
   string | undefined;
 // AUTH_SESSION=server keeps WorkOS's tokens on our API behind an HttpOnly cookie. Unset or "client" uses WorkOS's
 // browser session, which needs a custom WorkOS authentication domain (VITE_WORKOS_API_HOSTNAME) in production.
-const serverSession = import.meta.env.VITE_AUTH_SESSION === "server";
+export const serverSession = import.meta.env.VITE_AUTH_SESSION === "server";
 
 type Session = { user: { email: string } | null; isLoading: boolean; unavailable?: boolean; signIn: () => Promise<void> | void; signOut: () => Promise<void> | void };
 
@@ -28,8 +28,12 @@ function ClientSession({ children }: { children: ReactNode }) {
   return children;
 }
 
+// The server's sign-in, straight to Google or Microsoft when a provider is named (docs/sign-in.md).
+export function serverSignInUrl(provider?: "google" | "microsoft", back = "/dashboard") {
+  return `${apiBaseUrl}/v1/auth/login?${new URLSearchParams({ ...(provider ? { provider } : {}), return: back })}`;
+}
 function startServerSignIn() {
-  window.location.assign(`${apiBaseUrl}/v1/auth/login?return=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+  window.location.assign(serverSignInUrl(undefined, window.location.pathname + window.location.search));
 }
 async function endServerSession() {
   const response = await fetch(`${apiBaseUrl}/v1/auth/logout`, { method: "POST" });
@@ -106,7 +110,7 @@ export function AccountAccess() {
           )
         }
       >
-        {user ? "Sign out" : "Sign in with AuthKit"}
+        {user ? "Sign out" : "Sign in"}
       </button>
       {error && <p role="alert">{error}</p>}
     </>

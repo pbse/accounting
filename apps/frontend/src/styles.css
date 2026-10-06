@@ -1495,6 +1495,38 @@ html:has(.k-site) {
   color: var(--ink);
   text-underline-offset: 4px;
 }
+.k-providers {
+  display: grid;
+  gap: 12px;
+  width: min(100%, 340px);
+}
+.k-signin a.k-provider {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 13px 22px;
+  border: 1px solid var(--rule-2);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font: 500 15.5px/1.2 var(--sans);
+  text-decoration: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.k-signin a.k-provider:hover {
+  border-color: var(--ink-3);
+  box-shadow: var(--shadow);
+}
+.k-signin a.k-provider:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+.k-signin .k-alert {
+  max-width: 440px;
+  margin: 0;
+  color: var(--ink);
+}
 
 /* Footer: a pen-and-ink landscape closes every page. */
 .k-foot {

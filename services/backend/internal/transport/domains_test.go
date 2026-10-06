@@ -1,0 +1,355 @@
+package transport
+
+import (
+	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"close.local/backend/internal/auth"
+	"github.com/golang-jwt/jwt/v5"
+)
+
+func TestOnlyCompanyAddressesCount(t *testing.T) {
+	for email, want := range map[string]bool{
+		"ana@acme-cpa.com": true, "Ana@Acme-CPA.com ": true, "ben@smith.co.uk": true, "erin@firm.test": true, "live@live.example-firm.com": true,
+		"ana@gmail.com": false, "ana@googlemail.com": false, "ana@outlook.com": false, "ana@hotmail.co.uk": false, "ana@yahoo.co.jp": false,
+		"ana@icloud.com": false, "ana@proton.me": false, "ana@gmx.de": false, "ana@live.com": false, "ana": false, "@acme.com": false, "ana@acme": false, "ana@-acme.com": false,
+	} {
+		if _, got := companyDomain(email); got != want {
+			t.Errorf("%q: company=%v, want %v", email, got, want)
+		}
+	}
+	if domain, _ := companyDomain(" Ana@Acme-CPA.com. "); domain != "acme-cpa.com" {
+		t.Fatalf("the domain is lower case without a trailing dot: %q", domain)
+	}
+}
+
+// fakeWorkOS answers the WorkOS calls sign-in and the members page make, from memory.
+type fakeWorkOS struct {
+	mu          sync.Mutex
+	key         *rsa.PrivateKey
+	users       map[string]signedInUser
+	memberships []firmMembership
+	orgs        map[string]string // id → domain
+	created     []string
+	roleChanges []string
+}
+
+func (f *fakeWorkOS) token(t *testing.T, user, org string, permissions ...string) string {
+	t.Helper()
+	claims := auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: user, Issuer: "https://auth.example", IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute))}, Organization: org, Session: "session_" + user, Permissions: permissions}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = "fixture"
+	signed, err := token.SignedString(f.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signed
+}
+
+func (f *fakeWorkOS) membership(user, org string) *firmMembership {
+	for i := range f.memberships {
+		if f.memberships[i].UserID == user && f.memberships[i].OrganizationID == org {
+			return &f.memberships[i]
+		}
+	}
+	return nil
+}
+
+var adminPermissions = []string{"clients:all", "members:manage", "org:manage", "workpapers:review"}
+
+func (f *fakeWorkOS) serve(t *testing.T, r *http.Request) (int, any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var body map[string]any
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&body)
+	}
+	str := func(k string) string { s, _ := body[k].(string); return s }
+	q := r.URL.Query()
+	switch {
+	case r.URL.Path == "/sso/jwks/client_fixture":
+		return 200, map[string]any{"keys": []any{map[string]string{"kid": "fixture", "kty": "RSA", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(f.key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1})}}}
+	case r.URL.Path == "/user_management/authenticate":
+		// The code names the person; their organization is the one membership they hold, if exactly one.
+		user, org := str("code"), str("organization_id")
+		if str("grant_type") == "refresh_token" {
+			user = strings.TrimPrefix(str("refresh_token"), "refresh-")
+		}
+		if org == "" {
+			var held []map[string]string
+			for _, m := range f.memberships {
+				if m.UserID == user && m.Status == "active" {
+					held = append(held, map[string]string{"id": m.OrganizationID})
+				}
+			}
+			if len(held) > 1 {
+				return 403, map[string]any{"code": "organization_selection_required", "pending_authentication_token": "pending-" + user, "organizations": held, "user": f.users[user]}
+			}
+			if len(held) == 1 {
+				org = held[0]["id"]
+			}
+		}
+		if str("grant_type") == "urn:workos:oauth:grant-type:organization-selection" {
+			user = strings.TrimPrefix(str("pending_authentication_token"), "pending-")
+		}
+		perms := []string{}
+		if m := f.membership(user, org); m != nil && m.Role.Slug == "firm-admin" {
+			perms = adminPermissions
+		}
+		return 200, map[string]any{"access_token": f.token(t, user, org, perms...), "refresh_token": "refresh-" + user, "organization_id": org, "user": f.users[user]}
+	case r.Method == "GET" && r.URL.Path == "/organizations":
+		found := []map[string]string{}
+		for id, domain := range f.orgs {
+			if domain == q.Get("domains") {
+				found = append(found, map[string]string{"id": id, "name": domain})
+			}
+		}
+		return 200, map[string]any{"data": found, "list_metadata": map[string]string{}}
+	case r.Method == "POST" && r.URL.Path == "/organizations":
+		id := "org_Domain" + rand.Text()
+		domains, _ := body["domain_data"].([]any)
+		first, _ := domains[0].(map[string]any)
+		if first["state"] != "verified" {
+			t.Errorf("the firm's domain is created verified: %v", body)
+		}
+		f.orgs[id] = first["domain"].(string)
+		f.created = append(f.created, id)
+		return 201, map[string]string{"id": id}
+	case r.Method == "GET" && r.URL.Path == "/user_management/organization_memberships":
+		found := []firmMembership{}
+		for _, m := range f.memberships {
+			if (q.Get("user_id") == "" || m.UserID == q.Get("user_id")) && m.OrganizationID == q.Get("organization_id") && (q.Get("statuses") == "" || m.Status == q.Get("statuses")) {
+				found = append(found, m)
+			}
+		}
+		return 200, map[string]any{"data": found, "list_metadata": map[string]string{}}
+	case r.Method == "POST" && r.URL.Path == "/user_management/organization_memberships":
+		m := firmMembership{ID: "om_" + str("user_id"), UserID: str("user_id"), OrganizationID: str("organization_id"), Status: "active"}
+		m.Role.Slug = str("role_slug")
+		f.memberships = append(f.memberships, m)
+		return 201, m
+	case r.Method == "PUT" && strings.HasPrefix(r.URL.Path, "/user_management/organization_memberships/"):
+		for i := range f.memberships {
+			if "/user_management/organization_memberships/"+f.memberships[i].ID == r.URL.Path {
+				f.memberships[i].Role.Slug = str("role_slug")
+				f.roleChanges = append(f.roleChanges, f.memberships[i].UserID+"→"+str("role_slug"))
+				return 200, f.memberships[i]
+			}
+		}
+		return 404, map[string]string{}
+	case strings.HasPrefix(r.URL.Path, "/user_management/users/"):
+		u := f.users[strings.TrimPrefix(r.URL.Path, "/user_management/users/")]
+		return 200, map[string]any{"id": u.ID, "email": u.Email, "email_verified": u.EmailVerified, "first_name": strings.Split(u.Email, "@")[0], "last_name": ""}
+	case strings.HasPrefix(r.URL.Path, "/authorization/organizations/") && strings.HasSuffix(r.URL.Path, "/roles"):
+		return 200, map[string]any{"data": []map[string]any{
+			{"slug": "member", "name": "Member", "permissions": []string{}},
+			{"slug": "firm-admin", "name": "Firm admin", "permissions": adminPermissions},
+			{"slug": "staff-only", "name": "Staff only", "permissions": []string{"platform:operate"}},
+		}}
+	}
+	t.Errorf("unexpected WorkOS call %s %s", r.Method, r.URL)
+	return 500, nil
+}
+
+func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	// Closed by Cleanup, registered first so it runs after the data cleanup below (a defer would run before it).
+	db, err := OpenTenantDB(dsn, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	raw, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	domain := "acme" + strings.ToLower(rand.Text()[:8]) + ".test"
+	f := &fakeWorkOS{key: key, orgs: map[string]string{}, users: map[string]signedInUser{}}
+	person := func(name string, verified bool, at string) string {
+		id := "user_" + name + strings.ToLower(rand.Text()[:6])
+		f.users[id] = signedInUser{ID: id, Email: name + "@" + at, EmailVerified: verified}
+		return id
+	}
+	ana, ben, carol, dave, erin := person("ana", true, domain), person("ben", true, domain), person("carol", true, "gmail.com"), person("dave", false, domain), person("erin", true, domain)
+	t.Cleanup(func() {
+		for id := range f.orgs {
+			for _, q := range []string{`DELETE FROM auth_sessions WHERE organization_id=$1`, `DELETE FROM member_role_changes WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
+				if _, err := raw.Exec(q, id); err != nil {
+					t.Errorf("cleanup %s: %v", id, err)
+				}
+			}
+		}
+	})
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
+		status, v := f.serve(t, r)
+		out, _ := json.Marshal(v)
+		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(out)), Header: make(http.Header)}, nil
+	})
+	t.Setenv("WORKOS_CLIENT_ID", "client_fixture")
+	t.Setenv("WORKOS_ISSUER", "https://auth.example")
+	t.Setenv("WORKOS_ORGANIZATION_ID", "")
+	t.Setenv("WORKOS_API_KEY", "sk_test_fixture")
+	t.Setenv("SECRETS_KEY", strings.Repeat("cd", 32))
+	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
+	t.Setenv("AUTH_SESSION", "server")
+	t.Setenv("FRONTEND_ORIGIN", "https://app.example.test")
+	t.Setenv("PLATFORM_ORGANIZATION_ID", "org_PlatformFixture")
+	handler := apiWithStore(db, "")
+
+	// signIn runs the round trip with a provider button and returns where it lands and the session cookie, if any.
+	signIn := func(user, provider string) (string, string) {
+		t.Helper()
+		start := httptest.NewRecorder()
+		handler.ServeHTTP(start, httptest.NewRequest("GET", "https://app.example.test/v1/auth/login?provider="+provider, nil))
+		at, _ := url.Parse(start.Header().Get("Location"))
+		if want := map[string]string{"google": "GoogleOAuth", "microsoft": "MicrosoftOAuth"}[provider]; at.Query().Get("provider") != want {
+			t.Fatalf("the %s button goes straight to %s: %s", provider, want, at)
+		}
+		r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code="+user+"&state="+url.QueryEscape(at.Query().Get("state")), nil)
+		for _, c := range start.Result().Cookies() {
+			r.AddCookie(c)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != 302 {
+			t.Fatalf("sign-in for %s: %d %s", user, w.Code, w.Body.String())
+		}
+		for _, c := range w.Result().Cookies() {
+			if c.Name == sessionCookie && c.MaxAge > 0 {
+				return w.Header().Get("Location"), c.Value
+			}
+		}
+		return w.Header().Get("Location"), ""
+	}
+	call := func(cookie, method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, "https://app.example.test"+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "https://app.example.test")
+		r.AddCookie(&http.Cookie{Name: sessionCookie, Value: cookie})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+
+	// The first person from the domain creates its firm, with the domain verified, and becomes its administrator.
+	where, anaCookie := signIn(ana, "google")
+	if where != "/dashboard" || anaCookie == "" || len(f.created) != 1 {
+		t.Fatalf("Ana lands in a new firm: %s cookie=%v created=%v", where, anaCookie != "", f.created)
+	}
+	firm := f.created[0]
+	var stored, actor string
+	if err := raw.QueryRow(`SELECT o.email_domain,m.actor FROM organizations o JOIN organization_member_access m ON m.organization_id=o.id WHERE o.id=$1 AND m.subject=$2 AND m.granted`, firm, ana).Scan(&stored, &actor); err != nil || stored != domain || actor != ana {
+		t.Fatalf("the firm records its domain and its first member: %q %q %v", stored, actor, err)
+	}
+	if m := f.membership(ana, firm); m == nil || m.Role.Slug != "firm-admin" {
+		t.Fatalf("Ana is the firm's administrator in WorkOS: %+v", m)
+	}
+	if w := call(anaCookie, "GET", "/v1/closes", ""); w.Code != 200 {
+		t.Fatalf("the administrator opens the firm's work: %d %s", w.Code, w.Body.String())
+	}
+
+	// A colleague joins the same firm as a member, with no access until the administrator gives a role.
+	where, benCookie := signIn(ben, "microsoft")
+	if where != "/dashboard" || benCookie == "" || len(f.created) != 1 {
+		t.Fatalf("Ben joins rather than creating a firm: %s created=%v", where, f.created)
+	}
+	if m := f.membership(ben, firm); m == nil || m.Role.Slug != "member" {
+		t.Fatalf("Ben is a member in WorkOS: %+v", m)
+	}
+	if err := raw.QueryRow(`SELECT actor FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted`, firm, ben).Scan(&actor); err != nil || actor != "company-domain" {
+		t.Fatalf("the firm records that Ben joined by his address: %q %v", actor, err)
+	}
+	if w := call(benCookie, "GET", "/v1/closes/members/people", ""); w.Code != 403 {
+		t.Fatalf("a member without a role cannot manage people: %d", w.Code)
+	}
+
+	// Personal addresses, unverified ones and a person the firm removed are turned away, with no session.
+	if where, cookie := signIn(carol, "google"); where != "/login?error=company" || cookie != "" {
+		t.Fatalf("a Gmail address is refused: %s", where)
+	}
+	if where, cookie := signIn(dave, "google"); where != "/login?error=unverified" || cookie != "" {
+		t.Fatalf("an unverified address cannot join: %s", where)
+	}
+	if _, err := raw.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,false,'Left the firm; access removed.',$3)`, firm, ben, ana); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(ben, "google"); where != "/login?error=removed" || cookie != "" {
+		t.Fatalf("a removed member is not let back in by their address: %s", where)
+	}
+
+	// Someone WorkOS itself placed in the firm by its verified domain is recorded as joining by their address.
+	f.mu.Lock()
+	m := firmMembership{ID: "om_" + erin, UserID: erin, OrganizationID: firm, Status: "active"}
+	m.Role.Slug = "member"
+	f.memberships = append(f.memberships, m)
+	f.mu.Unlock()
+	if where, cookie := signIn(erin, "google"); where != "/dashboard" || cookie == "" {
+		t.Fatalf("Erin, provisioned by WorkOS, signs in: %s", where)
+	}
+	if err := raw.QueryRow(`SELECT actor FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted`, firm, erin).Scan(&actor); err != nil || actor != "company-domain" {
+		t.Fatalf("Erin is recorded as joining by her address: %q %v", actor, err)
+	}
+
+	// The administrator sees the firm's people and gives Erin a role; the change is recorded and reaches WorkOS.
+	w := call(anaCookie, "GET", "/v1/closes/members/people", "")
+	var page struct {
+		People []firmPerson `json:"people"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &page) != nil || len(page.People) != 3 {
+		t.Fatalf("the administrator lists the firm's people: %d %s", w.Code, w.Body.String())
+	}
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"staff-only","reason":"Give Erin a staff role.","confirmed":true}`); w.Code != 403 {
+		t.Fatalf("a role with permissions the administrator lacks cannot be given: %d %s", w.Code, w.Body.String())
+	}
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ana+`","role":"member","reason":"Step down from administrator.","confirmed":true}`); w.Code != 422 {
+		t.Fatalf("an administrator cannot change their own role: %d", w.Code)
+	}
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 200 {
+		t.Fatalf("the administrator gives Erin a role: %d %s", w.Code, w.Body.String())
+	}
+	var from, to string
+	if err := raw.QueryRow(`SELECT from_role,to_role,actor FROM member_role_changes WHERE organization_id=$1 AND subject=$2`, firm, erin).Scan(&from, &to, &actor); err != nil || from != "member" || to != "firm-admin" || actor != ana || len(f.roleChanges) != 1 {
+		t.Fatalf("the role change is recorded and made in WorkOS: %q %q %q %v %v", from, to, actor, f.roleChanges, err)
+	}
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 409 {
+		t.Fatalf("giving the role they already have changes nothing: %d", w.Code)
+	}
+
+	// A person in two firms signs in to the firm of their address's domain.
+	f.mu.Lock()
+	other := firmMembership{ID: "om_other_" + ana, UserID: ana, OrganizationID: "org_ElsewhereFixture", Status: "active"}
+	other.Role.Slug = "member"
+	f.memberships = append(f.memberships, other)
+	f.mu.Unlock()
+	if where, cookie := signIn(ana, "google"); where != "/dashboard" || cookie == "" {
+		t.Fatalf("Ana, in two firms, signs in: %s", where)
+	}
+	var org string
+	if err := raw.QueryRow(`SELECT organization_id FROM auth_sessions WHERE id_hash=(SELECT id_hash FROM auth_sessions WHERE subject=$1 ORDER BY created_at DESC LIMIT 1)`, ana).Scan(&org); err != nil || org != firm {
+		t.Fatalf("the session is for her domain's firm: %q %v", org, err)
+	}
+}

@@ -3303,3 +3303,26 @@ Checks:
   - Running packages in parallel against one database let a transport test take the `firm_health_check` test's queued preparation job (`TestAccountingMethodsDurableReviewAndSourceInvalidation`: "calculation failed queued"). Packages now run one at a time. CI's faster parallel run on Ubuntu and PostgreSQL 17 is unchanged and can still meet this.
 
 Not verified: the targets themselves. No load test and no timed hosted restore with provider reconciliation have been run.
+
+## Sign-in with Google or Microsoft, firms by company domain — 2026-10-05 (B12)
+
+`/login` now has **Continue with Google** and **Continue with Microsoft**, each going straight to the provider through WorkOS. The **Open the workspace** link and the AuthKit wording are gone; the link is kept only where sign-in is not configured, for local development. A signed-in visitor goes straight to the workspace. All of it needs the server-held session ([sign-in](sign-in.md)).
+
+The sign-in callback admits company addresses only; personal mail providers' domains are refused, and so are invitations to them. The first person with a verified address at a domain creates its firm:
+- a WorkOS organization with the domain verified;
+- a Firm admin membership;
+- `organizations.email_domain` (migration 124).
+
+Later colleagues from the domain join as members with no access. Removed people, suspended firms and deactivated memberships stay out, and a person in several firms lands in their domain's firm. The firm's administrator gives roles under **People and roles**: only roles whose permissions they hold, never their own. Each change is recorded in `member_role_changes`.
+
+Local checks:
+- Go build, vet, and the existing session, organization, invitation and export tests pass.
+- `TestOnlyCompanyAddressesCount` and `TestSignInMakesOrJoinsTheFirmOfTheAddressDomain` pass against local PostgreSQL with a fake WorkOS.
+- `npm run check` passes.
+
+Production WorkOS has no users yet, so no one is locked out.
+
+Production still needs the owner to:
+1. Create the Google OAuth client and the Entra application and enter them in WorkOS.
+2. Turn off password and passkey sign-in.
+3. Set `AUTH_SESSION=server`.

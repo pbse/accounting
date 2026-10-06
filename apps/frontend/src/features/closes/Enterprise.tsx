@@ -8,6 +8,96 @@ type Member = { id: number; subject: string; granted: boolean; reason: string; a
 type Alert = { kind: string; close_id: string; item_id: string; state: string; age_minutes: number };
 type Operations = { limits: { closes: number; active_jobs: number; model_calls_today: number }; usage: { closes: number; active_jobs: number; model_calls_today: number }; unmapped_delivery_events: number; undelivered_alerts: number; alerts: Alert[]; has_more: boolean };
 type Retention = { retain_until: string; legal_hold: boolean; version: number; deletion_blockers: string[] };
+type Person = { subject: string; email: string; name: string; role: string; status: string; access: "granted" | "revoked" | "none" };
+type RoleOption = { slug: string; name: string; description: string; permissions: string[]; allowed: boolean };
+type RoleChange = { id: number; subject: string; from_role: string; to_role: string; reason: string; actor: string; created_at: string };
+
+// The firm's people and their roles (docs/sign-in.md). Colleagues who sign in with the firm's company domain arrive
+// with the Member role, which opens nothing; an administrator gives each the role they need.
+function FirmPeople() {
+  const [page, setPage] = useState<{ people: Person[]; roles: RoleOption[]; changes: RoleChange[]; more: boolean }>();
+  const [subject, setSubject] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function load() {
+    setBusy(true);
+    try {
+      setPage(await workspaceRequest("/members/people"));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The firm’s people are unavailable.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+  async function change(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await workspaceRequest("/members/role", { subject, role: data.get("role"), reason: data.get("reason"), confirmed: data.get("confirmed") === "on" });
+      setMessage(result.message);
+      form.reset();
+      setSubject("");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The role could not be changed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const roleName = (slug: string) => page?.roles.find((role) => role.slug === slug)?.name ?? slug;
+  const who = (sub: string) => {
+    const person = page?.people.find((p) => p.subject === sub);
+    return person ? person.name || person.email : sub;
+  };
+  if (!page) return <p role="status">{message || "Loading the firm’s people…"}</p>;
+  const chosen = page.people.find((person) => person.subject === subject);
+  return (
+    <section>
+      <h3>People and roles</h3>
+      <p>Colleagues who sign in with the firm’s company domain join with the Member role, which opens nothing until you give them a role. A role change takes effect within five minutes.</p>
+      <table>
+        <thead><tr><th>Person</th><th>Role</th><th>Firm access</th></tr></thead>
+        <tbody>
+          {page.people.map((person) => (
+            <tr key={person.subject}>
+              <td>{person.name ? <>{person.name}<br /><small>{person.email}</small></> : person.email}</td>
+              <td>{roleName(person.role)}{person.status !== "active" && <small> · {person.status}</small>}</td>
+              <td>{person.access === "granted" ? "Enrolled" : person.access === "revoked" ? "Removed" : "Not enrolled"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {page.more && <p>Only the first 200 people are listed.</p>}
+      <form onSubmit={(event) => void change(event)}><fieldset disabled={busy}>
+        <legend>Change a person’s role</legend>
+        <label>Person
+          <select required value={subject} onChange={(event) => setSubject(event.target.value)}>
+            <option value="">Choose a person</option>
+            {page.people.filter((person) => person.status === "active").map((person) => <option key={person.subject} value={person.subject}>{person.name ? `${person.name} (${person.email})` : person.email}</option>)}
+          </select>
+        </label>
+        {chosen && <p>Current role: {roleName(chosen.role)}</p>}
+        <label>New role
+          <select name="role" required defaultValue="">
+            <option value="" disabled>Choose a role</option>
+            {page.roles.filter((role) => role.allowed).map((role) => <option key={role.slug} value={role.slug}>{role.name}{role.permissions.length ? ` — ${role.permissions.join(", ")}` : " — no access"}</option>)}
+          </select>
+        </label>
+        <label>Reason<textarea name="reason" required minLength={10} maxLength={2000} /></label>
+        <label><input name="confirmed" type="checkbox" required />I checked the person and the role.</label>
+        <button>Change role</button>
+      </fieldset></form>
+      {page.changes.length > 0 && <details><summary>Role changes ({page.changes.length})</summary><ol>{page.changes.map((c) => <li key={c.id}>{who(c.subject)}: {roleName(c.from_role)} → {roleName(c.to_role)} · {c.reason} · by {who(c.actor)} · {new Date(c.created_at).toLocaleString()}</li>)}</ol></details>}
+      <p role="status">{message}</p>
+    </section>
+  );
+}
 
 export function FirmEnrollment({ onEnrolled }: { onEnrolled: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -164,6 +254,7 @@ export function FirmOperations() {
       {snapshot.alerts.length === 0 ? <p>No aged or unknown work in this snapshot.</p> : <ul>{snapshot.alerts.map((item) => <li key={`${item.kind}-${item.item_id}`}><Link to={`/dashboard/closes/${item.close_id}`}>{item.kind} #{item.item_id}</Link> · {item.state} · {item.age_minutes} minutes</li>)}</ul>}
       {snapshot.has_more && <p>More than 100 alerts exist. Resolve these, then refresh to see the rest.</p>}
     </>}
+    {memberAccess && <FirmPeople />}
     {memberAccess && <Invitations />}
     {memberAccess && <form onSubmit={(event) => void decide(event)}><fieldset disabled={busy}>
       <legend>Enroll or revoke an existing WorkOS user by ID</legend>
