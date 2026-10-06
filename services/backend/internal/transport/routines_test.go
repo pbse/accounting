@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"close.local/backend/internal/preparation"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -236,6 +237,12 @@ func TestMonthlyHandOverOpensAndHandsOverEachNewMonth(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Alpha Group',true,$2,'Synthetic','fixture')`, org, month(0))
 	must(err)
 	call("user_admin", admin, "POST", "/v1/closes/"+signed+"/delete", map[string]any{"expected_version": retention.Version, "entity": "Alpha", "period": month(2), "reason_code": "contract_termination", "confirmed": true}, 200)
+	// The receipt keeps the digest of the client the close belonged to, read before its aliases were forgotten.
+	var clientDigest string
+	must(db.QueryRow(`SELECT COALESCE(client_digest,'') FROM close_deletion_receipts WHERE organization_id=$1 AND period=$2`, org, month(2)).Scan(&clientDigest))
+	if clientDigest != preparation.Digest([]byte(org+"\x00alpha\x00"+month(2))) {
+		t.Fatalf("the receipt keeps the client's digest: %q", clientDigest)
+	}
 	var stillActive int
 	must(db.QueryRow(`SELECT count(*) FROM current_client_roster WHERE organization_id=$1 AND active`, org).Scan(&stillActive))
 	if stillActive != 0 {

@@ -184,8 +184,8 @@ func registerTakeoverSetup(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, problems[0])
 			return
 		}
-		var newest bool
-		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM takeover_setups WHERE id=(SELECT max(id) FROM takeover_setups WHERE close_id::text=$1) AND digest=$2 AND timezone=$3)`, r.PathValue("id"), digest, in.Timezone).Scan(&newest); err != nil {
+		var newest, first bool
+		if err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM takeover_setups WHERE id=(SELECT max(id) FROM takeover_setups WHERE close_id::text=$1) AND digest=$2 AND timezone=$3),NOT EXISTS(SELECT 1 FROM takeover_setups WHERE close_id::text=$1)`, r.PathValue("id"), digest, in.Timezone).Scan(&newest, &first); err != nil {
 			problem(w, 503, "Takeover setup unavailable.")
 			return
 		}
@@ -198,13 +198,13 @@ func registerTakeoverSetup(mux *http.ServeMux, db *sql.DB) {
 		if err = tx.QueryRowContext(r.Context(), `INSERT INTO takeover_setups(organization_id,close_id,digest,content,timezone,confirmed_by) VALUES($1,$2::bigint,$3,$4,$5,$6) RETURNING id::text`, org, r.PathValue("id"), digest, string(saved), in.Timezone, who).Scan(&id); err == nil {
 			// A client taken over joins the firm's roster, owing a close each month from its opening month. One already on
 			// it, even inactive, stays as an administrator left it: confirming a setup again changes nothing there.
-			var joined sql.Result
-			joined, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) SELECT c.organization_id,c.entity,true,c.period,'Taken over from '||c.period,$2
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) SELECT c.organization_id,c.entity,true,c.period,'Taken over from '||c.period,$2
  FROM client_closes c WHERE c.id::text=$1 AND NOT EXISTS(SELECT 1 FROM client_roster r WHERE `+rosterMatch("c.organization_id", "c.entity")+`)`, r.PathValue("id"), who)
-			if err == nil {
-				if n, _ := joined.RowsAffected(); n == 1 {
-					err = applyCloseTemplate(r.Context(), tx, r.PathValue("id"), roles)
-				}
+			// The first confirmation gives the opening close the firm's template, if the client is active on the roster, as
+			// it is opened for any other month; a due date or owner the close already has is kept. A later confirmation
+			// leaves the close as its people left it.
+			if err == nil && first {
+				err = applyCloseTemplate(r.Context(), tx, r.PathValue("id"), roles)
 			}
 		}
 		if err != nil || tx.Commit() != nil {

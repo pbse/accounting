@@ -256,6 +256,18 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		t.Fatalf("a month deleted under the retention policy is not owed again: %v", got)
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Theta", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+	// So is a month whose close was opened under a confirmed alias, "Iota Co.", and deleted: its receipt keeps the digest
+	// of the client the close belonged to.
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Iota','iota co','fixture',now()-interval '1 day')`, org)
+	must(err)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Iota", "active": true, "since": ended, "reason": "A client"}, 200)
+	_, err = db.Exec(`INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest) VALUES($1,0,$2,$3,0,'fixture','retention_expired',$4)`,
+		org, preparation.Digest([]byte(org+"\x00iota co.\x00"+ended)), ended, preparation.Digest([]byte(org+"\x00iota\x00"+ended)))
+	must(err)
+	if got := brief("user_b", partner, "Iota"); len(got) != 0 {
+		t.Fatalf("a month deleted under the client's alias is not owed again: %v", got)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Iota", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
 	// A client can have no due date even though the template sets one.
 	zero := 0

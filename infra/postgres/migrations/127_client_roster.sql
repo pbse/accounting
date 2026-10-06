@@ -47,6 +47,11 @@ ALTER TABLE close_templates ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON close_templates FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON close_templates FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));
 
+-- A deletion receipt also keeps a digest of the client the close belonged to (its client identity when deleted), never
+-- the name, so a month deleted under any of a client's names stays done on the roster. Older receipts have only the
+-- digest of the close's own name.
+ALTER TABLE close_deletion_receipts ADD COLUMN client_digest text CHECK (length(client_digest)=64);
+
 -- The roster starts with every client that has a close. A client with a close of one of the three months before this one
 -- is active, owing every month from its earliest close of the last twelve, so a month missing between its recent closes
 -- shows while older history does not. Any other is listed inactive, from its latest close, for an administrator to

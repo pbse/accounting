@@ -88,7 +88,7 @@ type owedMonth struct {
 
 // owedMonths lists, newest first, the months the active roster clients the reader can work on (firm: every client; else
 // those assigned to who) owe and have no close for: each ended month from the client's first owed month (a month whose
-// close was deleted, as its deletion receipt records, was done), matching
+// close was deleted under any of the client's names, as its deletion receipt records, was done), matching
 // client (a name fragment or YYYY-MM, or "") as Work's filter does. A month the client's monthly hand-over is set to
 // open, and not stuck waiting, is marked as the hand-over's.
 func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm, review bool, who, client string) ([]owedMonth, error) {
@@ -102,7 +102,8 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
   AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(r.client_entity) AND g.granted))
   AND NOT EXISTS(SELECT 1 FROM opened o WHERE o.client=client_identity(r.organization_id,r.client_entity) AND o.period=m.period)
   AND NOT EXISTS(SELECT 1 FROM close_deletion_receipts d WHERE d.organization_id=r.organization_id AND d.period=m.period
-   AND d.entity_digest=encode(sha256(convert_to(r.organization_id,'UTF8')||'\x00'::bytea||convert_to(lower(r.client_entity),'UTF8')||'\x00'::bytea||convert_to(m.period,'UTF8')),'hex'))
+   AND (d.client_digest=encode(sha256(convert_to(r.organization_id,'UTF8')||'\x00'::bytea||convert_to(client_identity(r.organization_id,r.client_entity),'UTF8')||'\x00'::bytea||convert_to(m.period,'UTF8')),'hex')
+    OR d.entity_digest=encode(sha256(convert_to(r.organization_id,'UTF8')||'\x00'::bytea||convert_to(lower(r.client_entity),'UTF8')||'\x00'::bytea||convert_to(m.period,'UTF8')),'hex')))
   AND ($5='' OR r.client_entity ILIKE '%'||$5||'%' OR m.period=$5)
  ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, endedMonth(now), client)
 	if err != nil {

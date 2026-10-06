@@ -270,6 +270,13 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Deletion stopped without committing.")
 			return
 		}
+		// The client the close belongs to, read before its other names may be forgotten below. The receipt keeps a digest
+		// of it, never the name, so a month deleted under any of the client's names stays done on the roster.
+		var client string
+		if err = tx.QueryRowContext(r.Context(), `SELECT client_identity($1,$2)`, organization(r), entity).Scan(&client); err != nil {
+			problem(w, 503, "Deletion stopped without committing.")
+			return
+		}
 		// Ending the relationship or the client's request ends the client's monthly hand-over and forgets the other
 		// names its documents use.
 		if in.ReasonCode == "contract_termination" || in.ReasonCode == "client_request" {
@@ -292,7 +299,8 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 		}
 		var receipt string
 		identity := preparation.Digest([]byte(organization(r) + "\x00" + strings.ToLower(entity) + "\x00" + period))
-		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, organization(r), id, identity, period, productionCount, subject(r), in.ReasonCode).Scan(&receipt)
+		err = tx.QueryRowContext(r.Context(), `INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code,client_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id::text`, organization(r), id, identity, period, productionCount, subject(r), in.ReasonCode,
+			preparation.Digest([]byte(organization(r)+"\x00"+client+"\x00"+period))).Scan(&receipt)
 		if err != nil {
 			problem(w, 503, "Deletion stopped without committing. Refresh before retrying.")
 			return

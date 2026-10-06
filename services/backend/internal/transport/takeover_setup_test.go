@@ -128,6 +128,15 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 	}
 	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES('local-development',$1,true,'2026-08','Back','fixture')`, entity)
 	must(err)
+	// Only the first confirmation applies the template: a due date since cleared stays cleared when the setup is
+	// confirmed again, with the client active.
+	_, err = db.Exec(`UPDATE client_closes SET due_on=NULL WHERE entity=$1 AND period='2026-08'`, entity)
+	must(err)
+	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "America/Chicago", "confirmed": true}, 200)
+	must(db.QueryRow(`SELECT COALESCE(due_on::text,'') FROM client_closes WHERE entity=$1 AND period='2026-08'`, entity).Scan(&openingDue))
+	if openingDue != "" {
+		t.Fatalf("a later confirmation leaves the opening close as its people left it: %q", openingDue)
+	}
 	if b := blockers(); strings.Contains(b, "Confirm the takeover setup") {
 		t.Fatalf("a confirmed setup no longer holds the opening month: %s", b)
 	}
