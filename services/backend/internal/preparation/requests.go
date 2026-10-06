@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"close.local/backend/internal/quickbooks"
 )
 
 // The context is the selected work and the close's evidence less unrelated scheduled ledger captures: an upload or review changes it.
@@ -153,12 +155,18 @@ func FreshClientRequest(ctx context.Context, tx *sql.Tx, closeID, requestID stri
 }
 
 // requestCapture is SQL over work_requests q and request_drafts d: a consolidated request's ledger capture is still the
-// close's latest, with a current source and an active connection.
-const requestCapture = `q.coverage_scope->>'snapshot_id'=(SELECT id::text FROM quickbooks_snapshots WHERE close_id=d.close_id AND payload ? 'period' ORDER BY quickbooks_snapshots.id DESC LIMIT 1)
- AND EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')`
+// close's books' capture, chosen as coverage chooses it (transport's ledgerCoverage): the latest QuickBooks period
+// capture of the connection the books are read from, unless the latest Xero capture, named "xero:<id>", is newer. A QuickBooks capture also needs its current
+// source and an active connection; a Xero capture, an active connection.
+const requestCapture = `q.coverage_scope->>'snapshot_id'=(SELECT CASE WHEN xs.id IS NOT NULL AND (qs.id IS NULL OR xs.captured_at>qs.captured_at) THEN 'xero:'||xs.id ELSE qs.id::text END
+  FROM (SELECT 1) one LEFT JOIN LATERAL (SELECT s.id,s.captured_at FROM quickbooks_snapshots s WHERE s.close_id=d.close_id AND s.payload ? 'period'
+   AND s.connection_id=COALESCE(` + quickbooks.ReadingConnectionBefore + `s.close_id` + quickbooks.ReadingConnectionAfter + `,s.connection_id) ORDER BY s.captured_at DESC,s.id DESC LIMIT 1) qs ON true
+  LEFT JOIN LATERAL (SELECT id,captured_at FROM xero_snapshots WHERE close_id=d.close_id ORDER BY captured_at DESC,xero_snapshots.id DESC LIMIT 1) xs ON true)
+ AND (EXISTS(SELECT 1 FROM quickbooks_snapshots s JOIN evidence e ON e.id::text=s.payload->>'source_id' AND e.close_id=s.close_id JOIN quickbooks_connections x ON x.id=s.connection_id WHERE s.id::text=q.coverage_scope->>'snapshot_id' AND e.superseded_by IS NULL AND x.state='active')
+  OR EXISTS(SELECT 1 FROM xero_snapshots s JOIN xero_connections x ON x.id=s.connection_id WHERE 'xero:'||s.id=q.coverage_scope->>'snapshot_id' AND x.state='active'))`
 
 // requestBindings is each binding b a consolidated request q approved, with its account's newest binding cur.
-const requestBindings = `jsonb_array_elements(q.coverage_scope->'bindings') b LEFT JOIN LATERAL (SELECT c.id::text AS id,c.excluded,c.job_ids FROM coverage_bindings c WHERE c.close_id=d.close_id AND c.snapshot_id::text=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1) cur ON true`
+const requestBindings = `jsonb_array_elements(q.coverage_scope->'bindings') b LEFT JOIN LATERAL (SELECT c.id::text AS id,c.excluded,c.job_ids FROM coverage_bindings c WHERE c.close_id=d.close_id AND COALESCE('xero:'||c.xero_snapshot_id,c.snapshot_id::text)=q.coverage_scope->>'snapshot_id' AND c.account_id=b->>'account_id' ORDER BY c.id DESC LIMIT 1) cur ON true`
 
 // RequestCoverageIsCurrent is SQL over work_requests q and request_drafts d: a consolidated request is still on its
 // close's latest ledger capture, with a current source and active connection, and every binding is the current one.

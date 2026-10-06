@@ -39,6 +39,20 @@ Each snapshot also records the organisation's base currency and financial year, 
 
 The close's exceptions use the most recently captured month-end snapshot, QuickBooks or Xero, to list accounts on the wrong side of their normal balance and suspense, clearing, undeposited-funds or uncategorized accounts that still hold a balance (clearing only on balance-sheet accounts). A nonzero Opening Balance Equity (QuickBooks' opening-balance subtype, or an account of that name in either ledger) is its own cleanup item (B03), checked before the skips that depend on class or wording: it is usually zero once opening balances are settled, so the item says its cause is unverified, asks for the opening entries and the prior accountant's closing trial balance, and leaves the treatment (correcting a wrong opening balance or placing supported opening equity, with an approved date for a closed year) to the accountant. Nothing is changed. Each holding balance asks for reconciliation rather than a correction; for QuickBooks the item opens that account's ledger rows for the month, which can be added to agent evidence. Xero has no contra-account subtype, so accounts named "accumulated" are skipped, along with retained earnings and owner drawings; revenue and expense accounts are judged on their year-to-date movement.
 
+## Account coverage
+
+A close whose books are read from Xero (its Xero capture is newer than any QuickBooks one) asks the same coverage questions a QuickBooks close does. Every account in the month's capture needs a decision before sign-off: bound to the work that supports it, or excluded with a reason. The kinds are:
+- `BANK` accounts (bank and credit card): reconciliation;
+- `PREPAYMENT`: a prepaid schedule;
+- a `CURRLIAB` account named as an accrual: an accrual;
+- anything else: the accountant's review.
+
+How it works:
+- **Proposals are made from the capture when read**, so earlier captures have them too.
+- **Decisions name the capture.** Coverage decisions, client requests about accounts and account hand-offs name the Xero capture they were made on (`xero:<id>`). A newer capture replaces them, as a new QuickBooks capture does.
+- **Takeover.** Takeover setup proposes the account scope from the Xero capture of the month.
+- **Sign-offs.** Since coverage counts toward sign-off, a Xero close signed off before account coverage existed shows **reopen required**, until its accounts are decided and it is signed off again.
+
 ## Changes and client memory
 
 **Changes from last month** uses each close's newest snapshot, QuickBooks or Xero. With two Xero months from the same organisation, it compares each revenue and expense account's movement in the month, read from the Trial Balance's Debit and Credit columns (Xero reports these for the current month up to the report date). Payees come from the transactions each capture read: each contact's lines on the account, net of tax and signed as the Profit and Loss shows them, with journal lines unattributed. When either month's capture has no transactions, causes say why; an account with lines in another currency is not explained from them, because the capture does not hold their base-currency amounts; and a line without an account keeps the missing-payee question from being asked. A QuickBooks month is never compared with a Xero month. When confirming a document, client memory checks proposed accounts against the newest snapshot's chart of accounts, including Xero's (an account is usable only while Xero marks it active).

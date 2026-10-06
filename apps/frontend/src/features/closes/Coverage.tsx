@@ -53,8 +53,8 @@ export function Coverage({ closeId }: { closeId: string }) {
     <h3 id="coverage-title">Coverage and client evidence</h3>
     {error && <p role="alert">{error}</p>}
     <button disabled={busy} onClick={() => { setError(""); setVersion(v => v + 1); }}>Refresh coverage</button>
-    {!coverage ? <p>Loading coverage…</p> : !coverage.snapshot_id ? <p>Capture period reports in the QuickBooks panel above to define account coverage.</p> : <>
-      <p>Ledger snapshot #{coverage.snapshot_id}. Confirm the complete set of required jobs for each account. Resolution then follows their current, approved drafts automatically. Uploads, matching names and client replies cannot approve accounting decisions.</p>
+    {!coverage ? <p>Loading coverage…</p> : !coverage.snapshot_id ? <p>Capture the month in the QuickBooks or Xero panel above to define account coverage.</p> : <>
+      <p>{coverage.snapshot_id.startsWith("xero:") ? `Xero capture #${coverage.snapshot_id.slice(5)}` : `Ledger snapshot #${coverage.snapshot_id}`}. Confirm the complete set of required jobs for each account. Resolution then follows their current, approved drafts automatically. Uploads, matching names and client replies cannot approve accounting decisions.</p>
       {coverage.stale && <p role="alert">Ledger source or connection changed. Recapture before changing coverage.</p>}
       <p>{coverage.items.filter(i => i.state === "resolved").length} resolved · {coverage.items.filter(i => i.state === "excluded").length} explicitly excluded · {coverage.items.filter(i => !["resolved", "excluded"].includes(i.state)).length} unresolved</p>
       <label>Find an account or status<input type="search" value={accountSearch} onChange={e => { setAccountSearch(e.target.value); setAccountPage(0); }} placeholder="Name, ID, prepaid, missing…" /></label>
@@ -73,7 +73,8 @@ export function Coverage({ closeId }: { closeId: string }) {
           <label><input type="checkbox" name="confirmed" required /> I reviewed the account and ledger evidence. This is the complete required work set, or a justified exclusion.</label>
           <button>Confirm coverage scope</button>
         </fieldset></form>
-        <LedgerSelection key={`${coverage.snapshot_id}:${item.account_id}`} closeId={closeId} snapshotId={coverage.snapshot_id} accountId={item.account_id} stale={coverage.stale} suggestions={item.suggested_ledger_queries} />
+        {/* Ledger rows are selected from a QuickBooks capture's General Ledger; a Xero capture has none to select from. */}
+        {!coverage.snapshot_id.startsWith("xero:") && <LedgerSelection key={`${coverage.snapshot_id}:${item.account_id}`} closeId={closeId} snapshotId={coverage.snapshot_id} accountId={item.account_id} stale={coverage.stale} suggestions={item.suggested_ledger_queries} />}
       </details>)}
       {page > 0 && <button type="button" onClick={() => setAccountPage(page - 1)}>Previous accounts</button>}
       {(page + 1) * 50 < matchingAccounts.length && <button type="button" onClick={() => setAccountPage(page + 1)}>Next accounts</button>}
