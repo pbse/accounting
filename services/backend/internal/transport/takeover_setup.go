@@ -149,12 +149,10 @@ func registerTakeoverSetup(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Choose the client's timezone by its IANA name, for example America/New_York.")
 			return
 		}
-		// The opening close takes the firm's monthly close template when the client joins the roster; the firm's roles, for
-		// the owner it may give, are read before any lock is taken.
-		var roles map[string]reviewer
-		if org := organization(r); org != "local-development" {
-			roles, _ = firmReviewers(r.Context(), org)
-		}
+		// The opening close takes the firm's monthly close template on the first confirmation; the firm's roles, for the
+		// owner it may give, are read before any lock is taken when the firm names an owner.
+		roles := templateRoles(organization(r))
+		warmTemplateRoles(r.Context(), db, organization(r), roles)
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Takeover setup unavailable.")

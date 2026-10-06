@@ -260,12 +260,10 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 403, "You are not assigned to this client.")
 			return
 		}
-		// The firm's roles are read before any lock is taken, for the owner the template may give the close; roles that
-		// cannot be read give it none (applyCloseTemplate).
-		var roles map[string]reviewer
-		if org := organization(r); org != "local-development" {
-			roles, _ = firmReviewers(r.Context(), org)
-		}
+		// The firm's roles, for the owner the template may give the close, are read before any lock is taken when the
+		// firm names an owner; roles that cannot be read give it none (applyCloseTemplate).
+		roles := templateRoles(organization(r))
+		warmTemplateRoles(r.Context(), db, organization(r), roles)
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Close storage unavailable.")

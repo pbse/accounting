@@ -84,10 +84,10 @@ func carryHandler(db *sql.DB) http.HandlerFunc {
 			}
 		}
 		// A next month this opens takes the firm's monthly close template; the firm's roles, for the owner it may give the
-		// close, are read before any lock is taken.
-		var roles map[string]reviewer
-		if org := organization(r); r.Method == "POST" && org != "local-development" {
-			roles, _ = firmReviewers(r.Context(), org)
+		// close, are read before any lock is taken when the firm names an owner.
+		roles := templateRoles(organization(r))
+		if r.Method == "POST" {
+			warmTemplateRoles(r.Context(), db, organization(r), roles)
 		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {

@@ -38,15 +38,42 @@ func rosterLeft(org, name string) string {
  EXISTS(SELECT 1 FROM current_client_roster r WHERE r.organization_id=` + org + ` AND NOT r.active AND ` + plain("r.client_entity") + `=` + plain(name) + `))`
 }
 
+// templateRoles reads a firm's WorkOS roles for applyCloseTemplate at most once, when first wanted: the local
+// development firm has none, and roles that cannot be read are none, so no owner is given. A request warms it before
+// taking the firm lock when the firm has named an owner anywhere (warmTemplateRoles); a month opened in the moment an
+// owner is first named reads them under the lock instead, and a firm naming no owner never reads them.
+func templateRoles(org string) func(context.Context) map[string]reviewer {
+	var roles map[string]reviewer
+	read := org == "local-development"
+	return func(ctx context.Context) map[string]reviewer {
+		if !read {
+			roles, _ = firmReviewers(ctx, org)
+			read = true
+		}
+		return roles
+	}
+}
+
+// warmTemplateRoles reads the firm's roles before any lock is taken when its template or a roster entry names an owner.
+func warmTemplateRoles(ctx context.Context, db *sql.DB, org string, roles func(context.Context) map[string]reviewer) {
+	var named bool
+	if org == "local-development" || db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM close_templates WHERE organization_id=$1 AND owner<>'' AND id=(SELECT max(id) FROM close_templates WHERE organization_id=$1))
+ OR EXISTS(SELECT 1 FROM client_roster WHERE organization_id=$1 AND owner<>'')`, org).Scan(&named) != nil || !named {
+		return
+	}
+	roles(ctx)
+}
+
 // rosterTemplate is SQL, over a current_client_roster row r, for the firm's current template t.
 const rosterTemplate = `LEFT JOIN LATERAL (SELECT due_days,owner FROM close_templates WHERE organization_id=r.organization_id ORDER BY id DESC LIMIT 1) t ON true`
 
 // applyCloseTemplate gives a newly opened close of an active roster client its month's due date (due_days after the
 // month ends) and owner, from the client's overrides or else the firm's template, recording the owner as a change of
-// hands. The owner must still be able to do the work, judged as mayAct judges it from the firm's WorkOS roles (nil for
-// the local development firm, which has none): a hosted firm whose roles could not be read gives the close no owner.
+// hands. The owner must still be able to do the work, judged as mayAct judges it from the firm's WorkOS roles, read
+// only when there is an owner to judge (nil for the local development firm, which has none): a hosted firm whose roles
+// could not be read gives the close no owner.
 // A close already dated or held keeps what it has, and a close of a client not on the roster is left alone.
-func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles map[string]reviewer) error {
+func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, firmRoles func(context.Context) map[string]reviewer) error {
 	var org, period, owner string
 	var dueDays sql.NullInt64
 	var member, assigned bool
@@ -71,7 +98,10 @@ func applyCloseTemplate(ctx context.Context, tx *sql.Tx, closeID string, roles m
 	if org == "local-development" {
 		member = true
 	}
-	if owner == "" || (roles == nil && org != "local-development") || !mayAct(roles, owner, member, false, assigned) {
+	if owner == "" {
+		return nil
+	}
+	if roles := firmRoles(ctx); (roles == nil && org != "local-development") || !mayAct(roles, owner, member, false, assigned) {
 		return nil
 	}
 	held, err := tx.ExecContext(ctx, `UPDATE client_closes SET owner=$2 WHERE id::text=$1 AND owner=''`, closeID, owner)

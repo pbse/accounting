@@ -240,7 +240,7 @@ func stepRoutine(ctx context.Context, db *sql.DB, id, period string, roles map[s
 			return false, err
 		}
 		if opened {
-			if err = applyCloseTemplate(ctx, tx, closeID, roles); err != nil {
+			if err = applyCloseTemplate(ctx, tx, closeID, func(context.Context) map[string]reviewer { return roles }); err != nil {
 				return false, err
 			}
 		}
