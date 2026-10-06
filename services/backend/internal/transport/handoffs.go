@@ -273,7 +273,7 @@ func readHandoffs(ctx context.Context, tx *sql.Tx, goalID, me string) ([]goalHan
 // can no longer act for the client; once the close is signed off, every one. An account's is closed only on coverage
 // read from its capture: a different capture ends it, and unread coverage leaves it open. The goal's history says why.
 func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress, signed bool, roles map[string]reviewer) error {
-	rows, err := tx.QueryContext(ctx, `SELECT h.id::text,COALESCE(h.job_id::text,''),COALESCE(h.account_id,''),COALESCE(h.snapshot_id::text,''),h.document,h.assignee_name,h.assignee,h.via_grant,
+	rows, err := tx.QueryContext(ctx, `SELECT h.id::text,COALESCE(h.job_id::text,''),COALESCE(h.account_id,''),COALESCE(`+bindingCapture("h")+`,''),h.document,h.assignee_name,h.assignee,h.via_grant,
  EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=$1 AND m.subject=h.assignee AND m.granted),
  EXISTS(SELECT 1 FROM current_client_access a JOIN client_closes c ON lower(c.entity)=lower(a.client_entity) WHERE c.id=$3 AND a.organization_id=$1 AND a.subject=h.assignee AND a.granted)
  FROM goal_handoffs h WHERE h.goal_id=$2 AND h.closed_at IS NULL ORDER BY h.id`, g.org, g.id, g.close)
@@ -457,7 +457,7 @@ func registerHandoffs(mux *http.ServeMux, db *sql.DB) {
 			document, snapshot = "coverage for "+progress.accounts.Items[i].Name, progress.accounts.SnapshotID
 		}
 		var id string
-		switch err = tx.QueryRowContext(r.Context(), `INSERT INTO goal_handoffs(goal_id,job_id,account_id,snapshot_id,document,assignee,assignee_name,via_grant,note,created_by) VALUES($1,NULLIF($2,'')::bigint,NULLIF($3,''),NULLIF($4,'')::bigint,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, g.id, in.JobID, in.AccountID, snapshot, document, to.Subject, to.Name, to.viaGrant, in.Note, actor).Scan(&id); err {
+		switch err = tx.QueryRowContext(r.Context(), `INSERT INTO goal_handoffs(goal_id,job_id,account_id,snapshot_id,xero_snapshot_id,document,assignee,assignee_name,via_grant,note,created_by) VALUES($1,NULLIF($2,'')::bigint,NULLIF($3,''),`+captureColumns("$4")+`,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id::text`, g.id, in.JobID, in.AccountID, snapshot, document, to.Subject, to.Name, to.viaGrant, in.Note, actor).Scan(&id); err {
 		case nil:
 		case sql.ErrNoRows:
 			var holder string

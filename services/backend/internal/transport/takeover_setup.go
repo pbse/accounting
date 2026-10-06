@@ -47,7 +47,12 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 	scope := map[string]any{}
 	view, err := currentCoverage(ctx, tx, closeID)
 	read := true
-	if err == nil && view.SnapshotID != "" {
+	switch {
+	case err != nil || view.SnapshotID == "":
+	case strings.HasPrefix(view.SnapshotID, xeroCapture):
+		// A Xero client has one connection; the capture must be of this month.
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE(s.period=c.period,false) FROM xero_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE '`+xeroCapture+`'||s.id=$1`, view.SnapshotID).Scan(&read)
+	default:
 		err = tx.QueryRowContext(ctx, `SELECT COALESCE(s.connection_id=`+quickbooks.ReadingConnection("c.id")+` AND s.payload->>'period'=c.period,false) FROM quickbooks_snapshots s JOIN client_closes c ON c.id=s.close_id WHERE s.id::text=$1`, view.SnapshotID).Scan(&read)
 	}
 	switch {
@@ -56,7 +61,7 @@ func takeoverContent(ctx context.Context, tx *sql.Tx, closeID string) (map[strin
 	case err != nil:
 		return nil, "", nil, err
 	case view.SnapshotID == "":
-		scope["unavailable"] = "No QuickBooks capture of this month yet: the account scope is proposed from one (not available for Xero)."
+		scope["unavailable"] = "No QuickBooks or Xero capture of this month yet: the account scope is proposed from one."
 	case view.Stale:
 		scope["unavailable"] = "Capture this month again: the account scope is proposed from a current capture."
 	case !read:

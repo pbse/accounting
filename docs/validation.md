@@ -3206,3 +3206,47 @@ Not yet done, and waiting on the owner:
 - After that, the variable moves to prashant@getkrith.com with a production deploy, and one contact note checks delivery end to end.
 
 The browser layout check's plan-editor step failed intermittently in CI (PRs 271 and 274) at phone width. It offered a content grant before the console had loaded the grant held from the desktop pass, so the check opened a second one. That replaced the first and closed the plan already revealed under it. The step now reads what the editor shows until it opens: it opens at most one grant, only when the API says none is held for the check's firm, and waits for it to exist before looking again. When a held grant does not show (its list still loading, or its request failed) or the automatic reveal does not come, it reveals with a reason after five seconds. Ten local runs passed with 76 page views. Two of them started with no grant held, as in CI.
+
+## B01/B03: account coverage for Xero clients (2026-10-05)
+
+Request: phase A's B01 foundations ("The agent proposes scope and mappings… The system cannot declare complete coverage by excluding accounts it could not understand"). The user chose to build Xero coverage next. Until now, coverage read only QuickBooks captures. A close whose books are read from Xero had no account questions, so it could be signed off without any account being decided. Its takeover setup said the scope was "not available for Xero".
+
+What changed:
+- **The books' capture.** `ledgerCoverage` chooses the capture as the tie-out does: the latest QuickBooks period capture, unless the close's latest Xero capture is newer.
+  - A QuickBooks capture reads exactly as before, from the same query. Its coverage JSON, and so every QuickBooks sign-off digest, is unchanged.
+  - A Xero capture's coverage is proposed when read, by the new `xero.Coverage`, so earlier captures have it too. It is named `xero:<id>`, since the two providers' snapshot IDs could collide, and is stale once its connection is not active.
+  - A Xero capture that cannot be read becomes one stale item, "the Xero capture". It blocks sign-off and cannot be bound or excluded until the month is captured again.
+- **`xero.Coverage`.** `BANK` → reconciliation, `PREPAYMENT` → prepaid, a `CURRLIAB` account named as an accrual → accrual, anything else → accountant review. A Trial Balance account missing from the capture is flagged.
+  - Each kind's reason and question come from `quickbooks.NewCoverageItem`, shared with `quickbooks.Coverage`.
+  - A golden test, also run unchanged against main before the change, shows `quickbooks.Coverage` produces byte-identical output.
+- **Migration 125.** `coverage_bindings` and `goal_handoffs` gain `xero_snapshot_id`. Each names exactly one capture, enforced by checks; `/readyz` waits for both columns.
+  - Readiness signs a QuickBooks binding's row without the new key, so a QuickBooks sign-off made before the migration still matches.
+- **Every coverage path follows the capture in use:**
+  - coverage decisions and requests;
+  - `RequestCoverageIsCurrent` and the request currency checks;
+  - account hand-offs;
+  - the plan's "Cover every account" step, which names QuickBooks or Xero;
+  - takeover setup, which proposes the scope from the Xero capture of the month;
+  - the portfolio's "waiting on statements", which treats Xero `BANK` accounts as statement accounts.
+- **UI.** The coverage panel, preparation proposal and action card say "QuickBooks or Xero". The QuickBooks-only ledger row search is hidden for a Xero capture.
+- **Effect on existing sign-offs.** A Xero close signed off before this shows **reopen required** after deploy: its accounts now count toward sign-off. A QuickBooks close is unaffected.
+
+Checks:
+- `TestCoverageKeepsEachKindsWording` (golden) and `TestCoverageProposesEachXeroAccountsNeed`. The second covers bank, card, prepayment, an accrual, GST, archived and Trial-Balance-only accounts, and a capture without its Trial Balance.
+- `TestXeroCoverageAsksEveryAccountBeforeSignOff` (local PostgreSQL):
+  - Every account of the Xero capture blocks sign-off, and the takeover proposes the same three accounts.
+  - An exclusion is stored on `xero_snapshot_id` and signed with it.
+  - A client request on the capture is current, and with its link open the close waits on statements.
+  - An August capture replaces September's: the request is no longer current and the takeover says to capture this month again.
+  - A newer QuickBooks capture takes over, and its binding's signed row has no Xero key.
+  - An unreadable Xero capture blocks sign-off and refuses a decision (409).
+- `TestHandAXeroAccountToATeammate`: the hand-off names the Xero capture, stays open on it, and closes when the account is decided or a new capture replaces it.
+- These existing tests were updated:
+  - `TestPlanReadsTheBooksTheLedgerReadsUse`: its `{}` Xero fixture is now an unreadable capture whose accounts wait.
+  - `TestManagementPackReadsTheCapturedReports`: a newer Xero capture now needs the sign-off reopened, as a newer QuickBooks capture does.
+  - `TestXeroBillLineIsRecodedOnceAfterIndependentApproval`: it checks the correction's own blocker.
+  - `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth`: the new wording.
+- The full Go suite runs on a fresh local PostgreSQL with migrations applied twice. `npm run check`, `npm test` and `npm run build` pass.
+
+Not verified: a live Xero company's chart. Only synthetic captures were used.
+

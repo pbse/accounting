@@ -78,7 +78,7 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 		t.Fatalf("the opening month waits for its takeover setup: %s", b)
 	}
 	first := read()
-	if len(first.Problems) != 2 || !strings.Contains(first.Problems[0], "Connect the client's QuickBooks or Xero company") || !strings.Contains(first.Problems[1], "accounting basis") || !strings.Contains(first.Content.Scope.Unavailable, "No QuickBooks capture") {
+	if len(first.Problems) != 2 || !strings.Contains(first.Problems[0], "Connect the client's QuickBooks or Xero company") || !strings.Contains(first.Problems[1], "accounting basis") || !strings.Contains(first.Content.Scope.Unavailable, "No QuickBooks or Xero capture") {
 		t.Fatalf("a client with no company or basis cannot be confirmed: %+v", first)
 	}
 	for _, zone := range []string{"", "Local", "Mars/Olympus"} {

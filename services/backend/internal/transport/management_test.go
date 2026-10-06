@@ -225,7 +225,8 @@ func TestManagementPackReadsTheCapturedReports(t *testing.T) {
 	if got := status(); got != "signed_off" {
 		t.Fatalf("the capture the sign-off was made over is signed off: %s", got)
 	}
-	// A newer Xero capture, which the signed digest does not bind, leaves the sign-off standing but stays provisional.
+	// A newer Xero capture is the books' capture: its accounts, which the signed digest binds as it binds a QuickBooks
+	// capture's, need the sign-off reopened, and the pack shows them provisionally.
 	defer db.Exec(`DELETE FROM xero_snapshots WHERE close_id=$1`, closeID)
 	defer db.Exec(`DELETE FROM xero_connections WHERE close_id=$1`, closeID)
 	var xeroConnection string
@@ -238,8 +239,8 @@ func TestManagementPackReadsTheCapturedReports(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d',$3,'fixture',now()+interval '1 minute')`, closeID, xeroConnection, xeroPayload)
 	must(err)
 	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
-	if got := status(); got != "provisional" || current.State != "signed_off" {
-		t.Fatalf("a capture newer than a sign-off that still stands is provisional: %s (readiness %s)", got, current.State)
+	if got := status(); got != "provisional" || current.State != "reopen_required" {
+		t.Fatalf("a newer Xero capture needs the sign-off reopened, and the pack is provisional: %s (readiness %s)", got, current.State)
 	}
 
 	// Readiness binds the QuickBooks capture with the highest ID; a pack showing a different capture is not covered.
