@@ -144,7 +144,7 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 		if f.Field == "vendor" && !issuerLine(f.Candidates[0].Quote, f.Value, invoice) {
 			return Plan{}, "the cited line does not name the vendor as the invoice's issuer"
 		}
-		if f.Field == "billed_to" && !labelledLine(f.Candidates[0].Quote, f.Value, []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}) {
+		if f.Field == "billed_to" && !labelledLine(f.Candidates[0].Quote, f.Value, billToLabels, notBillTo) {
 			return Plan{}, "the cited line does not say the invoice is billed to that name"
 		}
 		facts[f.Field] = f.Value
@@ -548,11 +548,45 @@ func totalLineShows(invoice string, cents int64) bool {
 }
 
 // billToNames is the set of distinct names the invoice bills, read from lines whose label is a bill-to label.
+// billToLabels name the line that says who an invoice bills; notBillTo mark a line that names someone else (an issuer,
+// a ship-to or a contact).
+var billToLabels, notBillTo = []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"}, []string{"from", "ship", "deliver", "service", "support", "contact"}
+
+// CitedBilledTo is the billed-to name as the straight-through check accepts it: one candidate, cited from the invoice
+// itself, on a line labelled as the bill-to that ends with the name, and that name the whole of the one bill-to line
+// the invoice's text prints (sources holds the read evidence), so a quote cut short ("Bill to: Harbor" from "Bill to:
+// Harbor Fixture LLC") names no one, and neither does an invoice billing two names. It is "" for anything less, so a
+// weaker or ambiguous reading never has a held invoice called another company's.
+func CitedBilledTo(p Proposal, sources []IntakeSource) string {
+	primary, invoice := "", ""
+	for _, s := range p.Sources {
+		if s.Role == "invoice" {
+			primary = s.ID
+		}
+	}
+	for _, s := range sources {
+		if s.ID == primary {
+			invoice = s.Content
+		}
+	}
+	for _, f := range p.Facts {
+		if f.Field != "billed_to" || f.Value == "" || len(f.Candidates) != 1 || invoice == "" || f.Candidates[0].SourceID != primary {
+			continue
+		}
+		quote := f.Candidates[0].Quote
+		names := billToNames(invoice)
+		if endsLine(quote, f.Value) && labelledLine(quote, f.Value, billToLabels, notBillTo) && len(names) == 1 && names[documents.NormalizeEntity(f.Value)] {
+			return f.Value
+		}
+	}
+	return ""
+}
+
 func billToNames(invoice string) map[string]bool {
 	names := map[string]bool{}
 	for _, line := range strings.Split(invoice, "\n") {
 		normal := documents.NormalizeEntity(line)
-		for _, label := range []string{"bill to", "billed to", "invoice to", "invoiced to", "sold to"} {
+		for _, label := range billToLabels {
 			if name := strings.TrimSpace(strings.TrimPrefix(normal, label)); strings.HasPrefix(normal, label+" ") && name != "" {
 				names[name] = true
 			}
