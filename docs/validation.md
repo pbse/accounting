@@ -3544,3 +3544,12 @@ Request: the build plan's phase A "provider capability inventory". [Provider cap
 - **Corrections.** [Source sync and forwarding](source-sync-and-forwarding.md) no longer calls automatic QuickBooks checks sandbox-only, or implies that direct uploads are scanned.
 
 Not verified: everything marked synthetic in the inventory, against a real provider.
+
+## B02: Firm settings without firm-wide access (2026-10-06)
+
+Request: Codex found that Firm settings mounted the client roster for every member, so a reviewer without `clients:all` saw the roster's 403 there as an error (from #279).
+
+- **Change.** `workspaceRequest` now throws a `RequestError` carrying the HTTP status (`requestError.ts`); its message is unchanged, so every existing caller reads it as before. The roster section renders nothing when its read is refused for want of permission (`forbidden`), since it does not apply to that member. Any other failure is still shown.
+- **Tested.** `requestError.test.ts`: only a 403 makes a section inapplicable, not a 503 or a network error. Frontend check, build and tests (45/45).
+
+Not verified: the page in a browser as a hosted reviewer without `clients:all`.

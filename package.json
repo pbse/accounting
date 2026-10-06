@@ -14,7 +14,7 @@
     "dev:admin": "npm run dev -w @close/admin",
     "build": "npm run build -w @close/frontend && npm run build -w @close/admin",
     "check": "npm run check --workspaces --if-present",
-    "test": "node --experimental-strip-types --test scripts/context-machine-worker.test.mjs scripts/deploy-context-machine.test.mjs scripts/cloudflare-credentials.test.mjs workers/shared/llm.test.ts workers/queue/src/delivery.test.ts workers/edge/src/upload-scan.test.ts workers/edge/src/routes.test.ts apps/frontend/src/features/dashboard/commands.test.ts apps/frontend/src/features/closes/citation.test.ts apps/frontend/src/features/closes/ask.test.ts packages/ui/components/percents.test.mts workers/edge/src/contact.test.ts apps/frontend/src/features/marketing/workpapers.test.ts",
+    "test": "node --experimental-strip-types --test scripts/context-machine-worker.test.mjs scripts/deploy-context-machine.test.mjs scripts/cloudflare-credentials.test.mjs workers/shared/llm.test.ts workers/queue/src/delivery.test.ts workers/edge/src/upload-scan.test.ts workers/edge/src/routes.test.ts apps/frontend/src/features/dashboard/commands.test.ts apps/frontend/src/features/closes/citation.test.ts apps/frontend/src/features/closes/ask.test.ts apps/frontend/src/features/closes/requestError.test.ts packages/ui/components/percents.test.mts workers/edge/src/contact.test.ts apps/frontend/src/features/marketing/workpapers.test.ts",
     "check:layout": "node scripts/layout-check.mjs",
     "check:go": "cd services/backend && go test ./... && go vet ./...",
     "dev:cloudflare": "npm run build && wrangler dev -c workers/edge/wrangler.jsonc",

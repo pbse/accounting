@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { authenticationHeaders, authKitClientId } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
+import { RequestError } from "./requestError";
 // Kept in memory only. Refreshing requires unlocking again; never bake a token into frontend config.
 let token = "";
 const listeners = new Set<() => void>();
@@ -61,7 +62,7 @@ export async function workspaceRequest(
   }
   const result = await response.json();
   if (!response.ok)
-    throw new Error(result.message ?? "The workspace is unavailable.");
+    throw new RequestError(result.message ?? "The workspace is unavailable.", response.status);
   return result;
 }
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { forbidden } from "./requestError";
 import { workspaceRequest } from "./workspace";
 
 // rev changes with every change, so a form keyed on it resets to the newest entry.
@@ -20,6 +21,8 @@ const endedMonth = () => {
 export function ClientRoster() {
   const [roster, setRoster] = useState<Roster>();
   const [error, setError] = useState("");
+  // A member without firm-wide access (clients:all) cannot read the roster, so the section does not apply to them.
+  const [hidden, setHidden] = useState(false);
   // A save's refusal, kept while the roster is read again: a change made from an entry another administrator has since
   // changed resets to the newest entry, and this says why.
   const [notice, setNotice] = useState("");
@@ -30,11 +33,12 @@ export function ClientRoster() {
     let live = true;
     workspaceRequest("/roster")
       .then((data: Roster) => live && (setRoster(data), setError("")))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "The client roster is unavailable."));
+      .catch((e) => live && (forbidden(e) ? setHidden(true) : setError(e instanceof Error ? e.message : "The client roster is unavailable.")));
     return () => {
       live = false;
     };
   }, [refresh]);
+  if (hidden) return null;
   if (!roster) return error ? <section aria-label="Clients and monthly closes"><h2>Clients and monthly closes</h2><p role="alert">{error}</p></section> : null;
   const people = roster.people ?? [];
   const name = (subject: string) => people.find((p) => p.subject === subject)?.name ?? subject;
