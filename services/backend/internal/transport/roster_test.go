@@ -268,6 +268,26 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		t.Fatalf("a month deleted under the client's alias is not owed again: %v", got)
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Iota", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+	// A receipt from before the roster holds only the digest of the close's own name: one deleted under Kappa's confirmed
+	// alias "Kappa Co" is matched through the alias.
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by,confirmed_at) VALUES($1,'Kappa','kappa co','fixture',now()-interval '1 day')`, org)
+	must(err)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Kappa", "active": true, "since": ended, "reason": "A client"}, 200)
+	_, err = db.Exec(`INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code) VALUES($1,0,$2,$3,0,'fixture','retention_expired')`,
+		org, preparation.Digest([]byte(org+"\x00kappa co\x00"+ended)), ended)
+	must(err)
+	if got := brief("user_b", partner, "Kappa"); len(got) != 0 {
+		t.Fatalf("a month deleted under the client's alias before the roster is not owed again: %v", got)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Kappa", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+
+	// An entry whose first month is now over five years old can still be changed while it keeps that month, but not moved
+	// to another that old.
+	old := time.Now().UTC().AddDate(-6, 0, 0).Format("2006-01")
+	_, err = db.Exec(`INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) VALUES($1,'Lambda',false,$2,'Synthetic','fixture')`, org, old)
+	must(err)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Lambda", "active": false, "since": old, "due_days": 0, "reason": "Its own terms"}, 200)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Lambda", "active": false, "since": time.Now().UTC().AddDate(-6, 1, 0).Format("2006-01"), "reason": "Moved"}, 422)
 
 	// A client can have no due date even though the template sets one.
 	zero := 0

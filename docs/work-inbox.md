@@ -120,7 +120,7 @@ An administrator reactivates it in Firm settings.
 
 **Client identity.** The roster names each client by its own name, and matches closes by client identity, as opening months does elsewhere. Client assignments are matched by name, as access to a client's closes is, so the roster never shows or gives anyone a month they cannot open. A month opened under a confirmed alias of the client counts as the client's, and the roster refuses an alias as a second client. A name added on its own and later confirmed as an alias of a rostered client becomes that client: one entry, shown under the client's own name, whose latest decision covers both names.
 
-**Changes and records.** Only a firm administrator (`clients:all` and `members:manage`) changes the roster or the template, with a reason; in the local development firm, anyone may. A client's first owed month is within the last five years. A roster change takes the firm's lock, as opening a close does, so a month opened at the same moment honors it. Both are append-only histories and are part of the firm export.
+**Changes and records.** Only a firm administrator (`clients:all` and `members:manage`) changes the roster or the template, with a reason; in the local development firm, anyone may. A new or changed first owed month is within the last five years; an entry keeping its first month can still be changed. A roster change takes the firm's lock, as opening a close does, so a month opened at the same moment honors it. Both are append-only histories and are part of the firm export.
 
 ## Work needing re-review
 

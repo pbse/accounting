@@ -92,8 +92,16 @@ type owedMonth struct {
 // client (a name fragment or YYYY-MM, or "") as Work's filter does. A month the client's monthly hand-over is set to
 // open, and not stuck waiting, is marked as the hand-over's.
 func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm, review bool, who, client string) ([]owedMonth, error) {
-	// Months are matched by client identity, so a month opened under a confirmed alias of the client counts.
-	rows, err := tx.QueryContext(ctx, `WITH opened AS (SELECT DISTINCT client_identity(c.organization_id,c.entity) AS client,c.period FROM client_closes c WHERE c.organization_id=$1)
+	// Months are matched by client identity, so a month opened under a confirmed alias of the client counts. A deleted
+	// month is matched through its receipt, which holds digests, never names: of the client identity (client_digest), or,
+	// on a receipt from before the roster, of the close's own name, compared with every name the firm knows the client by
+	// (its closes', its confirmed aliases' and its roster entries').
+	rows, err := tx.QueryContext(ctx, `WITH opened AS (SELECT DISTINCT client_identity(c.organization_id,c.entity) AS client,c.period FROM client_closes c WHERE c.organization_id=$1),
+ names AS (SELECT client_identity($1,n.name) AS client,n.name FROM (SELECT lower(c.entity) AS name FROM client_closes c WHERE c.organization_id=$1
+  UNION SELECT a.alias FROM client_aliases a WHERE a.organization_id=$1 AND a.retired_at IS NULL
+  UNION SELECT lower(r.client_entity) FROM client_roster r WHERE r.organization_id=$1) n),
+ done AS (SELECT n.client,d.period FROM close_deletion_receipts d JOIN names n ON d.client_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.client,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex') OR d.entity_digest=encode(sha256(convert_to($1,'UTF8')||'\x00'::bytea||convert_to(n.name,'UTF8')||'\x00'::bytea||convert_to(d.period,'UTF8')),'hex')
+  WHERE d.organization_id=$1 AND d.period>=(SELECT min(since) FROM current_client_roster WHERE organization_id=$1 AND active))
  SELECT r.client_entity,m.period,COALESCE(r.due_days,t.due_days),COALESCE(r.owner,t.owner,''),
   EXISTS(SELECT 1 FROM close_routines h WHERE h.organization_id=r.organization_id AND client_identity(h.organization_id,h.client_entity)=client_identity(r.organization_id,r.client_entity) AND h.stopped_at IS NULL AND h.waiting='' AND h.last_period<m.period)
  FROM current_client_roster r `+rosterTemplate+`
@@ -101,9 +109,7 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
  WHERE r.organization_id=$1 AND r.active
   AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=r.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(r.client_entity) AND g.granted))
   AND NOT EXISTS(SELECT 1 FROM opened o WHERE o.client=client_identity(r.organization_id,r.client_entity) AND o.period=m.period)
-  AND NOT EXISTS(SELECT 1 FROM close_deletion_receipts d WHERE d.organization_id=r.organization_id AND d.period=m.period
-   AND (d.client_digest=encode(sha256(convert_to(r.organization_id,'UTF8')||'\x00'::bytea||convert_to(client_identity(r.organization_id,r.client_entity),'UTF8')||'\x00'::bytea||convert_to(m.period,'UTF8')),'hex')
-    OR d.entity_digest=encode(sha256(convert_to(r.organization_id,'UTF8')||'\x00'::bytea||convert_to(lower(r.client_entity),'UTF8')||'\x00'::bytea||convert_to(m.period,'UTF8')),'hex')))
+  AND NOT EXISTS(SELECT 1 FROM done x WHERE x.client=client_identity(r.organization_id,r.client_entity) AND x.period=m.period)
   AND ($5='' OR r.client_entity ILIKE '%'||$5||'%' OR m.period=$5)
  ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, endedMonth(now), client)
 	if err != nil {
@@ -275,9 +281,8 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Enter the client's name (1–200 characters).")
 			return
 		}
-		// Every owed month from the first is listed on each read, so the first is within the last five years.
 		since, err := time.Parse("2006-01", in.Since)
-		if now := time.Now().UTC(); err != nil || since.Before(time.Date(now.Year()-5, now.Month(), 1, 0, 0, 0, 0, time.UTC)) {
+		if err != nil {
 			problem(w, 422, "Enter the first month the client owes a close as YYYY-MM, within the last five years.")
 			return
 		}
@@ -297,6 +302,17 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 		}
 		if client != strings.ToLower(in.Entity) {
 			problem(w, 422, in.Entity+" is a confirmed alias of "+client+". Use the client's own name.")
+			return
+		}
+		// Every owed month from the first is listed on each read, so a new or changed first month is within the last five
+		// years; an entry keeping the first month it has can still be changed, or the client marked inactive.
+		var kept string
+		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT since FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+`),'')`, organization(r), in.Entity).Scan(&kept); err != nil {
+			problem(w, 503, "The client roster could not be saved.")
+			return
+		}
+		if now := time.Now().UTC(); in.Since != kept && since.Before(time.Date(now.Year()-5, now.Month(), 1, 0, 0, 0, 0, time.UTC)) {
+			problem(w, 422, "Enter the first month the client owes a close as YYYY-MM, within the last five years.")
 			return
 		}
 		if in.Owner != nil && *in.Owner != "" {
