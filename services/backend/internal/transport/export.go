@@ -239,6 +239,7 @@ func exportClose(db *sql.DB, release bool) http.HandlerFunc {
             'client_attachments',COALESCE((SELECT jsonb_agg(to_jsonb(a)-'body'-'claim' ORDER BY a.id) FROM client_attachments a WHERE a.close_id=$1),'[]'),
             'close_preparations',COALESCE((SELECT jsonb_agg(to_jsonb(g) ORDER BY g.id) FROM close_preparations g WHERE g.close_id=$1),'[]'::jsonb),
             'close_goals',COALESCE((SELECT jsonb_agg(to_jsonb(g) ORDER BY g.id) FROM close_goals g WHERE g.close_id=$1),'[]'::jsonb),
+            'close_owner_changes',COALESCE((SELECT jsonb_agg(to_jsonb(o) ORDER BY o.id) FROM close_owner_changes o WHERE o.close_id=$1),'[]'::jsonb),
             'emails',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',m.id,'request_id',m.request_id,'state',m.state,'delivery',m.delivery,'reminder_of',m.reminder_of,'approved_by',m.approved_by,'approved_until',m.approved_until,'attempts',m.attempts,'provider_id',m.provider_id,'error',m.error,'created_at',m.created_at,'finished_at',m.finished_at) ORDER BY m.created_at) FROM email_delivery m JOIN work_requests q ON q.id=m.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'::jsonb),
             'replies',COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM work_replies r JOIN work_requests q ON q.id=r.request_id JOIN request_drafts d ON d.id=q.draft_id WHERE d.close_id=$1),'[]'::jsonb))`, pack.Close.ID).Scan(&pack.WorkHistory)
 		if err != nil {

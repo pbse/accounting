@@ -196,7 +196,7 @@ export default function ClientClose() {
         {close.basis && <span className="chip" title="Set under Settings → Approved procedures and client overrides">{basisLabels[close.basis]} · {close.basis_scope === "client" ? "client override" : "firm default"}</span>}
         {close.profile && close.profile.state !== "none" && <span className="chip" role={close.profile.state === "conflict" ? "alert" : undefined} title="Read from the connected ledger">{profileLabel(close.profile)}</span>}
       </PageHeader>
-      <PlanningControls key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}`} closeId={close.id} plan={close} onSaved={() => void reload()} />
+      <PlanningControls key={`${close.due_on}-${close.priority}-${close.owned_by_me}-${close.assigned}-${close.can_assign}-${close.can_take_over}`} closeId={close.id} plan={close} onSaved={() => void reload()} />
       <StatGroup>
         <StatTile icon="review" label="Ready for review" value={ready.length} caption={`Current drafts with evidence and no blockers${latest}`} to={`${base}?tab=workpapers&filter=ready`} />
         <StatTile icon="blocked" tone="red" label="Needs attention" value={attention.length} caption={`Blockers, changes requested or evidence changed${latest}`} to={`${base}?tab=workpapers&filter=attention`} />

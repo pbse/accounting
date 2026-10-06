@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { workspaceRequest } from "./workspace";
 
-export type Plan = { due_on?: string; priority?: string; owned_by_me?: boolean; assigned?: boolean };
+export type Plan = { due_on?: string; priority?: string; owned_by_me?: boolean; assigned?: boolean; can_assign?: boolean; can_take_over?: boolean; handed?: { by: string; note: string; at: string } };
+type Person = { subject: string; name: string };
 
 function days(due: string) {
   const today = new Date();
@@ -32,11 +33,14 @@ export function PlanningControls({ closeId, plan, onSaved }: { closeId: string; 
   const [priority, setPriority] = useState(plan.priority ?? "normal");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  async function save(assignment: "keep" | "take" | "release") {
+  const [people, setPeople] = useState<Person[]>();
+  const [to, setTo] = useState("");
+  const [note, setNote] = useState("");
+  async function save(assignment: "keep" | "take" | "release" | "assign") {
     setBusy(true);
     setMessage("");
     try {
-      await workspaceRequest(`/${closeId}/planning`, { due_on: dueOn, priority, assignment });
+      await workspaceRequest(`/${closeId}/planning`, assignment === "assign" ? { due_on: dueOn, priority, assignment, assignee: to, note: note.trim() } : { due_on: dueOn, priority, assignment });
       setMessage("Saved.");
       onSaved();
     } catch (e) {
@@ -72,9 +76,50 @@ export function PlanningControls({ closeId, plan, onSaved }: { closeId: string; 
           Release
         </button>
       ) : (
-        <button type="button" disabled={busy || plan.assigned} onClick={() => void save("take")}>
-          {plan.assigned ? "Held by a colleague" : "Assign to me"}
+        <button type="button" disabled={busy || (plan.assigned && !plan.can_take_over)} onClick={() => void save("take")}>
+          {plan.assigned ? (plan.can_take_over ? "Take it over" : "Held by a colleague") : "Assign to me"}
         </button>
+      )}
+      {plan.handed && (
+        <p className="assistant-note">
+          Handed to you by {plan.handed.by} on {new Date(plan.handed.at).toLocaleDateString()}
+          {plan.handed.note && <> · “{plan.handed.note}”</>}
+        </p>
+      )}
+      {plan.can_assign && (
+        <details
+          onToggle={(e) => {
+            if (!e.currentTarget.open || people) return;
+            workspaceRequest(`/${closeId}/people`)
+              .then((data: { people: Person[] }) => setPeople(data.people))
+              .catch((err) => setMessage(err instanceof Error ? err.message : "Teammates are unavailable right now."));
+          }}
+        >
+          <summary>Hand the close to a teammate</summary>
+          {people?.length === 0 && <p className="assistant-note">Nobody else here can review this client's work.</p>}
+          {!!people?.length && (
+            <>
+              <label>
+                Teammate{" "}
+                <select value={to} onChange={(e) => setTo(e.target.value)}>
+                  <option value="">Choose…</option>
+                  {people.map((p) => (
+                    <option key={p.subject} value={p.subject}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Note for them
+                <textarea value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
+              </label>
+              <button type="button" disabled={busy || !to} onClick={() => void save("assign")}>
+                {busy ? "Handing over…" : "Hand it over"}
+              </button>
+            </>
+          )}
+        </details>
       )}
       <span role="status">{message}</span>
     </form>
