@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"maps"
 	"net/http/httptest"
 	"os"
 	"slices"
@@ -64,6 +65,7 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	store := savedCloses(db, strings.Repeat("a", 32))
 	call := func(subject string, permissions []string, method, path string, body any, want int) string {
 		t.Helper()
+		body = withRosterRev(t, db, org, path, body)
 		var reader *bytes.Reader
 		if body == nil {
 			reader = bytes.NewReader(nil)
@@ -91,6 +93,10 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		t.Fatal(body)
 	}
 	call("user_a", admin, "POST", "/v1/closes/close-template", map[string]any{"due_days": ten, "owner": "user_b", "reason": "Monthly closes"}, 200)
+	// A template change made from the template as it was before (here, none) is refused.
+	if body := call("user_a", admin, "POST", "/v1/closes/close-template", map[string]any{"due_days": ten, "owner": "", "reason": "Stale", "rev": ""}, 409); !strings.Contains(body, "changed since you looked") {
+		t.Fatalf("a stale template change is refused: %s", body)
+	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Alpha", "active": true, "since": before, "reason": "A client"}, 200)
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Gamma", "active": true, "since": ended, "owner": cy, "reason": "A client"}, 422)
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Beta", "active": true, "since": ended, "owner": nobody, "reason": "A client"}, 422)
@@ -272,10 +278,15 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": true, "since": ended, "due_days": 1, "reason": "A client"}, 200)
 	first := rev()
 	// Each change is a new revision, however soon after the last, so a form keyed on it resets.
-	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": true, "since": ended, "due_days": 2, "reason": "Two days"}, 200)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": true, "since": ended, "due_days": 2, "reason": "Two days", "rev": first}, 200)
 	if again := rev(); first == "" || again == first {
 		t.Fatalf("each roster change is a new revision: %q then %q", first, again)
 	}
+	// A change made from an entry read before another administrator's is refused, as is adding a client already there.
+	if body := call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Rho", "active": false, "since": ended, "reason": "Stale", "rev": first}, 409); !strings.Contains(body, "changed since you looked") {
+		t.Fatalf("a stale roster change is refused: %s", body)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "rho", "active": true, "since": ended, "reason": "Again", "rev": ""}, 409)
 	if c := dueCounts(); c["not_opened_overdue"]+c["not_opened_upcoming"] != 1 || c["overdue"]+c["upcoming"] != 0 || len(listed) != 1 || listed[0].Entity != "Rho" || listed[0].DueOn != due(2) {
 		t.Fatalf("Rho's unopened month counts as due, apart from the due closes, and is listed with them: %v %+v", c, listed)
 	}
@@ -425,7 +436,7 @@ func TestLocalDevelopmentManagesTheRoster(t *testing.T) {
 	handler := apiWithStore(db, token)
 	call := func(method, path string, body any, want int) string {
 		t.Helper()
-		raw, _ := json.Marshal(body)
+		raw, _ := json.Marshal(withRosterRev(t, db, "local-development", path, body))
 		r := httptest.NewRequest(method, path, bytes.NewReader(raw))
 		r.Header.Set("Authorization", "Bearer "+token)
 		r.Header.Set("Content-Type", "application/json")
@@ -467,4 +478,27 @@ func TestLocalDevelopmentManagesTheRoster(t *testing.T) {
 	if owner != me {
 		t.Fatalf("the local template's owner holds the month: %q, want %q", owner, me)
 	}
+}
+
+// withRosterRev gives a roster or template change the revision it replaces, as the Firm forms send it, unless the test
+// sets one.
+func withRosterRev(t *testing.T, db *sql.DB, org, path string, body any) any {
+	t.Helper()
+	m, ok := body.(map[string]any)
+	if _, set := m["rev"]; !ok || set || (path != "/v1/closes/roster" && path != "/v1/closes/close-template") {
+		return body
+	}
+	var rev string
+	var err error
+	if path == "/v1/closes/roster" {
+		err = db.QueryRow(`SELECT COALESCE((SELECT r.id::text FROM current_client_roster r WHERE r.organization_id=$1 AND client_identity(r.organization_id,r.client_entity)=client_identity($1,$2)),'')`, org, m["entity"]).Scan(&rev)
+	} else {
+		err = db.QueryRow(`SELECT COALESCE((SELECT id::text FROM close_templates WHERE organization_id=$1 ORDER BY id DESC LIMIT 1),'')`, org).Scan(&rev)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := maps.Clone(m)
+	out["rev"] = rev
+	return out
 }

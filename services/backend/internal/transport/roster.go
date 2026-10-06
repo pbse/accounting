@@ -145,23 +145,27 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
 	return out, rows.Err()
 }
 
+// rosterReviewers is the firm's WorkOS roles for rosterOwner, read before any lock is taken; the local development
+// firm has none.
+func rosterReviewers(ctx context.Context, org string) (map[string]reviewer, error) {
+	if org == "local-development" {
+		return nil, nil
+	}
+	return firmReviewers(ctx, org)
+}
+
 // rosterOwner says whether subject can hold a client's closes, and their name: a granted member who reviews entity's
 // work, through a role that reviews every client or an assignment to entity. The firm template applies to every client
 // (entity ""), so only a role reviewing every client will do. Only the local development firm, which has no WorkOS,
-// takes any member.
-func rosterOwner(ctx context.Context, db *sql.DB, r *http.Request, entity, subject string) (string, bool, error) {
-	org := organization(r)
+// takes any member. q is the transaction holding the firm lock, which membership and assignment changes take too.
+func rosterOwner(ctx context.Context, q querier, org string, reviewers map[string]reviewer, entity, subject string) (string, bool, error) {
 	if org == "local-development" {
 		return subject, true, nil
 	}
 	var member, assigned bool
-	err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted),
+	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted),
  EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, subject, entity).Scan(&member, &assigned)
 	if err != nil || !member {
-		return "", false, err
-	}
-	reviewers, err := firmReviewers(ctx, org)
-	if err != nil {
 		return "", false, err
 	}
 	rv := reviewers[subject]
@@ -283,6 +287,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			DueDays *int    `json:"due_days"`
 			Owner   *string `json:"owner"`
 			Reason  string  `json:"reason"`
+			Rev     string  `json:"rev"` // the client's entry as read, "" for none
 		}
 		if !decode(w, r, &in) {
 			return
@@ -326,14 +331,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Enter the first month the client owes a close as YYYY-MM, within the last five years.")
 			return
 		}
+		var reviewers map[string]reviewer
 		if in.Owner != nil && *in.Owner != "" {
-			_, ok, err := rosterOwner(r.Context(), db, r, in.Entity, *in.Owner)
-			if err != nil {
+			if reviewers, err = rosterReviewers(r.Context(), organization(r)); err != nil {
 				problem(w, 502, "Teammates are unavailable right now.")
-				return
-			}
-			if !ok {
-				problem(w, 422, "Choose a member who can review "+in.Entity+"'s work as its owner.")
 				return
 			}
 		}
@@ -343,12 +344,37 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		// The firm lock, which opening a close takes, orders this with any month being opened for the client.
-		_, err = tx.ExecContext(r.Context(), `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organization(r))
-		if err == nil {
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-				organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r))
+		// The firm lock, which opening a close and changing members or assignments take, orders this with them. Under it
+		// the entry must still be the one the administrator read, and the owner still able to do the work.
+		var current string
+		if err = tx.QueryRowContext(r.Context(), `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organization(r)).Scan(new(string)); err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT r.id::text FROM current_client_roster r WHERE `+rosterMatch("$1", "$2")+`),'')`, organization(r), in.Entity).Scan(&current)
 		}
+		if err != nil {
+			problem(w, 503, "The client roster could not be saved.")
+			return
+		}
+		if current != in.Rev {
+			if in.Rev == "" {
+				problem(w, 409, in.Entity+" is already on the roster. Change its entry instead.")
+			} else {
+				problem(w, 409, in.Entity+"'s entry changed since you looked. Review it again.")
+			}
+			return
+		}
+		if in.Owner != nil && *in.Owner != "" {
+			_, ok, err := rosterOwner(r.Context(), tx, organization(r), reviewers, in.Entity, *in.Owner)
+			if err != nil {
+				problem(w, 503, "The client roster could not be saved.")
+				return
+			}
+			if !ok {
+				problem(w, 422, "Choose a member who can review "+in.Entity+"'s work as its owner.")
+				return
+			}
+		}
+		_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+			organization(r), in.Entity, in.Active, in.Since, in.DueDays, in.Owner, in.Reason, subject(r))
 		// A client that owes nothing more has no monthly hand-over to open its months.
 		if err == nil && !in.Active {
 			_, err = tx.ExecContext(r.Context(), `UPDATE close_routines SET stopped_at=now(),stopped_by=$3,stop_reason=$4 WHERE organization_id=$1 AND client_identity(organization_id,client_entity)=client_identity($1,$2) AND stopped_at IS NULL`,
@@ -370,6 +396,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			DueDays *int   `json:"due_days"`
 			Owner   string `json:"owner"`
 			Reason  string `json:"reason"`
+			Rev     string `json:"rev"` // the template as read, "" for none
 		}
 		if !decode(w, r, &in) {
 			return
@@ -382,10 +409,38 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "A close is due 1–60 days after its month ends.")
 			return
 		}
+		var reviewers map[string]reviewer
+		var err error
 		if in.Owner != "" {
-			_, ok, err := rosterOwner(r.Context(), db, r, "", in.Owner)
-			if err != nil {
+			if reviewers, err = rosterReviewers(r.Context(), organization(r)); err != nil {
 				problem(w, 502, "Teammates are unavailable right now.")
+				return
+			}
+		}
+		tx, err := db.BeginTx(r.Context(), nil)
+		if err != nil {
+			problem(w, 503, "The monthly close template could not be saved.")
+			return
+		}
+		defer tx.Rollback()
+		// Under the firm lock the template must still be the one the administrator read, and the owner still able to
+		// review every client's work.
+		var current string
+		if err = tx.QueryRowContext(r.Context(), `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, organization(r)).Scan(new(string)); err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT id::text FROM close_templates WHERE organization_id=$1 ORDER BY id DESC LIMIT 1),'')`, organization(r)).Scan(&current)
+		}
+		if err != nil {
+			problem(w, 503, "The monthly close template could not be saved.")
+			return
+		}
+		if current != in.Rev {
+			problem(w, 409, "The monthly template changed since you looked. Review it again.")
+			return
+		}
+		if in.Owner != "" {
+			_, ok, err := rosterOwner(r.Context(), tx, organization(r), reviewers, "", in.Owner)
+			if err != nil {
+				problem(w, 503, "The monthly close template could not be saved.")
 				return
 			}
 			if !ok {
@@ -393,7 +448,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		if _, err := db.ExecContext(r.Context(), `INSERT INTO close_templates(organization_id,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5)`, organization(r), in.DueDays, in.Owner, in.Reason, subject(r)); err != nil {
+		if _, err = tx.ExecContext(r.Context(), `INSERT INTO close_templates(organization_id,due_days,owner,reason,actor) VALUES($1,$2,$3,$4,$5)`, organization(r), in.DueDays, in.Owner, in.Reason, subject(r)); err != nil || tx.Commit() != nil {
 			problem(w, 503, "The monthly close template could not be saved.")
 			return
 		}
