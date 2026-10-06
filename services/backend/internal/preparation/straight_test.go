@@ -394,4 +394,8 @@ func TestCitedBilledToIsTheInvoicesOwnBillToLine(t *testing.T) {
 	if got := CitedBilledTo(billed("Northwind Other Inc", "Bill to: Northwind Other Inc", "1", 1), nil); got != "" {
 		t.Errorf("without the invoice's text: %q", got)
 	}
+	two := []IntakeSource{{Source: Source{ID: "1"}, Content: "Acme Insurance Co\nBill to: Harbor Fixture LLC\nBill to: Northwind Other Inc"}}
+	if got := CitedBilledTo(billed("Northwind Other Inc", "Bill to: Northwind Other Inc", "1", 1), two); got != "" {
+		t.Errorf("an invoice billing two names bills neither for certain: %q", got)
+	}
 }
