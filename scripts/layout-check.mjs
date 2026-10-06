@@ -141,13 +141,15 @@ async function revealPlan(page) {
       return "waiting";
     });
     if (state === "open") return;
-    if (state === "grant" && !((await call("/v1/admin/grants")).grants ?? []).some((g) => g.organization === firm)) {
+    const held = state === "grant" && ((await call("/v1/admin/grants")).grants ?? []).some((g) => g.organization === firm);
+    if (state === "grant" && !held) {
       const grant = page.locator(".app-main details", { hasText: "Open a content grant" });
       await grant.evaluate((details) => (details.open = true));
       await grant.locator("input").fill(reason);
       await grant.locator('button:has-text("Open grant")').click();
-    } else if (state === "reveal" && Date.now() - asked > 5000) {
-      // Held a grant but not revealed under it yet: give the automatic reveal a moment, then reveal with a reason.
+    } else if (state !== "waiting" && Date.now() - asked > 5000) {
+      // A grant is held but not yet shown or used (the console's grants list may be loading, or its request failed):
+      // give the automatic reveal a moment, then reveal with a reason, which needs no grant.
       if (!asked) asked = Date.now();
       else {
         const reveal = page.locator(".app-main details", { hasText: "Reveal client content" });
