@@ -18,7 +18,9 @@ CREATE TABLE client_roster (
  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX client_roster_current ON client_roster(organization_id,lower(client_entity),id DESC);
-CREATE VIEW current_client_roster WITH (security_invoker=true) AS SELECT DISTINCT ON (organization_id,lower(client_entity)) * FROM client_roster ORDER BY organization_id,lower(client_entity),id DESC;
+-- The current entry of each client is its latest row by client identity, so a name later confirmed as an alias of a
+-- rostered client is that client, whichever name its latest decision used.
+CREATE VIEW current_client_roster WITH (security_invoker=true) AS SELECT DISTINCT ON (organization_id,client_identity(organization_id,client_entity)) * FROM client_roster ORDER BY organization_id,client_identity(organization_id,client_entity),id DESC;
 ALTER TABLE client_roster ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_read ON client_roster FOR SELECT USING (current_setting('app.organization',true) IN ('*',organization_id));
 CREATE POLICY tenant_add ON client_roster FOR INSERT WITH CHECK (current_setting('app.organization',true) IN ('*',organization_id));

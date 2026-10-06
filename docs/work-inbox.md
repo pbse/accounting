@@ -118,9 +118,9 @@ An administrator reactivates it in Firm settings.
 - The owner is recorded as a change of hands by "monthly close template".
 - The template's owner must review every client; a client's own owner, that client.
 
-**Client identity.** The roster names each client by its own name, and matches closes by client identity, as opening months does elsewhere. A month opened under a confirmed alias of the client counts as the client's, and the roster refuses an alias as a second client.
+**Client identity.** The roster names each client by its own name, and matches closes by client identity, as opening months does elsewhere. A month opened under a confirmed alias of the client counts as the client's, and the roster refuses an alias as a second client. A name added on its own and later confirmed as an alias of a rostered client becomes that client: one entry, whose latest decision covers both names.
 
-**Changes and records.** Only a firm administrator (`clients:all` and `members:manage`) changes the roster or the template, with a reason. A client's first owed month is within the last five years. A roster change takes the firm's lock, as opening a close does, so a month opened at the same moment honors it. Both are append-only histories and are part of the firm export.
+**Changes and records.** Only a firm administrator (`clients:all` and `members:manage`) changes the roster or the template, with a reason; in the local development firm, anyone may. A client's first owed month is within the last five years. A roster change takes the firm's lock, as opening a close does, so a month opened at the same moment honors it. Both are append-only histories and are part of the firm export.
 
 ## Work needing re-review
 

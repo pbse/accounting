@@ -191,6 +191,19 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Gamma", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
+	// A name added on its own and later confirmed as an alias of a rostered client is that client: one entry, one month.
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Epsilon", "active": true, "since": ended, "reason": "A client"}, 200)
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Epsilon Partners", "active": true, "since": ended, "reason": "A client"}, 200)
+	_, err = db.Exec(`INSERT INTO client_aliases(organization_id,client_entity,alias,confirmed_by) VALUES($1,'Epsilon','epsilon partners','fixture')`, org)
+	must(err)
+	if got := brief("user_b", partner, "Epsilon"); len(got) != 1 {
+		t.Fatalf("a confirmed alias is one client, owing one month: %v", got)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Epsilon", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+	if got := brief("user_b", partner, "Epsilon"); len(got) != 0 {
+		t.Fatalf("its latest decision covers both names: %v", got)
+	}
+
 	// A client can have no due date even though the template sets one.
 	zero := 0
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": true, "since": ended, "due_days": zero, "reason": "No deadline"}, 200)
@@ -246,5 +259,39 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
  FROM close_routines WHERE organization_id=$1 AND client_entity='Delta'`, org, deltaClose).Scan(&deltaStopped, &deltaCloses, &deltaGoals))
 	if deltaStopped != "Stopped because Delta is inactive on the firm's roster." || deltaCloses != 1 || deltaGoals != 0 {
 		t.Fatalf("a hand-over for an inactive client stops, opening and handing over nothing: %q %d %d", deltaStopped, deltaCloses, deltaGoals)
+	}
+}
+
+// The local development firm, which has no WorkOS, manages its own roster.
+func TestLocalDevelopmentManagesTheRoster(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	entity := "Local roster " + rand.Text()
+	t.Cleanup(func() { db.Exec(`DELETE FROM client_roster WHERE client_entity=$1`, entity) })
+	token := strings.Repeat("l", 32)
+	handler := apiWithStore(db, token)
+	call := func(method, path string, body any, want int) string {
+		t.Helper()
+		raw, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	call("POST", "/v1/closes/roster", map[string]any{"entity": entity, "active": true, "since": endedMonth(time.Now()), "reason": "Local client"}, 200)
+	if body := call("GET", "/v1/closes/roster", nil, 200); !strings.Contains(body, `"can_manage":true`) || !strings.Contains(body, entity) {
+		t.Fatalf("the local roster: %s", body)
 	}
 }

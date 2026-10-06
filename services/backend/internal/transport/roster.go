@@ -230,10 +230,10 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 				clients[i].Owed = append(clients[i].Owed, o.Period)
 			}
 		}
-		out := map[string]any{"template": template, "clients": clients, "can_manage": canManageMembers(r)}
+		out := map[string]any{"template": template, "clients": clients, "can_manage": canManageRoster(r)}
 		// An administrator chooses owners from the members who can do the work: a role reviewing every client (any
 		// client, and the template), or a reviewer, for the clients assigned to them.
-		if canManageMembers(r) {
+		if canManageRoster(r) {
 			people, err := rosterPeople(r.Context(), tx, org)
 			if err != nil {
 				out["people_unavailable"] = "Teammates are unavailable right now."
@@ -245,7 +245,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 	})
 	// A firm administrator adds a client, changes its first owed month or its overrides, or marks it inactive.
 	mux.HandleFunc("POST /v1/closes/roster", func(w http.ResponseWriter, r *http.Request) {
-		if !canManageMembers(r) {
+		if !canManageRoster(r) {
 			problem(w, 403, "Changing the client roster requires clients:all and members:manage.")
 			return
 		}
@@ -325,7 +325,7 @@ func registerRoster(mux *http.ServeMux, db *sql.DB) {
 	})
 	// A firm administrator sets the monthly close template: when each month's close is due, and who holds it.
 	mux.HandleFunc("POST /v1/closes/close-template", func(w http.ResponseWriter, r *http.Request) {
-		if !canManageMembers(r) {
+		if !canManageRoster(r) {
 			problem(w, 403, "Changing the monthly close template requires clients:all and members:manage.")
 			return
 		}
@@ -419,4 +419,11 @@ func rosterPeople(ctx context.Context, tx *sql.Tx, org string) ([]rosterPerson, 
 func canReview(r *http.Request) bool {
 	a := auth.Actor(r.Context())
 	return a != nil && (a.Organization == "" || slices.Contains(a.Permissions, "workpapers:review"))
+}
+
+// canManageRoster is a firm administrator (canManageMembers), or anyone without an organization (local development),
+// who changes the roster and the monthly close template.
+func canManageRoster(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return canManageMembers(r) || a != nil && a.Organization == ""
 }
