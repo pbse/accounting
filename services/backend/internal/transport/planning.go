@@ -6,6 +6,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"close.local/backend/internal/auth"
 )
 
 // Planning is scheduling metadata for ranking work; it never grants review or posting authority. Who holds a close can
@@ -41,13 +44,17 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Keep, take, release or assign the close.")
 			return
 		}
-		if input.Note = strings.TrimSpace(input.Note); len(input.Note) > 500 {
+		if input.Note = strings.TrimSpace(input.Note); utf8.RuneCountInString(input.Note) > 500 {
 			problem(w, 422, "Keep the note to 500 characters.")
 			return
 		}
 		me := subject(r)
 		if input.Assignment != "keep" && me == "" {
 			problem(w, 403, "Sign in before taking, releasing or assigning a close.")
+			return
+		}
+		if input.Assignment == "assign" && !canHandOver(r) {
+			problem(w, 403, "Handing a close over requires workpapers:review, or clients:all and members:manage.")
 			return
 		}
 		// The new holder must be a teammate who can review the client's work. WorkOS is read before any lock is taken; the
@@ -147,4 +154,12 @@ func registerPlanning(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]any{"due_on": input.DueOn, "priority": input.Priority, "owned_by_me": next != "" && next == me, "assigned": next != ""})
 	})
+}
+
+// canHandOver is someone who may hand a close to a teammate and so see who those teammates are: a reviewer, or a firm
+// administrator (canManageMembers), who may not review work but reassigns it. Without an organization (local
+// development) everyone may.
+func canHandOver(r *http.Request) bool {
+	a := auth.Actor(r.Context())
+	return a != nil && (a.Organization == "" || slices.Contains(a.Permissions, "workpapers:review") || canManageMembers(r))
 }

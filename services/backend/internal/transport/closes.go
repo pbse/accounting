@@ -319,7 +319,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 			problem(w, 503, "Could not open the close.")
 			return
 		}
-		item.CanAssign = subject(r) != "" && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
+		item.CanAssign = subject(r) != "" && canHandOver(r) && (item.OwnedByMe || !item.Assigned || canManageMembers(r))
 		rows, err := db.QueryContext(r.Context(), `SELECT id::text,kind,created_at,paper,digest,review_state,review_id FROM workpaper_review_state WHERE close_id=$1 ORDER BY workpaper_review_state.id DESC LIMIT 101`, item.ID)
 		if err != nil {
 			problem(w, 503, "Could not open workpapers.")

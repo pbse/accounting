@@ -331,8 +331,11 @@ func settleHandoffs(ctx context.Context, tx *sql.Tx, g goalRow, p goalProgress, 
 }
 
 func registerHandoffs(mux *http.ServeMux, db *sql.DB) {
+	// Teammates are listed to whoever may hand them work: reviewers handing a document, and firm administrators
+	// reassigning a close.
 	mux.HandleFunc("GET /v1/closes/{id}/people", func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := reviewActor(w, r); !ok {
+		if !canHandOver(r) {
+			problem(w, 403, "Your organization role lacks workpapers:review.")
 			return
 		}
 		var entity string

@@ -69,7 +69,8 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 		return w.Body.String()
 	}
 	partner, reviewer := []string{"workpapers:review", "clients:all"}, []string{"workpapers:review"}
-	admin := append([]string{"members:manage"}, partner...)
+	// The administrator manages members across every client but reviews no work; the viewer can do neither.
+	admin, viewer := []string{"members:manage", "clients:all"}, []string{}
 	plan := func(subject string, permissions []string, assignment, assignee, note string, want int) string {
 		t.Helper()
 		return call(subject, permissions, "POST", "/v1/closes/"+alpha+"/planning", map[string]string{"priority": "normal", "assignment": assignment, "assignee": assignee, "note": note}, want)
@@ -87,8 +88,15 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 		return c.Close.CanAssign
 	}
 
-	if !canAssign("user_c", reviewer) {
-		t.Fatal("anyone who can work on the client may hand over a close nobody holds")
+	if !canAssign("user_c", reviewer) || canAssign("user_d", viewer) {
+		t.Fatal("a reviewer may hand over a close nobody holds; a viewer may not")
+	}
+	call("user_d", viewer, "GET", "/v1/closes/"+alpha+"/people", nil, 403)
+	if body := plan("user_d", viewer, "assign", "user_b", "", 403); !strings.Contains(body, "requires workpapers:review") {
+		t.Fatal(body)
+	}
+	if people := call("user_a", admin, "GET", "/v1/closes/"+alpha+"/people", nil, 200); !strings.Contains(people, `"user_c"`) {
+		t.Fatalf("an administrator who reviews nothing still sees whom to reassign to: %s", people)
 	}
 	plan("user_b", partner, "take", "", "", 200)
 	if canAssign("user_c", reviewer) || !canAssign("user_b", partner) || !canAssign("user_a", admin) {
@@ -117,6 +125,9 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 	plan("user_b", partner, "take", "", "", 409)
 	// A firm administrator reassigns it whoever holds it.
 	plan("user_a", admin, "assign", "user_b", "Back from leave", 200)
+	// A note is limited in characters, not bytes.
+	plan("user_b", partner, "assign", "user_c", strings.Repeat("é", 300), 200)
+	plan("user_c", reviewer, "assign", "user_b", "", 200)
 	if owner() != "user_b" {
 		t.Fatalf("the administrator gave it back to Bea: %s", owner())
 	}
@@ -132,7 +143,7 @@ func TestACloseChangesHandsAndEachChangeIsRecorded(t *testing.T) {
 		changes = append(changes, from+">"+to+" by "+actor+" "+reason)
 	}
 	rows.Close()
-	if got := strings.Join(changes, " | "); got != ">user_b by user_b  | user_b>user_c by user_b Covering while I'm away | user_c>user_b by user_a Back from leave | user_b> by user_b " {
+	if got := strings.Join(changes, " | "); got != ">user_b by user_b  | user_b>user_c by user_b Covering while I'm away | user_c>user_b by user_a Back from leave | user_b>user_c by user_b "+strings.Repeat("é", 300)+" | user_c>user_b by user_c  | user_b> by user_b " {
 		t.Fatalf("each change of hands is recorded, and a kept plan is none: %s", got)
 	}
 	activity := call("user_a", admin, "GET", "/v1/closes/security", nil, 200)
