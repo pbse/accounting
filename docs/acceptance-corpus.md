@@ -51,7 +51,7 @@ A case is one client-month, in a directory of its own: `case.json` with its docu
   - `drafts`: every entry correct preparation proposes, each with `date`, `debit_account`, `credit_account` and `amount`. A field left out is not judged; leaving out `drafts` leaves the drafts unjudged.
   - `exception`: a material problem a person must see before anything goes on. A problem counts as caught only when the app's own sign for it shows, so the harness accepts only problems it has a sign for:
     - `wrong_client`: the identity block, or a hold reason naming the invoice as billed to someone other than the client.
-    - `duplicate`: a file whose bytes repeat an earlier one's, kept by the app as that document. Such a file must be labeled `duplicate`, and the case is refused otherwise.
+    - `duplicate`: a file whose uploaded bytes repeat an earlier one's, kept by the app as that document. A workbook is compared as the CSV of its first sheet, as it is uploaded. Such a file must be labeled `duplicate`, and the case is refused otherwise.
 
     Other problems the plan requires (an OCR decimal error, missing pages, conflicting totals) are added to `acceptance.Exceptions` with their sign as the app learns to report them. Until then, a case can still label the facts and drafts of such a document.
 - **`signoff`.** The accountant's part once the agent is done, applied after the pipeline settles and recorded as "acceptance reviewer". With `approve_drafts`, every current draft is approved; the scope is defined as covering every draft. Readiness is then read as sign-off reads it. Without `signoff`, nothing defines the scope, so the close is never ready: a case with `expect_ready` true and no `signoff` is refused.

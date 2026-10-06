@@ -1,6 +1,8 @@
 package acceptance
 
 import (
+	"archive/zip"
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -92,7 +94,7 @@ func TestLoadRefusesACaseItCannotScore(t *testing.T) {
 	write("bad/a.txt", "Same invoice")
 	write("bad/b.txt", "Same invoice")
 	_, err := Load(dir)
-	for _, want := range []string{"id \"Bad Case\"", "split \"tuning\"", "client and its month", "missing.txt", "work type", "b.txt repeats a.txt byte for byte", "what sign-off covers",
+	for _, want := range []string{"id \"Bad Case\"", "split \"tuning\"", "client and its month", "missing.txt", "work type", "b.txt repeats a.txt byte for byte as uploaded", "what sign-off covers",
 		`cannot yet tell whether the app found "ocr_decimal"; known: duplicate, wrong_client`} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("want %q in %v", want, err)
@@ -103,6 +105,41 @@ func TestLoadRefusesACaseItCannotScore(t *testing.T) {
 	write("ready/a.txt", "Invoice")
 	if _, err = Load(dir); err == nil || !strings.Contains(err.Error(), "a close expected ready needs its sign-off step") {
 		t.Fatalf("a case expected ready without a sign-off step: %v", err)
+	}
+}
+
+// Two workbooks whose bytes differ but whose first sheets match are one uploaded document, as the app keeps them.
+func TestWorkbooksAreComparedAsUploaded(t *testing.T) {
+	book := func(extra string) string {
+		var raw bytes.Buffer
+		w := zip.NewWriter(&raw)
+		for name, body := range map[string]string{
+			"xl/workbook.xml":            `<workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet r:id="rId1"/></sheets></workbook>`,
+			"xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+			"xl/worksheets/sheet1.xml":   `<worksheet><sheetData><row><c r="A1" t="inlineStr"><is><t>Insurance</t></is></c><c r="B1"><v>1200</v></c></row></sheetData></worksheet>`,
+			"docProps/app.xml":           extra,
+		} {
+			f, _ := w.Create(name)
+			f.Write([]byte(body))
+		}
+		w.Close()
+		return raw.String()
+	}
+	dir := t.TempDir()
+	for name, body := range map[string]string{"wb/a.xlsx": book("<Properties>first</Properties>"), "wb/b.xlsx": book("<Properties>saved again</Properties>"),
+		"wb/case.json": `{"id":"wb","split":"development","client":"Harbor","period":"2026-09","setup":{},"documents":[{"file":"a.xlsx","label":{"work_type":"prepaid"}},{"file":"b.xlsx","label":{"work_type":"prepaid"}}]}`} {
+		if err := writeFile(dir+"/"+name, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a, b := book("<Properties>first</Properties>"), book("<Properties>saved again</Properties>"); a == b {
+		t.Fatal("the workbooks' bytes differ")
+	}
+	if name, body, err := (Case{Dir: dir + "/wb"}).Upload("a.xlsx"); err != nil || name != "a.xlsx.csv" || string(body) != "Insurance,1200\n" {
+		t.Fatalf("a workbook uploads as its first sheet's CSV: %q %q %v", name, body, err)
+	}
+	if _, err := Load(dir); err == nil || !strings.Contains(err.Error(), "b.xlsx repeats a.xlsx byte for byte as uploaded") {
+		t.Fatalf("the second workbook is the same upload: %v", err)
 	}
 }
 

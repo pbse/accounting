@@ -83,13 +83,13 @@ func (c Case) Recorded(ids map[string]string) (*llm.Client, error) {
 	return llm.New(llm.Config{APIKey: "recorded-answers", Model: "recorded", HTTP: &http.Client{Transport: model}})
 }
 
-// RecordedComplete refuses a case that a recorded run cannot evaluate: every document the app keeps (each whose bytes do
-// not repeat an earlier one's) needs its recorded answer, or its reading would fail and nothing would be scored.
+// RecordedComplete refuses a case that a recorded run cannot evaluate: every document the app keeps (each whose uploaded
+// bytes do not repeat an earlier one's) needs its recorded answer, or its reading would fail and nothing would be scored.
 func (c Case) RecordedComplete() error {
 	var problems []error
 	seen := map[string]bool{}
 	for _, d := range c.Documents {
-		body, err := os.ReadFile(filepath.Join(c.Dir, d.File))
+		_, body, err := c.Upload(d.File)
 		if err != nil {
 			return err
 		}

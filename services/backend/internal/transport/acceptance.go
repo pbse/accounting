@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"close.local/backend/internal/acceptance"
@@ -66,18 +64,10 @@ func RunAcceptanceCase(ctx context.Context, db *sql.DB, c acceptance.Case, firm 
 		return observed, err
 	}
 	for _, d := range c.Documents {
-		body, err := os.ReadFile(filepath.Join(c.Dir, d.File))
-		if err != nil {
-			return observed, err
-		}
 		// As the upload route does: a workbook becomes CSV text of its first sheet, named with .csv added.
-		name := d.File
-		if strings.HasSuffix(strings.ToLower(name), ".xlsx") {
-			text, err := documents.SpreadsheetText(body)
-			if err != nil {
-				return observed, fmt.Errorf("case %s: %s: %w", c.ID, d.File, err)
-			}
-			name, body = name+".csv", []byte(text)
+		name, body, err := c.Upload(d.File)
+		if err != nil {
+			return observed, fmt.Errorf("case %s: %s: %w", c.ID, d.File, err)
 		}
 		if !validEvidenceFile(name, body) {
 			return observed, fmt.Errorf("case %s: %s is not a file an upload accepts (UTF-8 text/CSV up to 512 KiB, or a complete PDF up to 5 MiB)", c.ID, d.File)

@@ -3208,6 +3208,7 @@ Checks:
 - `TestOneFirmNeedsADistinctClientPerCase`: in one named firm, two cases sharing a client (ignoring case and spacing) are refused, and so is a firm ID the database would refuse.
 - `TestDraftsAreMatchedAsAWhole`: labels `{amount 100}` and `{amount 100, debit Prepaid}` both match drafts Prepaid/100 and Other/100. Against two Other/100 drafts, exactly one labeled entry is unmatched.
 - `TestLoadRefusesACaseItCannotScore`: a malformed case is refused with each problem named. The problems are: id, split, client and month, a missing document, an unlabeled work type, repeated bytes not labeled duplicate, a sign-off step without a scope, an exception the harness has no sign for, and a case expected ready without a sign-off step.
+- `TestWorkbooksAreComparedAsUploaded`: two workbooks with different bytes but the same first sheet upload as the same CSV, and the second must be labeled a duplicate.
 - `TestARecordedRunNeedsEveryKeptDocumentsAnswer`: only a kept document without an answer is named; the byte-for-byte repeat needs none.
 - `TestOnlyALocalDatabaseIsUsed`: localhost, loopback, sockets and a local key=value setting are accepted. A remote host, a remote `host=` parameter, a remote key=value setting, a private address, a remote fallback host, and a hostless URL with a remote `PGHOST` are refused.
 - `TestTheSampleCorpusRunsThroughThePipeline` (local PostgreSQL, real pipeline, recorded answers):

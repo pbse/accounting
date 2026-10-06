@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"close.local/backend/internal/documents"
 )
 
 // Case is one client-month.
@@ -69,6 +71,22 @@ type Bill struct {
 	Amount    string `json:"amount"`
 	Date      string `json:"date"`
 	AccountID string `json:"account_id"`
+}
+
+// Upload is a document as the upload route adds it: a workbook becomes the CSV text of its first sheet, named with .csv
+// added; anything else is its bytes. The app keeps one document per uploaded body.
+func (c Case) Upload(file string) (name string, body []byte, err error) {
+	if body, err = os.ReadFile(filepath.Join(c.Dir, file)); err != nil {
+		return "", nil, err
+	}
+	if !strings.HasSuffix(strings.ToLower(file), ".xlsx") {
+		return file, body, nil
+	}
+	text, err := documents.SpreadsheetText(body)
+	if err != nil {
+		return "", nil, err
+	}
+	return file + ".csv", []byte(text), nil
 }
 
 // Document is one file of the case with its accountant's label. Model names a recorded model answer, replayed in
@@ -170,13 +188,14 @@ func (c Case) check() error {
 			continue
 		}
 		files[d.File] = true
-		body, err := os.ReadFile(filepath.Join(c.Dir, d.File))
+		_, body, err := c.Upload(d.File)
 		if err != nil {
 			problems = append(problems, fmt.Errorf("document %s: %w", d.File, err))
 		}
-		// The same bytes uploaded again are one document to the app; the label must say the copy is a duplicate.
+		// The same uploaded bytes again are one document to the app (two workbooks with the same first sheet are too);
+		// the label must say the copy is a duplicate.
 		if earlier, ok := bodies[string(body)]; ok && err == nil && d.Label.Exception != "duplicate" {
-			problems = append(problems, fmt.Errorf("document %s repeats %s byte for byte: label it a duplicate", d.File, earlier))
+			problems = append(problems, fmt.Errorf("document %s repeats %s byte for byte as uploaded: label it a duplicate", d.File, earlier))
 		} else if !ok && err == nil {
 			bodies[string(body)] = d.File
 		}
