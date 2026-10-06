@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/preparation"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -48,7 +49,7 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		for _, q := range []string{`DELETE FROM close_goals WHERE close_id IN (SELECT id FROM client_closes WHERE organization_id=$1)`, `DELETE FROM workflow_runs WHERE organization_id=$1`,
-			`DELETE FROM close_routines WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
+			`DELETE FROM close_routines WHERE organization_id=$1`, `DELETE FROM client_aliases WHERE organization_id=$1`, `DELETE FROM close_deletion_receipts WHERE organization_id=$1`, `DELETE FROM client_closes WHERE organization_id=$1`, `DELETE FROM client_roster WHERE organization_id=$1`, `DELETE FROM close_templates WHERE organization_id=$1`,
 			`DELETE FROM client_access WHERE organization_id=$1`, `DELETE FROM organization_member_access WHERE organization_id=$1`, `DELETE FROM organizations WHERE id=$1`} {
 			if _, e := db.Exec(q, org); e != nil {
 				t.Errorf("cleanup %s: %v", q, e)
@@ -242,6 +243,19 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		t.Fatalf("Cy is not shown a month he cannot open: %v", got)
 	}
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Eta", "active": false, "since": ended, "reason": "Fixture done"}, 200)
+
+	// A month whose close was deleted under the retention policy was done: it is not owed again.
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Theta", "active": true, "since": ended, "reason": "A client"}, 200)
+	if got := brief("user_b", partner, "Theta"); len(got) != 1 {
+		t.Fatalf("Theta owes its month: %v", got)
+	}
+	_, err = db.Exec(`INSERT INTO close_deletion_receipts(organization_id,close_id,entity_digest,period,production_postings,actor,reason_code) VALUES($1,0,$2,$3,0,'fixture','retention_expired')`,
+		org, preparation.Digest([]byte(org+"\x00"+strings.ToLower("Theta")+"\x00"+ended)), ended)
+	must(err)
+	if got := brief("user_b", partner, "Theta"); len(got) != 0 {
+		t.Fatalf("a month deleted under the retention policy is not owed again: %v", got)
+	}
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Theta", "active": false, "since": ended, "reason": "Fixture done"}, 200)
 
 	// A client can have no due date even though the template sets one.
 	zero := 0

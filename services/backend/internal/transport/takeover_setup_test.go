@@ -99,8 +99,18 @@ func TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth(t *testing.T) {
 		t.Fatalf("the company the books are read from and the basis are confirmed: %+v", current)
 	}
 	call("POST", path, map[string]any{"digest": first.Digest, "timezone": "America/New_York", "confirmed": true}, 409)
+	// The firm's monthly template dates each close 4 days after its month ends.
+	_, err = db.Exec(`INSERT INTO close_templates(organization_id,due_days,owner,reason,actor) VALUES('local-development',4,'','Synthetic','fixture')`)
+	must(err)
+	defer db.Exec(`DELETE FROM close_templates WHERE organization_id='local-development'`)
 	call("POST", path, map[string]any{"digest": current.Digest, "timezone": "America/New_York", "confirmed": true}, 200)
-	// The client taken over joins the firm's roster, owing a close each month from its opening month.
+	// The client taken over joins the firm's roster, owing a close each month from its opening month, and its opening
+	// close takes the template.
+	var openingDue string
+	must(db.QueryRow(`SELECT COALESCE(due_on::text,'') FROM client_closes WHERE entity=$1 AND period='2026-08'`, entity).Scan(&openingDue))
+	if openingDue != "2026-09-04" {
+		t.Fatalf("the opening close takes the template: %q", openingDue)
+	}
 	var since string
 	must(db.QueryRow(`SELECT since FROM current_client_roster WHERE client_entity=$1 AND active`, entity).Scan(&since))
 	if since != "2026-08" {

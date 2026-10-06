@@ -3427,7 +3427,7 @@ What changed:
     - Any other client is listed inactive with a "To confirm" reason, from its latest close, rather than left off.
     - A scratch database was migrated through 126 and given two clients: one with closes 20, 5 and 2 months back, and one with a close 8 months back. After migration 127 the first was active from 5 months back, so the months between show. The second was inactive "to confirm".
     - Another scratch database was given "Acme" closes under its own name and under its confirmed alias "Acme Holdings". It got one entry, "Acme", active from its earliest recent close.
-- **Owed months** (`owedMonths`). Every ended month from a client's first owed month with no close is owed, however old. It is shown to whoever can work on the client (`clients:all`, or an assignment). A month the client's monthly hand-over is set to open still shows, marked `hand_over`, until a close exists, however late the hand-over is.
+- **Owed months** (`owedMonths`). Every ended month from a client's first owed month with no close is owed, however old. A month whose close was deleted, as its deletion receipt records, was done, and is not owed again. It is shown to whoever can work on the client (`clients:all`, or an assignment). A month the client's monthly hand-over is set to open still shows, marked `hand_over`, until a close exists, however late the hand-over is.
   - The morning brief returns them as `not_opened`, narrowed by Work's client or month filter.
   - Work lists them in their own **Months not opened** section, apart from **Due in 7 days**, with **Open**.
 - **The template on new closes** (`applyCloseTemplate`). A close newly opened for an active roster client takes the client's override, else the template, whether it comes from the new-close route, **Open**, a monthly hand-over or carry-forward. That means a due date N days after the month ends, and an owner.
@@ -3442,7 +3442,7 @@ What changed:
 - **Assignments follow the app's access rule.** The app grants access to a client's closes by name (`clientAccess`, `closeAccess`), so the roster matches client assignments by name too. It never shows or gives anyone a month they cannot open. Making access alias-aware would widen who can open which closes, and is left out of this change.
 - **Client identity.** The current roster is one entry per client identity, so a name later confirmed as an alias merges with its client. The entry is shown under the client's own name, with its latest terms. Roster entries match closes by `client_identity`: in owed months, the template, the inactive guards, takeover, retention and the latest close. A month opened under a confirmed alias counts as the client's, and the roster refuses an alias as a second client.
 - **"Yours"** on an owed month means the template's owner is the reader and they can still review.
-- **Joining and leaving.** Confirming a takeover setup puts a client never on the roster onto it from its opening month; confirming again does not reactivate one an administrator marked inactive.
+- **Joining and leaving.** Confirming a takeover setup puts a client never on the roster onto it from its opening month, and gives its opening close the template; confirming again does not reactivate one an administrator marked inactive.
   - Deleting a close for contract termination or at the client's request takes every name the client is on the roster under off it, its confirmed aliases included. This happens before those aliases are forgotten, so a former alias is not left as a client still owing months.
   - The deletion stops hand-overs under the client's aliases too.
   - A month's hand-over flag also matches routines by client identity. Deleting a close for contract termination or at the client's request takes it off. Marking a client inactive also stops its monthly hand-over.
@@ -3461,6 +3461,7 @@ Checks:
   - Gamma's month opened under its confirmed alias "Gamma Group" is no longer owed, and "Gamma Group" is refused as a roster entry.
   - "Epsilon Partners", added on its own and then confirmed as an alias of Epsilon, merges with it into one entry owing one month, shown as Epsilon. Epsilon's later deactivation covers both names.
   - A month opened under Zeta's alias "Zeta Co" takes the template's due date. It is not given to Cy, who is assigned to "Zeta" and so cannot open a close named "Zeta Co". Deactivating Zeta stops a hand-over set up under "Zeta Co".
+  - Theta's month is no longer owed once a deletion receipt records its close deleted under the retention policy. The receipt's digest is computed in SQL exactly as Go computes it.
   - Cy, assigned only under Eta's alias "Eta Co", is refused as Eta's owner and not shown Eta's month: he cannot open closes named Eta.
 - `TestLocalDevelopmentManagesTheRoster`: the local development firm adds a client and manages its roster. It records no members, so its reader is offered as an owner, can be the template's owner, and is given the month opened.
   - The roster lists each client with its owed months, and administrators see the members they can choose.
@@ -3469,7 +3470,7 @@ Checks:
   - Its next month is then refused by the new-close route while its existing month still opens. A monthly hand-over set up for it is refused. A hand-over left for the inactive Delta, whose next month was already open, stops in the sweep without handing that month to the agent.
 - `TestCarryForwardRoundingLineageAndFreshReview` (extended): the month carry-forward opens takes the client's 3-day due date. Once the client leaves the roster, carrying forward is refused (409), and the carry at sign-off skips it.
 - `TestMonthlyHandOverOpensAndHandsOverEachNewMonth` (extended): the month a hand-over opens takes the template. Contract termination takes the client off the roster, including the name "Alpha Group" confirmed as its alias; no active entry remains.
-- `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth` (extended): the client joins the roster from its opening month. Once marked inactive, confirming the setup again for another timezone leaves it inactive.
+- `TestATakeoverSetupIsConfirmedOnceOnTheOpeningMonth` (extended): the client joins the roster from its opening month, and its opening close takes the template's due date (4 days after August ends). Once marked inactive, confirming the setup again for another timezone leaves it inactive.
 - The full Go suite runs on a fresh local PostgreSQL with migrations applied twice. `npm run check`, `npm test` and `npm run build` pass.
 
 Not verified in a browser against a real WorkOS firm.

@@ -144,6 +144,12 @@ func registerTakeoverSetup(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 422, "Choose the client's timezone by its IANA name, for example America/New_York.")
 			return
 		}
+		// The opening close takes the firm's monthly close template when the client joins the roster; the firm's roles, for
+		// the owner it may give, are read before any lock is taken.
+		var roles map[string]reviewer
+		if org := organization(r); org != "local-development" {
+			roles, _ = firmReviewers(r.Context(), org)
+		}
 		tx, err := db.BeginTx(r.Context(), nil)
 		if err != nil {
 			problem(w, 503, "Takeover setup unavailable.")
@@ -192,8 +198,14 @@ func registerTakeoverSetup(mux *http.ServeMux, db *sql.DB) {
 		if err = tx.QueryRowContext(r.Context(), `INSERT INTO takeover_setups(organization_id,close_id,digest,content,timezone,confirmed_by) VALUES($1,$2::bigint,$3,$4,$5,$6) RETURNING id::text`, org, r.PathValue("id"), digest, string(saved), in.Timezone, who).Scan(&id); err == nil {
 			// A client taken over joins the firm's roster, owing a close each month from its opening month. One already on
 			// it, even inactive, stays as an administrator left it: confirming a setup again changes nothing there.
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) SELECT c.organization_id,c.entity,true,c.period,'Taken over from '||c.period,$2
+			var joined sql.Result
+			joined, err = tx.ExecContext(r.Context(), `INSERT INTO client_roster(organization_id,client_entity,active,since,reason,actor) SELECT c.organization_id,c.entity,true,c.period,'Taken over from '||c.period,$2
  FROM client_closes c WHERE c.id::text=$1 AND NOT EXISTS(SELECT 1 FROM client_roster r WHERE `+rosterMatch("c.organization_id", "c.entity")+`)`, r.PathValue("id"), who)
+			if err == nil {
+				if n, _ := joined.RowsAffected(); n == 1 {
+					err = applyCloseTemplate(r.Context(), tx, r.PathValue("id"), roles)
+				}
+			}
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The takeover setup could not be saved.")
