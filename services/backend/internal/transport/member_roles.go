@@ -237,7 +237,8 @@ func registerMemberRoles(mux *http.ServeMux, db *sql.DB) {
 }
 
 // settleRoleChanges settles changes WorkOS did not confirm from the role it now reports for each person: the new role
-// means the change took; any other, a minute on, means it did not.
+// means the change took; the old one, a minute on, means it did not; any other role (changed in WorkOS meanwhile)
+// leaves the outcome unknown, which is recorded as such rather than guessed.
 func settleRoleChanges(ctx context.Context, db *sql.DB, org string) error {
 	rows, err := db.QueryContext(ctx, `SELECT id,subject,from_role,to_role,created_at<now()-interval '1 minute' FROM member_role_changes WHERE organization_id=$1 AND state='pending'`, org)
 	if err != nil {
@@ -266,13 +267,18 @@ func settleRoleChanges(ctx context.Context, db *sql.DB, org string) error {
 			return err
 		}
 		state := ""
-		if p.old {
-			state = "failed"
-		}
 		for _, m := range held {
-			if m.Role.Slug == p.to {
+			switch {
+			case m.Role.Slug == p.to:
 				state = "applied"
+			case p.old && m.Role.Slug == p.from:
+				state = "failed"
+			case p.old:
+				state = "unknown"
 			}
+		}
+		if p.old && len(held) == 0 {
+			state = "unknown"
 		}
 		if state != "" {
 			if _, err = db.ExecContext(ctx, `UPDATE member_role_changes SET state=$2,settled_at=now() WHERE id=$1 AND state='pending'`, p.id, state); err != nil {

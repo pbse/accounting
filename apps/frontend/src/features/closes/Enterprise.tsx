@@ -10,7 +10,7 @@ type Operations = { limits: { closes: number; active_jobs: number; model_calls_t
 type Retention = { retain_until: string; legal_hold: boolean; version: number; deletion_blockers: string[] };
 type Person = { subject: string; email: string; name: string; role: string; status: string; access: "granted" | "revoked" | "none" };
 type RoleOption = { slug: string; name: string; description: string; permissions: string[]; allowed: boolean };
-type RoleChange = { id: number; subject: string; from_role: string; to_role: string; reason: string; actor: string; state: "pending" | "applied" | "failed"; created_at: string };
+type RoleChange = { id: number; subject: string; from_role: string; to_role: string; reason: string; actor: string; state: "pending" | "applied" | "failed" | "unknown"; created_at: string };
 
 // The firm's people and their roles (docs/sign-in.md). Colleagues who sign in with the firm's company domain arrive
 // with the Member role, which opens nothing until an administrator gives them a role or assigns them clients.
@@ -95,7 +95,7 @@ function FirmPeople() {
         <label><input name="confirmed" type="checkbox" required />I checked the person and the role.</label>
         <button>Change role</button>
       </fieldset></form>
-      {page.changes.length > 0 && <details><summary>Role changes ({page.changes.length})</summary><ol>{page.changes.map((c) => <li key={c.id}>{who(c.subject)}: {roleName(c.from_role)} → {roleName(c.to_role)}{c.state === "pending" ? " (awaiting WorkOS)" : c.state === "failed" ? " (not made)" : ""} · {c.reason} · by {who(c.actor)} · {new Date(c.created_at).toLocaleString()}</li>)}</ol></details>}
+      {page.changes.length > 0 && <details><summary>Role changes ({page.changes.length})</summary><ol>{page.changes.map((c) => <li key={c.id}>{who(c.subject)}: {roleName(c.from_role)} → {roleName(c.to_role)}{c.state === "pending" ? " (awaiting WorkOS)" : c.state === "failed" ? " (not made)" : c.state === "unknown" ? " (outcome unknown: changed in WorkOS meanwhile)" : ""} · {c.reason} · by {who(c.actor)} · {new Date(c.created_at).toLocaleString()}</li>)}</ol></details>}
       <p role="status">{message}</p>
     </section>
   );

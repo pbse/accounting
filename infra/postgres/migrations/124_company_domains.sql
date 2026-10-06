@@ -13,7 +13,7 @@ CREATE TABLE member_role_changes (
  to_role text NOT NULL CHECK (char_length(to_role) BETWEEN 1 AND 100),
  reason text NOT NULL CHECK (char_length(reason) BETWEEN 10 AND 2000),
  actor text NOT NULL CHECK (left(actor,5)='user_'),
- state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','applied','failed')),
+ state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','applied','failed','unknown')),
  created_at timestamptz NOT NULL DEFAULT now(),
  settled_at timestamptz
 );

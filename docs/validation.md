@@ -3377,6 +3377,12 @@ Both are tested.
 
 Pass 14 found that a firm which had removed someone could still hold them when their own domain had no firm, so they could not set one up. A firm that removed the person now no longer holds them, and their domain's claim decides; tested.
 
+Pass 15 found two gaps:
+- **A firm WorkOS chose, which had not admitted the person, could still hold them.** Only admission in that firm now keeps them.
+- **A lost role change showing a third role was recorded as failed.** It is now recorded as unknown.
+
+Both are tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

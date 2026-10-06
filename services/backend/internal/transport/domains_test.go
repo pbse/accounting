@@ -497,6 +497,21 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+erin+`","role":"firm-admin","reason":"Erin runs the September closes.","confirmed":true}`); w.Code != 409 {
 		t.Fatalf("giving the role they already have changes nothing: %d", w.Code)
 	}
+	// A lost change whose person WorkOS then shows in a third role is recorded as unknown, not guessed.
+	f.put = "lost"
+	if w := call(anaCookie, "POST", "/v1/closes/members/role", `{"subject":"`+ivy+`","role":"firm-admin","reason":"Ivy takes the payroll closes.","confirmed":true}`); w.Code != 502 {
+		t.Fatalf("an unconfirmed change: %d %s", w.Code, w.Body.String())
+	}
+	f.mu.Lock()
+	f.membership(ivy, firm).Role.Slug = "auditor"
+	f.mu.Unlock()
+	if _, err := raw.Exec(`UPDATE member_role_changes SET created_at=now()-interval '2 minutes' WHERE subject=$1 AND state='pending'`, ivy); err != nil {
+		t.Fatal(err)
+	}
+	var ivyState string
+	if w := call(anaCookie, "GET", "/v1/closes/members/people", ""); w.Code != 200 || raw.QueryRow(`SELECT state FROM member_role_changes WHERE subject=$1 ORDER BY id DESC LIMIT 1`, ivy).Scan(&ivyState) != nil || ivyState != "unknown" {
+		t.Fatalf("a third role leaves the outcome unknown: %d %q", w.Code, ivyState)
+	}
 
 	sessionOrg := func(user string) string {
 		t.Helper()
@@ -628,6 +643,20 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	f.mu.Unlock()
 	if where, cookie := signIn(erin, "google"); where != "/dashboard" || cookie == "" || sessionOrg(erin) != inviting {
 		t.Fatalf("Erin, having accepted, signs in to the inviting firm: %s %s", where, sessionOrg(erin))
+	}
+
+	// A firm WorkOS placed someone in, which has not admitted them, does not hold them: their own domain decides.
+	vicDomain := "vic" + strings.ToLower(rand.Text()[:8]) + ".test"
+	hosted[vicDomain] = true
+	vic := person("vic", true, vicDomain)
+	f.mu.Lock()
+	vm := firmMembership{ID: "om_" + vic, UserID: vic, OrganizationID: elsewhere, Status: "active"}
+	vm.Role.Slug = "member"
+	f.memberships = append(f.memberships, vm)
+	f.mu.Unlock()
+	beforeVic := len(f.created)
+	if where, cookie := signIn(vic, "google"); where != "/dashboard" || cookie == "" || len(f.created) != beforeVic+1 || sessionOrg(vic) != f.created[len(f.created)-1] {
+		t.Fatalf("Vic sets up his own domain's firm: %s %s", where, sessionOrg(vic))
 	}
 
 	// Every sign-in needs a verified address: a member whose address WorkOS no longer counts as verified is turned away.

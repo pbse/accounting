@@ -259,24 +259,29 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, stri
 		belongs = belongs || registered && acceptedInvitation(ctx, db, []string{held}, tokens.User) == held
 	}
 	if registered && belongs {
-		return held, domainMember(ctx, db, held, tokens.User)
+		refusal, _ := domainMember(ctx, db, held, tokens.User)
+		return held, refusal
 	}
 	if err := db.QueryRowContext(ctx, `SELECT id FROM organizations WHERE email_domain=$1`, domain).Scan(&own); err != nil && err != sql.ErrNoRows {
 		return "", refuseUnavailable
 	}
 	switch {
 	case own != "" && own == held:
-		return held, domainMember(ctx, db, held, tokens.User)
+		refusal, _ := domainMember(ctx, db, held, tokens.User)
+		return held, refusal
 	case own != "":
 		return domainFirm(ctx, db, tokens.User)
 	case registered:
-		// A firm that removed them does not hold them: their own domain's claim decides instead.
+		// The firm WorkOS chose keeps them only if they are admitted there (it set up by hand, with their domain
+		// verified); one that removed them, or that has not admitted them, leaves their own domain's claim to decide.
 		var removed bool
 		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND NOT granted)`, held, tokens.User.ID).Scan(&removed); err != nil {
 			return "", refuseUnavailable
 		}
 		if !removed {
-			return held, domainMember(ctx, db, held, tokens.User)
+			if refusal, admitted := domainMember(ctx, db, held, tokens.User); refusal != "" || admitted {
+				return held, refusal
+			}
 		}
 	}
 	return domainFirm(ctx, db, tokens.User)

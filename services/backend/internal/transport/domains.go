@@ -310,40 +310,41 @@ func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user si
 
 // domainMember records, the first time, that someone WorkOS already placed in a firm by its verified domain (WorkOS's
 // own domain provisioning) belongs to it. Anyone else in the firm came by invitation and is enrolled as before.
-func domainMember(ctx context.Context, db *sql.DB, org string, user signedInUser) string {
+// admitted says whether they now hold the firm's access: as a member before, or by joining here.
+func domainMember(ctx context.Context, db *sql.DB, org string, user signedInUser) (refusal string, admitted bool) {
 	domain, company := companyDomain(user.Email)
 	if !company {
-		return refusePersonal
+		return refusePersonal, false
 	}
 	ctx = systemContext(ctx)
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return refuseUnavailable
+		return refuseUnavailable, false
 	}
 	defer tx.Rollback()
 	var enabled bool
 	var recorded sql.NullString
 	err = tx.QueryRowContext(ctx, `SELECT enabled,email_domain FROM organizations WHERE id=$1 FOR UPDATE`, org).Scan(&enabled, &recorded)
 	if err != nil {
-		return refuseUnavailable
+		return refuseUnavailable, false
 	}
 	if !enabled {
-		return refuseSuspended
+		return refuseSuspended, false
 	}
 	// Someone the firm has already decided on needs nothing here, whatever their domain; one it removed is told so.
 	var granted sql.NullBool
 	if err = tx.QueryRowContext(ctx, `SELECT granted FROM current_organization_members WHERE organization_id=$1 AND subject=$2`, org, user.ID).Scan(&granted); err != nil && err != sql.ErrNoRows {
-		return refuseUnavailable
+		return refuseUnavailable, false
 	}
 	if granted.Valid {
 		if !granted.Bool {
-			return refuseRemoved
+			return refuseRemoved, false
 		}
-		return ""
+		return "", true
 	}
 	// Anyone else from another domain came by invitation, which enrolls them on their first request.
 	if recorded.Valid && recorded.String != domain {
-		return ""
+		return "", false
 	}
 	if !recorded.Valid {
 		// A firm set up by hand whose WorkOS organization has this domain verified (so WorkOS placed them in it) takes
@@ -355,7 +356,7 @@ func domainMember(ctx context.Context, db *sql.DB, org string, user signedInUser
 			} `json:"domains"`
 		}
 		if workos(ctx, "GET", "/organizations/"+url.PathEscape(org), nil, &o) != nil {
-			return refuseUnavailable
+			return refuseUnavailable, false
 		}
 		verified := slices.ContainsFunc(o.Domains, func(d struct {
 			Domain string `json:"domain"`
@@ -364,23 +365,24 @@ func domainMember(ctx context.Context, db *sql.DB, org string, user signedInUser
 			return strings.EqualFold(d.Domain, domain) && d.State == "verified"
 		})
 		if !verified {
-			return ""
+			return "", false
 		}
 		taken, err := tx.ExecContext(ctx, `UPDATE organizations SET email_domain=$2 WHERE id=$1 AND email_domain IS NULL AND NOT EXISTS(SELECT 1 FROM organizations WHERE email_domain=$2)`, org, domain)
 		if err != nil {
-			return refuseUnavailable
+			return refuseUnavailable, false
 		}
 		if n, _ := taken.RowsAffected(); n == 0 {
-			return ""
+			return "", false
 		}
 	}
 	if !user.EmailVerified {
-		return refuseUnverified
+		return refuseUnverified, false
 	}
 	if refusal := joinFirm(ctx, tx, org, enabled, user, domain); refusal != "" {
-		return refusal
+		return refusal, false
 	}
-	return commitOr(tx)
+	refusal = commitOr(tx)
+	return refusal, refusal == ""
 }
 
 func commitOr(tx *sql.Tx) string {
