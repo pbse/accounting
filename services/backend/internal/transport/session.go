@@ -206,15 +206,17 @@ func (c *sessionConfig) firmTokens(ctx context.Context, db *sql.DB, kind session
 		return tokens, "", nil
 	}
 	org, refusal := firmFor(ctx, db, tokens)
-	if refusal != "" || org == tokens.OrganizationID {
+	if refusal != "" {
 		return tokens, refusal, nil
 	}
+	// The session starts from a token issued now, for the settled firm, so it carries the role the person holds after
+	// joining (someone set to Member keeps nothing WorkOS gave them before).
 	tokens, _, err = c.authenticate(ctx, map[string]string{"grant_type": "refresh_token", "refresh_token": tokens.RefreshToken, "organization_id": org})
 	return tokens, "", err
 }
 
-// firmFor decides which firm a firm session is for. A registered firm WorkOS signed them in to keeps them when that
-// firm has decided on them or invited them (an accountant a client's firm invited stays there). Otherwise their
+// firmFor decides which firm a firm session is for. A registered firm WorkOS signed them in to keeps them when they are
+// a member there or it has an open invitation for them (an accountant a client's firm invited stays there). Otherwise their
 // address decides: the firm registered for their domain (joined if need be); else a registered firm WorkOS holds them
 // in; else their domain's claim, which may create the firm or take over an organization WorkOS placed them in.
 func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, string) {
@@ -225,7 +227,7 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, stri
 	var own string
 	if held != "" && held != os.Getenv("PLATFORM_ORGANIZATION_ID") {
 		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1),
-			EXISTS(SELECT 1 FROM organization_member_access WHERE organization_id=$1 AND subject=$2) OR EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND email=$3 AND state IN ('sending','pending','accepted'))`,
+			EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) OR EXISTS(SELECT 1 FROM member_invitations WHERE organization_id=$1 AND email=$3 AND state IN ('sending','pending'))`,
 			held, tokens.User.ID, strings.ToLower(strings.TrimSpace(tokens.User.Email))).Scan(&registered, &belongs); err != nil {
 			return "", refuseUnavailable
 		}
@@ -248,8 +250,9 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens) (string, stri
 }
 
 // chosenOrganization answers WorkOS asking which organization a person in several signs in to. Staff sign in to the
-// platform's. For a firm session, a firm that invited them comes first, then their domain's registered firm; failing
-// both, any of theirs completes the sign-in, and firmFor settles the firm, renewing the session into it if need be.
+// platform's. For a firm session: a firm with an open invitation for them, then the firm they last signed in to where
+// they are still a member, then their domain's registered firm; failing all, any of theirs completes the sign-in, and
+// firmFor settles the firm.
 func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind sessionKind, choice *organizationChoice) string {
 	platform := os.Getenv("PLATFORM_ORGANIZATION_ID")
 	listed := []string{}
@@ -266,7 +269,11 @@ func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind
 	}
 	domain, _ := companyDomain(choice.User.Email)
 	var org string
-	if db.QueryRowContext(systemContext(ctx), `SELECT organization_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state IN ('sending','pending','accepted') ORDER BY created_at DESC LIMIT 1`, strings.ToLower(strings.TrimSpace(choice.User.Email)), listed).Scan(&org) == nil {
+	if db.QueryRowContext(systemContext(ctx), `SELECT organization_id FROM member_invitations WHERE email=$1 AND organization_id=ANY($2) AND state IN ('sending','pending') ORDER BY created_at DESC LIMIT 1`, strings.ToLower(strings.TrimSpace(choice.User.Email)), listed).Scan(&org) == nil {
+		return org
+	}
+	if db.QueryRowContext(systemContext(ctx), `SELECT s.organization_id FROM auth_sessions s JOIN current_organization_members m ON m.organization_id=s.organization_id AND m.subject=s.subject AND m.granted
+		WHERE s.subject=$1 AND s.organization_id=ANY($2) ORDER BY s.created_at DESC LIMIT 1`, choice.User.ID, listed).Scan(&org) == nil {
 		return org
 	}
 	if db.QueryRowContext(systemContext(ctx), `SELECT id FROM organizations WHERE email_domain=$1 AND id=ANY($2)`, domain, listed).Scan(&org) == nil {

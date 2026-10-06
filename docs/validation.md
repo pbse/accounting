@@ -3338,6 +3338,13 @@ Pass 4 found that an existing member's address was not checked for verification,
 
 Pass 5 found that preferring the domain's firm would pull an accountant invited by another firm away from it. A firm that has decided on or invited the person now keeps them, ahead of their domain's firm; tested.
 
+Pass 6 found three gaps:
+- **A session could keep the role WorkOS held before a joiner was set to Member.** Every firm session now starts from a token issued after the firm is settled.
+- **A firm that had removed someone could still hold them.** Only current membership or an open invitation now keeps a person in a firm.
+- **`yahoo.com.au` counted as a company domain.** Two-label country suffixes are now caught.
+
+Each is tested.
+
 Production WorkOS has no users yet, so no one is locked out.
 
 Production still needs the owner to:

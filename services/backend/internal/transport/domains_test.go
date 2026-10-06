@@ -27,7 +27,7 @@ func TestOnlyCompanyAddressesCount(t *testing.T) {
 	for email, want := range map[string]bool{
 		"ana@acme-cpa.com": true, "Ana@Acme-CPA.com ": true, "ben@smith.co.uk": true, "erin@firm.test": true, "live@live.example-firm.com": true,
 		"ana@gmail.com": false, "ana@googlemail.com": false, "ana@outlook.com": false, "ana@hotmail.co.uk": false, "ana@yahoo.co.jp": false,
-		"ana@icloud.com": false, "ana@proton.me": false, "ana@gmx.de": false, "ana@live.com": false, "ana": false, "@acme.com": false, "ana@acme": false, "ana@-acme.com": false,
+		"ana@icloud.com": false, "ana@yahoo.com.au": false, "ana@hotmail.com.br": false, "ana@outlook.consulting": true, "ana@yahoo.example-firm.com": true, "ana@proton.me": false, "ana@gmx.de": false, "ana@live.com": false, "ana": false, "@acme.com": false, "ana@acme": false, "ana@-acme.com": false,
 	} {
 		if _, got := companyDomain(email); got != want {
 			t.Errorf("%q: company=%v, want %v", email, got, want)
@@ -345,8 +345,12 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	im.Role.Slug = "firm-admin"
 	f.memberships = append(f.memberships, im)
 	f.mu.Unlock()
-	if where, cookie := signIn(ivy, "google"); where != "/dashboard" || cookie == "" || f.membership(ivy, firm).Role.Slug != "member" {
+	where, ivyCookie := signIn(ivy, "google")
+	if where != "/dashboard" || ivyCookie == "" || f.membership(ivy, firm).Role.Slug != "member" {
 		t.Fatalf("Ivy joins as a member, whatever WorkOS held: %s %s", where, f.membership(ivy, firm).Role.Slug)
+	}
+	if w := call(ivyCookie, "GET", "/v1/closes/members/people", ""); w.Code != 403 {
+		t.Fatalf("Ivy's session carries the member role, not what WorkOS held before: %d", w.Code)
 	}
 
 	// Someone the firm invited joins through the invitation, with its role: before accepting it they are asked to.
@@ -500,6 +504,20 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	}
 	if where, cookie := signIn(mia, "google"); where != "/dashboard" || cookie == "" || sessionOrg(mia) != inviting || f.membership(mia, firm) != nil {
 		t.Fatalf("Mia stays in the firm that invited her: %s %s", where, sessionOrg(mia))
+	}
+
+	// Someone a client's firm removed, signed in by WorkOS to that firm, still reaches their own domain's firm.
+	nora := person("nora", true, domain)
+	f.mu.Lock()
+	nm := firmMembership{ID: "om_" + nora, UserID: nora, OrganizationID: elsewhere, Status: "active"}
+	nm.Role.Slug = "member"
+	f.memberships = append(f.memberships, nm)
+	f.mu.Unlock()
+	if _, err := raw.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,'Invited from another firm.',$3),($1,$2,false,'The engagement ended.',$3)`, elsewhere, nora, nora); err != nil {
+		t.Fatal(err)
+	}
+	if where, cookie := signIn(nora, "google"); where != "/dashboard" || cookie == "" || sessionOrg(nora) != firm {
+		t.Fatalf("Nora, removed from another firm, lands in her own domain's firm: %s %s", where, sessionOrg(nora))
 	}
 
 	// Every sign-in needs a verified address: a member whose address WorkOS no longer counts as verified is turned away.

@@ -51,9 +51,10 @@ func companyDomain(email string) (string, bool) {
 		return domain, false
 	}
 	first, rest, _ := strings.Cut(domain, ".")
-	// A family member is personal only under a public suffix of one or two labels (hotmail.co.uk), never as part of a
-	// company's own name (live.example-firm.com stays a company domain).
-	if slices.Contains(personalFamilies, first) && strings.Count(rest, ".") <= 1 && len(strings.Split(rest, ".")[0]) <= 3 {
+	// A family member is personal only under a country suffix of one or two short labels (hotmail.co.uk, yahoo.com.au),
+	// never as part of a company's own name (live.example-firm.com stays a company domain).
+	suffix := strings.Split(rest, ".")
+	if slices.Contains(personalFamilies, first) && len(suffix) <= 2 && !slices.ContainsFunc(suffix, func(l string) bool { return len(l) > 3 }) {
 		return domain, false
 	}
 	return domain, true
