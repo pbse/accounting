@@ -44,13 +44,21 @@ export function Login() {
   );
 }
 
-// Someone already signed in goes straight to the workspace, whichever session the environment uses.
+// The workspace page that sent the visitor to sign in, if any; otherwise the workspace's front page.
+function workspaceReturn(params: URLSearchParams) {
+  const asked = params.get("return") ?? "";
+  return asked.startsWith("/dashboard") ? asked : "/dashboard";
+}
+
+// Someone already signed in goes straight to the workspace page they asked for, whichever session the environment uses.
 function SignedInGoesToWork({ children }: { children: ReactNode }) {
   const { user } = useSession();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const back = workspaceReturn(params);
   useEffect(() => {
-    if (user) navigate("/dashboard", { replace: true });
-  }, [user, navigate]);
+    if (user) navigate(back, { replace: true });
+  }, [user, navigate, back]);
   return user ? <p role="status">Opening your workspace…</p> : children;
 }
 
@@ -60,7 +68,7 @@ function ProviderSignIn() {
   const { isLoading, unavailable } = useSession();
   const [params] = useSearchParams();
   const refusal = refusals[params.get("error") ?? ""];
-  const back = params.get("return")?.startsWith("/dashboard") ? params.get("return")! : "/dashboard";
+  const back = workspaceReturn(params);
   if (isLoading) return <p role="status">Checking your session…</p>;
   return (
     <>
