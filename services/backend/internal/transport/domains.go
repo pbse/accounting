@@ -90,6 +90,7 @@ const (
 	refuseHosting     = "hosting"
 	refuseInvited     = "invited"
 	refuseAsk         = "ask"
+	refuseStaff       = "staff"
 	refuseUnverified  = "unverified"
 	refuseRemoved     = "removed"
 	refuseSuspended   = "suspended"

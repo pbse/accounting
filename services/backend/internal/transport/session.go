@@ -103,13 +103,19 @@ func (k sessionKind) returnPath(p string) bool {
 	return (u.Path == clean || u.Path == clean+"/") && (clean == k.root || strings.HasPrefix(clean, k.root+"/"))
 }
 
-// owns says whether a session row's organization belongs to this kind: staff hold the platform organization, firms never do.
-func (k sessionKind) owns(org string) bool {
+// holds says whether a session belongs to this kind. Each row records which it is, so a staff session (which may be in
+// a firm's organization, or none) never stands in for a firm session or the other way round. A staff session is for an
+// address at STAFF_EMAIL_DOMAIN when that is set, else in the platform staff organization; a firm session is never in
+// the platform staff organization.
+func (k sessionKind) holds(staff bool, org, email string) bool {
 	platform := os.Getenv("PLATFORM_ORGANIZATION_ID")
-	if k.staff {
-		return platform != "" && org == platform
+	switch {
+	case k.staff && staffDomain() != "":
+		return staff && staffAddress(email)
+	case k.staff:
+		return staff && platform != "" && org == platform
 	}
-	return platform == "" || org != platform
+	return !staff && (platform == "" || org != platform)
 }
 
 func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
@@ -230,6 +236,9 @@ func (c *sessionConfig) settle(ctx context.Context, db *sql.DB, kind sessionKind
 		return tokens, refuseUnverified, nil
 	}
 	if kind.staff {
+		if staffDomain() != "" && !staffAddress(tokens.User.Email) {
+			return tokens, refuseStaff, nil
+		}
 		return tokens, "", nil
 	}
 	org, refusal := firmFor(ctx, db, tokens, c.enrolling(ctx, tokens))
@@ -363,7 +372,7 @@ func workingFirms(ctx context.Context, db *sql.DB, choice *organizationChoice) (
 // HttpOnly cookie. It answers the request itself when it cannot.
 func (c *sessionConfig) startSession(w http.ResponseWriter, r *http.Request, db *sql.DB, kind sessionKind, check *auth.Verifier, tokens workosTokens) bool {
 	claims, err := check.Verify(r.Context(), tokens.AccessToken)
-	if err != nil || claims.Subject != tokens.User.ID || claims.ExpiresAt == nil || !kind.owns(claims.Organization) {
+	if err != nil || claims.Subject != tokens.User.ID || claims.ExpiresAt == nil || !kind.holds(kind.staff, claims.Organization, tokens.User.Email) {
 		problem(w, 401, "The sign-in could not be verified.")
 		return false
 	}
@@ -374,8 +383,8 @@ func (c *sessionConfig) startSession(w http.ResponseWriter, r *http.Request, db 
 		return false
 	}
 	id, ctx := randomToken(), systemContext(r.Context())
-	_, err = db.ExecContext(ctx, `INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+make_interval(days=>$9))`,
-		hashToken(id), claims.Subject, claims.Organization, claims.Session, tokens.User.Email, refresh, access, claims.ExpiresAt.Time, sessionDays)
+	_, err = db.ExecContext(ctx, `INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at,staff) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+make_interval(days=>$9),$10)`,
+		hashToken(id), claims.Subject, claims.Organization, claims.Session, tokens.User.Email, refresh, access, claims.ExpiresAt.Time, sessionDays, kind.staff)
 	if err != nil {
 		problem(w, 503, "Sessions are unavailable.")
 		return false
@@ -458,6 +467,10 @@ func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind
 			listed = append(listed, o.ID)
 		}
 	}
+	if kind.staff && staffDomain() != "" && len(listed) > 0 {
+		// A staff session by email domain is not about any organization: any of theirs completes the sign-in.
+		return listed[0]
+	}
 	if kind.staff || len(listed) == 0 {
 		return ""
 	}
@@ -485,9 +498,14 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 	mux.HandleFunc("GET /v1/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		kind := kindOf(r)
 		org := os.Getenv("WORKOS_ORGANIZATION_ID")
-		if kind.staff {
+		provider := providers[r.URL.Query().Get("provider")]
+		switch {
+		case kind.staff && staffDomain() != "":
+			// Staff are an email domain: they sign in with Google, in whatever organization (or none) they have.
+			org, provider = "", providers["google"]
+		case kind.staff:
 			if org = os.Getenv("PLATFORM_ORGANIZATION_ID"); org == "" {
-				problem(w, 503, "Staff sign-in is not configured: set PLATFORM_ORGANIZATION_ID.")
+				problem(w, 503, "Staff sign-in is not configured: set STAFF_EMAIL_DOMAIN.")
 				return
 			}
 		}
@@ -497,7 +515,6 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		}
 		state := randomToken()
 		setCookie(w, loginCookie, state+"."+base64.RawURLEncoding.EncodeToString([]byte(back)), 600)
-		provider := providers[r.URL.Query().Get("provider")]
 		if provider == "" {
 			provider = "authkit"
 		}
@@ -608,10 +625,11 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		w.Header().Set("Cache-Control", "no-store")
 		kind := kindOf(r)
 		var subject, email, org string
+		var staff bool
 		cookie, err := r.Cookie(kind.cookie)
 		if err == nil {
-			err = db.QueryRowContext(systemContext(r.Context()), `SELECT subject,email,organization_id FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(cookie.Value)).Scan(&subject, &email, &org)
-			if err == nil && !kind.owns(org) {
+			err = db.QueryRowContext(systemContext(r.Context()), `SELECT subject,email,organization_id,staff FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(cookie.Value)).Scan(&subject, &email, &org, &staff)
+			if err == nil && !kind.holds(staff, org, email) {
 				err = sql.ErrNoRows
 			}
 		}
@@ -681,11 +699,12 @@ func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Ha
 			problem(w, 403, "Open the staff console directly.")
 			return
 		}
-		token, status := c.accessToken(r.Context(), db, kind, check, cookie.Value)
+		token, person, status := c.accessToken(r.Context(), db, kind, check, cookie.Value)
 		switch status {
 		case 0:
 			r.Header.Set("Authorization", "Bearer "+token)
-			next.ServeHTTP(w, r)
+			// The staff console learns who signed in from the session's own row; nothing in the request can set it.
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), signedInKey{}, &person)))
 		case 401:
 			setCookie(w, kind.cookie, "", -1)
 			problem(w, 401, "Your session ended. Sign in again.")
@@ -695,84 +714,95 @@ func (c *sessionConfig) bearer(db *sql.DB, verifier *auth.Verifier, next http.Ha
 	})
 }
 
-// accessToken returns the session's WorkOS access token, refreshing it when it has under a minute left. The refresh
-// runs with the row locked and checks again after the lock, so two tabs refresh once; the rotated refresh token is
-// saved. WorkOS declining the refresh, or a refreshed token for another person, session or firm, ends the session.
-func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, kind sessionKind, verifier *auth.Verifier, raw string) (string, int) {
+// accessToken returns the session's WorkOS access token, and whose session it is, refreshing the token when it has under
+// a minute left. The refresh runs with the row locked and checks again after the lock, so two tabs refresh once; the
+// rotated refresh token is saved. WorkOS declining the refresh, a refreshed token for another person, session or
+// organization, or an address that no longer qualifies (a staff session's no longer at the staff domain) ends it.
+func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, kind sessionKind, verifier *auth.Verifier, raw string) (string, signedInPerson, int) {
 	ctx = systemContext(ctx)
 	var sealed []byte
 	var expires time.Time
 	var org string
-	err := db.QueryRowContext(ctx, `SELECT organization_id,access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(raw)).Scan(&org, &sealed, &expires)
-	if err == sql.ErrNoRows || (err == nil && !kind.owns(org)) {
-		return "", 401
+	var staff bool
+	var person signedInPerson
+	err := db.QueryRowContext(ctx, `SELECT subject,email,organization_id,staff,access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(raw)).Scan(&person.Subject, &person.Email, &org, &staff, &sealed, &expires)
+	if err == sql.ErrNoRows || (err == nil && !kind.holds(staff, org, person.Email)) {
+		return "", person, 401
 	}
 	if err != nil {
-		return "", 503
+		return "", person, 503
 	}
 	if time.Until(expires) > time.Minute {
 		if access, err := secrets.Open("auth-session:access", sealed); err == nil {
-			return string(access), 0
+			return string(access), person, 0
 		}
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", 503
+		return "", person, 503
 	}
 	defer tx.Rollback()
-	var subject, workos string
+	var workos string
 	var refresh []byte
-	err = tx.QueryRowContext(ctx, `SELECT subject,organization_id,workos_session,refresh_token,access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`, hashToken(raw)).Scan(&subject, &org, &workos, &refresh, &sealed, &expires)
-	if err == sql.ErrNoRows {
-		return "", 401
+	err = tx.QueryRowContext(ctx, `SELECT subject,email,organization_id,staff,workos_session,refresh_token,access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`, hashToken(raw)).Scan(&person.Subject, &person.Email, &org, &staff, &workos, &refresh, &sealed, &expires)
+	if err == sql.ErrNoRows || (err == nil && !kind.holds(staff, org, person.Email)) {
+		return "", person, 401
 	}
 	if err != nil {
-		return "", 503
+		return "", person, 503
 	}
 	if time.Until(expires) > time.Minute {
 		if access, err := secrets.Open("auth-session:access", sealed); err == nil {
-			return string(access), 0
+			return string(access), person, 0
 		}
 	}
-	end := func() (string, int) {
+	end := func() (string, signedInPerson, int) {
 		if _, err := tx.ExecContext(ctx, `UPDATE auth_sessions SET revoked_at=now() WHERE id_hash=$1`, hashToken(raw)); err != nil || tx.Commit() != nil {
-			return "", 503
+			return "", person, 503
 		}
-		return "", 401
+		return "", person, 401
 	}
 	plain, err := secrets.Open("auth-session:refresh", refresh)
 	if err != nil {
 		return end()
 	}
-	tokens, refused, err := c.authenticate(ctx, map[string]string{"grant_type": "refresh_token", "refresh_token": string(plain), "organization_id": org})
+	// A session in no organization (a staff member by email domain who belongs to no firm) renews as it is.
+	fields := map[string]string{"grant_type": "refresh_token", "refresh_token": string(plain)}
+	if org != "" {
+		fields["organization_id"] = org
+	}
+	tokens, refused, err := c.authenticate(ctx, fields)
 	if refused {
 		return end()
 	}
 	if err != nil {
-		return "", 503
+		return "", person, 503
 	}
 	newRefresh, err := secrets.Seal("auth-session:refresh", []byte(tokens.RefreshToken))
 	if err != nil {
-		return "", 503
+		return "", person, 503
 	}
 	claims, err := verifier.Verify(ctx, tokens.AccessToken)
 	if errors.Is(err, auth.ErrSigningKeys) {
 		// WorkOS's keys could not be checked: keep its rotated refresh token and try again on the next request.
 		if _, err = tx.ExecContext(ctx, `UPDATE auth_sessions SET refresh_token=$2,access_expires_at=now() WHERE id_hash=$1`, hashToken(raw), newRefresh); err != nil || tx.Commit() != nil {
-			return "", 503
+			return "", person, 503
 		}
-		return "", 503
+		return "", person, 503
 	}
-	// Renewal keeps the sign-in rules: an address WorkOS no longer counts as verified, or one no longer a company's, ends it.
-	if _, company := companyDomain(tokens.User.Email); err != nil || claims.Subject != subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil || !tokens.User.EmailVerified || !company {
+	// Renewal keeps the sign-in rules: an address WorkOS no longer counts as verified, or one no longer a company's, ends
+	// it, as does a staff address no longer at the staff domain.
+	_, company := companyDomain(tokens.User.Email)
+	if err != nil || claims.Subject != person.Subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil || !tokens.User.EmailVerified || !company || !kind.holds(staff, org, tokens.User.Email) {
 		return end()
 	}
 	newAccess, err := secrets.Seal("auth-session:access", []byte(tokens.AccessToken))
 	if err != nil {
-		return "", 503
+		return "", person, 503
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE auth_sessions SET refresh_token=$2,access_token=$3,access_expires_at=$4 WHERE id_hash=$1`, hashToken(raw), newRefresh, newAccess, claims.ExpiresAt.Time); err != nil || tx.Commit() != nil {
-		return "", 503
+	if _, err = tx.ExecContext(ctx, `UPDATE auth_sessions SET refresh_token=$2,access_token=$3,access_expires_at=$4,email=$5 WHERE id_hash=$1`, hashToken(raw), newRefresh, newAccess, claims.ExpiresAt.Time, tokens.User.Email); err != nil || tx.Commit() != nil {
+		return "", person, 503
 	}
-	return tokens.AccessToken, 0
+	person.Email = tokens.User.Email
+	return tokens.AccessToken, person, 0
 }

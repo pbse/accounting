@@ -17,7 +17,7 @@ The firm-facing **Security center** stays as it is. It is a firm administrator's
 
 ## Principles
 
-1. **Separate identity.** Staff sign in as members of a dedicated WorkOS organization that is never enrolled as a firm. Firm sessions cannot reach admin routes, and staff sessions cannot use firm routes.
+1. **Separate identity.** Staff are Krith's own people: everyone with a verified Google address at `STAFF_EMAIL_DOMAIN` (getkrith.com in production; see [staff by email domain](#staff-by-email-domain)). They sign in to the console with a staff session of its own. Firm sessions cannot reach admin routes, and staff sessions cannot use firm routes.
 2. **Least privilege, explicit permissions.** Reading, operating and viewing client content are separate permissions.
 3. **Metadata by default.** Staff see states, counts, errors and IDs. Client content (documents, extracted text, `wf:"sensitive"` fields, email bodies) requires `platform:content` and a stated reason, and is logged.
 4. **Writes go through domain code, under the target firm.** An admin action runs with that firm's tenant context, so row-level security still confines it, and it calls the same Go function the app uses. No raw SQL edits, no "set state to queued".
@@ -30,7 +30,17 @@ The firm-facing **Security center** stays as it is. It is a firm administrator's
 
 ## Identity and access
 
-### WorkOS setup
+### Staff by email domain
+Since 2026-10-06, setting `STAFF_EMAIL_DOMAIN` makes everyone with a verified Google address at that domain staff. It is a GitHub environment variable, `getkrith.com` in production, which the deploy workflows pass to the API. The platform staff organization below then plays no part.
+- **Sign-in.** `/v1/auth/login?staff=1` goes straight to Google and names no organization. Staff keep whatever WorkOS organizations they have, or none. A staff member who also belongs to a firm (such as getkrith.com's own) still gets a staff session that is not a firm session.
+- **Who is turned away.** Every rule in [sign-in](sign-in.md) applies, and the address must be at the staff domain. Anyone else returns to `/login?error=staff` with no session.
+- **Each session says whether it is staff.** A staff session's organization no longer tells the two kinds apart, so `auth_sessions.staff` (migration 128) records it. The staff cookie accepts only a staff row for an address at the domain, and the firm cookie only a firm row. Renewal ends a staff session once its address no longer qualifies. A session in no organization renews without naming one.
+- **Only the session counts.** WorkOS access tokens carry no email address. The API takes the staff member's address from their session row, never from the request, so a bearer token alone never opens the console in this mode.
+- **Permissions.** Every staff member holds all four platform permissions. Client content still needs a stated reason and is audited, as is every staff write.
+- **Removing someone.** Suspending their Google Workspace account stops new sign-ins, but a staff session lasts up to 30 days. To end it at once, also sign them out everywhere from the console's People screen, which ends their sessions here and in WorkOS.
+- **Server sessions only.** This mode needs `AUTH_SESSION=server`. Without `STAFF_EMAIL_DOMAIN`, staff are the members of the platform staff organization, as below.
+
+### WorkOS setup (the staff organization, without `STAFF_EMAIL_DOMAIN`)
 - **Staff organization:** create "Platform staff" in each WorkOS environment. The API reads its ID from `PLATFORM_ORGANIZATION_ID`.
 - **Permissions:**
   - `platform:read`: see all firms' metadata.
@@ -54,7 +64,7 @@ The firm-facing **Security center** stays as it is. It is a firm administrator's
 
 ### Network (phase A4)
 Every page of the console lives under `/admin` on the app's own hostname, and only internal staff can load any of it.
-- **The check.** The edge Worker serves nothing under `/admin` (pages, scripts, styles) until the API accepts the request's staff session. It asks `GET /v1/admin/me` with the request's cookies, which needs a session in the platform staff organization with `platform:read`.
+- **The check.** The edge Worker serves nothing under `/admin` (pages, scripts, styles) until the API accepts the request's staff session. It asks `GET /v1/admin/me` with the request's cookies. That needs a staff session for a verified address at `STAFF_EMAIL_DOMAIN`, or, without that setting, a session in the platform staff organization with `platform:read`.
 - **Refusals.** A signed-out visitor to a page goes to staff sign-in and comes back to that page. A file is refused with 401, and a staff member without the console's role gets 403.
 - **Sign-in mode.** This needs `AUTH_SESSION=server`, whose cookie the edge can see (see [sign-in session](auth-sandbox-staging.md#sign-in-session)). In any other mode the Worker serves nothing under `/admin`.
 - **Authorization.** The gate is defence in depth: every staff API call is still authorized in Go.

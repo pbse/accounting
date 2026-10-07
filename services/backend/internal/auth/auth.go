@@ -47,6 +47,8 @@ var ErrSigningKeys = errors.New("signing keys unavailable")
 
 type Verifier struct {
 	ClientID, Organization, Issuer string
+	// AnyOrganization accepts a session in any organization or in none (staff by email domain, docs/admin-panel.md).
+	AnyOrganization bool
 	// JWKSURL and Audience configure an OAuth resource (MCP): its own key set, and an audience the token must name.
 	JWKSURL, Audience string
 	mu                sync.Mutex
@@ -120,7 +122,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 	if errors.Is(err, ErrSigningKeys) {
 		return nil, ErrSigningKeys
 	}
-	if err != nil || claims.Subject == "" || claims.Session == "" || claims.Organization == "" || claims.Organization == "local-development" || (v.Organization != "" && claims.Organization != v.Organization) {
+	if err != nil || claims.Subject == "" || claims.Session == "" || (claims.Organization == "" && !v.AnyOrganization) || claims.Organization == "local-development" || (v.Organization != "" && claims.Organization != v.Organization) {
 		return nil, errors.New("invalid session or organization")
 	}
 	if v.Audience != "" {

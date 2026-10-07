@@ -74,6 +74,7 @@ The callback sends the person back to `/login?error=…`, and the page explains 
 | `unverified` | An address WorkOS has not verified |
 | `removed` | The firm removed this person, or WorkOS deactivated their membership |
 | `suspended` | The firm is paused |
+| `staff` | A staff console sign-in from an address not at `STAFF_EMAIL_DOMAIN` ([admin panel](admin-panel.md#staff-by-email-domain)) |
 | `unavailable` | WorkOS or the database could not finish; try again |
 
 ## Setup (once per environment)
@@ -89,7 +90,7 @@ In Google Cloud (the owner, since it issues a client secret):
 In WorkOS (production environment):
 
 - **Authentication → OAuth providers → Google:** enter the client ID and secret ("Your app's credentials") and enable it. Done 2026-10-06.
-- **Turn off password and passkey sign-in, and keep every other social provider (Microsoft among them) off**, so AuthKit's own page (still used by the staff console, and by any unknown provider name) offers only Google. Check the AuthKit page afterwards. Done in production 2026-10-06: Google is the only method on (password, passkeys and Magic Auth off; Microsoft OAuth was never enabled).
+- **Turn off password and passkey sign-in, and keep every other social provider (Microsoft among them) off**, so AuthKit's own page (still used by the staff console without `STAFF_EMAIL_DOMAIN`, and by any unknown provider name) offers only Google. Check the AuthKit page afterwards. Done in production 2026-10-06: Google is the only method on (password, passkeys and Magic Auth off; Microsoft OAuth was never enabled).
 - **Roles:** `firm-admin` and `member` exist. Keep `member` without permissions.
 - **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, and the sign-out URI `https://getkrith.com/`.
 

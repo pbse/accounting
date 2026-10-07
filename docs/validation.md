@@ -3562,3 +3562,20 @@ WorkOS's Microsoft OAuth serves personal Microsoft accounts only: its setup requ
 - The domain rules are unchanged: a new firm's domain may run on Google Workspace or Microsoft 365, as evidence it is a company's.
 
 Google OAuth is configured and enabled in WorkOS production (the credential reads Valid), and Microsoft OAuth was never enabled there. Password, passkey and Magic Auth sign-in were then turned off in WorkOS production (2026-10-06, read back: Google is the only method on). `AUTH_SESSION=server` follows this change's merge.
+
+## Staff console by email domain — 2026-10-06 (B12)
+
+Request: the owner judged the platform staff organization the wrong way to gate admin tools; anyone with a getkrith.com address should be able to open `/admin`.
+
+- **Change.** With `STAFF_EMAIL_DOMAIN` set, staff sign-in goes straight to Google, in whatever organization the person has (or none). It admits only a WorkOS-verified company address at that domain, and each staff member holds every platform permission. The API takes the address from the server-held session's row, never from the request. Sessions now record whether they are staff (`auth_sessions.staff`, migration 128), so a staff session in a firm's organization never passes as a firm session. The staff organization remains the path when the setting is unset.
+- **Tested.** `TestStaffAreVerifiedAddressesAtTheStaffDomain` covers:
+  - sign-in goes to Google with no organization;
+  - someone in no organization, and a firm member, both open the console with every permission;
+  - an address at another domain is refused with no session;
+  - a bearer token alone is refused, and a staff cookie does not open the workspace;
+  - a session in no organization renews;
+  - renewal ends the session once the address leaves the domain.
+
+  The existing staff-organization tests (`TestServerSessionKeepsWorkOSTokensOnTheServer`, the admin route tests) pass unchanged. Backend tests pass against local PostgreSQL, except the PDF tests, which need Poppler (not installed locally; CI has it).
+
+Not verified: a real staff sign-in in production, which needs `STAFF_EMAIL_DOMAIN=getkrith.com` set and deployed.

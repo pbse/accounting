@@ -12,6 +12,7 @@ const refusals: Record<string, string> = {
   unverified: "Your email address isn’t verified yet. Verify it with Google, then sign in again.",
   removed: "Your firm’s administrator has removed your access. Ask them to restore it.",
   suspended: "Your firm’s workspace is paused. Talk to us to restore it.",
+  staff: "The staff console is only for Krith staff, signed in with their Krith Google account. Firm members use the workspace.",
   unavailable: "Sign-in couldn’t finish just now. Please try again in a moment.",
 };
 
