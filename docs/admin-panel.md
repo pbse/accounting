@@ -37,7 +37,7 @@ Since 2026-10-06, setting `STAFF_EMAIL_DOMAIN` makes everyone with a verified Go
 - **Each session says whether it is staff.** A staff session's organization no longer tells the two kinds apart, so `auth_sessions.staff` (migration 128) records it. The staff cookie accepts only a staff row for an address at the domain, and the firm cookie only a firm row. Renewal ends a staff session once its address no longer qualifies. A session in no organization renews without naming one.
 - **Only the session counts.** WorkOS access tokens carry no email address. The API takes the staff member's address from their session row, never from the request, so a bearer token alone never opens the console in this mode.
 - **Permissions.** Every staff member holds all four platform permissions. Client content still needs a stated reason and is audited, as is every staff write.
-- **Removing someone.** Suspending their Google Workspace account stops new sign-ins, but a staff session lasts up to 30 days. To end it at once, also delete the person's user in WorkOS: their next token renewal, within minutes, is then refused and the session ends.
+- **Removing someone.** Suspending their Google Workspace account stops new sign-ins, but a staff session lasts up to 30 days. To end it at once, also sign them out everywhere from the console's People screen, which ends their sessions here and in WorkOS.
 - **Server sessions only.** This mode needs `AUTH_SESSION=server`. Without `STAFF_EMAIL_DOMAIN`, staff are the members of the platform staff organization, as below.
 
 ### WorkOS setup (the staff organization, without `STAFF_EMAIL_DOMAIN`)
