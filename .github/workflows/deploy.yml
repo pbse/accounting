@@ -82,14 +82,15 @@ jobs:
           MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: |
           node --input-type=module <<'JS'
-          for (const name of ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','WORKOS_CLIENT_ID','WORKOS_ISSUER','DATABASE_RUNTIME_ROLE','MIGRATION_DATABASE_URL','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','STAGING_URL','VITE_WORKOS_API_HOSTNAME']) {
+          for (const name of ['TEXT_SCANNER_URL','UPLOAD_SCAN_HOST','WORKOS_CLIENT_ID','WORKOS_ISSUER','DATABASE_RUNTIME_ROLE','MIGRATION_DATABASE_URL','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','STAGING_URL']) {
             if (!process.env[name]) throw new Error(`Missing staging setting: ${name}`);
           }
           if (new URL(process.env.VITE_API_BASE_URL || process.env.STAGING_URL).hostname !== process.env.UPLOAD_SCAN_HOST || process.env.UPLOAD_SCAN_HOST.endsWith('.workers.dev')) throw new Error('UPLOAD_SCAN_HOST must match the API custom hostname protected by WAF');
           const session = process.env.AUTH_SESSION || 'client';
           if (!['client','server'].includes(session)) throw new Error('AUTH_SESSION must be client or server');
           if (session === 'server' && process.env.VITE_API_BASE_URL && new URL(process.env.VITE_API_BASE_URL).origin !== new URL(process.env.STAGING_URL).origin) throw new Error('AUTH_SESSION=server needs the API on the app origin: leave VITE_API_BASE_URL empty or set it to that origin');
-          if (session === 'client' && [undefined, '', 'api.workos.com'].includes(process.env.VITE_WORKOS_API_HOSTNAME)) console.log('::warning::AUTH_SESSION=client with api.workos.com: WorkOS needs a custom authentication domain in production; set AUTH_SESSION=server or a custom WORKOS_API_HOSTNAME');
+          if (session === 'client' && !process.env.VITE_WORKOS_API_HOSTNAME) throw new Error('Missing staging setting: VITE_WORKOS_API_HOSTNAME (AUTH_SESSION=client needs it)');
+          if (session === 'client' && process.env.VITE_WORKOS_API_HOSTNAME === 'api.workos.com') console.log('::warning::AUTH_SESSION=client with api.workos.com: WorkOS needs a custom authentication domain in production; set AUTH_SESSION=server or a custom WORKOS_API_HOSTNAME');
           if (!!process.env.WORKOS_AUTHKIT_DOMAIN !== !!process.env.MCP_RESOURCE_URL) throw new Error('Set WORKOS_AUTHKIT_DOMAIN and MCP_RESOURCE_URL together or neither');
           if (process.env.WORKOS_AUTHKIT_DOMAIN) {
             const authkit = new URL(process.env.WORKOS_AUTHKIT_DOMAIN);
