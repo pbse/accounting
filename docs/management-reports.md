@@ -15,7 +15,7 @@ Each pack states its entity, period, basis (accrual), currency, capture time and
 
 QuickBooks account figures open their captured General Ledger rows for both months; totals are the sums of the accounts listed above them. Xero figures have no ledger-row reader yet. The agent's investigations can read the pack, as they read other close-scoped tools.
 
-**Checks:** `TestManagementPackShowsTheLedgersCashFlowOnlyAsItTies` and `TestTheStatementOfCashFlowsIsKeptOnlyForTheMonth` (QuickBooks-shaped reports; a real sandbox statement is not yet exercised). `TestManagementPackTiesStatementsToTheTrialBalances` works two balanced months by hand (statements, working capital, a prior-only expense, a reclassified account, an unclassified account and an untyped ledger). `TestManagementPackReadsTheCapturedReports` reads QuickBooks-shaped reports through the API and shows a sign-off covering its QuickBooks capture while a newer Xero capture stays provisional. Real-provider captures are not yet exercised.
+**Checks:** `TestManagementPackShowsTheLedgersCashFlowOnlyAsItTies` and `TestTheStatementOfCashFlowsIsKeptOnlyForTheMonth` (QuickBooks-shaped reports; a real sandbox statement is not yet exercised). `TestManagementPackTiesStatementsToTheTrialBalances` works two balanced months by hand (statements, working capital, a prior-only expense, a reclassified account, an unclassified account and an untyped ledger). `TestManagementPackReadsTheCapturedReports` reads QuickBooks-shaped reports through the API and shows a sign-off covering its QuickBooks capture, then a sign-off covering a Xero capture, each until a newer capture leaves the pack provisional. Real-provider captures are not yet exercised.
 
 ## Budget against actual
 
