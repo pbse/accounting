@@ -94,6 +94,7 @@ const (
 	refuseRemoved     = "removed"
 	refuseSuspended   = "suspended"
 	refuseUnavailable = "unavailable"
+	refuseExpired     = "expired"
 )
 
 type firmMembership struct {

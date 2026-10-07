@@ -14,7 +14,11 @@ const refusals: Record<string, string> = {
   suspended: "Your firm’s workspace is paused. Talk to us to restore it.",
   staff: "The staff console is only for Krith staff, signed in with their Krith Google account. Firm members use the workspace.",
   unavailable: "Sign-in couldn’t finish just now. Please try again in a moment.",
+  expired: "That sign-in expired. Continue with Google to start again.",
 };
+// WorkOS sends a sign-in it began itself (an accepted invitation, or a tab left from before) to this page with a code
+// that only a sign-in started here can use, so the page asks for one instead of sitting silent.
+const unfinished = "Your sign-in isn’t finished yet. Continue with Google to finish it.";
 
 export function Login() {
   const configured = Boolean(authKitClientId);
@@ -66,8 +70,17 @@ function SignedInGoesToWork({ children }: { children: ReactNode }) {
 // yet (docs/sign-in.md); the page's last line asks them to talk to us.
 function ProviderSignIn() {
   const { isLoading, unavailable } = useSession();
-  const [params] = useSearchParams();
-  const refusal = refusals[params.get("error") ?? ""];
+  const [params, setParams] = useSearchParams();
+  const [leftover] = useState(() => params.has("code"));
+  useEffect(() => {
+    // The code is no use here, so it leaves the address; the page still says what to do.
+    if (!params.has("code") && !params.has("state")) return;
+    const kept = new URLSearchParams(params);
+    kept.delete("code");
+    kept.delete("state");
+    setParams(kept, { replace: true });
+  }, [params, setParams]);
+  const refusal = refusals[params.get("error") ?? ""] ?? (leftover ? unfinished : undefined);
   const back = workspaceReturn(params);
   if (isLoading) return <p role="status">Checking your session…</p>;
   return (

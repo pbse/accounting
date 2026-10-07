@@ -163,18 +163,47 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		return signInTo(firmSession, back, session, refresh)
 	}
 
-	// A callback that did not start here, or has the wrong state, is refused before WorkOS is asked.
+	// A callback that did not start here, or has the wrong state, is refused before WorkOS is asked, and the person is
+	// sent back to start again where their sign-in began.
+	callback := func(start, query string) *httptest.ResponseRecorder {
+		t.Helper()
+		var started *http.Cookie
+		if start != "" {
+			login := send(handler, "GET", start, "", "")
+			at, _ := url.Parse(login.Header().Get("Location"))
+			query, started = strings.ReplaceAll(query, "{state}", url.QueryEscape(at.Query().Get("state"))), cookieOf(login, loginCookie)
+		}
+		r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?"+query, nil)
+		if started != nil {
+			r.AddCookie(started)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	for _, refused := range []struct{ start, query, to string }{
+		{"/v1/auth/login", "code=code-1&state=forged", "/login?error=expired"},
+		{"/v1/auth/login", "state={state}", "/login?error=expired"},
+		{"", "code=code-1&state=x", "/login?error=expired"},
+		{"/v1/auth/login?staff=1", "code=code-1&state=forged", "/admin/"},
+	} {
+		w := callback(refused.start, refused.query)
+		if w.Code != 302 || w.Header().Get("Location") != refused.to || len(calls) != 0 || cookieOf(w, sessionCookie) != nil || cookieOf(w, staffCookie) != nil {
+			t.Fatalf("a callback from %q with %q goes to %s without calling WorkOS: %d %q calls=%d", refused.start, refused.query, refused.to, w.Code, w.Header().Get("Location"), len(calls))
+		}
+	}
+	// A code WorkOS will not take (used, or too old) opens nothing, and the login page says to try again.
 	login := send(handler, "GET", "/v1/auth/login", "", "")
-	r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code=code-1&state=forged", nil)
+	at, _ := url.Parse(login.Header().Get("Location"))
+	respond = func(map[string]string) (int, any) { return 400, map[string]string{"code": "invalid_grant"} }
+	r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code=code-1&state="+url.QueryEscape(at.Query().Get("state")), nil)
 	r.AddCookie(cookieOf(login, loginCookie))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
-	if w.Code != 400 || len(calls) != 0 {
-		t.Fatalf("a forged state is refused without calling WorkOS: %d calls=%d", w.Code, len(calls))
+	if w.Code != 302 || w.Header().Get("Location") != "/login?error=unavailable" || len(calls) != 1 || cookieOf(w, sessionCookie) != nil {
+		t.Fatalf("a refused code goes back to the login page: %d %q calls=%d", w.Code, w.Header().Get("Location"), len(calls))
 	}
-	if w := send(handler, "GET", "/v1/auth/callback?code=code-1&state=x", "", ""); w.Code != 400 {
-		t.Fatalf("a callback with no sign-in cookie is refused: %d", w.Code)
-	}
+	calls = nil
 
 	back := "/dashboard/closes/" + alpha
 	done, cookie := signIn(back, "session_1", "refresh-1")

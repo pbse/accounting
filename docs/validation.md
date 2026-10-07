@@ -3715,3 +3715,22 @@ Request: make Xero management packs publishable. After the Xero sign-off change,
 - **Tested.** `TestManagementPackReadsTheCapturedReports` (extended): a total line after a blank line is refused naming its row in the file, 5; a statement whose ending cash is 1,600 against book cash of 1,500 is shown with a difference of 100.00; one that ties completes the pack and discloses its source; after sign-off it publishes; an import while signed off is refused and the pack is not open for one, and a later import reopens the sign-off. Observed failing without each part: the readiness binding, the credit-card exclusion, the bank marking, the signed-off refusal, loading the import, file row numbers and the open flag. The transport and Xero packages pass on a fresh local PostgreSQL; the frontend typechecks.
 
 Not verified: a real Xero organisation or a real statement exported from Xero.
+
+## Sign-in: a leftover or replayed sign-in says what to do (2026-10-07)
+
+Request: an old `/login?code=…` address sat silent; the user expected a firm to be created. The code came from a sign-in WorkOS returned to its default redirect URI, `/login`, which in server sessions only our callback can finish, and only for a sign-in started in the same browser.
+
+- **Login page.** With `AUTH_SESSION=server`, `/login?code=…` removes `code` and `state` from the address, keeps `return`, and says "Your sign-in isn't finished yet. Continue with Google to finish it." The login page also explains the new `expired` refusal.
+- **Callback.** A callback whose state does not match the browser's sign-in cookie (a reload, the back button, an old tab) no longer answers with a JSON 400. Without asking WorkOS, it sends the person to `/login?error=expired`, or a staff console sign-in to `/admin/`. A code WorkOS refuses, or a WorkOS outage, sends them to `/login?error=unavailable` instead of a JSON 502.
+- **Tested.**
+  - `TestServerSessionKeepsWorkOSTokensOnTheServer` (extended), on a fresh local PostgreSQL. A forged state, a missing code, no sign-in cookie, and a forged staff state each redirect, to `/login?error=expired` or to `/admin/`, with no WorkOS call and no session cookie. A code WorkOS answers with `invalid_grant` goes to `/login?error=unavailable` with no session.
+  - The sign-in, staff and session tests pass.
+  - The frontend typechecks and builds in server mode.
+  - Headless Edge against the built page and a signed-out stub API:
+    - `/login?code=…&state=x` ends at `/login` with the message and the Google button;
+    - with `return=/dashboard/closes`, it keeps `return` and the button returns there;
+    - `error=expired` shows its message;
+    - plain `/login` shows none.
+
+Not verified: an accepted WorkOS invitation in production, which takes the same path.
+

@@ -530,7 +530,13 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			kind, check = staffSession, staff
 		}
 		if state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 || r.URL.Query().Get("code") == "" || !kind.returnPath(back) {
-			problem(w, 400, "This sign-in expired or did not start here. Start again from the sign-in page.")
+			// A reload, the back button or an old tab: nothing is asked of WorkOS, and the person starts again where
+			// their sign-in began, the staff console or the login page, which says why.
+			if kind.staff {
+				http.Redirect(w, r, staffSession.home, http.StatusFound)
+			} else {
+				http.Redirect(w, r, "/login?error="+refuseExpired, http.StatusFound)
+			}
 			return
 		}
 		tokens, refusal, choice, err := c.firmTokens(r.Context(), db, kind, r.URL.Query().Get("code"))
@@ -553,7 +559,8 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			return
 		}
 		if err != nil {
-			problem(w, 502, "WorkOS could not complete the sign-in. Try again.")
+			// WorkOS refused the code (used, or too old) or could not be reached: the login page says to try again.
+			http.Redirect(w, r, "/login?error="+refuseUnavailable, http.StatusFound)
 			return
 		}
 		if c.startSession(w, r, db, kind, check, tokens) {
