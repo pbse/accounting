@@ -256,6 +256,30 @@ func TestManagementPackReadsTheCapturedReports(t *testing.T) {
 	if got := status(); got != "signed_off" || current.State != "signed_off" {
 		t.Fatalf("a capture taken earlier changes neither the sign-off nor the pack: %s (readiness %s)", got, current.State)
 	}
+
+	// A sign-off made over a Xero capture stands for it as for a QuickBooks one, until a newer capture.
+	captureXero := func(after string) {
+		t.Helper()
+		_, err := db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09',$3,$4,'fixture',now()+$5::interval)`, closeID, xeroConnection, rand.Text(), xeroPayload, after)
+		must(err)
+		must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
+	}
+	captureXero("1 minute")
+	call("POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "reopen", "note": "Captured from Xero", "confirmed": true})
+	for _, account := range []string{"a-1", "a-2", "a-3", "a-4", "a-5"} {
+		var view struct{ Coverage coverageView }
+		must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/coverage", nil), &view))
+		call("POST", "/v1/closes/"+closeID+"/coverage", map[string]any{"action": "bind", "digest": view.Coverage.Digest, "account_id": account, "excluded": true, "reason": "Reviewed outside this close.", "confirmed": true})
+	}
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
+	call("POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "sign", "note": "Synthetic Xero sign-off", "confirmed": true})
+	if got := status(); got != "signed_off" {
+		t.Fatalf("the Xero capture the sign-off was made over is signed off: %s", got)
+	}
+	captureXero("2 minutes")
+	if got := status(); got != "provisional" || current.State != "reopen_required" {
+		t.Fatalf("a newer Xero capture needs the sign-off reopened, and the pack is provisional: %s (readiness %s)", got, current.State)
+	}
 }
 
 func TestPublishedManagementPacksAreFrozenAndCorrectedAsNewVersions(t *testing.T) {

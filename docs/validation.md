@@ -3629,3 +3629,12 @@ Tested:
 - Edge route tests, frontend checks, build and JavaScript tests.
 
 Not verified until deployed: the production login page and sidebar.
+
+## B07: a Xero month's sign-off stands in its management pack (2026-10-06)
+
+Request: make Xero management packs publishable. Two things block them: the pack never counted a Xero month as signed off, and it has no cash-flow statement. This change fixes the first; the second comes with an imported statement.
+
+- **Change.** `captureStatus` (`transport/management.go`) compares the signed coverage's capture with the pack's as coverage names it: `xero:<id>` for a Xero capture. Since the Xero coverage change (#278) the signed readiness digest binds a Xero capture's identity and digest as it binds a QuickBooks one, so the old rule that a Xero month stays provisional no longer had a reason.
+- **Tested.** `TestManagementPackReadsTheCapturedReports` (extended): sign-off over a Xero capture, once its accounts' coverage is answered, reads signed off in the pack; a newer Xero capture reopens it and the pack is provisional again. It fails without the change ("provisional"). The management, publication, readiness, coverage and Xero tests pass on a fresh local PostgreSQL.
+
+Not verified: a real Xero organisation. A signed Xero pack is still not publishable until it has a reconciled cash-flow statement.
