@@ -17,10 +17,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// The platform staff console (docs/admin-panel.md) lives under /v1/admin. With STAFF_EMAIL_DOMAIN set, staff are the
-// people with a verified address there, signed in through the server-held staff session (the session layer passes on
-// who they are), and each holds every platform permission. Without it, staff are the members of the WorkOS
-// organization PLATFORM_ORGANIZATION_ID, never enrolled as a firm, with the permissions their role there gives.
+// The platform staff console (docs/admin-panel.md) lives under /v1/admin. Staff are the people with a verified address
+// at STAFF_EMAIL_DOMAIN, signed in through the server-held staff session (the session layer passes on who they are),
+// and each holds every platform permission.
 const (
 	platformRead    = "platform:read"
 	platformOperate = "platform:operate"
@@ -64,26 +63,24 @@ func staffOf(ctx context.Context) *staffMember {
 	return m
 }
 
-// staffVerifier checks a staff session's tokens: in any organization (or none) when staff are an email domain, else in
-// the platform staff organization.
+// staffVerifier checks a staff session's tokens, in whatever organization (or none) the staff member holds.
 func staffVerifier() *auth.Verifier {
-	if staffDomain() != "" {
-		return &auth.Verifier{ClientID: os.Getenv("WORKOS_CLIENT_ID"), Issuer: os.Getenv("WORKOS_ISSUER"), AnyOrganization: true}
-	}
-	return &auth.Verifier{ClientID: os.Getenv("WORKOS_CLIENT_ID"), Issuer: os.Getenv("WORKOS_ISSUER"), Organization: os.Getenv("PLATFORM_ORGANIZATION_ID")}
+	return &auth.Verifier{ClientID: os.Getenv("WORKOS_CLIENT_ID"), Issuer: os.Getenv("WORKOS_ISSUER"), AnyOrganization: true}
 }
 
-// staffOnly lets a request through only from platform staff holding permission. With WorkOS and STAFF_EMAIL_DOMAIN,
-// that is a staff session whose verified address is at the domain, never a bare token (which names no address);
-// with WorkOS alone, a token in the platform staff organization. Without WorkOS (local development only) the
-// workspace token stands in for a staff member with every platform permission.
+// staffOnly lets a request through only from platform staff holding permission. With WorkOS, that is a staff session
+// whose verified address is at STAFF_EMAIL_DOMAIN, never a bare token (which names no address). Without WorkOS (local
+// development only) the workspace token stands in for a staff member with every platform permission.
 func staffOnly(token, permission string, next http.HandlerFunc) http.HandlerFunc {
 	verifier := staffVerifier()
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var member staffMember
 		switch {
-		case verifier.ClientID != "" && staffDomain() != "":
+		case verifier.ClientID != "" && staffDomain() == "":
+			problem(w, 503, "Staff sign-in is not configured: set STAFF_EMAIL_DOMAIN.")
+			return
+		case verifier.ClientID != "":
 			// Only the session layer sets the person, from a staff session's own row, never from the request.
 			person := signedInOf(r.Context())
 			claims, err := verifier.Authenticate(r, "")
@@ -92,22 +89,6 @@ func staffOnly(token, permission string, next http.HandlerFunc) http.HandlerFunc
 				return
 			}
 			member = staffMember{Subject: claims.Subject, Email: person.Email, Permissions: platformPermissions, Mode: "workos"}
-		case verifier.ClientID != "" && verifier.Organization == "":
-			problem(w, 503, "Staff sign-in is not configured: set STAFF_EMAIL_DOMAIN.")
-			return
-		case verifier.ClientID != "":
-			claims, err := verifier.Authenticate(r, "")
-			if err != nil {
-				problem(w, 401, "Sign in as platform staff.")
-				return
-			}
-			var granted []string
-			for _, p := range claims.Permissions {
-				if slices.Contains(platformPermissions, p) {
-					granted = append(granted, p)
-				}
-			}
-			member = staffMember{Subject: claims.Subject, Permissions: granted, Mode: "workos"}
 		default:
 			if _, err := verifier.Authenticate(r, token); err != nil {
 				problem(w, 401, "Unlock local development access.")

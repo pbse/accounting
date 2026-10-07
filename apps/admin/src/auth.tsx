@@ -1,12 +1,10 @@
-import { AuthKitProvider, useAuth } from "@workos-inc/authkit-react";
-import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-// Staff sign in to the WorkOS organization that holds platform staff; without WorkOS (local
-// development only) the server's workspace token stands in, kept in this tab's memory. With
-// VITE_AUTH_SESSION=server the backend holds the staff session in its own cookie and requests
-// carry no token.
+// Staff are the people with a verified Google address at the staff domain (docs/admin-panel.md). Only the backend's
+// own session knows that address, so with WorkOS the console needs VITE_AUTH_SESSION=server: the backend holds the
+// staff session in its own cookie and requests carry no token. Without WorkOS (local development only) the server's
+// workspace token stands in, kept in this tab's memory.
 const clientId = import.meta.env.VITE_WORKOS_CLIENT_ID as string | undefined;
-const staffOrganization = import.meta.env.VITE_PLATFORM_ORGANIZATION_ID as string | undefined;
 const serverSession = import.meta.env.VITE_AUTH_SESSION === "server";
 
 let token: () => Promise<string> = async () => "";
@@ -30,11 +28,7 @@ async function endServerSession() {
 export function StaffAccess({ children }: { children: ReactNode }) {
   if (!clientId) return <DevelopmentUnlock>{children}</DevelopmentUnlock>;
   if (serverSession) return <ServerSession>{children}</ServerSession>;
-  return (
-    <AuthKitProvider clientId={clientId} apiHostname={import.meta.env.VITE_WORKOS_API_HOSTNAME || undefined} redirectUri={`${window.location.origin}/admin/`}>
-      <StaffSession>{children}</StaffSession>
-    </AuthKitProvider>
-  );
+  return <Gate><h1>The staff console needs server sessions</h1><p>Staff are recognised by their verified address, which only the server-held session carries. Build the console with VITE_AUTH_SESSION=server.</p></Gate>;
 }
 
 function Gate({ children }: { children: ReactNode }) {
@@ -51,8 +45,8 @@ function SignIn({ onSignIn }: { onSignIn: () => void }) {
   return (
     <Gate>
       <h1>Close · Staff</h1>
-      <p>This console is for platform staff. Firm members use the workspace instead.</p>
-      <button className="primary" onClick={onSignIn}>Sign in as platform staff</button>
+      <p>This console is for Krith staff, with their Krith Google account. Firm members use the workspace instead.</p>
+      <button className="primary" onClick={onSignIn}>Sign in with Google</button>
     </Gate>
   );
 }
@@ -68,29 +62,6 @@ function ServerSession({ children }: { children: ReactNode }) {
   if (state === "unavailable") return <Gate><h1>Your session could not be checked</h1><p>Reload the page to try again.</p></Gate>;
   if (state === "signed-out") {
     return <SignIn onSignIn={() => window.location.assign(`/v1/auth/login?staff=1&return=${encodeURIComponent(window.location.pathname + window.location.search)}`)} />;
-  }
-  return children;
-}
-
-function StaffSession({ children }: { children: ReactNode }) {
-  const auth = useAuth();
-  useLayoutEffect(() => {
-    token = auth.getAccessToken;
-    signOutStaff = () => auth.signOut({ returnTo: `${window.location.origin}/admin/` });
-  }, [auth]);
-  if (auth.isLoading) return <p role="status">Checking your session…</p>;
-  if (!auth.user) return <SignIn onSignIn={() => auth.signIn({ organizationId: staffOrganization })} />;
-  if (!staffOrganization) {
-    return <Gate><h1>Staff sign-in is not configured</h1><p>The admin panel needs VITE_PLATFORM_ORGANIZATION_ID at build time.</p></Gate>;
-  }
-  if (auth.organizationId !== staffOrganization) {
-    return (
-      <Gate>
-        <h1>You are signed in to a firm</h1>
-        <p>Switch to the platform staff organization to use this console. Your firm session stays available in the workspace.</p>
-        <button className="primary" onClick={() => auth.switchToOrganization({ organizationId: staffOrganization })}>Switch to platform staff</button>
-      </Gate>
-    );
   }
   return children;
 }

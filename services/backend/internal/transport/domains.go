@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net"
 	"net/url"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -210,7 +209,7 @@ func domainFirm(ctx context.Context, db *sql.DB, user signedInUser) (org, refusa
 		}
 		org = created.ID
 	}
-	if !organizationID.MatchString(org) || org == os.Getenv("PLATFORM_ORGANIZATION_ID") {
+	if !organizationID.MatchString(org) {
 		return "", refuseUnavailable
 	}
 	// A firm the app already knows under that organization keeps its administrators: the domain is recorded and this

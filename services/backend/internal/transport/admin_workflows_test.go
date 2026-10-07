@@ -60,7 +60,7 @@ var _ = wf.Define(wf.Spec[adminFlowInput, map[string]string]{
 func adminJSON(t *testing.T, h http.Handler, token, method, path, body string, want int, header ...string) map[string]any {
 	t.Helper()
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
-	r.Header.Set("Authorization", "Bearer "+token)
+	authorize(r, token)
 	r.Header.Set("Content-Type", "application/json")
 	for i := 0; i+1 < len(header); i += 2 {
 		r.Header.Set(header[i], header[i+1])
@@ -249,24 +249,20 @@ func TestStaffRunWorkflowsForAFirmAndEveryActionIsAudited(t *testing.T) {
 	}
 }
 
-func TestReadOnlyStaffCannotActOrReveal(t *testing.T) {
+// A run with no step yet has an empty list of steps, not null.
+func TestANewRunHasAnEmptyListOfSteps(t *testing.T) {
 	db := adminDB(t)
-	sign := signer(t)
-	staffOrg := "org_Staff" + rand.Text()
-	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
-	h := apiWithStore(db, strings.Repeat("x", 32))
-	adminJSON(t, h, sign(staffOrg, "platform:read"), "POST", "/v1/admin/workflows/runs", `{"workflow":"test_admin_flow","reason":"r"}`, 403)
-	adminJSON(t, h, sign(staffOrg, "platform:read"), "POST", "/v1/admin/workflows/runs/1/cancel", `{"reason":"r"}`, 403)
+	t.Setenv("WORKOS_CLIENT_ID", "")
+	token := strings.Repeat("s", 32)
+	h := apiWithStore(db, token)
 	var run int64
 	if err := db.QueryRow(`INSERT INTO workflow_runs(workflow,idempotency_key,started_by,input) VALUES('test_admin_flow',$1,'test','{"id":"p","secret":"s"}') RETURNING id`, rand.Text()).Scan(&run); err != nil {
 		t.Fatal(err)
 	}
 	defer db.Exec(`DELETE FROM workflow_runs WHERE id=$1`, run)
-	// A run with no step yet has an empty list of steps, not null.
-	if steps := adminJSON(t, h, sign(staffOrg, "platform:read"), "GET", "/v1/admin/workflows/runs/"+jsonNumber(float64(run)), "", 200)["steps"]; steps == nil {
+	if steps := adminJSON(t, h, token, "GET", "/v1/admin/workflows/runs/"+jsonNumber(float64(run)), "", 200)["steps"]; steps == nil {
 		t.Fatal("a new run's steps must be an empty list")
 	}
-	adminJSON(t, h, sign(staffOrg, "platform:read", "platform:operate"), "GET", "/v1/admin/workflows/runs/"+jsonNumber(float64(run))+"?reveal=1", "", 403, "X-Access-Reason", "curious")
 }
 
 func TestEventKeysShowOnlyTheirTopic(t *testing.T) {

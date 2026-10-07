@@ -34,7 +34,6 @@ export class CapabilityAPI extends Container<Env> {
     WORKOS_CLIENT_ID: this.env.WORKOS_CLIENT_ID ?? "",
     WORKOS_ORGANIZATION_ID: this.env.WORKOS_ORGANIZATION_ID ?? "",
     WORKOS_ISSUER: this.env.WORKOS_ISSUER ?? "",
-    PLATFORM_ORGANIZATION_ID: this.env.PLATFORM_ORGANIZATION_ID ?? "",
     STAFF_EMAIL_DOMAIN: this.env.STAFF_EMAIL_DOMAIN ?? "",
     QBO_SANDBOX_REALM_ID: this.env.QBO_SANDBOX_REALM_ID ?? "",
     QBO_SANDBOX_ACCESS_TOKEN: this.env.QBO_SANDBOX_ACCESS_TOKEN ?? "",
@@ -99,7 +98,6 @@ interface Env {
   WORKOS_CLIENT_ID?: string;
   WORKOS_ORGANIZATION_ID?: string;
   WORKOS_ISSUER?: string;
-  PLATFORM_ORGANIZATION_ID?: string;
   STAFF_EMAIL_DOMAIN?: string;
   QBO_SANDBOX_REALM_ID?: string;
   QBO_SANDBOX_ACCESS_TOKEN?: string;

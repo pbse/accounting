@@ -191,21 +191,3 @@ func TestStaffManageAFirmAndClientTextStaysMasked(t *testing.T) {
 		}
 	}
 }
-
-func TestReadOnlyStaffCannotChangeAFirm(t *testing.T) {
-	db := adminDB(t)
-	sign := signer(t)
-	staffOrg := "org_Staff" + rand.Text()
-	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
-	firm := "org_Read" + rand.Text()
-	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Read-only view')`, firm); err != nil {
-		t.Fatal(err)
-	}
-	h := apiWithStore(db, strings.Repeat("x", 32))
-	reader := sign(staffOrg, "platform:read")
-	for _, path := range []string{"/suspend", "/resume", "/members/user_a/revoke", "/members/user_a/restore", "/limits", "/support-owner", "/assistance", "/invitations/1/revoke"} {
-		adminJSON(t, h, reader, "POST", "/v1/admin/firms/"+firm+path, `{"confirm":"`+firm+`","reason":"Trying without permission"}`, 403)
-	}
-	adminJSON(t, h, reader, "GET", "/v1/admin/firms/"+firm+"/people?reveal=1", "", 403, "X-Access-Reason", "curious")
-	adminJSON(t, h, reader, "GET", "/v1/admin/firms/"+firm+"/activity?reveal=1", "", 403, "X-Access-Reason", "curious")
-}

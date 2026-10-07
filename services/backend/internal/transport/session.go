@@ -104,18 +104,13 @@ func (k sessionKind) returnPath(p string) bool {
 }
 
 // holds says whether a session belongs to this kind. Each row records which it is, so a staff session (which may be in
-// a firm's organization, or none) never stands in for a firm session or the other way round. A staff session is for an
-// address at STAFF_EMAIL_DOMAIN when that is set, else in the platform staff organization; a firm session is never in
-// the platform staff organization.
-func (k sessionKind) holds(staff bool, org, email string) bool {
-	platform := os.Getenv("PLATFORM_ORGANIZATION_ID")
-	switch {
-	case k.staff && staffDomain() != "":
+// a firm's organization, or none) never stands in for a firm session or the other way round, and a staff session is
+// for an address at STAFF_EMAIL_DOMAIN.
+func (k sessionKind) holds(staff bool, email string) bool {
+	if k.staff {
 		return staff && staffAddress(email)
-	case k.staff:
-		return staff && platform != "" && org == platform
 	}
-	return !staff && (platform == "" || org != platform)
+	return !staff
 }
 
 func setCookie(w http.ResponseWriter, name, value string, maxAge int) {
@@ -236,7 +231,7 @@ func (c *sessionConfig) settle(ctx context.Context, db *sql.DB, kind sessionKind
 		return tokens, refuseUnverified, nil
 	}
 	if kind.staff {
-		if staffDomain() != "" && !staffAddress(tokens.User.Email) {
+		if !staffAddress(tokens.User.Email) {
 			return tokens, refuseStaff, nil
 		}
 		return tokens, "", nil
@@ -298,7 +293,7 @@ func acceptedInvitations(ctx context.Context, db *sql.DB, firms []string, user s
 
 // enrolling says whether WorkOS signed the person in to an organization with the authority to enroll it as a firm.
 func (c *sessionConfig) enrolling(ctx context.Context, tokens workosTokens) bool {
-	if c.firms == nil || tokens.OrganizationID == "" || tokens.OrganizationID == os.Getenv("PLATFORM_ORGANIZATION_ID") {
+	if c.firms == nil || tokens.OrganizationID == "" {
 		return false
 	}
 	claims, err := c.firms.Verify(ctx, tokens.AccessToken)
@@ -336,7 +331,7 @@ func openChoice(r *http.Request) *firmChoice {
 func workingFirms(ctx context.Context, db *sql.DB, choice *organizationChoice) ([]string, error) {
 	listed := []string{}
 	for _, o := range choice.Organizations {
-		if o.ID != os.Getenv("PLATFORM_ORGANIZATION_ID") && organizationID.MatchString(o.ID) {
+		if organizationID.MatchString(o.ID) {
 			listed = append(listed, o.ID)
 		}
 	}
@@ -372,7 +367,7 @@ func workingFirms(ctx context.Context, db *sql.DB, choice *organizationChoice) (
 // HttpOnly cookie. It answers the request itself when it cannot.
 func (c *sessionConfig) startSession(w http.ResponseWriter, r *http.Request, db *sql.DB, kind sessionKind, check *auth.Verifier, tokens workosTokens) bool {
 	claims, err := check.Verify(r.Context(), tokens.AccessToken)
-	if err != nil || claims.Subject != tokens.User.ID || claims.ExpiresAt == nil || !kind.holds(kind.staff, claims.Organization, tokens.User.Email) {
+	if err != nil || claims.Subject != tokens.User.ID || claims.ExpiresAt == nil || !kind.holds(kind.staff, tokens.User.Email) {
 		problem(w, 401, "The sign-in could not be verified.")
 		return false
 	}
@@ -404,7 +399,7 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens, enrolling boo
 	held := tokens.OrganizationID
 	var registered, belongs bool
 	var own string
-	if held != "" && held != os.Getenv("PLATFORM_ORGANIZATION_ID") {
+	if held != "" {
 		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organizations WHERE id=$1), EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`,
 			held, tokens.User.ID).Scan(&registered, &belongs); err != nil {
 			return "", refuseUnavailable
@@ -451,28 +446,24 @@ func firmFor(ctx context.Context, db *sql.DB, tokens workosTokens, enrolling boo
 	return domainFirm(ctx, db, tokens.User)
 }
 
-// chosenOrganization answers WorkOS asking which organization a person in several signs in to. Staff sign in to the
-// platform's. For a firm session: a firm whose invitation WorkOS shows they have accepted (their first sign-in after
+// chosenOrganization answers WorkOS asking which organization a person in several signs in to. For a staff session, any
+// of theirs. For a firm session: a firm whose invitation WorkOS shows they have accepted (their first sign-in after
 // accepting it), then the firm they last signed in to where they are still a member, then their domain's registered
 // firm; failing all, any of theirs completes the sign-in, and firmFor settles the firm. An invitation not yet accepted
 // never takes them away from a firm they work in.
 func (c *sessionConfig) chosenOrganization(ctx context.Context, db *sql.DB, kind sessionKind, choice *organizationChoice) string {
-	platform := os.Getenv("PLATFORM_ORGANIZATION_ID")
 	listed := []string{}
 	for _, o := range choice.Organizations {
-		if kind.staff && o.ID == platform {
-			return o.ID
-		}
 		if organizationID.MatchString(o.ID) {
 			listed = append(listed, o.ID)
 		}
 	}
-	if kind.staff && staffDomain() != "" && len(listed) > 0 {
-		// A staff session by email domain is not about any organization: any of theirs completes the sign-in.
-		return listed[0]
-	}
-	if kind.staff || len(listed) == 0 {
+	if len(listed) == 0 {
 		return ""
+	}
+	if kind.staff {
+		// A staff session is not about any organization: any of theirs completes the sign-in.
+		return listed[0]
 	}
 	domain, _ := companyDomain(choice.User.Email)
 	switch org, err := acceptedInvitation(ctx, db, listed, choice.User); {
@@ -499,15 +490,13 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		kind := kindOf(r)
 		org := os.Getenv("WORKOS_ORGANIZATION_ID")
 		provider := providers[r.URL.Query().Get("provider")]
-		switch {
-		case kind.staff && staffDomain() != "":
-			// Staff are an email domain: they sign in with Google, in whatever organization (or none) they have.
-			org, provider = "", providers["google"]
-		case kind.staff:
-			if org = os.Getenv("PLATFORM_ORGANIZATION_ID"); org == "" {
+		if kind.staff {
+			if staffDomain() == "" {
 				problem(w, 503, "Staff sign-in is not configured: set STAFF_EMAIL_DOMAIN.")
 				return
 			}
+			// Staff are an email domain: they sign in with Google, in whatever organization (or none) they have.
+			org, provider = "", providers["google"]
 		}
 		back := r.URL.Query().Get("return")
 		if !kind.returnPath(back) {
@@ -629,7 +618,7 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		cookie, err := r.Cookie(kind.cookie)
 		if err == nil {
 			err = db.QueryRowContext(systemContext(r.Context()), `SELECT subject,email,organization_id,staff FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(cookie.Value)).Scan(&subject, &email, &org, &staff)
-			if err == nil && !kind.holds(staff, org, email) {
+			if err == nil && !kind.holds(staff, email) {
 				err = sql.ErrNoRows
 			}
 		}
@@ -726,7 +715,7 @@ func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, kind sessio
 	var staff bool
 	var person signedInPerson
 	err := db.QueryRowContext(ctx, `SELECT subject,email,organization_id,staff,access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, hashToken(raw)).Scan(&person.Subject, &person.Email, &org, &staff, &sealed, &expires)
-	if err == sql.ErrNoRows || (err == nil && !kind.holds(staff, org, person.Email)) {
+	if err == sql.ErrNoRows || (err == nil && !kind.holds(staff, person.Email)) {
 		return "", person, 401
 	}
 	if err != nil {
@@ -745,7 +734,7 @@ func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, kind sessio
 	var workos string
 	var refresh []byte
 	err = tx.QueryRowContext(ctx, `SELECT subject,email,organization_id,staff,workos_session,refresh_token,access_token,access_expires_at FROM auth_sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now() FOR UPDATE`, hashToken(raw)).Scan(&person.Subject, &person.Email, &org, &staff, &workos, &refresh, &sealed, &expires)
-	if err == sql.ErrNoRows || (err == nil && !kind.holds(staff, org, person.Email)) {
+	if err == sql.ErrNoRows || (err == nil && !kind.holds(staff, person.Email)) {
 		return "", person, 401
 	}
 	if err != nil {
@@ -793,7 +782,7 @@ func (c *sessionConfig) accessToken(ctx context.Context, db *sql.DB, kind sessio
 	// Renewal keeps the sign-in rules: an address WorkOS no longer counts as verified, or one no longer a company's, ends
 	// it, as does a staff address no longer at the staff domain.
 	_, company := companyDomain(tokens.User.Email)
-	if err != nil || claims.Subject != person.Subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil || !tokens.User.EmailVerified || !company || !kind.holds(staff, org, tokens.User.Email) {
+	if err != nil || claims.Subject != person.Subject || claims.Organization != org || claims.Session != workos || claims.ExpiresAt == nil || !tokens.User.EmailVerified || !company || !kind.holds(staff, tokens.User.Email) {
 		return end()
 	}
 	newAccess, err := secrets.Seal("auth-session:access", []byte(tokens.AccessToken))
