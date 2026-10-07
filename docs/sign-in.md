@@ -76,7 +76,7 @@ Krith emails each person once when they come into a firm by signing in:
 How it works:
 - **Queued with the sign-in.** `domainFirm` and `joinFirm` write the email to `platform_emails` (migration 130) in the sign-in's own transaction, so a sign-in that fails sends nothing. A person gets one per firm, however often they sign in. People who come by invitation get WorkOS's invitation email instead.
 - **Sent by the worker.** The worker's `platform_emails` loop (`delivery.RunPlatformEmails`) sends each one through Resend, with Krith's own send-only key and sender, never a firm's connection. The idempotency key is the row's, so a retry never sends twice.
-- **Retries and refusals.** An unanswered attempt is retried twice, a minute apart. A refusal is final.
+- **Retries and refusals.** An attempt with an uncertain outcome (no answer, a server error, or success without Resend's message ID) is retried twice, a minute apart. If it is still uncertain, it is recorded as unknown, because Resend may have sent it. A refusal is final.
 - **Expiry and deletion.** Anything not sent within a day of the sign-in expires. Rows are deleted 30 days after they finish, and with their firm.
 
 Settings:
@@ -138,4 +138,4 @@ In GitHub (production environment variables): set `AUTH_SESSION=server`, then ru
 The welcome emails have their own tests in `internal/delivery`:
 - `TestPlatformEmailsSay` checks what each email says, and that a malformed recipient or an unknown kind is refused.
 - `TestPlatformEmailsNeedKrithsSender` checks that nothing is sent without the key and a valid sender.
-- `TestPlatformEmailsAreSentOnceWithKrithsKey` runs against a fake Resend. It checks that emails go out with Krith's key and each row's own idempotency key. An unanswered attempt is retried under the same key, a refusal is final, an email older than a day expires unsent, and a row finished over 30 days ago is deleted.
+- `TestPlatformEmailsAreSentOnceWithKrithsKey` runs against a fake Resend. It checks that emails go out with Krith's key and each row's own idempotency key. An uncertain attempt is retried under the same key, including a success without Resend's message ID, and is recorded as unknown after three tries. A refusal is final, an email older than a day expires unsent, and a row finished over 30 days ago is deleted.

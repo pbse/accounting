@@ -77,7 +77,8 @@ func tidyPlatformEmails(ctx context.Context, db *sql.DB) error {
 }
 
 // sendPlatformEmail sends one queued email, or retries one whose attempt went unanswered, under the same idempotency
-// key each time. A lost or failed response is retried twice more; a refusal is final.
+// key each time. An attempt whose outcome is uncertain (no answer, a server error, or a success without Resend's message
+// ID) is tried twice more and then recorded as unknown, since Resend may have sent it; a refusal is final.
 func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (bool, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -111,8 +112,11 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 		var status int
 		if providerID, status, err = send(ctx, key, payload, "krith-platform/"+strconv.FormatInt(id, 10)); err != nil {
 			state, message = "failed", err.Error()
-			if (status == 0 || status == 408 || status == 409 || status == 429 || status >= 500) && attempts+1 < 3 {
-				state = "queued"
+			if status == 0 || status == 408 || status == 409 || status == 429 || status >= 500 || (status >= 200 && status < 300) {
+				state = "unknown"
+				if attempts+1 < 3 {
+					state = "queued"
+				}
 			}
 		}
 	}

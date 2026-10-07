@@ -67,9 +67,10 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 		}
 		return id
 	}
-	ana, ben, cy := queue("welcome", "ana"), queue("joined", "ben"), queue("joined", "cy")
+	ana, ben, cy, eve, fay := queue("welcome", "ana"), queue("joined", "ben"), queue("joined", "cy"), queue("joined", "eve"), queue("joined", "fay")
 
-	// Resend answers Ana at once, Ben only on the second try, and refuses Cy's.
+	// Resend answers Ana at once and Ben only on the second try; it refuses Cy's, answers Eve's first try without its
+	// message ID, and never gives Fay's an ID.
 	var mu sync.Mutex
 	seen := map[string][]http.Header{}
 	bodies := map[string]Email{}
@@ -94,6 +95,8 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 			w.Write([]byte(`{"message":"invalid"}`))
 		case who == "ben" && tries == 1:
 			w.WriteHeader(500)
+		case who == "eve" && tries == 1, who == "fay":
+			w.Write([]byte(`{}`))
 		default:
 			w.Write([]byte(`{"id":"re_` + who + `"}`))
 		}
@@ -139,9 +142,12 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 	if s, n, _ := state(cy); s != "failed" || n != 1 {
 		t.Fatalf("a refusal is final: %s %d", s, n)
 	}
+	if s, n, _ := state(eve); s != "queued" || n != 1 {
+		t.Fatalf("a success without Resend's message ID is uncertain, so it waits to be tried again: %s %d", s, n)
+	}
 
 	// Ben's retry, once due, goes under the same idempotency key, so Resend sends it at most once.
-	if _, err := db.Exec(`UPDATE platform_emails SET next_attempt_at=now() WHERE id=$1`, ben); err != nil {
+	if _, err := db.Exec(`UPDATE platform_emails SET next_attempt_at=now() WHERE id IN ($1,$2,$3)`, ben, eve, fay); err != nil {
 		t.Fatal(err)
 	}
 	drain()
@@ -150,6 +156,19 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 	}
 	if len(seen["cy"]) != 1 {
 		t.Fatalf("Cy's refused email is not tried again: %d", len(seen["cy"]))
+	}
+	if s, _, p := state(eve); s != "sent" || p != "re_eve" || seen["eve"][1].Get("Idempotency-Key") != seen["eve"][0].Get("Idempotency-Key") {
+		t.Fatalf("Eve's retry, under the same key, confirms it: %s %q", s, p)
+	}
+	// Still uncertain after three tries, Fay's is recorded as unknown, not failed: Resend may have sent it.
+	for range 2 {
+		if _, err := db.Exec(`UPDATE platform_emails SET next_attempt_at=now() WHERE id=$1`, fay); err != nil {
+			t.Fatal(err)
+		}
+		drain()
+	}
+	if s, n, _ := state(fay); s != "unknown" || n != 3 || len(seen["fay"]) != 3 {
+		t.Fatalf("an attempt still unconfirmed after three tries is unknown: %s %d %d", s, n, len(seen["fay"]))
 	}
 
 	// What waited more than a day is not sent; finished rows go after 30 days.

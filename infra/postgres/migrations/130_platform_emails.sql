@@ -9,7 +9,7 @@ CREATE TABLE platform_emails (
  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
  subject text NOT NULL,
  recipient text NOT NULL CHECK (length(recipient) BETWEEN 3 AND 320),
- state text NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','sending','sent','failed','expired')),
+ state text NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','sending','sent','failed','unknown','expired')),
  attempts int NOT NULL DEFAULT 0,
  next_attempt_at timestamptz NOT NULL DEFAULT now(),
  claimed_at timestamptz,
