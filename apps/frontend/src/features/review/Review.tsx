@@ -1,7 +1,10 @@
-import { referenceWorkpaperUrl } from "../../lib/api";
+import { useEffect, useMemo } from "react";
 import type { ReferenceWorkpaper } from "../../../../../packages/contracts/reference";
 
 export function Review({ workpaper }: { workpaper: ReferenceWorkpaper }) {
+  // The example's JSON, as loaded, for download.
+  const download = useMemo(() => URL.createObjectURL(new Blob([JSON.stringify(workpaper, null, 2)], { type: "application/json" })), [workpaper]);
+  useEffect(() => () => URL.revokeObjectURL(download), [download]);
   return (
     <>
       <div className="review-grid">
@@ -104,7 +107,7 @@ export function Review({ workpaper }: { workpaper: ReferenceWorkpaper }) {
         </details>
         <a
           className="download"
-          href={referenceWorkpaperUrl}
+          href={download}
           download="synthetic-prepaid.json"
         >
           Download reference JSON

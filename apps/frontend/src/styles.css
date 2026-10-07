@@ -1466,11 +1466,9 @@ html:has(.k-site) {
 .k-signin {
   display: grid;
   justify-items: center;
-  gap: 16px;
-  max-width: 520px;
-  margin: clamp(40px, 5vw, 56px) auto 0;
-  padding-top: 24px;
-  border-top: 1px solid var(--ink);
+  gap: 20px;
+  max-width: 420px;
+  margin: clamp(32px, 4vw, 44px) auto 0;
   text-align: center;
   font-family: var(--sans);
   font-size: 15px;

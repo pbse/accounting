@@ -1,7 +1,8 @@
 import { Work } from "../closes/Work";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { referenceWorkpaperUrl } from "../../lib/api";
+import { workspaceRequest } from "../closes/workspace";
+import { RequestError } from "../closes/requestError";
 import type { ReferenceWorkpaper } from "../../../../../packages/contracts/reference";
 import { Review } from "../review/Review";
 import { PageHeader } from "@close/ui/components/PageHeader";
@@ -12,25 +13,30 @@ export default function Dashboard({
   view: "work" | "close" | "review";
 }) {
   const [workpaper, setWorkpaper] = useState<ReferenceWorkpaper>();
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<"failed" | "none">();
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (view === "work") return;
-    const controller = new AbortController();
-    setError(false);
-    fetch(referenceWorkpaperUrl, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error("Unavailable");
-        return response.json();
-      })
-      .then(setWorkpaper)
-      .catch(() => {
-        if (!controller.signal.aborted) setError(true);
-      });
-    return () => controller.abort();
+    let live = true;
+    setError(undefined);
+    // The worked example is Krith's own firm's alone; any other firm is told there is none.
+    workspaceRequest("/examples/prepaid")
+      .then((paper) => live && setWorkpaper(paper as ReferenceWorkpaper))
+      .catch((e) => live && setError(e instanceof RequestError && e.status === 404 ? "none" : "failed"));
+    return () => {
+      live = false;
+    };
   }, [attempt, view]);
 
   if (view === "work") return <Work />;
+  if (error === "none")
+    return (
+      <section>
+        <h1>There is no example here</h1>
+        <p>The worked example is only in Krith’s own workspace.</p>
+        <Link to="/dashboard">Back to your work</Link>
+      </section>
+    );
 
   return (
     <>
@@ -41,7 +47,7 @@ export default function Dashboard({
       >
         Preparation, approval, verified posting, and firm sign-off remain separate.
       </PageHeader>
-      {error ? (
+      {error === "failed" ? (
         <section role="alert">
           <h2>We couldn’t load the reference workpaper.</h2>
           <p>

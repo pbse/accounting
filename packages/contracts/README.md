@@ -1,6 +1,6 @@
 # Capability contracts
 
-`reference.ts` describes `GET /v1/reference/prepaid`, a public synthetic fixture. `prepaid.ts` describes the implemented, stateless `POST /v1/workpapers:prepare` capability. It supports equal full months, inclusive actual days, one prospective credit and confirmed booked-balance adjustments. `accrual.ts` describes fixed incurred accrual preparation. New methods require explicit confirmation and source-linked accountant review; they do not enable posting. See `docs/accounting-methods.md` for exact boundaries.
+`reference.ts` describes `GET /v1/closes/examples/prepaid`, a synthetic worked example that only Krith's own firm (the one registered for `STAFF_EMAIL_DOMAIN`) can read. `prepaid.ts` describes the implemented, stateless `POST /v1/workpapers:prepare` capability. It supports equal full months, inclusive actual days, one prospective credit and confirmed booked-balance adjustments. `accrual.ts` describes fixed incurred accrual preparation. New methods require explicit confirmation and source-linked accountant review; they do not enable posting. See `docs/accounting-methods.md` for exact boundaries.
 
 The first live capability should introduce versioned OpenAPI and generated consumers here, with request validation in Go. REST, MCP and UI must share that capability and authorization path. MCP remains a transport adapter; tool descriptions are not permissions.
 
