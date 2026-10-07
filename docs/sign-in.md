@@ -2,7 +2,7 @@
 
 People sign in to Krith with their firm's **Google Workspace** account. The login page (`/login`) has one button, **Continue with Google**, which goes straight to Google through WorkOS; there is no intermediate AuthKit page.
 
-**Firms on Microsoft 365 are set up with us for now.** WorkOS's Microsoft OAuth serves personal Microsoft accounts only, never a firm's Microsoft 365 accounts, so there is no Microsoft button; the page says "Talk to us". The ways to add Microsoft 365 later are a work-email code (WorkOS Magic Auth, our own page) or each firm's own Entra ID through WorkOS SSO. Someone at a Microsoft 365 firm whose Google account uses their work address can still sign in with Google. Personal addresses cannot sign in. A firm is created from its company domain the first time someone from it signs in, and colleagues from the same domain join it automatically. This needs the server-held session (`AUTH_SESSION=server`, see [auth and sandbox staging](auth-sandbox-staging.md#sign-in-session)); with WorkOS's browser session the page keeps a single **Sign in** button, because its SDK always opens AuthKit's own page.
+**Firms on Microsoft 365 cannot sign in yet.** WorkOS's Microsoft OAuth serves personal Microsoft accounts only, never a firm's Microsoft 365 accounts, so there is no Microsoft button. Setting such a firm up by hand would not help: its people would still have no way to sign in. The page says that Krith signs firms in with Google Workspace for now, and offers "Talk to us". A Microsoft 365 firm can be admitted once one of two paths is built and validated: a work-email code (WorkOS Magic Auth on our own page), or the firm's own Entra ID through WorkOS SSO. Someone at a Microsoft 365 firm whose Google account uses their work address can already sign in with Google. Personal addresses cannot sign in. A firm is created from its company domain the first time someone from it signs in, and colleagues from the same domain join it automatically. This needs the server-held session (`AUTH_SESSION=server`, see [auth and sandbox staging](auth-sandbox-staging.md#sign-in-session)); with WorkOS's browser session the page keeps a single **Sign in** button, because its SDK always opens AuthKit's own page.
 
 ## Who may sign in
 
@@ -89,7 +89,7 @@ In Google Cloud (the owner, since it issues a client secret):
 In WorkOS (production environment):
 
 - **Authentication → OAuth providers → Google:** enter the client ID and secret ("Your app's credentials") and enable it. Done 2026-10-06.
-- **Turn off password and passkey sign-in**, so AuthKit's own page (still used by the staff console) offers only Google.
+- **Turn off password and passkey sign-in, and keep every other social provider (Microsoft among them) off**, so AuthKit's own page (still used by the staff console, and by any unknown provider name) offers only Google. Check the AuthKit page afterwards. In production Microsoft OAuth was never enabled (2026-10-06).
 - **Roles:** `firm-admin` and `member` exist. Keep `member` without permissions.
 - **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, and the sign-out URI `https://getkrith.com/`.
 

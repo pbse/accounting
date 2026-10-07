@@ -54,8 +54,8 @@ function SignedInGoesToWork({ children }: { children: ReactNode }) {
   return user ? <p role="status">Opening your workspace…</p> : children;
 }
 
-// The server's sign-in: straight to Google, and back to where sign-in began. Firms on Microsoft 365 are set up with
-// us for now (docs/sign-in.md).
+// The server's sign-in: straight to Google, and back to where sign-in began. Firms on Microsoft 365 cannot sign in
+// yet (docs/sign-in.md).
 function ProviderSignIn() {
   const { isLoading, unavailable } = useSession();
   const [params] = useSearchParams();
@@ -76,7 +76,7 @@ function ProviderSignIn() {
         join it, and the firm’s administrator decides what each can open.
       </p>
       <p className="k-fine">
-        Firm on Microsoft 365? <Link to="/contact">Talk to us</Link> and we’ll set your workspace up.
+        Krith signs firms in with Google Workspace for now. Firm on Microsoft 365? <Link to="/contact">Talk to us</Link>.
       </p>
     </>
   );

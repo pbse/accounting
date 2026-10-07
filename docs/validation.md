@@ -3557,8 +3557,8 @@ Not verified: the page in a browser as a hosted reviewer without `clients:all`.
 ## Sign-in with Google only — 2026-10-06 (B12)
 
 WorkOS's Microsoft OAuth serves personal Microsoft accounts only: its setup requires "Personal Microsoft accounts only". So a Microsoft button could never sign in a firm's Microsoft 365 account, which the company-domain rule refuses anyway. The owner chose Google only for now:
-- The login page has **Continue with Google** and a "Talk to us" line for firms on Microsoft 365.
+- The login page has **Continue with Google** and says that Krith signs firms in with Google Workspace for now, with "Talk to us" for firms on Microsoft 365. Such a firm cannot be admitted until a work-email code or Entra SSO path is built and validated; setting it up by hand would leave its people without a sign-in.
 - The server no longer knows a `microsoft` provider; any other name falls back to AuthKit's page, which is tested.
 - The domain rules are unchanged: a new firm's domain may run on Google Workspace or Microsoft 365, as evidence it is a company's.
 
-Google OAuth is configured and enabled in WorkOS production (the credential reads Valid). Turning off password and passkey sign-in, and `AUTH_SESSION=server`, follow this change.
+Google OAuth is configured and enabled in WorkOS production (the credential reads Valid), and Microsoft OAuth was never enabled there. Turning off password and passkey sign-in (keeping every other provider off), and `AUTH_SESSION=server`, follow this change.
