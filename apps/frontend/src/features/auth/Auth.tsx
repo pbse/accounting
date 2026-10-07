@@ -28,11 +28,11 @@ function ClientSession({ children }: { children: ReactNode }) {
   return children;
 }
 
-// The server's sign-in, straight to Google or Microsoft when a provider is named (docs/sign-in.md).
-export function serverSignInUrl(provider?: "google" | "microsoft", back = "/dashboard") {
+// The server's sign-in, straight to Google when it is named (docs/sign-in.md).
+export function serverSignInUrl(provider?: "google", back = "/dashboard") {
   return `${apiBaseUrl}/v1/auth/login?${new URLSearchParams({ ...(provider ? { provider } : {}), return: back })}`;
 }
-// Signing in from anywhere goes through the login page, with its Google and Microsoft choice, and back here after.
+// Signing in from anywhere goes through the login page, with its Google button, and back here after.
 function startServerSignIn() {
   window.location.assign(`/login?${new URLSearchParams({ return: window.location.pathname + window.location.search })}`);
 }

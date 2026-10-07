@@ -258,7 +258,7 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		start := httptest.NewRecorder()
 		handler.ServeHTTP(start, httptest.NewRequest("GET", "https://app.example.test/v1/auth/login?provider="+provider, nil))
 		at, _ := url.Parse(start.Header().Get("Location"))
-		if want := map[string]string{"google": "GoogleOAuth", "microsoft": "MicrosoftOAuth"}[provider]; at.Query().Get("provider") != want {
+		if want := map[string]string{"google": "GoogleOAuth"}[provider]; at.Query().Get("provider") != want {
 			t.Fatalf("the %s button goes straight to %s: %s", provider, want, at)
 		}
 		r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code="+user+"&state="+url.QueryEscape(at.Query().Get("state")), nil)
@@ -291,6 +291,13 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		return w
 	}
 
+	// Only Google goes straight to its provider; any other name (Microsoft among them) is AuthKit's own page.
+	unnamed := httptest.NewRecorder()
+	handler.ServeHTTP(unnamed, httptest.NewRequest("GET", "https://app.example.test/v1/auth/login?provider=microsoft", nil))
+	if at, _ := url.Parse(unnamed.Header().Get("Location")); at.Query().Get("provider") != "authkit" {
+		t.Fatalf("an unknown provider uses AuthKit's page: %s", at)
+	}
+
 	// The first person from the domain creates its firm, with the domain verified, and becomes its administrator.
 	where, anaCookie := signIn(ana, "google")
 	if where != "/dashboard" || anaCookie == "" || len(f.created) != 1 {
@@ -309,7 +316,7 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	}
 
 	// A colleague joins the same firm as a member, with no access until the administrator gives a role.
-	where, benCookie := signIn(ben, "microsoft")
+	where, benCookie := signIn(ben, "google")
 	if where != "/dashboard" || benCookie == "" || len(f.created) != 1 {
 		t.Fatalf("Ben joins rather than creating a firm: %s created=%v", where, f.created)
 	}
@@ -568,7 +575,7 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 		f.memberships = append(f.memberships, m)
 	}
 	f.mu.Unlock()
-	if where, cookie := signIn(leo, "microsoft"); where != "/dashboard" || cookie == "" || sessionOrg(leo) != secondOrg {
+	if where, cookie := signIn(leo, "google"); where != "/dashboard" || cookie == "" || sessionOrg(leo) != secondOrg {
 		t.Fatalf("Leo claims his domain's organization: %s %s", where, sessionOrg(leo))
 	}
 	if err := raw.QueryRow(`SELECT email_domain FROM organizations WHERE id=$1`, secondOrg).Scan(&stored); err != nil || stored != second || f.membership(leo, secondOrg).Role.Slug != "firm-admin" {

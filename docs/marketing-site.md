@@ -10,7 +10,7 @@ The public site at getkrith.com introduces Krith to accounting firms and finance
 | Contact | `/contact` | The contact form, three plain next steps and hello@getkrith.com |
 | Security | `/security` | Nine short controls: authority, evidence, separation, encryption, uploads, AI, staff access, hosting and the firm's control |
 | Privacy notice | `/privacy` | The notice, including who processes data for us and how long data is kept |
-| Log in | `/login` | **Continue with Google** and **Continue with Microsoft**, company accounts only ([sign-in](sign-in.md)); a signed-in visitor goes to the workspace |
+| Log in | `/login` | **Continue with Google**, company accounts only, and "Talk to us" for firms on Microsoft 365 ([sign-in](sign-in.md)); a signed-in visitor goes to the workspace |
 | Not found | any other path | A short page with a link home |
 
 Every page shares one header and footer (`features/marketing/Layout.tsx`). Header: the wordmark (home), **How it works** (`/#how`), **Security**, **Log in** and **Talk to us** (`/contact`). Footer: How it works, Security, Contact, Log in and Privacy notice. Every "Talk to us" goes to `/contact`; "How we protect client data" on the home page goes to `/security`. The client request page (`/request`) links to `/privacy` and `/security`. Nothing on the site links to another domain except the email address.
