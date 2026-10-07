@@ -3630,6 +3630,15 @@ Tested:
 
 Not verified until deployed: the production login page and sidebar.
 
+## The deploys no longer require a WorkOS hostname — 2026-10-07 (B12)
+
+Request: clean up the settings no longer needed. Production signs in with server sessions, so `WORKOS_API_HOSTNAME` is unused there, but both deploy checks still refused to run without it.
+
+- **Change.** The production and staging settings checks no longer list `VITE_WORKOS_API_HOSTNAME` as required. With `AUTH_SESSION=client` and no custom hostname, the deploy still prints its warning, as it did for `api.workos.com`. The deployment, staging-auth and onboarding docs say the hostname matters only for client sessions.
+- **Tested.** The production check, run locally with sample settings: server sessions with no hostname pass; client sessions with no hostname pass with the warning; a missing `WORKOS_CLIENT_ID` is still refused.
+
+Not verified: a production deploy without the variable (delete it only after this deploys).
+
 ## B07: a Xero month's sign-off stands in its management pack (2026-10-06)
 
 Request: make Xero management packs publishable. Two things block them: the pack never counted a Xero month as signed off, and it has no cash-flow statement. This change fixes the first; the second comes with an imported statement.

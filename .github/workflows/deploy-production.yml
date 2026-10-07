@@ -103,7 +103,7 @@ jobs:
           MIGRATION_DATABASE_URL: ${{ secrets.MIGRATION_DATABASE_URL }}
         run: |
           node --input-type=module <<'JS'
-          for (const name of ['TEXT_SCANNER_URL','WORKOS_CLIENT_ID','WORKOS_ISSUER','DATABASE_RUNTIME_ROLE','MIGRATION_DATABASE_URL','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','PRODUCTION_URL','VITE_WORKOS_API_HOSTNAME']) {
+          for (const name of ['TEXT_SCANNER_URL','WORKOS_CLIENT_ID','WORKOS_ISSUER','DATABASE_RUNTIME_ROLE','MIGRATION_DATABASE_URL','CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','PRODUCTION_URL']) {
             if (!process.env[name]) throw new Error(`Missing production setting: ${name}`);
           }
           // Without UPLOAD_SCAN_HOST (e.g. on workers.dev) the edge refuses every PDF scan; set it only for a WAF-protected custom hostname.

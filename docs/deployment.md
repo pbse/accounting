@@ -51,7 +51,7 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 | Purpose | GitHub variables | Cloudflare secrets (unless explicitly marked GitHub) |
 | --- | --- | --- |
 | Required hosting | `STAGING_URL`, verified non-secret `DATABASE_RUNTIME_ROLE`; optional `VITE_API_BASE_URL` | GitHub: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, owner `MIGRATION_DATABASE_URL`; Cloudflare: runtime `DATABASE_URL` (direct endpoint, TLS) |
-| Required auth | `WORKOS_CLIENT_ID`, `WORKOS_API_HOSTNAME`, `WORKOS_ISSUER`; optional single-firm `WORKOS_ORGANIZATION_ID` | — |
+| Required auth | `WORKOS_CLIENT_ID`, `WORKOS_ISSUER`; optional single-firm `WORKOS_ORGANIZATION_ID` | — |
 | Sign-in session | `AUTH_SESSION`: `client` (default, WorkOS's browser session; needs a custom `WORKOS_API_HOSTNAME` in production) or `server` (the API holds the session) | With `server`: `WORKOS_API_KEY` and `SECRETS_KEY` |
 | Required scanning | `UPLOAD_SCAN_HOST` (API hostname only), `TEXT_SCANNER_URL` | `UPLOAD_SCAN_KEY` (separate random secret, at least 32 characters) |
 | Encrypted connectors/email | — | `SECRETS_KEY` (32 random bytes, 64 hex characters; same on API/worker, backed up separately) |
