@@ -185,10 +185,10 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		{"/v1/auth/login", "code=code-1&state=forged", "/login?error=expired"},
 		{"/v1/auth/login", "state={state}", "/login?error=expired"},
 		{"", "code=code-1&state=x", "/login?error=expired"},
-		{"/v1/auth/login?staff=1", "code=code-1&state=forged", "/admin/"},
+		{"/v1/auth/login?staff=1", "code=code-1&state=forged", "/admin/?signin=expired"},
 		// Each keeps the page the person asked for, so signing in again returns there.
 		{"/v1/auth/login?return=%2Fdashboard%2Fcloses%2Fx", "code=code-1&state=forged", "/login?error=expired&return=%2Fdashboard%2Fcloses%2Fx"},
-		{"/v1/auth/login?staff=1&return=%2Fadmin%2Ffirms", "code=code-1&state=forged", "/admin/firms"},
+		{"/v1/auth/login?staff=1&return=%2Fadmin%2Faudit%3Ffirm%3Dorg_1", "code=code-1&state=forged", "/admin/audit?firm=org_1&signin=expired"},
 	} {
 		w := callback(refused.start, refused.query)
 		if w.Code != 302 || w.Header().Get("Location") != refused.to || len(calls) != 0 || cookieOf(w, sessionCookie) != nil || cookieOf(w, staffCookie) != nil {
@@ -207,7 +207,7 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		t.Fatalf("a refused code goes back to the login page: %d %q calls=%d", w.Code, w.Header().Get("Location"), len(calls))
 	}
 	// A staff sign-in starts again from the console, whose button signs in to it, not the firm login page.
-	if w := callback("/v1/auth/login?staff=1&return=%2Fadmin%2Ffirms", "code=code-1&state={state}"); w.Code != 302 || w.Header().Get("Location") != "/admin/firms" || len(calls) != 2 || cookieOf(w, staffCookie) != nil {
+	if w := callback("/v1/auth/login?staff=1&return=%2Fadmin%2Ffirms", "code=code-1&state={state}"); w.Code != 302 || w.Header().Get("Location") != "/admin/firms?signin=unavailable" || len(calls) != 2 || cookieOf(w, staffCookie) != nil {
 		t.Fatalf("a refused staff code goes back to the console: %d %q calls=%d", w.Code, w.Header().Get("Location"), len(calls))
 	}
 	calls = nil

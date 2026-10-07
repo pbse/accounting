@@ -530,11 +530,15 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			kind, check = staffSession, staff
 		}
 		// again sends the person to start again, still bound for the page they asked for: staff to that console page,
-		// whose button signs them in to it, and anyone else to the login page, which says why.
+		// whose button signs them in to it, and anyone else to the login page. Each says why.
 		again := func(why string) {
 			switch {
 			case kind.staff:
-				http.Redirect(w, r, back, http.StatusFound)
+				to, _ := url.Parse(back)
+				query := to.Query()
+				query.Set("signin", why)
+				to.RawQuery = query.Encode()
+				http.Redirect(w, r, to.String(), http.StatusFound)
 			case back != kind.home && kind.returnPath(back):
 				http.Redirect(w, r, "/login?"+url.Values{"error": {why}, "return": {back}}.Encode(), http.StatusFound)
 			default:

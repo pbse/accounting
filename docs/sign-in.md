@@ -104,7 +104,7 @@ The callback sends the person back to `/login?error=…`, and the page explains 
 | `unavailable` | WorkOS refused the code (already used, or too old) or could not be reached, or the database could not finish; try again. A staff console sign-in goes back to the console page it was for instead |
 | `expired` | The callback did not match a sign-in started in this browser: a reload, the back button, or an old tab. Nothing is asked of WorkOS. A staff console sign-in goes back to the console page it was for instead |
 
-After `expired` or `unavailable`, the login page keeps the workspace page the sign-in was for (`return`), so signing in again goes there.
+After `expired` or `unavailable`, the login page keeps the workspace page the sign-in was for (`return`), so signing in again goes there. A staff sign-in returns to its console page with `signin=expired` or `signin=unavailable`, which the console shows above its sign-in button and takes out of the address.
 
 **A sign-in WorkOS started itself.** WorkOS returns a sign-in that did not start on our login page (an accepted invitation, or a tab left from before server sessions) to its default redirect URI, `/login`, with a code. Only a sign-in started here can use a code, since its state is checked against the browser's cookie. So the login page removes the code from the address and says "Your sign-in isn't finished yet. Continue with Google to finish it."
 
