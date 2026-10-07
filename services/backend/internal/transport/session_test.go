@@ -203,6 +203,10 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 	if w.Code != 302 || w.Header().Get("Location") != "/login?error=unavailable" || len(calls) != 1 || cookieOf(w, sessionCookie) != nil {
 		t.Fatalf("a refused code goes back to the login page: %d %q calls=%d", w.Code, w.Header().Get("Location"), len(calls))
 	}
+	// A staff sign-in starts again from the console, whose button signs in to it, not the firm login page.
+	if w := callback("/v1/auth/login?staff=1", "code=code-1&state={state}"); w.Code != 302 || w.Header().Get("Location") != "/admin/" || len(calls) != 2 || cookieOf(w, staffCookie) != nil {
+		t.Fatalf("a refused staff code goes back to the console: %d %q calls=%d", w.Code, w.Header().Get("Location"), len(calls))
+	}
 	calls = nil
 
 	back := "/dashboard/closes/" + alpha

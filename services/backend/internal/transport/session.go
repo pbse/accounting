@@ -529,14 +529,18 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		if staffSession.returnPath(back) {
 			kind, check = staffSession, staff
 		}
-		if state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 || r.URL.Query().Get("code") == "" || !kind.returnPath(back) {
-			// A reload, the back button or an old tab: nothing is asked of WorkOS, and the person starts again where
-			// their sign-in began, the staff console or the login page, which says why.
+		// again sends the person to start again where their sign-in began: staff to the console, whose button signs
+		// them in to it, and anyone else to the login page, which says why.
+		again := func(why string) {
 			if kind.staff {
 				http.Redirect(w, r, staffSession.home, http.StatusFound)
 			} else {
-				http.Redirect(w, r, "/login?error="+refuseExpired, http.StatusFound)
+				http.Redirect(w, r, "/login?error="+why, http.StatusFound)
 			}
+		}
+		if state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 || r.URL.Query().Get("code") == "" || !kind.returnPath(back) {
+			// A reload, the back button or an old tab: nothing is asked of WorkOS.
+			again(refuseExpired)
 			return
 		}
 		tokens, refusal, choice, err := c.firmTokens(r.Context(), db, kind, r.URL.Query().Get("code"))
@@ -553,14 +557,14 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			http.Redirect(w, r, "/login?choose=1", http.StatusFound)
 			return
 		}
+		if err != nil || refusal == refuseUnavailable {
+			// WorkOS refused the code (used, or too old) or could not be reached, or the database could not finish.
+			again(refuseUnavailable)
+			return
+		}
 		if refusal != "" {
 			// The login page says why, in words; nothing about the person goes in the address.
 			http.Redirect(w, r, "/login?error="+refusal, http.StatusFound)
-			return
-		}
-		if err != nil {
-			// WorkOS refused the code (used, or too old) or could not be reached: the login page says to try again.
-			http.Redirect(w, r, "/login?error="+refuseUnavailable, http.StatusFound)
 			return
 		}
 		if c.startSession(w, r, db, kind, check, tokens) {

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { apiBaseUrl } from "../../lib/api";
 import { AccountAccess, authKitClientId, serverSession, serverSignInUrl, useSession } from "./Auth";
 
@@ -71,14 +71,16 @@ function SignedInGoesToWork({ children }: { children: ReactNode }) {
 function ProviderSignIn() {
   const { isLoading, unavailable } = useSession();
   const [params, setParams] = useSearchParams();
-  const [leftover] = useState(() => params.has("code"));
+  const { state } = useLocation();
+  // The code is no use here, so it leaves the address. This visit's history entry remembers it, so the page still says
+  // what to do, and a later visit to the login page does not.
+  const leftover = params.has("code") || (state as { unfinished?: boolean } | null)?.unfinished === true;
   useEffect(() => {
-    // The code is no use here, so it leaves the address; the page still says what to do.
     if (!params.has("code") && !params.has("state")) return;
     const kept = new URLSearchParams(params);
     kept.delete("code");
     kept.delete("state");
-    setParams(kept, { replace: true });
+    setParams(kept, { replace: true, state: { unfinished: params.has("code") } });
   }, [params, setParams]);
   const refusal = refusals[params.get("error") ?? ""] ?? (leftover ? unfinished : undefined);
   const back = workspaceReturn(params);
