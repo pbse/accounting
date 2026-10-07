@@ -88,14 +88,24 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	var id int64
 	var kind, recipient, firm, domain string
 	var attempts int
-	err = tx.QueryRowContext(ctx, `SELECT e.id,e.kind,e.recipient,o.name,COALESCE(o.email_domain,''),e.attempts FROM platform_emails e JOIN organizations o ON o.id=e.organization_id
+	var current bool
+	// The email says the person is in the firm, so it goes only while the firm is enabled and the person still a member.
+	err = tx.QueryRowContext(ctx, `SELECT e.id,e.kind,e.recipient,o.name,COALESCE(o.email_domain,''),e.attempts,
+ o.enabled AND EXISTS(SELECT 1 FROM current_organization_members m WHERE m.organization_id=e.organization_id AND m.subject=e.subject AND m.granted)
+ FROM platform_emails e JOIN organizations o ON o.id=e.organization_id
  WHERE ((e.state='queued' AND e.next_attempt_at<=now()) OR (e.state='sending' AND e.claimed_at<now()-interval '2 minutes')) AND e.attempts<3 AND e.created_at>now()-interval '23 hours'
- ORDER BY e.id FOR UPDATE OF e SKIP LOCKED LIMIT 1`).Scan(&id, &kind, &recipient, &firm, &domain, &attempts)
+ ORDER BY e.id FOR UPDATE OF e SKIP LOCKED LIMIT 1`).Scan(&id, &kind, &recipient, &firm, &domain, &attempts, &current)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
+	}
+	if !current {
+		if _, err = tx.ExecContext(ctx, `UPDATE platform_emails SET state='cancelled',claimed_at=NULL,finished_at=now(),error='The firm was suspended or the person removed before it was sent' WHERE id=$1`, id); err != nil {
+			return false, err
+		}
+		return true, tx.Commit()
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE platform_emails SET state='sending',claimed_at=now(),attempts=attempts+1 WHERE id=$1`, id); err != nil {
 		return false, err

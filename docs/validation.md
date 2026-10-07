@@ -3685,14 +3685,14 @@ Request: the user signed in and expected that "probably should have sent me a we
 
 - **Change.**
   - **Queued with the sign-in.** Migration 130 adds `platform_emails`, platform-only under row-level security. `domainFirm` and `joinFirm` queue one email per person and firm in the sign-in's own transaction: a welcome for whoever becomes the administrator, a joined note for a member.
-  - **Sent by the worker.** A new worker loop, `delivery.RunPlatformEmails`, sends them through Resend with Krith's key (`PLATFORM_EMAIL_KEY`, a queue-worker credential) and sender (`PLATFORM_EMAIL_FROM`, a GitHub variable). Each row's idempotency key is its own. An attempt with an uncertain outcome (no answer, a server error, or success without Resend's message ID) is retried twice under the same key, then recorded as unknown; a refusal is final; anything unsent after a day expires; rows are deleted 30 days after they finish.
+  - **Sent by the worker.** A new worker loop, `delivery.RunPlatformEmails`, sends them through Resend with Krith's key (`PLATFORM_EMAIL_KEY`, a queue-worker credential) and sender (`PLATFORM_EMAIL_FROM`, a GitHub variable). Each row's idempotency key is its own. An attempt with an uncertain outcome (no answer, a server error, or success without Resend's message ID) is retried twice under the same key, then recorded as unknown; a refusal is final; an email for a person removed, or a firm suspended, before it goes is cancelled unsent; anything unsent after a day expires; rows are deleted 30 days after they finish.
   - **Off without settings.** With no key or sender, nothing is sent.
   - **Readiness.** Readiness now requires the table.
   - **Privacy notice.** It now says Krith emails each firm member once, from Krith, through Resend, and keeps that record for 30 days. Its date is 7 October 2026.
 - **Tests.** Against a fresh local PostgreSQL with every migration applied:
   - `TestSignInMakesOrJoinsTheFirmOfTheAddressDomain` (extended): the administrator and the colleague each have one email queued, and a later sign-in adds none.
   - New delivery tests check what each email says and that it needs Krith's sender.
-  - Against a fake Resend: sending happens with Krith's key under each row's own idempotency key; a retry reuses that key; a success without a message ID is retried, and recorded as unknown after three tries; a refusal is final; expiry and deletion work.
+  - Against a fake Resend: sending happens with Krith's key under each row's own idempotency key; a retry reuses that key; a success without a message ID is retried, and recorded as unknown after three tries; a refusal is final; a removed person's or a suspended firm's email is cancelled unsent; expiry and deletion work.
   - The credentials script's tests pass with the new credential.
 
 Not verified: a real send from production. That needs the user's send-only Resend key installed, and `PLATFORM_EMAIL_FROM` set.

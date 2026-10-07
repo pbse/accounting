@@ -59,9 +59,20 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO organizations(id,name,email_domain) VALUES($1,'Acme Advisors',$2)`, org, domain); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Exec(`DELETE FROM organizations WHERE id=$1`, org) })
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM organization_member_access WHERE organization_id=$1`, org)
+		db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
+	})
+	member := func(who string, granted bool) {
+		t.Helper()
+		if _, err := db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,$3,'test','test')`, org, "user_"+who+suffix, granted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Each person joined the firm by signing in, which queued their email.
 	queue := func(kind, who string) (id string) {
 		t.Helper()
+		member(who, true)
 		if err := db.QueryRow(`INSERT INTO platform_emails(kind,organization_id,subject,recipient) VALUES($1,$2,$3,$4) RETURNING id::text`, kind, org, "user_"+who+suffix, who+"@"+domain).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
@@ -169,6 +180,25 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 	}
 	if s, n, _ := state(fay); s != "unknown" || n != 3 || len(seen["fay"]) != 3 {
 		t.Fatalf("an attempt still unconfirmed after three tries is unknown: %s %d %d", s, n, len(seen["fay"]))
+	}
+
+	// Nothing goes to someone the firm removed before their email went out, or to anyone at a suspended firm.
+	gus := queue("joined", "gus")
+	member("gus", false)
+	drain()
+	if s, n, _ := state(gus); s != "cancelled" || n != 0 || len(seen["gus"]) != 0 {
+		t.Fatalf("a removed person's email is cancelled unsent: %s %d", s, n)
+	}
+	ivy := queue("joined", "ivy")
+	if _, err := db.Exec(`UPDATE organizations SET enabled=false WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	if _, err := db.Exec(`UPDATE organizations SET enabled=true WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
+	if s, n, _ := state(ivy); s != "cancelled" || n != 0 || len(seen["ivy"]) != 0 {
+		t.Fatalf("an email from a suspended firm is cancelled unsent: %s %d", s, n)
 	}
 
 	// What waited more than a day is not sent; finished rows go after 30 days.
