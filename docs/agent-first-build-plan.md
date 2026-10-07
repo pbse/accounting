@@ -109,7 +109,7 @@ Extend the existing Security center **Connector operations** into the firm-visib
 
 **Build on:** ledger reports, brief, flux, aging, tie-out, binder and permissions. **Owner:** reporting + accounting + experience.
 
-Build a firm-branded management pack with P&L, balance sheet, reconciled historical cash-flow statement, prior-period comparisons, material movements, working capital and next actions. Add reviewed, evidence-linked commentary, report mappings/templates, secure publication, PDF and spreadsheet export. Distinguish provisional actuals from reviewed/published results and unposted proposals. Historical cash flow requires validated provider output or an accountant-approved deterministic preparation method.
+Build a firm-branded management pack with P&L, balance sheet, reconciled historical cash-flow statement, prior-period comparisons, material movements, working capital and next actions. Add reviewed, evidence-linked commentary, report mappings/templates, secure publication, PDF and spreadsheet export. Distinguish provisional actuals from reviewed/published results and unposted proposals. Historical cash flow requires validated provider output, an accountant-approved deterministic preparation method or, where the provider has none (Xero), a statement the firm provides and attests to at import, reconciled to the books and disclosed as the firm's.
 
 Add a client-scoped executive role enforced on APIs, agent capabilities, documents and exports. It reads permitted published information and permitted current views; separately scoped decision responses cannot grant preparation, review, posting or administration authority. Internal notes and sensitive payroll details stay private.
 

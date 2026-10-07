@@ -57,6 +57,8 @@ How it works:
 
 **Changes from last month** uses each close's newest snapshot, QuickBooks or Xero. With two Xero months from the same organisation, it compares each revenue and expense account's movement in the month, read from the Trial Balance's Debit and Credit columns (Xero reports these for the current month up to the report date). Payees come from the transactions each capture read: each contact's lines on the account, net of tax and signed as the Profit and Loss shows them, with journal lines unattributed. When either month's capture has no transactions, causes say why; an account with lines in another currency is not explained from them, because the capture does not hold their base-currency amounts; and a line without an account keeps the missing-payee question from being asked. A QuickBooks month is never compared with a Xero month. When confirming a document, client memory checks proposed accounts against the newest snapshot's chart of accounts, including Xero's (an account is usable only while Xero marks it active).
 
+The **Reports** tab's management pack has no Xero cash-flow statement to read, since Xero's API has none: the firm imports its own as CSV, checked against the capture's bank accounts (see [management reports](management-reports.md)).
+
 ## Approved journal posting
 
 This keeps the same human steps and refusals as production QuickBooks posting (migration 060).

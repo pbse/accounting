@@ -234,7 +234,7 @@ func TestManagementPackReadsTheCapturedReports(t *testing.T) {
 	cell := func(id, name, debit, credit, ytdDebit, ytdCredit string) string {
 		return `{"RowType":"Row","Cells":[{"Value":"` + name + `","Attributes":[{"Id":"account","Value":"` + id + `"}]},{"Value":"` + debit + `"},{"Value":"` + credit + `"},{"Value":"` + ytdDebit + `"},{"Value":"` + ytdCredit + `"}]}`
 	}
-	xeroPayload := `{"date":"2026-09-30","organisation":{"Organisations":[{"BaseCurrency":"USD"}]},"accounts":{"Accounts":[{"AccountID":"a-1","Name":"Checking","Class":"ASSET"},{"AccountID":"a-2","Name":"Card","Class":"LIABILITY"},{"AccountID":"a-3","Name":"Owner","Class":"EQUITY"},{"AccountID":"a-4","Name":"Sales","Class":"REVENUE"},{"AccountID":"a-5","Name":"Rent","Class":"EXPENSE"}]},"trial_balance":{"Reports":[{"Rows":[{"RowType":"Header","Cells":[{"Value":"Account"},{"Value":"Debit"},{"Value":"Credit"},{"Value":"YTD Debit"},{"Value":"YTD Credit"}]},` +
+	xeroPayload := `{"date":"2026-09-30","organisation":{"Organisations":[{"BaseCurrency":"USD"}]},"accounts":{"Accounts":[{"AccountID":"a-1","Name":"Checking","Class":"ASSET","Type":"BANK","BankAccountType":"BANK"},{"AccountID":"a-2","Name":"Card","Class":"LIABILITY","Type":"BANK","BankAccountType":"CREDITCARD"},{"AccountID":"a-3","Name":"Owner","Class":"EQUITY"},{"AccountID":"a-4","Name":"Sales","Class":"REVENUE"},{"AccountID":"a-5","Name":"Rent","Class":"EXPENSE"}]},"trial_balance":{"Reports":[{"Rows":[{"RowType":"Header","Cells":[{"Value":"Account"},{"Value":"Debit"},{"Value":"Credit"},{"Value":"YTD Debit"},{"Value":"YTD Credit"}]},` +
 		strings.Join([]string{cell("a-1", "Checking", "", "", "1500.00", ""), cell("a-2", "Card", "", "", "", "200.00"), cell("a-3", "Owner", "", "", "", "1000.00"), cell("a-4", "Sales", "", "800.00", "", "800.00"), cell("a-5", "Rent", "500.00", "", "500.00", "")}, ",") + `]}]}}`
 	_, err = db.Exec(`INSERT INTO xero_snapshots(close_id,connection_id,tenant_id,period,digest,payload,actor,captured_at) VALUES($1,$2,'t-1','2026-09','d',$3,'fixture',now()+interval '1 minute')`, closeID, xeroConnection, xeroPayload)
 	must(err)
@@ -264,21 +264,70 @@ func TestManagementPackReadsTheCapturedReports(t *testing.T) {
 		must(err)
 		must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
 	}
+	signXero := func() {
+		t.Helper()
+		for _, account := range []string{"a-1", "a-2", "a-3", "a-4", "a-5"} {
+			var view struct{ Coverage coverageView }
+			must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/coverage", nil), &view))
+			call("POST", "/v1/closes/"+closeID+"/coverage", map[string]any{"action": "bind", "digest": view.Coverage.Digest, "account_id": account, "excluded": true, "reason": "Reviewed outside this close.", "confirmed": true})
+		}
+		must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
+		call("POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "sign", "note": "Synthetic Xero sign-off", "confirmed": true})
+	}
 	captureXero("1 minute")
 	call("POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "reopen", "note": "Captured from Xero", "confirmed": true})
-	for _, account := range []string{"a-1", "a-2", "a-3", "a-4", "a-5"} {
-		var view struct{ Coverage coverageView }
-		must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/coverage", nil), &view))
-		call("POST", "/v1/closes/"+closeID+"/coverage", map[string]any{"action": "bind", "digest": view.Coverage.Digest, "account_id": account, "excluded": true, "reason": "Reviewed outside this close.", "confirmed": true})
-	}
-	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
-	call("POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "sign", "note": "Synthetic Xero sign-off", "confirmed": true})
+	signXero()
 	if got := status(); got != "signed_off" {
 		t.Fatalf("the Xero capture the sign-off was made over is signed off: %s", got)
 	}
 	captureXero("2 minutes")
 	if got := status(); got != "provisional" || current.State != "reopen_required" {
 		t.Fatalf("a newer Xero capture needs the sign-off reopened, and the pack is provisional: %s (readiness %s)", got, current.State)
+	}
+
+	// The firm's statement completes a Xero month's pack: checked against its cash accounts (the card is not cash), under
+	// the sign-off, and then publishable.
+	defer db.Exec(`DELETE FROM management_publications WHERE close_id=$1`, closeID)
+	defer db.Exec(`DELETE FROM cash_flow_imports WHERE close_id=$1`, closeID)
+	importCSV := func(csv string, want int) map[string]any {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{"csv": csv, "source": "September cash flow.csv", "confirmed": true})
+		r := httptest.NewRequest("POST", "/v1/closes/"+closeID+"/cash-flow", bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		var out map[string]any
+		if w.Code != want || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("import: %d %s", w.Code, w.Body.String())
+		}
+		return out
+	}
+	statement := "Section,Line,Amount\nBeginning cash,,1200\nOperating activities,Receipts from customers,800\noperating activities,Rent paid,-500\nEnding cash,,1500\n"
+	var closed struct{ Open bool }
+	if importCSV(statement, 409); json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/management-pack", nil), &closed) != nil || closed.Open {
+		t.Fatalf("while the sign-off is not reopened the pack is not open for an import")
+	}
+	call("POST", "/v1/closes/"+closeID+"/signoff", map[string]any{"digest": current.Digest, "expected_decision_id": current.DecisionID, "action": "reopen", "note": "Captured from Xero again", "confirmed": true})
+	if out := importCSV(strings.Replace(statement, "\noperating activities,Rent paid,-500", "\n\noperating activities,Total operating activities,300", 1), 422); !strings.Contains(fmt.Sprint(out), "row 5") {
+		t.Fatalf("a total is refused, naming its row in the file: %v", out)
+	}
+	if flow := importCSV(strings.Replace(statement, ",,1500", ",,1600", 1), 200)["cash_flow"].(map[string]any); flow["reconciled"] != false || !strings.Contains(fmt.Sprint(flow["differences"]), "the books 1500.00, a difference of 100.00") {
+		t.Fatalf("a statement that does not tie to book cash is shown with its difference: %v", flow)
+	}
+	pack := importCSV(statement, 200)
+	if pack["complete"] != true || pack["open"] != true || !strings.Contains(pack["note"].(string), "imported from September cash flow.csv") || !strings.Contains(pack["note"].(string), "Opening cash was not checked") {
+		t.Fatalf("a statement that ties completes the pack, and the pack says where it came from: %v", pack)
+	}
+	signXero()
+	var signed struct{ Digest, Overall string }
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/management-pack", nil), &signed))
+	call("POST", "/v1/closes/"+closeID+"/management-pack/publications", map[string]any{"action": "publish", "digest": signed.Digest, "commentary": "Cash rose 300 from operations.", "confirmed": true})
+	_, err = db.Exec(`INSERT INTO cash_flow_imports(close_id,company,currency,csv,source,attestation,actor) VALUES($1,'t-1','USD',$2,'fixture','fixture','fixture')`, closeID, statement)
+	must(err)
+	must(json.Unmarshal(call("GET", "/v1/closes/"+closeID+"/readiness", nil), &current))
+	if current.State != "reopen_required" {
+		t.Fatalf("a later statement needs the sign-off reopened: %s", current.State)
 	}
 }
 
