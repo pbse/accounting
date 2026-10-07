@@ -107,8 +107,15 @@ export default function WorkspaceLayout() {
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
-  // Signed out, the workspace shows nothing of itself: the visitor signs in and comes back to this page.
-  if (authKitClientId && !sessionLoading && !signedIn) return <Navigate to={`/login?return=${encodeURIComponent(location.pathname + location.search)}`} replace />;
+  // Signed out, the workspace shows nothing of itself, not even while the session is checked: the visitor signs in and
+  // comes back to this page, at the same place on it.
+  if (authKitClientId && sessionLoading)
+    return (
+      <main id="main" className="app-main">
+        <p role="status">Checking your session…</p>
+      </main>
+    );
+  if (authKitClientId && !signedIn) return <Navigate to={`/login?return=${encodeURIComponent(location.pathname + location.search + location.hash)}`} replace />;
   return (
     <div className="app-shell">
       <a className="skip" href="#main">
