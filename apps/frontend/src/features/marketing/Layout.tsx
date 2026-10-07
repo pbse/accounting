@@ -61,7 +61,7 @@ export function MarketingLayout() {
             <Link className="k-logo" to="/" aria-label="Krith, home">
               krith
             </Link>
-            <p className="k-tagline">The work of accounting, prepared for your signature.</p>
+            <p className="k-tagline">The work, prepared.</p>
           </div>
           <nav aria-label="Krith">
             <h3>Krith</h3>
