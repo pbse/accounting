@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"close.local/backend/internal/auth"
+	"close.local/backend/internal/secrets"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -55,6 +56,13 @@ func signer(t *testing.T) func(org string, permissions ...string) string {
 	t.Setenv("WORKOS_CLIENT_ID", "client_fixture")
 	t.Setenv("WORKOS_ISSUER", "https://auth.example")
 	t.Setenv("WORKOS_ORGANIZATION_ID", "")
+	// Staff sign in through server-held sessions, at the staff domain (see staffSignIn).
+	t.Setenv("AUTH_SESSION", "server")
+	t.Setenv("WORKOS_API_KEY", "sk_test_admin")
+	t.Setenv("SECRETS_KEY", strings.Repeat("ab", 32))
+	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
+	t.Setenv("FRONTEND_ORIGIN", "https://app.example.test")
+	t.Setenv("STAFF_EMAIL_DOMAIN", "krith-staff.test")
 	return func(org string, permissions ...string) string {
 		token := jwt.NewWithClaims(jwt.SigningMethodRS256, auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_staff", Issuer: "https://auth.example", ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)), IssuedAt: jwt.NewNumericDate(time.Now())},
 			Organization: org, Session: "session_fixture", Permissions: permissions})
@@ -67,10 +75,46 @@ func signer(t *testing.T) func(org string, permissions ...string) string {
 	}
 }
 
+// staffSignIn signs someone in to the staff console as the server does, for an address at email: a staff row in
+// auth_sessions holding a token from sign (in no organization). It returns a credential that adminCall and adminJSON
+// send as the staff cookie.
+func staffSignIn(t *testing.T, db *sql.DB, sign func(string, ...string) string, email string) string {
+	t.Helper()
+	access, err := secrets.Seal("auth-session:access", []byte(sign("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh, err := secrets.Seal("auth-session:refresh", []byte("refresh-staff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := rand.Text()
+	if _, err := db.Exec(`INSERT INTO auth_sessions(id_hash,subject,organization_id,workos_session,email,refresh_token,access_token,access_expires_at,expires_at,staff) VALUES($1,'user_staff','','session_fixture',$2,$3,$4,now()+interval '1 hour',now()+interval '1 day',true)`,
+		hashToken(id), email, refresh, access); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Exec(`DELETE FROM auth_sessions WHERE id_hash=$1`, hashToken(id)) })
+	return staffCredential + id
+}
+
+// staffCredential marks a credential that is a staff session's cookie rather than a bearer token.
+const staffCredential = "staff-session:"
+
+// authorize sends a credential the way a browser or client would: a staff session as the staff cookie from the app's
+// own origin, anything else as a bearer token.
+func authorize(r *http.Request, credential string) {
+	if cookie, ok := strings.CutPrefix(credential, staffCredential); ok {
+		r.AddCookie(&http.Cookie{Name: staffCookie, Value: cookie})
+		r.Header.Set("Origin", os.Getenv("PUBLIC_APP_URL"))
+		return
+	}
+	r.Header.Set("Authorization", "Bearer "+credential)
+}
+
 func adminCall(t *testing.T, h http.Handler, token, method, path string, want int) []byte {
 	t.Helper()
 	r := httptest.NewRequest(method, path, nil)
-	r.Header.Set("Authorization", "Bearer "+token)
+	authorize(r, token)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != want {
@@ -82,43 +126,45 @@ func adminCall(t *testing.T, h http.Handler, token, method, path string, want in
 func TestStaffAndFirmSessionsNeverCross(t *testing.T) {
 	db := adminDB(t)
 	sign := signer(t)
-	staffOrg, firmOrg := "org_Staff"+rand.Text(), "org_Firm"+rand.Text()
-	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
+	firmOrg := "org_Firm" + rand.Text()
 	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Admin test firm')`, firmOrg); err != nil {
 		t.Fatal(err)
 	}
 	defer db.Exec(`DELETE FROM organizations WHERE id=$1`, firmOrg)
 	h := apiWithStore(db, strings.Repeat("x", 32))
+	staff := staffSignIn(t, db, sign, "pat@krith-staff.test")
 
+	// Staff hold every platform permission, whatever their token claims.
 	var me staffMember
-	json.Unmarshal(adminCall(t, h, sign(staffOrg, "platform:read", "clients:all"), "GET", "/v1/admin/me", 200), &me)
-	if me.Subject != "user_staff" || !slices.Equal(me.Permissions, []string{"platform:read"}) || me.Mode != "workos" {
-		t.Fatalf("staff identity %+v: only platform permissions count", me)
+	json.Unmarshal(adminCall(t, h, staff, "GET", "/v1/admin/me", 200), &me)
+	if me.Subject != "user_staff" || me.Email != "pat@krith-staff.test" || !slices.Equal(me.Permissions, platformPermissions) || me.Mode != "workos" {
+		t.Fatalf("staff identity %+v", me)
 	}
 	var firms struct{ Firms []adminFirmRow }
-	json.Unmarshal(adminCall(t, h, sign(staffOrg, "platform:read"), "GET", "/v1/admin/firms?q="+firmOrg, 200), &firms)
+	json.Unmarshal(adminCall(t, h, staff, "GET", "/v1/admin/firms?q="+firmOrg, 200), &firms)
 	if len(firms.Firms) != 1 || firms.Firms[0].ID != firmOrg {
 		t.Fatalf("firms %+v", firms)
 	}
-	adminCall(t, h, sign(staffOrg, "platform:content"), "GET", "/v1/admin/firms", 403)
-	// A firm's session is refused even if its role claims a platform permission.
-	adminCall(t, h, sign(firmOrg, "platform:read", "clients:all"), "GET", "/v1/admin/firms", 401)
-	// A staff session cannot use the firm routes: the staff organization is never enrolled.
-	adminCall(t, h, sign(staffOrg, "platform:read", "clients:all"), "GET", "/v1/closes", 403)
+	// A firm's token is refused even if its role claims a platform permission, and so is a staff member's own token
+	// sent without their session: only the session says who they are.
+	adminCall(t, h, sign(firmOrg, platformPermissions...), "GET", "/v1/admin/firms", 401)
+	adminCall(t, h, sign(""), "GET", "/v1/admin/me", 401)
+	// The staff cookie does not open the firm routes.
+	adminCall(t, h, staff, "GET", "/v1/closes", 401)
 
-	t.Setenv("PLATFORM_ORGANIZATION_ID", "")
-	adminCall(t, apiWithStore(db, strings.Repeat("x", 32)), sign(staffOrg, "platform:read"), "GET", "/v1/admin/me", 503)
+	// Without a staff domain, nobody is staff.
+	t.Setenv("STAFF_EMAIL_DOMAIN", "")
+	adminCall(t, apiWithStore(db, strings.Repeat("x", 32)), staff, "GET", "/v1/admin/me", 401)
 }
 
-// Every staff route, read from the handlers' source so a new one is covered as soon as it is registered: no token, a
-// firm's session (whatever its role claims) and a staff member without platform:read are all refused before it runs.
-func TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead(t *testing.T) {
+// Every staff route, read from the handlers' source so a new one is covered as soon as it is registered: no
+// credential, a firm's token (whatever its role claims) and a staff session for an address no longer at the staff
+// domain are all refused before it runs.
+func TestEveryStaffRouteRefusesFirmsAndOtherAddresses(t *testing.T) {
 	db := adminDB(t)
 	sign := signer(t)
-	staffOrg := "org_Staff" + rand.Text()
-	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
 	h := apiWithStore(db, strings.Repeat("x", 32))
-	firm, unread := sign("org_Firm"+rand.Text(), platformPermissions...), sign(staffOrg, platformOperate, platformContent, platformPlans)
+	firm, elsewhere := sign("org_Firm"+rand.Text(), platformPermissions...), staffSignIn(t, db, sign, "pat@elsewhere.test")
 	route, param := regexp.MustCompile(`HandleFunc\("(GET|POST) (/v1/admin/[^"]*)"`), regexp.MustCompile(`\{[^}]*\}`)
 	files, _ := filepath.Glob("admin*.go")
 	var routes int
@@ -135,7 +181,7 @@ func TestEveryStaffRouteRefusesFirmsAndStaffWithoutRead(t *testing.T) {
 			path := param.ReplaceAllString(m[2], "x")
 			adminCall(t, h, "", m[1], path, 401)
 			adminCall(t, h, firm, m[1], path, 401)
-			adminCall(t, h, unread, m[1], path, 403)
+			adminCall(t, h, elsewhere, m[1], path, 401)
 		}
 	}
 	if routes < 39 {

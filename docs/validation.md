@@ -3589,3 +3589,16 @@ Request: after #284 deployed, the owner's `/admin` would not load, redirecting w
 - **Tested.** `routes.test.ts`: every console page maps to `/admin/`, and files (and a typed `/admin/index.html`, which then redirects once) map to themselves. JavaScript tests and checks pass.
 
 Not verified until deployed: the owner's signed-in load of `/admin` in production.
+
+## Retire the platform staff organization — 2026-10-07 (B12)
+
+Request: clean up the settings no longer needed once staff are everyone at the staff domain (#284).
+
+- **Change.** Staff are only the verified addresses at `STAFF_EMAIL_DOMAIN`. The API, the console and the deploys no longer read `PLATFORM_ORGANIZATION_ID` or `VITE_PLATFORM_ORGANIZATION_ID`. Firm sign-in no longer sets aside the staff organization. In production, that organization has no members and no domains. With WorkOS and no staff domain, staff routes and staff sign-in answer 503. The console needs server sessions and no longer uses AuthKit, so its `@workos-inc/authkit-react` dependency is gone. Every staff member holds every platform permission; each route still names the one it needs.
+- **Tests.**
+  - The admin tests now sign staff in as the server does: a staff session row for an address at the staff domain (`staffSignIn`).
+  - `TestEveryStaffRouteRefusesFirmsAndOtherAddresses` sends three credentials to every route: none, a firm's token claiming every platform permission, and a staff session for another domain. Each is refused before the route runs.
+  - The permission-tier tests (read-only, content and plans staff) are gone with the tiers. The empty-steps check they carried is now `TestANewRunHasAnEmptyListOfSteps`.
+  - The server-session test signs the same person in as staff through Google, with no organization, and checks that staff sign-in needs a staff domain.
+
+Not verified: the production console after the deploy, and the GitHub variables' removal (done after the merge).

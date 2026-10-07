@@ -31,7 +31,7 @@ const refuse = (status: number, message: string) => new Response(message, { stat
 
 // staffGate lets a request for the staff console through (undefined) only when the API accepts its staff session:
 // GET /v1/admin/me, asked with the request's cookies alone, needs a staff session for a verified address at
-// STAFF_EMAIL_DOMAIN (or, without that, one in the platform staff organization with platform:read). Signed out, a page goes to staff sign-in and returns afterwards; a file is refused; nothing of the
+// STAFF_EMAIL_DOMAIN. Signed out, a page goes to staff sign-in and returns afterwards; a file is refused; nothing of the
 // console is sent. Only AUTH_SESSION=server keeps a session the edge can see, so any other mode serves nothing.
 export async function staffGate(request: Request, authSession: string | undefined, check: (request: Request) => Promise<Response>): Promise<Response | undefined> {
   if (authSession !== "server") return refuse(503, "The staff console is served only with AUTH_SESSION=server, so sign-in can be checked before it loads.");
@@ -48,7 +48,7 @@ export async function staffGate(request: Request, authSession: string | undefine
     login.search = new URLSearchParams({ staff: "1", return: url.pathname + url.search }).toString();
     return new Response(null, { status: 302, headers: { Location: login.toString(), "Cache-Control": "no-store" } });
   }
-  if (verdict.status === 401) return refuse(401, "Sign in as platform staff.");
+  if (verdict.status === 401) return refuse(401, "Sign in with your staff Google account.");
   if (verdict.status === 403) return refuse(403, "Your staff role does not include the staff console.");
   return refuse(503, "Staff sign-in could not be checked. Try again shortly.");
 }

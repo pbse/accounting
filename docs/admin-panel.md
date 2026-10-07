@@ -31,40 +31,32 @@ The firm-facing **Security center** stays as it is. It is a firm administrator's
 ## Identity and access
 
 ### Staff by email domain
-Since 2026-10-06, setting `STAFF_EMAIL_DOMAIN` makes everyone with a verified Google address at that domain staff. It is a GitHub environment variable, `getkrith.com` in production, which the deploy workflows pass to the API. The platform staff organization below then plays no part.
+Since 2026-10-06, setting `STAFF_EMAIL_DOMAIN` makes everyone with a verified Google address at that domain staff. It is a GitHub environment variable, `getkrith.com` in production, which the deploy workflows pass to the API. It replaced the "Platform staff" WorkOS organization, retired on 2026-10-07 (see [As built (A0)](#as-built-a0)).
 - **Sign-in.** `/v1/auth/login?staff=1` goes straight to Google and names no organization. Staff keep whatever WorkOS organizations they have, or none. A staff member who also belongs to a firm (such as getkrith.com's own) still gets a staff session that is not a firm session.
 - **Who is turned away.** Every rule in [sign-in](sign-in.md) applies, and the address must be at the staff domain. Anyone else returns to `/login?error=staff` with no session.
 - **Each session says whether it is staff.** A staff session's organization no longer tells the two kinds apart, so `auth_sessions.staff` (migration 128) records it. The staff cookie accepts only a staff row for an address at the domain, and the firm cookie only a firm row. Renewal ends a staff session once its address no longer qualifies. A session in no organization renews without naming one.
 - **Only the session counts.** WorkOS access tokens carry no email address. The API takes the staff member's address from their session row, never from the request, so a bearer token alone never opens the console in this mode.
 - **Permissions.** Every staff member holds all four platform permissions. Client content still needs a stated reason and is audited, as is every staff write.
 - **Removing someone.** Suspending their Google Workspace account stops new sign-ins, but a staff session lasts up to 30 days. To end it at once, also sign them out everywhere from the console's People screen, which ends their sessions here and in WorkOS.
-- **Server sessions only.** This mode needs `AUTH_SESSION=server`. Without `STAFF_EMAIL_DOMAIN`, staff are the members of the platform staff organization, as below.
+- **Server sessions only.** Staff access needs `AUTH_SESSION=server`. With WorkOS and no `STAFF_EMAIL_DOMAIN`, every staff route answers 503.
+- **Two-step verification.** Staff sign in with Google, so turn on 2-Step Verification for the staff domain in the Google Workspace admin console.
 
-### WorkOS setup (the staff organization, without `STAFF_EMAIL_DOMAIN`)
-- **Staff organization:** create "Platform staff" in each WorkOS environment. The API reads its ID from `PLATFORM_ORGANIZATION_ID`.
-- **Permissions:**
-  - `platform:read`: see all firms' metadata.
-  - `platform:operate`: start, cancel and retry runs, signal and approve, suspend or resume a firm, manage invitations.
-  - `platform:content`: view client content, with a reason.
-  - `platform:plans`: build and approve plans. Approving still requires the plan validator's per-activity permission check.
-  - `platform:read` is every role's baseline: the API requires it on every staff route, on top of the route's own permission, since the console cannot be used without it.
-- **Roles:**
-  - Support: `platform:read`.
-  - Operator: adds `platform:operate`.
-  - Content reviewer: adds `platform:content`.
-  - Platform admin: all four.
-  Staff are added and removed in the WorkOS dashboard in phase A0; an in-console staff screen comes in A2.
-- **MFA:** require it for every staff member, either through WorkOS's MFA setting or through SSO to a company identity provider that enforces it. Confirm which one WorkOS applies per organization before relying on it.
-- **Short sessions:** the admin app refreshes tokens, and the API rejects staff tokens whose organization isn't `PLATFORM_ORGANIZATION_ID`.
+### Permissions
+- `platform:read`: see all firms' metadata.
+- `platform:operate`: start, cancel and retry runs, signal and approve, suspend or resume a firm, manage invitations.
+- `platform:content`: view client content, with a reason.
+- `platform:plans`: build and approve plans. Approving still requires the plan validator's per-activity permission check.
+
+Every staff member holds all four. Each route still names the permission it needs, on top of `platform:read`, so narrower staff roles could return without revisiting the routes.
 
 ### API verification
-- A staff verifier is `auth.Verifier{ClientID, Issuer, Organization: PLATFORM_ORGANIZATION_ID}`. The pinned organization means a firm's token fails verification on admin routes.
-- Firm routes already refuse the staff organization, because it's never registered in `organizations` (the "403 organization not enabled" case in [onboarding](onboarding.md)). A test must prove both directions.
+- A staff verifier accepts a WorkOS token in any organization, or none. What makes a request staff is its session: a row in `auth_sessions` marked staff, for a verified address at `STAFF_EMAIL_DOMAIN`. The API reads that row; a token alone, sent as a bearer token, never opens the console.
+- A firm's session cannot reach admin routes, which read only the staff cookie and only staff rows. A staff session cannot use firm routes, which read only the firm cookie and only firm rows. Tests prove both directions.
 - **Local development:** when WorkOS isn't configured, the existing `WORKSPACE_TOKEN` also grants every platform permission, mirroring today's local-only development access. A configured WorkOS client disables that.
 
 ### Network (phase A4)
 Every page of the console lives under `/admin` on the app's own hostname, and only internal staff can load any of it.
-- **The check.** The edge Worker serves nothing under `/admin` (pages, scripts, styles) until the API accepts the request's staff session. It asks `GET /v1/admin/me` with the request's cookies. That needs a staff session for a verified address at `STAFF_EMAIL_DOMAIN`, or, without that setting, a session in the platform staff organization with `platform:read`.
+- **The check.** The edge Worker serves nothing under `/admin` (pages, scripts, styles) until the API accepts the request's staff session. It asks `GET /v1/admin/me` with the request's cookies. That needs a staff session for a verified address at `STAFF_EMAIL_DOMAIN`.
 - **Refusals.** A signed-out visitor to a page goes to staff sign-in and comes back to that page. A file is refused with 401, and a staff member without the console's role gets 403.
 - **Sign-in mode.** This needs `AUTH_SESSION=server`, whose cookie the edge can see (see [sign-in session](auth-sandbox-staging.md#sign-in-session)). In any other mode the Worker serves nothing under `/admin`.
 - **Authorization.** The gate is defence in depth: every staff API call is still authorized in Go.
@@ -86,7 +78,7 @@ services/backend/internal/transport/admin.go   /v1/admin/* routes, staff middlew
 - Before serving anything under `/admin`, check the staff session (see [network](#network-phase-a4)).
 
 ### New setting
-`PLATFORM_ORGANIZATION_ID` must be added everywhere settings are listed:
+`STAFF_EMAIL_DOMAIN` is listed everywhere settings are:
 - `.env.example`;
 - `compose.yaml`;
 - the edge Worker's container `envVars`;
@@ -219,11 +211,10 @@ All routes under `/v1/admin`. They require a staff token plus the permission lis
 
 ## As built (A0)
 
-- **WorkOS.** "Platform staff" is its own organization in each environment (production `org_01M3JTPHHZXPV1MPYTQTZMQ52H`, staging `org_01M3JTPJ7038BZYHDY9M3K4ENK`). The permissions `platform:read`, `platform:operate`, `platform:content` and `platform:plans` are environment-wide, but the roles are scoped to the staff organization, so they cannot be given to a firm member. WorkOS requires organization roles to start with `org-`: `org-platform-support`, `org-platform-operator`, `org-platform-content`, `org-platform-admin`.
-- **Settings.** The API reads `PLATFORM_ORGANIZATION_ID`; with WorkOS configured and this unset, every staff route answers 503. The admin app is built with `VITE_PLATFORM_ORGANIZATION_ID` (the same public ID) and signs staff in to that organization. The deploy workflows derive both from the GitHub variable `PLATFORM_ORGANIZATION_ID`, which is already set for production.
+- **WorkOS (retired 2026-10-07).** Staff were first the members of a "Platform staff" WorkOS organization, with roles for each permission tier; [staff by email domain](#staff-by-email-domain) replaced it, and the API, the console and the deploys no longer read `PLATFORM_ORGANIZATION_ID`. As it was: "Platform staff" was its own organization in each environment (production `org_01M3JTPHHZXPV1MPYTQTZMQ52H`, staging `org_01M3JTPJ7038BZYHDY9M3K4ENK`). The permissions `platform:read`, `platform:operate`, `platform:content` and `platform:plans` are environment-wide, but the roles are scoped to the staff organization, so they cannot be given to a firm member. WorkOS requires organization roles to start with `org-`: `org-platform-support`, `org-platform-operator`, `org-platform-content`, `org-platform-admin`.
 - **WorkOS redirect.** Register `https://<app>/admin/` as a redirect URI for the environment's AuthKit application before staff sign in. With `AUTH_SESSION=server` the API holds the staff session in its own cookie; `https://<app>/admin/` is then a sign-out redirect (see [sign-in session](auth-sandbox-staging.md#sign-in-session)).
 - **Heartbeats.** Only the worker process (`worker`) and the workflow engine loop (`workflow_engine`) report so far. Adding one per job loop means touching each loop; that comes with A2's jobs screen.
-- **One browser, one organization.** With `AUTH_SESSION=client`, AuthKit keeps one session per browser: a person who is both a firm member and staff signs in to one organization at a time, and the console offers to switch. With `AUTH_SESSION=server`, the workspace and the console have separate cookies, so both stay signed in.
+- **Both stay signed in.** The workspace and the console have separate cookies, so a person who is both a firm member and staff stays signed in to both. With `AUTH_SESSION=client` the console does not sign staff in at all: only the server's session knows their address.
 - **Local development.** Without WorkOS, the workspace token unlocks the console with every platform permission. Run it with `npm run dev:admin` (port 5174, `/admin/`), or the `admin` Compose service.
 
 ## As built (A1)

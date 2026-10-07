@@ -232,15 +232,3 @@ func TestStaffFindAPersonAcrossFirmsAndEndTheirSessions(t *testing.T) {
 	}
 	adminJSON(t, h, token, "POST", "/v1/admin/people/"+person+"/sessions/revoke", `{"reason":"Laptop reported stolen"}`, 503)
 }
-
-func TestReadOnlyStaffCannotEndSessionsOrResend(t *testing.T) {
-	db := adminDB(t)
-	sign := signer(t)
-	staffOrg := "org_Staff" + rand.Text()
-	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
-	t.Setenv("WORKOS_API_KEY", "sk_test_people")
-	h := apiWithStore(db, strings.Repeat("x", 32))
-	reader := sign(staffOrg, "platform:read")
-	adminJSON(t, h, reader, "POST", "/v1/admin/people/user_a/sessions/revoke", `{"reason":"Trying without permission"}`, 403)
-	adminJSON(t, h, reader, "POST", "/v1/admin/firms/org_Any/invitations/1/resend", `{"reason":"Trying without permission"}`, 403)
-}

@@ -254,7 +254,6 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
 	t.Setenv("AUTH_SESSION", "server")
 	t.Setenv("FRONTEND_ORIGIN", "https://app.example.test")
-	t.Setenv("PLATFORM_ORGANIZATION_ID", "org_PlatformFixture")
 	handler := apiWithStore(db, "")
 
 	// signIn runs the round trip with a provider button and returns where it lands and the session cookie, if any.
@@ -875,7 +874,6 @@ func TestStaffAreVerifiedAddressesAtTheStaffDomain(t *testing.T) {
 	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
 	t.Setenv("AUTH_SESSION", "server")
 	t.Setenv("FRONTEND_ORIGIN", "https://app.example.test")
-	t.Setenv("PLATFORM_ORGANIZATION_ID", "")
 	t.Setenv("STAFF_EMAIL_DOMAIN", strings.ToUpper(staffDomainName))
 	handler := apiWithStore(db, "")
 

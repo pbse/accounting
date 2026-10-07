@@ -207,9 +207,6 @@ func adminPeople(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		for j := range people[i].Memberships {
 			m := &people[i].Memberships[j]
 			m.FirmName = names[m.OrganizationID]
-			if m.OrganizationID == os.Getenv("PLATFORM_ORGANIZATION_ID") {
-				m.FirmName = "Platform staff"
-			}
 		}
 	}
 	jsonReply(w, 200, map[string]any{"query": q, "workos": state, "from_app_records": fromRecords, "users": people, "memberships": json.RawMessage(memberships), "invitations": json.RawMessage(invitations)})

@@ -89,14 +89,3 @@ func TestContentGrantsStandInForAReasonOnOneFirmForAWhile(t *testing.T) {
 		t.Fatalf("grant audit %q %v", actions, err)
 	}
 }
-
-func TestGrantsNeedContentPermission(t *testing.T) {
-	db := adminDB(t)
-	sign := signer(t)
-	staffOrg := "org_Staff" + rand.Text()
-	t.Setenv("PLATFORM_ORGANIZATION_ID", staffOrg)
-	h := apiWithStore(db, strings.Repeat("x", 32))
-	reader := sign(staffOrg, "platform:read", "platform:operate")
-	adminJSON(t, h, reader, "GET", "/v1/admin/grants", "", 403)
-	adminJSON(t, h, reader, "POST", "/v1/admin/firms/org_Any/grant", `{"minutes":60,"reason":"Month-end support for the firm"}`, 403)
-}
