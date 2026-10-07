@@ -104,6 +104,8 @@ services:
     entrypoint: ["/worker"]
     environment:
       SECRETS_KEY: ${SECRETS_KEY:-}
+      PLATFORM_EMAIL_KEY: ${PLATFORM_EMAIL_KEY:-}
+      PLATFORM_EMAIL_FROM: ${PLATFORM_EMAIL_FROM:-}
       UPLOAD_SCAN_KEY: ${UPLOAD_SCAN_KEY:-}
       TEXT_SCANNER_URL: http://scanner:8080/scan
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

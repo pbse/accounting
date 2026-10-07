@@ -67,6 +67,24 @@ A signed-out visitor to any `/dashboard` page goes to `/login` and, once signed 
 
 The worked example (the example close and review, a synthetic prepaid schedule) is Krith's own. Only the firm registered for `STAFF_EMAIL_DOMAIN` sees it in its sidebar and can read it (`GET /v1/closes/examples/prepaid`); every other firm gets 404 there. Local development, without WorkOS, keeps it.
 
+## Welcome emails
+
+Krith emails each person once when they come into a firm by signing in:
+- **Welcome to Krith:** to whoever becomes a firm's administrator by signing in, either by creating it or by being the first member of a firm with none. It says the firm is set up, links to the workspace, and says colleagues at the domain join with no access until given a role or clients.
+- **You've joined <firm> on Krith:** to each colleague who joins by their address. It says they can't open any clients until the administrator decides.
+
+How it works:
+- **Queued with the sign-in.** `domainFirm` and `joinFirm` write the email to `platform_emails` (migration 130) in the sign-in's own transaction, so a sign-in that fails sends nothing. A person gets one per firm, however often they sign in. People who come by invitation get WorkOS's invitation email instead.
+- **Sent by the worker.** The worker's `platform_emails` loop (`delivery.RunPlatformEmails`) sends each one through Resend, with Krith's own send-only key and sender, never a firm's connection. The idempotency key is the row's, so a retry never sends twice.
+- **Retries and refusals.** An unanswered attempt is retried twice, a minute apart. A refusal is final.
+- **Expiry and deletion.** Anything not sent within a day of the sign-in expires. Rows are deleted 30 days after they finish, and with their firm.
+
+Settings:
+- `PLATFORM_EMAIL_FROM` is a GitHub environment variable, e.g. `Krith <hello@mail.getkrith.com>`, on the sender domain verified in Resend.
+- `PLATFORM_EMAIL_KEY` is a Cloudflare credential of the queue worker: a Resend key with sending access to that domain only, installed with `node scripts/cloudflare-credentials.mjs PLATFORM_EMAIL_KEY production < key-file`.
+- Links use `PUBLIC_APP_URL`.
+- Without the key and a valid sender, the worker logs that platform emails are off and sends nothing.
+
 ## Why a sign-in is turned away
 
 The callback sends the person back to `/login?error=…`, and the page explains it. Nothing about the person goes in the address.
@@ -111,7 +129,13 @@ In GitHub (production environment variables): set `AUTH_SESSION=server`, then ru
 - Gmail, unverified, removed and non-hosted-domain people are turned away;
 - someone WorkOS provisioned by domain is recorded;
 - an organization WorkOS placed someone in becomes the firm;
+- the administrator and the colleague each have one email queued, and signing in again queues none;
 - a hand-made firm takes its verified domain;
 - the administrator lists people and changes a role, but not their own, and only to a role they hold;
 - a refused change is recorded as failed, and a change whose answer was lost settles as applied;
 - a person in two firms lands in their domain's firm.
+
+The welcome emails have their own tests in `internal/delivery`:
+- `TestPlatformEmailsSay` checks what each email says, and that a malformed recipient or an unknown kind is refused.
+- `TestPlatformEmailsNeedKrithsSender` checks that nothing is sent without the key and a valid sender.
+- `TestPlatformEmailsAreSentOnceWithKrithsKey` runs against a fake Resend. It checks that emails go out with Krith's key and each row's own idempotency key. An unanswered attempt is retried under the same key, a refusal is final, an email older than a day expires unsent, and a row finished over 30 days ago is deleted.
