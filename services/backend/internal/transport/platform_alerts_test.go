@@ -114,3 +114,39 @@ func TestPlatformProblemsAlertOnceAndResolve(t *testing.T) {
 		t.Fatalf("failed delivery %q %v", status, err)
 	}
 }
+
+// An email of Krith's whose outcome is unknown raises a platform alert of its own, naming the row and Resend's
+// idempotency key but not the address, and it resolves once the row is settled.
+func TestUnknownPlatformEmailsAlertUntilSettled(t *testing.T) {
+	db := adminDB(t)
+	ctx := context.Background()
+	org := "org_UnknownEmail" + strings.ToLower(rand.Text()[:8])
+	if _, err := db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Acme')`, org); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := db.QueryRow(`INSERT INTO platform_emails(kind,organization_id,subject,recipient,state,attempts) VALUES('welcome',$1,'user_ana','ana@acme.test','unknown',3) RETURNING id::text`, org).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Exec(`DELETE FROM platform_alerts WHERE kind='platform.unknown_email' AND item_id=$1`, id)
+		db.Exec(`DELETE FROM organizations WHERE id=$1`, org)
+	})
+	if err := collectPlatformAlerts(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	if err := db.QueryRow(`SELECT detail FROM platform_alerts WHERE kind='platform.unknown_email' AND item_id=$1 AND resolved_at IS NULL`, id).Scan(&detail); err != nil || !strings.Contains(detail, "krith-platform/"+id) || strings.Contains(detail, "ana@") {
+		t.Fatalf("an open alert names the idempotency key, not the address: %q %v", detail, err)
+	}
+	if _, err := db.Exec(`UPDATE platform_emails SET state='sent' WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := collectPlatformAlerts(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var open int
+	if db.QueryRow(`SELECT count(*) FROM platform_alerts WHERE kind='platform.unknown_email' AND item_id=$1 AND resolved_at IS NULL`, id).Scan(&open); open != 0 {
+		t.Fatal("the alert resolves once the email is settled")
+	}
+}

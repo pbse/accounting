@@ -66,8 +66,14 @@ func RunPlatformEmails(ctx context.Context, db *sql.DB) {
 }
 
 func tidyPlatformEmails(ctx context.Context, db *sql.DB) error {
-	// Resend keeps an idempotency key for 24 hours, so an attempt is never repeated after that.
-	if _, err := db.ExecContext(ctx, `UPDATE platform_emails SET state='expired',claimed_at=NULL,finished_at=now(),
+	// A last attempt the worker stopped holding before Resend answered may have been sent.
+	if _, err := db.ExecContext(ctx, `UPDATE platform_emails SET state='unknown',claimed_at=NULL,finished_at=now(),error='The worker stopped before Resend answered the last attempt'
+ WHERE state='sending' AND attempts>=3 AND claimed_at<now()-interval '2 minutes'`); err != nil {
+		return err
+	}
+	// Resend keeps an idempotency key for 24 hours, so an attempt is never repeated after that. One never tried expires;
+	// one tried before was retried only because Resend may have accepted it, so its outcome is unknown.
+	if _, err := db.ExecContext(ctx, `UPDATE platform_emails SET state=CASE WHEN attempts>0 THEN 'unknown' ELSE 'expired' END,claimed_at=NULL,finished_at=now(),
  error=CASE WHEN attempts>0 THEN 'Resend did not confirm it within a day of the sign-in' ELSE 'Not sent within a day of the sign-in' END
  WHERE state IN ('queued','sending') AND created_at<now()-interval '23 hours'`); err != nil {
 		return err
@@ -78,7 +84,8 @@ func tidyPlatformEmails(ctx context.Context, db *sql.DB) error {
 
 // sendPlatformEmail sends one queued email, or retries one whose attempt went unanswered, under the same idempotency
 // key each time. An attempt whose outcome is uncertain (no answer, a server error, or a success without Resend's message
-// ID) is tried twice more and then recorded as unknown, since Resend may have sent it; a refusal is final.
+// ID) is tried twice more and then recorded as unknown, since Resend may have sent it. A refusal is final: failed, or
+// unknown when it answers a retry, since the earlier attempt may have been sent. Unknown emails raise a platform alert.
 func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (bool, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -115,19 +122,22 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 	}
 	state, providerID, message := "sent", "", ""
 	email, err := platformEmail(kind, recipient, firm, domain, from, app)
-	if err != nil {
-		state, message = "failed", err.Error()
-	} else {
+	called, status := false, 0
+	if err == nil {
 		payload, _ := json.Marshal(email)
-		var status int
-		if providerID, status, err = send(ctx, key, payload, "krith-platform/"+strconv.FormatInt(id, 10)); err != nil {
-			state, message = "failed", err.Error()
-			if status == 0 || status == 408 || status == 409 || status == 429 || status >= 500 || (status >= 200 && status < 300) {
-				state = "unknown"
-				if attempts+1 < 3 {
-					state = "queued"
-				}
-			}
+		called = true
+		providerID, status, err = send(ctx, key, payload, "krith-platform/"+strconv.FormatInt(id, 10))
+	}
+	if err != nil {
+		message = err.Error()
+		uncertain := called && (status == 0 || status == 408 || status == 409 || status == 429 || status >= 500 || (status >= 200 && status < 300))
+		switch {
+		case uncertain && attempts+1 < 3:
+			state = "queued"
+		case uncertain || attempts > 0:
+			state = "unknown"
+		default:
+			state = "failed"
 		}
 	}
 	persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

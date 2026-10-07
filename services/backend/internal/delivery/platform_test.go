@@ -104,8 +104,11 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 		case who == "cy":
 			w.WriteHeader(422)
 			w.Write([]byte(`{"message":"invalid"}`))
-		case who == "ben" && tries == 1:
+		case who == "ben" && tries == 1, who == "kim" && tries == 1:
 			w.WriteHeader(500)
+		case who == "kim":
+			w.WriteHeader(422)
+			w.Write([]byte(`{"message":"invalid"}`))
 		case who == "eve" && tries == 1, who == "fay":
 			w.Write([]byte(`{}`))
 		default:
@@ -199,6 +202,34 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 	}
 	if s, n, _ := state(ivy); s != "cancelled" || n != 0 || len(seen["ivy"]) != 0 {
 		t.Fatalf("an email from a suspended firm is cancelled unsent: %s %d", s, n)
+	}
+
+	// A refusal that answers a retry leaves the outcome unknown: the unanswered attempt before it may have been sent.
+	kim := queue("joined", "kim")
+	drain()
+	if _, err := db.Exec(`UPDATE platform_emails SET next_attempt_at=now() WHERE id=$1`, kim); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	if s, n, _ := state(kim); s != "unknown" || n != 2 {
+		t.Fatalf("a refusal after an unanswered attempt is unknown, not failed: %s %d", s, n)
+	}
+	// So is a last attempt the worker stopped holding before Resend answered, and one still unconfirmed after a day.
+	jo, lee := queue("joined", "jo"), queue("joined", "lee")
+	if _, err := db.Exec(`UPDATE platform_emails SET state='sending',attempts=3,claimed_at=now()-interval '5 minutes' WHERE id=$1`, jo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE platform_emails SET attempts=1,next_attempt_at=now()+interval '1 hour',created_at=now()-interval '24 hours' WHERE id=$1`, lee); err != nil {
+		t.Fatal(err)
+	}
+	if err := tidyPlatformEmails(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if s, _, _ := state(jo); s != "unknown" {
+		t.Fatalf("an abandoned last attempt is unknown: %s", s)
+	}
+	if s, _, _ := state(lee); s != "unknown" {
+		t.Fatalf("an email tried and unconfirmed within a day is unknown, not expired: %s", s)
 	}
 
 	// What waited more than a day is not sent; finished rows go after 30 days.
