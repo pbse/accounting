@@ -65,7 +65,10 @@ function useClientSession(): Session {
     user: user ? { email: user.email } : null,
     isLoading,
     signIn: () => {
-      sessionStorage.setItem("returnTo", window.location.pathname + window.location.search);
+      // From the login page, return to the workspace page that sent the visitor there; elsewhere, to this page.
+      const asked = new URLSearchParams(window.location.search).get("return") ?? "";
+      const back = window.location.pathname === "/login" && asked.startsWith("/dashboard") ? asked : window.location.pathname + window.location.search;
+      sessionStorage.setItem("returnTo", back);
       return signIn();
     },
     signOut: () => signOut({ returnTo: window.location.origin }),
