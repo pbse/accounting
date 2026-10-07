@@ -63,7 +63,7 @@ Endpoints: `GET /v1/closes/members/people` and `POST /v1/closes/members/role`. B
 
 ## Signed out, there is no workspace
 
-A signed-out visitor to any `/dashboard` page goes to `/login` and, once signed in, back to that page. Nothing of the workspace shows first: no sidebar, no preparation tools, no examples.
+A signed-out visitor to any `/dashboard` page goes to `/login` and, once signed in, back to that page, anchor included. Nothing of the workspace shows first, not even while the session is checked: no sidebar, no preparation tools, no examples. A session that cannot be checked (the API or WorkOS unreachable) is not treated as a sign-out: the workspace stays closed and says so, with a way to try again.
 
 The worked example (the example close and review, a synthetic prepaid schedule) is Krith's own. Only the firm registered for `STAFF_EMAIL_DOMAIN` sees it in its sidebar and can read it (`GET /v1/closes/examples/prepaid`); every other firm gets 404 there. Local development, without WorkOS, keeps it.
 

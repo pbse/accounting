@@ -71,7 +71,8 @@ export default function WorkspaceLayout() {
   const [executive, setExecutive] = useState<boolean>();
   const [examples, setExamples] = useState(false);
   // A hosted session still loading is not yet signed out.
-  const sessionLoading = authKitClientId ? useSession().isLoading : false;
+  const session = authKitClientId ? useSession() : undefined;
+  const sessionLoading = session?.isLoading ?? false;
   const known = !sessionLoading && (!signedIn || executive !== undefined);
   useEffect(() => {
     if (!signedIn) return;
@@ -113,6 +114,19 @@ export default function WorkspaceLayout() {
     return (
       <main id="main" className="app-main">
         <p role="status">Checking your session…</p>
+      </main>
+    );
+  // A session that could not be checked is not a sign-out: the workspace stays closed, and the visitor can try again.
+  if (session?.unavailable)
+    return (
+      <main id="main" className="app-main">
+        <section className="gate" role="alert">
+          <h1>Your session couldn’t be checked</h1>
+          <p>Krith couldn’t reach sign-in just now. Nothing in your workspace has changed.</p>
+          <button type="button" className="primary" onClick={() => window.location.reload()}>
+            Try again
+          </button>
+        </section>
       </main>
     );
   if (authKitClientId && !signedIn) return <Navigate to={`/login?return=${encodeURIComponent(location.pathname + location.search + location.hash)}`} replace />;

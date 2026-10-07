@@ -3618,6 +3618,10 @@ Changes:
 - **Example download.** The review's download comes from the loaded example.
 - **Edge Worker.** It no longer treats the example as public.
 - **Login page.** It is now a heading, one line, the Google button and a single "Talk to us" line, with no rule above the button.
+- **Review fixes (Codex).**
+  - Nothing of the shell shows while the session is checked.
+  - The return address keeps its anchor, and client-mode sign-in returns there too.
+  - A session that cannot be checked shows a retryable error instead of sending a signed-in person to sign in again.
 
 Tested:
 - `TestOnlyKrithsOwnFirmSeesTheExample`: Krith's firm sees and reads the example; another firm is told there is none and gets 404; without a staff domain, nobody has it.
