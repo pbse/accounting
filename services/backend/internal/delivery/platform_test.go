@@ -104,7 +104,7 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 		case who == "cy":
 			w.WriteHeader(422)
 			w.Write([]byte(`{"message":"invalid"}`))
-		case who == "ben" && tries == 1, who == "kim" && tries == 1:
+		case who == "ben" && tries == 1, who == "kim" && tries == 1, who == "max":
 			w.WriteHeader(500)
 		case who == "kim":
 			w.WriteHeader(422)
@@ -191,6 +191,17 @@ func TestPlatformEmailsAreSentOnceWithKrithsKey(t *testing.T) {
 	drain()
 	if s, n, _ := state(gus); s != "cancelled" || n != 0 || len(seen["gus"]) != 0 {
 		t.Fatalf("a removed person's email is cancelled unsent: %s %d", s, n)
+	}
+	// Removed after an unanswered attempt, nothing more is sent, but the outcome stays unknown: it may have gone.
+	maxine := queue("joined", "max")
+	drain()
+	member("max", false)
+	if _, err := db.Exec(`UPDATE platform_emails SET next_attempt_at=now() WHERE id=$1`, maxine); err != nil {
+		t.Fatal(err)
+	}
+	drain()
+	if s, n, _ := state(maxine); s != "unknown" || n != 1 || len(seen["max"]) != 1 {
+		t.Fatalf("a removed person's email tried once stays unknown, unsent again: %s %d %d", s, n, len(seen["max"]))
 	}
 	ivy := queue("joined", "ivy")
 	if _, err := db.Exec(`UPDATE organizations SET enabled=false WHERE id=$1`, org); err != nil {

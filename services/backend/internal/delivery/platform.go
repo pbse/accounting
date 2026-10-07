@@ -109,7 +109,9 @@ func sendPlatformEmail(ctx context.Context, db *sql.DB, key, from, app string) (
 		return false, err
 	}
 	if !current {
-		if _, err = tx.ExecContext(ctx, `UPDATE platform_emails SET state='cancelled',claimed_at=NULL,finished_at=now(),error='The firm was suspended or the person removed before it was sent' WHERE id=$1`, id); err != nil {
+		// Nothing more is sent. One never tried is cancelled; one tried before may have been sent, so it stays unknown.
+		if _, err = tx.ExecContext(ctx, `UPDATE platform_emails SET state=CASE WHEN attempts>0 THEN 'unknown' ELSE 'cancelled' END,claimed_at=NULL,finished_at=now(),
+ error=CASE WHEN attempts>0 THEN 'The firm was suspended or the person removed after an unconfirmed attempt' ELSE 'The firm was suspended or the person removed before it was sent' END WHERE id=$1`, id); err != nil {
 			return false, err
 		}
 		return true, tx.Commit()
