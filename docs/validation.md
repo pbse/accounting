@@ -3645,9 +3645,15 @@ Not verified: a production deploy without the variable (delete it only after thi
 
 ## About page — 2026-10-07
 
-Request: Google for Startups and Claude for Startups could not verify Krith's founding team and company from the website. The user wanted something basic that does not say too much: Prashant Bansal, CEO, linked to prashantb.com; headquartered in NYC; founded in 2026 in New York.
+Request: Google for Startups and Claude for Startups could not verify Krith's founding team and company from the website. The user wanted something basic that does not say too much: Prashant Bansal, CEO, linked to prashantb.com; headquartered in NYC; founded in 2026 in New York. They then asked for a bit more, so the page does not feel shallow, and for it to be creative.
 
-- **Change.** A new `/about` page with two short sections: Headquarters ("New York City. Krith was founded there in 2026.") and Leadership (Prashant Bansal, Founder and CEO, linked to prashantb.com). The page also carries the same facts as schema.org `Organization` data: name, site, founding date and place, address and founder. **About** is in the header (hidden on phones, like the other header links) and in the footer's Company column. The build writes it to static HTML (`about.html`) like Security and Privacy, so it reads without JavaScript. The layout check opens it directly and from the home page's link.
+- **Change.** A new `/about` page:
+  - **Heading:** "Krith means done", with the name's Sanskrit root.
+  - **Company file:** a ledger-style list: founded 2026 in New York; headquarters New York City; leadership Prashant Bansal, Founder and CEO, linked to prashantb.com; for accounting firms and finance teams; starting with the month-end close. It ends with a decorative signature.
+  - **Why Krith:** two short paragraphs.
+  - **Principles:** three, each restating a Security control: people decide, every figure keeps its source, each firm's data stays its own.
+
+  The page also carries the same facts as schema.org `Organization` data: name, site, founding date and place, address and founder. **About** is in the header (hidden on phones, like the other header links) and in the footer's Company column. The build writes it to static HTML (`about.html`) like Security and Privacy, so it reads without JavaScript. The layout check opens it directly and from the home page's link.
 - **Tested.**
   - The frontend builds, and `dist/about.html` holds the page and its structured data.
   - In a browser on the built site, at 1440 and 390 pixels wide: the page renders, does not widen the page and carries one block of structured data.
