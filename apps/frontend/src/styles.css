@@ -1376,10 +1376,10 @@ html:has(.k-site) {
     border-left: 0;
   }
 }
-/* About: the company file, a short why and the principles. */
+/* About: a short why, the principles, then the company file. */
 .k-file {
   max-width: 1000px;
-  margin: clamp(44px, 5vw, 64px) auto 0;
+  margin: clamp(56px, 7vw, 96px) auto 0;
 }
 .k-file dl {
   margin: 0;
@@ -1409,28 +1409,9 @@ html:has(.k-site) {
   text-underline-offset: 4px;
   text-decoration-thickness: 1px;
 }
-.k-file-sign {
-  display: grid;
-  justify-items: start;
-  gap: 6px;
-  width: min(260px, 100%);
-  margin: 22px 0 0 auto;
-  font-family: var(--sans);
-  color: var(--blue);
-}
-.k-file-sig {
-  display: block;
-  width: 100%;
-  padding: 4px 6px 0;
-  border-bottom: 1px solid var(--ink);
-  font-family: var(--hand);
-  font-size: 46px;
-  line-height: 1.1;
-  white-space: nowrap;
-}
 .k-why {
   max-width: 1000px;
-  margin: clamp(56px, 7vw, 96px) auto 0;
+  margin: clamp(44px, 5vw, 64px) auto 0;
   display: grid;
   grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
   gap: 12px 24px;
@@ -1452,9 +1433,6 @@ html:has(.k-site) {
   .k-file-row,
   .k-why {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .k-file-sig {
-    font-size: 40px;
   }
 }
 .k-after {

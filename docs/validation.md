@@ -3662,6 +3662,23 @@ Request: Google for Startups and Claude for Startups could not verify Krith's fo
 
 Not verified: the production page after deploy.
 
+## About page: Krith first — 2026-10-07
+
+Request: remove "Starting with: the month-end close", move Why Krith and the principles up, and put the company file at the bottom "so the page feels dedicated to krith and I am just one another info".
+
+- **Change.**
+  - The page now runs: heading, Why Krith, the three principles, the links to Security and Contact, then the company file.
+  - The file's rows are For, Founded, Headquarters and Leadership, so the founder's line comes last.
+  - The "Starting with" row is gone.
+  - The decorative signature is gone too: it set the founder's name in large type, against the request. The user was told and can ask for it back.
+  - The structured data is unchanged.
+- **Tested.**
+  - The frontend builds.
+  - In a browser on the built site, at 1440 and 390 pixels wide: the page renders in the new order, nothing widens the page, and the structured data is present once.
+  - The header link from home opens it.
+
+Not verified: the production page after deploy.
+
 ## B07: a Xero month's sign-off stands in its management pack (2026-10-06)
 
 Request: make Xero management packs publishable. Two things block them: the pack never counted a Xero month as signed off, and it has no cash-flow statement. This change fixes the first; the second comes with an imported statement.
