@@ -3579,3 +3579,13 @@ Request: the owner judged the platform staff organization the wrong way to gate 
   The existing staff-organization tests (`TestServerSessionKeepsWorkOSTokensOnTheServer`, the admin route tests) pass unchanged. Backend tests pass against local PostgreSQL, except the PDF tests, which need Poppler (not installed locally; CI has it).
 
 Not verified: a real staff sign-in in production, which needs `STAFF_EMAIL_DOMAIN=getkrith.com` set and deployed.
+
+## Staff console page loop — 2026-10-07 (A4)
+
+Request: after #284 deployed, the owner's `/admin` would not load, redirecting with 307 over and over.
+
+- **Cause.** Once the staff gate let a page through, the edge Worker asked the static assets for `/admin/index.html`. Cloudflare's assets answer any `…/index.html` with a 307 to the directory (production: `/index.html` gives 307 to `/`). So `/admin/index.html` went back to `/admin/`, which the Worker turned into `/admin/index.html` again. Signed-out visitors never reached that step, and nobody had opened the console in production before #284.
+- **Change.** Pages are now served from `/admin/` (`adminAsset` in `workers/edge/src/routes.ts`), which the assets answer with the console's index page; files are served as asked.
+- **Tested.** `routes.test.ts`: every console page maps to `/admin/`, and files (and a typed `/admin/index.html`, which then redirects once) map to themselves. JavaScript tests and checks pass.
+
+Not verified until deployed: the owner's signed-in load of `/admin` in production.

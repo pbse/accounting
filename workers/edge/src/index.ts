@@ -2,7 +2,7 @@ import { llmEnvironment } from '../../shared/llm';
 import { Container } from "@cloudflare/containers";
 // Required entrypoint for Cloudflare container outbound service interception.
 export { ContainerProxy } from "@cloudflare/containers";
-import { adminPage, adminPath, forwardsToAPI, needsWorkspaceAuth, secureAdmin, staffGate } from "./routes";
+import { adminAsset, adminPath, forwardsToAPI, needsWorkspaceAuth, secureAdmin, staffGate } from "./routes";
 import { uploadScanRequest } from "./upload-scan";
 import { EmailMessage } from "cloudflare:email";
 import { contactMessage, noteToForward } from "./contact";
@@ -180,12 +180,13 @@ export default {
     if (path.startsWith("/internal/")) {
       return new Response("Not found", { status: 404 });
     }
-    // The staff admin panel, only for signed-in platform staff, is its own single-page app: its pages load
-    // /admin/index.html.
+    // The staff admin panel, only for signed-in platform staff, is its own single-page app: its pages load its index
+    // page, asked for as /admin/ (see adminAsset).
     if (adminPath(path)) {
       const refused = await staffGate(request, env.AUTH_SESSION, (check) => env.API.getByName("reference-api").fetch(check));
       if (refused) return secureAdmin(refused);
-      return secureAdmin(await env.ASSETS.fetch(adminPage(path) ? new Request(new URL("/admin/index.html", request.url), request) : request));
+      const asset = adminAsset(path);
+      return secureAdmin(await env.ASSETS.fetch(asset === path ? request : new Request(new URL(asset, request.url), request)));
     }
     // The home page comes with its words already in the HTML (apps/frontend/prerender.mjs); index.html stays the empty
     // shell every app route loads.
