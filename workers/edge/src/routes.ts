@@ -15,6 +15,13 @@ export function adminPage(path: string): boolean {
   return /^\/admin(\/[^.]*)?$/.test(path);
 }
 
+// The asset an /admin request is served from. A page gets the console's index page, asked for by its directory:
+// Cloudflare's static assets answer a request for .../index.html with a 307 to the directory, which the Worker would
+// turn back into a request for index.html, sending the browser round in circles. Files are served as asked.
+export function adminAsset(path: string): string {
+  return adminPage(path) ? "/admin/" : path;
+}
+
 // Anything under /admin: the staff console's pages and files.
 export function adminPath(path: string): boolean {
   return path === "/admin" || path.startsWith("/admin/");

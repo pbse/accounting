@@ -82,7 +82,7 @@ services/backend/internal/transport/admin.go   /v1/admin/* routes, staff middlew
 
 ### Edge Worker
 - `/v1/admin/*` is already forwarded to the API container because it's under `/v1/`.
-- Add `/admin/*` to `run_worker_first`, serving the asset if it exists and `/admin/index.html` otherwise. The current single-page-app fallback returns the firm app's `index.html`, which is wrong for admin deep links.
+- Add `/admin/*` to `run_worker_first`, serving a file as asked and every page from `/admin/`, the console's index page. The current single-page-app fallback returns the firm app's `index.html`, which is wrong for admin deep links. Never ask the assets for `/admin/index.html`: Cloudflare answers that with a 307 to `/admin/`, and the Worker would loop.
 - Before serving anything under `/admin`, check the staff session (see [network](#network-phase-a4)).
 
 ### New setting
