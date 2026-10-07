@@ -17,9 +17,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// The platform staff console (docs/admin-panel.md) lives under /v1/admin. Staff sign in as members
-// of the WorkOS organization PLATFORM_ORGANIZATION_ID, which is never enrolled as a firm: its
-// sessions cannot use firm routes, and firm sessions fail this verifier's pinned organization.
+// The platform staff console (docs/admin-panel.md) lives under /v1/admin. With STAFF_EMAIL_DOMAIN set, staff are the
+// people with a verified address there, signed in through the server-held staff session (the session layer passes on
+// who they are), and each holds every platform permission. Without it, staff are the members of the WorkOS
+// organization PLATFORM_ORGANIZATION_ID, never enrolled as a firm, with the permissions their role there gives.
 const (
 	platformRead    = "platform:read"
 	platformOperate = "platform:operate"
@@ -34,8 +35,28 @@ type staffKey struct{}
 // staffMember is who a staff request comes from.
 type staffMember struct {
 	Subject     string   `json:"subject"`
+	Email       string   `json:"email,omitempty"`
 	Permissions []string `json:"permissions"`
 	Mode        string   `json:"mode"` // "workos", or "local-development" without WorkOS
+}
+
+// staffDomain is the email domain whose verified addresses are platform staff, or "" when staff are not set up that way.
+func staffDomain() string { return strings.ToLower(strings.TrimSpace(os.Getenv("STAFF_EMAIL_DOMAIN"))) }
+
+// staffAddress says whether an address is at the staff domain.
+func staffAddress(email string) bool {
+	domain, company := companyDomain(email)
+	return staffDomain() != "" && company && domain == staffDomain()
+}
+
+// signedInKey carries the person a server-held session belongs to, set by the session layer from its own row.
+type signedInKey struct{}
+
+type signedInPerson struct{ Subject, Email string }
+
+func signedInOf(ctx context.Context) *signedInPerson {
+	p, _ := ctx.Value(signedInKey{}).(*signedInPerson)
+	return p
 }
 
 func staffOf(ctx context.Context) *staffMember {
@@ -43,21 +64,36 @@ func staffOf(ctx context.Context) *staffMember {
 	return m
 }
 
+// staffVerifier checks a staff session's tokens: in any organization (or none) when staff are an email domain, else in
+// the platform staff organization.
 func staffVerifier() *auth.Verifier {
+	if staffDomain() != "" {
+		return &auth.Verifier{ClientID: os.Getenv("WORKOS_CLIENT_ID"), Issuer: os.Getenv("WORKOS_ISSUER"), AnyOrganization: true}
+	}
 	return &auth.Verifier{ClientID: os.Getenv("WORKOS_CLIENT_ID"), Issuer: os.Getenv("WORKOS_ISSUER"), Organization: os.Getenv("PLATFORM_ORGANIZATION_ID")}
 }
 
-// staffOnly lets a request through only from platform staff holding permission. With WorkOS the
-// token must belong to the staff organization; without it (local development only) the workspace
-// token stands in for a staff member with every platform permission.
+// staffOnly lets a request through only from platform staff holding permission. With WorkOS and STAFF_EMAIL_DOMAIN,
+// that is a staff session whose verified address is at the domain, never a bare token (which names no address);
+// with WorkOS alone, a token in the platform staff organization. Without WorkOS (local development only) the
+// workspace token stands in for a staff member with every platform permission.
 func staffOnly(token, permission string, next http.HandlerFunc) http.HandlerFunc {
 	verifier := staffVerifier()
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		var member staffMember
 		switch {
+		case verifier.ClientID != "" && staffDomain() != "":
+			// Only the session layer sets the person, from a staff session's own row, never from the request.
+			person := signedInOf(r.Context())
+			claims, err := verifier.Authenticate(r, "")
+			if person == nil || err != nil || claims.Subject != person.Subject || !staffAddress(person.Email) {
+				problem(w, 401, "Sign in with your staff Google account.")
+				return
+			}
+			member = staffMember{Subject: claims.Subject, Email: person.Email, Permissions: platformPermissions, Mode: "workos"}
 		case verifier.ClientID != "" && verifier.Organization == "":
-			problem(w, 503, "Staff sign-in is not configured: set PLATFORM_ORGANIZATION_ID.")
+			problem(w, 503, "Staff sign-in is not configured: set STAFF_EMAIL_DOMAIN.")
 			return
 		case verifier.ClientID != "":
 			claims, err := verifier.Authenticate(r, "")

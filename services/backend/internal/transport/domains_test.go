@@ -89,10 +89,16 @@ func (f *fakeWorkOS) serve(t *testing.T, r *http.Request) (int, any) {
 	case r.URL.Path == "/user_management/authenticate":
 		// The code names the person; their organization is the one membership they hold, if exactly one.
 		user, org := str("code"), str("organization_id")
-		if str("grant_type") == "refresh_token" {
-			user = strings.TrimPrefix(str("refresh_token"), "refresh-")
+		renewing := str("grant_type") == "refresh_token"
+		if renewing {
+			// Like WorkOS, a renewal that names no organization keeps the session's own (carried in the refresh token).
+			var held string
+			user, held, _ = strings.Cut(strings.TrimPrefix(str("refresh_token"), "refresh-"), "|")
+			if org == "" {
+				org = held
+			}
 		}
-		if org == "" {
+		if org == "" && !renewing {
 			var held []map[string]string
 			for _, m := range f.memberships {
 				if m.UserID == user && m.Status == "active" {
@@ -115,7 +121,7 @@ func (f *fakeWorkOS) serve(t *testing.T, r *http.Request) (int, any) {
 		} else if m != nil && m.Role.Slug == "enroller" {
 			perms = []string{"org:enroll", "members:manage", "clients:all"}
 		}
-		return 200, map[string]any{"access_token": f.token(t, user, org, perms...), "refresh_token": "refresh-" + user, "organization_id": org, "user": f.users[user]}
+		return 200, map[string]any{"access_token": f.token(t, user, org, perms...), "refresh_token": "refresh-" + user + "|" + org, "organization_id": org, "user": f.users[user]}
 	case r.Method == "GET" && r.URL.Path == "/organizations":
 		found := []map[string]string{}
 		for id, domain := range f.orgs {
@@ -812,5 +818,145 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	}
 	if w := call(ivyCookie, "GET", "/v1/closes", ""); w.Code != 401 {
 		t.Fatalf("a renewal for an unverified address ends the session: %d", w.Code)
+	}
+}
+
+// Staff are the people with a verified address at STAFF_EMAIL_DOMAIN: they sign in to the staff console with Google, in
+// whatever organization (or none) they have, and hold every platform permission; nobody else does.
+func TestStaffAreVerifiedAddressesAtTheStaffDomain(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not configured")
+	}
+	db, err := OpenTenantDB(dsn, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	raw, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { raw.Close() })
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staffDomainName := "krith" + strings.ToLower(rand.Text()[:8]) + ".test"
+	f := &fakeWorkOS{key: key, orgs: map[string]string{}, users: map[string]signedInUser{}, invitations: map[string]map[string]string{}}
+	person := func(name string, verified bool, at string) string {
+		id := "user_" + name + strings.ToLower(rand.Text()[:6])
+		f.users[id] = signedInUser{ID: id, Email: name + "@" + at, EmailVerified: verified}
+		return id
+	}
+	staff, firmPerson, outsider := person("prashant", true, staffDomainName), person("pat", true, staffDomainName), person("olga", true, "elsewhere-"+staffDomainName)
+	staffFirm := "org_StaffFirm" + rand.Text()
+	f.orgs[staffFirm] = staffDomainName
+	membership := firmMembership{ID: "om_" + firmPerson, UserID: firmPerson, OrganizationID: staffFirm, Status: "active"}
+	membership.Role.Slug = "firm-admin"
+	f.memberships = append(f.memberships, membership)
+	t.Cleanup(func() {
+		for _, user := range []string{staff, firmPerson, outsider} {
+			raw.Exec(`DELETE FROM auth_sessions WHERE subject=$1`, user)
+		}
+	})
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = sandboxTransport(func(r *http.Request) (*http.Response, error) {
+		status, v := f.serve(t, r)
+		out, _ := json.Marshal(v)
+		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(out)), Header: make(http.Header)}, nil
+	})
+	t.Setenv("WORKOS_CLIENT_ID", "client_fixture")
+	t.Setenv("WORKOS_ISSUER", "https://auth.example")
+	t.Setenv("WORKOS_ORGANIZATION_ID", "")
+	t.Setenv("WORKOS_API_KEY", "sk_test_fixture")
+	t.Setenv("SECRETS_KEY", strings.Repeat("ef", 32))
+	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
+	t.Setenv("AUTH_SESSION", "server")
+	t.Setenv("FRONTEND_ORIGIN", "https://app.example.test")
+	t.Setenv("PLATFORM_ORGANIZATION_ID", "")
+	t.Setenv("STAFF_EMAIL_DOMAIN", strings.ToUpper(staffDomainName))
+	handler := apiWithStore(db, "")
+
+	// signInStaff runs the staff sign-in round trip and returns where it lands and the staff cookie, if any.
+	signInStaff := func(user string) (string, string) {
+		t.Helper()
+		start := httptest.NewRecorder()
+		handler.ServeHTTP(start, httptest.NewRequest("GET", "https://app.example.test/v1/auth/login?staff=1&return=/admin/firms", nil))
+		at, _ := url.Parse(start.Header().Get("Location"))
+		if at.Query().Get("provider") != "GoogleOAuth" || at.Query().Get("organization_id") != "" {
+			t.Fatalf("staff sign-in goes straight to Google, in no organization: %s", at)
+		}
+		r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code="+user+"&state="+url.QueryEscape(at.Query().Get("state")), nil)
+		for _, c := range start.Result().Cookies() {
+			r.AddCookie(c)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		for _, c := range w.Result().Cookies() {
+			if c.Name == staffCookie && c.MaxAge > 0 {
+				return w.Header().Get("Location"), c.Value
+			}
+		}
+		return w.Header().Get("Location"), ""
+	}
+	call := func(cookieName, cookie, path string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest("GET", "https://app.example.test"+path, nil)
+		r.AddCookie(&http.Cookie{Name: cookieName, Value: cookie})
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+
+	// Someone at the staff domain with no organization at all opens the console, with every platform permission.
+	where, cookie := signInStaff(staff)
+	if where != "/admin/firms" || cookie == "" {
+		t.Fatalf("staff sign-in returns to the console: %s", where)
+	}
+	var me staffMember
+	if w := call(staffCookie, cookie, "/v1/admin/me"); w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &me) != nil || me.Subject != staff || !slices.Equal(me.Permissions, platformPermissions) || me.Email != f.users[staff].Email {
+		t.Fatalf("the staff cookie opens the console with every permission: %d %s", w.Code, w.Body.String())
+	}
+	// The staff session is not a firm session, and its row says so.
+	if w := call(sessionCookie, cookie, "/v1/closes"); w.Code != 401 {
+		t.Fatalf("a staff session does not open the workspace: %d", w.Code)
+	}
+	var marked bool
+	if err := raw.QueryRow(`SELECT staff FROM auth_sessions WHERE id_hash=$1`, hashToken(cookie)).Scan(&marked); err != nil || !marked {
+		t.Fatalf("the session is marked as staff: %v %v", marked, err)
+	}
+	// A staff member who is also in a firm signs in to the console just the same.
+	if where, other := signInStaff(firmPerson); where != "/admin/firms" || other == "" || call(staffCookie, other, "/v1/admin/me").Code != 200 {
+		t.Fatalf("a staff member in a firm opens the console: %s", where)
+	}
+	// An address at any other domain is turned away, with no session.
+	if where, other := signInStaff(outsider); where != "/login?error=staff" || other != "" {
+		t.Fatalf("an address outside the staff domain is refused: %s", where)
+	}
+	// A bare token in a header is never staff, whatever its organization.
+	bare := httptest.NewRequest("GET", "https://app.example.test/v1/admin/me", nil)
+	bare.Header.Set("Authorization", "Bearer "+f.token(t, staff, staffFirm, platformPermissions...))
+	if w := httptest.NewRecorder(); func() int { handler.ServeHTTP(w, bare); return w.Code }() != 401 {
+		t.Fatalf("a bearer token alone does not open the console: %d", w.Code)
+	}
+	// A staff session in no organization renews as it is; once the address is no longer at the staff domain, it ends.
+	if _, err := raw.Exec(`UPDATE auth_sessions SET access_expires_at=now() WHERE id_hash=$1`, hashToken(cookie)); err != nil {
+		t.Fatal(err)
+	}
+	if w := call(staffCookie, cookie, "/v1/admin/me"); w.Code != 200 {
+		t.Fatalf("a staff session in no organization renews: %d %s", w.Code, w.Body.String())
+	}
+	f.mu.Lock()
+	moved := f.users[staff]
+	moved.Email = "prashant@elsewhere-" + staffDomainName
+	f.users[staff] = moved
+	f.mu.Unlock()
+	if _, err := raw.Exec(`UPDATE auth_sessions SET access_expires_at=now() WHERE id_hash=$1`, hashToken(cookie)); err != nil {
+		t.Fatal(err)
+	}
+	if w := call(staffCookie, cookie, "/v1/admin/me"); w.Code != 401 {
+		t.Fatalf("a renewal for an address outside the staff domain ends the session: %d", w.Code)
 	}
 }
