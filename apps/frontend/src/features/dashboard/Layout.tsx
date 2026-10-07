@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useRef, useState } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { SidebarAccount } from "./Access";
 import { Assistant, useSignedIn } from "./Assistant";
 import { openAssistant } from "./assistantStore";
@@ -38,6 +38,7 @@ const groups: { label: string; items: { to: string; label: string; icon: IconNam
       { to: "/dashboard/security", label: "Security", icon: "shield" },
     ],
   },
+  // Only Krith's own firm has the worked example (see examples.go).
   {
     label: "Examples",
     items: [
@@ -68,8 +69,10 @@ export default function WorkspaceLayout() {
   const signedIn = useSignedIn();
   // Unknown until the server says; nothing of the workspace shows before then, so an executive never sees it.
   const [executive, setExecutive] = useState<boolean>();
+  const [examples, setExamples] = useState(false);
   // A hosted session still loading is not yet signed out.
-  const sessionLoading = authKitClientId ? useSession().isLoading : false;
+  const session = authKitClientId ? useSession() : undefined;
+  const sessionLoading = session?.isLoading ?? false;
   const known = !sessionLoading && (!signedIn || executive !== undefined);
   useEffect(() => {
     if (!signedIn) return;
@@ -84,6 +87,16 @@ export default function WorkspaceLayout() {
   useEffect(() => {
     if (executive && !location.pathname.startsWith("/dashboard/executive")) navigate("/dashboard/executive", { replace: true });
   }, [executive, location.pathname, navigate]);
+  useEffect(() => {
+    if (executive !== false) return;
+    let live = true;
+    workspaceRequest("/examples")
+      .then((data) => live && setExamples(!!data.available))
+      .catch(() => live && setExamples(false));
+    return () => {
+      live = false;
+    };
+  }, [executive]);
   useShellThemeColor();
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -95,6 +108,28 @@ export default function WorkspaceLayout() {
     window.addEventListener("keydown", focusSearch);
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
+  // Signed out, the workspace shows nothing of itself, not even while the session is checked: the visitor signs in and
+  // comes back to this page, at the same place on it.
+  if (authKitClientId && sessionLoading)
+    return (
+      <main id="main" className="app-main">
+        <p role="status">Checking your session…</p>
+      </main>
+    );
+  // A session that could not be checked is not a sign-out: the workspace stays closed, and the visitor can try again.
+  if (session?.unavailable)
+    return (
+      <main id="main" className="app-main">
+        <section className="gate" role="alert">
+          <h1>Your session couldn’t be checked</h1>
+          <p>Krith couldn’t reach sign-in just now. Nothing in your workspace has changed.</p>
+          <button type="button" className="primary" onClick={() => window.location.reload()}>
+            Try again
+          </button>
+        </section>
+      </main>
+    );
+  if (authKitClientId && !signedIn) return <Navigate to={`/login?return=${encodeURIComponent(location.pathname + location.search + location.hash)}`} replace />;
   return (
     <div className="app-shell">
       <a className="skip" href="#main">
@@ -123,7 +158,7 @@ export default function WorkspaceLayout() {
           </label>
         </form>}
         <nav aria-label="Workspace">
-          {(executive ? executiveGroups(new URLSearchParams(location.search).get("close")) : known ? groups : []).map((group) => (
+          {(executive ? executiveGroups(new URLSearchParams(location.search).get("close")) : known ? groups.filter((group) => examples || group.label !== "Examples") : []).map((group) => (
             <div className="nav-group" key={group.label}>
               <div className="nav-label">{group.label}</div>
               {group.items.map((item) => (

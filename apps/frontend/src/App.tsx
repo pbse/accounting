@@ -27,13 +27,11 @@ function Gated({ children }: { children: ReactNode }) {
 function CloseScoped({ children }: { children: ReactNode }) {
   const [params] = useSearchParams();
   const close = params.get("close");
-  return close ? (
+  return (
     <Gated>
-      <EffortTracker closeId={close} activity="prepare" />
+      {close && <EffortTracker closeId={close} activity="prepare" />}
       {children}
     </Gated>
-  ) : (
-    children
   );
 }
 const Reconciliation = lazy(() => import("./features/reconciliation/Prepare"));
@@ -55,8 +53,8 @@ export function App() {
           {marketingRoutes(<Route path="login" element={<Login />} />)}
           <Route path="dashboard" element={<WorkspaceLayout />}>
             <Route index element={<Gated><Dashboard view="work" /></Gated>} />
-            <Route path="close" element={<Dashboard view="close" />} />
-            <Route path="review" element={<Dashboard view="review" />} />
+            <Route path="close" element={<Gated><Dashboard view="close" /></Gated>} />
+            <Route path="review" element={<Gated><Dashboard view="review" /></Gated>} />
             <Route path="closes" element={<Gated><ClosesList /></Gated>} />
             <Route path="closes/:id" element={<Gated><ClientClose /></Gated>} />
             <Route path="closes/:id/workpapers/:paperId" element={<Gated><WorkpaperView /></Gated>} />

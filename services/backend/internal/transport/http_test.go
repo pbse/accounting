@@ -1,24 +1,17 @@
 package transport
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-func TestReferenceAndActionBoundary(t *testing.T) {
+// The worked example is no longer public (it is Krith's own; see examples.go), and there is no generic action route.
+func TestNoPublicExampleOrActionRoute(t *testing.T) {
 	response := httptest.NewRecorder()
 	API().ServeHTTP(response, httptest.NewRequest("GET", "/v1/reference/prepaid", nil))
-	var paper struct {
-		Mode     string
-		Schedule []struct {
-			Expense   string
-			Remaining string
-		}
-	}
-	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &paper) != nil || paper.Mode != "synthetic" || len(paper.Schedule) != 12 || paper.Schedule[11].Remaining != "0.00" {
-		t.Fatalf("reference contract invalid: %s", response.Body.String())
+	if response.Code != 404 {
+		t.Fatalf("the example is not public: %d", response.Code)
 	}
 	for _, test := range []struct {
 		handler http.Handler
@@ -36,11 +29,11 @@ func TestReferenceAndActionBoundary(t *testing.T) {
 	}
 }
 
-func TestReferenceCrossOriginAccess(t *testing.T) {
+func TestCrossOriginAccess(t *testing.T) {
 	t.Setenv("FRONTEND_ORIGIN", "https://close.example")
 	handler := API()
 	for _, origin := range []string{"https://close.example", "https://untrusted.example", ""} {
-		request := httptest.NewRequest("GET", "/v1/reference/prepaid", nil)
+		request := httptest.NewRequest("GET", "/healthz", nil)
 		request.Header.Set("Origin", origin)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)

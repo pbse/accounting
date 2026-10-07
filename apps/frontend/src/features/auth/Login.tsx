@@ -22,9 +22,8 @@ export function Login() {
   return (
     <main id="main" className="k-col k-page">
       <div className="k-page-head">
-        <p className="k-label">Log in</p>
-        <h1>Your workspace.</h1>
-        <p className="k-lede">Sign in with your firm’s Google Workspace account.</p>
+        <h1>Log in.</h1>
+        <p className="k-lede">With your firm’s Google Workspace account.</p>
       </div>
       <div className="k-signin">
         {!configured ? (
@@ -38,30 +37,38 @@ export function Login() {
           <SignedInGoesToWork>{serverSession ? <ProviderSignIn /> : <AccountAccess />}</SignedInGoesToWork>
         )}
         <p className="k-fine">
-          New to Krith? <Link to="/contact">Talk to us</Link>
+          New to Krith, or on Microsoft 365? <Link to="/contact">Talk to us</Link>.
         </p>
       </div>
     </main>
   );
 }
 
-// Someone already signed in goes straight to the workspace, whichever session the environment uses.
+// The workspace page that sent the visitor to sign in, if any; otherwise the workspace's front page.
+function workspaceReturn(params: URLSearchParams) {
+  const asked = params.get("return") ?? "";
+  return asked.startsWith("/dashboard") ? asked : "/dashboard";
+}
+
+// Someone already signed in goes straight to the workspace page they asked for, whichever session the environment uses.
 function SignedInGoesToWork({ children }: { children: ReactNode }) {
   const { user } = useSession();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const back = workspaceReturn(params);
   useEffect(() => {
-    if (user) navigate("/dashboard", { replace: true });
-  }, [user, navigate]);
+    if (user) navigate(back, { replace: true });
+  }, [user, navigate, back]);
   return user ? <p role="status">Opening your workspace…</p> : children;
 }
 
 // The server's sign-in: straight to Google, and back to where sign-in began. Firms on Microsoft 365 cannot sign in
-// yet (docs/sign-in.md).
+// yet (docs/sign-in.md); the page's last line asks them to talk to us.
 function ProviderSignIn() {
   const { isLoading, unavailable } = useSession();
   const [params] = useSearchParams();
   const refusal = refusals[params.get("error") ?? ""];
-  const back = params.get("return")?.startsWith("/dashboard") ? params.get("return")! : "/dashboard";
+  const back = workspaceReturn(params);
   if (isLoading) return <p role="status">Checking your session…</p>;
   return (
     <>
@@ -72,13 +79,6 @@ function ProviderSignIn() {
           <GoogleMark /> Continue with Google
         </a>
       </div>
-      <p className="k-fine">
-        The first person from a firm sets up its workspace. Colleagues who sign in later with the same company domain
-        join it, and the firm’s administrator decides what each can open.
-      </p>
-      <p className="k-fine">
-        Krith signs firms in with Google Workspace for now. Firm on Microsoft 365? <Link to="/contact">Talk to us</Link>.
-      </p>
     </>
   );
 }

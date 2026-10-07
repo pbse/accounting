@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { AccountAccess, authKitClientId, useSession } from "../auth/Auth";
 import { unlock, useUnlocked } from "../closes/workspace";
 
-// Client data routes wait for access; the calculators stay usable without it.
+// Every workspace page waits for access; there is nothing to try without signing in.
 export function WorkspaceGate({ children }: { children: ReactNode }) {
   return authKitClientId ? <SignedIn>{children}</SignedIn> : <Unlocked>{children}</Unlocked>;
 }

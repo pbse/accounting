@@ -83,6 +83,6 @@ test("what the console serves is for its staff member alone; refusals are never 
 });
 
 test("the contact form and health checks stay open while workspace sign-in is unconfigured", () => {
-  for (const path of ["/healthz", "/v1/reference/prepaid", "/v1/contact"]) assert.equal(needsWorkspaceAuth(path), false, path);
+  for (const path of ["/healthz", "/v1/contact"]) assert.equal(needsWorkspaceAuth(path), false, path);
   for (const path of ["/v1/closes", "/v1/contact/1", "/readyz", "/mcp"]) assert.equal(needsWorkspaceAuth(path), true, path);
 });

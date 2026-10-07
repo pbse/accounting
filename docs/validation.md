@@ -3602,3 +3602,30 @@ Request: clean up the settings no longer needed once staff are everyone at the s
   - The server-session test signs the same person in as staff through Google, with no organization, and checks that staff sign-in needs a staff domain.
 
 Not verified: the production console after the deploy, and the GitHub variables' removal (done after the merge).
+
+## No signed-out workspace; the example is Krith's own — 2026-10-07
+
+Request:
+- remove the demo dashboard;
+- keep the example close and review for the getkrith.com organization only;
+- simplify the login page, removing its line about how firms are set up;
+- shorten the footer tagline to the home page's "The work, prepared."
+
+Changes:
+- **No signed-out workspace.** A signed-out visitor to any workspace page now goes to sign-in, then back to the page they asked for, and sees nothing of the workspace first. Before, they saw the full sidebar, could use the preparation tools without signing in, and could open the example pages.
+- **Gated pages.** Every workspace route is now gated, the preparation tools included.
+- **The example moved behind firm sign-in.** It went from the public `GET /v1/reference/prepaid` to `GET /v1/closes/examples/prepaid`. Only the firm whose `email_domain` is `STAFF_EMAIL_DOMAIN` can read it; other firms get 404. `GET /v1/closes/examples` tells the sidebar whether to show the Examples group. Local development keeps it.
+- **Example download.** The review's download comes from the loaded example.
+- **Edge Worker.** It no longer treats the example as public.
+- **Login page.** It is now a heading, one line, the Google button and a single "Talk to us" line, with no rule above the button.
+- **Review fixes (Codex).**
+  - Nothing of the shell shows while the session is checked.
+  - The return address keeps its anchor, and client-mode sign-in returns there too.
+  - A session that cannot be checked shows a retryable error instead of sending a signed-in person to sign in again.
+
+Tested:
+- `TestOnlyKrithsOwnFirmSeesTheExample`: Krith's firm sees and reads the example; another firm is told there is none and gets 404; without a staff domain, nobody has it.
+- `TestNoPublicExampleOrActionRoute`: the old public address answers 404.
+- Edge route tests, frontend checks, build and JavaScript tests.
+
+Not verified until deployed: the production login page and sidebar.

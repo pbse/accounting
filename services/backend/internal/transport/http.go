@@ -20,7 +20,6 @@ import (
 
 	"close.local/backend/internal/accruals"
 	"close.local/backend/internal/reconciliation"
-	"close.local/backend/internal/reference"
 )
 
 func health(w http.ResponseWriter, r *http.Request) {
@@ -68,12 +67,6 @@ func apiWithStore(db *sql.DB, token string) http.Handler {
 			}
 		}
 		jsonReply(w, 200, map[string]string{"status": "ready"})
-	})
-	mux.HandleFunc("GET /v1/reference/prepaid", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Disposition", `attachment; filename="synthetic-prepaid.json"`)
-		w.Write(reference.Prepaid)
 	})
 	registerEnrollment(mux, db)
 	registerAdmin(mux, db, token)
