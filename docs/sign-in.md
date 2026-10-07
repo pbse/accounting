@@ -1,6 +1,8 @@
 # Sign-in and firms by company domain
 
-People sign in to Krith with their firm's **Google Workspace** or **Microsoft 365** account. The login page (`/login`) has two buttons, **Continue with Google** and **Continue with Microsoft**, and each goes straight to that provider through WorkOS; there is no intermediate AuthKit page. Personal addresses cannot sign in. A firm is created from its company domain the first time someone from it signs in, and colleagues from the same domain join it automatically. This needs the server-held session (`AUTH_SESSION=server`, see [auth and sandbox staging](auth-sandbox-staging.md#sign-in-session)); with WorkOS's browser session the page keeps a single **Sign in** button, because its SDK always opens AuthKit's own page.
+People sign in to Krith with their firm's **Google Workspace** account. The login page (`/login`) has one button, **Continue with Google**, which goes straight to Google through WorkOS; there is no intermediate AuthKit page.
+
+**Firms on Microsoft 365 are set up with us for now.** WorkOS's Microsoft OAuth serves personal Microsoft accounts only, never a firm's Microsoft 365 accounts, so there is no Microsoft button; the page says "Talk to us". The ways to add Microsoft 365 later are a work-email code (WorkOS Magic Auth, our own page) or each firm's own Entra ID through WorkOS SSO. Someone at a Microsoft 365 firm whose Google account uses their work address can still sign in with Google. Personal addresses cannot sign in. A firm is created from its company domain the first time someone from it signs in, and colleagues from the same domain join it automatically. This needs the server-held session (`AUTH_SESSION=server`, see [auth and sandbox staging](auth-sandbox-staging.md#sign-in-session)); with WorkOS's browser session the page keeps a single **Sign in** button, because its SDK always opens AuthKit's own page.
 
 ## Who may sign in
 
@@ -76,15 +78,18 @@ The callback sends the person back to `/login?error=…`, and the page explains 
 
 ## Setup (once per environment)
 
-In Google Cloud and Microsoft Entra (the owner, since each issues a client secret):
+In Google Cloud (the owner, since it issues a client secret):
 
-- **Google:** create an OAuth client (Web application) with the redirect URI WorkOS shows for Google OAuth. Use an External consent screen limited to the `openid`, `email` and `profile` scopes.
-- **Microsoft:** register an Entra application for **accounts in any organizational directory**, so work accounts only, with the redirect URI WorkOS shows for Microsoft OAuth. Then create a client secret.
+1. **APIs & Services → OAuth consent screen:**
+   - Audience External, published.
+   - App name Krith, home page `https://getkrith.com`, privacy policy `https://getkrith.com/privacy`, authorised domain `getkrith.com`.
+   - No extra scopes: WorkOS asks for basic sign-in only.
+2. **Clients → Create client:** a Web application whose authorised redirect URI is the one WorkOS shows under Authentication → OAuth providers → Google → Manage.
 
 In WorkOS (production environment):
 
-- **Authentication → Google OAuth and Microsoft OAuth:** enter each client ID and secret, then enable them.
-- **Turn off password and passkey sign-in**, so AuthKit's own page (still used by the staff console) offers only Google and Microsoft.
+- **Authentication → OAuth providers → Google:** enter the client ID and secret ("Your app's credentials") and enable it. Done 2026-10-06.
+- **Turn off password and passkey sign-in**, so AuthKit's own page (still used by the staff console) offers only Google.
 - **Roles:** `firm-admin` and `member` exist. Keep `member` without permissions.
 - **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, and the sign-out URI `https://getkrith.com/`.
 

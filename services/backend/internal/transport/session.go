@@ -141,7 +141,8 @@ type organizationChoice struct {
 func (*organizationChoice) Error() string { return "WorkOS asks which organization to sign in to" }
 
 // providers are the sign-in buttons on the login page, each WorkOS's own name for it; anything else uses AuthKit's page.
-var providers = map[string]string{"google": "GoogleOAuth", "microsoft": "MicrosoftOAuth"}
+// Google only: WorkOS's Microsoft OAuth serves personal Microsoft accounts, never a firm's Microsoft 365 accounts.
+var providers = map[string]string{"google": "GoogleOAuth"}
 
 // authenticate exchanges a code or refresh token with WorkOS. refused is true only when WorkOS answered and declined
 // (a 4xx other than rate limiting); a network error, 429 or 5xx is temporary, so a session never ends because WorkOS

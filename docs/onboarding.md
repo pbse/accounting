@@ -49,7 +49,7 @@ Each open step links to the control that completes it. A member who is not enrol
 
 ## Onboard a hosted firm
 
-With the server-held session, a firm onboards itself ([sign-in](sign-in.md)): the first person to sign in with a verified Google Workspace or Microsoft 365 address at the firm's domain creates its workspace as Firm admin, and colleagues who sign in later with the same domain join with no access until that administrator gives them a role under **People and roles**. Personal addresses cannot sign in. The manual path below remains for firms set up by hand.
+With the server-held session, a firm onboards itself ([sign-in](sign-in.md)): the first person to sign in with a verified Google Workspace address at the firm's domain creates its workspace as Firm admin, and colleagues who sign in later with the same domain join with no access until that administrator gives them a role under **People and roles**. Personal addresses cannot sign in. The manual path below remains for firms set up by hand.
 
 The API accepts signed WorkOS organization sessions only; it does not trust an organization ID supplied in a form, URL or header. Create the organization and its user memberships in WorkOS and require your MFA policy there. Grant the first authorized administrator `org:enroll`, `members:manage` and `clients:all`, then sign in to that organization and use **Enroll a new firm** on Client closes. The API derives the exact organization and user IDs from the verified token and records the first membership. Existing registered organizations without membership records may be claimed only by an administrator with the same enrollment grant; verify their identity and ownership before doing so. All new client closes derive ownership from the verified session.
 
