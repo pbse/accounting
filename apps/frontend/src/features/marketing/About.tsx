@@ -1,8 +1,8 @@
 import { Link } from "react-router";
 
-// Who is behind Krith and why, kept to facts that stay true: when and where it was founded, who leads it, and the
-// commitments the Security page states in full. The company file repeats the facts as structured data, so search
-// engines and anyone verifying the company can read them (docs/marketing-site.md).
+// Krith first: why it exists and the commitments the Security page states in full. The company file comes last,
+// with when and where it was founded and who leads it, and is repeated as structured data so search engines and
+// anyone verifying the company can read it (docs/marketing-site.md).
 const FOUNDER_SITE = "https://prashantb.com";
 
 const ORGANIZATION = {
@@ -33,40 +33,6 @@ export function About() {
           From the Sanskrit <i>kṛta</i>: done, made, accomplished. Krith prepares the work behind every engagement, starting with the month-end close, so your people can review, decide and sign.
         </p>
       </div>
-      <figure className="k-file" aria-labelledby="file-title">
-        <div className="k-lhead">
-          <span id="file-title">Company file</span>
-          <span>Krith · New York</span>
-        </div>
-        <dl>
-          <div className="k-file-row">
-            <dt>Founded</dt>
-            <dd>2026, in New York</dd>
-          </div>
-          <div className="k-file-row">
-            <dt>Headquarters</dt>
-            <dd>New York City</dd>
-          </div>
-          <div className="k-file-row">
-            <dt>Leadership</dt>
-            <dd>
-              <a href={FOUNDER_SITE}>Prashant Bansal</a>, Founder and CEO
-            </dd>
-          </div>
-          <div className="k-file-row">
-            <dt>For</dt>
-            <dd>Accounting firms and finance teams</dd>
-          </div>
-          <div className="k-file-row">
-            <dt>Starting with</dt>
-            <dd>The month-end close</dd>
-          </div>
-        </dl>
-        <div className="k-file-sign" aria-hidden="true">
-          <span className="k-key">Signed</span>
-          <span className="k-file-sig">Prashant Bansal</span>
-        </div>
-      </figure>
       <section className="k-why" aria-labelledby="why-title">
         <h2 id="why-title">Why Krith</h2>
         <div>
@@ -89,6 +55,32 @@ export function About() {
           Questions? <Link to="/contact">Talk to us</Link>
         </span>
       </div>
+      <figure className="k-file" aria-labelledby="file-title">
+        <div className="k-lhead">
+          <span id="file-title">Company file</span>
+          <span>Krith · New York</span>
+        </div>
+        <dl>
+          <div className="k-file-row">
+            <dt>For</dt>
+            <dd>Accounting firms and finance teams</dd>
+          </div>
+          <div className="k-file-row">
+            <dt>Founded</dt>
+            <dd>2026, in New York</dd>
+          </div>
+          <div className="k-file-row">
+            <dt>Headquarters</dt>
+            <dd>New York City</dd>
+          </div>
+          <div className="k-file-row">
+            <dt>Leadership</dt>
+            <dd>
+              <a href={FOUNDER_SITE}>Prashant Bansal</a>, Founder and CEO
+            </dd>
+          </div>
+        </dl>
+      </figure>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(ORGANIZATION) }} />
     </main>
   );
