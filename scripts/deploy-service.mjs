@@ -64,7 +64,8 @@ export const configuration = {
   "XERO_CLIENT_ID",
   "XERO_REDIRECT_URI",
   "PUBLIC_APP_URL",
-  "TEXT_SCANNER_URL"
+  "TEXT_SCANNER_URL",
+  "PLATFORM_EMAIL_FROM"
  ],
  "scanner": []
 };

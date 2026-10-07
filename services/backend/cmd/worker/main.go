@@ -46,6 +46,7 @@ func main() {
 	loops := map[string]func(context.Context, *sql.DB){
 		"preparation":     preparation.Run,
 		"delivery":        delivery.Run,
+		"platform_emails": delivery.RunPlatformEmails,
 		"forwarded":       forwarded.Run,
 		"quickbooks_sync": quickbooks.RunSync,
 		"platform_alerts": transport.RunPlatformAlerts,

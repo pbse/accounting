@@ -113,12 +113,14 @@ func deliverOperationsAlerts(ctx context.Context, db *sql.DB, endpoint, token st
 
 // platformAlertQuery is the platform's own problems now, as (kind, item_id, detail): a loop whose heartbeat stopped (only
 // the worker process and the workflow engine report one; the other job loops' stalls show as their stuck items, in
-// Stuck work and the firms' alerts), workflow runs stuck as the admin panel's stuck view counts them, and provider
-// writes whose outcome is unknown. The detail may change without
+// Stuck work and the firms' alerts), workflow runs stuck as the admin panel's stuck view counts them, provider
+// writes whose outcome is unknown, and each of Krith's own emails Resend may or may not have sent (by row only, never the
+// address; it resolves when the row is settled or deleted). The detail may change without
 // re-alerting; a new alert needs a new kind or item.
 const platformAlertQuery = `SELECT 'platform.loop_stale',loop,'last beat '||beat_at::text FROM worker_heartbeats WHERE beat_at<now()-interval '5 minutes'
  UNION ALL SELECT 'platform.runs_stuck','workflow_runs',count(*)||' runnable run(s) not picked up' FROM workflow_runs r WHERE ` + stuckRuns + ` HAVING count(*)>0
- UNION ALL SELECT 'platform.unknown_effects','workflow_steps',count(*)||' provider write(s) to reconcile' FROM workflow_steps WHERE state='unknown' HAVING count(*)>0`
+ UNION ALL SELECT 'platform.unknown_effects','workflow_steps',count(*)||' provider write(s) to reconcile' FROM workflow_steps WHERE state='unknown' HAVING count(*)>0
+ UNION ALL SELECT 'platform.unknown_email',id::text,'Resend may have sent it; check its log for idempotency key krith-platform/'||id FROM platform_emails WHERE state='unknown'`
 
 // collectPlatformAlerts resolves platform alerts whose problem cleared and opens one for each new problem.
 func collectPlatformAlerts(ctx context.Context, db *sql.DB) error {

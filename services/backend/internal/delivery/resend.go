@@ -26,8 +26,11 @@ type Email struct {
 	Text    string   `json:"text"`
 }
 
+// resendAPI is Resend's API; tests point it at a fake.
+var resendAPI = "https://api.resend.com"
+
 func request(ctx context.Context, key, method, path string, body []byte, idempotency string) ([]byte, int, error) {
-	req, err := http.NewRequestWithContext(ctx, method, "https://api.resend.com"+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, resendAPI+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -80,7 +83,12 @@ func VerifySender(ctx context.Context, c Connection) error {
 	return nil
 }
 func Send(ctx context.Context, key string, payload []byte, id string) (string, int, error) {
-	raw, status, err := request(ctx, key, "POST", "/emails", payload, "close-request/"+id)
+	return send(ctx, key, payload, "close-request/"+id)
+}
+
+// send posts one email under an idempotency key, which Resend honours for 24 hours.
+func send(ctx context.Context, key string, payload []byte, idempotency string) (string, int, error) {
+	raw, status, err := request(ctx, key, "POST", "/emails", payload, idempotency)
 	if err != nil {
 		return "", status, err
 	}

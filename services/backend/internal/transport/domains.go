@@ -245,6 +245,9 @@ func domainFirm(ctx context.Context, db *sql.DB, user signedInUser) (org, refusa
 		org, user.ID, "Created the firm by signing in with a verified address at "+domain); err != nil {
 		return "", refuseUnavailable
 	}
+	if queueWelcome(ctx, tx, "welcome", org, user) != nil {
+		return "", refuseUnavailable
+	}
 	return org, commitOr(tx)
 }
 
@@ -315,8 +318,24 @@ func joinFirm(ctx context.Context, tx *sql.Tx, org string, enabled bool, user si
 		if _, err := tx.ExecContext(ctx, `INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,$2,true,$3,$4)`, org, user.ID, reason, actor); err != nil {
 			return refuseUnavailable
 		}
+		kind := "joined"
+		if role == "firm-admin" {
+			kind = "welcome"
+		}
+		if queueWelcome(ctx, tx, kind, org, user) != nil {
+			return refuseUnavailable
+		}
 	}
 	return ""
+}
+
+// queueWelcome writes, in the sign-in's own transaction, the email Krith then sends the person: a welcome to whoever
+// becomes a firm's administrator by signing in, a note to a colleague who joins it. The worker sends it
+// (delivery.RunPlatformEmails); a person gets one per firm, however often they sign in.
+func queueWelcome(ctx context.Context, tx *sql.Tx, kind, org string, user signedInUser) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO platform_emails(kind,organization_id,subject,recipient) VALUES($1,$2,$3,$4) ON CONFLICT (organization_id,subject) DO NOTHING`,
+		kind, org, user.ID, strings.ToLower(strings.TrimSpace(user.Email)))
+	return err
 }
 
 // domainMember records, the first time, that someone WorkOS already placed in a firm by its verified domain (WorkOS's

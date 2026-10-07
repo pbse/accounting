@@ -55,6 +55,7 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 | Sign-in session | `AUTH_SESSION`: `client` (default, WorkOS's browser session; needs a custom `WORKOS_API_HOSTNAME` in production) or `server` (the API holds the session) | With `server`: `WORKOS_API_KEY` and `SECRETS_KEY` |
 | Required scanning | `UPLOAD_SCAN_HOST` (API hostname only), `TEXT_SCANNER_URL` | `UPLOAD_SCAN_KEY` (separate random secret, at least 32 characters) |
 | Encrypted connectors/email | — | `SECRETS_KEY` (32 random bytes, 64 hex characters; same on API/worker, backed up separately) |
+| Welcome emails (optional) | `PLATFORM_EMAIL_FROM`, Krith's sender on a domain verified in Resend ([sign-in](sign-in.md#welcome-emails)) | Queue worker: `PLATFORM_EMAIL_KEY`, a send-only Resend key for that domain (set both or neither) |
 | OpenAI proposals | `OPENAI_MODEL` | `OPENAI_API_KEY` (configure both or neither; API and worker) |
 | Sandbox QuickBooks OAuth | `QBO_CLIENT_ID`, `QBO_REDIRECT_URI` | `QBO_CLIENT_SECRET`; optional `QBO_WEBHOOK_VERIFIER` |
 | Production QuickBooks OAuth | `QBO_PRODUCTION_CLIENT_ID`, `QBO_PRODUCTION_REDIRECT_URI` | `QBO_PRODUCTION_CLIENT_SECRET` |

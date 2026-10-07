@@ -334,6 +334,19 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	if w := call(benCookie, "GET", "/v1/closes/members/people", ""); w.Code != 403 {
 		t.Fatalf("a member without a role cannot manage people: %d", w.Code)
 	}
+	// Krith writes each of them one email: a welcome for the administrator who set the firm up, a note for the colleague
+	// who joined. The worker sends them (delivery.RunPlatformEmails).
+	emailed := func() string {
+		t.Helper()
+		var list string
+		if err := raw.QueryRow(`SELECT COALESCE(string_agg(kind||' '||recipient,', ' ORDER BY id),'') FROM platform_emails WHERE organization_id=$1 AND subject IN ($2,$3)`, firm, ana, ben).Scan(&list); err != nil {
+			t.Fatal(err)
+		}
+		return list
+	}
+	if got, want := emailed(), "welcome ana@"+domain+", joined ben@"+domain; got != want {
+		t.Fatalf("one email each, queued: %q, want %q", got, want)
+	}
 
 	// Personal addresses, unverified ones and a person the firm removed are turned away, with no session.
 	if where, cookie := signIn(carol, "google"); where != "/login?error=company" || cookie != "" {
@@ -789,6 +802,9 @@ func TestSignInMakesOrJoinsTheFirmOfTheAddressDomain(t *testing.T) {
 	f.mu.Unlock()
 	if where, cookie := signIn(ana, "google"); where != "/dashboard" || cookie == "" {
 		t.Fatalf("Ana, in two firms, signs in: %s", where)
+	}
+	if got, want := emailed(), "welcome ana@"+domain+", joined ben@"+domain; got != want {
+		t.Fatalf("signing in again sends nothing more: %q, want %q", got, want)
 	}
 	var org string
 	if err := raw.QueryRow(`SELECT organization_id FROM auth_sessions WHERE id_hash=(SELECT id_hash FROM auth_sessions WHERE subject=$1 ORDER BY created_at DESC LIMIT 1)`, ana).Scan(&org); err != nil || org != firm {
