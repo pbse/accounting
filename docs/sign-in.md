@@ -89,7 +89,7 @@ In Google Cloud (the owner, since it issues a client secret):
 In WorkOS (production environment):
 
 - **Authentication → OAuth providers → Google:** enter the client ID and secret ("Your app's credentials") and enable it. Done 2026-10-06.
-- **Turn off password and passkey sign-in, and keep every other social provider (Microsoft among them) off**, so AuthKit's own page (still used by the staff console, and by any unknown provider name) offers only Google. Check the AuthKit page afterwards. In production Microsoft OAuth was never enabled (2026-10-06).
+- **Turn off password and passkey sign-in, and keep every other social provider (Microsoft among them) off**, so AuthKit's own page (still used by the staff console, and by any unknown provider name) offers only Google. Check the AuthKit page afterwards. Done in production 2026-10-06: Google is the only method on (password, passkeys and Magic Auth off; Microsoft OAuth was never enabled).
 - **Roles:** `firm-admin` and `member` exist. Keep `member` without permissions.
 - **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, and the sign-out URI `https://getkrith.com/`.
 

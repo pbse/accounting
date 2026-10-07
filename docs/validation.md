@@ -3561,4 +3561,4 @@ WorkOS's Microsoft OAuth serves personal Microsoft accounts only: its setup requ
 - The server no longer knows a `microsoft` provider; any other name falls back to AuthKit's page, which is tested.
 - The domain rules are unchanged: a new firm's domain may run on Google Workspace or Microsoft 365, as evidence it is a company's.
 
-Google OAuth is configured and enabled in WorkOS production (the credential reads Valid), and Microsoft OAuth was never enabled there. Turning off password and passkey sign-in (keeping every other provider off), and `AUTH_SESSION=server`, follow this change.
+Google OAuth is configured and enabled in WorkOS production (the credential reads Valid), and Microsoft OAuth was never enabled there. Password, passkey and Magic Auth sign-in were then turned off in WorkOS production (2026-10-06, read back: Google is the only method on). `AUTH_SESSION=server` follows this change's merge.
