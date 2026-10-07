@@ -629,6 +629,39 @@ func AccountBalances(payload json.RawMessage) (string, []ledger.AccountBalance, 
 	return currency, out, nil
 }
 
+// CashAccounts returns the Trial Balance's cash accounts, Xero bank accounts of the bank kind (credit cards are not
+// cash), and names any other kind of bank account (PayPal, or none given) holding a balance or moving in the month,
+// whose cash cannot be told apart.
+func CashAccounts(payload json.RawMessage) (cash []string, other []string, err error) {
+	var snapshot struct {
+		Accounts struct {
+			Accounts []struct{ AccountID, Name, Type, BankAccountType, Class string }
+		}
+	}
+	_, _, rows, err := Balances(payload)
+	if err != nil || json.Unmarshal(payload, &snapshot) != nil {
+		return nil, nil, errors.New("Xero snapshot is unreadable")
+	}
+	used := map[string]bool{}
+	for _, r := range rows {
+		for _, v := range []string{r.Debit, r.Credit, r.YTDDebit, r.YTDCredit} {
+			if n, err := ledger.Net(v, ""); err != nil || n.Sign() != 0 {
+				used[r.AccountID] = true
+			}
+		}
+	}
+	for _, a := range snapshot.Accounts.Accounts {
+		switch {
+		case a.Type != "BANK" || a.BankAccountType == "CREDITCARD":
+		case a.BankAccountType == "BANK" && a.Class == "ASSET":
+			cash = append(cash, a.AccountID)
+		case used[a.AccountID]:
+			other = append(other, a.Name)
+		}
+	}
+	return cash, other, nil
+}
+
 // MonthlyActivity returns each revenue and expense account's movement in the Trial Balance's month, signed
 // as a Profit and Loss shows it. Xero's Debit and Credit columns cover the current month up to the report date.
 func MonthlyActivity(payload json.RawMessage) (string, []ledger.AccountBalance, error) {

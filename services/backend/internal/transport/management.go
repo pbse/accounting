@@ -4,22 +4,26 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math/big"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/ledger"
 	"close.local/backend/internal/quickbooks"
 	"close.local/backend/internal/xero"
 )
 
-// packAccount is one ledger account as the management pack groups it. Type is QuickBooks' account type; Xero
-// captures carry only the class.
+// packAccount is one ledger account as the management pack groups it. Type is QuickBooks' account type; of a Xero
+// capture's accounts, only cash accounts carry one (Bank).
 type packAccount struct{ Name, Class, Type, Subtype string }
 
 // books is one month's ledger: the month-end Trial Balance net (debit minus credit) and the month's Profit and Loss
@@ -32,6 +36,16 @@ type books struct {
 	Activity map[string]*big.Rat
 	// CashFlow is the ledger's own Statement of Cash Flows for the month, when the capture has one.
 	CashFlow json.RawMessage
+	// Imported is the firm's statement for a Xero month; Uncounted names Xero bank accounts that are not cash accounts
+	// and not credit cards.
+	Imported  *cashFlowImport
+	Uncounted []string
+}
+
+// cashFlowImport is the firm's statement of cash flows as imported, with who imported it and what they attested.
+type cashFlowImport struct {
+	CSV, Source, Attestation, Actor string
+	At                              time.Time
 }
 
 type packLine struct {
@@ -302,16 +316,33 @@ func managementPack(this, last *books) map[string]any {
 	return out
 }
 
-// cashFlow is the ledger's own Statement of Cash Flows for the month, as the report gives it, checked against the books:
-// its sections add to the net change, beginning cash plus the change is ending cash, ending cash is the month-end book
-// cash and, with last month compared, beginning cash is last month's. Without the report it says why there is none.
+// cashFlow is the month's Statement of Cash Flows, the ledger's own or, for Xero, which has none, the firm's import, as
+// given, checked against the books: its sections add to the net change, beginning cash plus the change is ending cash,
+// ending cash is the month-end book cash and, with last month compared, beginning cash is last month's. Without one it
+// says why there is none.
 func cashFlow(this, last *books, compared bool) map[string]any {
-	if !this.Typed || len(this.CashFlow) == 0 || string(this.CashFlow) == "null" {
-		return map[string]any{"unavailable": "A historical cash-flow statement needs the ledger's own Statement of Cash Flows or an accountant-approved preparation method, and neither is captured yet: balance changes alone cannot separate depreciation, assets bought on credit or borrowing from cash. Book cash and its change are on the balance sheet."}
+	var sections []quickbooks.CashSection
+	var totals map[string]*big.Rat
+	var err error
+	uncounted := func(names []string, month string) map[string]any {
+		return map[string]any{"unavailable": "The imported statement cannot be checked against book cash: these Xero bank accounts, neither bank accounts nor credit cards, have a balance or movement " + month + ": " + strings.Join(names, ", ") + "."}
 	}
-	sections, totals, err := quickbooks.CashFlow(this.CashFlow)
+	switch {
+	case this.Imported != nil && len(this.Uncounted) > 0:
+		return uncounted(this.Uncounted, "this month")
+	case this.Imported != nil && compared && len(last.Uncounted) > 0:
+		return uncounted(last.Uncounted, "last month")
+	case this.Imported != nil:
+		sections, totals, err = parseCashFlow(this.Imported.CSV)
+	case !this.Typed:
+		return map[string]any{"unavailable": "Xero's API has no Statement of Cash Flows: import the firm's statement for the month (CSV) to complete the pack. Balance changes alone cannot separate depreciation, assets bought on credit or borrowing from cash. Book cash and its change are on the balance sheet."}
+	case len(this.CashFlow) == 0 || string(this.CashFlow) == "null":
+		return map[string]any{"unavailable": "A historical cash-flow statement needs the ledger's own Statement of Cash Flows or an accountant-approved preparation method, and neither is captured yet: balance changes alone cannot separate depreciation, assets bought on credit or borrowing from cash. Book cash and its change are on the balance sheet."}
+	default:
+		sections, totals, err = quickbooks.CashFlow(this.CashFlow)
+	}
 	if err != nil {
-		return map[string]any{"unavailable": "The captured Statement of Cash Flows could not be read: " + err.Error() + "."}
+		return map[string]any{"unavailable": "The Statement of Cash Flows could not be read: " + err.Error() + "."}
 	}
 	// Book cash is each month's own Bank accounts, whatever this month's presentation calls them.
 	bank := func(b *books) *big.Rat {
@@ -350,9 +381,164 @@ func cashFlow(this, last *books, compared bool) map[string]any {
 	if compared {
 		differ("Beginning cash against last month's book cash", beginning, bank(last))
 	}
-	return map[string]any{"sections": shown, "net_change": packLine{Name: "Net change in cash", Amount: money(change)},
+	out := map[string]any{"sections": shown, "net_change": packLine{Name: "Net change in cash", Amount: money(change)},
 		"beginning": packLine{Name: "Cash at the beginning of the month", Amount: money(beginning)}, "ending": packLine{Name: "Cash at the end of the month", Amount: money(ending)},
 		"book_cash": money(cash), "reconciled": len(differences) == 0, "differences": differences}
+	if i := this.Imported; i != nil {
+		disclosure := fmt.Sprintf("The cash-flow statement is the firm's, imported from %s by %s on %s, who attested: %s It is not read from the ledger.", i.Source, i.Actor, i.At.UTC().Format("2006-01-02"), i.Attestation)
+		if !compared {
+			disclosure += " Opening cash was not checked against last month's books."
+		}
+		out["disclosure"] = disclosure
+	}
+	return out
+}
+
+var cashSections = []string{"Operating activities", "Investing activities", "Financing activities", "Effect of exchange rate changes"}
+
+// parseCashFlow reads a statement of cash flows from CSV: the header Section,Line,Amount; lines under the sections above,
+// outflows negative, which it totals itself; and one Beginning cash and one Ending cash row with no line. It returns
+// them as quickbooks.CashFlow does, and refuses anything it would have to guess.
+func parseCashFlow(text string) ([]quickbooks.CashSection, map[string]*big.Rat, error) {
+	reader := csv.NewReader(strings.NewReader(text))
+	rows, at := [][]string{}, []int{}
+	for {
+		row, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("the file is not a readable CSV of three columns: %v", err)
+		}
+		line, _ := reader.FieldPos(0)
+		rows, at = append(rows, row), append(at, line)
+	}
+	if len(rows) < 3 || len(rows) > 501 || len(rows[0]) != 3 || strings.TrimPrefix(strings.Join(rows[0], ","), "\ufeff") != "Section,Line,Amount" {
+		return nil, nil, errors.New("the first row must be Section,Line,Amount, followed by up to 500 rows")
+	}
+	lines, totals := make([][]quickbooks.CashLine, len(cashSections)), map[string]*big.Rat{}
+	for i, row := range rows[1:] {
+		n := at[i+1]
+		section, name, cell := strings.TrimSpace(row[0]), strings.TrimSpace(row[1]), strings.TrimSpace(row[2])
+		if !budgetAmount.MatchString(cell) {
+			return nil, nil, fmt.Errorf("row %d: %q is not an amount such as -1200.50, without separators or symbols", n, row[2])
+		}
+		amount, _ := new(big.Rat).SetString(cell)
+		s := slices.IndexFunc(cashSections, func(c string) bool { return strings.EqualFold(c, section) })
+		total := map[string]string{"beginning cash": "BeginningCash", "ending cash": "EndingCash"}[strings.ToLower(section)]
+		switch {
+		case total != "" && (name != "" || totals[total] != nil):
+			return nil, nil, fmt.Errorf("row %d: give one %s row, with an empty Line", n, section)
+		case total != "":
+			totals[total] = amount
+		case s < 0:
+			return nil, nil, fmt.Errorf("row %d: %q is not Operating activities, Investing activities, Financing activities, Effect of exchange rate changes, Beginning cash or Ending cash", n, row[0])
+		case name == "" || len(name) > 200 || strings.HasPrefix(strings.ToLower(name), "total") || strings.EqualFold(name, cashSections[s]):
+			return nil, nil, fmt.Errorf("row %d: name the line in up to 200 characters; section totals are added up here, not imported", n)
+		default:
+			lines[s] = append(lines[s], quickbooks.CashLine{Name: name, Amount: amount})
+		}
+	}
+	if totals["BeginningCash"] == nil || totals["EndingCash"] == nil {
+		return nil, nil, errors.New("give one Beginning cash and one Ending cash row")
+	}
+	sections, change := []quickbooks.CashSection{}, zero()
+	for s, name := range cashSections {
+		if len(lines[s]) == 0 {
+			continue
+		}
+		total := zero()
+		for _, l := range lines[s] {
+			total.Add(total, l.Amount)
+		}
+		sections = append(sections, quickbooks.CashSection{Name: name, Lines: lines[s], Total: total})
+		change.Add(change, total)
+	}
+	totals["CashIncrease"] = change
+	return sections, totals, nil
+}
+
+// importCashFlow saves the firm's statement of cash flows for a close whose books are read from Xero, with the importer's
+// attestation of what it is. The sign-off covers it, so it needs sign-off authority and an open close. The reply is the
+// pack, with the statement checked against the books.
+func importCashFlow(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		who, ok := reviewActor(w, r)
+		if !ok {
+			return
+		}
+		if a := auth.Actor(ctx); a != nil && a.Organization != "" && !slices.Contains(a.Permissions, "close:signoff") {
+			problem(w, 403, "Your organization role lacks close:signoff.")
+			return
+		}
+		var in struct {
+			CSV       string `json:"csv"`
+			Source    string `json:"source"`
+			Confirmed bool   `json:"confirmed"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		in.Source = strings.TrimSpace(in.Source)
+		if len(in.CSV) > 64*1024 || in.Source == "" || len(in.Source) > 300 {
+			problem(w, 422, "Name the statement's source (up to 300 characters) and import a CSV of at most 64 KiB.")
+			return
+		}
+		if _, _, err := parseCashFlow(in.CSV); err != nil {
+			problem(w, 422, "The statement could not be read: "+err.Error()+".")
+			return
+		}
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			problem(w, 503, "The statement could not be saved.")
+			return
+		}
+		defer tx.Rollback()
+		var closeID, entity, period string
+		if err = tx.QueryRowContext(ctx, `SELECT id::text,entity,period FROM client_closes WHERE id::text=$1 FOR UPDATE`, r.PathValue("id")).Scan(&closeID, &entity, &period); err != nil {
+			problem(w, 404, "Close not found.")
+			return
+		}
+		done, err := signedOff(ctx, tx, closeID)
+		if err != nil {
+			problem(w, 503, "Close readiness unavailable.")
+			return
+		}
+		if done {
+			problem(w, 409, "The close is signed off, and its sign-off covers the statement: reopen it before importing another.")
+			return
+		}
+		m, err := periodBooks(ctx, tx, closeID, period)
+		if err != nil {
+			problem(w, 503, "Period snapshot unavailable.")
+			return
+		}
+		if m == nil || m.Source != "xero" || m.Stale {
+			problem(w, 409, "Capture this month's Xero Trial Balance first, from a current connection.")
+			return
+		}
+		b, err := readLedgerMonth(m)
+		if err != nil {
+			problem(w, 409, "This month's capture could not be read: "+err.Error()+".")
+			return
+		}
+		attestation := fmt.Sprintf("I reviewed this statement's classification and cash scope; it is for %s, %s, in %s, with amounts in whole %s units, not thousands.", entity, period, b.Currency, b.Currency)
+		if !in.Confirmed {
+			problem(w, 422, "Confirm: "+attestation)
+			return
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO cash_flow_imports(close_id,company,currency,csv,source,attestation,actor) VALUES($1,$2,$3,$4,$5,$6,$7)`, closeID, m.realm, b.Currency, in.CSV, in.Source, attestation, who); err != nil {
+			problem(w, 503, "The statement could not be saved.")
+			return
+		}
+		pack, err := closeManagementPack(ctx, tx, closeID)
+		if err != nil || tx.Commit() != nil {
+			problem(w, 503, "The statement could not be saved.")
+			return
+		}
+		jsonReply(w, 200, pack)
+	}
 }
 
 // readLedgerMonth reads a capture's Trial Balance and Profit and Loss into books.
@@ -401,6 +587,19 @@ func readLedgerMonth(m *fluxMonth) (*books, error) {
 	for _, a := range balances {
 		b.Balances[a.ID] = a.Net
 		b.Accounts[a.ID] = packAccount{Name: cmp.Or(a.FullName, a.Name), Class: a.Class, Type: a.AccountType, Subtype: a.Subtype}
+	}
+	if m.Source == "xero" {
+		cash, other, err := xero.CashAccounts(m.xero)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range cash {
+			if a, ok := b.Accounts[id]; ok {
+				a.Type = "Bank"
+				b.Accounts[id] = a
+			}
+		}
+		b.Uncounted = other
 	}
 	return b, nil
 }
@@ -474,6 +673,16 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	if err != nil {
 		return wait("This month's capture could not be read: " + err.Error() + ".")
 	}
+	if this.Source == "xero" {
+		var i cashFlowImport
+		var company, currency string
+		switch err = tx.QueryRowContext(ctx, `SELECT csv,source,attestation,actor,created_at,company,currency FROM cash_flow_imports WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1`, closeID).Scan(&i.CSV, &i.Source, &i.Attestation, &i.Actor, &i.At, &company, &currency); {
+		case err == nil && company == this.realm && currency == thisBooks.Currency:
+			thisBooks.Imported = &i
+		case err != nil && err != sql.ErrNoRows:
+			return nil, tieRefusal{503, "The imported cash-flow statement is unavailable."}
+		}
+	}
 	var last *fluxMonth
 	var lastBooks *books
 	comparison := ""
@@ -501,6 +710,11 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 		}
 	}
 	pack := managementPack(thisBooks, lastBooks)
+	signed, err := signedOff(ctx, tx, closeID)
+	if err != nil {
+		return nil, tieRefusal{503, "Close readiness unavailable."}
+	}
+	pack["open"] = !signed
 	status := captureStatus(ctx, tx, closeID, this)
 	pack["state"], pack["entity"], pack["period"], pack["currency"], pack["basis"] = "ready", entity, period, thisBooks.Currency, "Accrual"
 	pack["source"], pack["snapshot_id"], pack["as_of"], pack["stale"], pack["status"] = this.Source, this.SnapshotID, this.CapturedAt, this.Stale, status
@@ -516,6 +730,9 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	}
 	if status != "signed_off" {
 		note += " Provisional until the sign-off of every month shown stands."
+	}
+	if disclosure, ok := pack["cash_flow"].(map[string]any)["disclosure"].(string); ok {
+		note += " " + disclosure
 	}
 	pack["note"], pack["overall"], pack["digest"] = note, status, figuresDigest(pack)
 	var materiality sql.NullString

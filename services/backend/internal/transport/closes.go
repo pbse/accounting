@@ -197,6 +197,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 	mux.HandleFunc("GET /v1/closes/{id}/tie-out", tieOut(db))
 	mux.HandleFunc("GET /v1/closes/{id}/flux", flux(db))
 	mux.HandleFunc("GET /v1/closes/{id}/management-pack", managementReport(db))
+	mux.HandleFunc("POST /v1/closes/{id}/cash-flow", importCashFlow(db))
 	registerBudget(mux, db)
 	registerManagementPublications(mux, db)
 	registerExamples(mux, db)

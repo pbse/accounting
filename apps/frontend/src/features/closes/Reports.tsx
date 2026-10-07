@@ -22,6 +22,7 @@ export type Pack =
       overall: Status;
       digest: string;
       complete: boolean;
+      open: boolean;
       draft_commentary?: string;
       note: string;
       prior?: { close_id: string; period: string; snapshot_id: string; as_of: string; stale: boolean; status: Status };
@@ -30,7 +31,7 @@ export type Pack =
       profit_and_loss: { sections: Section[]; measures: Line[] };
       balance_sheet: { sections: Section[]; earnings: Line; total_assets: Line; total_liabilities: Line; total_equity: Line; difference: string };
       working_capital: Record<"book_cash" | "receivables" | "payables" | "current_assets" | "current_liabilities" | "working_capital", Line> | { unavailable: string };
-      cash_flow: { unavailable: string } | { sections: Section[]; net_change: Line; beginning: Line; ending: Line; book_cash: string; reconciled: boolean; differences: string[] };
+      cash_flow: { unavailable: string } | { sections: Section[]; net_change: Line; beginning: Line; ending: Line; book_cash: string; reconciled: boolean; differences: string[]; disclosure?: string };
     };
 
 type Status = "provisional" | "signed_off" | "unknown";
@@ -59,12 +60,12 @@ export function Reports({ closeId }: { closeId: string }) {
         <Publication closeId={closeId} pack={pack} />
       </>
     );
-  return <PackView closeId={closeId} pack={pack} staff />;
+  return <PackView closeId={closeId} pack={pack} staff onPack={setPack} />;
 }
 
 // A pack's statements, live or as published. Staff can ask the agent, open each figure's ledger rows and publish;
 // an executive reads the figures alone.
-export function PackView({ closeId, pack, staff = false }: { closeId: string; pack: Extract<Pack, { state: "ready" }>; staff?: boolean }) {
+export function PackView({ closeId, pack, staff = false, onPack }: { closeId: string; pack: Extract<Pack, { state: "ready" }>; staff?: boolean; onPack?: (pack: Pack) => void }) {
   const [account, setAccount] = useState("");
   const show = (value: string | null) => (value === null ? "–" : amount(value, pack.currency));
   const compared = !!pack.prior;
@@ -169,7 +170,7 @@ export function PackView({ closeId, pack, staff = false }: { closeId: string; pa
       ) : (
         <>
           <table>
-            <caption>The ledger's Statement of Cash Flows for {pack.period}</caption>
+            <caption>{flow.disclosure ? `The firm's Statement of Cash Flows for ${pack.period}, as imported` : `The ledger's Statement of Cash Flows for ${pack.period}`}</caption>
             <thead>
               <tr>
                 <th style={{ textAlign: "left" }}>Line</th>
@@ -217,6 +218,7 @@ export function PackView({ closeId, pack, staff = false }: { closeId: string; pa
           )}
         </>
       )}
+      {onPack && pack.source === "xero" && (pack.open ? <ImportCashFlow closeId={closeId} pack={pack} onPack={onPack} /> : <p className="note">The close's sign-off covers its cash-flow statement: reopen the sign-off to import or replace it.</p>)}
       {staff && <Publication closeId={closeId} pack={pack} />}
       {drill && account && (
         <>
@@ -231,6 +233,42 @@ export function PackView({ closeId, pack, staff = false }: { closeId: string; pa
         </>
       )}
     </section>
+  );
+}
+
+// Xero has no Statement of Cash Flows to capture, so the firm imports its own; the sign-off covers it.
+function ImportCashFlow({ closeId, pack, onPack }: { closeId: string; pack: Extract<Pack, { state: "ready" }>; onPack: (pack: Pack) => void }) {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        const form = new FormData(e.currentTarget);
+        const file = form.get("file") as File;
+        setBusy(true);
+        setError("");
+        file
+          .text()
+          .then((csv) => workspaceRequest(`/${closeId}/cash-flow`, { csv, source: file.name, confirmed: form.has("confirmed") }))
+          .then(onPack)
+          .catch((e) => setError(e instanceof Error ? e.message : "The statement could not be imported."))
+          .finally(() => setBusy(false));
+      }}
+    >
+      <fieldset disabled={busy}>
+        <legend>Import or replace the firm's statement (needs close:signoff)</legend>
+        {error && <p role="alert">{error}</p>}
+        <label>
+          CSV with the columns Section, Line, Amount: a row per line under Operating activities, Investing activities, Financing activities or Effect of exchange rate changes, outflows negative and no totals, plus a Beginning cash and an Ending cash row with an empty Line
+          <input name="file" type="file" accept=".csv,text/csv" required />
+        </label>
+        <label>
+          <input type="checkbox" name="confirmed" required /> I reviewed this statement's classification and cash scope; it is for {pack.entity}, {pack.period}, in {pack.currency}, with amounts in whole {pack.currency} units, not thousands.
+        </label>
+        <button>Import</button>
+      </fieldset>
+    </form>
   );
 }
 

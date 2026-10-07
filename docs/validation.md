@@ -3638,3 +3638,12 @@ Request: make Xero management packs publishable. Two things block them: the pack
 - **Tested.** `TestManagementPackReadsTheCapturedReports` (extended): sign-off over a Xero capture, once its accounts' coverage is answered, reads signed off in the pack; a newer Xero capture reopens it and the pack is provisional again. It fails without the change ("provisional"). The management, publication, readiness, coverage and Xero tests pass on a fresh local PostgreSQL.
 
 Not verified: a real Xero organisation. A signed Xero pack is still not publishable until it has a reconciled cash-flow statement.
+
+## B07: a Xero month's pack is completed by the firm's cash-flow statement (2026-10-07)
+
+Request: make Xero management packs publishable. After the Xero sign-off change, a Xero pack still lacked a cash-flow statement, which Xero's API does not provide; the user chose a statement the firm provides as CSV.
+
+- **Change.** `POST /v1/closes/{id}/cash-flow` (`transport/management.go`, migration 129) stores the CSV with the importer's attestation, the capture's Xero organisation and currency, for a close that is open and has a Xero capture, by a person with `close:signoff`. `parseCashFlow` refuses anything it would have to guess, by row. `cashFlow` checks the newest matching import against book cash, now the capture's Xero bank accounts of the bank kind (`xero.CashAccounts`; credit cards excluded, any other kind with a balance or movement makes the statement unavailable). Readiness signs the newest import; the pack's note, and so the publication and its exports, discloses it. B07's sentence in the build plan names the firm's statement as a third source.
+- **Tested.** `TestManagementPackReadsTheCapturedReports` (extended): a total line after a blank line is refused naming its row in the file, 5; a statement whose ending cash is 1,600 against book cash of 1,500 is shown with a difference of 100.00; one that ties completes the pack and discloses its source; after sign-off it publishes; an import while signed off is refused and the pack is not open for one, and a later import reopens the sign-off. Observed failing without each part: the readiness binding, the credit-card exclusion, the bank marking, the signed-off refusal, loading the import, file row numbers and the open flag. The transport and Xero packages pass on a fresh local PostgreSQL; the frontend typechecks.
+
+Not verified: a real Xero organisation or a real statement exported from Xero.
