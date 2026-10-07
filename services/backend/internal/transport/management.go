@@ -408,18 +408,22 @@ func readLedgerMonth(m *fluxMonth) (*books, error) {
 var errCurrency = errors.New("the Trial Balance and Profit and Loss are in different currencies")
 
 // captureStatus is a capture's review status: signed_off only while the close's sign-off stands over this very
-// QuickBooks capture, the one the signed readiness digest binds (any newer capture reopens it); a Xero capture is not
-// bound by that digest, so it stays provisional. Unknown when readiness cannot be read.
+// capture, QuickBooks or Xero, the one the signed readiness digest binds through ledger coverage (any newer capture
+// reopens it). Unknown when readiness cannot be read.
 func captureStatus(ctx context.Context, tx *sql.Tx, closeID string, m *fluxMonth) string {
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT capture_status`); err != nil {
 		return "unknown"
+	}
+	bound := m.SnapshotID
+	if m.Source == "xero" {
+		bound = xeroCapture + m.SnapshotID
 	}
 	current, err := closeReadiness(ctx, tx, closeID)
 	switch {
 	case err != nil:
 		tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT capture_status`)
 		return "unknown"
-	case current.State == "signed_off" && m.Source == "quickbooks" && current.coverage.SnapshotID == m.SnapshotID:
+	case current.State == "signed_off" && current.coverage.SnapshotID == bound:
 		return "signed_off"
 	}
 	return "provisional"

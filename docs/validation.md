@@ -3602,3 +3602,12 @@ Request: clean up the settings no longer needed once staff are everyone at the s
   - The server-session test signs the same person in as staff through Google, with no organization, and checks that staff sign-in needs a staff domain.
 
 Not verified: the production console after the deploy, and the GitHub variables' removal (done after the merge).
+
+## B07: a Xero month's sign-off stands in its management pack (2026-10-06)
+
+Request: make Xero management packs publishable. Two things block them: the pack never counted a Xero month as signed off, and it has no cash-flow statement. This change fixes the first; the second comes with an imported statement.
+
+- **Change.** `captureStatus` (`transport/management.go`) compares the signed coverage's capture with the pack's as coverage names it: `xero:<id>` for a Xero capture. Since the Xero coverage change (#278) the signed readiness digest binds a Xero capture's identity and digest as it binds a QuickBooks one, so the old rule that a Xero month stays provisional no longer had a reason.
+- **Tested.** `TestManagementPackReadsTheCapturedReports` (extended): sign-off over a Xero capture, once its accounts' coverage is answered, reads signed off in the pack; a newer Xero capture reopens it and the pack is provisional again. It fails without the change ("provisional"). The management, publication, readiness, coverage and Xero tests pass on a fresh local PostgreSQL.
+
+Not verified: a real Xero organisation. A signed Xero pack is still not publishable until it has a reconciled cash-flow statement.
