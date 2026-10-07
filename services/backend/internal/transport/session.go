@@ -529,12 +529,15 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		if staffSession.returnPath(back) {
 			kind, check = staffSession, staff
 		}
-		// again sends the person to start again where their sign-in began: staff to the console, whose button signs
-		// them in to it, and anyone else to the login page, which says why.
+		// again sends the person to start again, still bound for the page they asked for: staff to that console page,
+		// whose button signs them in to it, and anyone else to the login page, which says why.
 		again := func(why string) {
-			if kind.staff {
-				http.Redirect(w, r, staffSession.home, http.StatusFound)
-			} else {
+			switch {
+			case kind.staff:
+				http.Redirect(w, r, back, http.StatusFound)
+			case back != kind.home && kind.returnPath(back):
+				http.Redirect(w, r, "/login?"+url.Values{"error": {why}, "return": {back}}.Encode(), http.StatusFound)
+			default:
 				http.Redirect(w, r, "/login?error="+why, http.StatusFound)
 			}
 		}

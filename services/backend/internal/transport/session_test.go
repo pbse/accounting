@@ -186,6 +186,9 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		{"/v1/auth/login", "state={state}", "/login?error=expired"},
 		{"", "code=code-1&state=x", "/login?error=expired"},
 		{"/v1/auth/login?staff=1", "code=code-1&state=forged", "/admin/"},
+		// Each keeps the page the person asked for, so signing in again returns there.
+		{"/v1/auth/login?return=%2Fdashboard%2Fcloses%2Fx", "code=code-1&state=forged", "/login?error=expired&return=%2Fdashboard%2Fcloses%2Fx"},
+		{"/v1/auth/login?staff=1&return=%2Fadmin%2Ffirms", "code=code-1&state=forged", "/admin/firms"},
 	} {
 		w := callback(refused.start, refused.query)
 		if w.Code != 302 || w.Header().Get("Location") != refused.to || len(calls) != 0 || cookieOf(w, sessionCookie) != nil || cookieOf(w, staffCookie) != nil {
@@ -193,18 +196,18 @@ func TestServerSessionKeepsWorkOSTokensOnTheServer(t *testing.T) {
 		}
 	}
 	// A code WorkOS will not take (used, or too old) opens nothing, and the login page says to try again.
-	login := send(handler, "GET", "/v1/auth/login", "", "")
+	login := send(handler, "GET", "/v1/auth/login?return=%2Fdashboard%2Fcloses%2Fx", "", "")
 	at, _ := url.Parse(login.Header().Get("Location"))
 	respond = func(map[string]string) (int, any) { return 400, map[string]string{"code": "invalid_grant"} }
 	r := httptest.NewRequest("GET", "https://app.example.test/v1/auth/callback?code=code-1&state="+url.QueryEscape(at.Query().Get("state")), nil)
 	r.AddCookie(cookieOf(login, loginCookie))
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
-	if w.Code != 302 || w.Header().Get("Location") != "/login?error=unavailable" || len(calls) != 1 || cookieOf(w, sessionCookie) != nil {
+	if w.Code != 302 || w.Header().Get("Location") != "/login?error=unavailable&return=%2Fdashboard%2Fcloses%2Fx" || len(calls) != 1 || cookieOf(w, sessionCookie) != nil {
 		t.Fatalf("a refused code goes back to the login page: %d %q calls=%d", w.Code, w.Header().Get("Location"), len(calls))
 	}
 	// A staff sign-in starts again from the console, whose button signs in to it, not the firm login page.
-	if w := callback("/v1/auth/login?staff=1", "code=code-1&state={state}"); w.Code != 302 || w.Header().Get("Location") != "/admin/" || len(calls) != 2 || cookieOf(w, staffCookie) != nil {
+	if w := callback("/v1/auth/login?staff=1&return=%2Fadmin%2Ffirms", "code=code-1&state={state}"); w.Code != 302 || w.Header().Get("Location") != "/admin/firms" || len(calls) != 2 || cookieOf(w, staffCookie) != nil {
 		t.Fatalf("a refused staff code goes back to the console: %d %q calls=%d", w.Code, w.Header().Get("Location"), len(calls))
 	}
 	calls = nil
