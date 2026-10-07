@@ -1,7 +1,8 @@
 import { Link } from "react-router";
 
 // What keeps client data, and the authority over it, where it belongs. Each statement follows what the service does
-// today; when the code changes, change this page (docs/marketing-site.md).
+// today; when the code changes, change this page (docs/marketing-site.md). About restates Authority, Evidence and
+// Separation in brief; change it with them.
 const CONTROLS = [
   { key: "Authority", title: "Agents can’t act alone", text: "Agents prepare drafts and questions. They can’t approve an entry, send anything to a client, write to a ledger or sign off a close. People do, with their own permissions." },
   { key: "Evidence", title: "Every figure keeps its source", text: "When an agent takes a figure from a document, the words it relied on must appear exactly once and show the same amount or date. Otherwise the figure becomes a question for a person." },

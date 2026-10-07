@@ -43,6 +43,7 @@ export function MarketingLayout() {
           <nav className="k-nav" aria-label="Main">
             <Link to="/#how">How it works</Link>
             <NavLink to="/security">Security</NavLink>
+            <NavLink to="/about">About</NavLink>
           </nav>
           <div className="k-actions">
             <NavLink className="k-login" to="/login">
@@ -77,6 +78,9 @@ export function MarketingLayout() {
           <nav aria-label="Company">
             <h3>Company</h3>
             <ul>
+              <li>
+                <Link to="/about">About</Link>
+              </li>
               <li>
                 <Link to="/contact">Contact</Link>
               </li>
