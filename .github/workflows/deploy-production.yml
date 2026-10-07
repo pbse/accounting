@@ -111,7 +111,8 @@ jobs:
           const session = process.env.AUTH_SESSION || 'client';
           if (!['client','server'].includes(session)) throw new Error('AUTH_SESSION must be client or server');
           if (session === 'server' && process.env.VITE_API_BASE_URL && new URL(process.env.VITE_API_BASE_URL).origin !== new URL(process.env.PRODUCTION_URL).origin) throw new Error('AUTH_SESSION=server needs the API on the app origin: leave VITE_API_BASE_URL empty or set it to that origin');
-          if (session === 'client' && [undefined, '', 'api.workos.com'].includes(process.env.VITE_WORKOS_API_HOSTNAME)) console.log('::warning::AUTH_SESSION=client with api.workos.com: WorkOS needs a custom authentication domain in production; set AUTH_SESSION=server or a custom WORKOS_API_HOSTNAME');
+          if (session === 'client' && !process.env.VITE_WORKOS_API_HOSTNAME) throw new Error('Missing production setting: VITE_WORKOS_API_HOSTNAME (AUTH_SESSION=client needs it)');
+          if (session === 'client' && process.env.VITE_WORKOS_API_HOSTNAME === 'api.workos.com') console.log('::warning::AUTH_SESSION=client with api.workos.com: WorkOS needs a custom authentication domain in production; set AUTH_SESSION=server or a custom WORKOS_API_HOSTNAME');
           if (!!process.env.WORKOS_AUTHKIT_DOMAIN !== !!process.env.MCP_RESOURCE_URL) throw new Error('Set WORKOS_AUTHKIT_DOMAIN and MCP_RESOURCE_URL together or neither');
           if (process.env.WORKOS_AUTHKIT_DOMAIN) {
             const authkit = new URL(process.env.WORKOS_AUTHKIT_DOMAIN);
