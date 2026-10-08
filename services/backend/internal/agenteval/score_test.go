@@ -74,6 +74,17 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 	}
 }
 
+func TestAnAmountMatchesWholeAndSigned(t *testing.T) {
+	for answer, want := range map[string]bool{"prepaid expects 1100.00 in support": true, "the difference is -1100.00": false, "shown as (1100.00) here": false, "a balance of 11100.00": false, "up to 1100.00, not more": true, "1100.00": true} {
+		if got := containsFact(answer, "1100.00"); got != want {
+			t.Fatalf("%q: %v", answer, got)
+		}
+	}
+	if !containsFact("acme-invoice.txt is there", "acme-invoice.txt") {
+		t.Fatal("text matches as text")
+	}
+}
+
 func TestFoldDropsEveryThousandsSeparator(t *testing.T) {
 	if fold("USD 1,000,000.00") != "usd 1000000.00" || fold("1,100.00") != "1100.00" {
 		t.Fatalf("%q %q", fold("USD 1,000,000.00"), fold("1,100.00"))

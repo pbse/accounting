@@ -94,7 +94,7 @@ func Score(set Set, observed []Observed) Report {
 			result.Reasons = append(result.Reasons, toolSet(q, o)...)
 			answer := fold(o.Answer)
 			for _, fact := range q.Facts {
-				if !strings.Contains(answer, fold(fact)) {
+				if !containsFact(answer, fold(fact)) {
 					result.Reasons = append(result.Reasons, fmt.Sprintf("the answer lacks %q", fact))
 				}
 			}
@@ -229,6 +229,17 @@ func toolSet(q Question, o Observed) []string {
 	}
 	return out
 }
+
+// containsFact finds a fact in the folded answer. An amount must stand whole, with its sign: "-1100.00" or
+// "(1100.00)" never satisfies "1100.00", and "11100.00" does not either.
+func containsFact(answer, fact string) bool {
+	if !amount.MatchString(fact) {
+		return strings.Contains(answer, fact)
+	}
+	return regexp.MustCompile(`(?:^|[^\d.(\-−])` + regexp.QuoteMeta(fact) + `(?:$|[^\d])`).MatchString(answer)
+}
+
+var amount = regexp.MustCompile(`^-?\d+(?:\.\d+)?%?$`)
 
 // forbidden names each text the question says the answer may not contain.
 func forbidden(q Question, answer string) []string {
