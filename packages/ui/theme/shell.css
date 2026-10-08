@@ -107,10 +107,10 @@ body {
 }
 .app-shell h1 {
   font-family: inherit;
-  font-size: 24px;
-  line-height: 28px;
+  font-size: 28px;
+  line-height: 32px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   margin: 0;
 }
 .app-shell h2 {
@@ -308,22 +308,19 @@ body {
   box-shadow: var(--shadow-raised);
   text-decoration: none;
 }
-.topbar-brand .logo {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  display: grid;
-  place-items: center;
-  background: var(--blue);
-  color: var(--on-chip);
-  font-size: 15px;
-  font-weight: 600;
+.topbar-brand {
+  padding: 0 var(--space-20);
 }
-.topbar-brand strong {
-  display: block;
-  font-size: 14px;
-  line-height: 16px;
-  font-weight: 600;
+/* The Krith word mark, as the public site sets it: the serif word over a double blue rule. */
+.topbar-brand .wordmark {
+  font-family: var(--font-brand);
+  font-weight: 560;
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  padding-bottom: 3px;
+  border-bottom: 3px double var(--blue);
 }
 .topbar-brand small {
   display: block;
@@ -516,6 +513,63 @@ body {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.app-body {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+}
+/* The rail: the app's places as icons in one floating pill down the left, the current one in blue; what is asked of
+   the agent sits at its foot. Below 1100px, where the bar's navigation takes its own row, it gives way to those pills. */
+.rail {
+  position: sticky;
+  top: calc(var(--topbar-height) + var(--space-8));
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  width: var(--rail-width);
+  margin: var(--space-8) 0 var(--space-24) var(--space-24);
+  padding: var(--space-8) 0;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+}
+.rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+}
+.rail-group + .rail-group {
+  border-top: 1px solid var(--line);
+}
+.rail-group.end {
+  margin-top: var(--space-16);
+}
+.app-shell .rail-item {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  box-shadow: none;
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.app-shell .rail-item:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+.app-shell .rail-item[aria-current="page"],
+.app-shell .rail-item[aria-current="page"]:hover {
+  background: var(--blue);
+  color: var(--on-chip);
+}
 .app-shell .app-main {
   flex: 1;
   min-width: 0;
@@ -598,6 +652,10 @@ body {
     order: 3;
     flex-basis: 100%;
   }
+  /* With the navigation on its own row the bar is taller than the rail's offset; the bar's pills serve alone. */
+  .rail {
+    display: none;
+  }
 }
 @media (max-width: 1100px) and (min-width: 861px) {
   .topbar-tools {
@@ -611,7 +669,8 @@ body {
   }
   .topbar-brand small,
   .topbar-tools > form,
-  .topbar-account-name {
+  .topbar-account-name,
+  .rail {
     display: none;
   }
   .topbar-account > summary {
