@@ -274,7 +274,7 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	must(db.QueryRow(`SELECT agent_chat FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded))
 	security = httptest.NewRecorder()
 	store.ServeHTTP(security, httptest.NewRequest("GET", "/v1/closes/security", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: org, Permissions: []string{"clients:all", "members:manage"}})))
-	if recorded != "firm" || !strings.Contains(security.Body.String(), "Agent chat is on firm-wide") {
+	if recorded != "firm" || !strings.Contains(security.Body.String(), "Agent chat is also on firm-wide") {
 		t.Fatalf("the firm-wide policy change is recorded and shown: %v %s", recorded, security.Body.String())
 	}
 	firmAnswer := "Alpha has the oldest open close.\n\nCheck its blockers first."
