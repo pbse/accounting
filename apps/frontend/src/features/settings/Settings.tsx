@@ -44,8 +44,9 @@ export default function Settings() {
   const { policy, error: policyError, refresh: refreshPolicy } = usePolicy();
   const items = [...yours, ...firm(policy?.can_manage_members ?? false, policy?.can_read_roster ?? false)];
   const asked = params.get("tab");
-  // A section the person cannot open, or none, opens the profile; a firm section waits for the policy that gates it.
-  const tab = items.find((t) => t.key === asked)?.key ?? (asked && !policy && !policyError && firm(true, true).some((t) => t.key === asked) ? asked : "profile");
+  // A section the person cannot open, or none, opens the profile. A firm section asked for before the policy that gates
+  // it has been read stays selected, so a failed read shows there, with the way to try again, not a different section.
+  const tab = items.find((t) => t.key === asked)?.key ?? (asked && !policy && firm(true, true).some((t) => t.key === asked) ? asked : "profile");
   const [me, setMe] = useState<Me>();
   const [error, setError] = useState("");
   const [version, setVersion] = useState(0);
@@ -62,7 +63,19 @@ export default function Settings() {
   const firmSection = yours.every((t) => t.key !== tab);
   const panel = () => {
     if (firmSection) {
-      if (policyError) return isEnrollmentError(policyError) ? <FirmEnrollment onEnrolled={refreshPolicy} /> : <p role="alert">{policyError}</p>;
+      if (policyError)
+        return isEnrollmentError(policyError) ? (
+          <FirmEnrollment onEnrolled={refreshPolicy} />
+        ) : (
+          <section aria-label="Firm settings unavailable">
+            <p role="alert">{policyError}</p>
+            <p className="setting-actions">
+              <button type="button" onClick={refreshPolicy}>
+                Try again
+              </button>
+            </p>
+          </section>
+        );
       if (!policy) return <p role="status">Opening…</p>;
       if (tab === "people") return <People />;
       if (tab === "clients") return <ClientRoster />;

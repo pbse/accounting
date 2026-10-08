@@ -161,6 +161,8 @@ export function SecurityTab() {
   const [security, setSecurity] = useState<Security>();
   const [error, setError] = useState("");
   const [version, setVersion] = useState(0);
+  // The usage snapshot aggregates across the firm's work, so it is read only once someone opens it.
+  const [usage, setUsage] = useState(false);
   useEffect(() => {
     let live = true;
     workspaceRequest("/security")
@@ -372,9 +374,9 @@ export function SecurityTab() {
             </tbody>
           </table>
         </details>
-        <details>
+        <details onToggle={(e) => e.currentTarget.open && setUsage(true)}>
           <summary>Usage and alerts</summary>
-          <OperationsSnapshot />
+          {usage && <OperationsSnapshot />}
         </details>
         <details>
           <summary>Suspend the whole firm</summary>
