@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { EmailSettings } from "../closes/Email";
 import { workspaceRequest } from "../closes/workspace";
 import type { Policy } from "./Policies";
@@ -40,11 +41,20 @@ function SupportAndRecords({ policy }: { policy: Policy }) {
   );
 }
 
-// The firm itself: who supports it, how it sends email, and its records.
+// The firm itself: how it sends email, how much of its closes the agent carries, who supports it, and its records.
 export function FirmTab({ policy }: { policy: Policy }) {
   return (
     <>
       <EmailSettings />
+      <section aria-label="Human effort">
+        <h2>Human effort</h2>
+        <p>How much of each month's closes the agent carries, how many minutes people put in, and the agent's track record across the firm.</p>
+        <p className="setting-actions">
+          <Link className="button" to="/dashboard/measure">
+            Open Human effort
+          </Link>
+        </p>
+      </section>
       <SupportAndRecords policy={policy} />
     </>
   );
