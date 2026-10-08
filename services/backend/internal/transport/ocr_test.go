@@ -111,7 +111,7 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 	if _, err = db.Exec(`UPDATE worker_heartbeats SET detail=detail||'{"ocr":{"provider":"tesseract","held":"paid service not confirmed"}}' WHERE loop='worker'`); err != nil {
 		t.Fatal(err)
 	}
-	if got := read(); !strings.Contains(got, "has not confirmed its paid service") {
+	if got := read(); !strings.Contains(got, "paid-service confirmation") {
 		t.Fatalf("a held key is shown as held: %q", got)
 	}
 	if _, err = db.Exec(`UPDATE worker_heartbeats SET detail=detail||'{"ocr":{"provider":"tesseract","held":"model name not valid"}}' WHERE loop='worker'`); err != nil {

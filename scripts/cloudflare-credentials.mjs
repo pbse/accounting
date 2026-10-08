@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 // names, even with an empty value, in their configuration payloads.
 export const credentials = {
  edge: ['DATABASE_URL','UPLOAD_SCAN_KEY','EMAIL_INTAKE_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','XERO_WEBHOOK_KEY','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','QBO_SANDBOX_ACCESS_TOKEN'],
- queue: ['DATABASE_URL','UPLOAD_SCAN_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','OPERATIONS_ALERT_WEBHOOK_URL','OPERATIONS_ALERT_WEBHOOK_TOKEN','PLATFORM_EMAIL_KEY','GEMINI_API_KEY'],
+ queue: ['DATABASE_URL','UPLOAD_SCAN_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','OPERATIONS_ALERT_WEBHOOK_URL','OPERATIONS_ALERT_WEBHOOK_TOKEN','PLATFORM_EMAIL_KEY','GEMINI_API_KEY','GEMINI_PAID_SERVICE'],
  scanner: ['UPLOAD_SCAN_KEY'],
  'context-machine': ['CONTEXT_MACHINE_TOKEN','CONTEXT_MACHINE_DATABASE_URL','OPENAI_API_KEY','ANTHROPIC_API_KEY','CODEX_ACCESS_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','CODEX_AUTH_JSON'],
 };
@@ -39,6 +39,8 @@ export function validateCredential(name, input) {
  if (Buffer.byteLength(value) > 5000) throw new Error(`${name} must be at most 5 KB after compaction`);
  if (['CONTEXT_MACHINE_TOKEN','UPLOAD_SCAN_KEY','EMAIL_INTAKE_KEY'].includes(name) && value.length < 32) throw new Error(`${name} requires at least 32 random characters`);
  // A Gemini API key is one printable token; the worker sends it only in a request header.
+ // The paid-service confirmation is exactly "confirmed", and is installed only together with the key (below).
+ if (name === 'GEMINI_PAID_SERVICE' && value !== 'confirmed') throw new Error('GEMINI_PAID_SERVICE is installed with GEMINI_API_KEY by --paid-service');
  if (name === 'GEMINI_API_KEY' && !/^[\x21-\x7e]{20,200}$/.test(value)) throw new Error('GEMINI_API_KEY must be a single printable token of 20 to 200 characters');
  if (name === 'SECRETS_KEY' && !/^[a-f0-9]{64}$/i.test(value)) throw new Error('SECRETS_KEY requires 32 hex-encoded bytes');
  if (['DATABASE_URL','CONTEXT_MACHINE_DATABASE_URL'].includes(name)) {
@@ -62,12 +64,25 @@ export function install(app, values, production) {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
  try {
-  const [name, environment] = process.argv.slice(2);
-  if (!['production','staging'].includes(environment) || process.argv.length !== 4) throw new Error('Usage: node scripts/cloudflare-credentials.mjs NAME production|staging < credential-file');
+  const [name, environment, confirmation] = process.argv.slice(2);
+  // A Gemini key is installed only with the operator's confirmation that its Google project has billing enabled (the
+  // paid service): Google may use free-tier content to improve its products, and a key's billing cannot be checked
+  // through the API, so an installed key is the worker's confirmation.
+  const gemini = name === 'GEMINI_API_KEY';
+  if (!['production','staging'].includes(environment) || process.argv.length !== (gemini ? 5 : 4) || (gemini && confirmation !== '--paid-service')) {
+   throw new Error(gemini
+    ? 'Usage: node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production|staging --paid-service < key-file. Add --paid-service only once the key\'s Google project has billing enabled: on the free tier Google may use the pages it reads to improve its products.'
+    : 'Usage: node scripts/cloudflare-credentials.mjs NAME production|staging < credential-file');
+  }
   if (process.stdin.isTTY) throw new Error('Redirect a credential file or pipe into stdin; interactive input would echo the credential');
   const value = validateCredential(name, readFileSync(0,'utf8'));
   const apps = Object.entries(credentials).filter(([,names]) => names.includes(name)).map(([app]) => app);
+  // The confirmation goes in with the key, in one install, so a key never arrives confirmed apart from its own command.
+  if (name === 'GEMINI_PAID_SERVICE') throw new Error('Install GEMINI_PAID_SERVICE with the key: node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production|staging --paid-service < key-file');
+  const values = gemini ? {GEMINI_API_KEY:value, GEMINI_PAID_SERVICE:'confirmed'} : {[name]:value};
   for (const app of apps) secretNames(app, environment === 'production');
-  for (const app of apps) install(app, {[name]:value}, environment === 'production');
+  for (const app of apps) install(app, values, environment === 'production');
+  // A running queue container keeps the environment it started with: Gemini starts reading on the next start.
+  if (gemini) console.log(`Gemini reads PDFs once the queue container starts again: run "Deploy ${environment}", then check that Firm settings name Google Gemini as how PDFs are read.`);
  } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

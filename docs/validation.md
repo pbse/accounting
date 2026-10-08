@@ -3835,3 +3835,21 @@ Branch `claude/user-settings`. A member's own settings page at `/dashboard/setti
 - `/readyz` answers 503 with `member_settings` renamed away and 200 with it back.
 
 Not verified: a hosted member's name read and saved through WorkOS, and the Drive connection returning to the settings page; both take the same calls as the people roster and a close's evidence pane.
+
+## Gemini is turned on in one step (2026-10-07)
+
+Request: turn Gemini on with a single Cloudflare step, not a separate GitHub variable.
+
+- **Change.** `GEMINI_PAID_SERVICE` is no longer a GitHub variable: it is gone from the deploy workflows and from `scripts/deploy-service.mjs`'s configuration names. It is now a Cloudflare secret of the queue worker. `node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production --paid-service < key-file` installs it, as `confirmed`, together with the key in one install.
+  - `--paid-service` is the operator's confirmation that the key's Google project has billing enabled. Without it the script refuses the key and says why.
+  - The confirmation is never installed on its own.
+  - The worker still requires both. A key that ever arrived without the confirmation stays held, and Firm settings say to reinstall it with `--paid-service`.
+  - `GEMINI_OCR_MODEL` stays an optional GitHub variable, like the other model names.
+  - A running queue container keeps the environment it started with. After installing a Gemini key, the installer says to redeploy and check that Firm settings name Google Gemini. The deployment doc's staging table uses `staging` in its example.
+- **Tested.**
+  - `scripts/cloudflare-credentials.test.mjs`: the Gemini key is refused without `--paid-service`, or with any other or extra argument. Another credential with the flag is refused. With the flag, one install to the queue worker carries the key and `GEMINI_PAID_SERVICE: confirmed`. The confirmation alone is refused, and any value but `confirmed` fails validation.
+  - The configuration-only deploy tests now treat `GEMINI_PAID_SERVICE` as a credential, kept out of every configuration payload.
+  - `TestGeminiIsConfiguredOnlyWithAKeyOnTheConfirmedPaidService` (llm) and `TestFirmSettingsShowHowTheWorkerReadsPDFs` (transport) are unchanged apart from the held message.
+  - Script and frontend tests: 47/47.
+
+Not verified: live Gemini.
