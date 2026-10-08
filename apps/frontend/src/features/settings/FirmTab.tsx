@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { EmailSettings } from "../closes/Email";
 import { workspaceRequest } from "../closes/workspace";
@@ -42,7 +42,8 @@ function SupportAndRecords({ policy }: { policy: Policy }) {
 }
 
 // The firm itself: how it sends email, how much of its closes the agent carries, who supports it, and its records.
-export function FirmTab({ policy }: { policy: Policy }) {
+// The email sender and Human effort read on their own; only the support owner waits for the policy.
+export function FirmTab({ policy, unavailable }: { policy?: Policy; unavailable: ReactNode }) {
   return (
     <>
       <EmailSettings />
@@ -55,7 +56,7 @@ export function FirmTab({ policy }: { policy: Policy }) {
           </Link>
         </p>
       </section>
-      <SupportAndRecords policy={policy} />
+      {policy ? <SupportAndRecords policy={policy} /> : unavailable}
     </>
   );
 }

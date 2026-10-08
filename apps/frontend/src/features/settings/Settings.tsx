@@ -42,7 +42,8 @@ const descriptions: Record<string, string> = {
 export default function Settings() {
   const [params] = useSearchParams();
   const { policy, error: policyError, refresh: refreshPolicy } = usePolicy();
-  const items = [...yours, ...firm(policy?.can_manage_members ?? false, policy?.can_read_roster ?? false)];
+  // While the policy cannot be read, every firm section stays reachable; each refuses on its own if it must.
+  const items = [...yours, ...firm(policy ? policy.can_manage_members : !!policyError, policy ? policy.can_read_roster : !!policyError)];
   const asked = params.get("tab");
   // A section the person cannot open, or none, opens the profile. A firm section asked for before the policy that gates
   // it has been read stays selected, so a failed read shows there, with the way to try again, not a different section.
@@ -63,11 +64,15 @@ export default function Settings() {
   const firmSection = yours.every((t) => t.key !== tab);
   const panel = () => {
     if (firmSection) {
-      if (policyError)
-        return isEnrollmentError(policyError) ? (
+      // People, Clients and Security read their own routes, so a failed policy read does not close them.
+      if (tab === "people") return <People />;
+      if (tab === "clients") return <ClientRoster />;
+      if (tab === "security") return <SecurityTab />;
+      const unavailable = policyError ? (
+        isEnrollmentError(policyError) ? (
           <FirmEnrollment onEnrolled={refreshPolicy} />
         ) : (
-          <section aria-label="Firm settings unavailable">
+          <section aria-label="Firm policy unavailable">
             <p role="alert">{policyError}</p>
             <p className="setting-actions">
               <button type="button" onClick={refreshPolicy}>
@@ -75,13 +80,12 @@ export default function Settings() {
               </button>
             </p>
           </section>
-        );
-      if (!policy) return <p role="status">Opening…</p>;
-      if (tab === "people") return <People />;
-      if (tab === "clients") return <ClientRoster />;
-      if (tab === "policies") return <Policies policy={policy} refresh={refreshPolicy} />;
-      if (tab === "security") return <SecurityTab />;
-      return <FirmTab policy={policy} />;
+        )
+      ) : !policy ? (
+        <p role="status">Opening…</p>
+      ) : null;
+      if (tab === "policies") return unavailable ?? <Policies policy={policy!} refresh={refreshPolicy} />;
+      return <FirmTab policy={policy} unavailable={unavailable} />;
     }
     if (error) return <p role="alert">{error}</p>;
     if (!me) return <p role="status">Opening…</p>;

@@ -292,7 +292,17 @@ export function MemberDecision() {
       setBusy(false);
     }
   }
-  if (!members) return message ? <p role="alert">{message}</p> : null;
+  if (!members)
+    return message ? (
+      <p role="alert">
+        {message}{" "}
+        <button type="button" onClick={() => void load()}>
+          Try again
+        </button>
+      </p>
+    ) : (
+      <p role="status">Reading membership…</p>
+    );
   return (
     <>
       <form onSubmit={(event) => void decide(event)}><fieldset disabled={busy}>
