@@ -529,8 +529,25 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 		if staffSession.returnPath(back) {
 			kind, check = staffSession, staff
 		}
+		// again sends the person to start again, still bound for the page they asked for: staff to that console page,
+		// whose button signs them in to it, and anyone else to the login page. Each says why.
+		again := func(why string) {
+			switch {
+			case kind.staff:
+				to, _ := url.Parse(back)
+				query := to.Query()
+				query.Set("signin", why)
+				to.RawQuery = query.Encode()
+				http.Redirect(w, r, to.String(), http.StatusFound)
+			case back != kind.home && kind.returnPath(back):
+				http.Redirect(w, r, "/login?"+url.Values{"error": {why}, "return": {back}}.Encode(), http.StatusFound)
+			default:
+				http.Redirect(w, r, "/login?error="+why, http.StatusFound)
+			}
+		}
 		if state == "" || subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 || r.URL.Query().Get("code") == "" || !kind.returnPath(back) {
-			problem(w, 400, "This sign-in expired or did not start here. Start again from the sign-in page.")
+			// A reload, the back button or an old tab: nothing is asked of WorkOS.
+			again(refuseExpired)
 			return
 		}
 		tokens, refusal, choice, err := c.firmTokens(r.Context(), db, kind, r.URL.Query().Get("code"))
@@ -547,13 +564,14 @@ func (c *sessionConfig) register(mux *http.ServeMux, db *sql.DB, verifier *auth.
 			http.Redirect(w, r, "/login?choose=1", http.StatusFound)
 			return
 		}
+		if err != nil || refusal == refuseUnavailable {
+			// WorkOS refused the code (used, or too old) or could not be reached, or the database could not finish.
+			again(refuseUnavailable)
+			return
+		}
 		if refusal != "" {
 			// The login page says why, in words; nothing about the person goes in the address.
 			http.Redirect(w, r, "/login?error="+refusal, http.StatusFound)
-			return
-		}
-		if err != nil {
-			problem(w, 502, "WorkOS could not complete the sign-in. Try again.")
 			return
 		}
 		if c.startSession(w, r, db, kind, check, tokens) {

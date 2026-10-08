@@ -70,8 +70,9 @@
   background: var(--surface);
   border: 0;
   border-radius: var(--radius-md);
-  padding: var(--space-16);
+  padding: var(--space-16) var(--space-20);
   margin: var(--space-16) 0;
+  box-shadow: var(--shadow-card);
 }
 .app-shell .preparation-inputs > summary {
   font-size: 15px;
@@ -187,8 +188,9 @@
 .agent-card {
   background: var(--surface);
   border-radius: var(--radius-md);
-  padding: var(--space-12) var(--space-16);
+  padding: var(--space-12) var(--space-20);
   margin-bottom: var(--space-24);
+  box-shadow: var(--shadow-card);
 }
 .agent-card > summary {
   display: flex;
@@ -251,16 +253,18 @@
 }
 /* A form or panel placed straight on the page is a card, like a section. */
 .app-shell .attention > details {
-  padding: var(--space-16);
+  padding: var(--space-16) var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 /* Attention lists each client's items as its own card. */
 .app-shell .attention > article {
   margin-bottom: var(--space-16);
-  padding: var(--space-16);
+  padding: var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 .attention > article h2 {
   margin-top: 0;
@@ -282,12 +286,12 @@
   gap: var(--space-8);
   padding: var(--space-10) var(--space-16);
   border-radius: var(--radius-full);
-  background: var(--gloss), var(--blue);
+  background: var(--blue);
   color: var(--on-chip);
-  box-shadow: var(--shadow-chip), 0 8px 24px rgb(31 98 166 / 28%);
+  box-shadow: 0 8px 24px rgb(37 99 235 / 28%);
 }
 .app-shell .assistant-toggle:hover:not(:disabled) {
-  background: var(--gloss-hover), var(--blue);
+  background: var(--blue-hover);
 }
 aside.assistant {
   position: fixed;
@@ -302,7 +306,7 @@ aside.assistant {
   padding: var(--space-16);
   background: var(--surface);
   border-left: 1px solid var(--line);
-  box-shadow: -12px 0 32px rgb(0 0 0 / 6%);
+  box-shadow: -12px 0 32px rgb(16 24 40 / 8%);
 }
 .app-shell .assistant header {
   display: flex;
@@ -336,8 +340,7 @@ aside.assistant {
   margin: 0;
 }
 .app-shell .assistant-context .pill {
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
+  background: var(--fill);
   color: var(--ink-2);
 }
 .assistant-messages {
@@ -460,14 +463,14 @@ aside.assistant {
   justify-content: center;
   align-items: flex-start;
   padding: 12vh var(--space-16) var(--space-16);
-  background: rgb(0 0 0 / 25%);
+  background: rgb(16 24 40 / 25%);
 }
 .palette {
   width: min(560px, 100%);
   padding: var(--space-12);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: 0 16px 40px rgb(0 0 0 / 20%);
+  box-shadow: var(--shadow-pop);
 }
 .app-shell .palette input {
   width: 100%;

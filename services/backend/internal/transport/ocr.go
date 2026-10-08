@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"close.local/backend/internal/documents"
+	"close.local/backend/internal/llm"
 )
 
 // workerOCR is how the document worker reads PDF pages, as its heartbeat reported in the last five minutes: provider
@@ -35,7 +35,7 @@ func workerOCR(ctx context.Context, db *sql.DB) (provider, detail string) {
 
 // heldBecause says why a Gemini key on the worker is unused.
 func heldBecause(reason string) string {
-	if reason == documents.HeldModel {
+	if reason == llm.HeldModel {
 		return "GEMINI_OCR_MODEL is not a valid model name"
 	}
 	return "the operator has not confirmed its paid service (GEMINI_PAID_SERVICE)"

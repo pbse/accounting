@@ -40,7 +40,7 @@ func TestXeroBillLineIsRecodedOnceAfterIndependentApproval(t *testing.T) {
 	}
 	org, entity, tenant := "org_XeroFix"+rand.Text(), "Xero fix client", "t-"+rand.Text()
 	var closeID, connection string
-	_, err = db.Exec(`INSERT INTO organizations(id,name,require_independent_review) VALUES($1,'Xero correction fixture',true)`, org)
+	_, err = db.Exec(`INSERT INTO organizations(id,name,require_independent_review,allow_ledger_writes) VALUES($1,'Xero correction fixture',true,true)`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture'),($1,'user_reviewer',true,'Synthetic enrollment','fixture')`, org)
 	must(err)

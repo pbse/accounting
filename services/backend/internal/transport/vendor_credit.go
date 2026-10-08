@@ -174,6 +174,9 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Production supplier credits are not enabled yet. They turn on after the QuickBooks behavior is checked in the sandbox.")
 				return
 			}
+			if in.Action != "verify" && refuseLedgerWrites(w, r.Context(), db, organization(r)) {
+				return
+			}
 			saved, kind := "", "vendor_credit"
 			if in.Action == "verify" {
 				prior, err := readVendorCredit(r.Context(), db, closeID, paperID)
@@ -297,7 +300,18 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Type APPROVE VENDOR CREDIT.")
 				return
 			}
-			result, e := db.ExecContext(r.Context(), `UPDATE vendor_credit_postings SET state='approved',approved_by=$2,approval_expires_at=now()+interval '10 minutes' WHERE id::text=$1 AND state IN ('preview','approved')`, item.ID, a.Subject)
+			tx, e := db.BeginTx(r.Context(), nil)
+			if e != nil {
+				problem(w, 503, "Approval could not be saved.")
+				return
+			}
+			defer tx.Rollback()
+			// An approval of a live write is given only while the firm has writing on, decided under the firm-row lock that
+			// turning it off takes, so turning it off withdraws every approval it does not refuse.
+			if production && refuseLedgerWrites(w, r.Context(), tx, organization(r)) {
+				return
+			}
+			result, e := tx.ExecContext(r.Context(), `UPDATE vendor_credit_postings SET state='approved',approved_by=$2,approval_expires_at=now()+interval '10 minutes' WHERE id::text=$1 AND state IN ('preview','approved')`, item.ID, a.Subject)
 			if e != nil {
 				var constraint *pgconn.PgError
 				if errors.As(e, &constraint) && constraint.Code == "23505" && constraint.ConstraintName == "vendor_credit_one_reference" {
@@ -310,6 +324,10 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 			n, _ := result.RowsAffected()
 			if n != 1 {
 				problem(w, 409, "Posting attempt already exists.")
+				return
+			}
+			if tx.Commit() != nil {
+				problem(w, 503, "Approval could not be saved.")
 				return
 			}
 		case "execute":
@@ -342,6 +360,9 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if production {
+				if refuseLedgerWrites(w, r.Context(), tx, organization(r)) {
+					return
+				}
 				var current string
 				if tx.QueryRowContext(r.Context(), `SELECT id::text FROM production_posting_grants WHERE id=$1 AND revoked_at IS NULL AND expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=production_posting_grants.organization_id AND subject=production_posting_grants.granted_by AND granted) FOR UPDATE`, item.GrantID).Scan(&current) != nil {
 					problem(w, 409, "Production grant expired or was revoked.")

@@ -1,5 +1,7 @@
 # Assistant
 
+> This describes the assistant as built. Its rebuild into an agent that chooses its own reads and proposes actions as cards is designed in [agent-chat.md](agent-chat.md); as each part of that plan ships, the behavior here is replaced.
+
 The **Assistant** button (bottom right of every signed-in workspace page) opens a panel that answers questions from the saved work you can already see (migration 072). It shows only in a signed-in or unlocked workspace, and it remembers whether it was open in this browser; nothing else is kept in the browser.
 
 ## Context and history

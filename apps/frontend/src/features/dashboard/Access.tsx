@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { AccountAccess, authKitClientId, useSession } from "../auth/Auth";
 import { unlock, useUnlocked } from "../closes/workspace";
+import { Avatar } from "@close/ui/components/Avatar";
 
 // Every workspace page waits for access; there is nothing to try without signing in.
 export function WorkspaceGate({ children }: { children: ReactNode }) {
@@ -44,17 +45,32 @@ function SignedIn({ children }: { children: ReactNode }) {
   );
 }
 
-export function SidebarAccount() {
+// The account menu in the top bar: the person's initial, and under it their session and the way out.
+export function AccountMenu() {
   const unlocked = useUnlocked();
-  if (authKitClientId) return <AccountAccess />;
+  const session = authKitClientId ? useSession() : undefined;
+  const label = session?.user?.email ?? (unlocked ? "Local development" : "Locked");
   return (
-    <>
-      <p>{unlocked ? "Local development access" : "Workspace locked"}</p>
-      {unlocked && (
-        <button type="button" onClick={() => unlock("")}>
-          Lock workspace
-        </button>
-      )}
-    </>
+    <details className="topbar-account">
+      <summary>
+        <span className="visually-hidden">Account: </span>
+        <Avatar label={label} />
+        <span className="topbar-account-name">{session?.user ? session.user.email.split("@")[0] : label}</span>
+      </summary>
+      <div>
+        {authKitClientId ? (
+          <AccountAccess />
+        ) : (
+          <>
+            <p>{unlocked ? "Local development access" : "Workspace locked"}</p>
+            {unlocked && (
+              <button type="button" onClick={() => unlock("")}>
+                Lock workspace
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    </details>
   );
 }

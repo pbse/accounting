@@ -146,14 +146,18 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			{"provider": "Operations webhook", "receives": "Organization, close and item IDs, state and age of stuck work; no client names or amounts. Set on the worker.", "evidence": plural(alerts, "alert", "alerts") + " accepted in the last 30 days", "in_use": alerts > 0},
 		}
 		var evidence, acceptances []byte
+		var writes bool
 		if err = tx.QueryRowContext(r.Context(), capabilityEvidence, org).Scan(&evidence); err == nil {
 			err = tx.QueryRowContext(r.Context(), capabilityAcceptances, org).Scan(&acceptances)
+		}
+		if err == nil {
+			err = tx.QueryRowContext(r.Context(), `SELECT allow_ledger_writes FROM organizations WHERE id=$1`, org).Scan(&writes)
 		}
 		if err != nil {
 			problem(w, 503, "Security center unavailable.")
 			return
 		}
-		if out["operations"], err = capabilityRegister(evidence, out["posting_grants"].(json.RawMessage), out["services"].(json.RawMessage), acceptances); err != nil {
+		if out["operations"], err = capabilityRegister(evidence, out["posting_grants"].(json.RawMessage), out["services"].(json.RawMessage), acceptances, writes); err != nil {
 			problem(w, 503, "Security center unavailable.")
 			return
 		}

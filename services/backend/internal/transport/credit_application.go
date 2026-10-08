@@ -248,6 +248,9 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "Applying a "+spec.label+" in production is not enabled yet. It turns on after the QuickBooks behavior is checked in the sandbox.")
 				return
 			}
+			if in.Action != "verify" && refuseLedgerWrites(w, r.Context(), db, organization(r)) {
+				return
+			}
 			saved, kind := "", spec.grant
 			if in.Action == "verify" {
 				if item.GrantID == "" {
@@ -375,6 +378,11 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			defer tx.Rollback()
+			// An approval of a live write is given only while the firm has writing on, decided under the firm-row lock that
+			// turning it off takes, so turning it off withdraws every approval it does not refuse.
+			if production && refuseLedgerWrites(w, r.Context(), tx, organization(r)) {
+				return
+			}
 			if issue, err := correctionIndependenceIssue(r.Context(), tx, closeID, item.ProposedBy, a.Subject, item.Amount); err != nil {
 				problem(w, 503, "Firm review policy could not be checked. No write was made.")
 				return
@@ -429,6 +437,9 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if production {
+				if refuseLedgerWrites(w, r.Context(), tx, organization(r)) {
+					return
+				}
 				var current string
 				if tx.QueryRowContext(r.Context(), `SELECT id::text FROM production_posting_grants WHERE id=$1 AND revoked_at IS NULL AND expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=production_posting_grants.organization_id AND subject=production_posting_grants.granted_by AND granted) FOR UPDATE`, item.GrantID).Scan(&current) != nil {
 					problem(w, 409, "Production grant expired or was revoked.")

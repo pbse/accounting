@@ -1,4 +1,4 @@
-/* The Tray shell both apps share (the firm app and the staff console): layout, sidebar, page and the element
+/* The Tray shell both apps share (the firm app and the staff console): the top bar, the page column and the element
    styles inside it. Every value comes from tokens.css; keep literal colours out of this file. The shell depends on no
    other stylesheet: the element rules below are everything its pages assume. */
 * {
@@ -8,8 +8,8 @@ body {
   margin: 0;
 }
 .app-shell {
-  display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
   background: var(--bg);
   color: var(--ink);
@@ -43,7 +43,7 @@ body {
   position: absolute;
   top: -100px;
   left: var(--space-16);
-  z-index: 2;
+  z-index: 20;
   padding: var(--space-16);
   background: var(--surface);
 }
@@ -51,7 +51,7 @@ body {
   top: var(--space-16);
 }
 :where(.app-shell) section {
-  margin-bottom: 1.2rem;
+  margin-bottom: var(--space-16);
 }
 :where(.app-shell) summary {
   cursor: pointer;
@@ -107,30 +107,32 @@ body {
 }
 .app-shell h1 {
   font-family: inherit;
-  font-size: 20px;
-  line-height: 24px;
-  font-weight: 500;
-  letter-spacing: 0;
+  font-size: 24px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   margin: 0;
 }
 .app-shell h2 {
   font-family: inherit;
   font-size: 17px;
-  line-height: 20px;
-  font-weight: 500;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
 }
 .app-shell h3,
 .app-shell section h2 {
   font-family: inherit;
   font-size: 15px;
   line-height: 20px;
-  font-weight: 500;
+  font-weight: 600;
 }
 .app-shell .eyebrow {
   color: var(--ink-2);
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.06em;
+  text-transform: uppercase;
   margin: 0 0 0.3rem;
 }
 .app-shell dt,
@@ -149,7 +151,7 @@ body {
 }
 .app-shell legend {
   font-size: 15px;
-  font-weight: 500;
+  font-weight: 600;
 }
 .app-shell a:focus-visible,
 .app-shell button:focus-visible,
@@ -160,26 +162,29 @@ body {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
+/* A section is a white card on the grey ground; a section inside it is a tile with a hairline ring. */
 .app-shell section {
   background: var(--surface);
   border: 0;
   border-radius: var(--radius-md);
-  padding: var(--space-16);
-  box-shadow: none;
+  padding: var(--space-20);
+  box-shadow: var(--shadow-card);
 }
 .app-shell section section {
   background: var(--surface);
   border-radius: var(--radius-sm);
+  padding: var(--space-16);
   box-shadow: var(--shadow-tile);
 }
+/* Buttons are pills: white with a hairline ring, or solid blue for the one primary action. */
 .app-shell button,
 .app-shell .button {
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: var(--surface);
   box-shadow: var(--shadow-raised);
   color: var(--ink);
-  padding: var(--space-8) var(--space-12);
+  padding: var(--space-8) 14px;
   font-weight: 500;
   font-size: 13px;
   line-height: 16px;
@@ -190,14 +195,14 @@ body {
 }
 .app-shell .primary,
 .app-shell button.primary {
-  background: var(--graphite-gloss);
-  box-shadow: var(--shadow-chip);
+  background: var(--blue);
+  box-shadow: none;
   color: var(--on-chip);
-  padding: 9px var(--space-12);
+  padding: 9px var(--space-16);
 }
 .app-shell .primary:hover:not(:disabled),
 .app-shell .button.primary:hover {
-  background: var(--graphite-gloss-hover);
+  background: var(--blue-hover);
 }
 .app-shell label {
   display: block;
@@ -213,8 +218,8 @@ body {
   max-width: 44rem;
   margin-top: 6px;
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-  padding: var(--space-8) var(--space-10);
+  border-radius: var(--radius-sm);
+  padding: var(--space-8) var(--space-12);
   font: inherit;
   font-size: 14px;
   color: inherit;
@@ -230,14 +235,16 @@ body {
 }
 .app-shell thead th {
   color: var(--ink-2);
-  font-weight: 400;
+  font-weight: 500;
   font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .app-shell .note {
   background: var(--tile);
   border: 0;
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-tile);
+  box-shadow: none;
   color: var(--ink-2);
   font-size: 13px;
 }
@@ -248,10 +255,11 @@ body {
   background: var(--negative-tint);
   color: var(--negative-text);
 }
+/* Pills: tinted, rounded, with words that pass AA on their tint. */
 .app-shell .pill {
   display: inline-block;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) 6px;
+  border-radius: var(--radius-full);
+  padding: 2px var(--space-8);
   font-size: 11px;
   font-weight: 500;
   line-height: 16px;
@@ -266,85 +274,182 @@ body {
   background: var(--negative-tint);
   color: var(--negative-text);
 }
+.app-shell .pill.info {
+  background: var(--blue-tint);
+  color: var(--blue-text);
+}
 .app-shell .pill.neutral {
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
+  background: var(--fill);
   color: var(--ink-2);
 }
 
-.sidebar {
+/* The top bar: the brand, the navigation as pills with the current page in blue, and the tools on the right. */
+.topbar {
   position: sticky;
   top: 0;
-  height: 100vh;
-  overflow-y: auto;
+  z-index: 10;
   display: flex;
-  flex-direction: column;
-  padding: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-12);
+  min-height: var(--topbar-height);
+  padding: var(--space-12) var(--space-24);
   background: var(--bg);
-  border-right: 1px solid var(--line);
 }
-.sidebar-brand {
+.topbar-brand {
   display: flex;
   flex: none;
   align-items: center;
   gap: var(--space-10);
-  height: var(--header-height);
-  padding: 0 var(--space-16);
-  border-bottom: 1px solid var(--line);
+  height: 44px;
+  padding: 0 var(--space-16) 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
   text-decoration: none;
 }
-.sidebar-brand .logo {
-  width: var(--avatar);
-  height: var(--avatar);
-  border-radius: var(--radius-md);
+.topbar-brand .logo {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
   display: grid;
   place-items: center;
-  background: var(--gloss), var(--blue);
-  box-shadow: var(--shadow-chip);
+  background: var(--blue);
   color: var(--on-chip);
   font-size: 15px;
   font-weight: 600;
 }
-.sidebar-brand strong {
+.topbar-brand strong {
   display: block;
   font-size: 14px;
-  line-height: 18px;
-  font-weight: 500;
+  line-height: 16px;
+  font-weight: 600;
 }
-.sidebar-brand small {
+.topbar-brand small {
   display: block;
   color: var(--ink-2);
   font-size: 11px;
-  line-height: 16px;
+  line-height: 14px;
 }
-.sidebar > form {
-  padding: var(--space-16) var(--space-16) var(--space-4);
+/* The navigation takes the room between the brand and the tools; its pill hugs the items and scrolls sideways, with
+   a visible scrollbar, when they are wider than that room. */
+.topbar nav {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
 }
-.app-shell .sidebar-search {
-  position: relative;
-  margin: 0;
+.topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: var(--space-4);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
-.app-shell .sidebar-search input {
-  margin: 0;
+.app-shell .nav-item {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-8);
   height: var(--nav-item-height);
-  padding: 0 34px;
-  background: var(--fill);
-  border: 0;
-  border-radius: var(--radius-md);
+  padding: 0 14px;
+  border-radius: var(--radius-full);
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
 }
-.app-shell .sidebar-search input::placeholder {
+.nav-item svg {
+  color: currentcolor;
+  flex-shrink: 0;
+}
+.app-shell .nav-item:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.app-shell .nav-item[aria-current="page"],
+.app-shell .nav-item[aria-current="page"]:hover {
+  background: var(--blue);
+  color: var(--on-chip);
+}
+/* A button among the navigation pills (such as "Ask the agent") looks like its neighbours. */
+.app-shell button.nav-item {
+  background: none;
+  box-shadow: none;
+}
+.app-shell button.nav-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+/* An account name in a statement table that opens its ledger rows reads as text, not a raised button. */
+.app-shell button.cell-link,
+.app-shell button.cell-link:hover:not(:disabled) {
+  background: none;
+  box-shadow: none;
+  padding: 0;
+  border-radius: 0;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+}
+.app-shell .nav-item .pill {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  background: var(--blue);
+  color: var(--on-chip);
+  font-weight: 600;
+  line-height: 1;
+}
+.app-shell .nav-item[aria-current="page"] .pill {
+  background: var(--surface);
+  color: var(--blue-text);
+}
+.topbar-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-8);
+  margin-left: auto;
+}
+.topbar-tools > form {
+  margin: 0;
+}
+.app-shell .topbar-search {
+  position: relative;
+  display: block;
+  margin: 0;
+}
+.app-shell .topbar-search input {
+  width: 15rem;
+  height: 44px;
+  margin: 0;
+  padding: 0 36px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+}
+.app-shell .topbar-search input::placeholder {
   color: var(--ink-2);
 }
-.sidebar-search svg {
+.topbar-search svg {
   position: absolute;
-  left: var(--space-10);
+  left: 14px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--ink-2);
 }
-.sidebar-search kbd {
+.topbar-search kbd {
   position: absolute;
-  right: var(--space-10);
+  right: var(--space-12);
   top: 50%;
   transform: translateY(-50%);
   display: grid;
@@ -357,112 +462,71 @@ body {
   line-height: 1;
   color: var(--ink-2);
   border-radius: 5px;
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
+  background: var(--fill);
 }
-.nav-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-8) var(--space-16) var(--space-16);
+/* An account menu: the person's initial as a button, and a card below it with their session. */
+.topbar-account {
+  position: relative;
 }
-.nav-group + .nav-group {
-  border-top: 1px solid var(--line);
-}
-.nav-label {
+.topbar-account > summary {
   display: flex;
   align-items: center;
-  height: 30px;
-  padding-left: var(--space-10);
-  color: var(--ink-2);
+  gap: var(--space-8);
+  height: 44px;
+  padding: 0 var(--space-12) 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+  list-style: none;
+  font-size: 13px;
+  font-weight: 500;
+}
+.topbar-account > summary::-webkit-details-marker {
+  display: none;
+}
+.topbar-account > summary:hover {
+  background: var(--hover);
+}
+.topbar-account > summary .avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
   font-size: 13px;
 }
-.app-shell .nav-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-10);
-  height: var(--nav-item-height);
-  padding: 0 var(--space-10);
-  border-radius: var(--radius-md);
-  color: var(--ink-2);
-  text-decoration: none;
-  font-size: 14px;
-}
-.nav-item svg {
-  color: var(--ink-2);
-  flex-shrink: 0;
-}
-.app-shell .nav-item:hover {
-  background: var(--fill);
-}
-.app-shell .nav-item[aria-current="page"] {
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
-  color: var(--ink);
-}
-.nav-item[aria-current="page"] svg {
-  color: var(--ink);
-}
-/* "Ask the agent" in the sidebar is a button that looks like its neighbours. */
-.app-shell button.nav-item {
-  width: 100%;
-  background: none;
-  box-shadow: none;
-  font-weight: 400;
-  line-height: 20px;
-  text-align: left;
-}
-/* An account name in a statement table that opens its ledger rows reads as text, not a raised button. */
-.app-shell button.cell-link,
-.app-shell button.cell-link:hover:not(:disabled) {
-  background: none;
-  box-shadow: none;
-  padding: 0;
-  font: inherit;
-  text-align: left;
-  text-decoration: underline;
-}
-.app-shell button.nav-item:hover:not(:disabled) {
-  background: var(--fill);
-}
-.app-shell .nav-item .pill {
-  margin-left: auto;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-full);
-  background: var(--gloss), var(--blue);
-  box-shadow: var(--shadow-chip);
-  color: var(--on-chip);
-  font-weight: 600;
-  line-height: 1;
-}
-.sidebar-footer {
-  margin-top: auto;
+.topbar-account[open] > div {
+  position: absolute;
+  right: 0;
+  top: 52px;
+  z-index: 11;
+  width: min(320px, calc(100vw - 32px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
   padding: var(--space-16);
-  border-top: 1px solid var(--line);
-  font-size: 11px;
-  line-height: 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  font-size: 13px;
+  line-height: 18px;
   color: var(--ink-2);
 }
-.sidebar-footer p {
+.topbar-account > div p {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 .app-shell .app-main {
+  flex: 1;
   min-width: 0;
   max-width: none;
   padding: 0;
 }
 .page {
-  padding: 0 var(--space-16) 48px;
-}
-.page > :not(.page-header) {
-  max-width: 1288px;
+  width: 100%;
+  max-width: calc(var(--page-width) + 2 * var(--space-24));
+  margin: 0 auto;
+  padding: 0 var(--space-24) 48px;
 }
 .page > :first-child:not(.page-header) {
   margin-top: var(--space-16);
@@ -508,9 +572,9 @@ body {
 .chip {
   display: inline-flex;
   align-items: center;
-  min-height: 18px;
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) 6px;
+  min-height: 20px;
+  border-radius: var(--radius-full);
+  padding: 2px var(--space-8);
   font-size: 11px;
   font-weight: 500;
   line-height: 16px;
@@ -527,61 +591,47 @@ body {
 .stack > * + * {
   margin-top: var(--space-16);
 }
-.sidebar nav {
-  display: flex;
-  flex-direction: column;
+/* Where the brand, the navigation and the tools no longer share a row, the navigation takes the second row and
+   scrolls sideways; on a phone the bar also loses its subtitle and search. */
+@media (max-width: 1100px) {
+  .topbar nav {
+    order: 3;
+    flex-basis: 100%;
+  }
 }
-/* On a phone the sidebar is one strip that scrolls sideways above the page, and a wide table scrolls inside its card
-   instead of widening the page. */
+@media (max-width: 1100px) and (min-width: 861px) {
+  .topbar-tools {
+    margin-left: auto;
+  }
+}
 @media (max-width: 860px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-    align-content: start;
+  .topbar {
+    gap: var(--space-8);
+    padding: var(--space-8) var(--space-16);
+  }
+  .topbar-brand small,
+  .topbar-tools > form,
+  .topbar-account-name {
+    display: none;
+  }
+  .topbar-account > summary {
+    padding-right: 6px;
+  }
+  /* The one blue button keeps its icon alone where the brand, the button and the account must share a 320px row. */
+  .topbar-tools > .button.primary {
+    padding: 0 var(--space-12);
+    height: 44px;
+    display: inline-grid;
+    place-items: center;
+  }
+  .topbar-tools > .button.primary > span {
+    display: none;
   }
   .app-shell :has(> table) {
     overflow-x: auto;
   }
-  .sidebar {
-    position: static;
-    height: auto;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    padding: 8px;
-    overflow-x: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .sidebar-brand {
-    height: auto;
-    padding: 0;
-    border: 0;
-  }
-  .sidebar-brand small,
-  .nav-label,
-  .sidebar-footer p,
-  .sidebar > form {
-    display: none;
-  }
-  .sidebar nav,
-  .nav-group {
-    flex: none;
-    flex-direction: row;
-    padding: 0;
-  }
-  .app-shell .nav-item {
-    white-space: nowrap;
-  }
-  .nav-group + .nav-group {
-    border: 0;
-  }
-  .sidebar-footer {
-    flex: none;
-    flex-direction: row;
-    align-items: center;
-    margin: 0;
-    padding: 0;
-    border: 0;
+  .page {
+    padding: 0 var(--space-16) 48px;
   }
 }
 .app-shell section.bare {
@@ -594,11 +644,13 @@ body {
 .app-shell section.bare section {
   background: var(--surface);
   border-radius: var(--radius-md);
-  box-shadow: none;
+  padding: var(--space-20);
+  box-shadow: var(--shadow-card);
 }
 .app-shell section.bare section section {
   background: var(--surface);
   border-radius: var(--radius-sm);
+  padding: var(--space-16);
   box-shadow: var(--shadow-tile);
 }
 .app-shell .gate {
@@ -619,7 +671,8 @@ body {
 .app-shell .stack > details {
   background: var(--surface);
   border-radius: var(--radius-md);
-  padding: var(--space-12) var(--space-16);
+  padding: var(--space-12) var(--space-20);
+  box-shadow: var(--shadow-card);
 }
 .app-shell .stack > details[open] > summary {
   margin-bottom: var(--space-10);
@@ -630,11 +683,20 @@ body {
 }
 /* A form or panel placed straight on the page is a card, like a section. */
 .app-shell .page > form {
-  padding: var(--space-16);
+  padding: var(--space-20);
   border-radius: var(--radius-md);
   background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 /* Text helpers that replace one-off inline styles. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 .pre-line {
   white-space: pre-line;
 }

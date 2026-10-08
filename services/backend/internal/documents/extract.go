@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"close.local/backend/internal/budget"
+	"close.local/backend/internal/llm"
 )
 
 type boundedOutput struct{ bytes.Buffer }
@@ -57,7 +58,7 @@ func command(ctx context.Context, name string, args ...string) (string, error) {
 // counts each Gemini call against the firm's daily model limit first. Tesseract reads a page without a text layer that
 // Gemini could not.
 type Reading struct {
-	Gemini  *Gemini
+	Gemini  PageReader // nil: no machine reading but Tesseract's
 	Reserve func(context.Context) error
 	// local is the time the document's scanned pages from this one on need to be read locally, should Gemini fail
 	// them: Gemini is asked only while the time left covers its call and that.
@@ -86,19 +87,19 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 		return image, renderErr
 	}
 	hasLayer := strings.TrimSpace(layer) != ""
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < geminiTimeout+r.local+geminiMargin {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < llm.GeminiTimeout+r.local+geminiMargin {
 		r.off = true
 	}
 	if r.Gemini != nil && !r.off {
 		// A page Gemini would refuse unsent (an empty or oversized image) is never charged to the firm's limit.
-		if png, err := rendered(); err == nil && len(png) > 0 && len(png) <= geminiMaxImage {
+		if png, err := rendered(); err == nil && len(png) > 0 && len(png) <= llm.GeminiMaxImage {
 			if r.Reserve != nil {
 				if err = r.Reserve(ctx); err != nil {
 					r.off = true
 				}
 			}
 			if err == nil {
-				text, model, err := r.Gemini.Read(ctx, png)
+				text, model, err := r.Gemini.ReadPage(ctx, png)
 				switch {
 				case err != nil:
 					log.Printf("Gemini could not read a PDF page; using the local reading: %v", err)
@@ -249,9 +250,11 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 		return false, err
 	}
 	// Each Gemini page reading counts against the firm's daily model limit, as preparation's calls do, and as Gemini's.
-	text, extractErr := Extract(ctx, original, Reading{Gemini: GeminiFromEnv(), Reserve: func(ctx context.Context) error {
-		return budget.ReserveGeminiCalls(ctx, db, org, 1)
-	}})
+	reading := Reading{Reserve: func(ctx context.Context) error { return budget.ReserveGeminiCalls(ctx, db, org, 1) }}
+	if g := llm.GeminiFromEnv(); g != nil {
+		reading.Gemini = g
+	}
+	text, extractErr := Extract(ctx, original, reading)
 	state, message := "ready", ""
 	if extractErr != nil {
 		state = "failed"

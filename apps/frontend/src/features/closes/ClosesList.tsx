@@ -58,7 +58,24 @@ export default function ClosesList() {
   }
   return (
     <>
-      <PageHeader icon="clients" title="Client closes">
+      <PageHeader
+        icon="clients"
+        title="Client closes"
+        actions={
+          <form
+            className="title-actions"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const next = String(new FormData(event.currentTarget).get("q") ?? "").trim();
+              setParams(next ? { q: next } : {});
+            }}
+          >
+            <input name="q" aria-label="Search clients" placeholder="Client or YYYY-MM" maxLength={200} defaultValue={query} key={query} />
+            <button>Search</button>
+          </form>
+        }
+      >
         One place per client and month for evidence, prepared work, requests and sign-off.
       </PageHeader>
       <AskAgent

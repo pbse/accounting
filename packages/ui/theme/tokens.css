@@ -18,50 +18,58 @@
 }
 
 .app-shell {
-  /* Ground and surfaces: grey ground, white cards, quiet grey fills inside them. */
-  --bg: #f3f3f3;
+  /* Ground and surfaces: a light grey ground, white cards, quiet grey fills inside them. */
+  --bg: #f2f3f5;
   --surface: #ffffff;
-  --tile: #f3f3f3;
-  --fill: #ececec;
-  --hover: #f8f8f8;
-  --line: rgb(0 0 0 / 8%);
-  --line-strong: rgb(0 0 0 / 14%);
+  --tile: #f6f7f9;
+  --fill: #eceef2;
+  --hover: #f7f8fa;
+  --line: rgb(16 24 40 / 8%);
+  --line-strong: rgb(16 24 40 / 14%);
 
   /* Ink */
-  --ink: #121316;
-  --ink-2: #57565a;
-  /* Dots, dividers and icons only: 2.7:1 on white is too faint for text, which uses --ink-2. */
-  --ink-3: #9e9e9f;
+  --ink: #111827;
+  --ink-2: #5b6472;
+  /* Dots, dividers and icons only: too faint for text, which uses --ink-2. */
+  --ink-3: #9aa3b2;
   --on-chip: #ffffff;
 
-  /* Brand and data hues. */
-  --blue: #1f62a6;
-  --orange: #e5a263;
-  --teal: #1e9581;
-  --violet: #7c62ea;
-  --pink: #ff6d80;
-  --gray: #6e6e73;
+  /* Brand and data hues. --blue is the brand, the current page, the primary button and the focus ring. */
+  --blue: #2563eb;
+  --blue-hover: #1d4ed8;
+  --orange: #f59e0b;
+  --teal: #0d9488;
+  --violet: #7c5cf5;
+  --pink: #ec4899;
+  --gray: #6b7280;
 
-  /* Status: the hues paint discs and dots, the -text shades carry words at AA. */
-  --green: #2ba14f;
-  --red: #d2403f;
-  /* 4.6:1 on --positive-tint (a pill's ground) and 5.2:1 on white, so a green pill's 11px words pass AA. */
-  --positive-text: #1d7c3b;
-  --negative-text: #c0392f;
-  --positive-tint: #e7f4ec;
-  --negative-tint: #fbe9e8;
-  --attention-tint: #fbf0e3;
-  --attention-text: #8a5a1f;
-  --blue-tint: #e9f0f8;
+  /* Status: the hues paint dots and bars; each -text shade carries words at AA on its -tint and on white. */
+  --green: #16a34a;
+  --red: #dc2626;
+  --positive-text: #15803d;
+  --positive-tint: #e7f6ec;
+  --negative-text: #b91c1c;
+  --negative-tint: #fdecec;
+  --attention-text: #92400e;
+  --attention-tint: #fef3dc;
+  --blue-text: #1d4ed8;
+  --blue-tint: #e8efff;
+  --teal-text: #0f766e;
+  --teal-tint: #e3f5f2;
+  --violet-text: #5b3fd6;
+  --violet-tint: #efeaff;
+  /* The one thing to do first: a yellow card with dark words (the home's top decision). */
+  --spotlight: #ffd43b;
+  --spotlight-text: #3b2f00;
 
   /* A source line a draft cites. */
   --highlight: #fff3c9;
   --highlight-edge: #e0a800;
 
-  /* Shape: an element nested 4px inside a radius-md container uses radius-sm. */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  /* Shape: a card has radius-md corners; anything nested inside it uses radius-sm; pills and buttons are full. */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
   --radius-full: 999px;
 
   /* Spacing, named by pixel value. */
@@ -71,24 +79,23 @@
   --space-10: 10px;
   --space-12: 12px;
   --space-16: 16px;
+  --space-20: 20px;
   --space-24: 24px;
+  --space-32: 32px;
 
   /* Sizes */
-  --sidebar-width: 296px;
-  --header-height: 68px;
+  --topbar-height: 64px;
+  --page-width: 1288px;
   --nav-item-height: 36px;
-  --icon-tile: 32px;
+  --icon-tile: 36px;
   --avatar: 36px;
 
-  /* Elevation */
-  --shadow-raised: 0 0 0 1px rgb(0 0 0 / 6%), 0 1px 2px rgb(0 0 0 / 5%);
-  --shadow-tile: inset 0 0 0 1px rgb(0 0 0 / 7%);
-  --shadow-tile-hover: inset 0 0 0 1px rgb(0 0 0 / 12%);
-  --shadow-chip: inset 0 1px 0 rgb(255 255 255 / 22%), inset 0 0 0 1px rgb(0 0 0 / 14%), 0 1px 2px rgb(0 0 0 / 14%);
-  --gloss: linear-gradient(180deg, rgb(255 255 255 / 10%), rgb(0 0 0 / 8%));
-  --gloss-hover: linear-gradient(180deg, rgb(255 255 255 / 16%), rgb(0 0 0 / 4%));
-  --graphite-gloss: linear-gradient(180deg, #343539, #212226);
-  --graphite-gloss-hover: linear-gradient(180deg, #3e3f44, #27282c);
+  /* Elevation: cards float on a soft shadow; tiles inside them sit on a hairline ring; menus pop. */
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 4%), 0 2px 8px rgb(16 24 40 / 4%);
+  --shadow-raised: 0 0 0 1px rgb(16 24 40 / 6%), 0 1px 2px rgb(16 24 40 / 5%);
+  --shadow-tile: inset 0 0 0 1px rgb(16 24 40 / 7%);
+  --shadow-tile-hover: inset 0 0 0 1px rgb(16 24 40 / 12%);
+  --shadow-pop: 0 0 0 1px rgb(16 24 40 / 6%), 0 12px 32px rgb(16 24 40 / 12%);
 
   /* Type: Inter at optical size 32 (Inter Display) at every size. */
   --font-sans: "Tray Inter", Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

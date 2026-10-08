@@ -54,7 +54,7 @@ func main() {
 		"platform_alerts": transport.RunPlatformAlerts,
 		"workflow_engine": wf.Run,
 		"heartbeat": func(ctx context.Context, db *sql.DB) {
-			transport.RunHeartbeat(ctx, db, "worker", map[string]any{"ocr": documents.OCRSetting()})
+			transport.RunHeartbeat(ctx, db, "worker", map[string]any{"ocr": llm.OCRSetting()})
 		},
 	}
 	for name, loop := range loops {

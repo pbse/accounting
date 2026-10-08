@@ -3716,6 +3716,56 @@ Request: make Xero management packs publishable. After the Xero sign-off change,
 
 Not verified: a real Xero organisation or a real statement exported from Xero.
 
+## Sign-in: a leftover or replayed sign-in says what to do (2026-10-07)
+
+Request: an old `/login?code=…` address sat silent; the user expected a firm to be created. The code came from a sign-in WorkOS returned to its default redirect URI, `/login`, which in server sessions only our callback can finish, and only for a sign-in started in the same browser.
+
+- **Login page.** With `AUTH_SESSION=server`, `/login?code=…` removes `code` and `state` from the address, keeps `return`, and says "Your sign-in isn't finished yet. Continue with Google to finish it." The login page also explains the new `expired` refusal.
+- **Callback.** A callback whose state does not match the browser's sign-in cookie (a reload, the back button, an old tab) no longer answers with a JSON 400. Without asking WorkOS, it sends the person to `/login?error=expired`. A code WorkOS refuses, or a WorkOS outage, sends them to `/login?error=unavailable` instead of a JSON 502. Either way the login page keeps the workspace page the sign-in was for (`return`). Staff go back to the console page they asked for, since the firm login page's button would start a firm sign-in, with `signin=expired` or `signin=unavailable`. The console shows that reason above its sign-in button and takes it out of the address.
+- **Tested.**
+  - `TestServerSessionKeepsWorkOSTokensOnTheServer` (extended), on a fresh local PostgreSQL. A forged state, a missing code, no sign-in cookie, and a forged staff state each redirect, to `/login?error=expired` (with `return` for a deep link) or to the staff page with `signin=expired` (keeping its own query), with no WorkOS call and no session cookie. A code WorkOS answers with `invalid_grant` goes to `/login?error=unavailable&return=…`, or for staff to `/admin/firms?signin=unavailable`, with no session.
+  - The sign-in, staff and session tests pass.
+  - The frontend typechecks and builds in server mode.
+  - Headless Edge against the built page and a signed-out stub API:
+    - `/login?code=…&state=x` ends at `/login` with the message and the Google button;
+    - with `return=/dashboard/closes`, it keeps `return` and the button returns there;
+    - after the header's Log in link, the message is gone;
+    - `error=expired` shows its message;
+    - plain `/login` shows none;
+    - the staff console, built in server mode, at `/admin/audit?firm=org_1&signin=expired` (or `unavailable`) shows its reason and leaves `/admin/audit?firm=org_1`; an unknown reason shows nothing.
+
+Not verified: an accepted WorkOS invitation in production, which takes the same path.
+
+## Writing to clients' books is the firm's decision, off by default (2026-10-07)
+
+Request: "We should never be posting unless the User in his settings say so ... by default we can have it as NO." The user chose that the switch covers live books only.
+
+- **Setting.** Firm settings has **Writing to clients' books**, off for every firm (migration 131: `organizations.allow_ledger_writes`, recorded in `organization_policy_changes.ledger_writes`). A firm administrator (`org:manage`, or anyone in local development) changes it with a reason.
+- **Enforcement.** Every live write is refused with 409 `LEDGER_WRITES_OFF` while the setting is off (`refuseLedgerWrites`):
+  - QuickBooks production journals;
+  - Bill, Purchase and Deposit recodes;
+  - payment and credit applications;
+  - supplier credits;
+  - Xero manual journals and bill recodes.
+
+  It is checked when a write is previewed, approved or executed. It is checked again under a share lock on the firm's row, which a change of the setting updates, inside every approval and every execution transaction. The supplier credit approval became a transaction for this. Reading back (`verify`) is never refused. QuickBooks sandbox postings are outside it.
+- **Turning it off** (`stopLedgerWrites`, in the same transaction) expires every live approval not yet acted on across the six attempt tables. It returns `writes_in_flight`, the live writes already executing, which finish and are read back. Firm settings says so.
+- **Security center.** A write kind the server allows reads "off in Firm settings" and lists no clients while the setting is off.
+- **Readiness.** `/readyz` requires `organizations.allow_ledger_writes`.
+- **Tested.**
+  - `TestProductionPostingSingleDurableAttempt`:
+    - a firm with writing off is refused at preview, with nothing written;
+    - after writing is turned off again, a posted write still verifies, and a new execution is refused;
+    - an approval given before writing is turned off is refused at execution (`APPROVAL_EXPIRED`) until approved afresh;
+    - a write left executing is counted as under way.
+  - `TestApprovedDraftPostsOnceToXero`: the Xero preview is refused while writing is off.
+  - `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`: a firm starts off; turning writing on needs `org:manage`, is applied and recorded; turning it off is applied.
+  - `TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly`: no write is enabled while writing is off, and an allowed, granted kind reads "off in Firm settings".
+  - The other posting and correction tests create their firms with writing on.
+  - Frontend check, build and tests: 46/46.
+
+Not verified: a live QuickBooks or Xero company.
+
 ## Gemini reads every PDF page, with Tesseract as the fallback (2026-10-07)
 
 Request: the user's decision of 2026-10-07. Gemini reads every PDF page, Tesseract stays as the fallback, and it is on for all firms once the key is installed. Google is disclosed as a processor, and Firm settings shows the OCR provider.
@@ -3724,7 +3774,7 @@ Request: the user's decision of 2026-10-07. Gemini reads every PDF page, Tessera
   - https://ai.google.dev/gemini-api/docs/models (updated 2026-10-06) lists `gemini-3.8-flash` as stable, reading images and PDFs. It is the default, and `GEMINI_OCR_MODEL` overrides it.
   - https://ai.google.dev/api/generate-content gives the `generateContent` request and response; the key goes in the `x-goog-api-key` header.
   - https://ai.google.dev/gemini-api/terms (modified 2026-04-28): on paid services Google does not use prompts or responses to improve its products and logs them briefly for abuse detection; on unpaid services it may use content and have people review it. Hence the paid-key requirement.
-- **Design.** Gemini is a small client in `documents/gemini.go`, outside the LLM gateway, whose requests are text. Each page is rendered as a PNG and read one request at a time, at temperature 0 with a 30-second limit; the key stays in the header.
+- **Design.** Gemini is `llm.Gemini` (`llm/gemini.go`): in the gateway package, which owns every model call (`TestModelEndpointsStayInGateway` refused it elsewhere), but not a purpose route, since a page goes as an image. Extraction reaches it through `documents.PageReader`. Each page is rendered as a PNG and read one request at a time, at temperature 0 with a 30-second limit; the key stays in the header.
   - A page's text layer is always kept, lines and all. Gemini's reading of it only checks it, and the label says whether they agree (the same tokens, in order) or flags the page to check against the original. A flagged page becomes a `documents.Check` warning naming it, shown with the evidence checks and on a statement's review. Statement confirmation already requires every page recorded as checked against the original, which resolves it. Straight-through preparation refuses an invoice with such a page (`documents.ImageDisputed`), so its facts go to a person's confirmation instead. A blocking question was tried first; Codex found nothing could ever clear it.
   - Replacing the layer with Gemini's reading was tried and dropped over four Codex rounds. Each rule that let a reading through also let a materially different one through: comparing figures alone (rows swapped, a dropped sign, `.50` as `50`); the text without whitespace (`1  234` as `12  34`, and `1,50` as `150` once commas were set aside); the token sequence (joined lines that hide two conflicting totals from `documents.Check`).
   - A scanned page takes Gemini's reading, and falls back to Tesseract on failure, a cut-short or blocked reply, an empty reading, the firm's daily limit (`budget.ReserveModelCalls`, now shared with preparation), or the document's time. All text layers are read first; Gemini is asked only while the time left covers its 30-second call, 6 seconds for each scanned page still to come and a 10-second margin, so local reading can always finish.
@@ -3736,8 +3786,9 @@ Request: the user's decision of 2026-10-07. Gemini reads every PDF page, Tessera
 - **Credentials.** `GEMINI_API_KEY` is on the queue worker's allow-list only, as a single printable token, and the worker container receives it; `GEMINI_OCR_MODEL` is passed through the deploys.
 - **Disclosure.** The privacy notice lists Google (Gemini API). The Security page now says PDF pages go whole, as images, to Gemini, the one exception to redaction before a model.
 - **Tested.**
-  - `TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks` covers, with Gemini stubbed over HTTP: a scanned page read by Gemini; the request shape; a text page keeping its layer with Gemini agreeing (laid out differently, lines joined) or flagged (six misreadings: an added, changed or dropped figure, amounts swapped between rows, a re-signed amount, a changed word); five failure kinds falling back, a redirect among them (never followed); no key meaning no call and no render; an oversized page image read locally without being sent or charged; the limit stopping Gemini after one reservation; the deadline, and the time kept for the scanned pages still to come; and render failures.
-  - `TestGeminiIsConfiguredOnlyWithAKey`: no key, a key without the paid service confirmed, or a malformed model sends nothing; the last two are reported held.
+  - `TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks` covers, with a fake page reader: a scanned page read by Gemini; a text page keeping its layer with Gemini agreeing (laid out differently, lines joined) or flagged (six misreadings: an added, changed or dropped figure, amounts swapped between rows, a re-signed amount, a changed word); Gemini failing or reading nothing, falling back; no key meaning no call and no render; an oversized page image read locally without being sent or charged; the limit stopping Gemini after one reservation; the deadline, and the time kept for the scanned pages still to come; and render failures.
+  - `TestGeminiIsConfiguredOnlyWithAKeyOnTheConfirmedPaidService` (llm): no key, a key without the paid service confirmed, or a malformed model sends nothing; the last two are reported held.
+  - `TestGeminiReadsAPageImageOverHTTPAndRefusesWhatItCannotTrust` (llm), with Gemini stubbed over HTTP: the request (PNG inline, temperature 0, the key only in its header, the prompt's refusal of page instructions); thinking parts left out; a server error, a cut-short or blocked reply and a redirect (never followed) are errors; an empty or oversized image is refused unsent.
   - `TestGeminiReadingsShareTheLimitAndAreCountedApart`: two Gemini readings and one other call fill a limit of three, with two counted as Gemini's; one more reading is refused.
   - `TestStraightThroughNeedsOneVerifiedCandidatePerFactAndTheInvoiceExpensed` (extended): the invoice that prepares straight through, with a page Gemini read differently, goes to a person.
   - `TestAPageGeminiReadDifferentlyIsNamedToCompare`: a flagged page is a check warning naming the page; an agreeing page and the same words inside a page's text raise none.
