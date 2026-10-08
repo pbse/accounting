@@ -378,6 +378,17 @@ body {
 .app-shell button.nav-item:hover:not(:disabled) {
   background: var(--hover);
 }
+/* An account name in a statement table that opens its ledger rows reads as text, not a raised button. */
+.app-shell button.cell-link,
+.app-shell button.cell-link:hover:not(:disabled) {
+  background: none;
+  box-shadow: none;
+  padding: 0;
+  border-radius: 0;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+}
 .app-shell .nav-item .pill {
   min-width: 20px;
   height: 20px;
@@ -474,7 +485,7 @@ body {
   border-radius: var(--radius-full);
   font-size: 13px;
 }
-.topbar-account > div {
+.topbar-account[open] > div {
   position: absolute;
   right: 0;
   top: 52px;

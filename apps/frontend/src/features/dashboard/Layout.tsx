@@ -11,14 +11,15 @@ import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
 
 type NavItem = { to: string; label: string; icon: IconName; end?: boolean };
 
-// The firm's pages. Security and Measure open from Firm, the preparation forms from a close, and the worked example
-// from its own links; none needs a place in the bar.
+// The firm's pages. Security and Measure open from Firm and the preparation forms from a close; neither needs a place
+// in the bar. Only Krith's own firm has the worked example (see examples.go), and sees it here.
 const firmNav: NavItem[] = [
   { to: "/dashboard", label: "Work", icon: "work", end: true },
   { to: "/dashboard/attention", label: "Attention", icon: "decision" },
   { to: "/dashboard/closes", label: "Clients", icon: "clients" },
   { to: "/dashboard/firm", label: "Firm", icon: "firm" },
 ];
+const exampleNav: NavItem = { to: "/dashboard/close", label: "Example", icon: "book" };
 
 // A client's executive sees their business results and nothing of the firm's workspace; the server enforces the same.
 // Links keep the client and month they chose.
@@ -39,6 +40,7 @@ export default function WorkspaceLayout() {
   const signedIn = useSignedIn();
   // Unknown until the server says; nothing of the workspace shows before then, so an executive never sees it.
   const [executive, setExecutive] = useState<boolean>();
+  const [examples, setExamples] = useState(false);
   // A hosted session still loading is not yet signed out.
   const session = authKitClientId ? useSession() : undefined;
   const sessionLoading = session?.isLoading ?? false;
@@ -56,6 +58,16 @@ export default function WorkspaceLayout() {
   useEffect(() => {
     if (executive && !location.pathname.startsWith("/dashboard/executive")) navigate("/dashboard/executive", { replace: true });
   }, [executive, location.pathname, navigate]);
+  useEffect(() => {
+    if (executive !== false) return;
+    let live = true;
+    workspaceRequest("/examples")
+      .then((data) => live && setExamples(!!data.available))
+      .catch(() => live && setExamples(false));
+    return () => {
+      live = false;
+    };
+  }, [executive]);
   useShellThemeColor();
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -89,7 +101,7 @@ export default function WorkspaceLayout() {
       </main>
     );
   if (authKitClientId && !signedIn) return <Navigate to={`/login?return=${encodeURIComponent(location.pathname + location.search + location.hash)}`} replace />;
-  const items = executive ? executiveNav(new URLSearchParams(location.search).get("close")) : known ? firmNav : [];
+  const items = executive ? executiveNav(new URLSearchParams(location.search).get("close")) : known ? (examples ? [...firmNav, exampleNav] : firmNav) : [];
   return (
     <div className="app-shell">
       <a className="skip" href="#main">
