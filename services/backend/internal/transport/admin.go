@@ -391,11 +391,16 @@ func adminFirm(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 	jsonReply(w, 200, map[string]any{"firm": firm, "last_suspension": json.RawMessage(suspension), "runs": json.RawMessage(runs), "health": json.RawMessage(health), "limits": json.RawMessage(limits), "support_owner": owner, "assistance_minutes": assistance})
 }
 
-// RunHeartbeat records every 30 seconds that loop is alive, for the admin overview.
-func RunHeartbeat(ctx context.Context, db *sql.DB, loop string) {
+// RunHeartbeat records every 30 seconds that loop is alive, for the admin overview, with detail about how it is set up
+// (the worker's OCR setting, which Firm settings and the security view show).
+func RunHeartbeat(ctx context.Context, db *sql.DB, loop string, detail map[string]any) {
 	instance, _ := os.Hostname()
+	if detail == nil {
+		detail = map[string]any{}
+	}
+	setup, _ := json.Marshal(detail)
 	for {
-		if _, err := db.ExecContext(ctx, `INSERT INTO worker_heartbeats(loop,instance,beat_at) VALUES($1,$2,now()) ON CONFLICT (loop) DO UPDATE SET instance=$2,beat_at=now()`, loop, instance); err != nil && ctx.Err() == nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO worker_heartbeats(loop,instance,beat_at,detail) VALUES($1,$2,now(),$3::jsonb) ON CONFLICT (loop) DO UPDATE SET instance=$2,beat_at=now(),detail=worker_heartbeats.detail||$3::jsonb`, loop, instance, string(setup)); err != nil && ctx.Err() == nil {
 			log.Printf("Heartbeat %s could not be recorded: %v", loop, err)
 		}
 		select {

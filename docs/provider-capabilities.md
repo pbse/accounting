@@ -2,7 +2,7 @@
 
 Phase A of the [agent-first build plan](agent-first-build-plan.md#delivery-sequence-and-launch-gates) requires a provider capability inventory. This is it: for each row of the plan's [integration contract](agent-first-build-plan.md#integration-contract), what the code on `main` does on 2026-10-06, and how far each capability has been proven. It is read from the code and the dated records in [validation](validation.md), not from provider marketing or function names.
 
-**Headline: no provider capability has been verified against a live provider.** That covers QuickBooks, Xero, Stripe, Resend, the model provider, Google Drive and the Cloudflare upload scan. Every provider test intercepts the provider's HTTP. The records say so in their own words:
+**Headline: no provider capability has been verified against a live provider.** That covers QuickBooks, Xero, Stripe, Resend, the model provider, Google Gemini's PDF reading, Google Drive and the Cloudflare upload scan. Every provider test intercepts the provider's HTTP. The records say so in their own words:
 
 - 2026-09-22: "No live Intuit consent, account reads, postings or cloud deployment occurred."
 - [QuickBooks onboarding](quickbooks-onboarding.md): "Live sandbox validation remains pending; development integration tests intercept all Intuit HTTP calls."
@@ -92,7 +92,7 @@ The 2026-09-25 validation heading "Live Stripe payout reconciliation" names the 
 | Exact bytes | Synthetic, except workbooks | PDFs keep their original; text is stored verbatim; both with a SHA-256 digest (`transport/evidence.go`). **An .xlsx upload is kept as CSV text of its first sheet, and the workbook itself is not kept.** Forwarded mail keeps its body and digest. `TestForwardedFilesKeepsTwoExactAttachmentsAndRejectsUnsupported` |
 | Source identity | Forwarding synthetic; Drive missing | The forwarded message's digest is kept, and its sender is recorded as unverified. A Drive file reaches the app as an ordinary upload; no Drive file ID or revision is stored. |
 | Malware scan | Forwarded and client-request files synthetic; others missing | A scan is tied to the exact digest, and release needs a clean scan from the last 24 hours (`forwarded/worker.go`). `TestCoverageRequestsQuarantineAndResolution`, `TestIsolatedScanner`. A local ClamAV check on 2026-09-22 accepted a clean file and rejected EICAR; the Cloudflare verdict is stubbed. **Direct uploads, Drive files and fetched Stripe reports are not scanned.** |
-| OCR | Synthetic | Per page, with OCR text labelled for checking against the original (`documents/extract.go`). `TestExtractMixedPDF`, which needs Poppler and Tesseract. `TestCheckPageAndFactConflicts` |
+| OCR | Synthetic | Per page, with OCR text labelled for checking against the original (`documents/extract.go`). Gemini reads every page when its key is set (see the model provider), and Tesseract is the fallback. `TestExtractMixedPDF`, which needs Poppler and Tesseract. `TestCheckPageAndFactConflicts` |
 | Duplicate versus replacement | Synthetic | The same digest reuses the existing source; a replacement needs a newer source and a reason. `TestReviewAndEvidenceReplacement`, `TestReplacedInvoiceIsRecalculatedStraightThrough` |
 | Lineage | Synthetic, except Drive | `superseded_by` with the replacement's reason; a released forwarded file links to its evidence. |
 | Drive selection | Synthetic | `TestDriveFilesAreListedAndHandedBackOnlyWithAGrant`. "Not verified: a live WorkOS Pipes integration and Google Drive responses." |
@@ -120,6 +120,7 @@ The 2026-09-25 validation heading "Live Stripe payout reconciliation" names the 
 | Model and version recorded | Partial | Preparation stores the configured model and the response ID. The model name the provider returns is read (`llm/openai.go`) but not stored with the result. |
 | Timeout and cost limits | Synthetic, calls not money | A daily call budget per firm and three attempts. No money cap; in subscription mode the byte caps do not bound hidden reasoning tokens. |
 | Prompt injection | Synthetic | `TestHostileDocumentCannotSteerTheAgent` proves the execution boundary, not the model's behaviour. |
+| Gemini PDF reading (2026-10-07) | Synthetic; not verified live | With `GEMINI_API_KEY` on the worker, every PDF page goes as a PNG to Gemini (`documents/gemini.go`, `generateContent`, default model `gemini-3.8-flash`). On a page with a text layer, the reading is used only when its figures match the layer exactly, so a misread figure is never taken. A scanned page falls back to Tesseract when Gemini fails, is cut short, is blocked or is over the firm's daily call limit. Each page's label names how it was read and the model version Gemini reports. The worker reports its setting in its heartbeat for Firm settings and the security view. `TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks`, `TestGeminiIsConfiguredOnlyWithAKey`, `TestFiguresSetFormattingAside`, `TestFirmSettingsShowHowTheWorkerReadsPDFs`. Unredacted page images reach Google; use a paid key, since the free tier allows Google to use content. |
 | When unavailable | Synthetic | No fallback provider. Deterministic proposals still need a person's confirmation. `TestEveryPurposeCanSwitchBetweenAPIAndContextMachine`, `TestResearchResultsFailClosed` |
 
 ## Identity, business access and operations
@@ -144,6 +145,7 @@ Ordered by what they risk. Each live check needs credentials the user installs t
    - one Stripe test-mode report run;
    - one Resend send, its delivery webhook and one reply;
    - one model call per purpose;
+   - one Gemini reading of a scanned PDF page and of a page with a text layer;
    - one Drive selection;
    - one Cloudflare scan verdict.
 

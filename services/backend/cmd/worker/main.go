@@ -2,6 +2,7 @@ package main
 
 import (
 	"close.local/backend/internal/delivery"
+	"close.local/backend/internal/documents"
 	"close.local/backend/internal/forwarded"
 	"close.local/backend/internal/llm"
 	"close.local/backend/internal/preparation"
@@ -51,7 +52,9 @@ func main() {
 		"quickbooks_sync": quickbooks.RunSync,
 		"platform_alerts": transport.RunPlatformAlerts,
 		"workflow_engine": wf.Run,
-		"heartbeat":       func(ctx context.Context, db *sql.DB) { transport.RunHeartbeat(ctx, db, "worker") },
+		"heartbeat": func(ctx context.Context, db *sql.DB) {
+			transport.RunHeartbeat(ctx, db, "worker", map[string]any{"ocr": documents.OCRSetting()})
+		},
 	}
 	for name, loop := range loops {
 		go supervise(ctx, name, func() { loop(ctx, db) }, recordPanic(db))

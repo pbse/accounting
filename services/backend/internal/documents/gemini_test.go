@@ -1,0 +1,186 @@
+package documents
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"close.local/backend/internal/budget"
+)
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// fakeGemini answers generateContent with reply (or status), recording each request it receives.
+func fakeGemini(t *testing.T, status int, reply map[string]any) (*Gemini, *[]map[string]any) {
+	t.Helper()
+	var seen []map[string]any
+	g := &Gemini{key: "test-key-not-real", model: "gemini-3.8-flash", endpoint: "https://gemini.test/v1beta/models/", client: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://gemini.test/v1beta/models/gemini-3.8-flash:generateContent" || r.Header.Get("x-goog-api-key") != "test-key-not-real" || r.Method != "POST" {
+			t.Fatalf("unexpected Gemini request %s %s", r.Method, r.URL)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		seen = append(seen, body)
+		raw, _ := json.Marshal(reply)
+		return &http.Response{StatusCode: status, Body: io.NopCloser(bytes.NewReader(raw)), Header: make(http.Header)}, nil
+	})}}
+	return g, &seen
+}
+
+func answer(text string) map[string]any {
+	return map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": text}}}, "finishReason": "STOP"}}, "modelVersion": "gemini-3.8-flash-001"}
+}
+
+var pagePNG = []byte("\x89PNG synthetic page image")
+
+func render() ([]byte, error) { return pagePNG, nil }
+
+func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T) {
+	ctx := context.Background()
+	noTesseract := func([]byte) (string, error) {
+		t.Fatal("Tesseract is not needed when Gemini reads the page")
+		return "", nil
+	}
+
+	// A scanned page, with no text layer, takes Gemini's reading, labelled to check against the original. The page goes as
+	// a PNG image, with the key only in the header, and the call is reserved against the firm's daily limit first.
+	g, seen := fakeGemini(t, 200, answer("SCANNED INVOICE 6,000.00"))
+	reserved := 0
+	reading := Reading{Gemini: g, Reserve: func(context.Context) error { reserved++; return nil }}
+	text, method, err := reading.page(ctx, "  \n", render, noTesseract)
+	if err != nil || text != "SCANNED INVOICE 6,000.00" || method != "Gemini gemini-3.8-flash-001 (verify against original)" || reserved != 1 || len(*seen) != 1 {
+		t.Fatalf("a scanned page is read by Gemini: %q %q %v reserved %d", text, method, err, reserved)
+	}
+	part := (*seen)[0]["contents"].([]any)[0].(map[string]any)["parts"].([]any)[1].(map[string]any)["inline_data"].(map[string]any)
+	if part["mime_type"] != "image/png" || part["data"] != base64.StdEncoding.EncodeToString(pagePNG) || (*seen)[0]["generationConfig"].(map[string]any)["temperature"] != float64(0) {
+		t.Fatalf("the page goes as its PNG, read at temperature 0: %v", (*seen)[0])
+	}
+
+	// A page with its own text takes Gemini's reading only when it holds exactly the layer's figures.
+	layer := "TEXT INVOICE      12000.00\nPage 1 of 2\n"
+	g, _ = fakeGemini(t, 200, answer("TEXT INVOICE  12,000.00\nPage 1 of 2"))
+	reading = Reading{Gemini: g}
+	if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != "TEXT INVOICE  12,000.00\nPage 1 of 2" || method != "Gemini gemini-3.8-flash-001; figures match the PDF text" {
+		t.Fatalf("the same figures, laid out by Gemini: %q %q", text, method)
+	}
+	for _, misread := range []string{
+		"TEXT INVOICE  12,000.00\nPage 1 of 2\nTax 960.00", // a figure the page lacks
+		"TEXT INVOICE  12,800.00\nPage 1 of 2",             // a changed figure
+		"TEXT INVOICE\nPage 1 of 2",                        // a dropped figure
+		"TEXT INVOICE  12,000.00 12,000.00\nPage 1 of 2",   // a figure twice
+	} {
+		g, _ = fakeGemini(t, 200, answer(misread))
+		reading = Reading{Gemini: g}
+		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Gemini's reading had other figures" {
+			t.Fatalf("Gemini's reading %q is not taken over the text layer: %q %q", misread, text, method)
+		}
+	}
+
+	// When Gemini cannot read a page, a page with text keeps it and a scanned page is read by Tesseract.
+	tesseract := func(png []byte) (string, error) {
+		if !bytes.Equal(png, pagePNG) {
+			t.Fatal("Tesseract reads the rendered page")
+		}
+		return "SCANNED INVOICE 6000.00", nil
+	}
+	for name, failing := range map[string]struct {
+		status int
+		reply  map[string]any
+	}{
+		"server error": {500, map[string]any{"error": map[string]any{"message": "internal"}}},
+		"cut short":    {200, map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "SCANNED INV"}}}, "finishReason": "MAX_TOKENS"}}}},
+		"blocked":      {200, map[string]any{"promptFeedback": map[string]any{"blockReason": "SAFETY"}}},
+		"empty":        {200, answer("  ")},
+	} {
+		g, _ = fakeGemini(t, failing.status, failing.reply)
+		reading = Reading{Gemini: g}
+		if text, method, err = reading.page(ctx, "", render, tesseract); err != nil || text != "SCANNED INVOICE 6000.00" || method != "OCR (English; verify against original)" {
+			t.Fatalf("%s: a scanned page falls back to Tesseract: %q %q %v", name, text, method, err)
+		}
+		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text" {
+			t.Fatalf("%s: a page with text keeps it: %q %q", name, text, method)
+		}
+	}
+
+	// Without a key nothing is sent: a page with text is not even rendered.
+	reading = Reading{}
+	if text, method, _ = reading.page(ctx, layer, func() ([]byte, error) { t.Fatal("not rendered"); return nil, nil }, noTesseract); text != layer || method != "PDF text" {
+		t.Fatalf("without Gemini, the text layer: %q %q", text, method)
+	}
+	if text, method, _ = reading.page(ctx, "", render, tesseract); method != "OCR (English; verify against original)" {
+		t.Fatalf("without Gemini, Tesseract: %q %q", text, method)
+	}
+
+	// Once the firm's daily limit is reached, no more pages go to Gemini, and none is reserved again.
+	g, seen = fakeGemini(t, 200, answer("never sent"))
+	reserved = 0
+	reading = Reading{Gemini: g, Reserve: func(context.Context) error { reserved++; return budget.ErrModelLimit }}
+	for range 3 {
+		if _, method, _ = reading.page(ctx, "", render, tesseract); method != "OCR (English; verify against original)" {
+			t.Fatalf("over the limit, Tesseract: %q", method)
+		}
+	}
+	if reserved != 1 || len(*seen) != 0 {
+		t.Fatalf("the limit stops Gemini for the rest of the document: reserved %d, sent %d", reserved, len(*seen))
+	}
+
+	// With too little time left, the remaining pages are read locally so the document still finishes.
+	g, seen = fakeGemini(t, 200, answer("never sent"))
+	reading = Reading{Gemini: g}
+	short, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if _, method, _ = reading.page(short, "", render, tesseract); method != "OCR (English; verify against original)" || len(*seen) != 0 {
+		t.Fatalf("near the deadline, Tesseract: %q sent %d", method, len(*seen))
+	}
+
+	// A page that cannot be rendered fails only when nothing else can read it.
+	broken := func() ([]byte, error) { return nil, errors.New("pdftoppm failed") }
+	g, _ = fakeGemini(t, 200, answer("never sent"))
+	reading = Reading{Gemini: g}
+	if text, method, err = reading.page(ctx, layer, broken, noTesseract); err != nil || text != layer || method != "PDF text" {
+		t.Fatalf("an unrenderable page with text keeps it: %q %q %v", text, method, err)
+	}
+	if _, _, err = reading.page(ctx, "", broken, noTesseract); err != errRender {
+		t.Fatalf("an unrenderable scanned page fails: %v", err)
+	}
+}
+
+func TestGeminiIsConfiguredOnlyWithAKey(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GEMINI_OCR_MODEL", "")
+	if GeminiFromEnv() != nil || OCRSetting()["provider"] != "tesseract" {
+		t.Fatal("no key, no Gemini")
+	}
+	t.Setenv("GEMINI_API_KEY", "test-key-not-real")
+	if g := GeminiFromEnv(); g == nil || g.model != defaultGeminiModel || OCRSetting()["model"] != defaultGeminiModel || strings.Contains(g.endpoint, "key=") {
+		t.Fatalf("a key turns Gemini on with the default model: %+v", OCRSetting())
+	}
+	t.Setenv("GEMINI_OCR_MODEL", "gemini-3.7-flash")
+	if OCRSetting()["model"] != "gemini-3.7-flash" {
+		t.Fatal("the operator chooses the model")
+	}
+	t.Setenv("GEMINI_OCR_MODEL", "../models/other:generateContent?x=")
+	if GeminiFromEnv() != nil {
+		t.Fatal("a malformed model name is refused")
+	}
+}
+
+func TestFiguresSetFormattingAside(t *testing.T) {
+	if !sameFigures("Total 1,200.00 on 09/30/2026", "Total   1200.00 on 9/30/2026") {
+		t.Fatal("commas and leading zeros are formatting")
+	}
+	if sameFigures("Total 1,200.00", "Total 1,200") || sameFigures("Amount 12", "Amount 12 12") || sameFigures("Net 100", "Net 1000") {
+		t.Fatal("a different figure, or one more often, is not the same reading")
+	}
+}

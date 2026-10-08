@@ -85,7 +85,7 @@ func registerIndependence(mux *http.ServeMux, db *sql.DB) {
 		}
 		local := organization(r) == "local-development"
 		manage := slices.Contains(actorPermissions(r), "org:manage")
-		jsonReply(w, 200, map[string]any{"independent_review": required, "independent_review_min_amount": minimum, "materiality_amount": materiality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_provider": llm.ProviderLabel(r.Context(), "written_answer"), "model_answers": written, "firm_answers": firmWritten, "investigations": investigations, "support_owner": owner, "hosted": !local, "can_manage": !local && manage, "can_manage_links": local || manage, "can_manage_model_answers": local || manage})
+		jsonReply(w, 200, map[string]any{"independent_review": required, "independent_review_min_amount": minimum, "materiality_amount": materiality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_provider": llm.ProviderLabel(r.Context(), "written_answer"), "ocr_provider": ocrLabel(workerOCR(r.Context(), db)), "model_answers": written, "firm_answers": firmWritten, "investigations": investigations, "support_owner": owner, "hosted": !local, "can_manage": !local && manage, "can_manage_links": local || manage, "can_manage_model_answers": local || manage})
 	})
 	// Each change names only the settings it changes and records the resulting state of both.
 	mux.HandleFunc("POST /v1/closes/organization/policy", func(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +161,6 @@ func registerIndependence(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Firm policy change could not be confirmed.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"independent_review": review, "independent_review_min_amount": current, "materiality_amount": currentMateriality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_provider": llm.ProviderLabel(r.Context(), "written_answer"), "model_answers": written, "firm_answers": firmWritten, "investigations": investigations})
+		jsonReply(w, 200, map[string]any{"independent_review": review, "independent_review_min_amount": current, "materiality_amount": currentMateriality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_provider": llm.ProviderLabel(r.Context(), "written_answer"), "ocr_provider": ocrLabel(workerOCR(r.Context(), db)), "model_answers": written, "firm_answers": firmWritten, "investigations": investigations})
 	})
 }

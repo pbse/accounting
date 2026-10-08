@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +20,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"close.local/backend/internal/budget"
 )
 
 type boundedOutput struct{ bytes.Buffer }
@@ -49,10 +53,79 @@ func command(ctx context.Context, name string, args ...string) (string, error) {
 	return out.String(), err
 }
 
-// Extract retains page numbers and labels OCR separately from the PDF text layer.
+// Reading is how a PDF's pages are read beyond their text layer: Gemini, when configured, reads every page; Reserve
+// counts each Gemini call against the firm's daily model limit first. Tesseract reads a page without a text layer that
+// Gemini could not.
+type Reading struct {
+	Gemini  *Gemini
+	Reserve func(context.Context) error
+	// off is set once the firm's limit or the time left rules Gemini out for the rest of the document.
+	off bool
+}
+
+// geminiReserve is the time a document keeps back from Gemini, so its remaining pages can still be read locally.
+const geminiReserve = 40 * time.Second
+
+// page reads one page. Its text layer, when it has one, is exact: Gemini's reading replaces it only when the two hold
+// the same figures, so a misread figure is never taken. A page without one takes Gemini's reading, or else Tesseract's.
+// render draws the page as a PNG; tesseract reads one.
+func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte, error), tesseract func([]byte) (string, error)) (string, string, error) {
+	var image []byte
+	var renderErr error
+	rendered := func() ([]byte, error) {
+		if image == nil && renderErr == nil {
+			image, renderErr = render()
+		}
+		return image, renderErr
+	}
+	hasLayer := strings.TrimSpace(layer) != ""
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < geminiReserve {
+		r.off = true
+	}
+	if r.Gemini != nil && !r.off {
+		if png, err := rendered(); err == nil {
+			if r.Reserve != nil {
+				if err = r.Reserve(ctx); err != nil {
+					r.off = true
+				}
+			}
+			if err == nil {
+				text, model, err := r.Gemini.Read(ctx, png)
+				switch {
+				case err != nil:
+					log.Printf("Gemini could not read a PDF page; using the local reading: %v", err)
+				case strings.TrimSpace(text) == "":
+				case !hasLayer:
+					return text, "Gemini " + model + " (verify against original)", nil
+				case sameFigures(text, layer):
+					return text, "Gemini " + model + "; figures match the PDF text", nil
+				default:
+					return layer, "PDF text; Gemini's reading had other figures", nil
+				}
+			}
+		}
+	}
+	if hasLayer {
+		return layer, "PDF text", nil
+	}
+	png, err := rendered()
+	if err != nil {
+		return "", "", errRender
+	}
+	text, err := tesseract(png)
+	if err != nil {
+		return "", "", errOCR
+	}
+	return text, "OCR (English; verify against original)", nil
+}
+
+var errRender, errOCR = errors.New("render"), errors.New("ocr")
+
+// Extract retains page numbers and labels machine readings separately from the PDF text layer.
 // ponytail: English OCR, 20 pages, 5 MiB originals; larger documents need a separate intake budget.
-func Extract(ctx context.Context, original []byte) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+func Extract(ctx context.Context, original []byte, reading Reading) (string, error) {
+	// Under the three-minute extraction lease, with Gemini's per-page calls inside it.
+	ctx, cancel := context.WithTimeout(ctx, 150*time.Second)
 	defer cancel()
 	dir, err := os.MkdirTemp("", "close-pdf-")
 	if err != nil {
@@ -79,22 +152,26 @@ func Extract(ctx context.Context, original []byte) (string, error) {
 	var output boundedOutput
 	for page := 1; page <= pages; page++ {
 		n := strconv.Itoa(page)
-		text, err := command(ctx, "pdftotext", "-f", n, "-l", n, "-layout", "-enc", "UTF-8", pdf, "-")
+		layer, err := command(ctx, "pdftotext", "-f", n, "-l", n, "-layout", "-enc", "UTF-8", pdf, "-")
 		if err != nil {
 			return "", fmt.Errorf("PDF text extraction failed on page %d", page)
 		}
-		method := "PDF text"
-		if strings.TrimSpace(text) == "" {
-			method = "OCR (English; verify against original)"
-			prefix := filepath.Join(dir, "page")
-			if _, err = command(ctx, "pdftoppm", "-f", n, "-l", n, "-singlefile", "-scale-to", "2000", "-png", pdf, prefix); err != nil {
-				return "", fmt.Errorf("PDF rendering failed on page %d", page)
+		prefix := filepath.Join(dir, "page")
+		text, method, err := reading.page(ctx, layer, func() ([]byte, error) {
+			if _, err := command(ctx, "pdftoppm", "-f", n, "-l", n, "-singlefile", "-scale-to", "2000", "-png", pdf, prefix); err != nil {
+				return nil, err
 			}
-			text, err = command(ctx, "tesseract", prefix+".png", "stdout", "-l", "eng")
-			os.Remove(prefix + ".png")
-			if err != nil {
-				return "", fmt.Errorf("OCR failed on page %d; check Tesseract and English language data", page)
-			}
+			return os.ReadFile(prefix + ".png")
+		}, func([]byte) (string, error) {
+			return command(ctx, "tesseract", prefix+".png", "stdout", "-l", "eng")
+		})
+		os.Remove(prefix + ".png")
+		switch err {
+		case nil:
+		case errRender:
+			return "", fmt.Errorf("PDF rendering failed on page %d", page)
+		default:
+			return "", fmt.Errorf("OCR failed on page %d; check Tesseract and English language data", page)
 		}
 		if !utf8.ValidString(text) {
 			return "", fmt.Errorf("Invalid text on page %d", page)
@@ -120,16 +197,20 @@ func Extract(ctx context.Context, original []byte) (string, error) {
 // A fenced three-minute lease survives crashes without holding a transaction during OCR.
 func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	claim := rand.Text()
-	var id string
+	var id, org string
 	var original []byte
-	err := db.QueryRowContext(ctx, `UPDATE evidence SET extraction_state='processing',extraction_claim=$1,extraction_started_at=now() WHERE id=(SELECT id FROM evidence WHERE close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) AND original IS NOT NULL AND (extraction_state='queued' OR (extraction_state='processing' AND extraction_started_at<now()-interval '3 minutes')) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id::text,original`, claim).Scan(&id, &original)
+	err := db.QueryRowContext(ctx, `UPDATE evidence SET extraction_state='processing',extraction_claim=$1,extraction_started_at=now() WHERE id=(SELECT id FROM evidence WHERE close_id IN (SELECT c.id FROM client_closes c JOIN organizations o ON o.id=c.organization_id WHERE o.enabled) AND original IS NOT NULL AND (extraction_state='queued' OR (extraction_state='processing' AND extraction_started_at<now()-interval '3 minutes')) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
+ RETURNING id::text,original,(SELECT organization_id FROM client_closes WHERE id=evidence.close_id)`, claim).Scan(&id, &original, &org)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	text, extractErr := Extract(ctx, original)
+	// Each Gemini page reading counts against the firm's daily model limit, as preparation's calls do.
+	text, extractErr := Extract(ctx, original, Reading{Gemini: GeminiFromEnv(), Reserve: func(ctx context.Context) error {
+		return budget.ReserveModelCalls(ctx, db, org, 1)
+	}})
 	state, message := "ready", ""
 	if extractErr != nil {
 		state = "failed"

@@ -259,6 +259,31 @@ function WrittenAnswers() {
   );
 }
 
+// How the firm's PDFs are read, as the document worker reports it; the server operator sets it, so it is shown only.
+function DocumentReading() {
+  const [provider, setProvider] = useState("");
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/organization/policy")
+      .then((data: { ocr_provider?: string }) => live && setProvider(data.ocr_provider ?? ""))
+      .catch(() => live && setProvider(""));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!provider) return null;
+  return (
+    <section aria-label="Reading PDFs">
+      <h2>Reading PDFs</h2>
+      <p>{provider}.</p>
+      <p className="note">
+        A page's own PDF text is exact, so a machine reading replaces it only when every figure matches. Scanned pages read by a machine are labelled to check
+        against the original. The server operator chooses the reader.
+      </p>
+    </section>
+  );
+}
+
 function ReminderRule() {
   const [policy, setPolicy] = useState<Policy>();
   const [after, setAfter] = useState(0);
@@ -415,6 +440,7 @@ export default function Firm() {
           <IndependentReview />
       <LinkPasscodes />
       <WrittenAnswers />
+      <DocumentReading />
       <Materiality />
       <ReminderRule />
       <ClientRoster />
