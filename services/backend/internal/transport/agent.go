@@ -542,6 +542,8 @@ type agentPending struct {
 	raw     string
 	ok      bool
 	refusal string
+	began   time.Time
+	stepID  string
 }
 
 func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question string, firm, entity, period, today string, permissions []string, level string, history []llm.Message, read func(ctx context.Context, method, path string, body any) (string, bool), canOpen func(closeID string) bool, emit agentEvent) agentResult {
@@ -701,7 +703,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				args["client"] = entity
 			}
 			parsed[i] = args
-			p := &agentPending{t: t, args: args}
+			p := &agentPending{t: t, args: args, began: time.Now(), stepID: "t" + strconv.Itoa(len(out.steps)+1+i)}
 			plans[i] = p
 			if out.calls >= agentCalls {
 				p.refusal = "refused: the read budget of this message is spent"
@@ -724,6 +726,12 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			}
 			p.path, p.body = path, body
 			out.calls++
+			// The panel sees the read start now, while it runs.
+			if !emit("step", map[string]any{"id": p.stepID, "tool": t.name, "title": t.title, "state": "running"}) {
+				cancelReads()
+				out.outcome, out.why = "failed", "The conversation was closed."
+				return out
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -746,8 +754,11 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					output = "refused: arguments must be a JSON object"
 				}
 			}
-			// The trace keeps what ran and how it went, never the arguments: a search phrase or a note is content.
-			if !emit("step", map[string]any{"id": step.ID, "tool": step.Tool, "title": step.Title, "state": "running"}) {
+			// The trace keeps what ran and how it went, never the arguments: a search phrase or a note is content. A
+			// read that was launched already announced itself; the others are announced here.
+			if p := plans[i]; p != nil && p.path != "" {
+				began = p.began
+			} else if !emit("step", map[string]any{"id": step.ID, "tool": step.Tool, "title": step.Title, "state": "running"}) {
 				out.outcome, out.why = "failed", "The conversation was closed."
 				return out
 			}

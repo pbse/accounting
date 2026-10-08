@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { AgentComposer } from "@close/ui/components/AgentComposer";
-import { askAssistant } from "./assistantStore";
+import { askAssistant, starterCommands } from "./assistantStore";
 
 // "Ask the agent" at the top of a page: a question typed here or a suggestion picked opens the agent panel and asks it
 // there, in the close's conversation or, without a close, the firm's. Nothing runs from the page itself: the panel
@@ -19,8 +19,9 @@ export function AskAgent({
   children?: ReactNode;
 }) {
   const [question, setQuestion] = useState("");
+  // A starter chip is a command the fixed reads answer without a model; anything typed is free text.
   const ask = (text: string) => {
-    askAssistant(text, closeId);
+    askAssistant(starterCommands[text] ?? text, closeId);
     setQuestion("");
   };
   return (

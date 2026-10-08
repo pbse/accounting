@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
+import { workspaceRequest } from "../closes/workspace";
 
 type Outcome = { at: string } & Record<string, unknown>;
 
@@ -11,6 +12,33 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState("");
+  // A confirmed goal with closes still pending keeps running, a batch at a time, while this is the newest card.
+  const [progress, setProgress] = useState<Record<string, number>>();
+  const [stalled, setStalled] = useState("");
+  const operation = kind === "portfolio" && outcome ? String(outcome.operation_id ?? "") : "";
+  const pendingAtStart = kind === "portfolio" && outcome ? Number(outcome.pending ?? 0) : 0;
+  useEffect(() => {
+    if (!live || !operation || pendingAtStart === 0) return;
+    let on = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const run = async () => {
+      try {
+        const op = await workspaceRequest("/portfolio/run", { id: operation, confirmed: true, reason: String((proposal.args as Record<string, unknown> | undefined)?.reason ?? "") });
+        if (!on) return;
+        const counts: Record<string, number> = {};
+        for (const item of (op.items ?? []) as { state: string }[]) counts[item.state] = (counts[item.state] ?? 0) + 1;
+        setProgress(counts);
+        if ((counts.pending ?? 0) > 0) timer = setTimeout(run, 3000);
+      } catch (e) {
+        if (on) setStalled(e instanceof Error ? e.message : "The goal could not continue; open Work to run the rest.");
+      }
+    };
+    void run();
+    return () => {
+      on = false;
+      clearTimeout(timer);
+    };
+  }, [live, operation, pendingAtStart]);
   const args = (proposal.args ?? {}) as Record<string, unknown>;
   const title = kind === "approval" ? "Ask a person to review a draft" : `Run a goal across closes`;
   const card = (body: React.ReactNode) => (
@@ -22,7 +50,7 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
   );
   if (outcome) {
     if (kind === "portfolio") {
-      const n = (key: string) => Number(outcome[key] ?? 0);
+      const n = (key: string) => Number(progress ? (progress[key] ?? 0) : (outcome[key] ?? 0));
       const parts = [
         n("done") ? `${n("done")} started` : "",
         n("skipped") ? `${n("skipped")} skipped (nothing to do, or already handed over)` : "",
@@ -32,6 +60,7 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
       return card(
         <p>
           {String(outcome.action ?? "")} on {String(outcome.closes ?? "")} close{outcome.closes === 1 ? "" : "s"}: {parts.join(", ") || "no outcome recorded"} · confirmed {new Date(outcome.at).toLocaleString()}.{" "}
+          {stalled && <span role="alert">{stalled} </span>}
           <Link to="/dashboard">Work →</Link>
         </p>,
       );
