@@ -94,8 +94,18 @@ func TestMemberSettingsArePersonalAndLeaveWithTheMembership(t *testing.T) {
 	if code, me = call("user_b", "GET", "/v1/closes/me", nil); code != 200 || me["time_zone"] != "" {
 		t.Fatalf("another member sees their own, empty, zone: %d %v", code, me)
 	}
-	if code, _ = call("user_a", "POST", "/v1/closes/me", map[string]any{"first_name": "Ada"}); code != 409 {
+	if code, _ = call("user_a", "POST", "/v1/closes/me", map[string]any{"first_name": "Ada", "last_name": "L"}); code != 409 {
 		t.Fatalf("name without a sign-in provider: %d", code)
+	}
+	if code, _ = call("user_a", "POST", "/v1/closes/me", map[string]any{"first_name": "Ada"}); code != 422 {
+		t.Fatalf("half a name: %d", code)
+	}
+	// A refused request keeps nothing: the valid zone beside the bad name is not saved.
+	if code, _ = call("user_a", "POST", "/v1/closes/me", map[string]any{"first_name": "", "last_name": "L", "time_zone": "Asia/Tokyo"}); code != 422 {
+		t.Fatalf("empty first name: %d", code)
+	}
+	if code, me = call("user_a", "GET", "/v1/closes/me", nil); code != 200 || me["time_zone"] != "America/New_York" {
+		t.Fatalf("zone changed by a refused request: %d %v", code, me)
 	}
 	if code, _ = call("user_a", "POST", "/v1/closes/me", map[string]any{"colour": "blue"}); code != 400 {
 		t.Fatalf("unknown field: %d", code)

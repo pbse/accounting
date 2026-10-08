@@ -13,6 +13,7 @@ type Me = {
   first_name?: string;
   last_name?: string;
   name_editable: boolean;
+  profile_unavailable?: boolean;
   time_zone: string;
   notifications: { kinds: string[]; browser: boolean; all_kinds: string[] };
   drive: { configured: boolean; connected?: boolean; reason?: string };
@@ -88,7 +89,11 @@ function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
             <option key={z} value={z} />
           ))}
         </datalist>
-        {!me.name_editable && <p className="note">Your name is kept by the sign-in provider, which local development does not have.</p>}
+        {me.profile_unavailable ? (
+          <p role="alert">Your name could not be read from the sign-in provider just now. The rest of your settings are here; reload to try the name again.</p>
+        ) : (
+          !me.name_editable && <p className="note">Your name is kept by the sign-in provider, which local development does not have.</p>
+        )}
         <p>
           <button className="primary" disabled={busy}>Save</button>{" "}
           {deviceZone() && deviceZone() !== zone && (

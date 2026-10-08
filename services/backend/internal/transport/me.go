@@ -34,12 +34,13 @@ func registerMe(mux *http.ServeMux, db *sql.DB) {
 		// Name and email are WorkOS's; local development has neither.
 		reply["name_editable"] = false
 		if a := driveActor(r); a != nil {
+			// The profile is WorkOS's; when it cannot be read, the settings kept here still show, without it.
 			var user workosUser
 			if err := workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(a.Subject), nil, &user); err != nil {
-				problem(w, 502, "WorkOS could not read your account. Try again.")
-				return
+				reply["profile_unavailable"] = true
+			} else {
+				reply["email"], reply["first_name"], reply["last_name"], reply["name_editable"] = user.Email, user.FirstName, user.LastName, true
 			}
-			reply["email"], reply["first_name"], reply["last_name"], reply["name_editable"] = user.Email, user.FirstName, user.LastName, true
 			drive := map[string]any{"configured": true, "connected": false}
 			if _, reason, err := driveToken(r.Context(), a); err != nil {
 				drive["reason"] = "Google Drive could not be checked. Try again."
@@ -66,43 +67,52 @@ func registerMe(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "Sign in to keep your own settings.")
 			return
 		}
+		// Everything is checked before anything is kept, and the name, which another service keeps, goes first, so a
+		// refusal leaves nothing half-saved.
+		var zone string
 		if in.TimeZone != nil {
-			zone := strings.TrimSpace(*in.TimeZone)
+			zone = strings.TrimSpace(*in.TimeZone)
 			if zone != "" {
 				if _, err := time.LoadLocation(zone); err != nil || len(zone) > 64 || !strings.Contains(zone, "/") {
 					problem(w, 422, "Choose a time zone by its region and city, such as America/New_York.")
 					return
 				}
 			}
-			if _, err := db.ExecContext(r.Context(), `INSERT INTO member_settings(organization_id,subject,time_zone) VALUES($1,$2,$3) ON CONFLICT (organization_id,subject) DO UPDATE SET time_zone=EXCLUDED.time_zone,updated_at=now()`, organization(r), subject(r), zone); err != nil {
-				problem(w, 503, "Your settings could not be saved.")
-				return
-			}
 			in.TimeZone = &zone
 		}
+		var first, last string
 		if in.FirstName != nil || in.LastName != nil {
-			a := driveActor(r)
-			if a == nil {
-				problem(w, 409, "Your name is kept by the sign-in provider, which local development does not have.")
+			if in.FirstName == nil || in.LastName == nil {
+				problem(w, 422, "Send the first and last name together.")
 				return
 			}
-			first, last := "", ""
-			if in.FirstName != nil {
-				first = strings.TrimSpace(*in.FirstName)
-			}
-			if in.LastName != nil {
-				last = strings.TrimSpace(*in.LastName)
-			}
+			first, last = strings.TrimSpace(*in.FirstName), strings.TrimSpace(*in.LastName)
 			if first == "" || len(first) > 100 || len(last) > 100 {
 				problem(w, 422, "Give a first name, and keep each name under 100 characters.")
 				return
 			}
+			if driveActor(r) == nil {
+				problem(w, 409, "Your name is kept by the sign-in provider, which local development does not have.")
+				return
+			}
+		}
+		if in.FirstName != nil {
 			var user workosUser
-			if err := workos(r.Context(), "PUT", "/user_management/users/"+url.PathEscape(a.Subject), map[string]string{"first_name": first, "last_name": last}, &user); err != nil {
-				problem(w, 502, "WorkOS could not save your name. Try again.")
+			if err := workos(r.Context(), "PUT", "/user_management/users/"+url.PathEscape(subject(r)), map[string]string{"first_name": first, "last_name": last}, &user); err != nil {
+				problem(w, 502, "WorkOS could not save your name. Nothing was saved. Try again.")
 				return
 			}
 			in.FirstName, in.LastName = &user.FirstName, &user.LastName
+		}
+		if in.TimeZone != nil {
+			if _, err := db.ExecContext(r.Context(), `INSERT INTO member_settings(organization_id,subject,time_zone) VALUES($1,$2,$3) ON CONFLICT (organization_id,subject) DO UPDATE SET time_zone=EXCLUDED.time_zone,updated_at=now()`, organization(r), subject(r), zone); err != nil {
+				if in.FirstName != nil {
+					problem(w, 503, "Your name was saved; your time zone could not be. Try the time zone again.")
+				} else {
+					problem(w, 503, "Your time zone could not be saved.")
+				}
+				return
+			}
 		}
 		jsonReply(w, 200, map[string]any{"first_name": in.FirstName, "last_name": in.LastName, "time_zone": in.TimeZone})
 	})
