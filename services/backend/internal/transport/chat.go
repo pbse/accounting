@@ -1030,7 +1030,18 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			if result.outcome == "failed" {
-				// Nothing from the model is saved; the panel keeps the member's text and offers to retry.
+				// Nothing from the model is saved and the question is not kept, but the attempt itself is recorded: it
+				// spent model calls, and the firm's counts and failure telemetry must see it.
+				answerScope := "close"
+				if closeID == "" {
+					answerScope = "firm"
+				}
+				var trace any
+				if raw, err := json.Marshal(result.steps); err == nil && len(result.steps) > 0 {
+					trace = string(raw)
+				}
+				_, _ = db.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace,scope,rounds,tool_calls) VALUES($1,$2,NULLIF($3,'')::bigint,'failed',$4,$5::jsonb,$6,$7,$8)`, org, author, closeID, time.Since(began).Milliseconds(), trace, answerScope, result.rounds, result.calls)
+				// The panel keeps the member's text and offers to retry.
 				if streamed != nil {
 					emit("error", map[string]any{"message": result.why})
 					return

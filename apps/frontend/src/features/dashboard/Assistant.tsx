@@ -328,7 +328,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
       </form>
       <p className="assistant-note">
         Answers come from saved work you can access. A card's action runs only after you confirm it, through the same checks as the close page; the assistant never approves, sends or posts anything.
-        {" "}If your firm turns on Agent chat for client closes, a question in a client close that none of its fixed reads matches goes to the configured model provider with this close's saved status, sign-off blockers, tie-out, changes, exceptions and any open draft, plus the reads of this close the model chooses through the assistant's read-only tools, each made with your permissions and listed under the answer, which says it was written by the model. If the firm turns it on firm-wide, such a question asked outside a close goes with your lists of what needs a person today, the review queue and blocked work, and its answer is shown once and not kept.
+        {" "}With Agent chat on for client closes, every question you type in a client close goes to the configured model provider, with the reads of this close the agent chooses (its status, blockers, tie-out, changes, exceptions, documents, drafts, procedures, a search) made with your permissions and listed under the answer, and the last turns of this conversation; commands typed with / never go to a model. With it on firm-wide, a question asked outside a close goes the same way with the reads the agent chooses across the closes you can open, and an answer built on a read that cannot be tied to particular closes is shown once and not kept.
       </p>
     </aside>
   );
