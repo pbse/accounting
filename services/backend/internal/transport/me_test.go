@@ -69,8 +69,11 @@ func TestMemberSettingsArePersonalAndLeaveWithTheMembership(t *testing.T) {
 	if code != 200 || me["time_zone"] != "" {
 		t.Fatalf("fresh settings: %d %v", code, me)
 	}
-	if code, profile := call("user_a", "GET", "/v1/closes/me/profile", nil); code != 200 || profile["name_editable"] != false || profile["drive"].(map[string]any)["configured"] != false {
+	if code, profile := call("user_a", "GET", "/v1/closes/me/profile", nil); code != 200 || profile["name_editable"] != false {
 		t.Fatalf("local profile: %d %v", code, profile)
+	}
+	if code, drive := call("user_a", "GET", "/v1/closes/me/drive", nil); code != 200 || drive["configured"] != false {
+		t.Fatalf("local drive: %d %v", code, drive)
 	}
 	if n := me["notifications"].(map[string]any); len(n["kinds"].([]any)) != len(attentionKinds) || len(n["all_kinds"].([]any)) != len(attentionKinds) || n["browser"] != false {
 		t.Fatalf("default notifications: %v", n)

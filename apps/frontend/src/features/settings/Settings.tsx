@@ -9,21 +9,23 @@ import { workspaceRequest } from "../closes/workspace";
 
 type Me = { subject: string; time_zone: string; notifications: { kinds: string[]; browser: boolean; all_kinds: string[] } };
 // What the sign-in provider keeps, read apart from the settings kept here so a slow provider never hides those.
-type Profile = { email?: string; first_name?: string; last_name?: string; name_editable: boolean; profile_unavailable?: boolean; drive: { configured: boolean; connected?: boolean; reason?: string } };
+type Profile = { email?: string; first_name?: string; last_name?: string; name_editable: boolean; profile_unavailable?: boolean };
+type Drive = { configured: boolean; connected?: boolean; reason?: string };
 
-function useProfile() {
-  const [profile, setProfile] = useState<Profile>();
+// One read of a settings route, kept until it is replaced; each provider-backed part loads on its own.
+function useRead<T>(path: string, unavailable: string) {
+  const [value, setValue] = useState<T>();
   const [error, setError] = useState("");
   useEffect(() => {
     let live = true;
-    workspaceRequest("/me/profile")
-      .then((data) => live && setProfile(data))
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Your sign-in profile could not be read."));
+    workspaceRequest(path)
+      .then((data) => live && setValue(data))
+      .catch((e) => live && setError(e instanceof Error ? e.message : unavailable));
     return () => {
       live = false;
     };
-  }, []);
-  return { profile, error };
+  }, [path, unavailable]);
+  return { value, setValue, error };
 }
 
 const tabs = [
@@ -51,7 +53,7 @@ const zones = (): string[] => {
 function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
   // Local development has no hosted session to read; the hook is chosen once, as the layout does.
   const session = authKitClientId ? useSession() : undefined;
-  const { profile, error: profileError } = useProfile();
+  const { value: profile, setValue: setProfile, error: profileError } = useRead<Profile>("/me/profile", "Your sign-in profile could not be read.");
   const editable = profile?.name_editable ?? false;
   const [first, setFirst] = useState("");
   const [last, setLast] = useState("");
@@ -68,7 +70,9 @@ function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
     setMessage("");
     try {
       const changed = { time_zone: zone, ...(editable && (first !== (profile?.first_name ?? "") || last !== (profile?.last_name ?? "")) ? { first_name: first, last_name: last } : {}) };
-      await workspaceRequest("/me", changed);
+      const saved: { first_name: string | null; last_name: string | null } = await workspaceRequest("/me", changed);
+      // The saved name is the new baseline, so a later change sends only what differs from it.
+      if (saved.first_name !== null && profile) setProfile({ ...profile, first_name: saved.first_name, last_name: saved.last_name ?? "" });
       setMessage("Saved.");
       onSaved();
     } catch (err) {
@@ -125,7 +129,7 @@ function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
 
 // What is connected for this person alone. Ledgers, senders and posting authority are the firm's and are linked, not kept here.
 function Connections() {
-  const { profile, error } = useProfile();
+  const { value: drive, error } = useRead<Drive>("/me/drive", "Google Drive could not be checked.");
   const [message, setMessage] = useState("");
   async function connect() {
     setMessage("");
@@ -143,15 +147,15 @@ function Connections() {
         <p>Search your own Drive for a PDF, text or CSV file from a close's evidence pane. Only you can see your Drive; the grant is yours, through your firm's WorkOS connection.</p>
         {error ? (
           <p role="alert">{error}</p>
-        ) : !profile ? (
+        ) : !drive ? (
           <p role="status">Checking your Drive connection…</p>
-        ) : !profile.drive.configured ? (
+        ) : !drive.configured ? (
           <p className="note">Google Drive needs the firm's hosted sign-in, which local development does not have.</p>
-        ) : profile.drive.connected ? (
+        ) : drive.connected ? (
           <p>Connected.</p>
         ) : (
           <p>
-            {profile.drive.reason}{" "}
+            {drive.reason}{" "}
             <button type="button" onClick={() => void connect()}>
               Connect Google Drive
             </button>

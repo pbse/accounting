@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 	_ "time/tzdata"
 )
@@ -33,8 +32,8 @@ func registerMe(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]any{"subject": subject(r), "time_zone": timeZone, "notifications": map[string]any{"kinds": kinds, "browser": browser, "all_kinds": attentionKinds}})
 	})
-	// What the sign-in provider keeps about the member, and their Drive grant, read apart from the settings kept here so
-	// a slow provider never hides those. Local development has neither.
+	// What the sign-in provider keeps about the member, read apart from the settings kept here so a slow provider never
+	// hides those. Local development has no provider.
 	mux.HandleFunc("GET /v1/closes/me/profile", func(w http.ResponseWriter, r *http.Request) {
 		if subject(r) == "" {
 			problem(w, 403, "Sign in to see your own settings.")
@@ -42,39 +41,32 @@ func registerMe(mux *http.ServeMux, db *sql.DB) {
 		}
 		a := driveActor(r)
 		if a == nil {
-			jsonReply(w, 200, map[string]any{"name_editable": false, "drive": map[string]any{"configured": false}})
+			jsonReply(w, 200, map[string]any{"name_editable": false})
 			return
 		}
-		reply := map[string]any{"name_editable": false}
-		drive := map[string]any{"configured": true, "connected": false}
 		var user workosUser
-		var profileErr, driveErr error
-		var reason string
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			profileErr = workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(a.Subject), nil, &user)
-		}()
-		go func() {
-			defer wg.Done()
-			_, reason, driveErr = driveToken(r.Context(), a)
-		}()
-		wg.Wait()
-		if profileErr != nil {
-			reply["profile_unavailable"] = true
-		} else {
-			reply["email"], reply["first_name"], reply["last_name"], reply["name_editable"] = user.Email, user.FirstName, user.LastName, true
+		if err := workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(a.Subject), nil, &user); err != nil {
+			jsonReply(w, 200, map[string]any{"name_editable": false, "profile_unavailable": true})
+			return
 		}
-		if driveErr != nil {
+		jsonReply(w, 200, map[string]any{"email": user.Email, "first_name": user.FirstName, "last_name": user.LastName, "name_editable": true})
+	})
+	// The member's own Drive grant, read on its own so its provider's latency touches nothing else.
+	mux.HandleFunc("GET /v1/closes/me/drive", func(w http.ResponseWriter, r *http.Request) {
+		a := driveActor(r)
+		if a == nil {
+			jsonReply(w, 200, map[string]any{"configured": false})
+			return
+		}
+		drive := map[string]any{"configured": true, "connected": false}
+		if _, reason, err := driveToken(r.Context(), a); err != nil {
 			drive["reason"] = "Google Drive could not be checked. Try again."
 		} else if reason != "" {
 			drive["reason"] = reason
 		} else {
 			drive["connected"] = true
 		}
-		reply["drive"] = drive
-		jsonReply(w, 200, reply)
+		jsonReply(w, 200, drive)
 	})
 	// Each change names only the settings it changes.
 	mux.HandleFunc("POST /v1/closes/me", func(w http.ResponseWriter, r *http.Request) {
