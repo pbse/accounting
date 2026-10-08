@@ -134,6 +134,16 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 		t.Fatalf("without Gemini, Tesseract: %q %q", text, method)
 	}
 
+	// A page image Gemini would refuse unsent is neither sent nor charged to the firm's limit.
+	g, seen = fakeGemini(t, 200, answer("never sent"))
+	reserved = 0
+	reading = Reading{Gemini: g, Reserve: func(context.Context) error { reserved++; return nil }}
+	huge := func() ([]byte, error) { return make([]byte, geminiMaxImage+1), nil }
+	local := func([]byte) (string, error) { return "SCANNED INVOICE 6000.00", nil }
+	if _, method, _ = reading.page(ctx, "", huge, local); method != "OCR (English; verify against original)" || reserved != 0 || len(*seen) != 0 {
+		t.Fatalf("an oversized page image is read locally, uncharged: %q reserved %d sent %d", method, reserved, len(*seen))
+	}
+
 	// Once the firm's daily limit is reached, no more pages go to Gemini, and none is reserved again.
 	g, seen = fakeGemini(t, 200, answer("never sent"))
 	reserved = 0

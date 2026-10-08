@@ -90,7 +90,8 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 		r.off = true
 	}
 	if r.Gemini != nil && !r.off {
-		if png, err := rendered(); err == nil {
+		// A page Gemini would refuse unsent (an empty or oversized image) is never charged to the firm's limit.
+		if png, err := rendered(); err == nil && len(png) > 0 && len(png) <= geminiMaxImage {
 			if r.Reserve != nil {
 				if err = r.Reserve(ctx); err != nil {
 					r.off = true
