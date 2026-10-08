@@ -1,5 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
+import { Dialog, DialogActions } from "@close/ui/components/Dialog";
+import { RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { authenticationHeaders } from "../auth/Auth";
 import { apiBaseUrl } from "../../lib/api";
 import { workspaceRequest } from "./workspace";
@@ -17,16 +20,19 @@ type RoleChange = { id: number; subject: string; from_role: string; to_role: str
 export function FirmPeople() {
   const [page, setPage] = useState<{ people: Person[]; roles: RoleOption[]; changes: RoleChange[]; next: string }>();
   const [subject, setSubject] = useState("");
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   // The first page, or the next one after the people already shown.
   async function load(after = "") {
     setBusy(true);
     try {
       const next = await workspaceRequest(`/members/people${after ? `?after=${encodeURIComponent(after)}` : ""}`);
       setPage((shown) => (after && shown ? { ...next, people: [...shown.people, ...next.people] } : next));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The firm’s people are unavailable.");
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The firm’s people are unavailable.");
     } finally {
       setBusy(false);
     }
@@ -36,19 +42,18 @@ export function FirmPeople() {
   }, []);
   async function change(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
+    const data = new FormData(event.currentTarget);
     setBusy(true);
-    setMessage("");
+    setError("");
     try {
       const current = page?.people.find((person) => person.subject === subject)?.role ?? "";
       const result = await workspaceRequest("/members/role", { subject, role: data.get("role"), current, reason: data.get("reason"), confirmed: data.get("confirmed") === "on" });
       setMessage(result.message);
-      form.reset();
       setSubject("");
+      setOpen(false);
       await load();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The role could not be changed.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The role could not be changed.");
     } finally {
       setBusy(false);
     }
@@ -62,13 +67,26 @@ export function FirmPeople() {
     return (
       <section aria-label="People and roles">
         <h2>People and roles</h2>
-        <p role={message ? "alert" : "status"}>{message || "Loading the firm’s people…"}</p>
+        {error ? (
+          <p role="alert">
+            {error}{" "}
+            <button type="button" disabled={busy} onClick={() => void load()}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          <p role="status">Loading the firm’s people…</p>
+        )}
       </section>
     );
   const chosen = page.people.find((person) => person.subject === subject);
   return (
     <section aria-label="People and roles">
-      <h2>People and roles</h2>
+      <SectionHeader title="People and roles">
+        <button type="button" className="primary" onClick={() => (setError(""), setOpen(true))}>
+          Change a role
+        </button>
+      </SectionHeader>
       <p>Colleagues who sign in with the firm’s company domain join with the Member role, which opens nothing until you give them a role or assign them clients. A role change takes effect within five minutes.</p>
       <table>
         <thead><tr><th>Person</th><th>Role</th><th>Firm access</th></tr></thead>
@@ -82,27 +100,34 @@ export function FirmPeople() {
           ))}
         </tbody>
       </table>
-      {page.next && <p><button type="button" disabled={busy} onClick={() => void load(page.next)}>Show more people</button></p>}
-      <details><summary>Change a person’s role</summary><form onSubmit={(event) => void change(event)}><fieldset disabled={busy}>
-        <label>Person
-          <select required value={subject} onChange={(event) => setSubject(event.target.value)}>
-            <option value="">Choose a person</option>
-            {page.people.filter((person) => person.status === "active").map((person) => <option key={person.subject} value={person.subject}>{person.name ? `${person.name} (${person.email})` : person.email}</option>)}
-          </select>
-        </label>
-        {chosen && <p>Current role: {roleName(chosen.role)}</p>}
-        <label>New role
-          <select name="role" required defaultValue="">
-            <option value="" disabled>Choose a role</option>
-            {page.roles.filter((role) => role.allowed).map((role) => <option key={role.slug} value={role.slug}>{role.name}{role.permissions.length ? ` — ${role.permissions.join(", ")}` : " — no access"}</option>)}
-          </select>
-        </label>
-        <label>Reason<textarea name="reason" required minLength={10} maxLength={2000} /></label>
-        <label className="checkbox-label"><input name="confirmed" type="checkbox" required />I checked the person and the role.</label>
-        <button>Change role</button>
-      </fieldset></form></details>
-      {page.changes.length > 0 && <details><summary>Role changes ({page.changes.length})</summary><ol>{page.changes.map((c) => <li key={c.id}>{who(c.subject)}: {roleName(c.from_role)} → {roleName(c.to_role)}{c.state === "pending" ? " (awaiting WorkOS)" : c.state === "failed" ? " (not made)" : c.state === "unknown" ? " (outcome unknown: changed in WorkOS meanwhile)" : ""} · {c.reason} · by {who(c.actor)} · {new Date(c.created_at).toLocaleString()}</li>)}</ol></details>}
+      {page.next && <p className="setting-actions"><button type="button" disabled={busy} onClick={() => void load(page.next)}>Show more people</button></p>}
       {message && <p role="status">{message}</p>}
+      {error && !open && <p role="alert">{error}</p>}
+      {page.changes.length > 0 && <details><summary>Role changes ({page.changes.length})</summary><ol>{page.changes.map((c) => <li key={c.id}>{who(c.subject)}: {roleName(c.from_role)} → {roleName(c.to_role)}{c.state === "pending" ? " (awaiting WorkOS)" : c.state === "failed" ? " (not made)" : c.state === "unknown" ? " (outcome unknown: changed in WorkOS meanwhile)" : ""} · {c.reason} · by {who(c.actor)} · {new Date(c.created_at).toLocaleString()}</li>)}</ol></details>}
+      <Dialog open={open} onClose={() => setOpen(false)} title="Change a person’s role" description="The role decides what they can open across the firm. It takes effect within five minutes.">
+        <form onSubmit={(event) => void change(event)}><fieldset disabled={busy}>
+          <label>Person
+            <select required value={subject} onChange={(event) => setSubject(event.target.value)}>
+              <option value="">Choose a person</option>
+              {page.people.filter((person) => person.status === "active").map((person) => <option key={person.subject} value={person.subject}>{person.name ? `${person.name} (${person.email})` : person.email}</option>)}
+            </select>
+          </label>
+          {chosen && <p>Current role: {roleName(chosen.role)}</p>}
+          <label>New role
+            <select name="role" required defaultValue="">
+              <option value="" disabled>Choose a role</option>
+              {page.roles.filter((role) => role.allowed).map((role) => <option key={role.slug} value={role.slug}>{role.name}{role.permissions.length ? ` — ${role.permissions.join(", ")}` : " — no access"}</option>)}
+            </select>
+          </label>
+          <label>Reason<textarea name="reason" required minLength={10} maxLength={2000} /></label>
+          <label className="checkbox-label"><input name="confirmed" type="checkbox" required />I checked the person and the role.</label>
+          {error && <p role="alert">{error}</p>}
+          <DialogActions>
+            <button type="button" onClick={() => setOpen(false)}>Cancel</button>
+            <button className="primary">Change role</button>
+          </DialogActions>
+        </fieldset></form>
+      </Dialog>
     </section>
   );
 }
@@ -149,74 +174,115 @@ const invitationStates: Record<string, string> = { sending: "Not yet confirmed b
 export function Invitations() {
   const [roles, setRoles] = useState<{ configured: boolean; roles: Role[] }>();
   const [list, setList] = useState<Invitation[]>([]);
+  const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("");
   const [reason, setReason] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   async function load() {
     try {
       const [available, sent] = await Promise.all([workspaceRequest("/members/roles"), workspaceRequest("/members/invitations")]);
       setRoles(available);
       setList(sent);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Invitations are unavailable.");
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Invitations are unavailable.");
     }
   }
   useEffect(() => void load(), []);
+  // Leaving the dialog discards the draft, so a later invitation is verified afresh.
+  const dismiss = () => {
+    setEmail("");
+    setRole("");
+    setReason("");
+    setConfirmed(false);
+    setError("");
+    setOpen(false);
+  };
   async function act(body: Record<string, unknown>) {
     setBusy(true);
-    setMessage("");
+    setError("");
     try {
       const result = await workspaceRequest("/members/invitations", body);
       setMessage(result.message);
-      if (body.action === "send") {
-        setEmail("");
-        setReason("");
-        setConfirmed(false);
-      }
+      if (body.action === "send") dismiss();
       await load();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "The invitation could not be sent.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The invitation could not be sent.");
     } finally {
       setBusy(false);
     }
   }
-  if (roles && !roles.configured) return <section aria-label="Invite by email"><h2>Invitations</h2><p className="note">Email invitations need the server's WorkOS API key; until then, enroll members by their WorkOS user ID below.</p></section>;
-  const chosen = roles?.roles.find((r) => r.slug === role);
-  const hidden = roles?.roles.filter((r) => !r.allowed).length ?? 0;
+  if (!roles)
+    return (
+      <section aria-label="Invitations">
+        <h2>Invitations</h2>
+        {error ? (
+          <p role="alert">
+            {error}{" "}
+            <button type="button" onClick={() => void load()}>
+              Try again
+            </button>
+          </p>
+        ) : (
+          <p role="status">Reading invitations…</p>
+        )}
+      </section>
+    );
+  if (!roles.configured) return <section aria-label="Invitations"><h2>Invitations</h2><p className="note">Email invitations need the server's WorkOS API key; until then, enrol members by their WorkOS user ID below.</p></section>;
+  const chosen = roles.roles.find((r) => r.slug === role);
+  const hidden = roles.roles.filter((r) => !r.allowed).length;
   return (
-    <section aria-label="Invite by email">
-      <h2>Invitations</h2>
-      <p>WorkOS emails the invitation. Once they accept it and sign in, they join the firm. Assign their clients under client access if their role cannot see every client.</p>
-      <details open={list.length === 0}><summary>Invite by email</summary><form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
-        <fieldset disabled={busy}>
-          <label>Email<input type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-          <label>Role<select required value={role} onChange={(event) => setRole(event.target.value)}><option value="">Choose a role</option>{roles?.roles.filter((r) => r.allowed).map((r) => <option key={r.slug} value={r.slug}>{r.name}</option>)}</select></label>
-          {chosen && <>{chosen.description && <p>{chosen.description}</p>}<ul>{chosen.permissions.map((p) => <li key={p}>{p}</li>)}</ul></>}
-          {hidden > 0 && <p>{hidden} role{hidden === 1 ? " grants" : "s grant"} permissions you don't hold; only an administrator who holds them can invite into {hidden === 1 ? "it" : "them"}.</p>}
-          <label>Authority and reason<textarea required minLength={10} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
-          <label className="checkbox-label"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I verified the address and the role.</label>
-          <button disabled={!confirmed || !role}>Send invitation</button>
-        </fieldset>
-      </form></details>
-      {list.length > 0 && (
-        <ul>
+    <section aria-label="Invitations">
+      <SectionHeader title="Invitations">
+        <button type="button" className="primary" onClick={() => (setError(""), setOpen(true))}>
+          Invite by email
+        </button>
+      </SectionHeader>
+      <p>WorkOS emails the invitation. Once they accept it and sign in, they join the firm. Assign their clients under client assignments if their role cannot see every client.</p>
+      {list.length === 0 ? (
+        <p className="empty">Nobody has been invited yet.</p>
+      ) : (
+        <RowList>
           {list.map((i) => (
-            <li key={i.id}>
-              {i.email} · {i.role_name} · {invitationStates[i.state] ?? i.state} · invited by {i.invited_by} {new Date(i.created_at).toLocaleDateString()}
-              {(i.state === "pending" || i.state === "sending") && <> <button type="button" disabled={busy} onClick={() => void act({ action: "revoke", id: i.id, confirmed: true })}>Revoke</button></>}
-            </li>
+            <div className="row" key={i.id}>
+              <span>
+                <strong>{i.email}</strong>
+                <small>{i.role_name} · invited by {i.invited_by} {new Date(i.created_at).toLocaleDateString()}</small>
+              </span>
+              <span className={`pill ${i.state === "accepted" ? "" : i.state === "pending" || i.state === "sending" ? "info" : "neutral"}`}>{invitationStates[i.state] ?? i.state}</span>
+              <span />
+              {i.state === "pending" || i.state === "sending" ? <button type="button" disabled={busy} onClick={() => void act({ action: "revoke", id: i.id, confirmed: true })}>Revoke</button> : <span />}
+            </div>
           ))}
-        </ul>
+        </RowList>
       )}
       {message && <p role="status">{message}</p>}
+      {error && !open && <p role="alert">{error}</p>}
+      <Dialog open={open} onClose={dismiss} title="Invite by email" description="WorkOS emails the invitation; they join the firm once they accept it and sign in.">
+        <form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
+          <fieldset disabled={busy}>
+            <label>Email<input type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+            <label>Role<select required value={role} onChange={(event) => setRole(event.target.value)}><option value="">Choose a role</option>{roles.roles.filter((r) => r.allowed).map((r) => <option key={r.slug} value={r.slug}>{r.name}</option>)}</select></label>
+            {chosen && <>{chosen.description && <p>{chosen.description}</p>}<ul>{chosen.permissions.map((p) => <li key={p}>{p}</li>)}</ul></>}
+            {hidden > 0 && <p>{hidden} role{hidden === 1 ? " grants" : "s grant"} permissions you don't hold; only an administrator who holds them can invite into {hidden === 1 ? "it" : "them"}.</p>}
+            <label>Authority and reason<textarea required minLength={10} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
+            <label className="checkbox-label"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I verified the address and the role.</label>
+            {error && <p role="alert">{error}</p>}
+            <DialogActions>
+              <button type="button" onClick={dismiss}>Cancel</button>
+              <button className="primary" disabled={!confirmed || !role}>Send invitation</button>
+            </DialogActions>
+          </fieldset>
+        </form>
+      </Dialog>
     </section>
   );
 }
 
-// The firm's usage against its limits and any aged or unknown work, for an administrator checking on operations.
 export function OperationsSnapshot() {
   const [snapshot, setSnapshot] = useState<Operations>();
   const [busy, setBusy] = useState(false);
@@ -264,13 +330,16 @@ export function OperationsSnapshot() {
 export function MemberDecision() {
   const [members, setMembers] = useState<Member[]>();
   const [subject, setSubject] = useState("");
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   async function load() {
     try {
       setMembers(await workspaceRequest("/members"));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Membership history unavailable.");
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Membership history unavailable.");
     }
   }
   useEffect(() => {
@@ -280,22 +349,24 @@ export function MemberDecision() {
   async function decide(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
-    setMessage("");
+    setError("");
     try {
       const data = new FormData(event.currentTarget);
       await workspaceRequest("/members", { subject: subject.trim(), granted: data.get("granted") === "on", previous_id: current ? String(current.id) : "", reason: data.get("reason"), confirmed: data.get("confirmed") === "on" });
-      await load();
       setMessage("Firm membership decision saved. Revocation blocks subsequent API requests immediately; also revoke the WorkOS membership and session.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Membership decision unavailable.");
+      setSubject("");
+      setOpen(false);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Membership decision unavailable.");
     } finally {
       setBusy(false);
     }
   }
   if (!members)
-    return message ? (
+    return error ? (
       <p role="alert">
-        {message}{" "}
+        {error}{" "}
         <button type="button" onClick={() => void load()}>
           Try again
         </button>
@@ -305,17 +376,27 @@ export function MemberDecision() {
     );
   return (
     <>
-      <form onSubmit={(event) => void decide(event)}><fieldset disabled={busy}>
-        <label>Exact WorkOS user ID<input required pattern="user_.+" maxLength={200} value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
-        <p>Current access: {current ? current.granted ? "Enrolled" : "Revoked" : "Not enrolled"}</p>
-        <label className="checkbox-label"><input name="granted" type="checkbox" />Enroll this member (leave unchecked to revoke)</label>
-        <label>Authority and reason<textarea name="reason" required minLength={10} maxLength={2000} /></label>
-        <label className="checkbox-label"><input name="confirmed" type="checkbox" required />I verified the exact user and access decision.</label>
-        <button>Save member decision</button>
-      </fieldset></form>
-      <p className="setting-actions"><button type="button" disabled={busy} onClick={() => void load()}>Refresh membership</button></p>
-      {members.length > 0 && <details><summary>Membership history ({members.length})</summary><ol>{members.map((member) => <li key={member.id}>{member.granted ? "Enrolled" : "Revoked"} · {member.subject} · {member.reason} · {member.actor} · {new Date(member.created_at).toLocaleString()}</li>)}</ol></details>}
+      <p className="setting-actions">
+        <button type="button" onClick={() => (setError(""), setOpen(true))}>Enrol or revoke by user ID</button>
+        <button type="button" disabled={busy} onClick={() => void load()}>Refresh</button>
+      </p>
       {message && <p role="status">{message}</p>}
+      {error && !open && <p role="alert">{error}</p>}
+      {members.length > 0 && <details><summary>Membership history ({members.length})</summary><ol>{members.map((member) => <li key={member.id}>{member.granted ? "Enrolled" : "Revoked"} · {member.subject} · {member.reason} · {member.actor} · {new Date(member.created_at).toLocaleString()}</li>)}</ol></details>}
+      <Dialog open={open} onClose={() => setOpen(false)} title="Enrol or revoke a member" description="An exact WorkOS user, enrolled into this firm or refused from its next request.">
+        <form onSubmit={(event) => void decide(event)}><fieldset disabled={busy}>
+          <label>Exact WorkOS user ID<input required pattern="user_.+" maxLength={200} value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
+          <p>Current access: {current ? current.granted ? "Enrolled" : "Revoked" : "Not enrolled"}</p>
+          <label className="checkbox-label"><input name="granted" type="checkbox" />Enrol this member (leave unchecked to revoke)</label>
+          <label>Authority and reason<textarea name="reason" required minLength={10} maxLength={2000} /></label>
+          <label className="checkbox-label"><input name="confirmed" type="checkbox" required />I verified the exact user and access decision.</label>
+          {error && <p role="alert">{error}</p>}
+          <DialogActions>
+            <button type="button" onClick={() => setOpen(false)}>Cancel</button>
+            <button className="primary">Save member decision</button>
+          </DialogActions>
+        </fieldset></form>
+      </Dialog>
     </>
   );
 }

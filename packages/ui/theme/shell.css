@@ -747,6 +747,14 @@ body {
   background: var(--surface);
   box-shadow: var(--shadow-card);
 }
+/* A row of actions under a form or a card, the primary one first. */
+.setting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  align-items: center;
+  margin: var(--space-12) 0 0;
+}
 /* Text helpers that replace one-off inline styles. */
 .visually-hidden {
   position: absolute;
