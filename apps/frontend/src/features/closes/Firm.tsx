@@ -9,7 +9,7 @@ import { ClientRoster } from "./Roster";
 import { workspaceRequest } from "./workspace";
 
 type AgentChat = "off" | "closes" | "firm";
-type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; agent_chat: AgentChat; answers_stopped: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_agent_chat: boolean; ledger_writes: boolean; can_manage_ledger_writes: boolean };
+type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; agent_chat: AgentChat; answers_stopped: boolean; staff_planning: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_agent_chat: boolean; ledger_writes: boolean; can_manage_ledger_writes: boolean };
 
 // Who on our team supports the firm, and the firm's own records to take away at exit.
 function SupportAndExit() {
@@ -279,11 +279,11 @@ function AgentChatSetting() {
   }, [refresh]);
   if (!policy) return message ? <p role="alert">{message}</p> : null;
   const chosen = choice ?? policy.agent_chat;
-  async function change() {
+  async function change(body: Record<string, unknown> = { agent_chat: chosen }) {
     setBusy(true);
     setMessage("");
     try {
-      await workspaceRequest("/organization/policy", { agent_chat: chosen, reason });
+      await workspaceRequest("/organization/policy", { ...body, reason });
       setReason("");
       setChoice(undefined);
       setRefresh((n) => n + 1);
@@ -322,6 +322,12 @@ function AgentChatSetting() {
           </label>
           <button type="button" disabled={busy || reason.trim().length < 5 || chosen === policy.agent_chat} onClick={() => void change()}>
             Apply
+          </button>
+          <p>
+            <strong>Staff plan drafts: {policy.staff_planning ? "allowed" : "not allowed"}.</strong> Separately from the chat, platform staff may ask the model to draft a workflow plan for one of this firm's closes, sending their instruction with the close's client, month, sign-off state and counts of its preparation work; nothing runs before staff approve the plan.
+          </p>
+          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change({ staff_planning: !policy.staff_planning })}>
+            {policy.staff_planning ? "Stop staff plan drafts" : "Allow staff plan drafts"}
           </button>
         </>
       ) : (

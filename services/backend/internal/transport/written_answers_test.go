@@ -176,6 +176,14 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	if recorded != "closes" {
 		t.Fatal("the policy change is recorded")
 	}
+	// An unrelated policy change records no level, and the staff planner's consent is its own switch.
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"staff_planning": true, "reason": "Allow staff plans"}, 200)
+	var unrelated sql.NullString
+	var planning bool
+	must(db.QueryRow(`SELECT agent_chat,assistant_model_answers FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&unrelated, &planning))
+	if unrelated.Valid || !planning {
+		t.Fatalf("an unrelated change recorded a level, or the planner consent was not recorded: %v %v", unrelated, planning)
+	}
 	security := httptest.NewRecorder()
 	store.ServeHTTP(security, httptest.NewRequest("GET", "/v1/closes/security", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: org, Permissions: []string{"clients:all", "members:manage"}})))
 	if security.Code != 200 || !strings.Contains(security.Body.String(), "Agent chat is on for client closes") {
