@@ -1,15 +1,17 @@
+/* A grey track of pills; the selected one is solid blue, like the current page in the top bar. */
 .segmented {
   display: inline-flex;
   flex-wrap: wrap;
-  padding: 3px;
-  border-radius: var(--radius-md);
+  gap: 2px;
+  padding: var(--space-4);
+  border-radius: var(--radius-full);
   background: var(--fill);
 }
 .app-shell .segmented button,
 .app-shell .segmented a {
-  padding: 5px var(--space-10);
+  padding: 6px var(--space-12);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
   box-shadow: none;
   color: var(--ink-2);
@@ -18,15 +20,21 @@
   line-height: 16px;
   text-decoration: none;
 }
-.app-shell .segmented [aria-pressed="true"],
-.app-shell .segmented [aria-current="page"] {
+.app-shell .segmented button:hover:not(:disabled),
+.app-shell .segmented a:hover {
   background: var(--surface);
-  box-shadow: var(--shadow-raised);
   color: var(--ink);
+}
+.app-shell .segmented [aria-pressed="true"],
+.app-shell .segmented [aria-current="page"],
+.app-shell .segmented [aria-pressed="true"]:hover,
+.app-shell .segmented [aria-current="page"]:hover {
+  background: var(--blue);
+  color: var(--on-chip);
 }
 .segmented .count {
   margin-left: 6px;
-  color: var(--ink-2);
+  opacity: 0.8;
   font-variant-numeric: tabular-nums;
 }
 .segmented .count.alert::after {
@@ -38,4 +46,8 @@
   border-radius: var(--radius-full);
   background: var(--red);
   vertical-align: middle;
+}
+.app-shell .segmented [aria-pressed="true"] .count.alert::after,
+.app-shell .segmented [aria-current="page"] .count.alert::after {
+  background: var(--on-chip);
 }

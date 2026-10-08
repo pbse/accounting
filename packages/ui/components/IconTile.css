@@ -1,25 +1,37 @@
+/* A 36px tinted circle holding a 16px icon in its hue, used at the head of stat tiles and rows. */
 .icon-tile {
   width: var(--icon-tile);
   height: var(--icon-tile);
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-chip);
-  color: var(--on-chip);
+  border-radius: var(--radius-full);
 }
 .icon-tile-blue {
-  background: var(--gloss), var(--blue);
+  background: var(--blue-tint);
+  color: var(--blue-text);
 }
 .icon-tile-orange {
-  background: var(--gloss), var(--orange);
+  background: var(--attention-tint);
+  color: var(--attention-text);
 }
 .icon-tile-teal {
-  background: var(--gloss), var(--teal);
+  background: var(--teal-tint);
+  color: var(--teal-text);
+}
+.icon-tile-green {
+  background: var(--positive-tint);
+  color: var(--positive-text);
+}
+.icon-tile-violet {
+  background: var(--violet-tint);
+  color: var(--violet-text);
 }
 .icon-tile-red {
-  background: var(--gloss), var(--red);
+  background: var(--negative-tint);
+  color: var(--negative-text);
 }
 .icon-tile-gray {
-  background: var(--gloss), var(--gray);
+  background: var(--fill);
+  color: var(--ink-2);
 }

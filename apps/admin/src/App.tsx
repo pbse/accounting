@@ -16,6 +16,7 @@ import { Audit } from "./pages/Audit";
 import { ContactNotes } from "./pages/ContactNotes";
 import { Plan, Plans } from "./pages/Plans";
 import { PlanBuilder } from "./pages/PlanBuilder";
+import { Avatar } from "@close/ui/components/Avatar";
 import { Icon } from "@close/ui/components/Icon";
 
 type Me = { subject: string; permissions: string[]; mode: string };
@@ -58,8 +59,8 @@ function Layout() {
     <GrantsProvider enabled={me.data?.permissions.includes("platform:content") ?? false}>
     <div className="app-shell">
       <a className="skip" href="#main">Skip to content</a>
-      <aside className="sidebar">
-        <Link className="sidebar-brand" to="/">
+      <header className="topbar">
+        <Link className="topbar-brand" to="/">
           <span className="logo" aria-hidden="true">c</span>
           <span>
             <strong>Close</strong>
@@ -67,41 +68,40 @@ function Layout() {
           </span>
         </Link>
         <nav aria-label="Staff console">
-          <div className="nav-group">
-            <div className="nav-label">Platform</div>
-            <NavLink className="nav-item" end to="/"><Icon name="work" />Overview</NavLink>
-            <NavLink className="nav-item" to="/firms"><Icon name="firm" />Firms</NavLink>
-            <NavLink className="nav-item" to="/people"><Icon name="clients" />People</NavLink>
-            <NavLink className="nav-item" to="/audit"><Icon name="shield" />Staff audit</NavLink>
-            <NavLink className="nav-item" to="/contact-notes"><Icon name="file" />Contact notes</NavLink>
-          </div>
-          <div className="nav-group">
-            <div className="nav-label">Workflows</div>
-            <NavLink className="nav-item" to="/workflows"><Icon name="book" />Catalog</NavLink>
-            <NavLink className="nav-item" end to="/runs"><Icon name="run" />Runs</NavLink>
-            {me.data?.permissions.includes("platform:plans") && <NavLink className="nav-item" to="/plans"><Icon name="file" />Plans</NavLink>}
-          </div>
-          <div className="nav-group">
-            <div className="nav-label">Operations</div>
-            <NavLink className="nav-item" to="/jobs"><Icon name="blocked" />Stuck work</NavLink>
-            <NavLink className="nav-item" to="/connections"><Icon name="link" />Connections</NavLink>
-          </div>
+          <NavLink className="nav-item" end to="/"><Icon name="work" />Overview</NavLink>
+          <NavLink className="nav-item" to="/firms"><Icon name="firm" />Firms</NavLink>
+          <NavLink className="nav-item" to="/people"><Icon name="clients" />People</NavLink>
+          <NavLink className="nav-item" to="/audit"><Icon name="shield" />Staff audit</NavLink>
+          <NavLink className="nav-item" to="/contact-notes"><Icon name="file" />Contact notes</NavLink>
+          <NavLink className="nav-item" to="/workflows"><Icon name="book" />Catalog</NavLink>
+          <NavLink className="nav-item" end to="/runs"><Icon name="run" />Runs</NavLink>
+          {me.data?.permissions.includes("platform:plans") && <NavLink className="nav-item" to="/plans"><Icon name="file" />Plans</NavLink>}
+          <NavLink className="nav-item" to="/jobs"><Icon name="blocked" />Stuck work</NavLink>
+          <NavLink className="nav-item" to="/connections"><Icon name="link" />Connections</NavLink>
         </nav>
-        <div className="sidebar-footer">
-          <GrantList />
-          {me.data && (
-            <p>
-              Signed in as {me.data.subject}
-              {me.data.mode === "local-development" && " (local development)"}
-              <br />
-              {me.data.permissions.join(", ")}
-            </p>
-          )}
-          {me.error && <p role="alert">{me.error}</p>}
-          {signOutError && <p role="alert">{signOutError}</p>}
-          <button onClick={() => signOut().catch((error: Error) => setSignOutError(error.message))}>Sign out</button>
+        <div className="topbar-tools">
+          <details className="topbar-account">
+            <summary aria-label="Account">
+              <Avatar label={me.data?.subject ?? "?"} />
+              <span>{me.data?.subject ?? "Account"}</span>
+            </summary>
+            <div>
+              <GrantList />
+              {me.data && (
+                <p>
+                  Signed in as {me.data.subject}
+                  {me.data.mode === "local-development" && " (local development)"}
+                  <br />
+                  {me.data.permissions.join(", ")}
+                </p>
+              )}
+              {me.error && <p role="alert">{me.error}</p>}
+              {signOutError && <p role="alert">{signOutError}</p>}
+              <button onClick={() => signOut().catch((error: Error) => setSignOutError(error.message))}>Sign out</button>
+            </div>
+          </details>
         </div>
-      </aside>
+      </header>
       <main id="main" className="app-main">
         <div className="page">
           <Outlet context={me.data?.permissions ?? []} />

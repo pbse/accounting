@@ -405,7 +405,20 @@ export default function Firm() {
   }, [refresh]);
   return (
     <>
-      <PageHeader icon="firm" title="Firm settings">
+      <PageHeader
+        icon="firm"
+        title="Firm settings"
+        actions={
+          <div className="title-actions">
+            <Link className="button" to="/dashboard/security">
+              Security
+            </Link>
+            <Link className="button" to="/dashboard/measure">
+              Human effort
+            </Link>
+          </div>
+        }
+      >
         Review policies, client link and reminder rules, your agent access and approved email delivery for the whole firm.
       </PageHeader>
       {error && <p role="alert">{error}</p>}

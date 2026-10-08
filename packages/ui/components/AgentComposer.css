@@ -7,7 +7,7 @@
 .agent-composer-head {
   display: flex;
   align-items: center;
-  gap: var(--space-10);
+  gap: var(--space-12);
 }
 .agent-composer-head h2 {
   margin: 0;
@@ -16,7 +16,7 @@
   margin: 2px 0 0;
   color: var(--ink-2);
   font-size: 13px;
-  line-height: 16px;
+  line-height: 18px;
 }
 .agent-composer-ask {
   display: flex;
@@ -29,9 +29,9 @@
   max-width: none;
   height: 44px;
   margin: 0;
-  padding: 0 14px;
+  padding: 0 var(--space-16);
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: var(--tile);
   font-size: 15px;
 }
@@ -42,7 +42,7 @@
 }
 .app-shell .agent-composer-ask button.primary {
   margin: 0;
-  padding: 0 var(--space-16);
+  padding: 0 var(--space-20);
 }
 .app-shell .agent-composer summary {
   color: var(--ink-2);
