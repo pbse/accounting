@@ -3716,6 +3716,26 @@ Request: make Xero management packs publishable. After the Xero sign-off change,
 
 Not verified: a real Xero organisation or a real statement exported from Xero.
 
+## Sign-in: a leftover or replayed sign-in says what to do (2026-10-07)
+
+Request: an old `/login?code=…` address sat silent; the user expected a firm to be created. The code came from a sign-in WorkOS returned to its default redirect URI, `/login`, which in server sessions only our callback can finish, and only for a sign-in started in the same browser.
+
+- **Login page.** With `AUTH_SESSION=server`, `/login?code=…` removes `code` and `state` from the address, keeps `return`, and says "Your sign-in isn't finished yet. Continue with Google to finish it." The login page also explains the new `expired` refusal.
+- **Callback.** A callback whose state does not match the browser's sign-in cookie (a reload, the back button, an old tab) no longer answers with a JSON 400. Without asking WorkOS, it sends the person to `/login?error=expired`. A code WorkOS refuses, or a WorkOS outage, sends them to `/login?error=unavailable` instead of a JSON 502. Either way the login page keeps the workspace page the sign-in was for (`return`). Staff go back to the console page they asked for, since the firm login page's button would start a firm sign-in, with `signin=expired` or `signin=unavailable`. The console shows that reason above its sign-in button and takes it out of the address.
+- **Tested.**
+  - `TestServerSessionKeepsWorkOSTokensOnTheServer` (extended), on a fresh local PostgreSQL. A forged state, a missing code, no sign-in cookie, and a forged staff state each redirect, to `/login?error=expired` (with `return` for a deep link) or to the staff page with `signin=expired` (keeping its own query), with no WorkOS call and no session cookie. A code WorkOS answers with `invalid_grant` goes to `/login?error=unavailable&return=…`, or for staff to `/admin/firms?signin=unavailable`, with no session.
+  - The sign-in, staff and session tests pass.
+  - The frontend typechecks and builds in server mode.
+  - Headless Edge against the built page and a signed-out stub API:
+    - `/login?code=…&state=x` ends at `/login` with the message and the Google button;
+    - with `return=/dashboard/closes`, it keeps `return` and the button returns there;
+    - after the header's Log in link, the message is gone;
+    - `error=expired` shows its message;
+    - plain `/login` shows none;
+    - the staff console, built in server mode, at `/admin/audit?firm=org_1&signin=expired` (or `unavailable`) shows its reason and leaves `/admin/audit?firm=org_1`; an unknown reason shows nothing.
+
+Not verified: an accepted WorkOS invitation in production, which takes the same path.
+
 ## Writing to clients' books is the firm's decision, off by default (2026-10-07)
 
 Request: "We should never be posting unless the User in his settings say so ... by default we can have it as NO." The user chose that the switch covers live books only.

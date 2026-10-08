@@ -7,6 +7,21 @@ import { useEffect, useState, type ReactNode } from "react";
 const clientId = import.meta.env.VITE_WORKOS_CLIENT_ID as string | undefined;
 const serverSession = import.meta.env.VITE_AUTH_SESSION === "server";
 
+// Sign-in sends staff back to the page they asked for with why it has to start again (docs/sign-in.md). It is read
+// once, before the console's router starts, and taken out of the address.
+const signInFailures: Record<string, string> = {
+  expired: "That sign-in expired. Sign in again.",
+  unavailable: "Sign-in couldn’t finish just now. Please try again in a moment.",
+};
+const signInFailure = (() => {
+  const address = new URL(window.location.href);
+  const why = address.searchParams.get("signin");
+  if (why === null) return undefined;
+  address.searchParams.delete("signin");
+  window.history.replaceState(window.history.state, "", address.pathname + address.search + address.hash);
+  return signInFailures[why];
+})();
+
 let token: () => Promise<string> = async () => "";
 let signOutStaff: () => Promise<void> | void = serverSession ? endServerSession : () => {};
 
@@ -46,6 +61,7 @@ function SignIn({ onSignIn }: { onSignIn: () => void }) {
     <Gate>
       <h1>Close · Staff</h1>
       <p>This console is for Krith staff, with their Krith Google account. Firm members use the workspace instead.</p>
+      {signInFailure && <p role="alert">{signInFailure}</p>}
       <button className="primary" onClick={onSignIn}>Sign in with Google</button>
     </Gate>
   );

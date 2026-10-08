@@ -101,7 +101,12 @@ The callback sends the person back to `/login?error=…`, and the page explains 
 | `removed` | The firm removed this person, or WorkOS deactivated their membership |
 | `suspended` | The firm is paused |
 | `staff` | A staff console sign-in from an address not at `STAFF_EMAIL_DOMAIN` ([admin panel](admin-panel.md#staff-by-email-domain)) |
-| `unavailable` | WorkOS or the database could not finish; try again |
+| `unavailable` | WorkOS refused the code (already used, or too old) or could not be reached, or the database could not finish; try again. A staff console sign-in goes back to the console page it was for instead |
+| `expired` | The callback did not match a sign-in started in this browser: a reload, the back button, or an old tab. Nothing is asked of WorkOS. A staff console sign-in goes back to the console page it was for instead |
+
+After `expired` or `unavailable`, the login page keeps the workspace page the sign-in was for (`return`), so signing in again goes there. A staff sign-in returns to its console page with `signin=expired` or `signin=unavailable`, which the console shows above its sign-in button and takes out of the address.
+
+**A sign-in WorkOS started itself.** WorkOS returns a sign-in that did not start on our login page (an accepted invitation, or a tab left from before server sessions) to its default redirect URI, `/login`, with a code. Only a sign-in started here can use a code, since its state is checked against the browser's cookie. So the login page removes the code from the address and says "Your sign-in isn't finished yet. Continue with Google to finish it."
 
 ## Setup (once per environment)
 
@@ -118,7 +123,7 @@ In WorkOS (production environment):
 - **Authentication → OAuth providers → Google:** enter the client ID and secret ("Your app's credentials") and enable it. Done 2026-10-06.
 - **Turn off password and passkey sign-in, and keep every other social provider (Microsoft among them) off**, so AuthKit's own page (still used for any unknown provider name) offers only Google. Check the AuthKit page afterwards. Done in production 2026-10-06: Google is the only method on (password, passkeys and Magic Auth off; Microsoft OAuth was never enabled).
 - **Roles:** `firm-admin` and `member` exist. Keep `member` without permissions.
-- **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, and the sign-out URI `https://getkrith.com/`.
+- **Redirect URIs:** keep `https://getkrith.com/v1/auth/callback` registered, the default redirect URI `https://getkrith.com/login` (where WorkOS sends a sign-in it started itself), and the sign-out URI `https://getkrith.com/`.
 
 In GitHub (production environment variables): set `AUTH_SESSION=server`, then run Deploy production. The API needs `WORKOS_API_KEY` and `SECRETS_KEY`, which production already has.
 
