@@ -1,15 +1,14 @@
+/* A client's or person's initial in a solid hue. */
 .avatar {
   width: var(--avatar);
   height: var(--avatar);
   flex-shrink: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   display: grid;
   place-items: center;
-  background-image: var(--gloss);
-  box-shadow: var(--shadow-chip);
   color: var(--on-chip);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
 }
 .avatar-teal {
   background-color: var(--teal);

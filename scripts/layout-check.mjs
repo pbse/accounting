@@ -1,5 +1,5 @@
 // Both apps' layout in a real browser, on every page, at desktop and phone width: each page renders inside the shell
-// with its header, the sidebar and page column sit where the design system puts them, nothing widens the page on a
+// with its header, the top bar and page column sit where the design system puts them, nothing widens the page on a
 // phone, and the firm app's shell takes no style from the public site's stylesheet (docs/design-system.md).
 //
 // CI runs it when the front end changes. Locally: run the API and both apps' dev servers, then
@@ -73,7 +73,7 @@ const apps = [
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],
   },
-  // A client's request page stands alone, without the sidebar. A request really sent needs a client's preparation work
+  // A client's request page stands alone, without the top bar. A request really sent needs a client's preparation work
   // behind it, so the page's one read is answered in the browser with an open request: its questions, form and footer.
   {
     name: "client request page",
@@ -181,7 +181,7 @@ for (const app of apps) {
     const unlock = async () => {
       await page.fill('input[name="token"]', token);
       await page.click(`button:has-text("${app.unlock}")`);
-      await page.waitForSelector(".app-shell .sidebar");
+      await page.waitForSelector(".app-shell .topbar");
     };
     await page.goto(app.start);
     if (app.unlock) await unlock();
@@ -237,17 +237,17 @@ for (const app of apps) {
       await page.mouse.move(0, width.viewport.height - 1);
       const box = await page.evaluate(() => {
         const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect().toJSON();
-        return { sidebar: rect(".sidebar"), main: rect(".app-main"), scrollWidth: document.documentElement.scrollWidth };
+        return { topbar: rect(".topbar"), main: rect(".app-main"), scrollWidth: document.documentElement.scrollWidth };
       });
       if (box.scrollWidth > width.viewport.width) fail(`the page is ${box.scrollWidth}px wide, wider than the ${width.viewport.width}px screen`);
       if (app.standalone) {
-        if (box.sidebar) fail("a standalone page shows the sidebar");
-      } else if (width.name === "desktop") {
-        if (box.sidebar?.width !== 296) fail(`the sidebar is ${box.sidebar?.width}px wide, not 296px`);
-        if (box.main?.left !== 296) fail(`the page column starts at ${box.main?.left}px, not after the sidebar`);
+        if (box.topbar) fail("a standalone page shows the top bar");
       } else {
-        if (!(box.sidebar?.height <= 80)) fail(`the sidebar is ${box.sidebar?.height}px tall, not one strip`);
-        if (!(box.main?.top >= box.sidebar?.bottom)) fail("the page column does not start below the sidebar");
+        // The top bar is one row on a desktop and at most two (the brand and tools, then the navigation) on a phone.
+        const rows = width.name === "desktop" ? 1 : 2;
+        if (!(box.topbar?.height <= 72 * rows)) fail(`the top bar is ${box.topbar?.height}px tall, more than ${rows === 1 ? "one row" : "two rows"}`);
+        if (box.topbar?.width !== width.viewport.width) fail(`the top bar is ${box.topbar?.width}px wide, not the ${width.viewport.width}px screen`);
+        if (!(box.main?.top >= box.topbar?.bottom)) fail("the page column does not start below the top bar");
       }
       // The shell stands alone: emptying the public site's stylesheet changes nothing inside it. Styles are read with
       // the sheet, without it and with it again; only what both readings with it agree on counts, so a page still

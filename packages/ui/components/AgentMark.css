@@ -1,20 +1,20 @@
+/* The agent's mark: a solid blue tile with the sparkle. */
 .agent-mark {
   flex: none;
   display: grid;
   place-items: center;
-  background: var(--gloss), var(--blue);
-  box-shadow: var(--shadow-chip);
+  background: var(--blue);
   color: var(--on-chip);
 }
 .agent-mark-md {
   width: var(--icon-tile);
   height: var(--icon-tile);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
 }
 .agent-mark-sm {
   width: 22px;
   height: 22px;
-  border-radius: var(--radius-sm);
+  border-radius: 7px;
 }
 .agent-label {
   display: inline-flex;

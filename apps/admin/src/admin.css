@@ -77,12 +77,12 @@ td details summary {
 
 /* A destructive action, and an action that reads as a link. */
 .app-shell button.danger {
-  background: var(--gloss), var(--red);
-  box-shadow: var(--shadow-chip);
+  background: var(--red);
+  box-shadow: none;
   color: var(--on-chip);
 }
 .app-shell button.danger:hover:not(:disabled) {
-  background: var(--gloss-hover), var(--red);
+  background: var(--negative-text);
 }
 .app-shell button.link {
   padding: 0;
@@ -206,33 +206,17 @@ pre.json {
   outline-offset: 2px;
 }
 
-/* Open content grants, in the sidebar. */
+/* Open content grants, in the account menu. */
 .grants {
-  margin-bottom: var(--space-12);
   padding: var(--space-10) var(--space-12);
   border-radius: var(--radius-sm);
   background: var(--attention-tint);
   color: var(--attention-text);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 16px;
 }
-.grants p {
+.app-shell .grants p {
   margin: var(--space-4) 0 0;
-}
-/* On a phone an open grant stays in view, on one line of the sidebar strip, with its End. */
-@media (max-width: 860px) {
-  .grants {
-    display: flex;
-    align-items: center;
-    gap: var(--space-8);
-    margin: 0;
-    padding: var(--space-4) var(--space-8);
-    white-space: nowrap;
-  }
-  .sidebar-footer .grants p {
-    display: block;
-    margin: 0;
-  }
 }
 /* Contact notes are letters, not figures: they read from the left, each row from its top. */
 .contact-notes th,
