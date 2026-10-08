@@ -406,7 +406,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
         <p role="alert" className="assistant-error">
           {error}{" "}
           {lastBody && !busy && (
-            <button type="button" onClick={() => void send(lastBody)}>
+            <button type="button" onClick={() => void send("text" in lastBody ? { ...lastBody, text: text.trim() || lastBody.text } : lastBody)}>
               Try again
             </button>
           )}
@@ -443,7 +443,8 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
               if (slash.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
                 e.preventDefault();
                 setSelected((n) => (e.key === "ArrowDown" ? n + 1 : n - 1 + slash.length) % slash.length);
-              } else if (slash.length > 0 && chosen && e.key === "Tab") {
+              } else if (slash.length > 0 && chosen && e.key === "Tab" && !e.shiftKey && text !== `/${chosen.name}${chosen.argument ? " " : ""}`) {
+                // Tab completes the command; once it is complete, Tab moves focus on as anywhere else.
                 e.preventDefault();
                 complete(chosen, false);
               } else if (slash.length > 0 && chosen && e.key === "Enter" && !e.shiftKey) {
