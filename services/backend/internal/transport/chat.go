@@ -826,6 +826,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		// A written answer streams; once its first line is out, the reply keeps its status and ends with the conversation.
 		var streamed *streamWriter
 		var attempted, trace string
+		// The answer's text goes to the panel only once it is saved.
+		var answerText map[string]any
+		var answerEmit agentEvent
 		var latency sql.NullInt64
 		var in struct {
 			Action      string `json:"action"`
@@ -1106,10 +1109,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 						reply.body += " The action it proposed was not kept; ask for it on its own."
 					}
 				}
-				if !emit("text", map[string]any{"body": strings.Join(append([]string{result.reply.body}, result.reply.lines...), "\n"), "citations": result.reply.citations}) {
-					problem(w, 403, "Your access changed. Nothing was saved.")
-					return
-				}
+				answerText, answerEmit = map[string]any{"body": strings.Join(append([]string{result.reply.body}, result.reply.lines...), "\n"), "citations": result.reply.citations}, emit
 			case "limit":
 				reply = chatReply{body: result.why}
 			default:
@@ -1202,6 +1202,10 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The message could not be saved.")
+			return
+		}
+		if answerText != nil && !answerEmit("text", answerText) {
+			problem(w, 403, "Your access changed. The answer was saved; open the conversation to see it.")
 			return
 		}
 		history(w, r, map[string]any{"live": live, "live_citations": append([]chatCitation{}, linked...)})
