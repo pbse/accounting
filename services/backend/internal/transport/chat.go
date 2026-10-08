@@ -1137,7 +1137,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		// Only a kept answer and its question are replayed to the model; a question whose answer was not kept stays on
 		// screen but never reaches a later request.
-		replayable := !agent || result.outcome == "kept"
+		replayable := !agent || result.outcome == "kept" && result.known
 		for _, m := range []struct {
 			role, body, citations, action, due, finish, proposal, target, steps string
 			monthly                                                             bool
@@ -1275,15 +1275,34 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				relay(rec)
 				return
 			}
-			ran := replay(r, "POST", "/v1/closes/portfolio/run", map[string]any{"id": op.ID, "confirmed": true, "reason": in.Reason})
-			if ran.Code != 200 || json.Unmarshal(ran.Body.Bytes(), &op) != nil {
-				relay(ran)
+			// The saved operation is checked against the card once more: a close that started matching between the two
+			// previews is never acted on from here (the operation stays in Work, unrun).
+			saved := []string{}
+			for _, item := range op.Items {
+				saved = append(saved, item.CloseID)
+			}
+			slices.Sort(saved)
+			if !slices.Equal(saved, shown) {
+				problem(w, 409, "The closes this goal selects changed as it was saved. Open Work to review the goal, or ask for it again.")
 				return
 			}
-			pending := 0
-			for _, item := range op.Items {
-				if item.State == "pending" {
-					pending++
+			// Each run acts on at most ten closes; the card keeps running batches until none is pending.
+			pending := len(op.Items)
+			for batch := 0; batch < 10 && pending > 0; batch++ {
+				ran := replay(r, "POST", "/v1/closes/portfolio/run", map[string]any{"id": op.ID, "confirmed": true, "reason": in.Reason})
+				if ran.Code != 200 || json.Unmarshal(ran.Body.Bytes(), &op) != nil {
+					relay(ran)
+					return
+				}
+				before := pending
+				pending = 0
+				for _, item := range op.Items {
+					if item.State == "pending" {
+						pending++
+					}
+				}
+				if pending == before {
+					break
 				}
 			}
 			record(map[string]any{"operation_id": op.ID, "action": op.Action, "closes": len(op.Items), "pending": pending}, "The goal started, but this card could not record it. Open Work to follow it.")

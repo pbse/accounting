@@ -426,6 +426,33 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	return cited, ""
 }
 
+// collectNames gathers the client, account and document names a result carries, at any depth, so a help or refusal
+// answer can be checked for naming them.
+func collectNames(value any, depth int) []string {
+	if depth > 6 {
+		return nil
+	}
+	names := []string{}
+	switch t := value.(type) {
+	case map[string]any:
+		for key, v := range t {
+			if s, isText := v.(string); isText && slices.Contains([]string{"entity", "client_entity", "name", "account", "payee", "vendor", "customer", "label"}, key) && len(strings.TrimSpace(s)) > 2 {
+				names = append(names, s)
+			} else if !isText {
+				names = append(names, collectNames(v, depth+1)...)
+			}
+		}
+	case []any:
+		for i, v := range t {
+			if i >= 200 {
+				break
+			}
+			names = append(names, collectNames(v, depth+1)...)
+		}
+	}
+	return names
+}
+
 // sameValue compares a cited value with a field: figures as signed numbers or calendar days, anything else exactly.
 func sameValue(got, want string) bool {
 	if got == want {
@@ -624,13 +651,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					d := json.NewDecoder(strings.NewReader(string(capped)))
 					d.UseNumber()
 					d.Decode(&parsed)
-					if m, isObject := parsed.(map[string]any); isObject {
-						for _, key := range []string{"entity", "client_entity", "name"} {
-							if s, isText := m[key].(string); isText {
-								names = append(names, s)
-							}
-						}
-					}
+					names = append(names, collectNames(parsed, 0)...)
 				}
 				link := agentLink(t, args)
 				reads[step.ID] = agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title}

@@ -62,6 +62,11 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	ok("help", "I can read this close's status, tie-out and documents, or search it.", nil)
 	rejected("help", "This close is ready for sign-off.", nil, "stated a close's state")
 	rejected("help", "I can look at Alpha for you.", nil, "named a client")
+	var listing any
+	json.Unmarshal([]byte(`{"closes":[{"id":"1","entity":"Gamma Ltd","period":"2026-09","owner":{"name":"Pat"}}],"has_more":false}`), &listing)
+	if names := collectNames(listing, 0); len(names) != 2 || names[0] != "Gamma Ltd" && names[1] != "Gamma Ltd" {
+		t.Fatalf("names are collected from nested rows: %v", names)
+	}
 	rejected("refusal", "I don't give tax advice; the balance is 1,250.00 anyway.", nil, "held a figure")
 	if figures := agentFigures("Coverage runs 2026-09-01 to 2027-08-31 at 1,200.00."); len(figures) != 3 || figures[0] != "2026-09-01" || figures[1] != "2027-08-31" || figures[2] != "1200" {
 		t.Fatalf("a calendar day is one figure: %v", figures)
