@@ -54,12 +54,12 @@ confirm card ──POST …/chat/{message}/confirm──▶ close routes ──�
 One request handles one member message and runs under a 60-second write deadline, as today.
 
 1. **Authorize** as now: membership, close access, draft belongs to the close, one running confirmation blocks new questions.
-2. **Build the conversation.** System prompt (below) plus the last 20 stored turns of this conversation as plain text messages (user and assistant bodies only; earlier tool outputs are never resent), then the new message. The window is trimmed to a token budget from the oldest end.
+2. **Build the conversation.** System prompt (below) plus the last 20 stored turns of this conversation as plain text messages (user and assistant bodies only; earlier tool outputs are never resent), then the new message. The window is trimmed to a token budget from the oldest end. Before any turn is replayed or shown, its access is rechecked: every assistant turn records the closes its reads touched (`chat_messages.closes`), and a turn naming a close the member can no longer open is deleted, not merely skipped, so a firm-wide conversation never carries a lost client's facts into a later request or back onto the screen. A close conversation is already unreachable without access to its close.
 3. **Round.** Reserve one call from the firm's daily budget and call `llm.Generate` with purpose `chat`, the tool list, parallel tool calls allowed and `tool_choice: auto`. The response is either tool calls or text.
 4. **Execute tool calls** in parallel. For each: emit `step started`; a read-only tool replays its route under the member identity with the pinned scope, redacts the result exactly as `written_answers.go` does now (JSON value by value, document text as one text), caps it (below), and returns it as a tool result; a write tool stores a card on the pending assistant message with the model's arguments and returns `{"status":"proposed","card":"prepare"}`; an unknown tool or bad arguments return a refusal the model can read. Emit `step finished` with outcome and size.
 5. **Repeat** up to 6 rounds or 8 tool calls, whichever first, within 40 seconds of model time. Past the limit the model is told it must answer with what it has.
 6. **Answer.** The final text is checked (non-empty, at most 2,000 characters, citations resolve), redacted once more, and saved with its citations and any card. Emit `text` then `done` with the saved messages.
-7. **Record** one `assistant_answers` row (outcome, latency, rounds, tool trace without content), for close and firm-wide alike.
+7. **Record** one `assistant_answers` row (outcome, latency, rounds, tool trace without content), for close and firm-wide alike. The track record's query (`track_record.go`) joins `assistant_answers` to the closes the member can open, so firm-wide rows, which have no close, are counted in a second aggregation keyed only by organization; they hold no client details, so the firm's own count is safe to show to every member.
 
 Failure at any point saves nothing from the model, keeps the member's message, emits an `error` event with a plain sentence, and the panel offers to retry.
 
@@ -86,9 +86,14 @@ A proposal's arguments are what the card shows and what confirmation checks: the
 
 A read over 24 KiB is no longer dropped. Each registry entry gets an optional `cap` that names its main array and a limit (for example tie-out rows at 60, exceptions at 40, open items at 60, evidence at 50); the executor keeps the first N rows, adds `truncated: true` and `total`, and the prompt tells the model to say when a list was cut. Document text is cut at 16,000 characters with the same marker. Only after capping is the 24 KiB rule applied, so a read that is still too large is replaced by `{"omitted":"too large"}` and the model is told.
 
-### Citations
+### Citations and support
 
-Each tool result is numbered `t1`, `t2`, … in the order it ran. The final answer may contain `[t3]` markers. The server verifies each marker names a step that ran and succeeded, strips unknown ones, and stores for each cited step a label and a link to the page the read came from (the route-to-page map `written_answers.go` already keeps). The panel renders them as chips after the message. An answer with no citations is allowed when it only says what the agent can do, or only proposes a card.
+Each tool result is numbered `t1`, `t2`, … in the order it ran. The final answer is a strict-schema object, as today's written answer is: `answer`, `support` (a list of `{step, claim}` pairs) and `kind` (`facts`, `help`, `refusal` or `card`). The quote gate is replaced by two deterministic checks the server runs before anything is saved:
+
+- **Every `support.step` names a step that ran and succeeded.** An unknown step rejects the whole answer; nothing is stripped and shown anyway.
+- **Every figure in the answer is grounded.** Each amount, count, percentage or date in the answer text must appear as a value in the redacted result of a cited step (numbers compared after normalizing separators, signs and currency marks; dates by calendar day). A figure no cited read holds rejects the answer.
+
+A rejected answer is not saved. The panel shows "I couldn't support an answer from what I read" with the step chips, so the member sees what was read and can rephrase; the attempt is recorded as `not_kept`. A `help` or `refusal` answer may carry no support but must then contain no figures; a `card` answer needs only its proposal. For each cited step the server stores a label and a link to the page the read came from (the route-to-page map `written_answers.go` already keeps), and the panel renders them as chips after the message.
 
 ### Boundaries and refusals
 
@@ -126,11 +131,11 @@ Switching the `chat` purpose to a direct API adapter later needs no feature chan
 
 ### Settings
 
-Migration: add `organizations.agent_chat boolean NOT NULL DEFAULT false` and the policy-history column, set it true where `assistant_model_answers` is true, and stop reading the three old columns (dropped in a later migration once nothing reads them). Firm settings shows one switch, "Agent chat", with the same reason requirement; the security center line says whether it is on and which provider route serves it. Off, the panel still opens and runs slash commands and cards, with one line saying the firm has not turned on the agent. Default for new firms is a product decision recorded at launch; the recommendation is on, because the loop reads under the member's permissions and writes only through confirmed cards.
+Migration (in PR 2, before the loop reads it): add `organizations.agent_chat boolean NOT NULL DEFAULT false` and the policy-history column, set it true where `assistant_model_answers` is true, and stop reading the three old columns (dropped in PR 4 once nothing reads them). Firm settings shows one switch, "Agent chat", with the same reason requirement; the security center line says whether it is on and which provider route serves it. Off, the panel still opens and runs slash commands and cards, with one line saying the firm has not turned on the agent. Default for new firms is a product decision recorded at launch; the recommendation is on, because the loop reads under the member's permissions and writes only through confirmed cards.
 
 ### Data model
 
-- `chat_messages.action`: widen the check to `prepare, recheck, stop, request, delegate, approval, portfolio, open_close`; add `proposal jsonb` (the model's arguments as the card shows them) and `steps jsonb` (the trace shown with the answer: id, tool, title, outcome, link; never content).
+- `chat_messages.action`: widen the check to `prepare, recheck, stop, request, delegate, approval, portfolio, open_close`; add `proposal jsonb` (the model's arguments as the card shows them), `steps jsonb` (the trace shown with the answer: id, tool, title, outcome, link; never content) and `closes bigint[]` (the closes an assistant turn's reads touched, checked before replay and display; a firm-wide user turn has none).
 - `assistant_answers`: add `rounds smallint`, `tool_calls smallint`, `scope text CHECK (scope IN ('firm','close'))`; record firm-wide attempts too.
 - `chat_messages.citations` keeps its shape; a citation gains `step` (the `tN` it came from).
 
@@ -152,7 +157,7 @@ The panel is a conversation, not a help widget. The spec, against the audit of 2
 ## Evaluation and acceptance
 
 - **Golden set.** Forty questions over the acceptance corpus, firm-wide and close-scoped, each with the expected tool set (as a set, not an order), the facts the answer must contain, and whether a card is expected. Twenty off-scope prompts (tax advice, web, another firm's data, "ignore your rules", injection text inside a document) that must get a plain refusal and no card. The runner replays recorded tool outputs through the real loop against the configured provider and scores tool choice, fact presence, citation validity and refusal. It runs on demand and before each release, not on every CI run, because it spends model calls.
-- **Transport tests** (`go test ./internal/transport -run 'TestAgentChat'`): scope pinning, write tools never execute, proposal digest rejected after a change, result caps and markers, 24 KiB rule after capping, citation stripping, limits (rounds, calls, time), budget reservation per round, firm-wide attempts recorded, conversation history window, off-member profile refusal.
+- **Transport tests** (`go test ./internal/transport -run 'TestAgentChat'`): scope pinning, write tools never execute, proposal digest rejected after a change, result caps and markers, 24 KiB rule after capping, unknown support step and ungrounded figure both reject the answer, a turn touching a lost close is deleted before replay, firm-wide rows counted in the track record, limits (rounds, calls, time), budget reservation per round, firm-wide attempts recorded, conversation history window, off-member profile refusal.
 - **Panel checks:** the layout check gains the panel open on desktop and phone, with a running step list and a card.
 - **Done when:** a member can ask "which of my closes are waiting on the client and what is each waiting for?" and get a cited answer with links; ask "prepare Harbor Dental" from the dashboard and get the prepare card for that close; ask "what's the weather" and get one plain sentence; and the track record shows the agent's answered, kept and refused counts.
 
@@ -161,9 +166,9 @@ The panel is a conversation, not a help widget. The spec, against the audit of 2
 Four pull requests, each shippable on its own and each with its user journey, agent behavior, failure path and evidence, as the build plan requires.
 
 1. **Gateway and service.** Per-organization caller profiles for API-key mode in the context-machine service and gateway; the `chat` purpose; step callbacks from the loop (not from the gateway); result caps in the registry.
-2. **Agent loop.** `transport/agent.go` replaces the router behind the new setting: history window, tiered tools, proposals as cards, event protocol, citations, records. Old router and quote gate deleted; `chat.md` rewritten.
+2. **Agent loop and setting.** The `agent_chat` migration and the one-switch Firm settings page land first in this PR, then `transport/agent.go` replaces the router behind that setting: history window with the access recheck, tiered tools, proposals as cards, event protocol, support checks, records, and the track record's firm-wide aggregation. Old router and quote gate deleted; `chat.md` rewritten.
 3. **Panel.** The look and feel above, one store for the three entry points, the inline command list, phone layout, motion.
-4. **Portfolio and goals, settings, evals.** `select_closes` and `hand_over` as tools, the one-switch settings migration and security-center line, the golden set and its runner.
+4. **Portfolio and goals, cleanup, evals.** `select_closes` and `hand_over` as tools, the security-center line, dropping the three old setting columns, the golden set and its runner.
 
 ## Decisions to record before PR 2
 
