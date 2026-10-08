@@ -128,11 +128,13 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
   // starter questions, so the panel shows no chips of its own beside it.
   const [pageComposer, setPageComposer] = useState(false);
   useEffect(() => {
+    // The page's composer may mount after its own read, or unmount on a hand-over, so the page is watched, not probed.
     const look = () => setPageComposer(!!document.querySelector(".agent-composer"));
     look();
-    const timer = setTimeout(look, 600);
-    return () => clearTimeout(timer);
-  }, [location.pathname, location.search, loaded]);
+    const watcher = new MutationObserver(look);
+    watcher.observe(document.body, { childList: true, subtree: true });
+    return () => watcher.disconnect();
+  }, []);
   const path = closeId ? `/${closeId}/chat` : "/chat";
   // A question from the palette is asked once the history has loaded, so its answer is the last thing shown.
   useEffect(() => {
