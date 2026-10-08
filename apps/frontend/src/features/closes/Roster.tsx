@@ -35,7 +35,8 @@ export function ClientRoster() {
   const [editing, setEditing] = useState("");
   const saved = () => (setNotice(""), setRefresh((n) => n + 1));
   // A dialog left, with or without a refused save, reads the roster again, so the next attempt starts from the newest entry.
-  const left = (message = "") => (setNotice(message), setAdding(false), setEditing(""), setEditingTemplate(false), setRefresh((n) => n + 1));
+  // The dialog's own close follows Cancel, so an empty message keeps the refusal Cancel passed.
+  const left = (message = "") => (setNotice((kept) => message || kept), setAdding(false), setEditing(""), setEditingTemplate(false), setRefresh((n) => n + 1));
   useEffect(() => {
     let live = true;
     workspaceRequest("/roster")
