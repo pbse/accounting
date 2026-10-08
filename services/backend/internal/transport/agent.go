@@ -226,6 +226,10 @@ const agentAnswerInstructions = `Write the answer to the member's last message f
 // A calendar day or a close month is matched before its digits could be taken for separate numbers.
 var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b|[(−-]?\$?\d[\d,]*(?:\.\d+)?%?\)?`)
 
+// agentObservation is a sentence that observes the books (a verb of seeing or being, then an accounting noun), which
+// a help, refusal or card answer may not do however it begins.
+var agentObservation = regexp.MustCompile(`(?i)\b(?:see|saw|seen|found|finds?|shows?|showed|is|are|was|were|has|have|had|looks?|looked|appears?|seems?|remains?|stands?|sits?|holds?|owes?|totals?|came|comes)\b[^.!?]*\b(?:cash|surplus|deficit|balances?|invoices?|bills?|ledger|accounts?|revenue|expenses?|payroll|loans?|budget|snapshot|exceptions?|receivables?|payables?|overdue|paid|unpaid|ties?|reconciled|journal|entry|entries|amounts?|difference|variance|drafts?|blockers?|sign-off|signoff)\b`)
+
 // agentCapabilityStart is how a help, refusal or card sentence may begin: speaking for the agent or to the person.
 var agentCapabilityStart = regexp.MustCompile(`(?i)^(?:i |i'|i’|ask |say |open |you |to |here |this card|the card|confirm|check |choose |type |use |try |tell |nothing |no, |yes, |sorry|that |that's|that’s|it's|it’s)`)
 var agentURL = regexp.MustCompile(`(?i)\b(?:https?://|www\.)[^\s)]+`)
@@ -396,6 +400,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			if !agentCapabilityStart.MatchString(line) {
 				return nil, "a " + kind + " answer stated something about the work: " + line
 			}
+			if agentObservation.MatchString(line) {
+				return nil, "a " + kind + " answer stated something about the books: " + line
+			}
 		}
 		for _, name := range names {
 			if name != "" && strings.Contains(lower, strings.ToLower(name)) {
@@ -485,6 +492,58 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		return nil, "a facts answer has no support"
 	}
 	return cited, ""
+}
+
+// validateProposal checks a write tool's arguments before a card is proposed, so a card never shows a blank or
+// malformed value its confirmation could not run with.
+func validateProposal(t mcpTool, args map[string]any) string {
+	text := func(key string) string {
+		s, _ := args[key].(string)
+		return strings.TrimSpace(s)
+	}
+	for _, key := range t.required {
+		if key == "close_id" || key == "confirmed" {
+			continue
+		}
+		if _, isBool := args[key].(bool); isBool {
+			continue
+		}
+		if text(key) == "" {
+			return key + " is required"
+		}
+	}
+	switch t.name {
+	case "hand_over":
+		if f := text("finish"); f != "review" && f != "signoff" {
+			return "finish must be review or signoff"
+		}
+		if d := text("due_on"); d != "" {
+			if _, err := time.Parse("2006-01-02", d); err != nil {
+				return "due_on must be a day, YYYY-MM-DD"
+			}
+		}
+		if v, given := args["every_month"]; given {
+			if _, isBool := v.(bool); !isBool {
+				return "every_month must be true or false"
+			}
+		}
+	case "stop_work":
+		if n := len(text("reason")); n < 1 || n > 500 {
+			return "reason must be 1 to 500 characters"
+		}
+	case "request_approval":
+		if _, err := strconv.ParseInt(text("workpaper_id"), 10, 64); err != nil {
+			return "workpaper_id must be a draft's number"
+		}
+		if n := len(text("note")); n < 5 || n > 1000 {
+			return "note must be 5 to 1,000 characters"
+		}
+	case "select_closes":
+		if n := len(text("text")); n < 3 || n > 300 {
+			return "text must be the goal, 3 to 300 characters"
+		}
+	}
+	return ""
 }
 
 // collectNames gathers the client, account and document names a result carries, at any depth, so a help or refusal
@@ -792,6 +851,10 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				}
 				if closeID != "" {
 					args["close_id"] = closeID
+				}
+				if why := validateProposal(t, args); why != "" {
+					step.Status, output = "refused", "refused: "+why
+					break
 				}
 				if agentWrites[call.Name] == "request" {
 					// The request card drafts for every current candidate; the agent cannot narrow or word it.
