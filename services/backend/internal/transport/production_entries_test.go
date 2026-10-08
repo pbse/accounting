@@ -43,7 +43,7 @@ func TestApprovedLoanAndOwnerEntriesPostUnderTheirGrant(t *testing.T) {
 	}
 	org := "org_Entries" + rand.Text()
 	var closeID, connectionID string
-	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Entries fixture')`, org)
+	_, err = db.Exec(`INSERT INTO organizations(id,name,allow_ledger_writes) VALUES($1,'Entries fixture',true)`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture')`, org)
 	must(err)

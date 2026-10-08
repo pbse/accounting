@@ -48,7 +48,7 @@ func TestGovernedFinishPostsToTheSandboxAndSignsOffOnlyTheDeclaredScope(t *testi
 	for name, value := range map[string]string{"WORKOS_ORGANIZATION_ID": org, "QBO_SANDBOX_REALM_ID": "123", "QBO_SANDBOX_ACCESS_TOKEN": "synthetic-only", "QBO_SANDBOX_ENTITY": entity, "QBO_SANDBOX_PREPAID_ACCOUNT_ID": "10", "QBO_SANDBOX_EXPENSE_ACCOUNT_ID": "20", "SECRETS_KEY": strings.Repeat("ab", 32)} {
 		t.Setenv(name, value)
 	}
-	for _, q := range []string{`INSERT INTO organizations(id,name) VALUES($1,'Governed finish fixture')`,
+	for _, q := range []string{`INSERT INTO organizations(id,name,allow_ledger_writes) VALUES($1,'Governed finish fixture',true)`,
 		`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic','fixture')`} {
 		_, err = db.Exec(q, org)
 		must(err)

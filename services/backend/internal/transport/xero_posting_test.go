@@ -40,7 +40,7 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 	}
 	org, entity := "org_XeroPost"+rand.Text(), "Xero post client"
 	var closeID, connection string
-	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Xero posting fixture')`, org)
+	_, err = db.Exec(`INSERT INTO organizations(id,name,allow_ledger_writes) VALUES($1,'Xero posting fixture',true)`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture')`, org)
 	must(err)
@@ -163,6 +163,16 @@ func TestApprovedDraftPostsOnceToXero(t *testing.T) {
 		t.Fatalf("every kind stays off until the operator enables it: %s", body)
 	}
 	t.Setenv("XERO_POSTING_KINDS", "accrual")
+	// Every Xero organisation is a client's live books: nothing is posted while the firm has writing turned off.
+	if _, err = db.Exec(`UPDATE organizations SET allow_ledger_writes=false WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
+	if body := call(path, map[string]string{"action": "preview"}, 409); !strings.Contains(string(body), `"code":"LEDGER_WRITES_OFF"`) {
+		t.Fatalf("a firm with writing off posts nothing to Xero: %s", body)
+	}
+	if _, err = db.Exec(`UPDATE organizations SET allow_ledger_writes=true WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
 	if body := call(path, map[string]string{"action": "preview"}, 409); !strings.Contains(string(body), "Reconnect Xero") {
 		t.Fatalf("a connection without the manual journal scope must reconnect: %s", body)
 	}

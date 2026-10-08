@@ -434,6 +434,9 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Xero posting for "+kind+" drafts is not enabled yet. It turns on after Xero's behavior is checked for it.")
 			return
 		}
+		if in.Action != "verify" && refuseLedgerWrites(w, r.Context(), db, org) {
+			return
+		}
 		if err := preparation.CurrencyIssue(r.Context(), db, closeID, paperRaw); err != nil {
 			problem(w, 409, err.Error())
 			return
@@ -488,6 +491,9 @@ func registerXeroPosting(mux *http.ServeMux, db *sql.DB) {
 		var activeMember bool
 		if err = tx.QueryRowContext(r.Context(), `SELECT enabled AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) FROM organizations WHERE id=$1 FOR UPDATE`, org, a.Subject).Scan(&activeMember); err != nil || !activeMember {
 			problem(w, 403, "Firm or member access was revoked before this posting decision.")
+			return
+		}
+		if refuseLedgerWrites(w, r.Context(), tx, org) {
 			return
 		}
 		if status, message := draftApproved(r.Context(), tx, closeID, paperID, a, in.Action == "approve"); status != 0 {

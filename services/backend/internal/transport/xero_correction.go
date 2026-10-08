@@ -303,6 +303,9 @@ func registerXeroCorrections(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Xero bill corrections are not enabled yet. They turn on after Xero's behavior is checked on a demo company.")
 			return
 		}
+		if in.Action != "verify" && refuseLedgerWrites(w, r.Context(), db, org) {
+			return
+		}
 		var signed bool
 		if err := db.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT decision='signed_off' FROM close_signoffs WHERE close_id::text=$1 ORDER BY id DESC LIMIT 1),false)`, closeID).Scan(&signed); err != nil || signed {
 			problem(w, 409, "Use an open close for this client.")
@@ -359,6 +362,9 @@ func registerXeroCorrections(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if refuseSignedOff(w, r.Context(), tx, closeID) {
+			return
+		}
+		if refuseLedgerWrites(w, r.Context(), tx, org) {
 			return
 		}
 		approver := a.Subject
