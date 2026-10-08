@@ -36,7 +36,7 @@ These are pointers into the existing implementation, not evidence that a package
 | **B01 Takeover** | [Onboarding](docs/onboarding.md), [QBO](docs/quickbooks-onboarding.md), [firm procedures](docs/firm-procedures.md), [carry-forward](docs/carry-forward.md) |
 | **B02 Portfolio and decisions** | [Work inbox](docs/work-inbox.md), [coordinator](docs/close-coordinator.md), [maturity dashboard specification](docs/maturity.md#implementation-re-review-and-dashboard-specification-2026-10-02) |
 | **B03 Daily books and account reconciliation** | [Saved closes/reconciliation](docs/saved-closes-and-reconciliation.md), [source sync](docs/source-sync-and-forwarding.md), [coverage](docs/coverage-requests.md), [posting](docs/production-posting.md) |
-| **B04 Recurring preparation and investigation** | [Accounting methods](docs/accounting-methods.md), [evidence/preparation](docs/evidence-and-preparation.md), [assistant](docs/chat.md), [firm procedures](docs/firm-procedures.md) |
+| **B04 Recurring preparation and investigation** | [Accounting methods](docs/accounting-methods.md), [evidence/preparation](docs/evidence-and-preparation.md), [assistant](docs/chat.md), [agentic chat plan](docs/agent-chat.md), [firm procedures](docs/firm-procedures.md) |
 | **B05 Client follow-through** | [Requests](docs/client-request-links.md), [coverage requests](docs/coverage-requests.md), [email](docs/email-delivery.md), [scanning](docs/cloudflare-upload-scanning.md) |
 | **B06 Review, corrections and change** | [Review](docs/workpaper-review.md), [change review](docs/change-review-and-requests.md), [posting](docs/production-posting.md), [operations](docs/operations.md) |
 | **B07 Management and executive reports** | [Management reports](docs/management-reports.md), [build plan](docs/agent-first-build-plan.md), [existing binder/export](docs/close-review-package.md), [access architecture](docs/architecture.md), [design system](docs/design-system.md) |
@@ -55,7 +55,8 @@ These are pointers into the existing implementation, not evidence that a package
 | [Workflow engine](docs/workflow-engine.md) | Go durable workflow primitives, activity execution and current/deferred engine capabilities. |
 | [LLM gateway](docs/llm-gateway.md) | Model routing, context-machine integration, execution and operational boundaries. |
 | [Context-machine deployment](docs/context-machine-deployment.md) | Runtime configuration, deployment and verification procedure. |
-| [Assistant](docs/chat.md) | Scoped chat, context/history, bounded investigations and authority limits. |
+| [Agentic chat plan](docs/agent-chat.md) | The governing design for the assistant rebuild: model-chosen tool reads, writes as confirmed cards, event protocol, Context Machine constraints, panel look and feel, evaluation and the four delivery PRs (2026-10-07). |
+| [Assistant](docs/chat.md) | Current scoped chat behavior: keyword reads, cards, written answers and investigations, until the agentic chat plan replaces each part. |
 | [MCP](docs/mcp.md) | Agent-facing capabilities, attribution, OAuth/permissions and hosted setup. |
 | [Admin panel](docs/admin-panel.md) | Platform-staff console, separate staff identity, workflows and access controls. |
 
