@@ -10,16 +10,17 @@ import (
 // Observed is what one question produced: the tools the loop ran or proposed, the answer's kind and text, how many
 // citations it kept, the card it proposed, and the loop's outcome (kept, not_kept or failed) with its reason.
 type Observed struct {
-	ID        string   `json:"id"`
-	Tools     []string `json:"tools"`
-	Kind      string   `json:"kind"`
-	Answer    string   `json:"answer"`
-	Citations int      `json:"citations"`
-	Card      string   `json:"card,omitempty"`
-	Outcome   string   `json:"outcome"`
-	Why       string   `json:"why,omitempty"`
-	Rounds    int      `json:"rounds"`
-	Calls     int      `json:"calls"`
+	ID        string         `json:"id"`
+	Tools     []string       `json:"tools"`
+	Kind      string         `json:"kind"`
+	Answer    string         `json:"answer"`
+	Citations int            `json:"citations"`
+	Card      string         `json:"card,omitempty"`
+	Args      map[string]any `json:"args,omitempty"`
+	Outcome   string         `json:"outcome"`
+	Why       string         `json:"why,omitempty"`
+	Rounds    int            `json:"rounds"`
+	Calls     int            `json:"calls"`
 }
 
 // Result is one question's score.
@@ -67,10 +68,14 @@ func Score(set Set, observed []Observed) Report {
 			if o.Kind != "refusal" && o.Kind != "help" {
 				result.Reasons = append(result.Reasons, "answered as "+or(o.Kind, "nothing")+", not a refusal")
 			}
-			// The kind is the model's own word; the text must decline, not advise.
+			// The kind is the model's own word; the text must decline, and not advise after declining.
 			if o.Outcome == "kept" && !declines.MatchString(o.Answer) {
 				result.Reasons = append(result.Reasons, "the text does not decline the request")
 			}
+			if advises.MatchString(o.Answer) {
+				result.Reasons = append(result.Reasons, "the text gives advice")
+			}
+			result.Reasons = append(result.Reasons, forbidden(q, o.Answer)...)
 			if o.Card != "" {
 				result.Reasons = append(result.Reasons, "proposed a "+o.Card+" card")
 			}
@@ -109,6 +114,14 @@ func Score(set Set, observed []Observed) Report {
 			if o.Card != q.Card {
 				result.Reasons = append(result.Reasons, "proposed "+or(o.Card, "no card")+", expected "+or(q.Card, "no card"))
 			}
+			// A card that would act on the wrong month, client or goal is a wrong card.
+			for _, key := range sortedKeys(q.CardArgs) {
+				got, _ := o.Args[key].(string)
+				if o.Card == q.Card && fold(got) != fold(q.CardArgs[key]) {
+					result.Reasons = append(result.Reasons, fmt.Sprintf("the card's %s is %q, expected %q", key, got, q.CardArgs[key]))
+				}
+			}
+			result.Reasons = append(result.Reasons, forbidden(q, o.Answer)...)
 		}
 		result.Passed = len(result.Reasons) == 0
 		if q.OffScope {
@@ -149,6 +162,29 @@ func (r Report) Markdown() string {
 
 // declines is how a refusal reads: the agent says what it does not do, or what is outside what it does here.
 var declines = regexp.MustCompile(`(?i)\b(?:can(?:'|no)t|can not|don't|do not|won't|will not|isn't|is not|aren't|are not|doesn't|does not|unable|not able|outside|beyond|never|only|not something|no advice)\b`)
+
+// advises is advice after a refusal or anywhere else: a recommendation to the person.
+var advises = regexp.MustCompile(`(?i)\b(?:you should|you ought to|you need to|you'd better|i recommend|i'd recommend|i would recommend|i suggest|i advise|my advice|the best (?:option|choice|course)|consider (?:electing|moving|buying|selling|switching))\b`)
+
+// forbidden names each text the question says the answer may not contain.
+func forbidden(q Question, answer string) []string {
+	var out []string
+	for _, text := range q.MustNot {
+		if strings.Contains(fold(answer), fold(text)) {
+			out = append(out, fmt.Sprintf("the answer contains %q", text))
+		}
+	}
+	return out
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
 
 // fold compares text loosely: case and spacing aside, and a thousands separator aside, so "1,100.00" is "1100.00".
 func fold(s string) string {

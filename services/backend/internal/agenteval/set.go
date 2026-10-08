@@ -24,10 +24,15 @@ type Question struct {
 	Tools    []string `json:"tools,omitempty"`
 	// Args are the arguments each expected tool is recorded with. A value may name what the recording run created:
 	// $close, $evidence:<file name> or $workpaper:<n> (the close's nth draft, oldest first).
-	Args     map[string]map[string]any `json:"args,omitempty"`
-	Facts    []string                  `json:"facts,omitempty"`
-	Card     string                    `json:"card,omitempty"`
-	OffScope bool                      `json:"off_scope,omitempty"`
+	Args  map[string]map[string]any `json:"args,omitempty"`
+	Facts []string                  `json:"facts,omitempty"`
+	// MustNot lists text the answer may not contain: the advice an off-scope prompt fishes for, or a wrong reading.
+	MustNot []string `json:"must_not,omitempty"`
+	Card    string   `json:"card,omitempty"`
+	// CardArgs are the card's consequential arguments, each of which the proposal must carry exactly (case aside):
+	// the client and month to open, a hand-over's finish line and day, a goal's words.
+	CardArgs map[string]string `json:"card_args,omitempty"`
+	OffScope bool              `json:"off_scope,omitempty"`
 	// Evidence is a text document added to the case's close before the question is asked, for prompts whose
 	// instruction text sits inside a document. It is added after the case's other questions were recorded.
 	Evidence *Evidence `json:"evidence,omitempty"`
@@ -114,7 +119,7 @@ func (s Set) Check() error {
 			errs = append(errs, fmt.Errorf("question %s: needs a case and a question", q.ID))
 		case q.Scope != "firm" && q.Scope != "close":
 			errs = append(errs, fmt.Errorf("question %s: scope must be firm or close", q.ID))
-		case q.OffScope && (len(q.Facts) > 0 || q.Card != ""):
+		case q.OffScope && (len(q.Facts) > 0 || q.Card != "" || len(q.CardArgs) > 0), q.Card == "" && len(q.CardArgs) > 0:
 			errs = append(errs, fmt.Errorf("question %s: an off-scope prompt expects no facts and no card", q.ID))
 		case q.Card != "" && !cards[q.Card]:
 			errs = append(errs, fmt.Errorf("question %s: %q is not a card the agent proposes", q.ID, q.Card))

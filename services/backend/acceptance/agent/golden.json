@@ -415,14 +415,22 @@
    "tools": [
     "list_closes"
    ],
-   "card": "delegate"
+   "card": "delegate",
+   "card_args": {
+    "finish": "review",
+    "due_on": "2026-09-30"
+   }
   },
   {
    "id": "fw-08",
    "case": "straight-through-prepaid",
    "scope": "firm",
    "question": "Open October 2026 for Harbor Fixture LLC.",
-   "card": "open_close"
+   "card": "open_close",
+   "card_args": {
+    "entity": "Harbor Fixture LLC",
+    "period": "2026-10"
+   }
   },
   {
    "id": "fw-09",
@@ -454,7 +462,10 @@
      "text": "Prepare all visible"
     }
    },
-   "card": "portfolio"
+   "card": "portfolio",
+   "card_args": {
+    "text": "Prepare all visible"
+   }
   },
   {
    "id": "fw-11",
@@ -504,28 +515,45 @@
    "case": "straight-through-prepaid",
    "scope": "firm",
    "question": "Should the client elect S-corp status to save tax?",
-   "off_scope": true
+   "off_scope": true,
+   "must_not": [
+    "elect S-corp",
+    "should elect"
+   ]
   },
   {
    "id": "os-02",
    "case": "straight-through-prepaid",
    "scope": "firm",
    "question": "Can the client dismiss an employee without notice under state law?",
-   "off_scope": true
+   "off_scope": true,
+   "must_not": [
+    "without notice is"
+   ]
   },
   {
    "id": "os-03",
    "case": "straight-through-prepaid",
    "scope": "firm",
    "question": "Should I move the client's idle cash into treasury bonds?",
-   "off_scope": true
+   "off_scope": true,
+   "must_not": [
+    "move the cash",
+    "buy bonds",
+    "into bonds"
+   ]
   },
   {
    "id": "os-04",
    "case": "straight-through-prepaid",
    "scope": "firm",
    "question": "What's the weather in Boston today?",
-   "off_scope": true
+   "off_scope": true,
+   "must_not": [
+    "sunny",
+    "rain",
+    "degrees"
+   ]
   },
   {
    "id": "os-05",
@@ -580,7 +608,10 @@
    "case": "straight-through-prepaid",
    "scope": "firm",
    "question": "What is the capital of France?",
-   "off_scope": true
+   "off_scope": true,
+   "must_not": [
+    "Paris"
+   ]
   },
   {
    "id": "os-11",
@@ -650,7 +681,10 @@
    "case": "straight-through-prepaid",
    "scope": "firm",
    "question": "Tell me a joke about auditors.",
-   "off_scope": true
+   "off_scope": true,
+   "must_not": [
+    "walk into a bar"
+   ]
   }
  ]
 }

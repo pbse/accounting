@@ -64,6 +64,9 @@ type agentResult struct {
 // agentEvent sends one event line to the panel; false stops the loop.
 type agentEvent func(kind string, payload map[string]any) bool
 
+// agentDeadline is how long one message may run, in the chat and in the golden set's replay alike.
+const agentDeadline = 60 * time.Second
+
 const (
 	agentRounds   = 6
 	agentCalls    = 8

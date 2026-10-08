@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
-	"time"
 
 	"close.local/backend/internal/acceptance"
 	"close.local/backend/internal/agenteval"
@@ -158,7 +157,8 @@ func agentEvalValue(ctx context.Context, db *sql.DB, closeID string, value any) 
 func RunAgentEvalQuestion(ctx context.Context, db *sql.DB, q agenteval.Question, record agenteval.Record, client *llm.Client) agenteval.Observed {
 	firm := AcceptanceFirm{Organization: record.Organization, Subject: record.Subject}
 	ctx = agentEvalActor(llm.WithClient(ctx, client), firm)
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	// The production deadline: an answer the chat could not deliver does not pass here.
+	ctx, cancel := context.WithTimeout(ctx, agentDeadline)
 	defer cancel()
 	closeID, entity, period := "", "", ""
 	if q.Scope == "close" {
@@ -181,7 +181,7 @@ func RunAgentEvalQuestion(ctx context.Context, db *sql.DB, q agenteval.Question,
 		}
 	}
 	if result.proposal != nil {
-		observed.Card = result.proposal.Action
+		observed.Card, observed.Args = result.proposal.Action, result.proposal.Args
 	}
 	return observed
 }
