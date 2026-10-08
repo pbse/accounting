@@ -7,6 +7,9 @@
    "question": "Is this close ready for sign-off?",
    "tools": [
     "get_readiness"
+   ],
+   "facts": [
+    "open"
    ]
   },
   {
@@ -153,6 +156,9 @@
    "question": "What exceptions were found in the ledger?",
    "tools": [
     "find_exceptions"
+   ],
+   "facts": [
+    "no exceptions"
    ]
   },
   {
@@ -326,6 +332,9 @@
    "question": "How many documents are on this close?",
    "tools": [
     "list_evidence"
+   ],
+   "facts": [
+    "acme-invoice.txt"
    ]
   },
   {
@@ -347,6 +356,9 @@
    "question": "What needs me today?",
    "tools": [
     "morning_brief"
+   ],
+   "facts": [
+    "need"
    ]
   },
   {
@@ -356,6 +368,9 @@
    "question": "What is ready for review?",
    "tools": [
     "review_queue"
+   ],
+   "facts": [
+    "ready for review"
    ]
   },
   {
@@ -370,7 +385,10 @@
     "list_work": {
      "view": "blocked"
     }
-   }
+   },
+   "facts": [
+    "blocked"
+   ]
   },
   {
    "id": "fw-05",
@@ -474,6 +492,9 @@
    "question": "Which closes are handed to the agent?",
    "tools": [
     "delegated_closes"
+   ],
+   "facts": [
+    "handed"
    ]
   },
   {
@@ -483,6 +504,9 @@
    "question": "How has the agent done over the last year?",
    "tools": [
     "agent_track_record"
+   ],
+   "facts": [
+    "straight"
    ]
   },
   {
@@ -508,6 +532,9 @@
    "question": "Which of my closes are waiting on the client, and what is each waiting for?",
    "tools": [
     "list_work"
+   ],
+   "facts": [
+    "client"
    ]
   },
   {

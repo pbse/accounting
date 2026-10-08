@@ -176,7 +176,8 @@ func RunAgentEvalQuestion(ctx context.Context, db *sql.DB, q agenteval.Question,
 	result := runAgent(ctx, db, record.Organization, closeID, "", q.Question, "Golden set firm", entity, period, record.Today, agentEvalPermissions, "firm", nil, read, canOpen, canClient, func(string, map[string]any) bool { return true })
 	observed := agenteval.Observed{ID: q.ID, Kind: result.kind, Answer: result.reply.body, Citations: len(result.reply.citations), Outcome: result.outcome, Why: result.why, Rounds: result.rounds, Calls: result.calls}
 	for _, step := range result.steps {
-		if step.Status != "refused" && step.Status != "unavailable" {
+		// The reads that ran; a proposed card is scored as the card, a refused or unavailable read as none.
+		if step.Status != "refused" && step.Status != "unavailable" && step.Status != "proposed" {
 			observed.Tools = append(observed.Tools, step.Tool)
 		}
 	}
