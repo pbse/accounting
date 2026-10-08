@@ -182,7 +182,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
     setError("");
     setSteps([]);
     setLastBody(body);
-    setAsking("text" in body ? body.text : `/${body.command}${body.argument ? ` ${body.argument}` : ""}`);
+    setAsking("text" in body ? body.text : body.command ? `/${body.command}${body.argument ? ` ${body.argument}` : ""}` : "");
     const onEvent = (event: AgentEvent) => {
       if (asked !== generation.current) return;
       if (event.type === "step") {
@@ -449,7 +449,9 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
                 complete(chosen, false);
               } else if (slash.length > 0 && chosen && e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                complete(chosen, true);
+                // A command typed in full sends on Enter, with or without its optional argument; a partial one completes.
+                if (text.trim() === `/${chosen.name}`) submitLine(text.trim());
+                else complete(chosen, true);
               } else if (e.key === "Enter" && !e.shiftKey) submit(e);
               else if (e.key === "Escape" && menu) setMenu(false);
             }}
