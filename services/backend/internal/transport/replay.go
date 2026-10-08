@@ -36,7 +36,7 @@ func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayI
 		profiles = nil // Manual replay uses the authenticated caller.
 	}
 	eligible, _ := json.Marshal(profiles)
-	rows, err := db.QueryContext(ctx, `SELECT i.job_id::text,e.name,j.plans,j.created_by FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND ($2::jsonb='null'::jsonb OR EXISTS(SELECT 1 FROM jsonb_to_recordset(NULLIF($2::jsonb,'null'::jsonb)) p(organization text,subject text) WHERE p.organization=$3 AND p.subject=j.created_by)) ORDER BY i.confirmed_at DESC,i.job_id DESC LIMIT 3`, closeID, string(eligible), org)
+	rows, err := db.QueryContext(ctx, `SELECT i.job_id::text,e.name,j.plans,j.created_by FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN evidence e ON e.id=i.source_id WHERE j.close_id::text=$1 AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND ($2::jsonb='null'::jsonb OR EXISTS(SELECT 1 FROM jsonb_to_recordset(NULLIF($2::jsonb,'null'::jsonb)) p(organization text,subject text) WHERE p.organization=$3 AND p.subject IN ('*',j.created_by))) ORDER BY i.confirmed_at DESC,i.job_id DESC LIMIT 3`, closeID, string(eligible), org)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func sweepReplays(ctx context.Context, db *sql.DB) error {
 		return nil
 	}
 	eligible, _ := json.Marshal(llm.CompletionProfiles(ctx))
-	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND ($3::jsonb='null'::jsonb OR EXISTS(SELECT 1 FROM jsonb_to_recordset(NULLIF($3::jsonb,'null'::jsonb)) p(organization text,subject text) WHERE p.organization=o.id AND p.subject=j.created_by)) ORDER BY i.confirmed_at DESC LIMIT 1) j
+	rows, err := db.QueryContext(ctx, `SELECT o.id,j.close_id::text FROM organizations o CROSS JOIN LATERAL (SELECT j.close_id FROM preparation_intakes i JOIN preparation_jobs j ON j.id=i.job_id JOIN client_closes c ON c.id=j.close_id WHERE c.organization_id=o.id AND i.confirmed_by IS NOT NULL AND i.confirmed_by<>'agent' AND i.proposal->>'engine' IN ('openai','context_machine') AND ($3::jsonb='null'::jsonb OR EXISTS(SELECT 1 FROM jsonb_to_recordset(NULLIF($3::jsonb,'null'::jsonb)) p(organization text,subject text) WHERE p.organization=o.id AND p.subject IN ('*',j.created_by))) ORDER BY i.confirmed_at DESC LIMIT 1) j
  WHERE o.enabled AND NOT EXISTS(SELECT 1 FROM replay_runs r WHERE r.organization_id=o.id AND r.model=$1 AND r.reasoning_effort=$2) ORDER BY o.id LIMIT 20`, model, llm.ReasoningEffort(ctx, "preparation"), string(eligible))
 	if err != nil {
 		return err

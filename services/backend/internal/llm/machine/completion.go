@@ -39,11 +39,7 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "completion policy mismatch", 400)
 		return
 	}
-	allowed := false
-	for _, p := range s.cfg.Profiles {
-		allowed = allowed || in.Scope == p
-	}
-	if !allowed {
+	if !s.allows(in.Scope) {
 		http.Error(w, "unknown access profile", 403)
 		return
 	}
@@ -111,6 +107,20 @@ func (s *server) complete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(raw)
+}
+
+// allows accepts a completion scope that is a configured profile, or a member of an organization-wide profile; the
+// member's own membership and client grants are then checked by every read, as for an exact profile.
+func (s *server) allows(scope llm.Scope) bool {
+	if scope.Subject == "" || scope.Subject == llm.AnyMember {
+		return false
+	}
+	for _, p := range s.cfg.Profiles {
+		if scope == p || p.Subject == llm.AnyMember && p.Organization == scope.Organization && p.AccessProfile == scope.AccessProfile {
+			return true
+		}
+	}
+	return false
 }
 
 func completionPrompt(in llm.Request) (json.RawMessage, string, error) {

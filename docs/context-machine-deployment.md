@@ -37,7 +37,7 @@ Cloudflare Worker secrets are authoritative for service credentials; the private
 | `CODEX_MODEL` | GitHub variable | Exact OpenAI model ID for enabled Codex. |
 | `CLAUDE_MODEL` | GitHub variable | Exact Anthropic model ID for enabled Claude; it must support adaptive thinking and `output_config.effort`. |
 | `CONTEXT_MACHINE_MODEL` | GitHub variable | `codex` or `claude`: selects the research agent. |
-| `CONTEXT_MACHINE_PROFILES` | GitHub variable | Nonempty JSON array of exact organization/subject/access-profile triples. |
+| `CONTEXT_MACHINE_PROFILES` | GitHub variable | Nonempty JSON array of organization/subject/access-profile triples; a subject of `*` covers every current member of the organization ([below](#organization-wide-profiles)). |
 | `LLM_MODELS` | GitHub variable, optional | JSON purpose-to-model overrides for existing API workflows. |
 
 Existing `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` deploy all services. The token/account must support Workers, Durable Objects and Containers; Containers billing must be enabled. API keys require API billing and access to the chosen models. Subscription tokens use the corresponding account's permissions and limits. Only the selected research agent must be configured; an unused agent does not require a key or model. In `auto`, a missing model leaves that research agent disabled even if its API key exists for direct workflows. An explicitly selected auth mode with a missing credential fails startup/deployment. `auto` chooses once at startup; expired tokens, quota errors and refusals fail the run without changing credentials or repeating the request.
@@ -69,6 +69,16 @@ Example profile shape (replace both IDs with existing members):
 ```
 
 Profiles map to existing organization memberships and **explicit client grants**. They do not infer access from an administrator title or allow arbitrary subject substitution. Provision members and client grants using existing platform controls. Disabled organizations and revoked memberships/clients are denied by the read tools.
+
+### Organization-wide profiles
+
+A profile whose subject is `*` serves every current member of its organization, which the agent chat needs so that each member of a firm can ask as themselves:
+
+```json
+[{"organization":"org_EXAMPLE","subject":"*","access_profile":"accounting-read"}]
+```
+
+The gateway resolves a caller to their own exact profile first, then to the organization's wide profile, and sends the member's own subject on the wire, never `*`. The service accepts a scope whose organization and access profile match a wide profile and whose subject is a real member, and then checks that member's current membership and client grants exactly as for an exact profile; the wildcard itself, an empty subject and another organization are refused. Scheduled replays under a wide profile may select any member's confirmed readings of that organization. A wide profile requires API-key agents: the service refuses to start with one under a personal Codex login or Claude subscription, which serve their owner only. Autonomous research (`/v1/run`) still needs an exact profile.
 
 Create a new database LOGIN with a random password using the database owner's secure administration tooling. Grant only the supported read surface:
 
@@ -121,7 +131,7 @@ Provision the selected agent credentials/models, read-only service database cred
 
 ## Launch acceptance checks
 
-Starting the context machine enables the `research` route. Set `LLM_PROVIDER=context_machine` to route all eight accounting purposes through its private completion endpoint too; the main API and queue then need no provider API key. `LLM_PROVIDER=api` retains direct API routing. Research currently has no production feature caller. Integrate it into an authorized workflow with consent, budget reservation, provenance and citation validation before exposing it to users.
+Starting the context machine enables the `research` route. Set `LLM_PROVIDER=context_machine` to route all nine accounting purposes through its private completion endpoint too; the main API and queue then need no provider API key. `LLM_PROVIDER=api` retains direct API routing. Research currently has no production feature caller. Integrate it into an authorized workflow with consent, budget reservation, provenance and citation validation before exposing it to users.
 
 Before calling the AI layer ready:
 
@@ -153,7 +163,7 @@ The equivalent local command is `node scripts/deploy-context-machine.mjs --provi
 
 ### Personal subscriptions: your own research only
 
-Use one owner access profile in `CONTEXT_MACHINE_PROFILES`; personal Codex login and Claude subscription mode reject multiple profiles. These credentials must not serve other platform users. All accounting workflows can use the personal login with `LLM_PROVIDER=context_machine`, but only requests from its configured owner identity are accepted. Other platform users require an appropriate API/provider arrangement.
+Use one owner access profile in `CONTEXT_MACHINE_PROFILES`; personal Codex login and Claude subscription mode reject multiple profiles and organization-wide (`*`) profiles. These credentials must not serve other platform users. All accounting workflows can use the personal login with `LLM_PROVIDER=context_machine`, but only requests from its configured owner identity are accepted. Other platform users require an appropriate API/provider arrangement.
 
 **Codex / ChatGPT Pro:** create a separate managed session for this service using the official CLI. Do not upload the auth file actively used by your desktop: concurrent refreshes of the same session can invalidate each other. On your trusted computer:
 
@@ -204,7 +214,7 @@ gh variable set LLM_REASONING_EFFORTS --body '{"work_command":"low","investigati
 
 Pin `CODEX_MODEL` / `CLAUDE_MODEL` and their default effort. Optional `LLM_MODELS` and `LLM_REASONING_EFFORTS` apply to every completion purpose; the same policy is deployed to the gateway and service. Redeploy using the normal production workflow to update the service, API and queue together. Preflight rejects routing to a disabled service, unsupported CLI efforts, missing credentials and unacknowledged Codex subscription token limits before builds/migrations. Small existing output ceilings may need explicit, budget-reviewed adjustment after live acceptance; a fluent partial answer is never success.
 
-The HTTP organization boundary supplies the authenticated organization/subject. Preparation jobs use their recorded creator; scheduled replays use the original job creator, while manual replays retain the current caller identity. The service matches the entire provisioned profile and checks current organization/member access before launching the CLI. Personal accounts require one owner profile and reject other identities. Do not expose personal subscriptions to other platform users.
+The HTTP organization boundary supplies the authenticated organization/subject. Preparation jobs use their recorded creator; scheduled replays use the original job creator, while manual replays retain the current caller identity. The service matches the entire provisioned profile, or a member under an organization-wide profile, and checks current organization/member access before launching the CLI. Personal accounts require one owner profile and reject other identities. Do not expose personal subscriptions to other platform users.
 
 Each `/v1/complete` call uses exactly one model-call reservation and no agent read tools. Schemas and tool proposals are returned to existing domain validators; the caller's existing capability authorization, consent and approval gates still apply. Completion text arrives in one callback after validation, rather than live token deltas. Autonomous research retains its separately reserved multi-call/read-tool protocol. `/readyz` checks the same private binding for either mode but performs no paid inference.
 

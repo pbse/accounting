@@ -30,12 +30,10 @@ type CompletionResponse struct {
 func (c *Client) completion(ctx context.Context, r route, in Request) (Response, error) {
 	id, _ := ctx.Value(identityKey{}).(identity)
 	var scope Scope
-	for _, p := range c.profiles {
-		if p.Organization == id.organization && p.Subject == id.subject {
-			scope = p
-		}
+	if id.subject != "" && id.subject != AnyMember {
+		scope = c.profile(id.organization, id.subject)
 	}
-	if scope.AccessProfile == "" {
+	if scope.AccessProfile == "" || scope.Subject == AnyMember {
 		return Response{}, errors.New("context-machine completion requires a configured caller identity")
 	}
 	if in.Scope != nil || in.OnProgress != nil {

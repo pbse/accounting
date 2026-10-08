@@ -84,7 +84,7 @@ if (provider === "context_machine") {
  const mode = process.env[`${agent.toUpperCase()}_AUTH_MODE`] || "auto";
  const subscription = agent === "codex" && (mode === "subscription" || mode === "chatgpt" || (mode === "auto" && !has("OPENAI_API_KEY")));
  if (subscription && uncapped !== "true") throw new Error("Codex subscription completions require LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS=true");
- const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation"];
+ const purposes = ["evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat"];
  for (const name of ["LLM_MODELS", "LLM_REASONING_EFFORTS"]) {
   if (!process.env[name]) continue;
   let values; try { values=JSON.parse(process.env[name]); } catch { throw new Error(`Invalid ${name}`); }
@@ -93,6 +93,8 @@ if (provider === "context_machine") {
  }
 }
 if (personalSelected && (!Array.isArray(profiles) || profiles.length !== 1)) throw new Error("Personal subscriptions require exactly one owner access profile");
+// A subject of "*" serves every member of the organization, which only API-key agents may do; a personal login serves its owner.
+if (personalSelected && Array.isArray(profiles) && profiles.some(p => p && p.subject === "*")) throw new Error("An organization-wide access profile (subject \"*\") requires API-key agents, not a personal subscription");
 if (!Array.isArray(profiles) || !profiles.length ||
     profiles.some(p => !p || ["organization", "subject", "access_profile"].some(k => typeof p[k] !== "string" || !p[k].trim())) ||
     new Set(profiles.map(p => p.access_profile)).size !== profiles.length)
