@@ -168,22 +168,24 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	if body, _, _ := ask(question); !strings.HasPrefix(body, help) || calls != 0 {
 		t.Fatalf("with the policy off the model is never asked: %q calls=%d", body, calls)
 	}
-	call("user_a", nil, "/v1/closes/organization/policy", map[string]any{"model_answers": true, "reason": "Pilot written answers"}, 403)
-	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"model_answers": true, "reason": "Pilot written answers"}, 200)
-	var recorded bool
-	must(db.QueryRow(`SELECT assistant_model_answers FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded))
-	if !recorded {
+	call("user_a", nil, "/v1/closes/organization/policy", map[string]any{"agent_chat": "closes", "reason": "Pilot the agent"}, 403)
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"agent_chat": "always", "reason": "Pilot the agent"}, 422)
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"agent_chat": "closes", "reason": "Pilot the agent"}, 200)
+	var recorded string
+	must(db.QueryRow(`SELECT agent_chat FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded))
+	if recorded != "closes" {
 		t.Fatal("the policy change is recorded")
 	}
 	security := httptest.NewRecorder()
 	store.ServeHTTP(security, httptest.NewRequest("GET", "/v1/closes/security", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: org, Permissions: []string{"clients:all", "members:manage"}})))
-	if security.Code != 200 || !strings.Contains(security.Body.String(), "Written assistant answers are on") {
+	if security.Code != 200 || !strings.Contains(security.Body.String(), "Agent chat is on for client closes") {
 		t.Fatalf("the security center says written answers are on: %d %s", security.Code, security.Body.String())
 	}
 
 	respond = func(reads map[string]string) modelAnswer { return answer("status", headline(reads)) }
 	body, cited, streamed := ask(question)
-	if calls != 1 || body != written+"\n"+writtenNote || len(cited) != 1 || cited[0] != (citation{"Close overview", "/dashboard/closes/" + alpha}) {
+	// At the closes level the model may read before it writes, so a close answer costs an investigation round too.
+	if calls != 2 || body != written+"\n"+writtenNote || len(cited) != 1 || cited[0] != (citation{"Close overview", "/dashboard/closes/" + alpha}) {
 		t.Fatalf("a grounded answer is kept with its fixed link and says it was written by the model: %q %v calls=%d", body, cited, calls)
 	}
 	if streamed != written {
@@ -259,12 +261,12 @@ func TestAssistantWritesAnswersOnlyWhenTheFirmAllows(t *testing.T) {
 	if out, _ := post("/v1/closes/chat", firmQuestion); !strings.HasPrefix(out.Messages[len(out.Messages)-1].Body, firmHelp) || calls != spent {
 		t.Fatalf("close written answers alone never send a firm-wide question: calls=%d", calls)
 	}
-	call("user_a", nil, "/v1/closes/organization/policy", map[string]any{"firm_answers": true, "reason": "Pilot firm-wide answers"}, 403)
-	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"firm_answers": true, "reason": "Pilot firm-wide answers"}, 200)
-	must(db.QueryRow(`SELECT assistant_firm_answers FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded))
+	call("user_a", nil, "/v1/closes/organization/policy", map[string]any{"agent_chat": "firm", "reason": "Pilot firm-wide answers"}, 403)
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"agent_chat": "firm", "reason": "Pilot firm-wide answers"}, 200)
+	must(db.QueryRow(`SELECT agent_chat FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded))
 	security = httptest.NewRecorder()
 	store.ServeHTTP(security, httptest.NewRequest("GET", "/v1/closes/security", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_admin"}, Organization: org, Permissions: []string{"clients:all", "members:manage"}})))
-	if !recorded || !strings.Contains(security.Body.String(), "Firm-wide written answers are on") {
+	if recorded != "firm" || !strings.Contains(security.Body.String(), "Agent chat is on firm-wide") {
 		t.Fatalf("the firm-wide policy change is recorded and shown: %v %s", recorded, security.Body.String())
 	}
 	firmAnswer := "Alpha has the oldest open close.\n\nCheck its blockers first."

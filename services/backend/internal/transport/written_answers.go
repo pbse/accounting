@@ -41,14 +41,13 @@ const firmWrittenNote = "Written by the model from your firm's work lists (what 
 // source it cites was sent whole and holds the quote it gives. outcome is "" when nothing was attempted, otherwise
 // kept, not_kept, unanswerable, failed or limit; why says, when it is not empty, why nothing was written.
 func writtenReply(ctx context.Context, db *sql.DB, org string, readRaw func(string) (string, bool), closeID, paperID, question string, emit func(string) bool) (reply chatReply, why, outcome, trace string) {
-	setting := "assistant_model_answers"
-	if closeID == "" {
-		setting = "assistant_firm_answers"
-	}
-	var on, investigations bool
-	if db.QueryRowContext(ctx, `SELECT `+setting+`,assistant_investigations FROM organizations WHERE id=$1`, org).Scan(&on, &investigations) != nil || !on {
+	// The agent chat level consents to model-chosen reads: at "closes" a close question may be investigated and
+	// written; only at "firm" may a firm-wide question go to the model.
+	var level string
+	if db.QueryRowContext(ctx, `SELECT agent_chat FROM organizations WHERE id=$1`, org).Scan(&level) != nil || level == "off" || closeID == "" && level != "firm" {
 		return reply, "", "", ""
 	}
+	investigations := true
 	model := llm.Model(ctx, "written_answer")
 	if model == "" {
 		return reply, "Written answers need the agent model, which this server does not have.", "", trace

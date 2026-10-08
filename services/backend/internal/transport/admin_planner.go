@@ -135,7 +135,7 @@ func adminDraftPlan(w http.ResponseWriter, r *http.Request, db *sql.DB) {
 		if err := adminFirmExists(ctx, tx, in.Firm); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT assistant_model_answers FROM organizations WHERE id=$1`, in.Firm).Scan(&allowed); err != nil || in.CloseID == "" {
+		if err := tx.QueryRowContext(ctx, `SELECT agent_chat<>'off' FROM organizations WHERE id=$1`, in.Firm).Scan(&allowed); err != nil || in.CloseID == "" {
 			return err
 		}
 		var entity, period string

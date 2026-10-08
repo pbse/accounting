@@ -105,31 +105,26 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			out[key] = json.RawMessage(raw)
 		}
 		var calls, pageReads, alerts, email int
-		var written, firmWritten, investigations bool
+		var level string
 		var connected map[string]int
 		var raw []byte
 		err = tx.QueryRowContext(r.Context(), `SELECT COALESCE((SELECT sum(calls-gemini_calls) FROM model_calls WHERE organization_id=$1 AND day>(now() AT TIME ZONE 'UTC')::date-30),0),
  COALESCE((SELECT sum(gemini_calls) FROM model_calls WHERE organization_id=$1 AND day>(now() AT TIME ZONE 'UTC')::date-30),0),
- (SELECT assistant_model_answers FROM organizations WHERE id=$1),
- (SELECT assistant_firm_answers FROM organizations WHERE id=$1),
- (SELECT assistant_investigations FROM organizations WHERE id=$1),
+ (SELECT agent_chat FROM organizations WHERE id=$1),
  (SELECT count(*) FROM operations_alert_deliveries WHERE organization_id=$1 AND status='accepted' AND finished_at>now()-interval '30 days'),
  (SELECT count(*) FROM email_connections WHERE organization_id=$1 AND enabled),
- jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &pageReads, &written, &firmWritten, &investigations, &alerts, &email, &raw)
+ jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &pageReads, &level, &alerts, &email, &raw)
 		if err != nil || json.Unmarshal(raw, &connected) != nil {
 			problem(w, 503, "Security center unavailable.")
 			return
 		}
 		set := func(key string) bool { return os.Getenv(key) != "" }
-		answers := "Written assistant answers are off."
-		if written {
-			answers = "Written assistant answers are on: a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions, and an open draft."
+		answers := "Agent chat is off: no question reaches a model."
+		if level != "off" {
+			answers = "Agent chat is on for client closes, served by " + llm.ProviderLabel(r.Context(), "chat") + ": a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions, and an open draft, and before writing the model may read that close's own records through the assistant's read-only tools (documents' text, drafts, tie-out, changes, exceptions, search), each read made with the member's permissions and listed under the answer."
 		}
-		if investigations {
-			answers += " Investigations are on: before writing a close answer the model may read that close's own records through the assistant's read-only tools (documents' text, drafts, tie-out, changes, exceptions, search), each read made with the member's permissions and listed under the answer."
-		}
-		if firmWritten {
-			answers += " Firm-wide written answers are on: a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue, blocked work and work handed to the agent, with client names, across the closes the member can open."
+		if level == "firm" {
+			answers = "Agent chat is on firm-wide, served by " + llm.ProviderLabel(r.Context(), "chat") + ": as for client closes, and a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue, blocked work and work handed to the agent, with client names, across the closes the member can open."
 		}
 		gemini := map[string]string{"gemini": "Key set on the worker; model " + ocrModel, "tesseract": "Key not set on the worker; PDFs are read locally", "held": "Key set on the worker, but " + heldBecause(ocrModel) + ", so PDFs are read locally", "": "The worker has not reported its PDF reading in the last five minutes"}[ocr]
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.
