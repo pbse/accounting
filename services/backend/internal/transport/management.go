@@ -737,7 +737,7 @@ func closeManagementPack(ctx context.Context, tx *sql.Tx, closeID string) (map[s
 	pack["note"], pack["overall"], pack["digest"] = note, status, figuresDigest(pack)
 	var materiality sql.NullString
 	if err = tx.QueryRowContext(ctx, `SELECT materiality_amount::text FROM organizations WHERE id=$1`, org).Scan(&materiality); err != nil {
-		return nil, tieRefusal{503, "Firm settings are unavailable."}
+		return nil, tieRefusal{503, "The firm's policy is unavailable."}
 	}
 	pack["draft_commentary"] = draftCommentary(pack, materiality.String)
 	return pack, nil

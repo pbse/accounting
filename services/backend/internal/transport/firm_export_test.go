@@ -64,7 +64,7 @@ func TestAFirmDownloadsItsRecordsAtExit(t *testing.T) {
 			t.Fatalf("the export has %s with %s: %.400s", want.key, want.text, out.Records[want.key])
 		}
 	}
-	if policy := mustString(adminJSON(t, h, token, "GET", "/v1/closes/organization/policy", "", 200)); !strings.Contains(policy, `"support_owner":`) {
-		t.Fatalf("the firm's settings show its support owner: %s", policy)
+	if policy := mustString(adminJSON(t, h, token, "GET", "/v1/closes/organization/policy", "", 200)); !strings.Contains(policy, `"support_owner":`) || !strings.Contains(policy, `"can_read_roster":true`) || !strings.Contains(policy, `"can_manage_members":false`) {
+		t.Fatalf("the firm's settings show its support owner; the local workspace reads the roster but manages no members: %s", policy)
 	}
 }

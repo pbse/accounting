@@ -1,6 +1,6 @@
 .vertical-tabs-layout {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
   gap: var(--space-24);
   align-items: start;
 }
@@ -9,33 +9,55 @@
   flex-direction: column;
   gap: var(--space-4);
   position: sticky;
-  top: var(--space-16);
+  top: calc(var(--topbar-height) + var(--space-16));
+}
+.vertical-tabs-item {
+  display: contents;
+}
+/* A group's name sits above its first section, with room from the group before it. */
+.vertical-tabs-group {
+  display: block;
+  padding: var(--space-16) var(--space-12) var(--space-4);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+.vertical-tabs-item:first-child .vertical-tabs-group {
+  padding-top: var(--space-4);
 }
 .app-shell .vertical-tabs a {
   display: flex;
   align-items: center;
   gap: var(--space-10);
   height: var(--nav-item-height);
-  padding: 0 var(--space-10);
-  border-radius: var(--radius-md);
+  padding: 0 var(--space-12);
+  border-radius: var(--radius-full);
   color: var(--ink-2);
   font-size: 14px;
+  font-weight: 500;
   text-decoration: none;
 }
 .vertical-tabs svg {
-  color: var(--ink-2);
+  color: var(--ink-3);
   flex-shrink: 0;
 }
 .app-shell .vertical-tabs a:hover {
   background: var(--fill);
+  color: var(--ink);
 }
-.app-shell .vertical-tabs a[aria-current="page"] {
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
+.app-shell .vertical-tabs a[aria-current="page"],
+.app-shell .vertical-tabs a[aria-current="page"]:hover {
+  background: var(--blue);
+  color: var(--on-chip);
+}
+.vertical-tabs a:hover svg {
   color: var(--ink);
 }
 .vertical-tabs a[aria-current="page"] svg {
-  color: var(--ink);
+  color: var(--on-chip);
 }
 .vertical-tabs-panel {
   display: flex;
@@ -43,16 +65,31 @@
   gap: var(--space-16);
   min-width: 0;
 }
+.vertical-tabs-panel > section {
+  margin-bottom: 0;
+}
 @media (max-width: 850px) {
   .vertical-tabs-layout {
     grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-16);
   }
   .vertical-tabs {
     flex-direction: row;
-    flex-wrap: wrap;
+    gap: 2px;
     position: static;
+    padding: var(--space-4);
+    border-radius: var(--radius-full);
+    background: var(--surface);
+    box-shadow: var(--shadow-raised);
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+  .vertical-tabs-group {
+    display: none;
   }
   .app-shell .vertical-tabs a {
+    flex: none;
     white-space: nowrap;
+    font-size: 13px;
   }
 }

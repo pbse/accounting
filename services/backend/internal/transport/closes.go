@@ -300,7 +300,7 @@ func savedCloses(db *sql.DB, token string) http.Handler {
 				return
 			}
 			if left {
-				problem(w, 409, input.Entity+" is inactive on the firm's roster. A firm administrator reactivates it in Firm settings before a new month is opened.")
+				problem(w, 409, input.Entity+" is inactive on the firm's roster. A firm administrator reactivates it under Settings → Clients before a new month is opened.")
 				return
 			}
 			// A client's first close in the firm is its opening month. A month opened earlier than that one, before its

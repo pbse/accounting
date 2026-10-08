@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { workspaceRequest } from "./workspace";
 
 type Grant = {
@@ -67,37 +67,26 @@ export function ClientAccess({ entities }: { entities: string[] }) {
       setBusy(false);
     }
   }
+  useEffect(() => {
+    void load();
+  }, []);
   return (
-    <details
-      onToggle={(event) => {
-        if (event.currentTarget.open && !loaded && !busy) void load();
-      }}
-    >
-      <summary>Client access administration</summary>
-      <p>
-        Invite the accounting professional to your WorkOS organization first.
-        Give them only the needed review/procedure/sign-off roles, without
-        clients:all. Then assign their exact WorkOS user ID to a client here.
-        Assignments cover all periods of that client.
-      </p>
-      <p>
-        Only firm administrators with clients:all and members:manage can change
-        assignments. This does not invite users or grant action permissions.
-        Local development decisions do not identify a real person.
+    <>
+      <p className="note">
+        Invite the person first and give them only the roles their work needs, without clients:all. Then assign their exact WorkOS user ID to a client here. Firm-wide roles
+        override client assignments and must be removed separately. Local development decisions do not identify a real person.
       </p>
       {error && <p role="alert">{error}</p>}
       {message && <p role="status">{message}</p>}
-      <button disabled={busy} onClick={() => void load()}>
-        Refresh access history
-      </button>
       {loaded && (
         <>
+          <details open={history.length === 0}>
+          <summary>Record a client assignment decision</summary>
           <form
             key={current?.id ?? "new"}
             onSubmit={(event) => void save(event)}
           >
             <fieldset disabled={busy}>
-              <legend>Record a client assignment decision</legend>
               <label>
                 Exact WorkOS user ID
                 <input
@@ -128,7 +117,7 @@ export function ClientAccess({ entities }: { entities: string[] }) {
                 Current assignment:{" "}
                 {current?.granted ? "Granted" : "Not granted"}
               </p>
-              <label>
+              <label className="checkbox-label">
                 <input name="granted" type="checkbox" />
                 Grant access (leave unchecked to revoke)
               </label>
@@ -136,16 +125,14 @@ export function ClientAccess({ entities }: { entities: string[] }) {
                 Reason and authorization reference
                 <textarea required name="reason" maxLength={2000} />
               </label>
-              <label>
-                <input required type="checkbox" name="confirmed" />I verified
-                this user, client and intended access. Firm-wide WorkOS roles
-                override client assignments and must be removed separately when
-                needed.
+              <label className="checkbox-label">
+                <input required type="checkbox" name="confirmed" />I verified this user, client and intended access.
               </label>
               <button disabled={!entity}>Save access decision</button>
             </fieldset>
           </form>
-          <details>
+          </details>
+          {history.length > 0 && <details>
             <summary>Grant and revocation history ({history.length})</summary>
             <ol>
               {history.map((g) => (
@@ -159,9 +146,9 @@ export function ClientAccess({ entities }: { entities: string[] }) {
                 </li>
               ))}
             </ol>
-          </details>
+          </details>}
         </>
       )}
-    </details>
+    </>
   );
 }

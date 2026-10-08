@@ -82,14 +82,14 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 	// One read of who can do what, which services and agents act for the firm, and what changed; firm administrators only.
 	mux.HandleFunc("GET /v1/closes/security", func(w http.ResponseWriter, r *http.Request) {
 		if !canManageMembers(r) {
-			problem(w, 403, "The security center requires clients:all and members:manage.")
+			problem(w, 403, "The firm's security settings require clients:all and members:manage.")
 			return
 		}
 		// Read before the transaction takes a connection, so concurrent views never wait on a second one.
 		ocr, ocrModel := workerOCR(r.Context(), db)
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 		if err != nil {
-			problem(w, 503, "Security center unavailable.")
+			problem(w, 503, "Security is unavailable.")
 			return
 		}
 		defer tx.Rollback()
@@ -99,7 +99,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			"clients": `SELECT COALESCE(jsonb_agg(DISTINCT entity),'[]'::jsonb) FROM client_closes WHERE organization_id=$1`} {
 			var raw []byte
 			if err = tx.QueryRowContext(r.Context(), query, org).Scan(&raw); err != nil {
-				problem(w, 503, "Security center unavailable.")
+				problem(w, 503, "Security is unavailable.")
 				return
 			}
 			out[key] = json.RawMessage(raw)
@@ -115,7 +115,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
  (SELECT count(*) FROM email_connections WHERE organization_id=$1 AND enabled),
  jsonb_build_object('QuickBooks',(SELECT count(*) FROM quickbooks_connections WHERE organization_id=$1 AND state='active'),'Xero',(SELECT count(*) FROM xero_connections WHERE organization_id=$1 AND state='active'),'Stripe',(SELECT count(*) FROM stripe_connections WHERE organization_id=$1 AND state='active'))`, org).Scan(&calls, &pageReads, &level, &alerts, &email, &raw)
 		if err != nil || json.Unmarshal(raw, &connected) != nil {
-			problem(w, 503, "Security center unavailable.")
+			problem(w, 503, "Security is unavailable.")
 			return
 		}
 		set := func(key string) bool { return os.Getenv(key) != "" }
@@ -149,11 +149,11 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			err = tx.QueryRowContext(r.Context(), `SELECT allow_ledger_writes FROM organizations WHERE id=$1`, org).Scan(&writes)
 		}
 		if err != nil {
-			problem(w, 503, "Security center unavailable.")
+			problem(w, 503, "Security is unavailable.")
 			return
 		}
 		if out["operations"], err = capabilityRegister(evidence, out["posting_grants"].(json.RawMessage), out["services"].(json.RawMessage), acceptances, writes); err != nil {
-			problem(w, 503, "Security center unavailable.")
+			problem(w, 503, "Security is unavailable.")
 			return
 		}
 		jsonReply(w, 200, out)

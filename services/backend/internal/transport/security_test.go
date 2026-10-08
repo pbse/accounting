@@ -141,7 +141,7 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 		if o.Kind != "read" && (o.Status == "enabled" || o.Status == "production approved" || len(o.Clients) > 0) {
 			t.Fatalf("a write is enabled while the firm's writing is off: %+v", o)
 		}
-		if o.Provider == "QuickBooks" && o.Operation == "Journal: accrual" && o.Status != "off in Firm settings" {
+		if o.Provider == "QuickBooks" && o.Operation == "Journal: accrual" && o.Status != "off in Settings" {
 			t.Fatalf("an allowed, granted write says the firm's writing is off: %+v", o)
 		}
 	}

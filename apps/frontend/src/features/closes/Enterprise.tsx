@@ -14,7 +14,7 @@ type RoleChange = { id: number; subject: string; from_role: string; to_role: str
 
 // The firm's people and their roles (docs/sign-in.md). Colleagues who sign in with the firm's company domain arrive
 // with the Member role, which opens nothing until an administrator gives them a role or assigns them clients.
-function FirmPeople() {
+export function FirmPeople() {
   const [page, setPage] = useState<{ people: Person[]; roles: RoleOption[]; changes: RoleChange[]; next: string }>();
   const [subject, setSubject] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,11 +58,17 @@ function FirmPeople() {
     const person = page?.people.find((p) => p.subject === sub);
     return person ? person.name || person.email : sub;
   };
-  if (!page) return <p role="status">{message || "Loading the firm’s people…"}</p>;
+  if (!page)
+    return (
+      <section aria-label="People and roles">
+        <h2>People and roles</h2>
+        <p role={message ? "alert" : "status"}>{message || "Loading the firm’s people…"}</p>
+      </section>
+    );
   const chosen = page.people.find((person) => person.subject === subject);
   return (
-    <section>
-      <h3>People and roles</h3>
+    <section aria-label="People and roles">
+      <h2>People and roles</h2>
       <p>Colleagues who sign in with the firm’s company domain join with the Member role, which opens nothing until you give them a role or assign them clients. A role change takes effect within five minutes.</p>
       <table>
         <thead><tr><th>Person</th><th>Role</th><th>Firm access</th></tr></thead>
@@ -77,8 +83,7 @@ function FirmPeople() {
         </tbody>
       </table>
       {page.next && <p><button type="button" disabled={busy} onClick={() => void load(page.next)}>Show more people</button></p>}
-      <form onSubmit={(event) => void change(event)}><fieldset disabled={busy}>
-        <legend>Change a person’s role</legend>
+      <details><summary>Change a person’s role</summary><form onSubmit={(event) => void change(event)}><fieldset disabled={busy}>
         <label>Person
           <select required value={subject} onChange={(event) => setSubject(event.target.value)}>
             <option value="">Choose a person</option>
@@ -93,11 +98,11 @@ function FirmPeople() {
           </select>
         </label>
         <label>Reason<textarea name="reason" required minLength={10} maxLength={2000} /></label>
-        <label><input name="confirmed" type="checkbox" required />I checked the person and the role.</label>
+        <label className="checkbox-label"><input name="confirmed" type="checkbox" required />I checked the person and the role.</label>
         <button>Change role</button>
-      </fieldset></form>
+      </fieldset></form></details>
       {page.changes.length > 0 && <details><summary>Role changes ({page.changes.length})</summary><ol>{page.changes.map((c) => <li key={c.id}>{who(c.subject)}: {roleName(c.from_role)} → {roleName(c.to_role)}{c.state === "pending" ? " (awaiting WorkOS)" : c.state === "failed" ? " (not made)" : c.state === "unknown" ? " (outcome unknown: changed in WorkOS meanwhile)" : ""} · {c.reason} · by {who(c.actor)} · {new Date(c.created_at).toLocaleString()}</li>)}</ol></details>}
-      <p role="status">{message}</p>
+      {message && <p role="status">{message}</p>}
     </section>
   );
 }
@@ -141,7 +146,7 @@ type Role = { slug: string; name: string; description: string; permissions: stri
 type Invitation = { id: string; email: string; role_name: string; state: string; invited_by: string; subject?: string; expires_at?: string; created_at: string };
 const invitationStates: Record<string, string> = { sending: "Not yet confirmed by WorkOS", pending: "Waiting for them to accept", accepted: "Joined", revoked: "Revoked", expired: "Expired" };
 
-function Invitations() {
+export function Invitations() {
   const [roles, setRoles] = useState<{ configured: boolean; roles: Role[] }>();
   const [list, setList] = useState<Invitation[]>([]);
   const [email, setEmail] = useState("");
@@ -178,24 +183,24 @@ function Invitations() {
       setBusy(false);
     }
   }
-  if (roles && !roles.configured) return <p>Email invitations need the server's WorkOS API key; until then, enroll members by their WorkOS user ID below.</p>;
+  if (roles && !roles.configured) return <section aria-label="Invite by email"><h2>Invitations</h2><p className="note">Email invitations need the server's WorkOS API key; until then, enroll members by their WorkOS user ID below.</p></section>;
   const chosen = roles?.roles.find((r) => r.slug === role);
   const hidden = roles?.roles.filter((r) => !r.allowed).length ?? 0;
   return (
     <section aria-label="Invite by email">
-      <form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
+      <h2>Invitations</h2>
+      <p>WorkOS emails the invitation. Once they accept it and sign in, they join the firm. Assign their clients under client access if their role cannot see every client.</p>
+      <details open={list.length === 0}><summary>Invite by email</summary><form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
         <fieldset disabled={busy}>
-          <legend>Invite by email</legend>
           <label>Email<input type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
           <label>Role<select required value={role} onChange={(event) => setRole(event.target.value)}><option value="">Choose a role</option>{roles?.roles.filter((r) => r.allowed).map((r) => <option key={r.slug} value={r.slug}>{r.name}</option>)}</select></label>
           {chosen && <>{chosen.description && <p>{chosen.description}</p>}<ul>{chosen.permissions.map((p) => <li key={p}>{p}</li>)}</ul></>}
           {hidden > 0 && <p>{hidden} role{hidden === 1 ? " grants" : "s grant"} permissions you don't hold; only an administrator who holds them can invite into {hidden === 1 ? "it" : "them"}.</p>}
           <label>Authority and reason<textarea required minLength={10} maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} /></label>
-          <label><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I verified the address and the role.</label>
+          <label className="checkbox-label"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I verified the address and the role.</label>
           <button disabled={!confirmed || !role}>Send invitation</button>
         </fieldset>
-      </form>
-      <p>WorkOS emails the invitation. Once they accept it and sign in, they join the firm. Assign their clients under client access if their role cannot see every client.</p>
+      </form></details>
       {list.length > 0 && (
         <ul>
           {list.map((i) => (
@@ -211,28 +216,57 @@ function Invitations() {
   );
 }
 
-export function FirmOperations() {
+// The firm's usage against its limits and any aged or unknown work, for an administrator checking on operations.
+export function OperationsSnapshot() {
   const [snapshot, setSnapshot] = useState<Operations>();
-  const [members, setMembers] = useState<Member[]>([]);
-  const [memberAccess, setMemberAccess] = useState(false);
-  const [subject, setSubject] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   async function load() {
     setBusy(true);
     setMessage("");
     try {
-      const [ops, history] = await Promise.allSettled([workspaceRequest("/operations"), workspaceRequest("/members")]);
-      if (ops.status === "fulfilled") setSnapshot(ops.value);
-      if (history.status === "fulfilled") { setMembers(history.value); setMemberAccess(true); }
-      if (ops.status === "rejected" && history.status === "rejected") throw ops.reason;
+      setSnapshot(await workspaceRequest("/operations"));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Firm operations unavailable.");
     } finally {
       setBusy(false);
     }
   }
-  const current = members.find((member) => member.subject === subject.trim());
+  useEffect(() => {
+    void load();
+  }, []);
+  if (!snapshot) return message ? <p role="alert">{message}</p> : <p role="status">Reading usage…</p>;
+  return (
+    <>
+      <p>
+        Closes {snapshot.usage.closes}/{snapshot.limits.closes} · active jobs {snapshot.usage.active_jobs}/{snapshot.limits.active_jobs} · model calls today (UTC) {snapshot.usage.model_calls_today}/{snapshot.limits.model_calls_today} · undelivered external alerts {snapshot.undelivered_alerts} · unmapped historical delivery events {snapshot.unmapped_delivery_events}
+      </p>
+      {snapshot.alerts.length === 0 ? <p className="note">No aged or unknown work.</p> : <ul>{snapshot.alerts.map((item) => <li key={`${item.kind}-${item.item_id}`}><Link to={`/dashboard/closes/${item.close_id}`}>{item.kind} #{item.item_id}</Link> · {item.state} · {item.age_minutes} minutes</li>)}</ul>}
+      {snapshot.has_more && <p>More than 100 alerts exist. Resolve these, then refresh to see the rest.</p>}
+      <p className="setting-actions"><button type="button" disabled={busy} onClick={() => void load()}>Refresh</button></p>
+      {message && <p role="alert">{message}</p>}
+    </>
+  );
+}
+
+// Enrolling or revoking an exact WorkOS user, and the history of those decisions. WorkOS still owns identity and
+// roles; client assignments remain separate.
+export function MemberDecision() {
+  const [members, setMembers] = useState<Member[]>();
+  const [subject, setSubject] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function load() {
+    try {
+      setMembers(await workspaceRequest("/members"));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Membership history unavailable.");
+    }
+  }
+  useEffect(() => {
+    void load();
+  }, []);
+  const current = members?.find((member) => member.subject === subject.trim());
   async function decide(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -248,29 +282,21 @@ export function FirmOperations() {
       setBusy(false);
     }
   }
-  return <details onToggle={(event) => { if (event.currentTarget.open && !snapshot && !busy) void load(); }}>
-    <summary>Firm operations and membership</summary>
-    <p>Firm administrators can inspect durable exceptions and enroll or revoke exact WorkOS users. WorkOS still owns identity and roles; client assignments remain separate.</p>
-    <button type="button" disabled={busy} onClick={() => void load()}>Refresh operations</button>
-    {snapshot && <>
-      <p role="status">Closes {snapshot.usage.closes}/{snapshot.limits.closes} · active jobs {snapshot.usage.active_jobs}/{snapshot.limits.active_jobs} · model calls today (UTC) {snapshot.usage.model_calls_today}/{snapshot.limits.model_calls_today} · undelivered external alerts {snapshot.undelivered_alerts} · unmapped historical delivery events {snapshot.unmapped_delivery_events}</p>
-      {snapshot.alerts.length === 0 ? <p>No aged or unknown work in this snapshot.</p> : <ul>{snapshot.alerts.map((item) => <li key={`${item.kind}-${item.item_id}`}><Link to={`/dashboard/closes/${item.close_id}`}>{item.kind} #{item.item_id}</Link> · {item.state} · {item.age_minutes} minutes</li>)}</ul>}
-      {snapshot.has_more && <p>More than 100 alerts exist. Resolve these, then refresh to see the rest.</p>}
-    </>}
-    {memberAccess && <FirmPeople />}
-    {memberAccess && <Invitations />}
-    {memberAccess && <form onSubmit={(event) => void decide(event)}><fieldset disabled={busy}>
-      <legend>Enroll or revoke an existing WorkOS user by ID</legend>
-      <label>Exact WorkOS user ID<input required pattern="user_.+" maxLength={200} value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
-      <p>Current access: {current ? current.granted ? "Enrolled" : "Revoked" : "Not enrolled"}</p>
-      <label><input name="granted" type="checkbox" />Enroll this member (leave unchecked to revoke)</label>
-      <label>Authority and reason<textarea name="reason" required minLength={10} maxLength={2000} /></label>
-      <label><input name="confirmed" type="checkbox" required />I verified the exact user and access decision.</label>
-      <button>Save member decision</button>
-    </fieldset></form>}
-    {memberAccess && <details><summary>Membership history ({members.length})</summary><ol>{members.map((member) => <li key={member.id}>{member.granted ? "Enrolled" : "Revoked"} · {member.subject} · {member.reason} · {member.actor} · {new Date(member.created_at).toLocaleString()}</li>)}</ol></details>}
-    <p role="status">{message}</p>
-  </details>;
+  if (!members) return message ? <p role="alert">{message}</p> : null;
+  return (
+    <>
+      <form onSubmit={(event) => void decide(event)}><fieldset disabled={busy}>
+        <label>Exact WorkOS user ID<input required pattern="user_.+" maxLength={200} value={subject} onChange={(event) => setSubject(event.target.value)} /></label>
+        <p>Current access: {current ? current.granted ? "Enrolled" : "Revoked" : "Not enrolled"}</p>
+        <label className="checkbox-label"><input name="granted" type="checkbox" />Enroll this member (leave unchecked to revoke)</label>
+        <label>Authority and reason<textarea name="reason" required minLength={10} maxLength={2000} /></label>
+        <label className="checkbox-label"><input name="confirmed" type="checkbox" required />I verified the exact user and access decision.</label>
+        <button>Save member decision</button>
+      </fieldset></form>
+      {members.length > 0 && <details><summary>Membership history ({members.length})</summary><ol>{members.map((member) => <li key={member.id}>{member.granted ? "Enrolled" : "Revoked"} · {member.subject} · {member.reason} · {member.actor} · {new Date(member.created_at).toLocaleString()}</li>)}</ol></details>}
+      {message && <p role="status">{message}</p>}
+    </>
+  );
 }
 
 export function RetentionControls({ close, onDeleted }: { close: { id: string; entity: string; period: string }; onDeleted: (receipt: string) => void }) {

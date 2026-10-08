@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { BrowserRouter, Route, Routes, useSearchParams } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes, useSearchParams } from "react-router";
 import { marketingRoutes } from "./features/marketing/routes";
 import { Login } from "./features/auth/Login";
 import { WorkspaceGate } from "./features/dashboard/Access";
@@ -15,10 +15,8 @@ const PrepaidPreparation = lazy(() => import("./features/prepaids/Prepare"));
 const ClosesList = lazy(() => import("./features/closes/ClosesList"));
 const ClientClose = lazy(() => import("./features/closes/ClientClose"));
 const WorkpaperView = lazy(() => import("./features/closes/WorkpaperView"));
-const Firm = lazy(() => import("./features/closes/Firm"));
 const Measure = lazy(() => import("./features/closes/Measure"));
 const Attention = lazy(() => import("./features/closes/Attention"));
-const SecurityCenter = lazy(() => import("./features/closes/Security"));
 const Settings = lazy(() => import("./features/settings/Settings"));
 const Executive = lazy(() => import("./features/executive/Executive"));
 
@@ -59,9 +57,9 @@ export function App() {
             <Route path="closes" element={<Gated><ClosesList /></Gated>} />
             <Route path="closes/:id" element={<Gated><ClientClose /></Gated>} />
             <Route path="closes/:id/workpapers/:paperId" element={<Gated><WorkpaperView /></Gated>} />
-            <Route path="firm" element={<Gated><Firm /></Gated>} />
+            <Route path="firm" element={<Navigate to="/dashboard/settings?tab=firm" replace />} />
             <Route path="attention" element={<Gated><Attention /></Gated>} />
-            <Route path="security" element={<Gated><SecurityCenter /></Gated>} />
+            <Route path="security" element={<Navigate to="/dashboard/settings?tab=security" replace />} />
             <Route path="settings" element={<Gated><Settings /></Gated>} />
             <Route path="measure" element={<Gated><Measure /></Gated>} />
             <Route path="executive" element={<Gated><Executive view="overview" /></Gated>} />
