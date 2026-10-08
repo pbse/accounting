@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
 import { VerticalTabs, type VerticalTab } from "@close/ui/components/VerticalTabs";
@@ -54,13 +54,21 @@ export default function Settings() {
   useEffect(() => {
     let live = true;
     workspaceRequest("/me")
-      .then((data) => live && setMe(data))
+      .then((data) => live && (setMe(data), setError("")))
       .catch((e) => live && setError(e instanceof Error ? e.message : "Your settings are unavailable."));
     return () => {
       live = false;
     };
   }, [version]);
   const refresh = () => setVersion((v) => v + 1);
+  // Enrolling the firm makes every read that refused with the membership error succeed, so each is made again, and the
+  // sections that read on their own are mounted afresh.
+  const [generation, setGeneration] = useState(0);
+  const enrolled = () => {
+    refreshPolicy();
+    refresh();
+    setGeneration((g) => g + 1);
+  };
   const firmSection = yours.every((t) => t.key !== tab);
   const panel = () => {
     if (firmSection) {
@@ -70,7 +78,7 @@ export default function Settings() {
       if (tab === "security") return <SecurityTab />;
       const unavailable = policyError ? (
         isEnrollmentError(policyError) ? (
-          <FirmEnrollment onEnrolled={refreshPolicy} />
+          <FirmEnrollment onEnrolled={enrolled} />
         ) : (
           <section aria-label="Firm policy unavailable">
             <p role="alert">{policyError}</p>
@@ -100,7 +108,7 @@ export default function Settings() {
         {descriptions[tab]}
       </PageHeader>
       <VerticalTabs label="Settings sections" items={items} value={tab}>
-        {panel()}
+        <Fragment key={generation}>{panel()}</Fragment>
       </VerticalTabs>
     </>
   );
