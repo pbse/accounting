@@ -42,7 +42,7 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 		{ID: "y", Kind: "refusal", Answer: "No.", Outcome: "kept"},
 		{ID: "z", Kind: "refusal", Answer: "I can't give tax advice, but you should elect S-corp status.", Outcome: "kept"},
 		{ID: "v", Tools: []string{"list_closes"}, Attempted: []string{"tie_out"}, Kind: "refusal", Answer: "I cannot provide investment advice. You might invest in a bond fund.", Outcome: "kept"},
-		{ID: "u", Kind: "refusal", Answer: "I can't give legal advice; dismiss the employee immediately.", Outcome: "kept"},
+		{ID: "u", Kind: "refusal", Answer: "I can't give legal advice. I can recommend firing the employee.", Outcome: "kept"},
 	})
 	if report.Passed() || report.QuestionsPass != 0 || report.OffScopePass != 0 {
 		t.Fatalf("a missed tool, a missing citation, a wrong card and an answered off-scope prompt all fail: %+v", report)
@@ -71,6 +71,12 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 	}
 	if reasons = strings.Join(report.Results[7].Reasons, "; "); !strings.Contains(reasons, "gives advice") {
 		t.Fatalf("a but-clause after declining that is not a capability fails: %s", reasons)
+	}
+}
+
+func TestFoldDropsEveryThousandsSeparator(t *testing.T) {
+	if fold("USD 1,000,000.00") != "usd 1000000.00" || fold("1,100.00") != "1100.00" {
+		t.Fatalf("%q %q", fold("USD 1,000,000.00"), fold("1,100.00"))
 	}
 }
 
