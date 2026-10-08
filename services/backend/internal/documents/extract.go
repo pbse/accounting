@@ -248,9 +248,9 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// Each Gemini page reading counts against the firm's daily model limit, as preparation's calls do.
+	// Each Gemini page reading counts against the firm's daily model limit, as preparation's calls do, and as Gemini's.
 	text, extractErr := Extract(ctx, original, Reading{Gemini: GeminiFromEnv(), Reserve: func(ctx context.Context) error {
-		return budget.ReserveModelCalls(ctx, db, org, 1)
+		return budget.ReserveGeminiCalls(ctx, db, org, 1)
 	}})
 	state, message := "ready", ""
 	if extractErr != nil {

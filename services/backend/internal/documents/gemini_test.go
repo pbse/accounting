@@ -214,8 +214,8 @@ func TestGeminiIsConfiguredOnlyWithAKey(t *testing.T) {
 		t.Fatal("the operator chooses the model")
 	}
 	t.Setenv("GEMINI_OCR_MODEL", "../models/other:generateContent?x=")
-	if GeminiFromEnv() != nil {
-		t.Fatal("a malformed model name is refused")
+	if GeminiFromEnv() != nil || OCRSetting()["held"] != HeldModel {
+		t.Fatalf("a malformed model name is refused, and reported for the operator to repair: %+v", OCRSetting())
 	}
 }
 

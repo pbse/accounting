@@ -59,14 +59,25 @@ func newGemini(key, model, endpoint string, transport http.RoundTripper) *Gemini
 
 // OCRSetting is how this process reads PDF pages, as the worker reports it for Firm settings and the security view.
 func OCRSetting() map[string]string {
-	if g := GeminiFromEnv(); g != nil {
-		return map[string]string{"provider": "gemini", "model": g.model}
+	// A key that cannot be used is reported held, with why, so the operator can repair it rather than see local
+	// reading only.
+	model := cmp.Or(strings.TrimSpace(os.Getenv("GEMINI_OCR_MODEL")), defaultGeminiModel)
+	switch {
+	case strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) == "":
+		return map[string]string{"provider": "tesseract"}
+	case !paidConfirmed():
+		return map[string]string{"provider": "tesseract", "held": HeldUnpaid}
+	case !geminiModelName.MatchString(model):
+		return map[string]string{"provider": "tesseract", "held": HeldModel}
 	}
-	if strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != "" && !paidConfirmed() {
-		return map[string]string{"provider": "tesseract", "held": "paid service not confirmed"}
-	}
-	return map[string]string{"provider": "tesseract"}
+	return map[string]string{"provider": "gemini", "model": model}
 }
+
+// Why a worker holding a Gemini key reads locally instead.
+const (
+	HeldUnpaid = "paid service not confirmed"
+	HeldModel  = "model name not valid"
+)
 
 // A page takes at most this long to read, and its image at most this many bytes (under Gemini's 20 MB inline request).
 const (

@@ -114,6 +114,12 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 	if got := read(); !strings.Contains(got, "has not confirmed its paid service") {
 		t.Fatalf("a held key is shown as held: %q", got)
 	}
+	if _, err = db.Exec(`UPDATE worker_heartbeats SET detail=detail||'{"ocr":{"provider":"tesseract","held":"model name not valid"}}' WHERE loop='worker'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !strings.Contains(got, "GEMINI_OCR_MODEL is not a valid model name") {
+		t.Fatalf("a key held for a malformed model says so: %q", got)
+	}
 	if _, err = db.Exec(`UPDATE worker_heartbeats SET beat_at=now()-interval '10 minutes' WHERE loop='worker'`); err != nil {
 		t.Fatal(err)
 	}

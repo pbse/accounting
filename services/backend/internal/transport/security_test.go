@@ -97,7 +97,7 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	must(err)
 	_, err = db.Exec(`INSERT INTO production_postings(close_id,workpaper_id,source_key,grant_id,connection_id,realm,digest,journal,ledger_before,state,verified_at) SELECT $1,$2,'source-o',id,$3,'realm-o','d','{}','{}','verified',now() FROM production_posting_grants WHERE organization_id=$4`, otherClose, otherPaper, otherBooks, other)
 	must(err)
-	_, err = db.Exec(`INSERT INTO model_calls(organization_id,day,calls) VALUES($1,(now() AT TIME ZONE 'UTC')::date,3)`, org)
+	_, err = db.Exec(`INSERT INTO model_calls(organization_id,day,calls,gemini_calls) VALUES($1,(now() AT TIME ZONE 'UTC')::date,5,2)`, org)
 	must(err)
 
 	// The worker reports that Google Gemini reads the firm's PDFs.
@@ -291,7 +291,7 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 		t.Fatalf("which outside services are in use: %+v", got.Providers)
 	}
 	for _, p := range got.Providers {
-		if p.Provider == "Google Gemini" && (p.Evidence != "Key set on the worker; model gemini-3.8-flash" || !strings.Contains(p.Receives, "Each page of a PDF")) {
+		if p.Provider == "Google Gemini" && (p.Evidence != "Key set on the worker; model gemini-3.8-flash; 2 page readings reserved in the last 30 days" || !strings.Contains(p.Receives, "Each page of a PDF")) {
 			t.Fatalf("Gemini receives each PDF page, as the worker reports: %+v", p)
 		}
 	}
