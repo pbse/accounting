@@ -85,6 +85,8 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 403, "The security center requires clients:all and members:manage.")
 			return
 		}
+		// Read before the transaction takes a connection, so concurrent views never wait on a second one.
+		ocr, ocrModel := workerOCR(r.Context(), db)
 		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 		if err != nil {
 			problem(w, 503, "Security center unavailable.")
@@ -129,7 +131,6 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		if firmWritten {
 			answers += " Firm-wide written answers are on: a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue, blocked work and work handed to the agent, with client names, across the closes the member can open."
 		}
-		ocr, ocrModel := workerOCR(r.Context(), db)
 		gemini := map[string]string{"gemini": "Key set on the worker; model " + ocrModel, "tesseract": "Key not set on the worker; PDFs are read locally", "held": "Key set on the worker, but " + heldBecause(ocrModel) + ", so PDFs are read locally", "": "The worker has not reported its PDF reading in the last five minutes"}[ocr]
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.
 		out["providers"] = []map[string]any{
