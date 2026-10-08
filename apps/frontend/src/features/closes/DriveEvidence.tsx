@@ -47,7 +47,7 @@ export function DriveEvidence({ closeId, onAdded }: { closeId: string; onAdded: 
   return (
     <details>
       <summary>Add from Google Drive</summary>
-      <p>Search your Google Drive for a PDF, text or CSV file and add it as evidence, with the same checks as an upload. Only you can see your Drive; access is through your firm's WorkOS connection.</p>
+      <p>Search your Google Drive for a PDF, text or CSV file and add it as evidence, with the same checks as an upload. Only you can see your Drive; access is through your firm's sign-in.</p>
       {state?.connected === false && <p>{state.reason} <button type="button" onClick={() => void connect()}>Connect Google Drive</button></p>}
       {state?.connected && (
         <>

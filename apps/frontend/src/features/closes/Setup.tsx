@@ -42,7 +42,7 @@ export function Setup({ onEnrolled }: { onEnrolled: () => void }) {
           </ul>
           <p>
             Reconnecting restores scheduled captures for this and last month's open closes. Existing jobs and blockers stay as they are.
-            {!setup.can_reconnect && " Someone with the integrations:manage permission reconnects it."}
+            {!setup.can_reconnect && " Someone who manages the firm's connections reconnects it."}
           </p>
         </section>
       )}

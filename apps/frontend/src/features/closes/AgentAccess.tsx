@@ -41,8 +41,8 @@ export function AgentAccess() {
   const mine = access?.mine;
   return (
     <section aria-label="Agent access">
-      <h2>Agent access (MCP)</h2>
-      <p>AI assistants such as Claude or ChatGPT can work on closes for you over MCP. They never approve, sign off or post, and see only the clients assigned to you under Client access. You ask for access here; a firm administrator approves it.</p>
+      <h2>Agent access</h2>
+      <p>An AI assistant such as Claude or ChatGPT can work on closes for you. It never approves, signs off or posts, and sees only the clients assigned to you. You ask for access here; a firm administrator approves it.</p>
       {local && <p className="note">{local}</p>}
       {access && (
         <>

@@ -90,8 +90,8 @@ export function EffortCard({ closeId }: { closeId: string }) {
     <section aria-label="Human effort for this close">
       <h2>Human effort</h2>
       <p>
-        The PRD's north star is total human minutes per close. Tracked activity counts visible, interactive time in this workspace; add
-        off-screen preparation, corrections or configuration below. Waiting on clients is separate from labor.
+        Human minutes on this close. Tracked activity counts visible, interactive time in this workspace; add off-screen preparation,
+        corrections or configuration below. Waiting on clients is separate from labor.
       </p>
       <dl>
         <dt>Human minutes</dt>

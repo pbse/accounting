@@ -66,7 +66,7 @@ export default function Measure() {
           </label>
         }
       >
-        The PRD north star: total human minutes per client close, kept separate from waiting on clients.
+        Human minutes per client close, kept separate from waiting on clients.
       </PageHeader>
       {error && <p role="alert">{error}</p>}
       {report && (
@@ -100,6 +100,10 @@ export default function Measure() {
               />
             </section>
           )}
+          {report.completed.eligible + report.in_progress.eligible + report.unchecked === 0 && report.firm_assistance_minutes !== undefined && report.firm_assistance_minutes > 0 && (
+            <p className="note">Our team recorded {minutes(report.firm_assistance_minutes)} setting up and supporting the firm outside any close, in all months.</p>
+          )}
+          {report.completed.eligible + report.in_progress.eligible + report.unchecked > 0 && (
           <p className="note">
             Signed off means the close's sign-off still stands: a close changed since its sign-off counts as open
             {report.unchecked > 0 ? `, and ${report.unchecked} whose sign-off could not be rechecked count as open too` : ""}. Closes with no time are not
@@ -110,11 +114,14 @@ export default function Measure() {
             recorded on each close, so these are not total labour.
             {report.firm_assistance_minutes !== undefined && ` Our team also recorded ${minutes(report.firm_assistance_minutes)} setting up and supporting the firm outside any close, in all months.`}
           </p>
-          <p className="note">
-            Reviews this month: {report.reviews}, of which {report.reviews_after_approval} came after an earlier version was approved (any reason, not only a
-            changed source). Review minutes are estimates: tracked time counts each person's minute once under its latest activity, and recorded time
-            under what was entered.
-          </p>
+          )}
+          {report.reviews > 0 && (
+            <p className="note">
+              Reviews this month: {report.reviews}, of which {report.reviews_after_approval} came after an earlier version was approved (any reason, not only a
+              changed source). Review minutes are estimates: tracked time counts each person's minute once under its latest activity, and recorded time
+              under what was entered.
+            </p>
+          )}
           <RowList columns={["Client", "Human minutes", "Tracked · recorded", "Approved · reviews"]}>
             {report.items.length === 0 && <p className="empty">No closes in {report.period || "this month"}.</p>}
             {report.items.map((row) => (
@@ -202,6 +209,8 @@ function TrackRecord() {
           ]}
         />
       )}
+      {items + work.failed_jobs + work.unsupported_intakes === 0 && <p className="empty">No preparation work in closes from {data.window_from} to {data.window_to} yet.</p>}
+      {items + work.failed_jobs + work.unsupported_intakes > 0 && (
       <p>
         {items} work items: {work.straight_through} straight through, {work.person_confirmed} after a person confirmed the facts, {work.carried} carried or
         recurring, {work.other_agent} other agent drafts and {work.people} built by people. {work.failed_jobs} preparation jobs failed and{" "}
@@ -211,12 +220,21 @@ function TrackRecord() {
         {work.straight_refreshed > 0 && ` ${work.straight_refreshed} straight-through drafts were refreshed by the agent for a changed source, which is not a judgment.`} Approval
         is not proof a draft was correct.
       </p>
+      )}
       <SectionHeader title="Agent track record by client" />
+      {proposals.confirmed + drafts.judged === 0 && (
+        <p className="empty">
+          No client has a confirmed model proposal{data.has_more ? " among the first 200 clients" : ""} yet; the record by client starts with the first one.
+          {work.straight_judged > 0 && ` Straight-through drafts people judged are counted above.`}
+        </p>
+      )}
+      {proposals.confirmed + drafts.judged > 0 && (
       <p className="note">
         Closes from {data.window_from} on. Proposals are the model's readings of client documents that a person confirmed; kept means the person
         confirmed every value the model gave. Drafts count once a person has judged them, by a recorded review decision or a revision. Rule-based readings,
         carried-forward and recurring work, and {data.unlinked_human_drafts} drafts people saved directly are not counted.
       </p>
+      )}
       {data.has_more && (proposals.confirmed > 0 || drafts.judged > 0) && <p className="note">The charts cover the first 200 clients, the ones listed below.</p>}
       {(proposals.confirmed > 0 || drafts.judged > 0) && (
         <div className="track-split">
@@ -252,8 +270,8 @@ function TrackRecord() {
           {data.assistant.median_seconds !== null && `, typically ${data.assistant.median_seconds.toFixed(1)} s to write`}.
         </p>
       )}
+      {data.clients.length > 0 && (
       <RowList columns={["Client", "Proposals kept as proposed", "Drafts approved without revision", "Most changed"]}>
-        {data.clients.length === 0 && <p className="empty">No confirmed model proposals {data.has_more ? "among the first 200 clients" : "in this window"} yet.</p>}
         {data.clients.map((c) => (
           <div className="row" key={c.entity}>
             <EntityCell name={c.entity} title={c.entity} />
@@ -274,6 +292,7 @@ function TrackRecord() {
           </div>
         ))}
       </RowList>
+      )}
       {data.has_more && <p className="note">Showing the first 200 clients.</p>}
     </section>
   );
