@@ -507,7 +507,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 	}
 	closesSeen := []string{}
 	var previewed []string
-	previewedGoal := ""
+	previewedGoal, previewedAction := "", ""
 	previewedMore := false
 	known := true
 	limitReached := false
@@ -543,7 +543,8 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			t, offered := byName[call.Name]
 			step.Title = t.title
 			output := ""
-			if offered && json.Unmarshal([]byte(call.Arguments), &args) != nil {
+			if offered && (json.Unmarshal([]byte(call.Arguments), &args) != nil || args == nil) {
+				args = map[string]any{}
 				output = "refused: arguments must be a JSON object"
 			}
 			// The trace keeps what ran and how it went, never the arguments: a search phrase or a note is content.
@@ -584,11 +585,27 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				if closeID != "" {
 					args["close_id"] = closeID
 				}
+				if agentWrites[call.Name] == "request" {
+					// The request card drafts for every current candidate; the agent cannot narrow or word it.
+					for _, key := range []string{"workpaper_ids", "body", "context_digest", "expected_id"} {
+						if _, given := args[key]; given {
+							step.Status, output = "refused", "refused: the request card drafts for every current candidate with the saved wording; propose it without "+key
+							break
+						}
+					}
+					if step.Status != "" {
+						break
+					}
+				}
 				if agentWrites[call.Name] == "portfolio" {
 					// The card lists exactly the closes the preview showed; confirmation refuses a changed selection.
 					goal, _ := args["text"].(string)
 					if previewed == nil || previewedMore || !strings.EqualFold(strings.TrimSpace(goal), previewedGoal) {
 						step.Status, output = "refused", "refused: preview this exact goal with select_closes_preview first; only a selection it lists in full can be proposed, with the goal's own words"
+						break
+					}
+					if len(previewed) == 0 || !slices.Contains([]string{"prepare", "recheck", "stop", "delegate"}, previewedAction) {
+						step.Status, output = "refused", "refused: nothing to act on; a goal that lists closes without a verb (show), or selects none, has no card"
 						break
 					}
 					args["closes"] = previewed
@@ -655,6 +672,13 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				if t.name == "select_closes_preview" {
 					previewedGoal, _ = args["text"].(string)
 					previewedGoal = strings.TrimSpace(previewedGoal)
+					previewedAction = ""
+					var op struct {
+						Action string `json:"action"`
+					}
+					if json.Unmarshal(capped, &op) == nil {
+						previewedAction = op.Action
+					}
 					previewed, previewedMore = closes, !lineageKnown
 					if previewed == nil {
 						previewed = []string{}

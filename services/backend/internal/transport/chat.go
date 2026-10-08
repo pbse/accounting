@@ -1135,17 +1135,22 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		// Both messages of the pair carry the closes the reads touched; a proposal and its target close sit on the answer.
 		// A lineage-less firm-wide turn records no read's closes, but a card's target close is always recorded, so losing
 		// that close removes the card and its question together.
+		// Every close a read with known lineage named is recorded, whether or not another read left the answer
+		// shown-once, and so is a card's target close or a goal's selection: losing any of them removes the pair.
 		closes := closesLiteral(nil)
-		if agent && (closeID != "" || result.known) {
-			closes = closesLiteral(result.closes)
-		} else if agent && result.proposal != nil {
-			// A card's closes are recorded even when no read's lineage is known: the target close, or a goal's selection.
-			targets := []string{}
-			if result.proposal.TargetClose != "" {
-				targets = append(targets, result.proposal.TargetClose)
-			}
-			if selected, ok := result.proposal.Args["closes"].([]string); ok {
-				targets = append(targets, selected...)
+		if agent {
+			targets := slices.Clone(result.closes)
+			if result.proposal != nil {
+				if result.proposal.TargetClose != "" && !slices.Contains(targets, result.proposal.TargetClose) {
+					targets = append(targets, result.proposal.TargetClose)
+				}
+				if selected, ok := result.proposal.Args["closes"].([]string); ok {
+					for _, id := range selected {
+						if !slices.Contains(targets, id) {
+							targets = append(targets, id)
+						}
+					}
+				}
 			}
 			closes = closesLiteral(targets)
 		}
