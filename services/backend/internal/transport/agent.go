@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"close.local/backend/internal/documents"
@@ -532,7 +533,18 @@ type agentSupportEntry struct {
 
 // runAgent handles one message: tool rounds, the proposal if any, then the answer, all within the request's deadline.
 // read replays a route under the member; emit sends events; history is the conversation so far, already redacted.
-func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question string, firm, entity, period, today string, permissions []string, level string, history []llm.Message, read func(method, path string, body any) (string, bool), canOpen func(closeID string) bool, emit agentEvent) agentResult {
+// agentPending is a read of one round that runs while the round's other reads run.
+type agentPending struct {
+	t       mcpTool
+	args    map[string]any
+	path    string
+	body    map[string]any
+	raw     string
+	ok      bool
+	refusal string
+}
+
+func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question string, firm, entity, period, today string, permissions []string, level string, history []llm.Message, read func(ctx context.Context, method, path string, body any) (string, bool), canOpen func(closeID string) bool, emit agentEvent) agentResult {
 	var out agentResult
 	tools := agentTools(closeID != "", level)
 	byName := map[string]mcpTool{}
@@ -557,12 +569,99 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 	known := true
 	limitReached := false
 	finalize := false
+	// finish takes up a read that ran: redaction, caps, lineage, and the text the model is told.
+	finish := func(p *agentPending, step *agentStep) string {
+		t, args, raw, ok := p.t, p.args, p.raw, p.ok
+		var value any
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.UseNumber()
+		var redacted []byte
+		doc := t.name == "read_evidence_text"
+		switch {
+		case !ok:
+		case doc:
+			text, _ := documents.Redact(raw)
+			if len(text) > agentTextMax {
+				text = text[:agentTextMax] + "\n[cut: the document continues]"
+			}
+			redacted = []byte(text)
+		case decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF:
+			if t.name == "list_procedures" && closeID != "" {
+				value = scopeProcedures(value, entity)
+			}
+			redacted, _ = json.Marshal(redactValues(value))
+		default:
+			ok = false
+		}
+		if !ok {
+			step.Status = "unavailable"
+			return "unavailable: this read could not be made"
+		}
+		pinned := ""
+		if strings.Contains(t.path, "{close_id}") {
+			pinned, _ = args["close_id"].(string)
+		}
+		capped, truncated, _, closes, lineageKnown := modelResult(t, redacted, pinned)
+		if t.name == "select_closes_preview" {
+			previewedGoal, _ = args["text"].(string)
+			previewedGoal = strings.TrimSpace(previewedGoal)
+			previewedAction, previewedLabels = "", map[string]string{}
+			var op struct {
+				Action string `json:"action"`
+				Items  []struct {
+					CloseID string `json:"close_id"`
+					Label   string `json:"label"`
+				} `json:"items"`
+			}
+			if json.Unmarshal(capped, &op) == nil {
+				previewedAction = op.Action
+				for _, item := range op.Items {
+					previewedLabels[item.CloseID] = item.Label
+				}
+			}
+			previewed, previewedMore = closes, !lineageKnown
+			if previewed == nil {
+				previewed = []string{}
+			}
+		}
+		if !doc && !lineageKnown {
+			known = false
+		}
+		for _, id := range closes {
+			if !slices.Contains(closesSeen, id) {
+				closesSeen = append(closesSeen, id)
+			}
+		}
+		if len(capped) > agentReadMax {
+			step.Status = "omitted"
+			return "omitted: too large to send in full"
+		}
+		var parsed any
+		if !doc {
+			d := json.NewDecoder(strings.NewReader(string(capped)))
+			d.UseNumber()
+			d.Decode(&parsed)
+			names = append(names, collectNames(parsed, 0)...)
+		}
+		link := agentLink(t, args)
+		reads[step.ID] = agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title}
+		step.Status, step.Size, step.Truncated, step.Link = "ok", len(capped), truncated, &link
+		return step.ID + ": " + string(capped)
+	}
 	for round := 0; round < agentRounds && out.calls < agentCalls && !finalize; round++ {
 		if left := time.Until(deadline); left < agentReserve+agentMinRound {
 			break
 		}
-		if err := preparation.ReserveModelCalls(ctx, db, org, 1); errors.Is(err, preparation.ErrModelLimit) {
-			limitReached = true
+		// The first round reserves its own call and the answer's, so a round never spends the last call the answer
+		// needs; a later round that cannot be reserved ends the reading and the answer is written from what was read.
+		reserve := 1
+		if round == 0 {
+			reserve = 2
+		}
+		if err := preparation.ReserveModelCalls(ctx, db, org, reserve); errors.Is(err, preparation.ErrModelLimit) {
+			if round == 0 {
+				limitReached = true
+			}
 			break
 		} else if err != nil {
 			out.outcome, out.why = "failed", "The agent could not reserve a model call."
@@ -581,16 +680,67 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			finalize = true
 			break
 		}
-		for _, call := range result.ToolCalls {
+		// The round's reads start together under the round's deadline; every call is then taken up in order, so a
+		// proposal sees the reads of its own round and the events keep their order.
+		readCtx, cancelReads := context.WithDeadline(ctx, deadline.Add(-agentReserve))
+		plans := make([]*agentPending, len(result.ToolCalls))
+		parsed := make([]map[string]any, len(result.ToolCalls))
+		outputs := make([]string, len(result.ToolCalls))
+		var wg sync.WaitGroup
+		for i, call := range result.ToolCalls {
+			args := map[string]any{}
+			t, offered := byName[call.Name]
+			if !offered || agentWrites[call.Name] != "" {
+				continue
+			}
+			if json.Unmarshal([]byte(call.Arguments), &args) != nil || args == nil {
+				continue
+			}
+			parsed[i] = args
+			p := &agentPending{t: t, args: args}
+			plans[i] = p
+			if out.calls >= agentCalls {
+				p.refusal = "refused: the read budget of this message is spent"
+				continue
+			}
+			path, body, err := agentPath(t, args, closeID)
+			if err != nil {
+				p.refusal = "refused: " + err.Error()
+				continue
+			}
+			// Firm-wide, a close the model names is read only if the member can open it now: the read replays the
+			// inner routes, so the access boundary is applied here.
+			if named, isText := args["close_id"].(string); closeID == "" && isText && named != "" && !canOpen(named) {
+				p.refusal = "refused: not a close you can open"
+				continue
+			}
+			if t.name == "select_closes_preview" {
+				// Day names in a goal resolve against the member's own date, as the chat request supplied it.
+				body["today"] = today
+			}
+			p.path, p.body = path, body
+			out.calls++
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				p.raw, p.ok = read(readCtx, p.t.method, p.path, p.body)
+			}()
+		}
+		wg.Wait()
+		cancelReads()
+		for i, call := range result.ToolCalls {
 			began := time.Now()
 			step := agentStep{ID: "t" + strconv.Itoa(len(out.steps)+1), Tool: call.Name}
-			args := map[string]any{}
+			args := parsed[i]
 			t, offered := byName[call.Name]
 			step.Title = t.title
 			output := ""
-			if offered && (json.Unmarshal([]byte(call.Arguments), &args) != nil || args == nil) {
+			if args == nil {
 				args = map[string]any{}
-				output = "refused: arguments must be a JSON object"
+				if offered && (json.Unmarshal([]byte(call.Arguments), &args) != nil || args == nil) {
+					args = map[string]any{}
+					output = "refused: arguments must be a JSON object"
+				}
 			}
 			// The trace keeps what ran and how it went, never the arguments: a search phrase or a note is content.
 			if !emit("step", map[string]any{"id": step.ID, "tool": step.Tool, "title": step.Title, "state": "running"}) {
@@ -602,8 +752,6 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				step.Status = "refused"
 			case !offered:
 				step.Status, output = "refused", "refused: not a tool this agent offers here"
-			case out.calls >= agentCalls:
-				step.Status, output = "refused", "refused: the read budget of this message is spent"
 			case agentWrites[call.Name] != "":
 				if out.proposal != nil {
 					step.Status, output = "refused", "refused: one proposal at a time; propose the next once this one is confirmed"
@@ -668,98 +816,15 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					return out
 				}
 			default:
-				path, body, err := agentPath(t, args, closeID)
-				if err != nil {
-					step.Status, output = "refused", "refused: "+err.Error()
+				p := plans[i]
+				if p == nil || p.refusal != "" {
+					step.Status, output = "refused", "refused: arguments must be a JSON object"
+					if p != nil {
+						output = p.refusal
+					}
 					break
 				}
-				// Firm-wide, a close the model names is read only if the member can open it now: the read replays the
-				// inner routes, so the access boundary is applied here.
-				if named, isText := args["close_id"].(string); closeID == "" && isText && named != "" && !canOpen(named) {
-					step.Status, output = "refused", "refused: not a close you can open"
-					break
-				}
-				out.calls++
-				if t.name == "select_closes_preview" {
-					// Day names in a goal resolve against the member's own date, as the chat request supplied it.
-					body["today"] = today
-				}
-				raw, ok := read(t.method, path, body)
-				var value any
-				decoder := json.NewDecoder(strings.NewReader(raw))
-				decoder.UseNumber()
-				var redacted []byte
-				doc := t.name == "read_evidence_text"
-				switch {
-				case !ok:
-				case doc:
-					text, _ := documents.Redact(raw)
-					if len(text) > agentTextMax {
-						text = text[:agentTextMax] + "\n[cut: the document continues]"
-					}
-					redacted = []byte(text)
-				case decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF:
-					if t.name == "list_procedures" && closeID != "" {
-						value = scopeProcedures(value, entity)
-					}
-					redacted, _ = json.Marshal(redactValues(value))
-				default:
-					ok = false
-				}
-				if !ok {
-					step.Status, output = "unavailable", "unavailable: this read could not be made"
-					break
-				}
-				pinned := ""
-				if strings.Contains(t.path, "{close_id}") {
-					pinned, _ = args["close_id"].(string)
-				}
-				capped, truncated, _, closes, lineageKnown := modelResult(t, redacted, pinned)
-				if t.name == "select_closes_preview" {
-					previewedGoal, _ = args["text"].(string)
-					previewedGoal = strings.TrimSpace(previewedGoal)
-					previewedAction, previewedLabels = "", map[string]string{}
-					var op struct {
-						Action string `json:"action"`
-						Items  []struct {
-							CloseID string `json:"close_id"`
-							Label   string `json:"label"`
-						} `json:"items"`
-					}
-					if json.Unmarshal(capped, &op) == nil {
-						previewedAction = op.Action
-						for _, item := range op.Items {
-							previewedLabels[item.CloseID] = item.Label
-						}
-					}
-					previewed, previewedMore = closes, !lineageKnown
-					if previewed == nil {
-						previewed = []string{}
-					}
-				}
-				if !doc && !lineageKnown {
-					known = false
-				}
-				for _, id := range closes {
-					if !slices.Contains(closesSeen, id) {
-						closesSeen = append(closesSeen, id)
-					}
-				}
-				if len(capped) > agentReadMax {
-					step.Status, output = "omitted", "omitted: too large to send in full"
-					break
-				}
-				var parsed any
-				if !doc {
-					d := json.NewDecoder(strings.NewReader(string(capped)))
-					d.UseNumber()
-					d.Decode(&parsed)
-					names = append(names, collectNames(parsed, 0)...)
-				}
-				link := agentLink(t, args)
-				reads[step.ID] = agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title}
-				step.Status, step.Size, step.Truncated, step.Link = "ok", len(capped), truncated, &link
-				output = step.ID + ": " + string(capped)
+				output = finish(p, &step)
 			}
 			step.Millis = time.Since(began).Milliseconds()
 			out.steps = append(out.steps, step)
@@ -767,7 +832,10 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				out.outcome, out.why = "failed", "The conversation was closed."
 				return out
 			}
-			messages = append(messages, llm.Message{Result: &llm.ToolResult{CallID: call.CallID, Output: output}})
+			outputs[i] = output
+		}
+		for i, call := range result.ToolCalls {
+			messages = append(messages, llm.Message{Result: &llm.ToolResult{CallID: call.CallID, Output: outputs[i]}})
 		}
 	}
 	out.closes, out.known = closesSeen, known
@@ -775,13 +843,16 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		out.outcome, out.why = "limit", "The firm's daily model limit is reached, so I can't answer now."
 		return out
 	}
-	// The answer is a separate, tool-free call: the gateway refuses tools and a schema together.
-	if err := preparation.ReserveModelCalls(ctx, db, org, 1); errors.Is(err, preparation.ErrModelLimit) {
-		out.outcome, out.why = "limit", "The firm's daily model limit is reached, so I can't answer now."
-		return out
-	} else if err != nil {
-		out.outcome, out.why = "failed", "The agent could not reserve a model call."
-		return out
+	// The answer is a separate, tool-free call (the gateway refuses tools and a schema together); its model call was
+	// reserved with the first round's. A message that needed no round reserves it here.
+	if out.rounds == 0 {
+		if err := preparation.ReserveModelCalls(ctx, db, org, 1); errors.Is(err, preparation.ErrModelLimit) {
+			out.outcome, out.why = "limit", "The firm's daily model limit is reached, so I can't answer now."
+			return out
+		} else if err != nil {
+			out.outcome, out.why = "failed", "The agent could not reserve a model call."
+			return out
+		}
 	}
 	out.calls++
 	final := append(slices.Clone(messages), llm.Message{Role: "user", Content: agentAnswerInstructions})

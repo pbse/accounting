@@ -1022,8 +1022,13 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			}
 			began := time.Now()
 			loopCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-			result = runAgent(loopCtx, db, org, closeID, in.WorkpaperID, in.Text, firmName, entity, period, today.Format("2006-01-02"), actorPermissions(r), level, earlier, func(method, path string, body any) (string, bool) {
-				rec := replay(r, method, path, body)
+			result = runAgent(loopCtx, db, org, closeID, in.WorkpaperID, in.Text, firmName, entity, period, today.Format("2006-01-02"), actorPermissions(r), level, earlier, func(ctx context.Context, method, path string, body any) (string, bool) {
+				// The read obeys the loop's deadline, not only the request's.
+				raw, _ := json.Marshal(body)
+				req := httptest.NewRequestWithContext(ctx, method, path, bytes.NewReader(raw))
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
 				return rec.Body.String(), rec.Code == 200
 			}, func(id string) bool {
 				var ok bool
