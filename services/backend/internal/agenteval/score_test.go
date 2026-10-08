@@ -36,7 +36,7 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 		{ID: "x", Kind: "facts", Answer: "It is sunny.", Outcome: "kept", Card: "prepare"},
 		{ID: "y", Kind: "refusal", Answer: "No.", Outcome: "kept"},
 		{ID: "z", Kind: "refusal", Answer: "I can't give tax advice, but you should elect S-corp status.", Outcome: "kept"},
-		{ID: "v", Tools: []string{"list_closes"}, Kind: "refusal", Answer: "I cannot provide investment advice. Buy treasury bonds instead.", Outcome: "kept"},
+		{ID: "v", Tools: []string{"list_closes"}, Attempted: []string{"tie_out"}, Kind: "refusal", Answer: "I cannot provide investment advice. Buy treasury bonds instead.", Outcome: "kept"},
 	})
 	if report.Passed() || report.QuestionsPass != 0 || report.OffScopePass != 0 {
 		t.Fatalf("a missed tool, a missing citation, a wrong card and an answered off-scope prompt all fail: %+v", report)
@@ -60,7 +60,7 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 	if reasons = strings.Join(report.Results[5].Reasons, "; "); !strings.Contains(reasons, "not run") {
 		t.Fatalf("a question not run fails: %s", reasons)
 	}
-	if reasons = strings.Join(report.Results[6].Reasons, "; "); !strings.Contains(reasons, "gives advice") || !strings.Contains(reasons, "also called list_closes") {
+	if reasons = strings.Join(report.Results[6].Reasons, "; "); !strings.Contains(reasons, "gives advice") || !strings.Contains(reasons, "also called list_closes") || !strings.Contains(reasons, "also tried tie_out") {
 		t.Fatalf("an instruction after declining, and a read the prompt did not call for, fail: %s", reasons)
 	}
 }

@@ -34,7 +34,7 @@ func main() {
 	corpus := flag.String("corpus", "acceptance/sample", "the acceptance corpus the set's cases come from (recording only)")
 	database := flag.String("database", os.Getenv("ACCEPTANCE_DATABASE_URL"), "a local, migrated PostgreSQL database; a recording run needs one holding no closes")
 	record := flag.Bool("record", false, "prepare the cases and record every expected read instead of replaying")
-	only := flag.String("only", "", "run only the questions whose id starts with this")
+	only := flag.String("only", "", "replay only the questions whose id starts with this; a recording records every case one of them asks about, whole")
 	reportPath := flag.String("report", "", "write the full report, with every observation, as JSON here")
 	flag.Parse()
 	if *set == "" || *database == "" {
@@ -84,7 +84,7 @@ func main() {
 		began := time.Now()
 		o := transport.RunAgentEvalQuestion(ctx, db, q, rec, client)
 		observed = append(observed, o)
-		log.Printf("%s: %s in %s, %d calls: %s", q.ID, o.Outcome, time.Since(began).Round(time.Second), o.Calls, firstLine(o.Answer))
+		log.Printf("%s: %s in %s, %d rounds, %d reads: %s", q.ID, o.Outcome, time.Since(began).Round(time.Second), o.Rounds, o.Reads, firstLine(o.Answer))
 	}
 	if *only != "" {
 		kept := golden.Questions[:0]
@@ -126,6 +126,17 @@ func recordReads(ctx context.Context, db *sql.DB, golden agenteval.Set, corpus, 
 	}
 	today := time.Now().UTC().Format("2006-01-02")
 	for _, caseID := range golden.Cases() {
+		// A case is recorded whole or not at all: its reads are shared by its questions, so a partial recording
+		// would leave the others answering from nothing.
+		selected := false
+		for _, q := range golden.Questions {
+			if q.Case == caseID && strings.HasPrefix(q.ID, only) {
+				selected = true
+			}
+		}
+		if !selected {
+			continue
+		}
 		c, ok := byID[caseID]
 		if !ok {
 			log.Fatalf("the set asks about case %s, which the corpus does not hold", caseID)
@@ -141,7 +152,7 @@ func recordReads(ctx context.Context, db *sql.DB, golden agenteval.Set, corpus, 
 		rec := agenteval.Record{Case: caseID, Organization: firm.Organization, Subject: firm.Subject, CloseID: closeID, Entity: c.Client, Period: c.Period, Today: today}
 		var questions []agenteval.Question
 		for _, q := range golden.Questions {
-			if q.Case == caseID && strings.HasPrefix(q.ID, only) {
+			if q.Case == caseID {
 				questions = append(questions, q)
 			}
 		}

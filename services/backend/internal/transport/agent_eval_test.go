@@ -82,8 +82,8 @@ func TestAgentEvalReplaysRecordedReads(t *testing.T) {
 	if o2.Outcome != "kept" || o2.Kind != "refusal" || o2.Card != "" || len(o2.Tools) != 0 {
 		t.Fatalf("the refusal is kept with no card: %+v", o2)
 	}
-	if len(o3.Tools) != 0 {
-		t.Fatalf("an unrecorded read is unavailable, not a tool that ran: %+v", o3)
+	if len(o3.Tools) != 0 || strings.Join(o3.Attempted, ",") != "tie_out" {
+		t.Fatalf("an unrecorded read is unavailable, not a tool that ran, and is counted as tried: %+v", o3)
 	}
 	report := agenteval.Score(set, []agenteval.Observed{o1, o2, o3})
 	if report.QuestionsPass != 1 || report.Questions != 2 || report.OffScopePass != 1 || report.Passed() {

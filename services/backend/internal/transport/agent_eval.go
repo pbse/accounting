@@ -174,10 +174,14 @@ func RunAgentEvalQuestion(ctx context.Context, db *sql.DB, q agenteval.Question,
 	canOpen := func(id string) bool { return id == record.CloseID }
 	canClient := func(name string) bool { return strings.EqualFold(strings.TrimSpace(name), record.Entity) }
 	result := runAgent(ctx, db, record.Organization, closeID, "", q.Question, "Golden set firm", entity, period, record.Today, agentEvalPermissions, "firm", nil, read, canOpen, canClient, func(string, map[string]any) bool { return true })
-	observed := agenteval.Observed{ID: q.ID, Kind: result.kind, Answer: result.reply.body, Citations: len(result.reply.citations), Outcome: result.outcome, Why: result.why, Rounds: result.rounds, Calls: result.calls}
+	observed := agenteval.Observed{ID: q.ID, Kind: result.kind, Answer: result.reply.body, Citations: len(result.reply.citations), Outcome: result.outcome, Why: result.why, Rounds: result.rounds, Reads: result.calls}
 	for _, step := range result.steps {
 		// The reads that ran; a proposed card is scored as the card, a refused or unavailable read as none.
-		if step.Status != "refused" && step.Status != "unavailable" && step.Status != "proposed" {
+		switch step.Status {
+		case "proposed":
+		case "refused", "unavailable":
+			observed.Attempted = append(observed.Attempted, step.Tool)
+		default:
 			observed.Tools = append(observed.Tools, step.Tool)
 		}
 	}

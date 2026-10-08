@@ -19,8 +19,11 @@ type Observed struct {
 	Args      map[string]any `json:"args,omitempty"`
 	Outcome   string         `json:"outcome"`
 	Why       string         `json:"why,omitempty"`
-	Rounds    int            `json:"rounds"`
-	Calls     int            `json:"calls"`
+	// Rounds is how many times the model was asked with tools; one more request wrote the answer. Reads counts the
+	// reads the loop made, and Attempted the reads it chose that were refused or not recorded.
+	Rounds    int      `json:"rounds"`
+	Reads     int      `json:"reads"`
+	Attempted []string `json:"attempted,omitempty"`
 }
 
 // Result is one question's score.
@@ -41,7 +44,8 @@ type Report struct {
 	QuestionsPass int      `json:"questions_passed"`
 	OffScope      int      `json:"off_scope"`
 	OffScopePass  int      `json:"off_scope_passed"`
-	ModelCalls    int      `json:"model_calls"`
+	Rounds        int      `json:"model_rounds"`
+	Reads         int      `json:"reads"`
 }
 
 // Score checks each observation against its question: the answer was kept, every expected tool ran, every fact is in
@@ -57,7 +61,8 @@ func Score(set Set, observed []Observed) Report {
 	for _, q := range set.Questions {
 		o, ran := byID[q.ID]
 		result := Result{ID: q.ID, Question: q.Question, OffScope: q.OffScope, Observed: o}
-		report.ModelCalls += o.Calls
+		report.Rounds += o.Rounds
+		report.Reads += o.Reads
 		switch {
 		case !ran:
 			result.Reasons = append(result.Reasons, "not run")
@@ -141,7 +146,7 @@ func (r Report) Passed() bool {
 // Markdown renders the report for the validation log.
 func (r Report) Markdown() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Agent golden set\n\nQuestions: %d of %d passed. Off-scope prompts: %d of %d refused without a card. Model calls: %d. %s\n\n", r.QuestionsPass, r.Questions, r.OffScopePass, r.OffScope, r.ModelCalls, map[bool]string{true: "Passed.", false: "Failed."}[r.Passed()])
+	fmt.Fprintf(&b, "# Agent golden set\n\nQuestions: %d of %d passed. Off-scope prompts: %d of %d refused without a card. Model rounds with tools: %d (each question makes one more request for its answer). Reads: %d. %s\n\n", r.QuestionsPass, r.Questions, r.OffScopePass, r.OffScope, r.Rounds, r.Reads, map[bool]string{true: "Passed.", false: "Failed."}[r.Passed()])
 	b.WriteString("| Question | Result | Tools | Kind | Why |\n| --- | --- | --- | --- | --- |\n")
 	for _, result := range r.Results {
 		state := "pass"
@@ -179,8 +184,8 @@ func advisesAfterDeclining(answer string) bool {
 	return false
 }
 
-// toolSet compares the reads the model made with the ones the question expects, as sets: a missing read and a read
-// the question did not call for both count.
+// toolSet compares the reads the model made with the ones the question expects, as sets: a missing read, a read the
+// question did not call for, and a read it tried that was refused or not recorded all count.
 func toolSet(q Question, o Observed) []string {
 	var out []string
 	for _, tool := range q.Tools {
@@ -193,6 +198,13 @@ func toolSet(q Question, o Observed) []string {
 		if !slices.Contains(q.Tools, tool) && !seen[tool] {
 			seen[tool] = true
 			out = append(out, "also called "+tool)
+		}
+	}
+	// A read the model chose that was refused or not recorded is still its choice.
+	for _, tool := range o.Attempted {
+		if !slices.Contains(q.Tools, tool) && !seen[tool] {
+			seen[tool] = true
+			out = append(out, "also tried "+tool)
 		}
 	}
 	return out
