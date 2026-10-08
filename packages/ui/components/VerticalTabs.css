@@ -1,0 +1,58 @@
+.vertical-tabs-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--space-24);
+  align-items: start;
+}
+.vertical-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  position: sticky;
+  top: var(--space-16);
+}
+.app-shell .vertical-tabs a {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  height: var(--nav-item-height);
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-md);
+  color: var(--ink-2);
+  font-size: 14px;
+  text-decoration: none;
+}
+.vertical-tabs svg {
+  color: var(--ink-2);
+  flex-shrink: 0;
+}
+.app-shell .vertical-tabs a:hover {
+  background: var(--fill);
+}
+.app-shell .vertical-tabs a[aria-current="page"] {
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+  color: var(--ink);
+}
+.vertical-tabs a[aria-current="page"] svg {
+  color: var(--ink);
+}
+.vertical-tabs-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  min-width: 0;
+}
+@media (max-width: 850px) {
+  .vertical-tabs-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .vertical-tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+    position: static;
+  }
+  .app-shell .vertical-tabs a {
+    white-space: nowrap;
+  }
+}

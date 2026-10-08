@@ -22,7 +22,7 @@ Browser-based clients must also run on an origin listed in `MCP_ALLOWED_ORIGINS`
 
 ### Agent access per member
 
-AuthKit's OAuth tokens say who the person is but carry no app permissions, so the firm approves each member's agent access in **Agent access (MCP)**, which members use from **Firm settings** and administrators from the **Security center**:
+AuthKit's OAuth tokens say who the person is but carry no app permissions, so the firm approves each member's agent access in **Agent access (MCP)**, which members use from **Your settings** (Connections) and administrators from the **Security center**:
 
 1. **The member asks** from their own signed-in session: read only, or read and prepare.
 2. **An administrator approves** (needs clients:all and members:manage). The approval can narrow the request but never widen it. The administrator can also decline or revoke, and the member can revoke their own access. Every decision is recorded with a reason.

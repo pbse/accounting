@@ -3822,3 +3822,16 @@ PR 2a of the [agentic chat plan](agent-chat.md): `organizations.agent_chat` (off
 - The staff planner keeps its own consent (`assistant_model_answers`, `staff_planning` in the policy route, with its own control in Firm settings); `TestPlanProposals*` still sets it, and the written-answers test shows an unrelated change records no level.
 
 Not verified: a hosted firm's migration from the three old settings; the backfill rule is in the migration and in [chat.md](chat.md#written-answers).
+
+
+## 2026-10-07: Your settings
+
+Branch `claude/user-settings`. A member's own settings page at `/dashboard/settings`, opened from the account menu, in vertical tabs: General (name through WorkOS, time zone kept in `member_settings`, migration 134), Connections (agent access, the member's own Google Drive grant, and where the firm's connections and posting authority live) and Notifications (the attention kinds, moved from the Attention page).
+
+- `go test ./internal/transport/` against a fresh local database migrated through 134: the settings test proves a 403 without a subject, time zones accepted only as region/city or UTC, a refused change keeping nothing, each member reading only their own zone, the kinds saved on the attention route reading back, and a revoked membership removing the settings row.
+- The full Go suite passes except the two pre-existing tests that need Poppler and Tesseract on this machine.
+- `npm run check` for both apps and `npm test` (46 passing).
+- Headless Edge against the dev servers and the local workspace token, at 1280 and 390 wide: all three tabs render with a `PageHeader`, saving `Europe/Lisbon` shows "Saved.", and no page errors.
+- `/readyz` answers 503 with `member_settings` renamed away and 200 with it back.
+
+Not verified: a hosted member's name read and saved through WorkOS, and the Drive connection returning to the settings page; both take the same calls as the people roster and a close's evidence pane.
