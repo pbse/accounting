@@ -8,7 +8,8 @@ import { FirmEnrollment } from "./Enterprise";
 import { ClientRoster } from "./Roster";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; investigations: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean; ledger_writes: boolean; can_manage_ledger_writes: boolean };
+type AgentChat = "off" | "closes" | "firm";
+type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; agent_chat: AgentChat; answers_stopped: boolean; staff_planning: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_agent_chat: boolean; ledger_writes: boolean; can_manage_ledger_writes: boolean };
 
 // Who on our team supports the firm, and the firm's own records to take away at exit.
 function SupportAndExit() {
@@ -252,10 +253,18 @@ function LinkPasscodes() {
 }
 
 // Each reminder still needs a person's approval; the rule says when one is due and how many a request can have.
-// Written answers send a close's saved reads to the configured provider, so they stay off until an administrator turns them on.
-function WrittenAnswers() {
+// The agent chat sends a member's question and the reads the model chooses to the configured provider, so it stays
+// off until an administrator turns it on, for client closes or firm-wide, with a reason kept in the policy history.
+const agentLevels: { value: AgentChat; label: string; detail: string }[] = [
+  { value: "off", label: "Off", detail: "Assistant questions are answered only from the assistant's fixed reads and commands and are never sent to a model. Other model work the firm has allowed (document reading, Work commands, staff plan drafts) is unchanged." },
+  { value: "closes", label: "On for client closes", detail: "A question inside a client close may be investigated and answered by the model, from reads of that close made with the member's own permissions. Questions asked outside a close are never sent." },
+  { value: "firm", label: "On firm-wide", detail: "As for client closes, and a question asked outside a close may be answered from the member's own lists across the clients they can open, with client names." },
+];
+
+function AgentChatSetting() {
   const [policy, setPolicy] = useState<Policy>();
   const [reason, setReason] = useState("");
+  const [choice, setChoice] = useState<AgentChat>();
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
@@ -269,12 +278,14 @@ function WrittenAnswers() {
     };
   }, [refresh]);
   if (!policy) return message ? <p role="alert">{message}</p> : null;
-  async function change(setting: "model_answers" | "firm_answers" | "investigations") {
+  const chosen = choice ?? policy.agent_chat;
+  async function change(body: Record<string, unknown> = { agent_chat: chosen }) {
     setBusy(true);
     setMessage("");
     try {
-      await workspaceRequest("/organization/policy", { [setting]: !policy![setting], reason });
+      await workspaceRequest("/organization/policy", { ...body, reason });
       setReason("");
+      setChoice(undefined);
       setRefresh((n) => n + 1);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Policy change failed.");
@@ -282,41 +293,41 @@ function WrittenAnswers() {
       setBusy(false);
     }
   }
+  const current = agentLevels.find((l) => l.value === policy.agent_chat) ?? agentLevels[0];
   return (
-    <section aria-label="Written assistant answers">
-      <h2>Written assistant answers</h2>
+    <section aria-label="Agent chat">
+      <h2>Agent chat</h2>
       <p>
-        {policy.model_answers
-          ? "On: when a question in a client close matches none of the assistant's fixed reads, the model writes an answer."
-          : "Off: questions in a client close are answered only from the assistant's fixed reads and are never sent."}{" "}
-        When on, the question and that close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft) go to {policy.model_provider}, with card, bank and sign-in details removed. API requests ask not to store task history; context-machine task workspaces are deleted after completion. Provider-side retention depends on the provider and account type. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. Each attempt counts against the firm's daily model limit.
+        <strong>{current.label}.</strong> {current.detail}{" "}
+        When on, the question and the reads go to {policy.model_provider}, with card, bank and sign-in details removed: the close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft), plus up to six reads of that close the model chooses through the assistant's read-only tools (a document's text, a draft, the tie-out, changes, exceptions, a search), each made with the member's own permissions, listed under the answer and kept with the attempt's record without their content. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. The model reads and proposes only: an action it proposes runs after the person confirms its card. Each read and each answer counts against the firm's daily model limit.
       </p>
-      <p>
-        {policy.firm_answers
-          ? "Firm-wide answers are on: a question asked outside a client close that matches none of the fixed reads is also answered by the model."
-          : "Firm-wide answers are off: questions asked outside a client close are never sent."}{" "}
-        When on, the question and the member's own lists of what needs a person today, the review queue and blocked work, across the clients they can open, go to {policy.model_provider} under the same removals and checks. The answer is shown once and never kept in the conversation.
-      </p>
-      <p>
-        {policy.investigations
-          ? "Investigations are on: before writing a close answer, the model may first read that close's own records through the assistant's read-only tools."
-          : "Investigations are off: a written answer rests only on the close's saved status, blockers, tie-out, changes and exceptions."}{" "}
-        When on, the model may make up to six reads of this close (a document's text, a draft, the tie-out, changes, exceptions, a search), each made with your own permissions, redacted the same way and sent to {policy.model_provider} under the same task-history and provider-retention policy; each read counts against the firm's daily model limit, the answer lists what was read, and the reads are kept with the attempt's record. It reads only; it never changes, approves, sends or posts anything. Written answers must be on.
-      </p>
-      {policy.can_manage_model_answers ? (
+      {policy.answers_stopped && (
+        <p role="alert">
+          Written answers stopped when this setting replaced them: this firm had turned on written answers without investigations, or firm-wide answers alone, and the agent now chooses its own reads, which investigations consented to. Choose a level with a reason to turn the agent on again, or apply Off to keep it off.
+        </p>
+      )}
+      {policy.can_manage_agent_chat ? (
         <>
+          <fieldset>
+            <legend>Level</legend>
+            {agentLevels.map((level) => (
+              <label key={level.value} className="checkbox-label">
+                <input type="radio" name="agent-chat" value={level.value} checked={chosen === level.value} onChange={() => setChoice(level.value)} /> {level.label}
+              </label>
+            ))}
+          </fieldset>
           <label>
             Reason for the change
             <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
           </label>
-          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change("model_answers")}>
-            {policy.model_answers ? "Stop written answers" : "Turn on written answers"}
+          <button type="button" disabled={busy || reason.trim().length < 5 || (chosen === policy.agent_chat && !policy.answers_stopped)} onClick={() => void change()}>
+            Apply
           </button>
-          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change("firm_answers")}>
-            {policy.firm_answers ? "Stop firm-wide answers" : "Turn on firm-wide answers"}
-          </button>
-          <button type="button" disabled={busy || reason.trim().length < 5 || !policy.model_answers} onClick={() => void change("investigations")}>
-            {policy.investigations ? "Stop investigations" : "Turn on investigations"}
+          <p>
+            <strong>Staff plan drafts: {policy.staff_planning ? "allowed" : "not allowed"}.</strong> Separately from the chat, platform staff may ask the model to draft a workflow plan for one of this firm's closes, sending their instruction with the close's client, month, sign-off state and counts of its preparation work; nothing runs before staff approve the plan.
+          </p>
+          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change({ staff_planning: !policy.staff_planning })}>
+            {policy.staff_planning ? "Stop staff plan drafts" : "Allow staff plan drafts"}
           </button>
         </>
       ) : (
@@ -521,7 +532,7 @@ export default function Firm() {
           <IndependentReview />
           <LedgerWrites />
       <LinkPasscodes />
-      <WrittenAnswers />
+      <AgentChatSetting />
       <DocumentReading />
       <Materiality />
       <ReminderRule />

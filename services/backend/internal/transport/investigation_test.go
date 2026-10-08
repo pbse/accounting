@@ -139,15 +139,14 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 		return last.Body, strings.Split(last.Body, "\n"), last.Citations
 	}
 	question := "Does the insurance invoice cover the whole policy year?"
-	// Investigations cannot be turned on before written answers, and until they are on the model gets no tools.
-	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"model_answers": true, "reason": "Pilot written answers"}, 200)
-	if body, _, _ := ask(question); calls != 1 || toolRounds != 0 || strings.Contains(body, "Investigated") {
-		t.Fatalf("with investigations off the model gets no tools: calls=%d rounds=%d %q", calls, toolRounds, body)
+	// With the agent off nothing reaches the model; on for client closes, the model may read before it writes.
+	if body, _, _ := ask(question); calls != 0 || !strings.HasPrefix(body, "I answer from this close") {
+		t.Fatalf("with the agent off the model is never asked: calls=%d %q", calls, body)
 	}
-	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"investigations": true, "reason": "Pilot investigations"}, 200)
-	var recorded bool
-	must(db.QueryRow(`SELECT assistant_investigations FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded))
-	if !recorded {
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"agent_chat": "closes", "reason": "Pilot the agent"}, 200)
+	var recorded string
+	must(db.QueryRow(`SELECT agent_chat FROM organization_policy_changes WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&recorded))
+	if recorded != "closes" {
 		t.Fatal("the policy change is recorded")
 	}
 	calls, toolRounds = 0, 0
@@ -175,15 +174,11 @@ func TestAssistantInvestigatesBeforeWriting(t *testing.T) {
 	if len(outputsSeen) != 3 || !strings.Contains(outputsSeen[0], "Annual premium") || !strings.HasPrefix(outputsSeen[1], "refused: not a read this assistant offers") || !strings.Contains(outputsSeen[2], "removed") {
 		t.Fatalf("the model is told each read's result, and why a read was refused: %v", outputsSeen)
 	}
-	// Turning written answers off turns investigations off with them, and they cannot be turned on alone.
-	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"model_answers": false, "reason": "Pause written answers"}, 200)
-	var still bool
-	must(db.QueryRow(`SELECT assistant_investigations FROM organizations WHERE id=$1`, org).Scan(&still))
-	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"investigations": true, "reason": "Try investigations alone"}, 200)
-	var alone bool
-	must(db.QueryRow(`SELECT assistant_investigations FROM organizations WHERE id=$1`, org).Scan(&alone))
-	if still || alone {
-		t.Fatalf("investigations follow written answers off and cannot be on without them: still=%v alone=%v", still, alone)
+	// Turning the agent off stops every read and answer at once.
+	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"agent_chat": "off", "reason": "Pause the agent"}, 200)
+	spent := calls
+	if body, _, _ := ask(question); calls != spent || strings.Contains(body, "Investigated") {
+		t.Fatalf("with the agent off again the model is not asked: calls=%d %q", calls, body)
 	}
 	var trace string
 	must(db.QueryRow(`SELECT trace::text FROM assistant_answers WHERE organization_id=$1 AND outcome='kept' ORDER BY id DESC LIMIT 1`, org).Scan(&trace))

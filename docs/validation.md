@@ -3811,3 +3811,14 @@ PR 1 of the [agentic chat plan](agent-chat.md). Local run against a fresh migrat
 - Not covered by a test: the client-grant check a preparation job and a replay make when their creator is eligible only through a wide profile (`ProcessAgent`, `runReplay`); it is read in review.
 
 Not verified: a live context-machine deployment with a wide profile; no production firm has one yet.
+
+## 2026-10-07: one agent chat setting (migration 133)
+
+PR 2a of the [agentic chat plan](agent-chat.md): `organizations.agent_chat` (off, closes, firm) replaces written answers, firm-wide answers and investigations; the policy route, Firm settings, the security center and the admin planner read the level. Local run against a fresh migrated PostgreSQL:
+
+- `go test ./internal/transport -run 'TestAssistant|TestPlanProposals|TestSecurity|TestIndependent'`: pass. `TestAssistantWritesAnswersOnlyWhenTheFirmAllows` now sets the level (a member without `org:manage` is refused, an unknown level is refused with 422, `closes` is recorded in the policy history and shown on the security center, and a firm-wide question is sent only at `firm`); `TestAssistantInvestigatesBeforeWriting` shows that at `off` nothing reaches the model, at `closes` the model reads before writing, and turning the level off again stops every call.
+- Frontend `npm run check`: passes with the new Agent chat control, which also tells an administrator when the migration stopped the firm's written answers (`answers_stopped`, from `agent_chat_stopped`, cleared only when a level is chosen, not by an unrelated policy change).
+- The assistant panel's note describes the one setting and the model-chosen reads.
+- The staff planner keeps its own consent (`assistant_model_answers`, `staff_planning` in the policy route, with its own control in Firm settings); `TestPlanProposals*` still sets it, and the written-answers test shows an unrelated change records no level.
+
+Not verified: a hosted firm's migration from the three old settings; the backfill rule is in the migration and in [chat.md](chat.md#written-answers).
