@@ -82,7 +82,7 @@ export function StatementRows({ closeId, evidenceId, onConfirmed }: { closeId: s
       ) : (
         <>
           {review.checks.page_problems.map((p) => (
-            <p key={p} role="alert">{p} Resolve this before confirming.</p>
+            <p key={p} role="alert">{p} Upload the complete statement before confirming.</p>
           ))}
           {review.checks.page_warnings.map((p) => (
             <p key={p}>{p}</p>

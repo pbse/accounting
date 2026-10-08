@@ -243,17 +243,17 @@ func TestSameReadingSetsOnlyLayoutAside(t *testing.T) {
 	}
 }
 
-func TestAPageGeminiReadDifferentlyHoldsTheDocumentsFacts(t *testing.T) {
+func TestAPageGeminiReadDifferentlyIsNamedToCompare(t *testing.T) {
 	flagged := "--- Page 1 · PDF text; Gemini gemini-3.8-flash-001" + imageDiffers + " ---\nStatement\nPage 1 of 2\n--- Page 2 · PDF text; Gemini gemini-3.8-flash-001 read the same text ---\nPage 2 of 2\n"
 	check := Check("statement.pdf", flagged)
-	if len(check.Questions) != 1 || !strings.Contains(check.Questions[0], "PDF page 1: Gemini's reading of the page image differs from its PDF text") {
-		t.Fatalf("a page Gemini read differently is a question that holds the facts: %+v", check)
+	if len(check.Warnings) != 1 || len(check.Questions) != 0 || !strings.Contains(check.Warnings[0], "PDF page 1: Gemini's reading of the page image differs from its PDF text; compare that page with the original") {
+		t.Fatalf("a page Gemini read differently is named, to compare with the original: %+v", check)
 	}
-	if agreed := Check("statement.pdf", strings.Replace(flagged, imageDiffers, " read the same text", 1)); len(agreed.Questions) != 0 {
+	if agreed := Check("statement.pdf", strings.Replace(flagged, imageDiffers, " read the same text", 1)); len(agreed.Warnings) != 0 || len(agreed.Questions) != 0 {
 		t.Fatalf("pages Gemini read the same raise nothing: %+v", agreed)
 	}
 	// Only the extractor's own marker counts: the same words inside a page's text do not.
-	if inText := Check("statement.pdf", "--- Page 1 · PDF text ---\nGemini"+imageDiffers+" ---\nPage 1 of 1\n"); len(inText.Questions) != 0 {
-		t.Fatalf("a page's text cannot raise the question: %+v", inText)
+	if inText := Check("statement.pdf", "--- Page 1 · PDF text ---\nGemini"+imageDiffers+" ---\nPage 1 of 1\n"); len(inText.Warnings) != 0 || len(inText.Questions) != 0 {
+		t.Fatalf("a page's text cannot raise the warning: %+v", inText)
 	}
 }
