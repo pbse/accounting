@@ -131,23 +131,47 @@ func (g *Gemini) Read(ctx context.Context, png []byte) (string, string, error) {
 	return text.String(), cmp.Or(reply.ModelVersion, g.model), nil
 }
 
-var figure = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?`)
+var (
+	figure = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?`)
+	// What may stand between a figure and its sign: spaces and currency symbols.
+	figureGap = " \t$€£¥"
+)
 
 // figures counts the numbers in a page's text, each with its commas dropped and its whole part's leading zeros trimmed,
-// so "1,200.00" and "1200.00" are one figure and "09" and "9" another.
+// so "1,200.00" and "1200.00" are one figure and "09" and "9" another. A figure keeps the marks that can make it
+// negative, read as they are written rather than interpreted: a minus or opening parenthesis before it, a closing
+// parenthesis or minus after it, or CR or DR after it. So "-100.00", "(100.00)", "100.00-" and "100.00 CR" are four
+// figures, none of them 100.00; a reading that drops or moves such a mark is not the same reading.
 func figures(s string) map[string]int {
 	out := map[string]int{}
-	for _, f := range figure.FindAllString(s, -1) {
-		f = strings.ReplaceAll(f, ",", "")
+	for _, at := range figure.FindAllStringIndex(s, -1) {
+		f := strings.ReplaceAll(s[at[0]:at[1]], ",", "")
 		whole, fraction, decimal := strings.Cut(f, ".")
-		whole = cmp.Or(strings.TrimLeft(whole, "0"), "0")
+		key := cmp.Or(strings.TrimLeft(whole, "0"), "0")
 		if decimal {
-			whole += "." + fraction
+			key += "." + fraction
 		}
-		out[whole]++
+		before := strings.TrimRight(s[:at[0]], figureGap)
+		for _, mark := range []string{"-", "−", "("} {
+			if strings.HasSuffix(before, mark) {
+				key = mark + key
+			}
+		}
+		after := strings.TrimLeft(s[at[1]:], figureGap)
+		for _, mark := range []string{")", "-", "−"} {
+			if strings.HasPrefix(after, mark) {
+				key += mark
+			}
+		}
+		if len(after) >= 2 && (strings.EqualFold(after[:2], "CR") || strings.EqualFold(after[:2], "DR")) && (len(after) == 2 || !isLetter(after[2])) {
+			key += " " + strings.ToUpper(after[:2])
+		}
+		out[key]++
 	}
 	return out
 }
+
+func isLetter(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' }
 
 // sameFigures says whether two readings of a page hold exactly the same figures, each as many times: Gemini's reading
 // of a page with a text layer is used only then, so it can neither add, change nor drop a figure the layer has.

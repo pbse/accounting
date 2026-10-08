@@ -4,14 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"time"
 )
 
 // workerOCR is how the document worker reads PDF pages, as its heartbeat reported in the last five minutes: provider
 // "gemini" with its model, "tesseract", or "" when the worker has not reported. The API does not hold the Gemini key, so
-// it asks the worker that does; the heartbeat is platform state, read outside any one firm.
+// it asks the worker that does. The heartbeat is platform state, read outside any one firm: under a fresh system context,
+// since a signed-in member's firm would otherwise decide the row-level security tenant.
 func workerOCR(ctx context.Context, db *sql.DB) (provider, model string) {
+	platform, cancel := context.WithTimeout(context.WithValue(context.Background(), systemKey{}, true), 5*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
 	var raw []byte
-	if db.QueryRowContext(context.WithValue(ctx, systemKey{}, true), `SELECT COALESCE(detail->'ocr','{}'::jsonb) FROM worker_heartbeats WHERE loop='worker' AND beat_at>now()-interval '5 minutes'`).Scan(&raw) != nil {
+	if db.QueryRowContext(platform, `SELECT COALESCE(detail->'ocr','{}'::jsonb) FROM worker_heartbeats WHERE loop='worker' AND beat_at>now()-interval '5 minutes'`).Scan(&raw) != nil {
 		return "", ""
 	}
 	var setting struct{ Provider, Model string }

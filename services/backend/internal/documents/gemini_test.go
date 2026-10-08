@@ -183,4 +183,28 @@ func TestFiguresSetFormattingAside(t *testing.T) {
 	if sameFigures("Total 1,200.00", "Total 1,200") || sameFigures("Amount 12", "Amount 12 12") || sameFigures("Net 100", "Net 1000") {
 		t.Fatal("a different figure, or one more often, is not the same reading")
 	}
+	// A mark that can make a figure negative is part of it: dropping, adding or moving one is a different reading.
+	for _, pair := range [][2]string{
+		{"Refund -100.00", "Refund 100.00"},
+		{"Refund (100.00)", "Refund 100.00"},
+		{"Refund 100.00-", "Refund 100.00"},
+		{"Balance 100.00 CR", "Balance 100.00"},
+		{"Balance 100.00 DR", "Balance 100.00 CR"},
+		{"Refund −100.00", "Refund 100.00"},
+		{"Refund (100.00)", "Refund -100.00"},
+	} {
+		if sameFigures(pair[0], pair[1]) || sameFigures(pair[1], pair[0]) {
+			t.Fatalf("%q and %q differ in a figure's sign", pair[0], pair[1])
+		}
+	}
+	for _, pair := range [][2]string{
+		{"Refund (1,200.00)", "Refund ( 1200.00 )"},
+		{"Refund $-100", "Refund -$100"},
+		{"Balance 100.00 CR", "Balance 100.00cr"},
+		{"Credit 50 CREDIT", "Credit 50 CREDIT"},
+	} {
+		if !sameFigures(pair[0], pair[1]) {
+			t.Fatalf("%q and %q hold the same figures, laid out differently", pair[0], pair[1])
+		}
+	}
 }

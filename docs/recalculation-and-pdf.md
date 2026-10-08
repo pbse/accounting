@@ -8,7 +8,7 @@ PDF intake supports 5 MiB and 20 pages per file. Text/CSV remains limited to 512
 
 - Poppler reads each page's text layer.
 - With `GEMINI_API_KEY` on the worker, every page is also rendered (`pdftoppm`, 2,000 px PNG) and sent to Google's Gemini (`generateContent`, model `GEMINI_OCR_MODEL`, default `gemini-3.8-flash`, temperature 0, 30 seconds a page).
-  - On a page with a text layer, Gemini's reading is used only when it holds exactly the same figures, each as often (commas and leading zeros aside). Otherwise the exact text layer is kept, so a misread figure is never taken.
+  - On a page with a text layer, Gemini's reading is used only when it holds exactly the same figures, each as often (commas and leading zeros aside). A figure includes the marks that can make it negative (a minus, parentheses, a trailing minus, CR or DR), as written. Otherwise the exact text layer is kept, so a misread figure is never taken.
   - On a scanned page, Gemini's reading is used and labelled to verify against the original.
   - Each Gemini call counts against the firm's daily model-call limit.
 - Tesseract English OCR reads a scanned page when Gemini is not configured, fails, returns nothing, or is ruled out by the firm's limit or the document's time (the last 40 seconds of its 150 are kept for local reading).

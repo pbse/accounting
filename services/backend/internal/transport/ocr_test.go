@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -32,8 +33,24 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 	}
 	db.Exec(`DELETE FROM worker_heartbeats WHERE loop='worker'`)
 	t.Cleanup(func() { db.Exec(`DELETE FROM worker_heartbeats WHERE loop='worker'`) })
+	// Firm settings are served as the app serves them: a non-superuser through the tenant connection, so row-level
+	// security applies to the signed-in member's firm.
+	if _, err = db.Exec(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='close_rls_probe') THEN CREATE ROLE close_rls_probe LOGIN PASSWORD 'probe-only' NOSUPERUSER NOBYPASSRLS; END IF; END $$;
+		GRANT USAGE ON SCHEMA public TO close_rls_probe; GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO close_rls_probe; GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO close_rls_probe`); err != nil {
+		t.Fatal(err)
+	}
+	probeURL, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeURL.User = url.UserPassword("close_rls_probe", "probe-only")
+	tenant, err := OpenTenantDB(probeURL.String(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tenant.Close()
 	mux := http.NewServeMux()
-	registerIndependence(mux, db)
+	registerIndependence(mux, tenant)
 	read := func() string {
 		t.Helper()
 		r := httptest.NewRequest("GET", "/v1/closes/organization/policy", nil).WithContext(auth.WithActor(t.Context(), &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "user_a"}, Organization: org, Permissions: []string{"clients:all"}}))
@@ -74,8 +91,13 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 	if err = db.QueryRow(`SELECT detail->>'panic' FROM worker_heartbeats WHERE loop='worker'`).Scan(&panicked); err != nil || panicked != "earlier" {
 		t.Fatalf("a heartbeat keeps the detail earlier beats recorded: %q %v", panicked, err)
 	}
-	if provider, model := workerOCR(t.Context(), db); provider != "gemini" || model != "gemini-3.8-flash" {
-		t.Fatalf("the worker's OCR setting: %q %q", provider, model)
+	member := auth.WithActor(t.Context(), &auth.Claims{Organization: org})
+	if provider, model := workerOCR(member, tenant); provider != "gemini" || model != "gemini-3.8-flash" {
+		t.Fatalf("a member's request reads the worker's OCR setting despite its firm's row-level security: %q %q", provider, model)
+	}
+	var visible int
+	if err = tenant.QueryRowContext(member, `SELECT count(*) FROM worker_heartbeats`).Scan(&visible); err != nil || visible != 0 {
+		t.Fatalf("the member's own context still cannot read platform heartbeats: %d %v", visible, err)
 	}
 
 	// A worker without a key reads locally; one that has stopped reporting is not vouched for.
