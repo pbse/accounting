@@ -71,14 +71,17 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 		t.Fatalf("the page goes as its PNG, read at temperature 0: %v", (*seen)[0])
 	}
 
-	// A page with its own text takes Gemini's reading only when it says exactly what the layer says, laid out differently.
+	// A page with its own text always keeps it, lines and all. Gemini's reading only checks it: the label says the two
+	// agree when Gemini read the same text, laid out differently (even on joined lines),
 	layer := "TEXT INVOICE      12000.00\nWidgets  100.00\nGadgets  200.00\nPage 1 of 2\n"
-	laidOut := "TEXT INVOICE  12000.00\n\nWidgets 100.00\nGadgets 200.00\nPage 1 of 2"
-	g, _ = fakeGemini(t, 200, answer(laidOut))
-	reading = Reading{Gemini: g}
-	if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != laidOut || method != "Gemini gemini-3.8-flash-001; the same text as the PDF text layer" {
-		t.Fatalf("the same text, laid out by Gemini: %q %q", text, method)
+	for _, laidOut := range []string{"TEXT INVOICE  12000.00\n\nWidgets 100.00\nGadgets 200.00\nPage 1 of 2", "TEXT INVOICE 12000.00 Widgets 100.00 Gadgets 200.00 Page 1 of 2"} {
+		g, _ = fakeGemini(t, 200, answer(laidOut))
+		reading = Reading{Gemini: g}
+		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Gemini gemini-3.8-flash-001 read the same text" {
+			t.Fatalf("the text layer, which Gemini read the same: %q %q", text, method)
+		}
 	}
+	// and flags the page to check against the original when it read anything else.
 	for _, misread := range []string{
 		"TEXT INVOICE  12000.00\nWidgets 100.00\nGadgets 200.00\nPage 1 of 2\nTax 960.00", // a figure the page lacks
 		"TEXT INVOICE  12800.00\nWidgets 100.00\nGadgets 200.00\nPage 1 of 2",             // a changed figure
@@ -89,7 +92,7 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 	} {
 		g, _ = fakeGemini(t, 200, answer(misread))
 		reading = Reading{Gemini: g}
-		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Gemini's reading differed" {
+		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Gemini gemini-3.8-flash-001 read it differently, so check the original" {
 			t.Fatalf("Gemini's reading %q is not taken over the text layer: %q %q", misread, text, method)
 		}
 	}

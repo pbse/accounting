@@ -277,7 +277,7 @@ function DocumentReading() {
       <h2>Reading PDFs</h2>
       <p>{provider}.</p>
       <p className="note">
-        A page's own PDF text is exact, so a machine reading replaces it only when it says exactly the same thing, laid out differently. Scanned pages read by a machine are labelled to check
+        A page's own PDF text is exact and always kept; a machine reading of the page only checks it, and the page is flagged when the two differ. Scanned pages read by a machine are labelled to check
         against the original. The server operator chooses the reader.
       </p>
     </section>
