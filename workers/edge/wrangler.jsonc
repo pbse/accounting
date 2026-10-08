@@ -14,7 +14,7 @@
   "containers": [{
     "class_name": "CapabilityAPI",
     "image": "../../services/backend/Dockerfile",
-    "max_instances": 1,
+    "max_instances": 2,
     "instance_type": "standard-4",
     "constraints": {"regions": ["ENAM"]}
   }],
@@ -33,7 +33,7 @@
         "name": "close-production-capabilityapi-production",
         "class_name": "CapabilityAPI",
         "image": "../../services/backend/Dockerfile",
-        "max_instances": 1,
+        "max_instances": 2,
         "instance_type": "standard-4",
         "constraints": {"regions": ["ENAM"]}
       }],

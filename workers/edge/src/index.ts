@@ -54,6 +54,12 @@ export class CapabilityAPI extends Container<Env> {
   sleepAfter = "24h";
 }
 
+// The API's Durable Object, which starts and forwards to its container, lives where it was first made and never moves.
+// The first one, "reference-api", was made in San Jose, so every request crossed the country twice (edge to San Jose,
+// San Jose to the container beside the database). This one is made in eastern North America, with the container and
+// the database (docs/performance.md).
+const api = (env: Env) => env.API.getByName("api-enam", { locationHint: "enam" });
+
 // Containers reach private Worker bindings through a fixed virtual host.
 CapabilityAPI.outboundByHost = {
   "context-machine.internal": async (request, env) => (env as Env).CONTEXT_MACHINE?.fetch(request) ?? new Response(null, { status: 503 }),
@@ -150,7 +156,7 @@ export default {
       return;
     }
     const reply = recipient.startsWith(`${base}+reply-`);
-    const response = await env.API.getByName("reference-api").fetch(new Request(reply ? "http://api/internal/email-reply" : "http://api/internal/forwarded-email", {
+    const response = await api(env).fetch(new Request(reply ? "http://api/internal/email-reply" : "http://api/internal/forwarded-email", {
       method: "POST",
       headers: { "X-Close-Email-Key": env.EMAIL_INTAKE_KEY, "X-Close-Envelope-From": message.from, "X-Close-Envelope-To": message.to, "Content-Type": "message/rfc822" },
       body: await new Response(message.raw).arrayBuffer(),
@@ -173,7 +179,7 @@ export default {
       // ponytail: one API container; add bounded pooling after load measurement.
       const forwarded = uploadScanRequest(request, env.UPLOAD_SCAN_HOST, env.UPLOAD_SCAN_KEY);
       if (forwarded instanceof Response) return forwarded;
-      const response = await env.API.getByName("reference-api").fetch(forwarded);
+      const response = await api(env).fetch(forwarded);
       if (path === "/v1/contact" && request.method === "POST" && response.status === 201) forwardContact(response, env, ctx);
       return response;
     }
@@ -183,7 +189,7 @@ export default {
     // The staff admin panel, only for signed-in platform staff, is its own single-page app: its pages load its index
     // page, asked for as /admin/ (see adminAsset).
     if (adminPath(path)) {
-      const refused = await staffGate(request, env.AUTH_SESSION, (check) => env.API.getByName("reference-api").fetch(check));
+      const refused = await staffGate(request, env.AUTH_SESSION, (check) => api(env).fetch(check));
       if (refused) return secureAdmin(refused);
       const asset = adminAsset(path);
       return secureAdmin(await env.ASSETS.fetch(asset === path ? request : new Request(new URL(asset, request.url), request)));
