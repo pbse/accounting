@@ -238,6 +238,26 @@ var agentObservation = regexp.MustCompile(`(?i)\b(?:see|saw|seen|found|finds?|sh
 // agentCapabilityStart is how a help, refusal or card sentence may begin: speaking for the agent or to the person.
 var agentCapabilityStart = regexp.MustCompile(`(?i)^(?:i |i'|i’|ask |say |open |you |to |here |this card|the card|confirm|check |choose |type |use |try |tell |nothing |no, |yes, |sorry|that |that's|that’s|it's|it’s)`)
 var agentURL = regexp.MustCompile(`(?i)\b(?:https?://|www\.)[^\s)]+`)
+
+// agentCompletion is a sentence saying an action happened; a card, help or refusal answer never says so, since nothing
+// runs before the person confirms.
+var agentCompletion = regexp.MustCompile(`(?i)\b(?:i|we|it|this|that|has|have|had|was|were|is|are|been|just|already|now)\b[^.!?]{0,24}\b(?:sent|posted|approved|signed off|signed|stopped|started|prepared|ran|drafted|saved|submitted|handed over|handed|confirmed|deleted|changed|updated|created|requested|queued|rechecked|done|complete|completed|finished)\b`)
+
+var agentModal = regexp.MustCompile(`(?i)\b(?:can|could|may|might|will|would|should|able to|want to|need to)\b`)
+var agentNegation = regexp.MustCompile(`(?i)\b(?:nothing|not|never|no|none|until|before|unless|only after|won't|isn't|aren't|hasn't|haven't|wasn't|weren't|doesn't|don't|didn't|cannot|can't)\b`)
+
+// agentStatesIn lists the states a sentence asserts of something, in the words a read would hold them.
+func agentStatesIn(sentence string) []string {
+	lower := strings.ToLower(sentence)
+	out := []string{}
+	for _, state := range []string{"reconciled", "unreconciled", "ties", "differs", "ready", "blocked", "signed off", "waiting", "failed", "verified", "overdue", "approved", "rejected", "certified", "stale", "missing", "unpaid", "paid"} {
+		if regexp.MustCompile(`\b(?:is|are|was|were|remains?|looks?|seems?|now|still|has been|have been)\s+(?:not\s+|fully\s+|all\s+)?` + regexp.QuoteMeta(state) + `\b`).MatchString(lower) {
+			out = append(out, state)
+		}
+	}
+	return out
+}
+
 var agentStateClaim = regexp.MustCompile(`\b(?:is|are|was|were|remains?|looks?|seems?|got|gets|became|becomes)\b[^.!?]{0,30}\b(?:ready|blocked|signed off|signed-off|waiting|failed|verified|overdue|approved|rejected)\b`)
 var agentStateWords = []string{"ready", "blocked", "signed off", "signed-off", "waiting", "failed", "verified", "overdue", "approved", "rejected"}
 
@@ -457,6 +477,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			if agentObservation.MatchString(line) {
 				return nil, "a " + kind + " answer stated something about the books: " + line
 			}
+			// A negated or modal sentence ("nothing is sent until you confirm", "I can read approved procedures") is a
+			// promise or a capability, not a claim that something ran.
+			if agentCompletion.MatchString(line) && !agentNegation.MatchString(line) && !agentModal.MatchString(line) {
+				return nil, "a " + kind + " answer claimed an action ran: " + line
+			}
 		}
 		for _, name := range names {
 			if name != "" && strings.Contains(lower, strings.ToLower(name)) {
@@ -545,6 +570,27 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 	for i, c := range covered {
 		if !c {
 			return nil, fmt.Sprintf("sentence %d has no support", i)
+		}
+		// A state the sentence asserts ("is reconciled", "ties") must be the cited value itself, or in the quote,
+		// of one of its own support entries: an amount never supports a state.
+		for _, state := range agentStatesIn(lines[i]) {
+			held := false
+			for _, s := range support {
+				if s.sentence != i {
+					continue
+				}
+				read := reads[s.step]
+				cited := s.quote
+				if s.path != "" {
+					cited, _ = valueAt(read.value, s.path)
+				}
+				if strings.Contains(strings.ToLower(cited), state) {
+					held = true
+				}
+			}
+			if !held {
+				return nil, "the state " + state + " is not in a cited field of its sentence"
+			}
 		}
 	}
 	for i, line := range lines {
@@ -865,7 +911,21 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		}
 		wg.Wait()
 		cancelReads()
+		// Reads and refusals are taken up first, writes after them, so a proposal sees every read of its own round
+		// whatever order the model put them in; the model still receives the results in its own order.
+		order := []int{}
 		for i, call := range result.ToolCalls {
+			if agentWrites[call.Name] == "" {
+				order = append(order, i)
+			}
+		}
+		for i, call := range result.ToolCalls {
+			if agentWrites[call.Name] != "" {
+				order = append(order, i)
+			}
+		}
+		for _, i := range order {
+			call := result.ToolCalls[i]
 			began := time.Now()
 			step := agentStep{ID: "t" + strconv.Itoa(len(out.steps)+1), Tool: call.Name}
 			args := parsed[i]

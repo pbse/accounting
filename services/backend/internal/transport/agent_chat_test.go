@@ -71,6 +71,11 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	rejected("facts", "The premium is 1,200.00.", []agentSupportEntry{{"t3", 0, "", "", "premium"}}, "not in the read")
 	rejected("facts", "AR ties.", nil, "no support")
 	rejected("facts", "Payroll is approved.", []agentSupportEntry{{"t2", 0, "/rows/1/account", "AR", ""}}, "does not bear on its sentence")
+	rejected("facts", "The cash ledger balance is reconciled at (1,250.00).", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}}, "state reconciled is not in a cited field")
+	ok("facts", "The cash ledger balance differs at (1,250.00).", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}, {"t2", 0, "/rows/0/status", "differs", ""}})
+	rejected("card", "I sent the client request.", nil, "claimed an action ran")
+	rejected("help", "I have posted it already.", nil, "claimed an action ran")
+	ok("card", "Here is the client request to confirm; nothing is sent until you do.", nil)
 	ok("facts", "AR ties.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}})
 	if figures := agentFigures("Up .5% on the month."); len(figures) != 1 || figures[0] != "0.5%" {
 		t.Fatalf("a leading-decimal figure keeps its decimal: %v", figures)
