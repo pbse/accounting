@@ -29,6 +29,9 @@ test("commands ask the assistant or open the screen that does the work", async (
   // A command is sent as itself: the server runs its fixed read or card without a model.
   assert.deepEqual(await run("/status"), { message: "", navigated: "", asked: "/status", askedClose: "7" });
   assert.equal((await run("/status", "")).asked, "/status");
+  assert.equal((await run("/queue", "")).asked, "/queue");
+  assert.equal((await run("/blocked", "")).asked, "/blocked");
+  assert.equal((await run("/delegated", "")).asked, "/delegated");
   assert.equal((await run("/explain Prepaid insurance")).asked, "/explain Prepaid insurance");
   assert.equal((await run("/explain")).asked, "/explain");
   assert.equal((await run("/compare Rent")).asked, "/compare Rent");

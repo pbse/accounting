@@ -3,6 +3,9 @@ export type Command = { name: string; description: string; close?: boolean; argu
 export const commands: Command[] = [
   { name: "ask", description: "Ask the assistant about this close or your work", argument: "question" },
   { name: "status", description: "Where a close stands, or what needs you today" },
+  { name: "queue", description: "Drafts ready for review, across your closes" },
+  { name: "blocked", description: "Blocked work, across your closes" },
+  { name: "delegated", description: "The closes handed to the agent and how they are doing" },
   { name: "explain", description: "Explain a balance that doesn't tie, or what blocks sign-off", close: true, argument: "account" },
   { name: "compare", description: "Compare with last month, optionally for one account", close: true, argument: "account" },
   { name: "find", description: "Find documents, drafts, transactions, procedures or review decisions", argument: "words" },
@@ -45,6 +48,9 @@ export async function runCommand(command: Command, argument: string, ctx: Comman
       ctx.ask({ command: "find", argument }, close);
       return "";
     case "status":
+    case "queue":
+    case "blocked":
+    case "delegated":
     case "explain":
     case "compare":
     case "delegate":

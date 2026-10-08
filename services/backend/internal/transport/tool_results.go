@@ -58,6 +58,11 @@ func capResult(raw []byte, c toolCap) ([]byte, bool, int) {
 // across more closes than it lists.
 func lineageOf(raw []byte, lineage, pinned string) ([]string, bool) {
 	if pinned != "" {
+		// A close-scoped read that draws on closes it cannot name (a budget comparison's prior months and year to date)
+		// is pinned but its lineage is not known, so its answer is shown once.
+		if lineage == lineageNone {
+			return []string{pinned}, false
+		}
 		closes := []string{pinned}
 		if extra, ok := strings.CutPrefix(lineage, "+"); ok {
 			if id := closeAt(raw, extra); id != "" && id != pinned {

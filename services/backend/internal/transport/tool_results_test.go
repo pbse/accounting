@@ -80,6 +80,15 @@ func TestLineageComesFromTheReadNotTheModel(t *testing.T) {
 	if _, _, _, closes, known := modelResult(flux, []byte(`{"state":"ready","last_close_id":40,"changes":[]}`), "41"); !known || !slices.Equal(closes, []string{"41", "40"}) {
 		t.Fatalf("changes from last month name the prior close too: %v %v", closes, known)
 	}
+	var budget mcpTool
+	for _, tool := range mcpTools {
+		if tool.name == "budget_comparison" {
+			budget = tool
+		}
+	}
+	if _, _, _, closes, known := modelResult(budget, []byte(`{"month":{}}`), "41"); known || !slices.Equal(closes, []string{"41"}) {
+		t.Fatalf("a budget comparison draws on months it cannot name, so its lineage is not known: %v %v", closes, known)
+	}
 	if _, _, _, closes, known := modelResult(pack, []byte(`{"state":"waiting"}`), "41"); !known || !slices.Equal(closes, []string{"41"}) {
 		t.Fatalf("a comparison read without a prior close names its own: %v %v", closes, known)
 	}
