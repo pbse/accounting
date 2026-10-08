@@ -102,6 +102,17 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Beta", "active": true, "since": ended, "owner": nobody, "reason": "A client"}, 422)
 	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Beta", "active": true, "since": ended, "due_days": five, "owner": cy, "reason": "Cy's client"}, 200)
 	call("user_b", partner, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": true, "since": ended, "reason": "A client"}, 403)
+	// A member reads the roster entries of the clients assigned to them, and nothing of the template; adding needs no
+	// reason beyond the adding.
+	var mine struct {
+		Template  map[string]any
+		Clients   []struct{ Entity string }
+		CanManage bool `json:"can_manage"`
+	}
+	must(json.Unmarshal([]byte(call(cy, reviewer, "GET", "/v1/closes/roster", nil, 200)), &mine))
+	if mine.Template != nil || mine.CanManage || len(mine.Clients) != 1 || mine.Clients[0].Entity != "Beta" {
+		t.Fatalf("a member's roster read: %+v", mine)
+	}
 	// Every owed month is listed on each read, so the first is within the last five years.
 	if body := call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Delta", "active": true, "since": "0001-01", "reason": "A client"}, 422); !strings.Contains(body, "within the last five years") {
 		t.Fatal(body)
@@ -157,16 +168,16 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
 		t.Fatalf("an opened month is no longer owed: %s", got)
 	}
 
-	// The roster shows each client with the months it owes; marking one inactive ends what it owes.
+	// The roster shows each client with the months it can open, the running month first; marking one inactive ends what
+	// it owes.
 	var roster struct {
 		Template  map[string]any `json:"template"`
 		Clients   []rosterClient `json:"clients"`
 		CanManage bool           `json:"can_manage"`
 	}
-	call("user_c", reviewer, "GET", "/v1/closes/roster", nil, 403)
 	must(json.Unmarshal([]byte(call("user_b", partner, "GET", "/v1/closes/roster", nil, 200)), &roster))
 	if roster.CanManage || roster.Template["owner"] != "user_b" || len(roster.Clients) != 2 || roster.Clients[0].Entity != "Alpha" || roster.Clients[0].LastPeriod != ended ||
-		roster.Clients[1].Entity != "Beta" || strings.Join(roster.Clients[1].Owed, ",") != ended || *roster.Clients[1].Owner != "user_c" || *roster.Clients[1].DueDays != 5 {
+		roster.Clients[1].Entity != "Beta" || strings.Join(roster.Clients[1].Owed, ",") != time.Now().UTC().Format("2006-01")+","+ended || *roster.Clients[1].Owner != "user_c" || *roster.Clients[1].DueDays != 5 {
 		t.Fatalf("the roster: %+v", roster)
 	}
 	// An administrator chooses owners from the members who can do the work.
@@ -439,6 +450,15 @@ func TestTheRosterListsEveryMonthOwed(t *testing.T) {
  FROM close_routines WHERE organization_id=$1 AND client_entity='Delta'`, org, deltaClose).Scan(&deltaStopped, &deltaCloses, &deltaGoals))
 	if deltaStopped != "Stopped because Delta is inactive on the firm's roster." || deltaCloses != 1 || deltaGoals != 0 {
 		t.Fatalf("a hand-over for an inactive client stops, opening and handing over nothing: %q %d %d", deltaStopped, deltaCloses, deltaGoals)
+	}
+	// A client added without a reason is recorded as "Added as a client"; a later change still needs one.
+	call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Omicron", "active": false, "since": ended}, 200)
+	must(json.Unmarshal([]byte(call("user_a", admin, "GET", "/v1/closes/roster", nil, 200)), &roster))
+	if i := slices.IndexFunc(roster.Clients, func(c rosterClient) bool { return c.Entity == "Omicron" }); i < 0 || roster.Clients[i].Reason != "Added as a client" || roster.Clients[i].Active {
+		t.Fatalf("a client added without a reason: %+v", roster.Clients)
+	}
+	if body := call("user_a", admin, "POST", "/v1/closes/roster", map[string]any{"entity": "Omicron", "active": true, "since": ended}, 422); !strings.Contains(body, "Give a reason") {
+		t.Fatal(body)
 	}
 }
 

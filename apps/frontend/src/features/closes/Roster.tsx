@@ -10,7 +10,7 @@ type Template = { due_days: number | null; owner: string; reason: string; actor:
 type Client = { entity: string; active: boolean; since: string; due_days: number | null; owner: string | null; reason: string; actor: string; at: string; rev: string; last_period: string; owed: string[] };
 // clients are the names (lowercase) a reviewer is assigned to, as access to a client's closes is granted.
 type Person = { subject: string; name: string; firm_wide: boolean; clients: string[] };
-type Roster = { template: Template; clients: Client[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
+type Roster = { template: Template; template_hidden?: boolean; clients: Client[]; can_manage: boolean; people?: Person[]; people_unavailable?: string };
 
 const days = Array.from({ length: 60 }, (_, i) => i + 1);
 const endedMonth = () => {
@@ -71,6 +71,8 @@ export function ClientRoster() {
           <>
             {t.due_days ? `a due date ${t.due_days} ${t.due_days === 1 ? "day" : "days"} after the month ends` : "no due date"} and {t.owner ? <>{name(t.owner)} as its owner</> : "no owner"}
           </>
+        ) : roster.template_hidden ? (
+          "the due date and owner of the firm's monthly template"
         ) : (
           "no due date or owner until the firm sets its monthly template"
         )}
