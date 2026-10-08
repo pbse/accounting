@@ -159,6 +159,11 @@ func TestAgentChatOpensAClientMonthFromTheDashboard(t *testing.T) {
 	if len(lineage) != 2 || lineage[0] != "["+opened+"]" || lineage[1] != "["+opened+"]" {
 		t.Fatalf("both messages of the pair carry the opened close: %v", lineage)
 	}
+	var linked bool
+	must(db.QueryRow(`SELECT EXISTS(SELECT 1 FROM chat_messages a JOIN chat_messages q ON q.id=a.question_id WHERE a.id::text=$1 AND q.role='user' AND q.body LIKE 'Open October%')`, card.ID).Scan(&linked))
+	if !linked {
+		t.Fatal("the card names the question it answered")
+	}
 	call("POST", "/v1/closes/chat/confirm/"+card.ID, map[string]any{}, 409)
 	// The same month proposed again returns the open close, created false.
 	firstRound = `{"status":"completed","output":[{"type":"function_call","id":"fc_3","call_id":"c3","name":"open_close","arguments":"{\"entity\":\"alpha\",\"period\":\"2026-10\"}"}]}`

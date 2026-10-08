@@ -1192,13 +1192,18 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		// Only a kept answer and its question are replayed to the model; a question whose answer was not kept stays on
 		// screen but never reaches a later request.
 		replayable := !agent || result.outcome == "kept" && result.known
+		// The answer names its question (question_id), so a card's confirmation reaches the question it was asked by
+		// however the author's requests interleaved.
+		questionID := ""
 		for _, m := range []struct {
 			role, body, citations, action, due, finish, proposal, target, steps string
 			monthly                                                             bool
 		}{{"user", in.Text, "[]", "", "", "", "", "", "", false}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish, proposal, target, steps, reply.monthly}} {
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes,replayable) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[],$16)`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes, replayable); err != nil {
+			var id string
+			if err = tx.QueryRowContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes,replayable,question_id) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[],$16,NULLIF($17,'')::bigint) RETURNING id::text`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes, replayable, questionID).Scan(&id); err != nil {
 				break
 			}
+			questionID = id
 		}
 		// A conversation keeps its latest 200 messages; firm-wide ones also expire after 30 days.
 		if err == nil {
@@ -1300,7 +1305,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				problem(w, refused.status, refused.message)
 				return
 			}
-			if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET target_close_id=CASE WHEN id::text=$4 THEN $5::bigint ELSE target_close_id END,closes=(SELECT COALESCE(array_agg(DISTINCT c ORDER BY c),'{}') FROM unnest(closes||$5::bigint) c) WHERE `+scope+` AND (id::text=$4 OR id=(SELECT max(id) FROM chat_messages WHERE `+scope+` AND role='user' AND id<$4::bigint))`, org, author, closeID, r.PathValue("message"), item.ID); err != nil {
+			if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET target_close_id=CASE WHEN id::text=$4 THEN $5::bigint ELSE target_close_id END,closes=(SELECT COALESCE(array_agg(DISTINCT c ORDER BY c),'{}') FROM unnest(closes||$5::bigint) c) WHERE `+scope+` AND (id::text=$4 OR id=(SELECT question_id FROM chat_messages WHERE `+scope+` AND id::text=$4))`, org, author, closeID, r.PathValue("message"), item.ID); err != nil {
 				problem(w, 503, "The close could not be opened. Ask for it again.")
 				return
 			}
