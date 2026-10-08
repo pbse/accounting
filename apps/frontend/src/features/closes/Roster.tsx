@@ -93,15 +93,17 @@ export function ClientRoster() {
                     {c.last_period && ` · latest close ${c.last_period}`}
                   </>
                 }
-              />
+              >
+                <small>
+                  {c.reason} ({name(c.actor)}, {new Date(c.at).toLocaleDateString()})
+                </small>
+              </EntityCell>
               <span>
                 {c.active && c.owed.length > 0 ? <span className="pill muted">Not opened: {c.owed.join(", ")}</span> : c.active ? <span className="pill">Up to date</span> : <span className="pill neutral">Inactive</span>}
               </span>
               <small>
                 {c.due_days === null ? "Template due date" : c.due_days === 0 ? "No due date" : `Due ${c.due_days} days after month end`} ·{" "}
                 {c.owner === null ? "template owner" : c.owner ? name(c.owner) : "no owner"}
-                <br />
-                {c.reason} ({name(c.actor)}, {new Date(c.at).toLocaleDateString()})
               </small>
               {roster.can_manage ? (
                 <button type="button" onClick={() => setEditing(c.entity)}>

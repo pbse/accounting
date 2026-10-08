@@ -19,6 +19,7 @@ export function ClientAccess({ entities }: { entities: string[] }) {
   const [user, setUser] = useState("");
   const [entity, setEntity] = useState(entities[0] ?? "");
   const [message, setMessage] = useState("");
+  const [open, setOpen] = useState(false);
   async function load() {
     setBusy(true);
     setError("");
@@ -72,7 +73,6 @@ export function ClientAccess({ entities }: { entities: string[] }) {
   useEffect(() => {
     void load();
   }, []);
-  const [open, setOpen] = useState(false);
   if (!loaded)
     return error ? (
       <p role="alert">
