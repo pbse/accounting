@@ -859,6 +859,24 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		plans := make([]*agentPending, len(result.ToolCalls))
 		parsed := make([]map[string]any, len(result.ToolCalls))
 		outputs := make([]string, len(result.ToolCalls))
+		// Each call has one step id for its running event, its finished event and the saved trace: reads and
+		// refusals are taken up first, writes after them, so a proposal sees every read of its own round whatever
+		// order the model put them in; the model still receives the results in its own order.
+		order := []int{}
+		for i, call := range result.ToolCalls {
+			if agentWrites[call.Name] == "" {
+				order = append(order, i)
+			}
+		}
+		for i, call := range result.ToolCalls {
+			if agentWrites[call.Name] != "" {
+				order = append(order, i)
+			}
+		}
+		ids := make([]string, len(result.ToolCalls))
+		for n, i := range order {
+			ids[i] = "t" + strconv.Itoa(len(out.steps)+n+1)
+		}
 		var wg sync.WaitGroup
 		for i, call := range result.ToolCalls {
 			args := map[string]any{}
@@ -874,7 +892,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				args["client"] = entity
 			}
 			parsed[i] = args
-			p := &agentPending{t: t, args: args, began: time.Now(), stepID: "t" + strconv.Itoa(len(out.steps)+1+i)}
+			p := &agentPending{t: t, args: args, began: time.Now(), stepID: ids[i]}
 			plans[i] = p
 			if out.calls >= agentCalls {
 				p.refusal = "refused: the read budget of this message is spent"
@@ -911,23 +929,10 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		}
 		wg.Wait()
 		cancelReads()
-		// Reads and refusals are taken up first, writes after them, so a proposal sees every read of its own round
-		// whatever order the model put them in; the model still receives the results in its own order.
-		order := []int{}
-		for i, call := range result.ToolCalls {
-			if agentWrites[call.Name] == "" {
-				order = append(order, i)
-			}
-		}
-		for i, call := range result.ToolCalls {
-			if agentWrites[call.Name] != "" {
-				order = append(order, i)
-			}
-		}
 		for _, i := range order {
 			call := result.ToolCalls[i]
 			began := time.Now()
-			step := agentStep{ID: "t" + strconv.Itoa(len(out.steps)+1), Tool: call.Name}
+			step := agentStep{ID: ids[i], Tool: call.Name}
 			args := parsed[i]
 			t, offered := byName[call.Name]
 			step.Title = t.title
