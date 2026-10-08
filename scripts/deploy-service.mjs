@@ -65,7 +65,9 @@ export const configuration = {
   "XERO_REDIRECT_URI",
   "PUBLIC_APP_URL",
   "TEXT_SCANNER_URL",
-  "PLATFORM_EMAIL_FROM"
+  "PLATFORM_EMAIL_FROM",
+  "GEMINI_OCR_MODEL",
+  "GEMINI_PAID_SERVICE"
  ],
  "scanner": []
 };

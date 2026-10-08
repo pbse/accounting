@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 // names, even with an empty value, in their configuration payloads.
 export const credentials = {
  edge: ['DATABASE_URL','UPLOAD_SCAN_KEY','EMAIL_INTAKE_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','QBO_WEBHOOK_VERIFIER','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','XERO_WEBHOOK_KEY','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','QBO_SANDBOX_ACCESS_TOKEN'],
- queue: ['DATABASE_URL','UPLOAD_SCAN_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','OPERATIONS_ALERT_WEBHOOK_URL','OPERATIONS_ALERT_WEBHOOK_TOKEN','PLATFORM_EMAIL_KEY'],
+ queue: ['DATABASE_URL','UPLOAD_SCAN_KEY','SECRETS_KEY','QBO_CLIENT_SECRET','WORKOS_API_KEY','QBO_PRODUCTION_CLIENT_SECRET','XERO_CLIENT_SECRET','OPENAI_API_KEY','CONTEXT_MACHINE_TOKEN','OPERATIONS_ALERT_WEBHOOK_URL','OPERATIONS_ALERT_WEBHOOK_TOKEN','PLATFORM_EMAIL_KEY','GEMINI_API_KEY'],
  scanner: ['UPLOAD_SCAN_KEY'],
  'context-machine': ['CONTEXT_MACHINE_TOKEN','CONTEXT_MACHINE_DATABASE_URL','OPENAI_API_KEY','ANTHROPIC_API_KEY','CODEX_ACCESS_TOKEN','CLAUDE_CODE_OAUTH_TOKEN','CODEX_AUTH_JSON'],
 };
@@ -38,6 +38,8 @@ export function validateCredential(name, input) {
  }
  if (Buffer.byteLength(value) > 5000) throw new Error(`${name} must be at most 5 KB after compaction`);
  if (['CONTEXT_MACHINE_TOKEN','UPLOAD_SCAN_KEY','EMAIL_INTAKE_KEY'].includes(name) && value.length < 32) throw new Error(`${name} requires at least 32 random characters`);
+ // A Gemini API key is one printable token; the worker sends it only in a request header.
+ if (name === 'GEMINI_API_KEY' && !/^[\x21-\x7e]{20,200}$/.test(value)) throw new Error('GEMINI_API_KEY must be a single printable token of 20 to 200 characters');
  if (name === 'SECRETS_KEY' && !/^[a-f0-9]{64}$/i.test(value)) throw new Error('SECRETS_KEY requires 32 hex-encoded bytes');
  if (['DATABASE_URL','CONTEXT_MACHINE_DATABASE_URL'].includes(name)) {
   let db; try { db = new URL(value); } catch { throw new Error(`Invalid ${name}`); }
