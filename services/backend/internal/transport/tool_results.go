@@ -28,10 +28,16 @@ func capResult(raw []byte, c toolCap) ([]byte, bool, int) {
 		return raw, false, 0
 	}
 	var object map[string]json.RawMessage
-	if json.Unmarshal(raw, &object) != nil || object == nil {
+	var rows []json.RawMessage
+	// A bare array (the evidence list) is the "items" the MCP handler also presents it as.
+	if c.array == "items" && json.Unmarshal(raw, &rows) == nil {
+		if len(rows) <= c.limit {
+			return raw, false, len(rows)
+		}
+		object = map[string]json.RawMessage{"items": raw}
+	} else if json.Unmarshal(raw, &object) != nil || object == nil {
 		return raw, false, 0
 	}
-	var rows []json.RawMessage
 	if json.Unmarshal(object[c.array], &rows) != nil || len(rows) <= c.limit {
 		return raw, false, len(rows)
 	}

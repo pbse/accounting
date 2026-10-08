@@ -311,6 +311,12 @@ func WithIdentity(ctx context.Context, organization, subject string) context.Con
 }
 
 func HasIdentity(ctx context.Context) bool { _, ok := ctx.Value(identityKey{}).(identity); return ok }
+
+// Subject is the caller the HTTP or job boundary established, or empty without one.
+func Subject(ctx context.Context) string {
+	id, _ := ctx.Value(identityKey{}).(identity)
+	return id.subject
+}
 func ProviderLabel(ctx context.Context, purpose string) string {
 	c, _ := ctx.Value(clientKey{}).(*Client)
 	if c == nil {
