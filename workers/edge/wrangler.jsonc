@@ -26,10 +26,11 @@
     "production": {
       "services": [{"binding": "CONTEXT_MACHINE", "service": "close-context-machine-production"}],
       "send_email": [{"name": "CONTACT_EMAIL"}],
-      "name": "close-production",
+      "name": "krith-production",
       "routes": [{"pattern": "getkrith.com", "custom_domain": true}],
       "workers_dev": false,
       "containers": [{
+        "name": "close-production-capabilityapi-production",
         "class_name": "CapabilityAPI",
         "image": "../../services/backend/Dockerfile",
         "max_instances": 1,
