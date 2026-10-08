@@ -172,17 +172,23 @@ export function SecurityTab() {
       live = false;
     };
   }, [version]);
-  if (error)
-    return (
-      <section aria-label="Security">
-        <h2>Security</h2>
-        <p role="alert">{error}</p>
-      </section>
-    );
-  if (!security) return <p role="status">Opening…</p>;
   const refresh = () => setVersion((n) => n + 1);
+  // A failed read shows with a way to try again; a view already read stays in place under it.
+  const failed = error && (
+    <section aria-label="Security unavailable">
+      {!security && <h2>Security</h2>}
+      <p role="alert">{error}</p>
+      <p className="setting-actions">
+        <button type="button" onClick={refresh}>
+          Try again
+        </button>
+      </p>
+    </section>
+  );
+  if (!security) return failed || <p role="status">Opening…</p>;
   return (
     <>
+      {failed}
       <section aria-label="Connected services">
         <h2>Connected services</h2>
         <p>Each client's books and payouts, and who connected them. A connection is managed from the client's close.</p>

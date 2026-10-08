@@ -78,6 +78,11 @@ function IndependentReview({ policy, refresh }: { policy: Policy; refresh: () =>
   const current = policy.independent_review ? "always" : policy.independent_review_min_amount ? "large" : "off";
   const [choice, setChoice] = useState(current);
   const [amount, setAmount] = useState(policy.independent_review_min_amount);
+  // The policy read again after any change, by anyone, is the draft's new starting point.
+  useEffect(() => {
+    setChoice(current);
+    setAmount(policy.independent_review_min_amount);
+  }, [current, policy.independent_review_min_amount]);
   const status = current === "always" ? "On" : current === "large" ? `From ${money(policy.independent_review_min_amount)}` : "Off";
   const summary =
     current === "always"
@@ -210,6 +215,10 @@ function ReminderRule({ policy, refresh }: { policy: Policy; refresh: () => void
   const change = useChange(refresh);
   const [after, setAfter] = useState(policy.reminder_after_days);
   const [most, setMost] = useState(policy.reminder_max);
+  useEffect(() => {
+    setAfter(policy.reminder_after_days);
+    setMost(policy.reminder_max);
+  }, [policy.reminder_after_days, policy.reminder_max]);
   const days = (n: number) => (n === 0 ? "as soon as the previous email is delivered" : `${n} ${n === 1 ? "day" : "days"} after the previous email is delivered`);
   return (
     <Setting
@@ -314,6 +323,7 @@ const agentLevels: { value: AgentChat; label: string; detail: string }[] = [
 function AgentChatSetting({ policy, refresh }: { policy: Policy; refresh: () => void }) {
   const change = useChange(refresh);
   const [choice, setChoice] = useState<AgentChat>(policy.agent_chat);
+  useEffect(() => setChoice(policy.agent_chat), [policy.agent_chat]);
   const current = agentLevels.find((l) => l.value === policy.agent_chat) ?? agentLevels[0];
   return (
     <Setting
