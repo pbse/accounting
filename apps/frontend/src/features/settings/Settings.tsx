@@ -7,17 +7,24 @@ import { AgentAccess } from "../closes/AgentAccess";
 import { kindLabels } from "../closes/Attention";
 import { workspaceRequest } from "../closes/workspace";
 
-type Me = {
-  subject: string;
-  email?: string;
-  first_name?: string;
-  last_name?: string;
-  name_editable: boolean;
-  profile_unavailable?: boolean;
-  time_zone: string;
-  notifications: { kinds: string[]; browser: boolean; all_kinds: string[] };
-  drive: { configured: boolean; connected?: boolean; reason?: string };
-};
+type Me = { subject: string; time_zone: string; notifications: { kinds: string[]; browser: boolean; all_kinds: string[] } };
+// What the sign-in provider keeps, read apart from the settings kept here so a slow provider never hides those.
+type Profile = { email?: string; first_name?: string; last_name?: string; name_editable: boolean; profile_unavailable?: boolean; drive: { configured: boolean; connected?: boolean; reason?: string } };
+
+function useProfile() {
+  const [profile, setProfile] = useState<Profile>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/me/profile")
+      .then((data) => live && setProfile(data))
+      .catch((e) => live && setError(e instanceof Error ? e.message : "Your sign-in profile could not be read."));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return { profile, error };
+}
 
 const tabs = [
   { key: "general", label: "General", to: "/dashboard/settings", icon: "owner" },
@@ -44,9 +51,15 @@ const zones = (): string[] => {
 function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
   // Local development has no hosted session to read; the hook is chosen once, as the layout does.
   const session = authKitClientId ? useSession() : undefined;
-  const [first, setFirst] = useState(me.first_name ?? "");
-  const [last, setLast] = useState(me.last_name ?? "");
+  const { profile, error: profileError } = useProfile();
+  const editable = profile?.name_editable ?? false;
+  const [first, setFirst] = useState("");
+  const [last, setLast] = useState("");
   const [zone, setZone] = useState(me.time_zone);
+  useEffect(() => {
+    setFirst(profile?.first_name ?? "");
+    setLast(profile?.last_name ?? "");
+  }, [profile]);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   async function save(e: FormEvent) {
@@ -54,7 +67,7 @@ function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
     setBusy(true);
     setMessage("");
     try {
-      const changed = { time_zone: zone, ...(me.name_editable && (first !== (me.first_name ?? "") || last !== (me.last_name ?? "")) ? { first_name: first, last_name: last } : {}) };
+      const changed = { time_zone: zone, ...(editable && (first !== (profile?.first_name ?? "") || last !== (profile?.last_name ?? "")) ? { first_name: first, last_name: last } : {}) };
       await workspaceRequest("/me", changed);
       setMessage("Saved.");
       onSaved();
@@ -67,16 +80,16 @@ function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
   return (
     <section aria-label="General">
       <h2>General</h2>
-      <p>Signed in as {me.email || session?.user?.email || "the local development identity"}. Your email and sign-in belong to your firm's sign-in provider.</p>
+      <p>Signed in as {profile?.email || session?.user?.email || "the local development identity"}. Your email and sign-in belong to your firm's sign-in provider.</p>
       <form onSubmit={save}>
         <div className="form-grid">
           <label>
             First name
-            <input value={first} maxLength={100} disabled={!me.name_editable} onChange={(e) => setFirst(e.target.value)} />
+            <input value={first} maxLength={100} disabled={!editable} onChange={(e) => setFirst(e.target.value)} />
           </label>
           <label>
             Last name
-            <input value={last} maxLength={100} disabled={!me.name_editable} onChange={(e) => setLast(e.target.value)} />
+            <input value={last} maxLength={100} disabled={!editable} onChange={(e) => setLast(e.target.value)} />
           </label>
           <label>
             Time zone
@@ -89,10 +102,12 @@ function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
             <option key={z} value={z} />
           ))}
         </datalist>
-        {me.profile_unavailable ? (
+        {profileError || profile?.profile_unavailable ? (
           <p role="alert">Your name could not be read from the sign-in provider just now. The rest of your settings are here; reload to try the name again.</p>
+        ) : !profile ? (
+          <p role="status">Reading your name…</p>
         ) : (
-          !me.name_editable && <p className="note">Your name is kept by the sign-in provider, which local development does not have.</p>
+          !editable && <p className="note">Your name is kept by the sign-in provider, which local development does not have.</p>
         )}
         <p>
           <button className="primary" disabled={busy}>Save</button>{" "}
@@ -109,7 +124,8 @@ function General({ me, onSaved }: { me: Me; onSaved: () => void }) {
 }
 
 // What is connected for this person alone. Ledgers, senders and posting authority are the firm's and are linked, not kept here.
-function Connections({ me }: { me: Me }) {
+function Connections() {
+  const { profile, error } = useProfile();
   const [message, setMessage] = useState("");
   async function connect() {
     setMessage("");
@@ -125,13 +141,17 @@ function Connections({ me }: { me: Me }) {
       <section aria-label="Google Drive">
         <h2>Google Drive</h2>
         <p>Search your own Drive for a PDF, text or CSV file from a close's evidence pane. Only you can see your Drive; the grant is yours, through your firm's WorkOS connection.</p>
-        {!me.drive.configured ? (
+        {error ? (
+          <p role="alert">{error}</p>
+        ) : !profile ? (
+          <p role="status">Checking your Drive connection…</p>
+        ) : !profile.drive.configured ? (
           <p className="note">Google Drive needs the firm's hosted sign-in, which local development does not have.</p>
-        ) : me.drive.connected ? (
+        ) : profile.drive.connected ? (
           <p>Connected.</p>
         ) : (
           <p>
-            {me.drive.reason}{" "}
+            {profile.drive.reason}{" "}
             <button type="button" onClick={() => void connect()}>
               Connect Google Drive
             </button>
@@ -223,7 +243,7 @@ export default function Settings() {
         ) : !me ? (
           <p role="status">Opening…</p>
         ) : tab === "connections" ? (
-          <Connections me={me} />
+          <Connections />
         ) : tab === "notifications" ? (
           <Notifications me={me} onSaved={refresh} />
         ) : (

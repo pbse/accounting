@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 	_ "time/tzdata"
 )
@@ -30,27 +31,49 @@ func registerMe(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Your settings are unavailable.")
 			return
 		}
-		reply := map[string]any{"subject": subject(r), "time_zone": timeZone, "notifications": map[string]any{"kinds": kinds, "browser": browser, "all_kinds": attentionKinds}, "drive": map[string]any{"configured": false}}
-		// Name and email are WorkOS's; local development has neither.
-		reply["name_editable"] = false
-		if a := driveActor(r); a != nil {
-			// The profile is WorkOS's; when it cannot be read, the settings kept here still show, without it.
-			var user workosUser
-			if err := workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(a.Subject), nil, &user); err != nil {
-				reply["profile_unavailable"] = true
-			} else {
-				reply["email"], reply["first_name"], reply["last_name"], reply["name_editable"] = user.Email, user.FirstName, user.LastName, true
-			}
-			drive := map[string]any{"configured": true, "connected": false}
-			if _, reason, err := driveToken(r.Context(), a); err != nil {
-				drive["reason"] = "Google Drive could not be checked. Try again."
-			} else if reason != "" {
-				drive["reason"] = reason
-			} else {
-				drive["connected"] = true
-			}
-			reply["drive"] = drive
+		jsonReply(w, 200, map[string]any{"subject": subject(r), "time_zone": timeZone, "notifications": map[string]any{"kinds": kinds, "browser": browser, "all_kinds": attentionKinds}})
+	})
+	// What the sign-in provider keeps about the member, and their Drive grant, read apart from the settings kept here so
+	// a slow provider never hides those. Local development has neither.
+	mux.HandleFunc("GET /v1/closes/me/profile", func(w http.ResponseWriter, r *http.Request) {
+		if subject(r) == "" {
+			problem(w, 403, "Sign in to see your own settings.")
+			return
 		}
+		a := driveActor(r)
+		if a == nil {
+			jsonReply(w, 200, map[string]any{"name_editable": false, "drive": map[string]any{"configured": false}})
+			return
+		}
+		reply := map[string]any{"name_editable": false}
+		drive := map[string]any{"configured": true, "connected": false}
+		var user workosUser
+		var profileErr, driveErr error
+		var reason string
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			profileErr = workos(r.Context(), "GET", "/user_management/users/"+url.PathEscape(a.Subject), nil, &user)
+		}()
+		go func() {
+			defer wg.Done()
+			_, reason, driveErr = driveToken(r.Context(), a)
+		}()
+		wg.Wait()
+		if profileErr != nil {
+			reply["profile_unavailable"] = true
+		} else {
+			reply["email"], reply["first_name"], reply["last_name"], reply["name_editable"] = user.Email, user.FirstName, user.LastName, true
+		}
+		if driveErr != nil {
+			drive["reason"] = "Google Drive could not be checked. Try again."
+		} else if reason != "" {
+			drive["reason"] = reason
+		} else {
+			drive["connected"] = true
+		}
+		reply["drive"] = drive
 		jsonReply(w, 200, reply)
 	})
 	// Each change names only the settings it changes.
@@ -73,7 +96,8 @@ func registerMe(mux *http.ServeMux, db *sql.DB) {
 		if in.TimeZone != nil {
 			zone = strings.TrimSpace(*in.TimeZone)
 			if zone != "" {
-				if _, err := time.LoadLocation(zone); err != nil || len(zone) > 64 || !strings.Contains(zone, "/") {
+				// A region and city, or UTC, which a device may report; not Local, nor an abbreviation such as EST.
+				if _, err := time.LoadLocation(zone); err != nil || len(zone) > 64 || (zone != "UTC" && !strings.Contains(zone, "/")) {
 					problem(w, 422, "Choose a time zone by its region and city, such as America/New_York.")
 					return
 				}

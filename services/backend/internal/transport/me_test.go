@@ -66,8 +66,11 @@ func TestMemberSettingsArePersonalAndLeaveWithTheMembership(t *testing.T) {
 
 	// Without a sign-in provider the name is read-only and Drive is off; the notification kinds default to all of them.
 	code, me := call("user_a", "GET", "/v1/closes/me", nil)
-	if code != 200 || me["name_editable"] != false || me["time_zone"] != "" || me["drive"].(map[string]any)["configured"] != false {
+	if code != 200 || me["time_zone"] != "" {
 		t.Fatalf("fresh settings: %d %v", code, me)
+	}
+	if code, profile := call("user_a", "GET", "/v1/closes/me/profile", nil); code != 200 || profile["name_editable"] != false || profile["drive"].(map[string]any)["configured"] != false {
+		t.Fatalf("local profile: %d %v", code, profile)
 	}
 	if n := me["notifications"].(map[string]any); len(n["kinds"].([]any)) != len(attentionKinds) || len(n["all_kinds"].([]any)) != len(attentionKinds) || n["browser"] != false {
 		t.Fatalf("default notifications: %v", n)
@@ -77,13 +80,16 @@ func TestMemberSettingsArePersonalAndLeaveWithTheMembership(t *testing.T) {
 	}
 
 	// A time zone is kept only as a real region/city name.
-	for _, zone := range []string{"Mars/Olympus", "UTC", "Local", "EST"} {
+	for _, zone := range []string{"Mars/Olympus", "Local", "EST"} {
 		if code, _ = call("user_a", "POST", "/v1/closes/me", map[string]any{"time_zone": zone}); code != 422 {
 			t.Fatalf("zone %q accepted: %d", zone, code)
 		}
 	}
 	if code, out := call("user_a", "POST", "/v1/closes/me", map[string]any{"time_zone": " Europe/London "}); code != 200 || out["time_zone"] != "Europe/London" {
 		t.Fatalf("set zone: %d %v", code, out)
+	}
+	if code, out := call("user_a", "POST", "/v1/closes/me", map[string]any{"time_zone": "UTC"}); code != 200 || out["time_zone"] != "UTC" {
+		t.Fatalf("UTC, which a device may report: %d %v", code, out)
 	}
 	if code, out := call("user_a", "POST", "/v1/closes/me", map[string]any{"time_zone": "America/New_York"}); code != 200 || out["time_zone"] != "America/New_York" {
 		t.Fatalf("change zone: %d %v", code, out)
