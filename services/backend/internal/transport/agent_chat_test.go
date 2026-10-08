@@ -51,6 +51,7 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 		t.Fatalf("citations name the field and link the page: %v", cited)
 	}
 	ok("facts", "Two things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
+	ok("facts", "2 things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
 	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "1250", ""}}, "does not hold the cited value")
 	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}}, "bound to no read")
 	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t9", 0, "/rows/1/ledger_balance", "8000", ""}}, "did not run")

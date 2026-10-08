@@ -403,6 +403,10 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			if n := normalizeFigure(s.value); n != "" {
 				bound[s.sentence][n] = true
 			}
+			// A cited field that is prose ("2 things need you: …") supports each figure it holds.
+			for _, f := range agentFigures(got) {
+				bound[s.sentence][f] = true
+			}
 		case s.quote != "":
 			// A quote binds a document's text only; a JSON read is cited by the field that holds the value.
 			if !read.doc {
@@ -511,6 +515,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 	}
 	closesSeen := []string{}
 	var previewed []string
+	previewedLabels := map[string]string{}
 	previewedGoal, previewedAction := "", ""
 	previewedMore := false
 	known := true
@@ -613,6 +618,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 						break
 					}
 					args["closes"] = previewed
+					args["labels"] = previewedLabels
 					args["today"] = today
 				}
 				proposal := &agentProposal{Action: agentWrites[call.Name], Args: args}
@@ -676,12 +682,19 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				if t.name == "select_closes_preview" {
 					previewedGoal, _ = args["text"].(string)
 					previewedGoal = strings.TrimSpace(previewedGoal)
-					previewedAction = ""
+					previewedAction, previewedLabels = "", map[string]string{}
 					var op struct {
 						Action string `json:"action"`
+						Items  []struct {
+							CloseID string `json:"close_id"`
+							Label   string `json:"label"`
+						} `json:"items"`
 					}
 					if json.Unmarshal(capped, &op) == nil {
 						previewedAction = op.Action
+						for _, item := range op.Items {
+							previewedLabels[item.CloseID] = item.Label
+						}
 					}
 					previewed, previewedMore = closes, !lineageKnown
 					if previewed == nil {

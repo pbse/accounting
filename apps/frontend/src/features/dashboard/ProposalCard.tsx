@@ -49,6 +49,7 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
     }
   }
   const closes = Array.isArray(args.closes) ? (args.closes as string[]) : [];
+  const labels = (args.labels ?? {}) as Record<string, string>;
   return card(
     <>
       {kind === "approval" ? (
@@ -61,7 +62,7 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
           <ul>
             {closes.map((id) => (
               <li key={id}>
-                <Link to={`/dashboard/closes/${id}`}>Close #{id}</Link>
+                <Link to={`/dashboard/closes/${id}`}>{labels[id] || `Close #${id}`}</Link>
               </li>
             ))}
           </ul>
