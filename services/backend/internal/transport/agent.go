@@ -57,10 +57,15 @@ type agentResult struct {
 	rounds   int
 	calls    int
 	why      string
+	// kind is the answer's kind as the model declared it: facts, help, refusal or card.
+	kind string
 }
 
 // agentEvent sends one event line to the panel; false stops the loop.
 type agentEvent func(kind string, payload map[string]any) bool
+
+// agentDeadline is how long one message may run, in the chat and in the golden set's replay alike.
+const agentDeadline = 60 * time.Second
 
 const (
 	agentRounds   = 6
@@ -72,7 +77,7 @@ const (
 )
 
 // agentWrites maps a write tool to the card it proposes. The tool never runs from the loop.
-var agentWrites = map[string]string{"prepare_close": "prepare", "recheck_close": "recheck", "stop_work": "stop", "draft_client_request": "request", "request_approval": "approval", "hand_over": "delegate", "select_closes": "portfolio"}
+var agentWrites = map[string]string{"prepare_close": "prepare", "recheck_close": "recheck", "stop_work": "stop", "draft_client_request": "request", "request_approval": "approval", "hand_over": "delegate", "select_closes": "portfolio", "open_close": "open_close"}
 
 // agentExtra are the tools the registry does not list for MCP: the chat's own reads and its proposals.
 var agentExtra = []mcpTool{
@@ -96,7 +101,7 @@ func agentTools(closeScoped bool, level string) []mcpTool {
 		pinned := strings.Contains(t.path, "{close_id}")
 		write := agentWrites[t.name] != ""
 		switch {
-		case t.zip || t.upload || t.name == "propose_plan" || t.name == "open_close":
+		case t.zip || t.upload || t.name == "propose_plan":
 			continue
 		case !t.readOnly && !write:
 			continue
@@ -131,6 +136,21 @@ func agentDefinitions(tools []mcpTool, pinned bool) []llm.Tool {
 		out = append(out, llm.Tool{Name: t.name, Description: t.description, Parameters: parameters})
 	}
 	return out
+}
+
+// agentRequest is the read the loop makes for a tool call, with what the conversation adds to the model's arguments:
+// inside a close, list_procedures asks the route for this client's versions before its view limit; a portfolio
+// preview carries the member's own date, so day names in a goal resolve as the chat request supplied them. The golden
+// set's recorder makes its reads through here too, so a replay matches them exactly.
+func agentRequest(t mcpTool, args map[string]any, closeID, entity, today string) (string, map[string]any, error) {
+	if t.name == "list_procedures" && closeID != "" {
+		args["client"] = entity
+	}
+	path, body, err := agentPath(t, args, closeID)
+	if err == nil && t.name == "select_closes_preview" {
+		body["today"] = today
+	}
+	return path, body, err
 }
 
 // agentPath is the request a read makes: the pinned close replaces any close_id the model sent, other arguments
@@ -228,6 +248,7 @@ func agentScope(today, firm, entity, period, paperID string, permissions []strin
 		if paperID != "" {
 			where += " Draft #" + paperID + " is open."
 		}
+		where += " Opening a client's month or acting across clients is done from the dashboard conversation, not here."
 	}
 	can := "The member may confirm cards that need the workpapers:review permission."
 	if !slices.Contains(permissions, "workpapers:review") {
@@ -652,6 +673,13 @@ func validateProposal(t mcpTool, args map[string]any) string {
 				return "every_month must be true or false"
 			}
 		}
+	case "open_close":
+		if n := len(text("entity")); n < 1 || n > 200 {
+			return "entity must be a client name of 1 to 200 characters"
+		}
+		if _, err := time.Parse("2006-01", text("period")); err != nil {
+			return "period must be a close month, YYYY-MM"
+		}
 	case "stop_work":
 		if n := len(text("reason")); n < 1 || n > 500 {
 			return "reason must be 1 to 500 characters"
@@ -730,7 +758,7 @@ type agentPending struct {
 	stepID  string
 }
 
-func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question string, firm, entity, period, today string, permissions []string, level string, history []llm.Message, read func(ctx context.Context, method, path string, body any) (string, bool), canOpen func(closeID string) bool, emit agentEvent) agentResult {
+func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question string, firm, entity, period, today string, permissions []string, level string, history []llm.Message, read func(ctx context.Context, method, path string, body any) (string, bool), canOpen func(closeID string) bool, canClient func(entity string) bool, emit agentEvent) agentResult {
 	var out agentResult
 	tools := agentTools(closeID != "", level)
 	byName := map[string]mcpTool{}
@@ -900,10 +928,6 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			if json.Unmarshal([]byte(call.Arguments), &args) != nil || args == nil {
 				continue
 			}
-			if t.name == "list_procedures" && closeID != "" {
-				// Inside a close the route itself is asked for this client's versions, before its view limit.
-				args["client"] = entity
-			}
 			parsed[i] = args
 			p := &agentPending{t: t, args: args, began: time.Now(), stepID: ids[i]}
 			plans[i] = p
@@ -911,7 +935,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				p.refusal = "refused: the read budget of this message is spent"
 				continue
 			}
-			path, body, err := agentPath(t, args, closeID)
+			path, body, err := agentRequest(t, args, closeID, entity, today)
 			if err != nil {
 				p.refusal = "refused: " + err.Error()
 				continue
@@ -921,10 +945,6 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			if named, isText := args["close_id"].(string); closeID == "" && isText && named != "" && !canOpen(named) {
 				p.refusal = "refused: not a close you can open"
 				continue
-			}
-			if t.name == "select_closes_preview" {
-				// Day names in a goal resolve against the member's own date, as the chat request supplied it.
-				body["today"] = today
 			}
 			p.path, p.body = path, body
 			out.calls++
@@ -975,16 +995,19 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					step.Status, output = "refused", "refused: one proposal at a time; propose the next once this one is confirmed"
 					break
 				}
+				// A portfolio card carries its closes and an open_close card names a client and a month; every other card
+				// acts on one close.
+				onClose := agentWrites[call.Name] != "portfolio" && agentWrites[call.Name] != "open_close"
 				target := closeID
 				if target == "" {
 					target, _ = args["close_id"].(string)
 				}
-				if _, err := strconv.ParseInt(target, 10, 64); err != nil && agentWrites[call.Name] != "portfolio" {
+				if _, err := strconv.ParseInt(target, 10, 64); err != nil && onClose {
 					step.Status, output = "refused", "refused: close_id must be a close's number from list_closes"
 					break
 				}
 				// A firm-wide card acts on a close the member can open now, and that close joins the pair's lineage.
-				if closeID == "" && agentWrites[call.Name] != "portfolio" {
+				if closeID == "" && onClose {
 					if !canOpen(target) {
 						step.Status, output = "refused", "refused: not a close you can open"
 						break
@@ -999,6 +1022,16 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				if why := validateProposal(t, args); why != "" {
 					step.Status, output = "refused", "refused: "+why
 					break
+				}
+				if agentWrites[call.Name] == "open_close" {
+					// The month is opened for a client the member is assigned to; the card confirms it as the Clients page
+					// would, and the close it opens joins the pair's lineage then.
+					entity, _ := args["entity"].(string)
+					args["entity"] = strings.TrimSpace(entity)
+					if !canClient(strings.TrimSpace(entity)) {
+						step.Status, output = "refused", "refused: not a client you are assigned to"
+						break
+					}
 				}
 				if agentWrites[call.Name] == "request" {
 					// The request card drafts for every current candidate; the agent cannot narrow or word it.
@@ -1028,7 +1061,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					args["today"] = today
 				}
 				proposal := &agentProposal{Action: agentWrites[call.Name], Args: args}
-				if closeID == "" && proposal.Action != "portfolio" {
+				if closeID == "" && onClose {
 					proposal.TargetClose = target
 				}
 				out.proposal = proposal
@@ -1113,6 +1146,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 		out.outcome, out.why = "not_kept", rejected
 		return out
 	}
+	out.kind = answer.Kind
 	out.reply = chatReply{body: text, citations: citations}
 	if out.proposal != nil {
 		out.reply.action = out.proposal.Action

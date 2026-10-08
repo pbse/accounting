@@ -18,6 +18,7 @@ The release corpus required by the [build plan's accuracy contract](agent-first-
   - one uploads the same invoice twice.
 
   `TestTheSampleCorpusRunsThroughThePipeline` keeps it, and the harness, working.
+- **The agent chat's golden set** in `services/backend/acceptance/agent`: forty questions over the sample cases and twenty off-scope prompts, with the reads recorded for replay, run by `cmd/agent-eval` ([agent-chat.md](agent-chat.md), "Evaluation and acceptance").
 - **Not yet assembled: the release corpus itself.** It needs authorized, de-identified client months (roughly 20 client-months and 100 documents across at least two periods, as a planning floor) and an independent accountant's labels. It is kept **outside this repository**, because it holds client data.
 
 ## A case

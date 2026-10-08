@@ -1025,7 +1025,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			began := time.Now()
-			loopCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+			loopCtx, cancel := context.WithTimeout(r.Context(), agentDeadline)
 			result = runAgent(loopCtx, db, org, closeID, in.WorkpaperID, in.Text, firmName, entity, period, today.Format("2006-01-02"), actorPermissions(r), level, earlier, func(ctx context.Context, method, path string, body any) (string, bool) {
 				// The read obeys the loop's deadline, not only the request's.
 				raw, _ := json.Marshal(body)
@@ -1037,6 +1037,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			}, func(id string) bool {
 				var ok bool
 				return db.QueryRowContext(r.Context(), closeAccess, id, org, firmAccess(r), author).Scan(&ok) == nil && ok
+			}, func(entity string) bool {
+				ok, err := clientAccess(db, r, entity)
+				return err == nil && ok
 			}, emit)
 			cancel()
 			if denied {
@@ -1189,13 +1192,18 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		// Only a kept answer and its question are replayed to the model; a question whose answer was not kept stays on
 		// screen but never reaches a later request.
 		replayable := !agent || result.outcome == "kept" && result.known
+		// The answer names its question (question_id), so a card's confirmation reaches the question it was asked by
+		// however the author's requests interleaved.
+		questionID := ""
 		for _, m := range []struct {
 			role, body, citations, action, due, finish, proposal, target, steps string
 			monthly                                                             bool
 		}{{"user", in.Text, "[]", "", "", "", "", "", "", false}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish, proposal, target, steps, reply.monthly}} {
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes,replayable) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[],$16)`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes, replayable); err != nil {
+			var id string
+			if err = tx.QueryRowContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes,replayable,question_id) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[],$16,NULLIF($17,'')::bigint) RETURNING id::text`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes, replayable, questionID).Scan(&id); err != nil {
 				break
 			}
+			questionID = id
 		}
 		// A conversation keeps its latest 200 messages; firm-wide ones also expire after 30 days.
 		if err == nil {
@@ -1244,7 +1252,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if acting == "" {
 			acting = target
 			var ok bool
-			if action != "portfolio" && (acting == "" || tx.QueryRowContext(r.Context(), closeAccess, acting, org, firmAccess(r), author).Scan(&ok) != nil || !ok) {
+			if action != "portfolio" && action != "open_close" && (acting == "" || tx.QueryRowContext(r.Context(), closeAccess, acting, org, firmAccess(r), author).Scan(&ok) != nil || !ok) {
 				problem(w, 403, "You can no longer open the close this card acts on.")
 				return
 			}
@@ -1269,6 +1277,40 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			history(w, r, nil)
+		}
+		if action == "open_close" {
+			// The card opens the month it named, as the Clients page would. The opened close becomes the card's close
+			// and joins the pair's lineage in the same transaction as its creation: a close is never opened without
+			// its card recording it, and a card never names a close that was not opened.
+			entity, _ := proposal.Args["entity"].(string)
+			period, _ := proposal.Args["period"].(string)
+			entity = strings.TrimSpace(entity)
+			if _, err := time.Parse("2006-01", period); err != nil || len(entity) < 1 || len(entity) > 200 {
+				problem(w, 409, "This card no longer names a client and a month. Ask for it again.")
+				return
+			}
+			allowed, accessErr := clientAccess(db, r, entity)
+			if accessErr != nil {
+				problem(w, 503, "Client access unavailable.")
+				return
+			}
+			if !allowed {
+				problem(w, 403, "You are not assigned to this client.")
+				return
+			}
+			roles := templateRoles(org)
+			warmTemplateRoles(r.Context(), db, org, roles)
+			item, created, refused := openClose(r.Context(), tx, org, entity, period, roles)
+			if refused != nil {
+				problem(w, refused.status, refused.message)
+				return
+			}
+			if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET target_close_id=CASE WHEN id::text=$4 THEN $5::bigint ELSE target_close_id END,closes=(SELECT COALESCE(array_agg(DISTINCT c ORDER BY c),'{}') FROM unnest(closes||$5::bigint) c) WHERE `+scope+` AND (id::text=$4 OR id=(SELECT question_id FROM chat_messages WHERE `+scope+` AND id::text=$4))`, org, author, closeID, r.PathValue("message"), item.ID); err != nil {
+				problem(w, 503, "The close could not be opened. Ask for it again.")
+				return
+			}
+			record(map[string]any{"close_id": item.ID, "entity": item.Entity, "period": item.Period, "created": created}, "The close could not be opened. Ask for it again.")
+			return
 		}
 		if action == "delegate" {
 			// Handing over binds no digest: the goal follows the close's documents as they change.

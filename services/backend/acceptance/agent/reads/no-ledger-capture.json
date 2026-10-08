@@ -1,0 +1,19 @@
+{
+ "case": "no-ledger-capture",
+ "organization": "org_AgentEvalnoledgercapture",
+ "subject": "user_agent_eval",
+ "close_id": "4",
+ "entity": "Harbor Fixture LLC",
+ "period": "2026-09",
+ "today": "2026-10-08",
+ "reads": [
+  {
+   "tool": "close_brief",
+   "method": "GET",
+   "path": "/v1/closes/4/brief",
+   "body": null,
+   "output": "{\"headline\":\"2 things need you: capture a month-end snapshot, confirm 1 document.\",\"lines\":[{\"area\":\"ledger\",\"state\":\"attention\",\"text\":\"No month-end Trial Balance yet. Capture a period snapshot so balances can be tied.\",\"tab\":\"evidence\"},{\"area\":\"preparation\",\"state\":\"attention\",\"text\":\"1 document: 0 prepared, 1 need your confirmation.\",\"tab\":\"overview\"},{\"area\":\"review\",\"state\":\"info\",\"text\":\"No drafts yet.\",\"tab\":\"workpapers\"},{\"area\":\"balance sheet\",\"state\":\"waiting\",\"text\":\"The tie-out waits on a month-end snapshot.\",\"tab\":\"overview\"},{\"area\":\"exceptions\",\"state\":\"waiting\",\"text\":\"No transaction capture or snapshot to scan yet. Captures run daily once QuickBooks is connected.\",\"tab\":\"evidence\"},{\"area\":\"sign-off\",\"state\":\"waiting\",\"text\":\"Sign-off waits on 2 items: Define the supported scope and required work before sign-off., Work #5 is needs confirmation.\",\"tab\":\"signoff\"}]}\n",
+   "ok": true
+  }
+ ]
+}
