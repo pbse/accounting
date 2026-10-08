@@ -41,6 +41,15 @@ Measured in production from the US east coast: attention 1.0 s, closes 1.4 s, ro
 - **Fewer round trips.** The firm check is one query. A read-only rollback keeps the connection's firm. Home reads all
   export labels in one query. The close brief runs its reads in parallel.
 
+## The way to the API
+
+After the move, an API request that touches no database still took about 250 ms from the east coast, against 110 ms
+for a static file. The API's Durable Object, which forwards each request to the container, ran in San Jose: a Durable
+Object stays where it was first made. Every request went from the edge to San Jose and from there to the container in
+Atlanta. The edge now uses a new object, `api-enam`, made with the location hint `enam`. The container application
+allows two instances, because the old object's container keeps its instance until it sleeps, 24 hours after its last
+request.
+
 ## In the browser
 
 A page used to load its pieces one after another: the main script, the layout's code, the session check, the page's
