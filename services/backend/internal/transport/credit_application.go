@@ -378,6 +378,11 @@ func registerCreditApplications(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			defer tx.Rollback()
+			// An approval of a live write is given only while the firm has writing on, decided under the firm-row lock that
+			// turning it off takes, so turning it off withdraws every approval it does not refuse.
+			if production && refuseLedgerWrites(w, r.Context(), tx, organization(r)) {
+				return
+			}
 			if issue, err := correctionIndependenceIssue(r.Context(), tx, closeID, item.ProposedBy, a.Subject, item.Amount); err != nil {
 				problem(w, 503, "Firm review policy could not be checked. No write was made.")
 				return

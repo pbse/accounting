@@ -300,7 +300,18 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, "Type APPROVE VENDOR CREDIT.")
 				return
 			}
-			result, e := db.ExecContext(r.Context(), `UPDATE vendor_credit_postings SET state='approved',approved_by=$2,approval_expires_at=now()+interval '10 minutes' WHERE id::text=$1 AND state IN ('preview','approved')`, item.ID, a.Subject)
+			tx, e := db.BeginTx(r.Context(), nil)
+			if e != nil {
+				problem(w, 503, "Approval could not be saved.")
+				return
+			}
+			defer tx.Rollback()
+			// An approval of a live write is given only while the firm has writing on, decided under the firm-row lock that
+			// turning it off takes, so turning it off withdraws every approval it does not refuse.
+			if production && refuseLedgerWrites(w, r.Context(), tx, organization(r)) {
+				return
+			}
+			result, e := tx.ExecContext(r.Context(), `UPDATE vendor_credit_postings SET state='approved',approved_by=$2,approval_expires_at=now()+interval '10 minutes' WHERE id::text=$1 AND state IN ('preview','approved')`, item.ID, a.Subject)
 			if e != nil {
 				var constraint *pgconn.PgError
 				if errors.As(e, &constraint) && constraint.Code == "23505" && constraint.ConstraintName == "vendor_credit_one_reference" {
@@ -313,6 +324,10 @@ func registerVendorCredit(mux *http.ServeMux, db *sql.DB) {
 			n, _ := result.RowsAffected()
 			if n != 1 {
 				problem(w, 409, "Posting attempt already exists.")
+				return
+			}
+			if tx.Commit() != nil {
+				problem(w, 503, "Approval could not be saved.")
 				return
 			}
 		case "execute":

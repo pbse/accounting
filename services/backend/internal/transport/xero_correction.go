@@ -364,6 +364,9 @@ func registerXeroCorrections(mux *http.ServeMux, db *sql.DB) {
 		if refuseSignedOff(w, r.Context(), tx, closeID) {
 			return
 		}
+		if refuseLedgerWrites(w, r.Context(), tx, org) {
+			return
+		}
 		approver := a.Subject
 		if in.Action == "execute" {
 			approver = record.ApprovedBy
@@ -387,9 +390,6 @@ func registerXeroCorrections(mux *http.ServeMux, db *sql.DB) {
 			}
 			record, _ = readXeroCorrection(r.Context(), db, closeID, invoiceID)
 			jsonReply(w, 200, record)
-			return
-		}
-		if refuseLedgerWrites(w, r.Context(), tx, org) {
 			return
 		}
 		var current string
