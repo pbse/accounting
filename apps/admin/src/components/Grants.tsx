@@ -69,6 +69,12 @@ export function OpenGrant({ firm }: { firm: string }) {
   );
 }
 
+// GrantCount marks the account button while any content grant is open, so the grant is never out of sight.
+export function GrantCount() {
+  const { grants } = useGrants();
+  return grants.length > 0 ? <span className="pill muted">{grants.length === 1 ? "1 grant open" : `${grants.length} grants open`}</span> : null;
+}
+
 // GrantList shows the staff member's open grants, each with a way to end it early.
 export function GrantList() {
   const { grants, reload } = useGrants();

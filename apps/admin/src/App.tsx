@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { BrowserRouter, Link, NavLink, Outlet, Route, Routes, useOutletContext } from "react-router";
 import { signOut } from "./auth";
-import { GrantList, GrantsProvider } from "./components/Grants";
+import { GrantCount, GrantList, GrantsProvider } from "./components/Grants";
 import { useResource } from "./api";
 import { Overview } from "./pages/Overview";
 import { Firms } from "./pages/Firms";
@@ -68,6 +68,7 @@ function Layout() {
           </span>
         </Link>
         <nav aria-label="Staff console">
+          <div className="topbar-nav">
           <NavLink className="nav-item" end to="/"><Icon name="work" />Overview</NavLink>
           <NavLink className="nav-item" to="/firms"><Icon name="firm" />Firms</NavLink>
           <NavLink className="nav-item" to="/people"><Icon name="clients" />People</NavLink>
@@ -78,12 +79,14 @@ function Layout() {
           {me.data?.permissions.includes("platform:plans") && <NavLink className="nav-item" to="/plans"><Icon name="file" />Plans</NavLink>}
           <NavLink className="nav-item" to="/jobs"><Icon name="blocked" />Stuck work</NavLink>
           <NavLink className="nav-item" to="/connections"><Icon name="link" />Connections</NavLink>
+          </div>
         </nav>
         <div className="topbar-tools">
           <details className="topbar-account">
             <summary aria-label="Account">
               <Avatar label={me.data?.subject ?? "?"} />
               <span>{me.data?.subject ?? "Account"}</span>
+              <GrantCount />
             </summary>
             <div>
               <GrantList />

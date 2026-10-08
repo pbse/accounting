@@ -72,7 +72,8 @@ export default function WorkspaceLayout() {
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (event.key !== "/" || target.closest("input, textarea, select, [contenteditable]") || !search.current) return;
+      // The search is hidden on a phone; the shortcut then leaves focus where it is.
+      if (event.key !== "/" || target.closest("input, textarea, select, [contenteditable]") || !search.current || search.current.offsetParent === null) return;
       event.preventDefault();
       search.current.focus();
     };
@@ -116,13 +117,15 @@ export default function WorkspaceLayout() {
           </span>
         </Link>
         <nav aria-label="Workspace">
-          {items.map((item) => (
-            <NavLink className="nav-item" end={item.end} to={item.to} key={item.to}>
-              <Icon name={item.icon} />
-              {item.label}
-              {item.to === "/dashboard/attention" && signedIn && <AttentionBadge />}
-            </NavLink>
-          ))}
+          <div className="topbar-nav">
+            {items.map((item) => (
+              <NavLink className="nav-item" end={item.end} to={item.to} key={item.to}>
+                <Icon name={item.icon} />
+                {item.label}
+                {item.to === "/dashboard/attention" && signedIn && <AttentionBadge />}
+              </NavLink>
+            ))}
+          </div>
         </nav>
         <div className="topbar-tools">
           {known && !executive && (

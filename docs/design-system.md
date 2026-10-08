@@ -82,7 +82,7 @@ Icons come from Hugeicons free, Stroke Rounded (MIT), copied from `@hugeicons/co
 
 ## The shell
 
-Both apps share one shell: a sticky top bar (`.topbar`) with the brand pill, the navigation as pills (`nav` of `.nav-item`s, the current one solid blue) and the tools on the right (`.topbar-tools`: the client search and "Ask the agent" in the firm app, and an account menu, `.topbar-account`, in both), then the page column (`.app-main > .page`), one centred column up to `--page-width` wide. On a phone the bar wraps to two rows and the navigation scrolls sideways. The firm app's bar names four pages, Work, Attention, Clients and Firm; Security and Measure open from Firm, the preparation forms from a close. The staff console's bar names its ten.
+Both apps share one shell: a sticky top bar (`.topbar`) with the brand pill, the navigation as pills (`nav` of `.nav-item`s, the current one solid blue) and the tools on the right (`.topbar-tools`: the client search and "Ask the agent" in the firm app, and an account menu, `.topbar-account`, in both), then the page column (`.app-main > .page`), one centred column up to `--page-width` wide. Below 1100px the navigation takes a second row and scrolls sideways; on a phone the bar also loses its subtitle and search, and the blue button keeps its icon alone. An open content grant shows on the staff console's account button. The firm app's bar names four pages, Work, Attention, Clients and Firm; Security and Measure open from Firm, the preparation forms from a close. The staff console's bar names its ten.
 
 ## Rollout
 
