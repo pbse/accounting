@@ -64,7 +64,9 @@ var capabilities = []capability{
 // tested (a verified sandbox record exists), production approved (this server allows live use), or enabled for the
 // clients whose grant in force (writes) or active connection (reads) covers it. Journal kinds are checked in a
 // QuickBooks sandbox, and Xero operations on a demo company, outside the app, so no sandbox date is recorded for them.
-func capabilityRegister(evidence, grants, services, acceptances json.RawMessage) ([]map[string]any, error) {
+// writes is whether the firm has turned writing to clients' books on in Firm settings: until it does, no write
+// operation is enabled for any client, whatever the server and the grants allow.
+func capabilityRegister(evidence, grants, services, acceptances json.RawMessage, writes bool) ([]map[string]any, error) {
 	var found []struct {
 		Provider, Kind string
 		Sandbox, Live  *time.Time
@@ -153,7 +155,10 @@ func capabilityRegister(evidence, grants, services, acceptances json.RawMessage)
 		}
 		row["sandbox_recorded"] = c.provider != "Xero" && !slices.Contains([]string{"accrual", "loan", "owner", "payroll", "settlement"}, c.kind)
 		status := "documented"
+		off := c.kind != "read" && !writes
 		switch {
+		case approved && off:
+			status = "off in Firm settings"
 		case approved && len(clients) > 0:
 			status = "enabled"
 		case approved:
@@ -161,7 +166,7 @@ func capabilityRegister(evidence, grants, services, acceptances json.RawMessage)
 		case sandbox != nil:
 			status = "sandbox tested"
 		}
-		if !approved {
+		if !approved || off {
 			clients = []string{}
 		}
 		slices.Sort(clients)

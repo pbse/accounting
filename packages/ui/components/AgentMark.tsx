@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Icon } from "./Icon";
 import "./AgentMark.css";
 
-// The agent's mark: a blue glossy tile with the sparkle. With children it leads a label, such as the
+// The agent's mark: a solid blue tile with the sparkle. With children it leads a label, such as the
 // heading of something the agent wrote.
 export function AgentMark({ size = "md", children }: { size?: "sm" | "md"; children?: ReactNode }) {
   const mark = (

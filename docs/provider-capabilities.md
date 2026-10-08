@@ -148,7 +148,7 @@ Ordered by what they risk. Each live check needs credentials the user installs t
    - one Cloudflare scan verdict.
 
    Record each with its date in [validation](validation.md). For QuickBooks, Xero and Stripe operations, also record the sandbox-check and acceptance stages in the Security view, which takes only those three providers.
-2. **Production `prepaid` posting is on by default without a sandbox record.** Decide whether the default becomes none, matching Xero, or record the sandbox check.
+2. **Production `prepaid` posting was on by default without a sandbox record.** Settled 2026-10-07: nothing is written to a client's live books until the firm turns on **Writing to clients' books** in Firm settings, which starts off (migration 131). The server's kind list still defaults to `prepaid` beneath it.
 3. **Not every file is scanned.** Direct uploads, Drive files and fetched Stripe reports skip the malware scan that forwarded and client-request files get.
 4. **A failed Xero refresh does not hold sign-off** the way a stopped QuickBooks refresh does.
 5. **Neither ledger revokes OAuth at the provider** on disconnect.

@@ -52,6 +52,7 @@ These are pointers into the existing implementation, not evidence that a package
 | --- | --- |
 | [Architecture](docs/architecture.md) | System boundaries, identity/authority, exact accounting and shared capabilities. |
 | [Design system](docs/design-system.md) | Tray shell, components, agent interaction conventions and layout checks. Reuse for accountant and executive experiences. |
+| [Workspace simplification](docs/workspace-simplification.md) | The 2026-10-07 audit's decisions: the cleaner look, the top bar, and the PR sequence that rebuilds the home, Clients, the close page, Firm settings and the copy. |
 | [Workflow engine](docs/workflow-engine.md) | Go durable workflow primitives, activity execution and current/deferred engine capabilities. |
 | [LLM gateway](docs/llm-gateway.md) | Model routing, context-machine integration, execution and operational boundaries. |
 | [Context-machine deployment](docs/context-machine-deployment.md) | Runtime configuration, deployment and verification procedure. |

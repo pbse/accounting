@@ -1,22 +1,20 @@
-/* White tiles with a hairline ring in a white tray, 4px apart; a tile you can open tints on hover. */
+/* White cards in a row, 12px apart; a card you can open lifts its ring on hover. */
 .stat-group {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
-  gap: var(--space-4);
-  padding: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-12);
   margin-bottom: var(--space-24);
-  background: var(--surface);
-  border-radius: var(--radius-md);
 }
 .app-shell .stat-tile {
   display: flex;
   flex-direction: column;
+  gap: var(--space-16);
   width: 100%;
-  padding: 0;
+  padding: var(--space-16);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: var(--shadow-tile);
+  box-shadow: var(--shadow-card);
   color: var(--ink);
   text-align: left;
   text-decoration: none;
@@ -26,33 +24,32 @@
 }
 .app-shell a.stat-tile:hover,
 .app-shell button.stat-tile:hover:not(:disabled) {
-  background: var(--hover);
-  box-shadow: var(--shadow-tile-hover);
+  background: var(--surface);
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--line-strong);
 }
 .stat-head {
   display: flex;
   align-items: center;
   gap: var(--space-10);
-  padding: var(--space-12);
-  border-bottom: 1px solid var(--line);
-  font-size: 15px;
+  color: var(--ink-2);
+  font-size: 13px;
   font-weight: 500;
 }
 .stat-body {
   display: block;
-  padding: var(--space-16) var(--space-12);
 }
 .stat-value {
   display: block;
-  font-size: 28px;
-  line-height: 32px;
-  font-weight: 500;
+  font-size: 30px;
+  line-height: 36px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 .stat-caption {
   display: block;
-  margin-top: var(--space-8);
+  margin-top: var(--space-4);
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 16px;
 }
