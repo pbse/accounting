@@ -1,0 +1,35 @@
+{
+ "case": "reading-ten-times-too-large",
+ "organization": "org_AgentEvalreadingtentimestoolarge",
+ "subject": "user_agent_eval",
+ "close_id": "2",
+ "entity": "Harbor Fixture LLC",
+ "period": "2026-09",
+ "today": "2026-10-08",
+ "reads": [
+  {
+   "tool": "close_brief",
+   "method": "GET",
+   "path": "/v1/closes/2/brief",
+   "body": null,
+   "output": "{\"headline\":\"2 things need you: confirm 1 document, support 1 balance.\",\"lines\":[{\"area\":\"ledger\",\"state\":\"waiting\",\"text\":\"Books read from the QuickBooks Trial Balance captured Oct 8, 05:53 UTC. The ledger is not certified: No current QuickBooks period reports for this month.\",\"tab\":\"evidence\"},{\"area\":\"preparation\",\"state\":\"attention\",\"text\":\"1 document: 0 prepared, 1 need your confirmation.\",\"tab\":\"overview\"},{\"area\":\"review\",\"state\":\"info\",\"text\":\"No drafts yet.\",\"tab\":\"workpapers\"},{\"area\":\"balance sheet\",\"state\":\"attention\",\"text\":\"0 of 1 balance-sheet account tie. No support yet: Accounts Payable.\",\"tab\":\"overview\"},{\"area\":\"exceptions\",\"state\":\"done\",\"text\":\"The agent found 0 questions for the client.\",\"tab\":\"overview\"},{\"area\":\"sign-off\",\"state\":\"waiting\",\"text\":\"Sign-off waits on 5 items: Coverage for Insurance: missing evidence., Coverage for Prepaid Expenses: missing evidence., Coverage for Accounts Payable: missing evidence. and 2 more\",\"tab\":\"signoff\"}]}\n",
+   "ok": true
+  },
+  {
+   "tool": "read_evidence_text",
+   "method": "GET",
+   "path": "/v1/closes/2/evidence/9/text",
+   "body": null,
+   "output": "Acme Insurance Co\nInvoice INV-778\nBill to: Harbor Fixture LLC\nAnnual premium USD 1,200.00\nCoverage period 2026-09-01 to 2027-08-31\n",
+   "ok": true
+  },
+  {
+   "tool": "list_close_jobs",
+   "method": "GET",
+   "path": "/v1/closes/2/jobs",
+   "body": null,
+   "output": "[{\"id\":\"3\",\"error\":\"\",\"state\":\"needs_confirmation\",\"created_at\":\"2026-10-08T05:53:25.70043+00:00\",\"finished_at\":null,\"workpaper_ids\":[]}]\n",
+   "ok": true
+  }
+ ]
+}

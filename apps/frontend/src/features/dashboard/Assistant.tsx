@@ -19,7 +19,7 @@ import { Suggestions } from "@close/ui/components/Suggestions";
 
 // A step the agent made for an answer: what ran, its outcome and where its detail lives; never its content.
 export type Step = { id: string; tool: string; title: string; status: string; size?: number; truncated?: boolean; link?: { label: string; href: string } };
-type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request" | "approval" | "portfolio"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null; proposal?: Record<string, unknown>; target_close_id?: string; target_close?: string; steps?: Step[] };
+type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request" | "approval" | "portfolio" | "open_close"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null; proposal?: Record<string, unknown>; target_close_id?: string; target_close?: string; steps?: Step[] };
 
 function readOpen() {
   try {
@@ -342,7 +342,9 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
                     Acts on <Link to={`/dashboard/closes/${m.target_close_id}`}>{m.target_close || `close #${m.target_close_id}`}</Link>, not on another close.
                   </p>
                 )}
-                {m.action === "portfolio" ? (
+                {m.action === "open_close" ? (
+                  <ProposalCard kind="open_close" proposal={m.proposal ?? {}} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+                ) : m.action === "portfolio" ? (
                   <ProposalCard kind="portfolio" proposal={m.proposal ?? {}} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
                 ) : m.action === "approval" ? (
                   cardClose && <ProposalCard kind="approval" proposal={m.proposal ?? {}} closeId={cardClose} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />

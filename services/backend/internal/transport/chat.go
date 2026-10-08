@@ -1037,6 +1037,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			}, func(id string) bool {
 				var ok bool
 				return db.QueryRowContext(r.Context(), closeAccess, id, org, firmAccess(r), author).Scan(&ok) == nil && ok
+			}, func(entity string) bool {
+				ok, err := clientAccess(db, r, entity)
+				return err == nil && ok
 			}, emit)
 			cancel()
 			if denied {
@@ -1244,7 +1247,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if acting == "" {
 			acting = target
 			var ok bool
-			if action != "portfolio" && (acting == "" || tx.QueryRowContext(r.Context(), closeAccess, acting, org, firmAccess(r), author).Scan(&ok) != nil || !ok) {
+			if action != "portfolio" && action != "open_close" && (acting == "" || tx.QueryRowContext(r.Context(), closeAccess, acting, org, firmAccess(r), author).Scan(&ok) != nil || !ok) {
 				problem(w, 403, "You can no longer open the close this card acts on.")
 				return
 			}
@@ -1269,6 +1272,40 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 			history(w, r, nil)
+		}
+		if action == "open_close" {
+			// The card opens the month it named, as the Clients page would. The opened close becomes the card's close
+			// and joins the pair's lineage in the same transaction as its creation: a close is never opened without
+			// its card recording it, and a card never names a close that was not opened.
+			entity, _ := proposal.Args["entity"].(string)
+			period, _ := proposal.Args["period"].(string)
+			entity = strings.TrimSpace(entity)
+			if _, err := time.Parse("2006-01", period); err != nil || len(entity) < 1 || len(entity) > 200 {
+				problem(w, 409, "This card no longer names a client and a month. Ask for it again.")
+				return
+			}
+			allowed, accessErr := clientAccess(db, r, entity)
+			if accessErr != nil {
+				problem(w, 503, "Client access unavailable.")
+				return
+			}
+			if !allowed {
+				problem(w, 403, "You are not assigned to this client.")
+				return
+			}
+			roles := templateRoles(org)
+			warmTemplateRoles(r.Context(), db, org, roles)
+			item, created, refused := openClose(r.Context(), tx, org, entity, period, roles)
+			if refused != nil {
+				problem(w, refused.status, refused.message)
+				return
+			}
+			if _, err = tx.ExecContext(r.Context(), `UPDATE chat_messages SET target_close_id=CASE WHEN id::text=$4 THEN $5::bigint ELSE target_close_id END,closes=(SELECT COALESCE(array_agg(DISTINCT c ORDER BY c),'{}') FROM unnest(closes||$5::bigint) c) WHERE `+scope+` AND (id::text=$4 OR id=(SELECT max(id) FROM chat_messages WHERE `+scope+` AND role='user' AND id<$4::bigint))`, org, author, closeID, r.PathValue("message"), item.ID); err != nil {
+				problem(w, 503, "The close could not be opened. Ask for it again.")
+				return
+			}
+			record(map[string]any{"close_id": item.ID, "entity": item.Entity, "period": item.Period, "created": created}, "The close could not be opened. Ask for it again.")
+			return
 		}
 		if action == "delegate" {
 			// Handing over binds no digest: the goal follows the close's documents as they change.
