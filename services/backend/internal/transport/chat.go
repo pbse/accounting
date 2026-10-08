@@ -967,12 +967,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		if agent {
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
-			if closeID == "" {
-				var err error
-				if clients, err = clientsNow(db); err != nil {
-					problem(w, 503, "Conversation unavailable.")
-					return
-				}
+			// The clients the member can open now are remembered for every agent turn: a read without lineage, firm-wide
+			// or a cross-client read inside a close, is covered by this set being unchanged before the answer goes out.
+			var err error
+			if clients, err = clientsNow(db); err != nil {
+				problem(w, 503, "Conversation unavailable.")
+				return
 			}
 			// The first event waits until the member's firm membership and access are checked again.
 			denied := false
@@ -1060,6 +1060,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			if allowed, err := still(db); err != nil || !allowed || denied {
 				problem(w, 403, "Your access changed. Nothing was saved.")
 				return
+			}
+			if !result.known {
+				if now, err := clientsNow(db); err != nil || now != clients {
+					problem(w, 403, "Your access changed. Nothing was saved.")
+					return
+				}
 			}
 			if raw, err := json.Marshal(result.steps); err == nil && len(result.steps) > 0 {
 				trace = string(raw)
