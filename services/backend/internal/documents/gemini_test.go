@@ -152,6 +152,18 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 	if _, method, _ = reading.page(short, "", render, tesseract); method != "OCR (English; verify against original)" || len(*seen) != 0 {
 		t.Fatalf("near the deadline, Tesseract: %q sent %d", method, len(*seen))
 	}
+	// Gemini is asked only while the time left covers its call and local reading of the scanned pages still to come.
+	minute, cancelMinute := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelMinute()
+	g, seen = fakeGemini(t, 200, answer("SCANNED INVOICE 6,000.00"))
+	reading = Reading{Gemini: g, local: 5 * localPerPage}
+	if _, method, _ = reading.page(minute, "", render, tesseract); method != "OCR (English; verify against original)" || len(*seen) != 0 {
+		t.Fatalf("five scanned pages to come leave no time for Gemini in a minute: %q sent %d", method, len(*seen))
+	}
+	reading = Reading{Gemini: g, local: localPerPage}
+	if _, method, _ = reading.page(minute, "", render, tesseract); !strings.HasPrefix(method, "Gemini ") || len(*seen) != 1 {
+		t.Fatalf("one scanned page to come leaves time for Gemini: %q sent %d", method, len(*seen))
+	}
 
 	// A page that cannot be rendered fails only when nothing else can read it.
 	broken := func() ([]byte, error) { return nil, errors.New("pdftoppm failed") }
@@ -189,7 +201,7 @@ func TestSameReadingSetsOnlyLayoutAside(t *testing.T) {
 	// Whitespace and line breaks are layout.
 	for _, pair := range [][2]string{
 		{"Total      1,200.00\nDue 2026-09-30", "Total 1,200.00 Due 2026-09-30"},
-		{"Refund (1,200.00)", "Refund ( 1,200.00 )"},
+		{"Refund (1,200.00)\n\n", "  Refund   (1,200.00)"},
 		{"Net 100.00\t\r\n", "Net 100.00"},
 	} {
 		if !sameReading(pair[0], pair[1]) {
@@ -199,6 +211,8 @@ func TestSameReadingSetsOnlyLayoutAside(t *testing.T) {
 	// Anything else is a different reading: a figure, its sign, comma or decimal point, a word, case or order.
 	for _, pair := range [][2]string{
 		{"A 100\nB 200", "A 200\nB 100"},
+		{"Item 1  234", "Item 12  34"},
+		{"Refund (1,200.00)", "Refund ( 1,200.00 )"},
 		{"Fee .50", "Fee 50"},
 		{"Fee 1,50", "Fee 150"},
 		{"Total 12,000.00", "Total 12000.00"},

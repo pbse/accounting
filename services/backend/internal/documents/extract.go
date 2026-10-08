@@ -59,12 +59,18 @@ func command(ctx context.Context, name string, args ...string) (string, error) {
 type Reading struct {
 	Gemini  *Gemini
 	Reserve func(context.Context) error
+	// local is the time the document's scanned pages from this one on need to be read locally, should Gemini fail
+	// them: Gemini is asked only while the time left covers its call and that.
+	local time.Duration
 	// off is set once the firm's limit or the time left rules Gemini out for the rest of the document.
 	off bool
 }
 
-// geminiReserve is the time a document keeps back from Gemini, so its remaining pages can still be read locally.
-const geminiReserve = 40 * time.Second
+// A scanned page takes at most about this long to render and read with Tesseract; geminiMargin is kept besides.
+const (
+	localPerPage = 6 * time.Second
+	geminiMargin = 10 * time.Second
+)
 
 // page reads one page. Its text layer, when it has one, is exact: Gemini's reading replaces it only when the two say
 // exactly the same thing apart from layout, so a misread figure or word is never taken. A page without one takes
@@ -79,7 +85,7 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 		return image, renderErr
 	}
 	hasLayer := strings.TrimSpace(layer) != ""
-	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < geminiReserve {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < geminiTimeout+r.local+geminiMargin {
 		r.off = true
 	}
 	if r.Gemini != nil && !r.off {
@@ -149,12 +155,22 @@ func Extract(ctx context.Context, original []byte, reading Reading) (string, err
 	if pages < 1 || pages > 20 {
 		return "", fmt.Errorf("PDF must contain 1–20 pages; no pages were silently omitted")
 	}
-	var output boundedOutput
+	// Every page's text layer first, so the scanned pages, which only a machine can read, are known before any is.
+	layers := make([]string, pages+1)
 	for page := 1; page <= pages; page++ {
 		n := strconv.Itoa(page)
-		layer, err := command(ctx, "pdftotext", "-f", n, "-l", n, "-layout", "-enc", "UTF-8", pdf, "-")
-		if err != nil {
+		if layers[page], err = command(ctx, "pdftotext", "-f", n, "-l", n, "-layout", "-enc", "UTF-8", pdf, "-"); err != nil {
 			return "", fmt.Errorf("PDF text extraction failed on page %d", page)
+		}
+	}
+	var output boundedOutput
+	for page := 1; page <= pages; page++ {
+		n, layer := strconv.Itoa(page), layers[page]
+		reading.local = 0
+		for _, later := range layers[page:] {
+			if strings.TrimSpace(later) == "" {
+				reading.local += localPerPage
+			}
 		}
 		prefix := filepath.Join(dir, "page")
 		text, method, err := reading.page(ctx, layer, func() ([]byte, error) {

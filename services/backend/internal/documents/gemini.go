@@ -12,9 +12,9 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
-	"unicode"
 )
 
 // Gemini reads a rendered PDF page through Google's Gemini API (generateContent), for every page of a PDF; Extract
@@ -139,18 +139,9 @@ func (g *Gemini) Read(ctx context.Context, png []byte) (string, string, error) {
 	return text.String(), cmp.Or(reply.ModelVersion, g.model), nil
 }
 
-// squash is a page's text without its layout: every whitespace character dropped and nothing else changed, so case,
-// punctuation, commas, signs, decimal points, words and their order all still count.
-func squash(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) {
-			return -1
-		}
-		return r
-	}, s)
-}
-
-// sameReading says whether two readings of a page say exactly the same thing, laid out differently. Gemini's reading
-// of a page with a text layer is used only then: a swapped, changed, added, dropped or re-signed amount, a moved
-// comma or decimal point, a moved label or a different word keeps the layer's exact text.
-func sameReading(a, b string) bool { return squash(a) == squash(b) }
+// sameReading says whether two readings of a page say exactly the same thing, laid out differently: the same tokens
+// (runs of text between whitespace), character for character, in the same order. Only how much whitespace separates
+// them, and where lines break, may differ. Gemini's reading of a page with a text layer is used only then. A swapped,
+// changed, added, dropped, re-signed or re-split amount ("1 234" against "12 34"), a moved comma or decimal point, a
+// moved label or a different word keeps the layer's exact text.
+func sameReading(a, b string) bool { return slices.Equal(strings.Fields(a), strings.Fields(b)) }
