@@ -124,7 +124,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			answers = "Agent chat is on for client closes, served by " + llm.ProviderLabel(r.Context(), "chat") + ": a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions, and an open draft, and before writing the model may read that close's own records through the assistant's read-only tools (documents' text, drafts, tie-out, changes, exceptions, search), each read made with the member's permissions and listed under the answer."
 		}
 		if level == "firm" {
-			answers = "Agent chat is on firm-wide, served by " + llm.ProviderLabel(r.Context(), "chat") + ": as for client closes, and a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue, blocked work and work handed to the agent, with client names, across the closes the member can open."
+			answers += " Agent chat is also on firm-wide: a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue, blocked work and work handed to the agent, with client names, across the closes the member can open."
 		}
 		gemini := map[string]string{"gemini": "Key set on the worker; model " + ocrModel, "tesseract": "Key not set on the worker; PDFs are read locally", "held": "Key set on the worker, but " + heldBecause(ocrModel) + ", so PDFs are read locally", "": "The worker has not reported its PDF reading in the last five minutes"}[ocr]
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.

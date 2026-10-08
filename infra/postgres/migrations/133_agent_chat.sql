@@ -11,7 +11,7 @@ UPDATE organizations SET agent_chat=CASE
  ELSE 'off' END;
 -- Firms whose written answers this migration stopped are told so in Firm settings until a level is chosen.
 ALTER TABLE organizations ADD COLUMN agent_chat_stopped boolean NOT NULL DEFAULT false;
-UPDATE organizations SET agent_chat_stopped=assistant_model_answers AND NOT assistant_investigations;
+UPDATE organizations SET agent_chat_stopped=(assistant_model_answers AND NOT assistant_investigations) OR (assistant_firm_answers AND NOT (assistant_model_answers AND assistant_investigations));
 -- The policy history records the level only on a change that set it; assistant_model_answers stays as the staff
 -- planner's own consent (staff_planning in the policy route).
 ALTER TABLE organization_policy_changes ADD COLUMN agent_chat text CHECK (agent_chat IN ('off','closes','firm'));
