@@ -175,7 +175,8 @@ var capability = regexp.MustCompile(`(?i)^\s*(?:i (?:can|can't|cannot|only|read|
 // not say what the agent does here. A plain refusal declines and names what the agent can do; nothing else.
 func advisesAfterDeclining(answer string) bool {
 	declined := false
-	for _, sentence := range strings.FieldsFunc(answer, func(r rune) bool { return r == '.' || r == '!' || r == '?' || r == '\n' }) {
+	// A clause after a semicolon or a colon is read as its own sentence.
+	for _, sentence := range strings.FieldsFunc(answer, func(r rune) bool { return r == '.' || r == '!' || r == '?' || r == ';' || r == ':' || r == '\n' }) {
 		if strings.TrimSpace(sentence) == "" {
 			continue
 		}
@@ -208,11 +209,13 @@ func toolSet(q Question, o Observed) []string {
 			out = append(out, "also called "+tool)
 		}
 	}
-	// A read the model chose that was refused or not recorded is still its choice.
+	// A read the model chose that was refused or not recorded is a miss, whatever its tool: with other arguments it
+	// is another read.
+	tried := map[string]bool{}
 	for _, tool := range o.Attempted {
-		if !slices.Contains(q.Tools, tool) && !seen[tool] {
-			seen[tool] = true
-			out = append(out, "also tried "+tool)
+		if !tried[tool] {
+			tried[tool] = true
+			out = append(out, "tried "+tool+" with a read that was refused or not recorded")
 		}
 	}
 	return out
