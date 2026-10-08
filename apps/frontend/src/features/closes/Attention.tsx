@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { workspaceRequest } from "./workspace";
 import { PageHeader } from "@close/ui/components/PageHeader";
@@ -10,7 +10,7 @@ type Event = { key: string; kind: string; text: string; at: string; workpaper_id
 type Group = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: Event[] };
 type Inbox = { groups: Group[]; unread: number; unread_keys: string[]; page: number; has_more: boolean; kinds: string[]; preferences: { kinds: string[]; browser: boolean } };
 
-const kindLabels: Record<string, string> = {
+export const kindLabels: Record<string, string> = {
   answered: "Client replies",
   confirm: "Facts to confirm",
   failed: "Failed preparation",
@@ -59,44 +59,6 @@ export function AttentionBadge() {
     };
   }, []);
   return unread > 0 ? <span className="pill" aria-label={`${unread} unread`}>{unread}</span> : null;
-}
-
-function Preferences({ inbox, onSaved }: { inbox: Inbox; onSaved: () => void }) {
-  const [kinds, setKinds] = useState(inbox.preferences.kinds);
-  const [browser, setBrowser] = useState(inbox.preferences.browser);
-  const [message, setMessage] = useState("");
-  async function save(e: FormEvent) {
-    e.preventDefault();
-    try {
-      if (browser && "Notification" in window && Notification.permission === "default") await Notification.requestPermission();
-      await workspaceRequest("/attention/preferences", { kinds, browser });
-      setMessage(browser && (!("Notification" in window) || Notification.permission !== "granted") ? "Saved. This browser blocks notifications, so only the badge shows new items." : "Saved.");
-      onSaved();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Preferences could not be saved.");
-    }
-  }
-  return (
-    <details>
-      <summary>Notification preferences</summary>
-      <form onSubmit={save}>
-        <fieldset>
-          <legend>Counted in your unread badge and notifications</legend>
-          {inbox.kinds.map((k) => (
-            <label key={k}>
-              <input type="checkbox" checked={kinds.includes(k)} onChange={(e) => setKinds(e.target.checked ? [...kinds, k] : kinds.filter((x) => x !== k))} /> {kindLabels[k] ?? k}
-            </label>
-          ))}
-        </fieldset>
-        <label>
-          <input type="checkbox" checked={browser} onChange={(e) => setBrowser(e.target.checked)} /> Show a browser notification for new items while the workspace is open. It says only how
-          many items are new, never a client, amount or document, and the page it opens reads them with your current access.
-        </label>
-        <button className="primary">Save preferences</button>
-        {message && <p role="status">{message}</p>}
-      </form>
-    </details>
-  );
 }
 
 // One place for what needs a person, drawn from work, review and request states; each item links to where it is acted on.
@@ -217,7 +179,9 @@ export default function Attention() {
           </button>
         </p>
       )}
-      {inbox && <Preferences inbox={inbox} onSaved={() => setVersion((v) => v + 1)} />}
+      <p className="note">
+        Which kinds count in your unread badge, and browser notifications, are in <Link to="/dashboard/settings?tab=notifications">your settings</Link>.
+      </p>
     </section>
   );
 }

@@ -33,6 +33,7 @@ Pages build from these instead of repeating markup and class names. Each takes i
 | `HexMap` | A whole split into up to four parts that never overlap, as clusters of hex cells with a legend of counts and shares that add up to 100 (Measure's track record). Its label states every share for screen readers.
 | `DotChart` | One series over time as dot columns over a full grid of empty dots (Measure's median human minutes by month). A point with no value stays empty rather than reading as zero; its label states every point.
 | `Segmented` | A set of toggles (`onChange`) or page tabs (each item's `to`), with optional counts and an alert dot. |
+| `VerticalTabs` | A settings page's sections as a column of links beside the selected section's cards (Your settings); on a phone the column becomes a strip above. |
 | `RowList`, `EntityCell` | A card of rows with optional column names; `EntityCell` is a row's first cell with the client's avatar or another leading mark. Rows themselves are `.row` links, summaries or blocks. |
 | `IconTile`, `Avatar`, `Icon` | A 36px tinted circle with an icon in its hue (blue, orange, teal, green, violet, red or gray), a client's initial in its colour, and an icon by name. |
 | `AgentComposer` | The card that leads a page with the agent: title, what it can do, a large input, one-click asks and the caller's results below. |

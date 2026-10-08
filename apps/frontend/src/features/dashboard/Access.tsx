@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { AccountAccess, authKitClientId, useSession } from "../auth/Auth";
 import { unlock, useUnlocked } from "../closes/workspace";
 import { Avatar } from "@close/ui/components/Avatar";
@@ -45,7 +46,7 @@ function SignedIn({ children }: { children: ReactNode }) {
   );
 }
 
-// The account menu in the top bar: the person's initial, and under it their session and the way out.
+// The account menu in the top bar: the person's initial, and under it their session, their own settings and the way out.
 export function AccountMenu() {
   const unlocked = useUnlocked();
   const session = authKitClientId ? useSession() : undefined;
@@ -58,6 +59,11 @@ export function AccountMenu() {
         <span className="topbar-account-name">{session?.user ? session.user.email.split("@")[0] : label}</span>
       </summary>
       <div>
+        {(session?.user || unlocked) && (
+          <Link to="/dashboard/settings" onClick={(event) => event.currentTarget.closest("details")?.removeAttribute("open")}>
+            Your settings
+          </Link>
+        )}
         {authKitClientId ? (
           <AccountAccess />
         ) : (

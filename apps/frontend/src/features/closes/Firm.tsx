@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { PageHeader } from "@close/ui/components/PageHeader";
-import { AgentAccess } from "./AgentAccess";
 import { isEnrollmentError } from "./ClosesList";
 import { EmailSettings } from "./Email";
 import { FirmEnrollment } from "./Enterprise";
@@ -539,9 +538,8 @@ export default function Firm() {
       <ClientRoster />
       <SupportAndExit />
           <p>
-            People, client assignments, agent grants, connected services and recent changes are in the <Link to="/dashboard/security">Security center</Link>. Request or give up your own agent access here.
+            People, client assignments, agent grants, connected services and recent changes are in the <Link to="/dashboard/security">Security center</Link>. Your own agent access (MCP) is under <Link to="/dashboard/settings?tab=connections">your settings</Link>.
           </p>
-          <AgentAccess />
           <EmailSettings />
         </div>
       )}
