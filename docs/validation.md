@@ -3884,3 +3884,13 @@ PR 2b of the [agentic chat plan](agent-chat.md): `transport/agent.go` answers fr
 - Frontend `npm run check`, `vite build` and the command tests: pass; commands are sent as `{command, argument}`.
 
 Not verified: a live context-machine completion for the `chat` purpose (no provider call is made in tests); the panel's step list and firm-wide cards in a browser (PR 3 carries the layout check).
+
+## 2026-10-08: the agent panel (PR 3)
+
+PR 3 of the [agentic chat plan](agent-chat.md): the panel is a conversation. Local run (API on a fresh migrated PostgreSQL, the firm app on Vite, Edge through Playwright):
+
+- Screenshots at 1440×900 and 390×844: an empty conversation shows the scope chip and three starter chips only, and none beside a page that leads with its own composer; `/status` and `/blocked` answer as plain agent text with the mark and citation chips; typing `/` lists the commands above the composer; the info button shows what is sent; in a close, `/prepare` and `/delegate Friday` render their cards as the message; on a phone the panel is a sheet with a back button and the composer above the home indicator.
+- `npm run check` (frontend): passes.
+- `node scripts/layout-check.mjs`: run with the panel check added (the dashboard at both widths opens the agent from the top bar's button, empty, and the close overview opens it and asks `/prepare` so its card renders; each checks nothing widens the page, the drawer is 360–420px on a desktop and the sheet is the screen on a phone, the composer is in view and every card sits inside the panel, then closes it; a running step list needs a model and is covered by the agent's event tests): "Checked 89 page views across both apps at desktop and phone width." with no failures (the drawer is measured once its 180 ms slide has settled).
+
+Not verified: the agent's live step list with a real model (no provider call is made locally); the drawer with a real provider's latency.
