@@ -192,6 +192,19 @@ func agentLink(t mcpTool, args map[string]any) chatCitation {
 	}
 	base := "/dashboard/closes/" + closeID
 	if closeID == "" {
+		// A firm-wide read's page: the job list on Preparation, the queue and the rest on Home.
+		switch t.path {
+		case "/v1/closes/work":
+			view, _ := args["view"].(string)
+			if view == "" {
+				view = "active"
+			}
+			return chatCitation{t.title, "/dashboard/work?view=" + url.QueryEscape(view)}
+		case "/v1/closes/review-queue":
+			return chatCitation{t.title, "/dashboard#review-queue"}
+		case "/v1/closes":
+			return chatCitation{t.title, "/dashboard/closes"}
+		}
 		return chatCitation{t.title, "/dashboard"}
 	}
 	if id, ok := args["evidence_id"].(string); ok {

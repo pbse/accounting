@@ -131,6 +131,12 @@ type owedMonth struct {
 // client (a name fragment or YYYY-MM, or "") as Work's filter does. A month the client's monthly hand-over is set to
 // open, and not stuck waiting, is marked as the hand-over's.
 func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm, review bool, who, client string) ([]owedMonth, error) {
+	return owedMonthsThrough(ctx, tx, endedMonth(now), org, firm, review, who, client)
+}
+
+// owedMonthsThrough is owedMonths up to and including the month through (YYYY-MM): the roster read uses the current
+// month, so a client's month that is still running, its first among them, opens with one tap where it is listed.
+func owedMonthsThrough(ctx context.Context, tx *sql.Tx, through, org string, firm, review bool, who, client string) ([]owedMonth, error) {
 	// Months are matched by client identity, so a month opened under a confirmed alias of the client counts. A deleted
 	// month is matched through its receipt, which holds digests, never names: of the client the close belonged to
 	// (client_digest), which may since have been confirmed as an alias of this one, and the same with case and
@@ -155,7 +161,7 @@ func owedMonths(ctx context.Context, tx *sql.Tx, now time.Time, org string, firm
   AND NOT EXISTS(SELECT 1 FROM opened o WHERE o.client=client_identity(r.organization_id,r.client_entity) AND o.period=m.period)
   AND NOT EXISTS(SELECT 1 FROM done x WHERE x.client=client_identity(r.organization_id,r.client_entity) AND x.period=m.period)
   AND ($5='' OR r.client_entity ILIKE '%'||$5||'%' OR m.period=$5)
- ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, endedMonth(now), client)
+ ORDER BY m.period DESC,lower(r.client_entity)`, org, firm, who, through, client)
 	if err != nil {
 		return nil, err
 	}

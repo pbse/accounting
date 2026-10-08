@@ -10,7 +10,6 @@ import { askAssistant, nextReview, starterCommands, starters, takePending, useOp
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { commands, parseCommand, runCommand, type Ask } from "./commands";
 import { AgentMark } from "@close/ui/components/AgentMark";
-import { Icon } from "@close/ui/components/Icon";
 import { Suggestions } from "@close/ui/components/Suggestions";
 
 // A step the agent made for an answer: what ran, its outcome and where its detail lives; never its content.
@@ -71,10 +70,10 @@ function Panel() {
     document.body.classList.toggle("assistant-open", open);
     return () => document.body.classList.remove("assistant-open");
   }, [open]);
-  const toggleButton = useRef<HTMLButtonElement>(null);
+  // Closing the panel hands focus back to the top bar's Ask the agent button, which opened it.
   const opened = useRef(open);
   useEffect(() => {
-    if (!open && opened.current) toggleButton.current?.focus();
+    if (!open && opened.current) document.querySelector<HTMLButtonElement>(".topbar .ask-agent")?.focus();
     opened.current = open;
   }, [open]);
   function toggle(next: boolean) {
@@ -85,12 +84,7 @@ function Panel() {
       // The panel still works without remembering its state.
     }
   }
-  if (!open)
-    return (
-      <button ref={toggleButton} type="button" className="assistant-toggle" onClick={() => toggle(true)} aria-label="Open the assistant">
-        <Icon name="agent" /> Ask the agent
-      </button>
-    );
+  if (!open) return null;
   // A new close or draft mounts a fresh conversation, so nothing from the previous context can show.
   return <Conversation key={`${closeId}/${paperId}`} closeId={closeId} paperId={paperId} focus={openRequests} onClose={() => toggle(false)} />;
 }

@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
+	"close.local/backend/internal/auth"
 	"close.local/backend/internal/preparation"
 )
 
@@ -107,8 +109,11 @@ LEFT JOIN work_requests uq ON uq.id=CASE WHEN v.key LIKE 'unanswered:%' THEN spl
 ORDER BY v.at DESC,v.key`
 
 type attentionEvent struct {
-	Key          string     `json:"key"`
-	Kind         string     `json:"kind"`
+	Key  string `json:"key"`
+	Kind string `json:"kind"`
+	// Yours says the reader holds the authority the event's action needs (a reviewer's for drafts and facts, a sender's
+	// for requests); otherwise it waits on a teammate, and Home counts it apart.
+	Yours        bool       `json:"yours"`
 	Text         string     `json:"text"`
 	At           time.Time  `json:"at"`
 	WorkpaperID  string     `json:"workpaper_id,omitempty"`
@@ -129,7 +134,37 @@ type attentionGroup struct {
 	Events   []attentionEvent `json:"events"`
 }
 
-func attentionEvents(ctx context.Context, db *sql.DB, r *http.Request) ([]attentionEvent, error) {
+// reader is a database or a transaction: the reads below run on either, so Home can take them in its own snapshot.
+type reader interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// eventYours says whether the reader may take the action an event of kind names: replies, drafts, facts, failures,
+// files and request follow-ups need the reviewer role, an undelivered email the sender role with it, and a goal or a
+// hand-off only the reader it names.
+func eventYours(r *http.Request, kind string) bool {
+	a := auth.Actor(r.Context())
+	if a == nil {
+		return false
+	}
+	if a.Organization == "" {
+		return true
+	}
+	switch kind {
+	case "answered", "approve", "confirm", "failed", "fix", "changed", "release", "send", "unanswered":
+		// A reviewer acts on an approved request with no delivery by recording one made another way (the work handler's
+		// delivery action needs the reviewer role alone), and follows up or withdraws an unanswered one; only sending the
+		// email itself, the email kind below, needs the sender role too.
+		return slices.Contains(a.Permissions, "workpapers:review")
+	case "email":
+		// Sending the email again is a sender's act as well as a reviewer's, as the send handler requires.
+		return slices.Contains(a.Permissions, "requests:send") && slices.Contains(a.Permissions, "workpapers:review")
+	}
+	return true
+}
+
+func attentionEvents(ctx context.Context, db reader, r *http.Request) ([]attentionEvent, error) {
 	rows, err := db.QueryContext(ctx, attentionQuery, organization(r), firmAccess(r), subject(r))
 	if err != nil {
 		return nil, err
@@ -146,12 +181,30 @@ func attentionEvents(ctx context.Context, db *sql.DB, r *http.Request) ([]attent
 		if snoozed.Valid && snoozed.Time.After(time.Now()) {
 			e.SnoozedUntil = &snoozed.Time
 		}
+		e.Yours = eventYours(r, e.Kind)
 		events = append(events, e)
 	}
-	return events, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// A hand-off two days old is one decision, not two: once its reminder exists, the reminder stands for it (its own
+	// key, so it is new again even when the hand-off was read) and the hand-off itself is not listed.
+	reminded := map[string]bool{}
+	for _, e := range events {
+		if base, found := strings.CutSuffix(e.Key, ":reminder"); found {
+			reminded[base] = true
+		}
+	}
+	kept := events[:0]
+	for _, e := range events {
+		if !reminded[e.Key] {
+			kept = append(kept, e)
+		}
+	}
+	return kept, nil
 }
 
-func attentionPreferences(ctx context.Context, db *sql.DB, r *http.Request) ([]string, bool, error) {
+func attentionPreferences(ctx context.Context, db reader, r *http.Request) ([]string, bool, error) {
 	var raw []byte
 	var browser bool
 	err := db.QueryRowContext(ctx, `SELECT array_to_json(kinds),browser FROM attention_preferences WHERE organization_id=$1 AND subject=$2`, organization(r), subject(r)).Scan(&raw, &browser)
@@ -178,30 +231,8 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Attention inbox unavailable.")
 			return
 		}
-		view := r.URL.Query().Get("view")
 		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-		unread, shown := []string{}, []attentionEvent{}
-		for _, e := range events {
-			if e.SnoozedUntil == nil && !e.Read && slices.Contains(kinds, e.Kind) {
-				unread = append(unread, e.Key)
-			}
-			if (e.SnoozedUntil != nil) == (view == "snoozed") && (view != "unread" || !e.Read) && (view != "mine" || e.group.Owner == "mine") {
-				shown = append(shown, e)
-			}
-		}
-		// Pages of 200 keep every item reachable; the unread keys cover all of them, for the badge and notifications.
-		page = min(max(page, 0), max(len(shown)-1, 0)/200)
-		start, end := page*200, min(page*200+200, len(shown))
-		groups := []*attentionGroup{}
-		for _, e := range shown[start:end] {
-			i := slices.IndexFunc(groups, func(g *attentionGroup) bool { return g.CloseID == e.group.CloseID })
-			if i < 0 {
-				g := e.group
-				groups, i = append(groups, &g), len(groups)
-			}
-			groups[i].Events = append(groups[i].Events, e)
-		}
-		jsonReply(w, 200, map[string]any{"groups": groups, "unread": len(unread), "unread_keys": unread, "page": page, "has_more": end < len(shown), "kinds": attentionKinds, "preferences": map[string]any{"kinds": kinds, "browser": browser}})
+		jsonReply(w, 200, attentionInbox(events, kinds, browser, r.URL.Query().Get("view"), page, r.URL.Query().Get("order") == "priority"))
 	})
 	mux.HandleFunc("POST /v1/closes/attention", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -279,4 +310,74 @@ func registerAttention(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]any{"kinds": in.Kinds, "browser": in.Browser})
 	})
+}
+
+// attentionInbox is the inbox response for events already read: the view's events (all, mine, unread or snoozed) in
+// pages of 200, grouped by close, with the keys that are new to the reader. With priority, the reader's own decisions
+// come first, then the most pressing close (overdue, then by due date, undated last) and within it the newest event,
+// applied before the page boundary so page one holds what matters most; otherwise newest first. Home reads page one
+// of every event in the same snapshot as its counts, so the card and the list it opens agree.
+func attentionInbox(events []attentionEvent, kinds []string, browser bool, view string, page int, priority bool) map[string]any {
+	unread, shown := []string{}, []attentionEvent{}
+	for _, e := range events {
+		// New, for the badge and a notification, is what the reader can act on; a teammate's decision is shown, not announced.
+		if e.SnoozedUntil == nil && !e.Read && e.Yours && slices.Contains(kinds, e.Kind) {
+			unread = append(unread, e.Key)
+		}
+		// New, as a view, is what the count calls new: unread, the reader's to act on, of a kind they count.
+		isNew := !e.Read && e.Yours && slices.Contains(kinds, e.Kind)
+		if (e.SnoozedUntil != nil) == (view == "snoozed") && (view != "unread" || isNew) && (view != "mine" || e.group.Owner == "mine") {
+			shown = append(shown, e)
+		}
+	}
+	// Home asks for the reader's own decisions first, then the most pressing close: overdue closes, then by due date,
+	// undated last, and within a close the newest event; the order is applied before the page boundary, so page one
+	// holds what matters most.
+	if priority {
+		today := time.Now().UTC().Format("2006-01-02")
+		rank := func(g attentionGroup) int {
+			switch {
+			case g.DueOn != "" && g.DueOn < today:
+				return 0
+			case g.DueOn != "":
+				return 1
+			}
+			return 2
+		}
+		// The reader's own decisions come before a teammate's, so the first page holds what the reader can act on.
+		own := func(e attentionEvent) int {
+			if e.Yours {
+				return 0
+			}
+			return 1
+		}
+		slices.SortStableFunc(shown, func(a, b attentionEvent) int {
+			if c := own(a) - own(b); c != 0 {
+				return c
+			}
+			if c := rank(a.group) - rank(b.group); c != 0 {
+				return c
+			}
+			if c := strings.Compare(a.group.DueOn, b.group.DueOn); c != 0 {
+				return c
+			}
+			if c := strings.Compare(a.group.CloseID, b.group.CloseID); c != 0 {
+				return c
+			}
+			return b.At.Compare(a.At)
+		})
+	}
+	// Pages of 200 keep every item reachable; the unread keys cover all of them, for the badge and notifications.
+	page = min(max(page, 0), max(len(shown)-1, 0)/200)
+	start, end := page*200, min(page*200+200, len(shown))
+	groups := []*attentionGroup{}
+	for _, e := range shown[start:end] {
+		i := slices.IndexFunc(groups, func(g *attentionGroup) bool { return g.CloseID == e.group.CloseID })
+		if i < 0 {
+			g := e.group
+			groups, i = append(groups, &g), len(groups)
+		}
+		groups[i].Events = append(groups[i].Events, e)
+	}
+	return map[string]any{"groups": groups, "unread": len(unread), "unread_keys": unread, "page": page, "has_more": end < len(shown), "kinds": attentionKinds, "preferences": map[string]any{"kinds": kinds, "browser": browser}}
 }

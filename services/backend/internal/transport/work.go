@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/mail"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -151,7 +152,10 @@ func registerWork(mux *http.ServeMux, db *sql.DB) {
 				return
 			}
 		}
-		rows, err := db.QueryContext(r.Context(), workSelect+` WHERE `+workScope+` AND (`+predicate+`) AND (cardinality($6::text[])=0 OR j.id::text=ANY($6)) ORDER BY CASE WHEN j.state IN ('needs_confirmation','failed') THEN 0 WHEN (`+predicates["blocked"]+`) OR `+issues+` THEN 1 WHEN j.state='waiting_client' THEN 2 WHEN j.state IN ('waiting_evidence','interpreting','queued') THEN 3 ELSE 4 END,(c.owner<>'' AND c.owner=$5) DESC,c.due_on NULLS LAST,`+priorityOrder+`,j.id DESC LIMIT 101`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r), jobs)
+		// The firm-wide list pages by 100 (offset), so every job a count names can be reached; a close's own list is one page.
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		offset = max(offset, 0)
+		rows, err := db.QueryContext(r.Context(), workSelect+` WHERE `+workScope+` AND (`+predicate+`) AND (cardinality($6::text[])=0 OR j.id::text=ANY($6)) ORDER BY CASE WHEN j.state IN ('needs_confirmation','failed') THEN 0 WHEN (`+predicates["blocked"]+`) OR `+issues+` THEN 1 WHEN j.state='waiting_client' THEN 2 WHEN j.state IN ('waiting_evidence','interpreting','queued') THEN 3 ELSE 4 END,(c.owner<>'' AND c.owner=$5) DESC,c.due_on NULLS LAST,`+priorityOrder+`,j.id DESC LIMIT 101 OFFSET $7`, r.PathValue("id"), search, organization(r), firmAccess(r), subject(r), jobs, offset)
 		if err != nil {
 			problem(w, 503, "Work inbox unavailable.")
 			return

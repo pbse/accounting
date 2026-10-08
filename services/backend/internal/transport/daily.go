@@ -46,7 +46,10 @@ var dailyLatest = `(SELECT * FROM (
  ) u ORDER BY at DESC LIMIT 1)`
 
 // dailyFindings ranks every accessible unsigned current or prior-month close by the findings captured since its last review.
-func dailyFindings(ctx context.Context, db *sql.DB, org string, firm bool, who string) ([]dailyItem, error) {
+// dailyFindings lists each open close of this and last month with its latest capture's exceptions; client narrows it
+// to a client name fragment or a month (YYYY-MM), as Home's filter does, or "" for every close.
+// A close whose recorded sign-off no longer stands (reopened) is named in reopened and listed like an open one.
+func dailyFindings(ctx context.Context, db reader, org string, firm bool, who, client string, reopened []string) ([]dailyItem, error) {
 	rows, err := db.QueryContext(ctx, `SELECT c.id::text,c.entity,c.period,s.source,s.id::text,s.at,s.requested_by,s.exceptions,
  CASE WHEN s.source='quickbooks' AND b.connection_id=s.connection_id THEN b.exceptions WHEN s.source='xero' AND bx.connection_id=s.connection_id THEN bx.exceptions END,d.reviewed_at,s.unchecked
  FROM client_closes c
@@ -54,7 +57,8 @@ func dailyFindings(ctx context.Context, db *sql.DB, org string, firm bool, who s
  LEFT JOIN daily_reviews d ON d.close_id=c.id LEFT JOIN quickbooks_entity_syncs b ON b.id=d.sync_id LEFT JOIN xero_snapshots bx ON bx.id=d.xero_snapshot_id
  WHERE c.organization_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=c.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(c.entity) AND g.granted))
  AND c.period BETWEEN to_char((now() AT TIME ZONE 'UTC')-interval '1 month','YYYY-MM') AND to_char(now() AT TIME ZONE 'UTC','YYYY-MM')
- AND COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off'`, org, firm, who)
+ AND (COALESCE((SELECT decision FROM close_signoffs WHERE close_id=c.id ORDER BY id DESC LIMIT 1),'')<>'signed_off' OR c.id::text=ANY($5::text[]))
+ AND ($4='' OR c.entity ILIKE '%'||$4||'%' OR c.period=$4)`, org, firm, who, client, reopened)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +105,24 @@ func dailyFindings(ctx context.Context, db *sql.DB, org string, firm bool, who s
 // that transaction captures found since an accountant last reviewed each close.
 func registerDaily(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/daily", func(w http.ResponseWriter, r *http.Request) {
-		items, err := dailyFindings(r.Context(), db, organization(r), firmAccess(r), subject(r))
+		client := strings.TrimSpace(r.URL.Query().Get("client"))
+		if len(client) > 200 {
+			problem(w, 422, "Client search is too long.")
+			return
+		}
+		// One snapshot: the closes reopened since their sign-off are found first, then listed with the open ones.
+		tx, err := db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if err != nil {
+			problem(w, 503, "Daily books unavailable.")
+			return
+		}
+		defer tx.Rollback()
+		reopened, err := reopenedCloses(r.Context(), tx, r, time.Now().UTC())
+		if err != nil {
+			problem(w, 503, "Daily books unavailable.")
+			return
+		}
+		items, err := dailyFindings(r.Context(), tx, organization(r), firmAccess(r), subject(r), client, reopened)
 		if err != nil {
 			problem(w, 503, "Daily books unavailable.")
 			return
@@ -112,12 +133,16 @@ func registerDaily(mux *http.ServeMux, db *sql.DB) {
 		}
 		jsonReply(w, 200, map[string]any{"items": items, "has_more": more})
 	})
+	// Marking a capture's exceptions reviewed is a reviewer's decision: it clears them from every reader's count.
 	mux.HandleFunc("POST /v1/closes/{id}/daily-review", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
 			SyncID string `json:"sync_id"`
 			Source string `json:"source"`
 		}
 		if !decode(w, r, &in) {
+			return
+		}
+		if _, ok := reviewActor(w, r); !ok {
 			return
 		}
 		tx, err := db.BeginTx(r.Context(), nil)

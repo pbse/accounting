@@ -118,9 +118,14 @@ func TestDailyBooksShowsExceptionsNewSinceTheLastReview(t *testing.T) {
 		return out.Items
 	}
 	got := daily()
-	if len(got) != 2 || got[0].CloseID != dental || len(got[0].New) != 2 || got[1].CloseID != bakery {
-		t.Fatalf("unreviewed closes list every exception, most new first; signed-off and other firms' closes are left out: %+v", got)
+	// The fixture's sign-off records a digest the close no longer has, so it no longer stands: the close is reopened
+	// and listed like an open one, last. Another firm's close is left out.
+	if len(got) != 3 || got[0].CloseID != dental || len(got[0].New) != 2 || got[1].CloseID != bakery || got[2].CloseID != signed {
+		t.Fatalf("unreviewed closes list every exception, most new first, a reopened close among them; other firms' closes are left out: %+v", got)
 	}
+	// Marking a capture reviewed needs the reviewer role; firm-wide sight of the client is not enough.
+	call("POST", "/v1/closes/"+dental+"/daily-review", map[string]string{"sync_id": latest}, 403)
+	actor.Permissions = []string{"clients:all", "workpapers:review"}
 	call("POST", "/v1/closes/"+dental+"/daily-review", map[string]string{"sync_id": first}, 409)
 	call("POST", "/v1/closes/"+dental+"/daily-review", map[string]string{"sync_id": latest}, 200)
 	if got = daily(); got[len(got)-1].CloseID != dental || got[len(got)-1].Total != 2 || len(got[len(got)-1].New) != 0 {
