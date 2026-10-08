@@ -3,10 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import { authKitClientId } from "../auth/Auth";
 import { Icon } from "@close/ui/components/Icon";
 import { PageHeader } from "@close/ui/components/PageHeader";
-import { AskAgent } from "../dashboard/AskAgent";
-import { starters } from "../dashboard/assistantStore";
 import { EntityCell, RowList } from "@close/ui/components/RowList";
-import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { FirmEnrollment } from "./Enterprise";
 import { PlanChips } from "./Planning";
 import { workspaceRequest } from "./workspace";
@@ -16,115 +13,220 @@ export function isEnrollmentError(message: string) {
   return !!authKitClientId && message.includes("firm or membership");
 }
 
+type RosterClient = { entity: string; active: boolean; since: string; last_period: string; owed: string[]; closes: { id: string; entity: string; period: string; signed_off: boolean; rechecked: boolean; unchecked?: boolean; due_on?: string; priority?: string; assigned?: boolean; owned_by_me?: boolean }[] };
+type Roster = { clients: RosterClient[]; can_manage: boolean };
+type ListedClose = Close & { client?: string; signed_off?: boolean; rechecked?: boolean; unchecked?: boolean };
+type ClientRow = { entity: string; active?: boolean; since?: string; closes: ListedClose[]; owed: string[] };
+
+const thisMonth = () => new Date().toISOString().slice(0, 7);
+const monthName = (period: string) => new Date(`${period}-01T00:00:00`).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+
+// Clients: every client the reader can work on, with the months it owes that nobody opened (one tap opens one) and
+// its open closes. A firm administrator adds a client by name; nothing else is asked.
 export default function ClosesList() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const query = params.get("q") ?? "";
-  const [items, setItems] = useState<Close[]>([]);
+  const [closes, setCloses] = useState<ListedClose[]>([]);
+  // The closes the server matched to the search (a confirmed alias among the ways it matches), kept whatever the
+  // local names say.
+  const [found, setFound] = useState<Set<string>>(new Set());
   const [more, setMore] = useState(false);
+  const [roster, setRoster] = useState<Roster>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [adding, setAdding] = useState(false);
   useEffect(() => {
     let live = true;
     setLoading(true);
     setError("");
-    workspaceRequest(query ? `?q=${encodeURIComponent(query)}` : "")
-      .then((data) => {
-        if (!live) return;
-        setItems(data.closes ?? []);
-        setMore(data.has_more);
-      })
-      .catch((e) => live && setError(e instanceof Error ? e.message : "Could not open client closes."))
+    // The recent closes, and with a search also those matching it (older ones among them), for clients the roster
+    // does not list.
+    const closes = Promise.all([workspaceRequest(""), query ? workspaceRequest(`?q=${encodeURIComponent(query)}`) : Promise.resolve({ closes: [], has_more: false })]).then(([recent, found]) => {
+      if (!live) return;
+      const seen = new Set<string>();
+      setCloses([...(recent.closes ?? []), ...(found.closes ?? [])].filter((c: ListedClose) => !seen.has(c.id) && seen.add(c.id)));
+      setFound(new Set((found.closes ?? []).map((c: ListedClose) => c.id)));
+      setMore(query ? found.has_more : recent.has_more);
+    });
+    // The roster lists every client a firm administrator can see, and for a member the clients assigned to them, each
+    // with the months it owes that nobody opened.
+    const roster = workspaceRequest("/roster").then((data: Roster) => live && setRoster(data));
+    Promise.all([closes, roster])
+      .catch((e) => live && setError(e instanceof Error ? e.message : "Could not open your clients."))
       .finally(() => live && setLoading(false));
     return () => {
       live = false;
     };
   }, [query, refresh]);
-  async function create(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    setBusy(true);
+  // One row per client: the roster names each by its own name, a close by the name it was opened with (its `client`
+  // is the own name a confirmed alias resolves to), and an owed month by the own name.
+  const rows = new Map<string, ClientRow>();
+  const row = (entity: string, key = entity.toLowerCase()) => {
+    let found = rows.get(key);
+    if (!found) rows.set(key, (found = { entity, closes: [], owed: [] }));
+    return found;
+  };
+  // The roster carries each client's whole history (every close under any of its names) and which months it can open:
+  // every month from its first through this one that has no close and was not deleted as done. The recent and searched
+  // closes add only clients the roster does not list.
+  for (const c of roster?.clients ?? []) Object.assign(row(c.entity), { active: c.active, since: c.since, owed: [...c.owed], closes: c.closes.map((cl) => ({ ...cl, client: c.entity.toLowerCase() })) });
+  // The recent and searched closes carry each close's due date, priority and owner; a close the roster also lists
+  // takes them from here.
+  for (const c of closes) {
+    const r = row(c.entity, c.client || c.entity.toLowerCase());
+    // The list adds what the roster's history lacks: a close of a client off the roster, and each close's planning.
+    // Where both read a close, the roster's sign-off state stands (one read, one moment); the list's is used only
+    // for a close the roster does not have.
+    const known = r.closes.find((cl) => cl.id === c.id);
+    if (known) Object.assign(known, { due_on: c.due_on, priority: c.priority, assigned: c.assigned, owned_by_me: c.owned_by_me, can_assign: c.can_assign, can_take_over: c.can_take_over, handed: c.handed });
+    else r.closes.push({ ...c, rechecked: c.rechecked === true });
+  }
+  const needle = query.trim().toLowerCase();
+  // A search matches a client's own name, any name its closes were opened with, or a month.
+  const shown = [...rows.values()]
+    .filter((r) => !needle || r.entity.toLowerCase().includes(needle) || r.closes.some((c) => found.has(c.id) || c.entity.toLowerCase().includes(needle) || c.period === needle) || r.owed.includes(needle))
+    .sort((a, b) => Number(b.active ?? true) - Number(a.active ?? true) || a.entity.localeCompare(b.entity));
+  async function open(entity: string, period: string) {
+    setBusy(`${entity}:${period}`);
     setError("");
     try {
-      const saved = await workspaceRequest("", { entity: data.get("entity"), period: data.get("period") });
+      const saved = await workspaceRequest("", { entity, period });
       navigate(`/dashboard/closes/${saved.id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed. Retry the same client and month safely.");
-    } finally {
-      setBusy(false);
+      setError(e instanceof Error ? e.message : "The month could not be opened.");
+      setBusy("");
     }
   }
+  async function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const entity = String(data.get("entity") ?? "").trim();
+    setBusy("add");
+    setError("");
+    try {
+      await workspaceRequest("/roster", { entity, active: true, since: String(data.get("since") || thisMonth()), due_days: null, owner: null, reason: "", rev: "" });
+      setAdding(false);
+      setRefresh((n) => n + 1);
+    } catch (e) {
+      // The form stays, with what was typed, so the person corrects it rather than starting over.
+      setAdding(true);
+      setError(e instanceof Error ? e.message : "The client could not be added.");
+    } finally {
+      setBusy("");
+    }
+  }
+  // Empty only when the roster was read: a failed read says nothing about whether there are clients.
+  const empty = !loading && !!roster && rows.size === 0 && !query;
   return (
     <>
       <PageHeader
         icon="clients"
-        title="Client closes"
+        title="Clients"
         actions={
-          <form
-            className="title-actions"
-            role="search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const next = String(new FormData(event.currentTarget).get("q") ?? "").trim();
-              setParams(next ? { q: next } : {});
-            }}
-          >
-            <input name="q" aria-label="Search clients" placeholder="Client or YYYY-MM" maxLength={200} defaultValue={query} key={query} />
-            <button>Search</button>
-          </form>
+          <div className="title-actions">
+            <form
+              role="search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const next = String(new FormData(event.currentTarget).get("q") ?? "").trim();
+                setParams(next ? { q: next } : {});
+              }}
+            >
+              <input name="q" aria-label="Search clients" placeholder="Client or YYYY-MM" maxLength={200} defaultValue={query} key={query} />
+            </form>
+            {roster?.can_manage && (
+              <button type="button" className="primary" onClick={() => setAdding((v) => !v)}>
+                Add a client
+              </button>
+            )}
+          </div>
         }
       >
-        One place per client and month for evidence, prepared work, requests and sign-off.
+        Each client's months: owed, open or signed off.
       </PageHeader>
-      <AskAgent
-        description="Ask which closes need you, are ready for review or are blocked: the agent answers from your workspace and shows anything it would do for you to confirm."
-        placeholder="Ask about your clients' closes, such as “what is ready for review?”"
-        suggestions={starters.firm}
-      />
       {error && <p role="alert">{error}</p>}
       {isEnrollmentError(error) && <FirmEnrollment onEnrolled={() => setRefresh((n) => n + 1)} />}
-      <section>
-        <h2>Open or create a close</h2>
-        <form onSubmit={create}>
-          <fieldset disabled={busy}>
-            <div className="form-grid">
-              <label>
-                Client / entity
-                <input name="entity" required maxLength={200} defaultValue={query} />
-              </label>
-              <label>
-                Close month
-                <input name="period" type="month" required />
-              </label>
-            </div>
-            <button className="primary">Create or open close</button>
-          </fieldset>
-        </form>
-      </section>
-      <SectionHeader title={query ? `Closes matching “${query}”` : "Recent closes"}>
-        {query && (
-          <button type="button" onClick={() => setParams({})}>
-            Clear search
+      {roster?.can_manage && (adding || empty) && (
+        <form className="add-client" onSubmit={add} aria-label="Add a client">
+          <label>
+            Client name
+            <input name="entity" required maxLength={200} autoFocus placeholder="Acme Services" />
+          </label>
+          <label>
+            First month to close
+            <input name="since" type="month" defaultValue={thisMonth()} />
+          </label>
+          <button className="primary" disabled={busy === "add"}>
+            {busy === "add" ? "Adding…" : "Add client"}
           </button>
-        )}
-      </SectionHeader>
-      <RowList columns={["Client", "Close month", "Plan", ""]}>
-        {loading && <p role="status" className="empty">Loading closes…</p>}
-        {!loading && items.length === 0 && <p className="empty">{query ? "No closes match this search." : "No closes yet. Create your first client close above."}</p>}
-        {items.map((item) => (
-          <Link className="row" key={item.id} to={`/dashboard/closes/${item.id}`}>
-            <EntityCell name={item.entity} title={item.entity} />
-            <span className="chip">{item.period}</span>
-            <span>
-              <PlanChips plan={item} />
+          {!empty && (
+            <button type="button" disabled={busy === "add"} onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+          )}
+        </form>
+      )}
+      <RowList label="Clients">
+        {loading && <p role="status" className="empty">Loading clients…</p>}
+        {empty && <p className="empty">{roster?.can_manage ? "No clients yet. Add your first client above; the agent takes it from there." : "No client is assigned to you yet."}</p>}
+        {!loading && query && shown.length === 0 && <p className="empty">No client or month matches “{query}”.</p>}
+        {shown.map((r) => (
+          <div className="row client-row" key={r.entity}>
+            <EntityCell
+              name={r.entity}
+              title={r.entity}
+              detail={[
+                r.active === false ? "No longer a client" : r.since ? `Closes each month from ${monthName(r.since)}` : "",
+                r.closes.filter((c) => !c.signed_off && !c.unchecked).length ? `${r.closes.filter((c) => !c.signed_off && !c.unchecked).length} open` : "",
+                r.closes.filter((c) => c.unchecked).length ? `${r.closes.filter((c) => c.unchecked).length} whose sign-off could not be checked` : "",
+                r.closes.filter((c) => c.signed_off && c.rechecked !== false).length ? `${r.closes.filter((c) => c.signed_off && c.rechecked !== false).length} signed off` : "",
+                r.closes.filter((c) => c.signed_off && c.rechecked === false).length ? `${r.closes.filter((c) => c.signed_off && c.rechecked === false).length} older, sign-off not rechecked here` : "",
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            />
+            <span className="client-months">
+              {r.owed.map((period) => (
+                <button type="button" className="chip owed" key={period} disabled={busy !== ""} onClick={() => void open(r.entity, period)}>
+                  {busy === `${r.entity}:${period}` ? "Opening…" : `Open ${monthName(period)}`}
+                </button>
+              ))}
+              {r.closes.map((c) => (
+                <Link
+                  className={c.signed_off && c.rechecked !== false ? "chip signed" : "chip"}
+                  key={c.id}
+                  to={`/dashboard/closes/${c.id}`}
+                  title={c.signed_off && c.rechecked === false ? "A sign-off is recorded but not rechecked here; open the close to see whether it still stands" : undefined}
+                >
+                  {c.signed_off && c.rechecked !== false && <Icon name="review" size={12} />}
+                  {monthName(c.period)}
+                  {c.unchecked && <span className="pill danger">not checked</span>}
+                  {/* Due and owner chips for open work only: a recorded or unchecked sign-off is not called overdue. */}
+                  {!c.signed_off && !c.unchecked && <PlanChips plan={c} />}
+                </Link>
+              ))}
             </span>
-            <Icon name="arrow" />
-          </Link>
+            {r.active !== false && (
+            <details className="open-month">
+              <summary>Another month</summary>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void open(r.entity, String(new FormData(event.currentTarget).get("period")));
+                }}
+              >
+                <input name="period" type="month" required aria-label={`Month to open for ${r.entity}`} />
+                <button disabled={busy !== ""}>Open</button>
+              </form>
+            </details>
+            )}
+          </div>
         ))}
       </RowList>
-      {more && <p className="note">Showing the 100 most recent matches. Search by client or YYYY-MM to narrow the list.</p>}
+      {more && <p className="note">Showing the 100 most recent closes. Search by client or YYYY-MM to find older ones.</p>}
     </>
   );
 }
