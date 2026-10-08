@@ -431,14 +431,13 @@
    "id": "fw-07",
    "case": "straight-through-prepaid",
    "scope": "firm",
-   "question": "Hand Harbor Fixture's September over to the agent until it is ready for review, by 2026-09-30.",
+   "question": "Hand Harbor Fixture's September over to the agent until it is ready for review.",
    "tools": [
     "list_closes"
    ],
    "card": "delegate",
    "card_args": {
-    "finish": "review",
-    "due_on": "2026-09-30"
+    "finish": "review"
    }
   },
   {
