@@ -67,6 +67,12 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 		t.Fatalf("a calendar day is one figure: %v", figures)
 	}
 	ok("facts", "Coverage starts 2026-09-01.", []agentSupportEntry{{"t3", 0, "", "", "coverage 2026-09-01 to"}})
+	if figures := agentFigures("September 2026-09 ran at 50% of 50."); len(figures) != 3 || figures[0] != "2026-09" || figures[1] != "50%" || figures[2] != "50" {
+		t.Fatalf("a close month is one figure and a percentage keeps its unit: %v", figures)
+	}
+	if sameValue("50", "50%") || !sameValue("50.0%", "50%") || !sameValue("2026-09", "2026-09") {
+		t.Fatal("a percentage is never supported by a plain number")
+	}
 	if n := normalizeFigure("(1,250.00)"); n != "-1250" {
 		t.Fatalf("parentheses are the sign: %s", n)
 	}

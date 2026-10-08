@@ -1117,9 +1117,13 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace,scope,rounds,tool_calls) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,NULLIF($6,'')::jsonb,$7,$8,$9)`, org, author, closeID, attempted, latency, trace, answerScope, result.rounds, result.calls)
 		}
 		// Both messages of the pair carry the closes the reads touched; a proposal and its target close sit on the answer.
+		// A lineage-less firm-wide turn records no read's closes, but a card's target close is always recorded, so losing
+		// that close removes the card and its question together.
 		closes := closesLiteral(nil)
 		if agent && (closeID != "" || result.known) {
 			closes = closesLiteral(result.closes)
+		} else if agent && result.proposal != nil && result.proposal.TargetClose != "" {
+			closes = closesLiteral([]string{result.proposal.TargetClose})
 		}
 		proposal, target := "", ""
 		if result.proposal != nil && agent && reply.action != "" {
@@ -1242,6 +1246,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			// a close never shown is never acted on. The verb is the goal's own. One batch runs now; the card follows the
 			// rest.
 			goal, _ := proposal.Args["text"].(string)
+			goalDay, _ := proposal.Args["today"].(string)
 			var shown []string
 			if raw, ok := proposal.Args["closes"].([]any); ok {
 				for _, id := range raw {
@@ -1251,7 +1256,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				}
 			}
 			var op portfolioOperation
-			if rec := replay(r, "POST", "/v1/closes/portfolio", map[string]any{"text": goal, "preview": true}); rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &op) != nil {
+			if rec := replay(r, "POST", "/v1/closes/portfolio", map[string]any{"text": goal, "preview": true, "today": goalDay}); rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &op) != nil {
 				problem(w, 409, "This goal can no longer be previewed. Ask for it again.")
 				return
 			}
@@ -1265,7 +1270,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "The closes this goal selects changed since the card showed them. Ask for it again and check the new list.")
 				return
 			}
-			rec := replay(r, "POST", "/v1/closes/portfolio", map[string]any{"text": goal})
+			rec := replay(r, "POST", "/v1/closes/portfolio", map[string]any{"text": goal, "today": goalDay})
 			if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &op) != nil {
 				relay(rec)
 				return

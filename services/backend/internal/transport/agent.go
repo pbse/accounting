@@ -222,8 +222,8 @@ const agentAnswerSchema = `{"type":"object","additionalProperties":false,"requir
 
 const agentAnswerInstructions = `Write the answer to the member's last message from the tool results in this conversation, in plain prose of at most 1,500 characters, no markdown headings. kind is facts when the answer states anything about the firm's work; help when it only says what you can do here; refusal when the request is outside what you do; card when you proposed an action and the answer only introduces it. For a facts answer, every sentence (numbered from 0) must carry at least one support entry, and every amount, count, percentage or date in the text must be the value of a support entry: step is the tool result's id (t1, t2, ...), path is a JSON pointer into that result (for example /rows/3/ledger_balance) and value is the exact value there; for a document's text, leave path empty and give a verbatim quote of at least 8 characters containing the figure. A help or refusal answer carries no figures, no client, account or document names and no state of a close or draft. Use the person's words for what they asked; cite nothing you did not read.`
 
-// A calendar day is matched before its digits could be taken for three numbers.
-var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|[(−-]?\$?\d[\d,]*(?:\.\d+)?%?\)?`)
+// A calendar day or a close month is matched before its digits could be taken for separate numbers.
+var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b|[(−-]?\$?\d[\d,]*(?:\.\d+)?%?\)?`)
 var agentURL = regexp.MustCompile(`(?i)\b(?:https?://|www\.)[^\s)]+`)
 var agentStateWords = []string{"ready", "blocked", "signed off", "signed-off", "waiting", "failed", "verified", "overdue", "approved", "rejected"}
 
@@ -247,6 +247,17 @@ func normalizeFigure(s string) string {
 		}
 		return ""
 	}
+	if regexp.MustCompile(`^\d{4}-\d{2}$`).MatchString(s) {
+		if month, err := time.Parse("2006-01", s); err == nil {
+			return month.Format("2006-01")
+		}
+		return ""
+	}
+	// A percentage is its own kind of figure: 50% is never supported by a count or an amount of 50.
+	unit := ""
+	if strings.Contains(s, "%") {
+		unit = "%"
+	}
 	negative := strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") || strings.HasPrefix(s, "-") || strings.HasPrefix(s, "−") || strings.HasSuffix(s, "-")
 	s = strings.Trim(s, "()-−$,% ")
 	s = strings.ReplaceAll(s, ",", "")
@@ -260,7 +271,7 @@ func normalizeFigure(s string) string {
 	if negative {
 		f = -f
 	}
-	return strconv.FormatFloat(f, 'f', -1, 64)
+	return strconv.FormatFloat(f, 'f', -1, 64) + unit
 }
 
 // valueAt resolves a JSON pointer in a decoded result, as the text the model may cite.
@@ -536,6 +547,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 						break
 					}
 					args["closes"] = previewed
+					args["today"] = today
 				}
 				proposal := &agentProposal{Action: agentWrites[call.Name], Args: args}
 				if closeID == "" && proposal.Action != "portfolio" {
@@ -554,6 +566,10 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					break
 				}
 				out.calls++
+				if t.name == "select_closes_preview" {
+					// Day names in a goal resolve against the member's own date, as the chat request supplied it.
+					body["today"] = today
+				}
 				raw, ok := read(t.method, path, body)
 				var value any
 				decoder := json.NewDecoder(strings.NewReader(raw))
