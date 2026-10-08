@@ -182,9 +182,13 @@ func agentPath(t mcpTool, args map[string]any, pinned string) (string, map[strin
 	return path, body, nil
 }
 
-// agentLink is the page a read's detail lives on.
+// agentLink is the page a read's detail lives on; a firm-wide read's page is the dashboard, whatever close the
+// conversation is in.
 func agentLink(t mcpTool, args map[string]any) chatCitation {
 	closeID, _ := args["close_id"].(string)
+	if !strings.Contains(t.path, "{close_id}") {
+		closeID = ""
+	}
 	base := "/dashboard/closes/" + closeID
 	if closeID == "" {
 		return chatCitation{t.title, "/dashboard"}
@@ -322,15 +326,19 @@ func valueAt(value any, pointer string) (string, bool) {
 	return string(raw), err == nil
 }
 
-// linkAt is the page of the row a pointer points into: the nearest enclosing object's href, when it has one and it is
-// a path inside the workspace; "" otherwise.
-func linkAt(value any, pointer string) string {
+// linkAt is the page of the row a pointer points into: the nearest enclosing object's href when it has one inside the
+// workspace, else the close the row names by idKey; "" otherwise.
+func linkAt(value any, pointer, idKey string) string {
 	keys := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
 	best := ""
 	for i := 0; i <= len(keys); i++ {
 		if object, ok := value.(map[string]any); ok {
 			if href, isText := object["href"].(string); isText && strings.HasPrefix(href, "/dashboard/") {
 				best = href
+			} else if id, isText := object[idKey].(string); isText && id != "" && i > 0 {
+				best = "/dashboard/closes/" + url.PathEscape(id)
+			} else if n, isNumber := object[idKey].(json.Number); isNumber && i > 0 {
+				best = "/dashboard/closes/" + n.String()
 			}
 		}
 		if i == len(keys) {
@@ -372,6 +380,7 @@ type agentRead struct {
 	doc   bool
 	link  chatCitation
 	title string
+	tool  string
 }
 
 // agentSupport checks an answer against the reads: every support step ran, every pointer or quote resolves to its
@@ -465,8 +474,12 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		href := read.link.Href
 		if s.path != "" {
 			label += " › " + strings.TrimPrefix(s.path, "/")
-			// A row that carries its own page (a search hit, a queue item) links there, not to the read's page.
-			if own := linkAt(read.value, s.path); own != "" {
+			// A row that carries its own page (a search hit, a queue item, a listed close) links there, not to the read's.
+			idKey := "close_id"
+			if read.tool == "list_closes" {
+				idKey = "id"
+			}
+			if own := linkAt(read.value, s.path, idKey); own != "" {
 				href = own
 			}
 		}
@@ -705,7 +718,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			names = append(names, collectNames(parsed, 0)...)
 		}
 		link := agentLink(t, args)
-		reads[step.ID] = agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title}
+		reads[step.ID] = agentRead{text: string(capped), value: parsed, doc: doc, link: link, title: t.title, tool: t.name}
 		step.Status, step.Size, step.Truncated, step.Link = "ok", len(capped), truncated, &link
 		return step.ID + ": " + string(capped)
 	}
@@ -932,7 +945,6 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			return out
 		}
 	}
-	out.calls++
 	final := append(slices.Clone(messages), llm.Message{Role: "user", Content: agentAnswerInstructions})
 	answerCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()

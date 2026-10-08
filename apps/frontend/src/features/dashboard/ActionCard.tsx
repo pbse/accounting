@@ -28,13 +28,14 @@ const jobs = (n: number) => `${n} job${n === 1 ? "" : "s"}`;
 
 // A close action proposed in the assistant. It lists exactly what the close page's route would act on, runs only after
 // its author confirms that list, and then follows the jobs its confirmation covered.
-export function ActionCard({ closeId, action, outcome, live, onConfirm }: { closeId: string; action: CardAction; outcome?: Outcome | null; live: boolean; onConfirm: (body: { digest: string; reason: string }) => Promise<void> }) {
+// proposedReason is the reason the agent gave for stopping, shown for the member to keep or change.
+export function ActionCard({ closeId, action, outcome, live, proposedReason = "", onConfirm }: { closeId: string; action: CardAction; outcome?: Outcome | null; live: boolean; proposedReason?: string; onConfirm: (body: { digest: string; reason: string }) => Promise<void> }) {
   const [status, setStatus] = useState<Status>();
   const [work, setWork] = useState<Work[]>();
   const [error, setError] = useState("");
   const [failure, setFailure] = useState("");
   const [confirmed, setConfirmed] = useState("");
-  const [reason, setReason] = useState("");
+  const [reason, setReason] = useState(proposedReason);
   const [busy, setBusy] = useState(false);
   const settled = !!outcome;
   useEffect(() => {

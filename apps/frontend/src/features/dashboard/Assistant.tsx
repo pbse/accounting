@@ -276,7 +276,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
               ) : m.action === "request" ? (
                 <RequestCard closeId={cardClose} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ) : (
-                <ActionCard closeId={cardClose} action={m.action} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+                <ActionCard closeId={cardClose} action={m.action} outcome={m.outcome} live={i === newestCard} proposedReason={String((m.proposal?.args as Record<string, unknown> | undefined)?.reason ?? "")} onConfirm={(body) => confirm(m.id, body)} />
               ))
             )}
             {m.role === "assistant" && i === messages.length - 1 && live.length > 0 && (
@@ -346,7 +346,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
       </form>
       <p className="assistant-note">
         Answers come from saved work you can access. A card's action runs only after you confirm it, through the same checks as the close page; the assistant never approves, sends or posts anything.
-        {" "}With Agent chat on for client closes, every question you type in a client close goes to the configured model provider, with the reads of this close the agent chooses (its status, blockers, tie-out, changes, exceptions, documents, drafts, procedures, a search) made with your permissions and listed under the answer, and the last turns of this conversation; commands typed with / never go to a model. With it on firm-wide, a question asked outside a close goes the same way with the reads the agent chooses across the closes you can open, and an answer built on a read that cannot be tied to particular closes is shown once and not kept.
+        {" "}With Agent chat on for client closes, every question you type in a client close goes to the configured model provider, with the reads of this close the agent chooses (its status, blockers, tie-out, changes, exceptions, documents, drafts, procedures, a search) made with your permissions and listed under the answer, and the last turns of this conversation; commands typed with / never go to a model, except /ask, which sends its question as free text. With it on firm-wide, a question asked outside a close goes the same way with the reads the agent chooses across the closes you can open, and an answer built on a read that cannot be tied to particular closes is shown once and not kept.
       </p>
     </aside>
   );

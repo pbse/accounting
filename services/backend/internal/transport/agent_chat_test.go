@@ -54,6 +54,11 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	ok("facts", "Two things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
 	ok("facts", "2 things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
 	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "1250", ""}}, "does not hold the cited value")
+	listing2 := `{"closes":[{"id":"9","entity":"Delta Co","period":"2026-09"}],"has_more":false}`
+	reads["t5"] = agentRead{text: listing2, value: decode(listing2), link: chatCitation{"List client closes", "/dashboard"}, title: "List client closes", tool: "list_closes"}
+	if cited := ok("facts", "Delta Co has a September close.", []agentSupportEntry{{"t5", 0, "/closes/0/entity", "Delta Co", ""}}); len(cited) != 1 || cited[0].Href != "/dashboard/closes/9" {
+		t.Fatalf("a listed close links to itself: %v", cited)
+	}
 	hits := `{"results":[{"kind":"document","title":"Zurich invoice.pdf","href":"/dashboard/closes/7?tab=evidence#doc-4","close":"Alpha · 2026-09"}]}`
 	reads["t4"] = agentRead{text: hits, value: decode(hits), link: chatCitation{"Search", "/dashboard"}, title: "Search across your closes"}
 	if cited := ok("facts", "The invoice is named Zurich invoice.pdf.", []agentSupportEntry{{"t4", 0, "/results/0/title", "Zurich invoice.pdf", ""}}); len(cited) != 1 || cited[0].Href != "/dashboard/closes/7?tab=evidence#doc-4" {
@@ -300,7 +305,7 @@ func TestAgentChatReadsProposesAndAnswersInAClose(t *testing.T) {
 	var closes string
 	must(db.QueryRow(`SELECT outcome,scope,rounds,tool_calls FROM assistant_answers WHERE organization_id=$1 ORDER BY id DESC LIMIT 1`, org).Scan(&outcome, &scope, &rounds, &toolCalls))
 	must(db.QueryRow(`SELECT array_to_json(closes)::text FROM chat_messages WHERE organization_id=$1 AND role='user' ORDER BY id DESC LIMIT 1`, org).Scan(&closes))
-	if outcome != "kept" || scope != "close" || rounds != 2 || toolCalls != 2 || closes != "["+closeID+"]" {
+	if outcome != "kept" || scope != "close" || rounds != 2 || toolCalls != 1 || closes != "["+closeID+"]" {
 		t.Fatalf("the attempt and the pair's lineage are recorded: %s %s %d %d %s", outcome, scope, rounds, toolCalls, closes)
 	}
 	// The next message replays the kept pair, redacted, and an unsupported answer is not kept.
