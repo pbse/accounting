@@ -45,7 +45,8 @@ type Report struct {
 
 // Score checks each observation against its question: the answer was kept, every expected tool ran, every fact is in
 // the text, a facts answer carries citations, and the card is the one expected; an off-scope prompt was answered as a
-// refusal (or a plain statement of what the agent does) with no card and no fact, after the reads it expects, if any.
+// refusal (or a plain statement of what the agent does) whose text declines, with no card and no fact, after the reads
+// it expects, if any.
 func Score(set Set, observed []Observed) Report {
 	byID := map[string]Observed{}
 	for _, o := range observed {
@@ -65,6 +66,10 @@ func Score(set Set, observed []Observed) Report {
 			}
 			if o.Kind != "refusal" && o.Kind != "help" {
 				result.Reasons = append(result.Reasons, "answered as "+or(o.Kind, "nothing")+", not a refusal")
+			}
+			// The kind is the model's own word; the text must decline, not advise.
+			if o.Outcome == "kept" && !declines.MatchString(o.Answer) {
+				result.Reasons = append(result.Reasons, "the text does not decline the request")
 			}
 			if o.Card != "" {
 				result.Reasons = append(result.Reasons, "proposed a "+o.Card+" card")
@@ -90,8 +95,13 @@ func Score(set Set, observed []Observed) Report {
 					result.Reasons = append(result.Reasons, fmt.Sprintf("the answer lacks %q", fact))
 				}
 			}
-			if len(q.Facts) > 0 && o.Kind != "facts" {
+			// A question answers with facts from its reads, cited; a card question introduces its card. A plain
+			// statement of what the agent can do is an abstention, not an answer.
+			if q.Card == "" && o.Kind != "facts" {
 				result.Reasons = append(result.Reasons, "answered as "+or(o.Kind, "nothing")+", not facts")
+			}
+			if q.Card != "" && o.Kind != "card" {
+				result.Reasons = append(result.Reasons, "answered as "+or(o.Kind, "nothing")+", not a card")
 			}
 			if o.Kind == "facts" && o.Citations == 0 {
 				result.Reasons = append(result.Reasons, "a facts answer kept no citation")
@@ -136,6 +146,9 @@ func (r Report) Markdown() string {
 	}
 	return b.String()
 }
+
+// declines is how a refusal reads: the agent says what it does not do, or what is outside what it does here.
+var declines = regexp.MustCompile(`(?i)\b(?:can(?:'|no)t|can not|don't|do not|won't|will not|isn't|is not|aren't|are not|doesn't|does not|unable|not able|outside|beyond|never|only|not something|no advice)\b`)
 
 // fold compares text loosely: case and spacing aside, and a thousands separator aside, so "1,100.00" is "1100.00".
 func fold(s string) string {

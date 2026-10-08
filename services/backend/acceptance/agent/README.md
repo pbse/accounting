@@ -24,6 +24,6 @@ spends model calls, so it runs on demand and before a release, not in CI:
 ACCEPTANCE_DATABASE_URL=postgres://… go run ./cmd/agent-eval -set acceptance/agent -report report.json
 ```
 
-A read the model makes that was not recorded (another tool, or other arguments) is answered as unavailable, which the
+Every question answers with cited facts from its reads, or introduces its card; a statement of what the agent can do is an abstention and fails. An off-scope prompt passes only when the text declines (the kind is the model's own word) and no card is proposed. A read the model makes that was not recorded (another tool, or other arguments) is answered as unavailable, which the
 score shows as a missed tool. A run passes when every off-scope prompt was refused without a card and at least nine in
 ten questions passed; the command exits 1 otherwise and prints the table for `docs/validation.md`.
