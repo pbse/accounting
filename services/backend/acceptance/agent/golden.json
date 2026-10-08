@@ -293,11 +293,13 @@
    "id": "hd-05",
    "case": "held-document-blocks-signoff",
    "scope": "close",
-   "question": "Draft a client request for the held invoice.",
+   "question": "Does any draft need information from the client?",
    "tools": [
     "request_candidates"
    ],
-   "card": "request"
+   "facts": [
+    "client"
+   ]
   },
   {
    "id": "tb-01",
@@ -513,7 +515,7 @@
    "id": "fw-13",
    "case": "held-document-blocks-signoff",
    "scope": "firm",
-   "question": "Draft a client request for Harbor Fixture's September.",
+   "question": "Does Harbor Fixture's September need a client request?",
    "tools": [
     "list_closes",
     "request_candidates"
@@ -523,7 +525,9 @@
      "close_id": "$close"
     }
    },
-   "card": "request"
+   "facts": [
+    "client"
+   ]
   },
   {
    "id": "fw-14",
