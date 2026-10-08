@@ -86,6 +86,7 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	rejected("refusal", "I found that the invoice is unpaid.", nil, "about the books")
 	ok("help", "I can read this close's status, tie-out and documents, or search it.", nil)
 	ok("help", "Ask me about the balance sheet tie-out or what blocks sign-off.", nil)
+	ok("help", "I can read approved procedures and the review queue.", nil)
 	rejected("card", "See https://example.com for the card.", nil, "no read supplied")
 	ok("card", "Here is what preparing this close would coordinate. Confirm the card to start.", nil)
 	rejected("facts", "AR ties at 8,000.00. Cash differs by 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/ledger_balance", "8000", ""}, {"t2", 1, "/rows/0/status", "differs", ""}}, "no read in its sentence")

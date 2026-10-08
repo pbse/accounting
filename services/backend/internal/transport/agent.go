@@ -238,6 +238,7 @@ var agentObservation = regexp.MustCompile(`(?i)\b(?:see|saw|seen|found|finds?|sh
 // agentCapabilityStart is how a help, refusal or card sentence may begin: speaking for the agent or to the person.
 var agentCapabilityStart = regexp.MustCompile(`(?i)^(?:i |i'|i’|ask |say |open |you |to |here |this card|the card|confirm|check |choose |type |use |try |tell |nothing |no, |yes, |sorry|that |that's|that’s|it's|it’s)`)
 var agentURL = regexp.MustCompile(`(?i)\b(?:https?://|www\.)[^\s)]+`)
+var agentStateClaim = regexp.MustCompile(`\b(?:is|are|was|were|remains?|looks?|seems?|got|gets|became|becomes)\b[^.!?]{0,30}\b(?:ready|blocked|signed off|signed-off|waiting|failed|verified|overdue|approved|rejected)\b`)
 var agentStateWords = []string{"ready", "blocked", "signed off", "signed-off", "waiting", "failed", "verified", "overdue", "approved", "rejected"}
 
 // agentFigures are the figures in a text, normalized: separators and currency marks dropped, parentheses or a
@@ -462,10 +463,10 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				return nil, "a " + kind + " answer named a client or document"
 			}
 		}
-		for _, word := range agentStateWords {
-			if strings.Contains(lower, word) {
-				return nil, "a " + kind + " answer stated a close's state"
-			}
+		// A state word counts when it is predicated of something ("it is blocked"), not when it names what the
+		// agent can read ("approved procedures").
+		if agentStateClaim.MatchString(lower) {
+			return nil, "a " + kind + " answer stated a close's state"
 		}
 		return nil, ""
 	}
