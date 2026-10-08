@@ -125,6 +125,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 		Citations   []map[string]string `json:"citations"`
 		Action      string              `json:"action"`
 		TargetClose string              `json:"target_close_id"`
+		TargetLabel string              `json:"target_close"`
 		Outcome     map[string]any      `json:"outcome"`
 	}
 	type reply struct {
@@ -157,7 +158,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 		t.Fatalf("the read ran, the goal without a preview and the card on a close the member cannot open were refused, the hand-over was proposed: %v", outputsSeen)
 	}
 	last := out.Messages[len(out.Messages)-1]
-	if last.Action != "delegate" || last.TargetClose != beta || !strings.HasPrefix(last.Body, "Beta is where it is.") {
+	if last.Action != "delegate" || last.TargetClose != beta || last.TargetLabel != "Beta · 2026-09" || !strings.HasPrefix(last.Body, "Beta is where it is.") {
 		t.Fatalf("the card names the close it acts on: %+v", last)
 	}
 	var closes string

@@ -404,6 +404,10 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				bound[s.sentence][n] = true
 			}
 		case s.quote != "":
+			// A quote binds a document's text only; a JSON read is cited by the field that holds the value.
+			if !read.doc {
+				return nil, "a quote cites a read that is not a document; cite its field"
+			}
 			if len(s.quote) < 8 || len(s.quote) > 500 || !strings.Contains(read.text, s.quote) {
 				return nil, "a quote is not in the read it cites"
 			}

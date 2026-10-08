@@ -48,7 +48,10 @@ func agentHistory(ctx context.Context, db *sql.DB, org, author, closeID string) 
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	// Newest first: an answer is kept with the question before it; anything else is skipped.
+	// Newest first: an answer is kept with the question before it; anything else is skipped. The window is bounded
+	// by characters as well as turns, oldest first out, and no single message is replayed past 2,000 characters.
+	const budget = 24000
+	spent := 0
 	out := []llm.Message{}
 	for i := 0; i+1 < len(turns); i++ {
 		answer, question := turns[i], turns[i+1]
@@ -63,7 +66,18 @@ func agentHistory(ctx context.Context, db *sql.DB, org, author, closeID string) 
 		if cut := strings.Index(body, "\n"+agentNote); cut > 0 {
 			body = body[:cut]
 		}
-		out = append([]llm.Message{{Role: "user", Content: asked(question.body)}, {Role: "assistant", Content: body}}, out...)
+		asked := asked(question.body)
+		if len(asked) > 2000 {
+			asked = asked[:2000] + "…"
+		}
+		if len(body) > 2000 {
+			body = body[:2000] + "…"
+		}
+		if spent+len(asked)+len(body) > budget {
+			break
+		}
+		spent += len(asked) + len(body)
+		out = append([]llm.Message{{Role: "user", Content: asked}, {Role: "assistant", Content: body}}, out...)
 		if len(out) >= 40 {
 			break
 		}

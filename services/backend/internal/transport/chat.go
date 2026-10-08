@@ -52,6 +52,7 @@ type chatMessage struct {
 	Outcome     json.RawMessage `json:"outcome"`
 	Proposal    json.RawMessage `json:"proposal,omitempty"`
 	TargetClose string          `json:"target_close_id,omitempty"`
+	TargetLabel string          `json:"target_close,omitempty"`
 	Steps       json.RawMessage `json:"steps,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 }
@@ -777,7 +778,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 503, "Conversation unavailable.")
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),every_month,COALESCE(outcome,'null'::jsonb),COALESCE(proposal,'null'::jsonb),COALESCE(target_close_id::text,''),COALESCE(steps,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),every_month,COALESCE(outcome,'null'::jsonb),COALESCE(proposal,'null'::jsonb),COALESCE(target_close_id::text,''),COALESCE((SELECT t.entity||' · '||t.period FROM client_closes t WHERE t.id=chat_messages.target_close_id),''),COALESCE(steps,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Conversation unavailable.")
 			return
@@ -786,7 +787,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		messages := []chatMessage{}
 		for rows.Next() {
 			var m chatMessage
-			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.DueOn, &m.Finish, &m.EveryMonth, &m.Outcome, &m.Proposal, &m.TargetClose, &m.Steps, &m.CreatedAt) != nil {
+			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.DueOn, &m.Finish, &m.EveryMonth, &m.Outcome, &m.Proposal, &m.TargetClose, &m.TargetLabel, &m.Steps, &m.CreatedAt) != nil {
 				problem(w, 503, "Conversation unavailable.")
 				return
 			}
@@ -1137,6 +1138,11 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				answerScope = "firm"
 			}
 			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace,scope,rounds,tool_calls) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,NULLIF($6,'')::jsonb,$7,$8,$9)`, org, author, closeID, attempted, latency, trace, answerScope, result.rounds, result.calls)
+		}
+		// A question whose answer was not kept, or was shown once, leaves the conversation when it next advances.
+		if _, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scope+` AND NOT replayable AND outcome IS NULL`, org, author, closeID); err != nil {
+			problem(w, 503, "The message could not be saved.")
+			return
 		}
 		// Both messages of the pair carry the closes the reads touched; a proposal and its target close sit on the answer.
 		// A lineage-less firm-wide turn records no read's closes, but a card's target close is always recorded, so losing

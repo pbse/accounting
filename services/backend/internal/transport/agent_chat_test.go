@@ -58,6 +58,7 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	rejected("facts", "AR ties. Cash differs.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "sentence 1 has no support")
 	rejected("facts", "The premium is 1,200.00.", []agentSupportEntry{{"t3", 0, "", "", "premium"}}, "not in the read")
 	rejected("facts", "AR ties.", nil, "no support")
+	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t2", 0, "", "", "\"ledger_balance\":\"8000.00\""}}, "not a document")
 	rejected("facts", "See https://example.com/report for AR.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "no read supplied")
 	ok("help", "I can read this close's status, tie-out and documents, or search it.", nil)
 	rejected("help", "I can see this close is ready for sign-off.", nil, "stated a close's state")

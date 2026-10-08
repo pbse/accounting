@@ -15,7 +15,7 @@ import { Suggestions } from "@close/ui/components/Suggestions";
 
 // A step the agent made for an answer: what ran, its outcome and where its detail lives; never its content.
 export type Step = { id: string; tool: string; title: string; status: string; size?: number; truncated?: boolean; link?: { label: string; href: string } };
-type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request" | "approval" | "portfolio"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null; proposal?: Record<string, unknown>; target_close_id?: string; steps?: Step[] };
+type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request" | "approval" | "portfolio"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null; proposal?: Record<string, unknown>; target_close_id?: string; target_close?: string; steps?: Step[] };
 
 function readOpen() {
   try {
@@ -246,6 +246,11 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
           <li key={m.id} className={m.role}>
             <p>{m.body}</p>
             {m.steps && m.steps.length > 0 && <StepList steps={m.steps} done />}
+            {m.action && m.target_close_id && (
+              <p className="assistant-note">
+                Acts on <Link to={`/dashboard/closes/${m.target_close_id}`}>{m.target_close || `close #${m.target_close_id}`}</Link>, not on another close.
+              </p>
+            )}
             {m.action === "portfolio" ? (
               <ProposalCard kind="portfolio" proposal={m.proposal ?? {}} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
             ) : m.action === "approval" ? (
