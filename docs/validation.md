@@ -3812,7 +3812,7 @@ PR 1 of the [agentic chat plan](agent-chat.md). Local run against a fresh migrat
 
 Not verified: a live context-machine deployment with a wide profile; no production firm has one yet.
 
-## 2026-10-07: one agent chat setting (migration 132)
+## 2026-10-07: one agent chat setting (migration 133)
 
 PR 2a of the [agentic chat plan](agent-chat.md): `organizations.agent_chat` (off, closes, firm) replaces written answers, firm-wide answers and investigations; the policy route, Firm settings, the security center and the admin planner read the level. Local run against a fresh migrated PostgreSQL:
 
