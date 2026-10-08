@@ -62,6 +62,10 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	rejected("help", "This close is ready for sign-off.", nil, "stated a close's state")
 	rejected("help", "I can look at Alpha for you.", nil, "named a client")
 	rejected("refusal", "I don't give tax advice; the balance is 1,250.00 anyway.", nil, "held a figure")
+	if figures := agentFigures("Coverage runs 2026-09-01 to 2027-08-31 at 1,200.00."); len(figures) != 3 || figures[0] != "2026-09-01" || figures[1] != "2027-08-31" || figures[2] != "1200" {
+		t.Fatalf("a calendar day is one figure: %v", figures)
+	}
+	ok("facts", "Coverage starts 2026-09-01.", []agentSupportEntry{{"t3", 0, "", "", "coverage 2026-09-01 to"}})
 	if n := normalizeFigure("(1,250.00)"); n != "-1250" {
 		t.Fatalf("parentheses are the sign: %s", n)
 	}

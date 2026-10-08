@@ -135,6 +135,32 @@ func closeAt(raw []byte, path string) string {
 	return ""
 }
 
+// scopeProcedures keeps, of a procedures listing, the versions for one client and those for all clients: inside a
+// close the model is told this client's treatments, never another client's instructions or accounts.
+func scopeProcedures(value any, entity string) any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	versions, ok := object["versions"].([]any)
+	if !ok {
+		return value
+	}
+	kept := []any{}
+	for _, v := range versions {
+		row, isRow := v.(map[string]any)
+		if !isRow {
+			continue
+		}
+		client, _ := row["client_entity"].(string)
+		if client == "" || strings.EqualFold(strings.TrimSpace(client), strings.TrimSpace(entity)) {
+			kept = append(kept, row)
+		}
+	}
+	object["versions"] = kept
+	return object
+}
+
 // modelResult prepares a read's body for the model: its rows capped, and the closes it names collected from the body
 // rather than from anything the model sent. A firm-wide read cut by its cap lists fewer closes than it drew on, so its
 // lineage is not known, exactly as a read the route itself capped.

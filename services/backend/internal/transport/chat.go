@@ -1060,15 +1060,16 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			switch result.outcome {
 			case "kept":
 				reply = result.reply
-				if closeID == "" && !result.known {
-					// A firm-wide answer built on a read without lineage is shown once and not kept, as today's lists are.
+				if !result.known {
+					// An answer built on a read without lineage (a firm-wide list, or a cross-client read inside a close) is
+					// shown once and not kept, as today's lists are: nothing verified which clients it drew on.
 					for _, line := range strings.Split(reply.body, "\n") {
 						if line = strings.TrimSpace(line); line != "" {
 							live = append(live, line)
 						}
 					}
 					linked = reply.citations
-					reply = chatReply{body: "I answered from reads that cannot be tied to particular closes, so the answer was shown once and not kept; ask again to see it.", citations: []chatCitation{{"Work", "/dashboard"}}}
+					reply = chatReply{body: "I answered from reads that cannot be tied to particular closes, so the answer was shown once and not kept; ask again to see it.", citations: []chatCitation{{"Work", "/dashboard"}}, action: reply.action, due: reply.due, finish: reply.finish, monthly: reply.monthly}
 				}
 				if !emit("text", map[string]any{"body": strings.Join(append([]string{result.reply.body}, result.reply.lines...), "\n"), "citations": result.reply.citations}) {
 					problem(w, 403, "Your access changed. Nothing was saved.")

@@ -42,6 +42,16 @@ func TestModelReadsAreCappedNotDropped(t *testing.T) {
 	}
 }
 
+// Inside a close the procedures listing is cut to this client's versions and the firm-wide ones.
+func TestProceduresAreScopedToTheConversationsClient(t *testing.T) {
+	var value any
+	json.Unmarshal([]byte(`{"versions":[{"id":"1","client_entity":"Alpha","method":"a"},{"id":"2","client_entity":"","method":"b"},{"id":"3","client_entity":"Beta","method":"c"}]}`), &value)
+	out, _ := json.Marshal(scopeProcedures(value, "alpha "))
+	if strings.Contains(string(out), "Beta") || !strings.Contains(string(out), `"id":"1"`) || !strings.Contains(string(out), `"id":"2"`) {
+		t.Fatalf("another client's procedures reached the model: %s", out)
+	}
+}
+
 // The closes an answer touched come from the read's own body: a close-scoped read names the conversation's close
 // whatever the model sent; a firm-wide read names each close in its rows once; a read that counted or capped across
 // more closes than it lists, or that declared no lineage, has no known closes.

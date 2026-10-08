@@ -224,7 +224,8 @@ const agentAnswerSchema = `{"type":"object","additionalProperties":false,"requir
 
 const agentAnswerInstructions = `Write the answer to the member's last message from the tool results in this conversation, in plain prose of at most 1,500 characters, no markdown headings. kind is facts when the answer states anything about the firm's work; help when it only says what you can do here; refusal when the request is outside what you do; card when you proposed an action and the answer only introduces it. For a facts answer, every sentence (numbered from 0) must carry at least one support entry, and every amount, count, percentage or date in the text must be the value of a support entry: step is the tool result's id (t1, t2, ...), path is a JSON pointer into that result (for example /rows/3/ledger_balance) and value is the exact value there; for a document's text, leave path empty and give a verbatim quote of at least 8 characters containing the figure. A help or refusal answer carries no figures, no client, account or document names and no state of a close or draft. Use the person's words for what they asked; cite nothing you did not read.`
 
-var agentFigure = regexp.MustCompile(`[(−-]?\$?\d[\d,]*(?:\.\d+)?%?\)?|\b\d{4}-\d{2}-\d{2}\b`)
+// A calendar day is matched before its digits could be taken for three numbers.
+var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|[(−-]?\$?\d[\d,]*(?:\.\d+)?%?\)?`)
 var agentStateWords = []string{"ready", "blocked", "signed off", "signed-off", "waiting", "failed", "verified", "overdue", "approved", "rejected"}
 
 // agentFigures are the figures in a text, normalized: separators and currency marks dropped, parentheses or a
@@ -556,6 +557,9 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 					}
 					redacted = []byte(text)
 				case decoder.Decode(&value) == nil && decoder.Decode(new(any)) == io.EOF:
+					if t.name == "list_procedures" && closeID != "" {
+						value = scopeProcedures(value, entity)
+					}
 					redacted, _ = json.Marshal(redactValues(value))
 				default:
 					ok = false
