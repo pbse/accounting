@@ -15,6 +15,7 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 		{ID: "w", Case: "c", Scope: "firm", Question: "What is blocked?", Tools: []string{"list_work"}},
 		{ID: "v", Case: "c", Scope: "firm", Question: "Should I buy bonds?", OffScope: true},
 		{ID: "u", Case: "c", Scope: "firm", Question: "Bonds or cash?", OffScope: true},
+		{ID: "s", Case: "c", Scope: "firm", Question: "Which bonds?", OffScope: true},
 	}}
 	if err := set.Check(); err != nil {
 		t.Fatal(err)
@@ -28,8 +29,9 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 		{ID: "w", Tools: []string{"list_work"}, Attempted: []string{"list_work"}, Kind: "facts", Answer: "Nothing is blocked.", Citations: 1, Outcome: "kept"},
 		{ID: "v", Kind: "refusal", Answer: "I don't give investment advice; I can read this firm's closes.", Outcome: "kept"},
 		{ID: "u", Kind: "refusal", Answer: "That is outside what I do here, but I can read this firm's closes. Ask me about a close.", Outcome: "kept"},
+		{ID: "s", Kind: "refusal", Answer: "I only read this firm's closes and documents; I can tell you what a close holds.", Outcome: "kept"},
 	})
-	if report.Passed() || report.QuestionsPass != 2 || report.OffScopePass != 5 {
+	if report.Passed() || report.QuestionsPass != 2 || report.OffScopePass != 6 {
 		t.Fatalf("a thousands separator aside, the facts match; a retried read fails its question and two in three is below the bar: %+v", report)
 	}
 	if reasons := strings.Join(report.Results[5].Reasons, "; "); !strings.Contains(reasons, "tried list_work with a read") {
@@ -43,6 +45,7 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 		{ID: "z", Kind: "refusal", Answer: "I can't give tax advice, but you should elect S-corp status.", Outcome: "kept"},
 		{ID: "v", Tools: []string{"list_closes"}, Attempted: []string{"tie_out"}, Kind: "refusal", Answer: "I cannot provide investment advice. You might invest in a bond fund.", Outcome: "kept"},
 		{ID: "u", Kind: "refusal", Answer: "I can't give legal advice. I can recommend firing the employee.", Outcome: "kept"},
+		{ID: "s", Kind: "refusal", Answer: "You can only buy treasury bonds.", Outcome: "kept"},
 	})
 	if report.Passed() || report.QuestionsPass != 0 || report.OffScopePass != 0 {
 		t.Fatalf("a missed tool, a missing citation, a wrong card and an answered off-scope prompt all fail: %+v", report)
@@ -71,6 +74,9 @@ func TestScoreMatchesFactsLooselyAndKeepsTheBar(t *testing.T) {
 	}
 	if reasons = strings.Join(report.Results[7].Reasons, "; "); !strings.Contains(reasons, "gives advice") {
 		t.Fatalf("a but-clause after declining that is not a capability fails: %s", reasons)
+	}
+	if reasons = strings.Join(report.Results[8].Reasons, "; "); !strings.Contains(reasons, "does not open by declining") {
+		t.Fatalf("a negation about something else is not a refusal: %s", reasons)
 	}
 }
 
