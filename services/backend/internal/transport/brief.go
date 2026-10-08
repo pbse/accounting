@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -37,15 +38,53 @@ func named(names []string) string {
 func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		read := func(path string, out any) bool {
-			req, err := http.NewRequestWithContext(r.Context(), "GET", "/v1/closes/"+url.PathEscape(id)+path, nil)
-			if err != nil {
-				return false
-			}
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, req)
-			return rec.Code == 200 && json.Unmarshal(rec.Body.Bytes(), out) == nil
+		// The reads are independent, so they all start now, each on its own connection, and the brief waits only for
+		// the slowest: run one after another they were most of its database round trips.
+		type reply struct {
+			code int
+			body []byte
 		}
+		started := map[string]chan reply{}
+		for _, path := range []string{"/tie-out", "/quickbooks/exceptions", "/readiness"} {
+			done := make(chan reply, 1)
+			started[path] = done
+			go func() {
+				defer func() {
+					if recover() != nil {
+						done <- reply{code: 500}
+					}
+				}()
+				req, err := http.NewRequestWithContext(r.Context(), "GET", "/v1/closes/"+url.PathEscape(id)+path, nil)
+				if err != nil {
+					done <- reply{code: 500}
+					return
+				}
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+				done <- reply{rec.Code, rec.Body.Bytes()}
+			}()
+		}
+		replies := map[string]reply{}
+		read := func(path string, out any) bool {
+			got, ok := replies[path]
+			if !ok {
+				got = <-started[path]
+				replies[path] = got
+			}
+			return got.code == 200 && json.Unmarshal(got.body, out) == nil
+		}
+		var jobs [5]int
+		var jobsErr error
+		var approved, ready, unsourced, attention, drafts int
+		var reviewErr error
+		var counts sync.WaitGroup
+		counts.Go(func() {
+			jobsErr = db.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE state='completed'),count(*) FILTER (WHERE state IN ('queued','interpreting','waiting_evidence')),count(*) FILTER (WHERE state='needs_confirmation'),count(*) FILTER (WHERE state='waiting_client'),count(*) FILTER (WHERE state='failed') FROM preparation_jobs WHERE close_id::text=$1 AND state<>'cancelled'`, id).Scan(&jobs[0], &jobs[1], &jobs[2], &jobs[3], &jobs[4])
+		})
+		counts.Go(func() {
+			reviewErr = db.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE review_state='approved'),count(*) FILTER (WHERE review_state='pending' AND sourced AND NOT blocked),count(*) FILTER (WHERE review_state='pending' AND NOT sourced AND NOT blocked),count(*) FILTER (WHERE review_state IN ('changes_requested','source_changed') OR blocked),count(*)
+ FROM (SELECT w.review_state,COALESCE(jsonb_typeof(w.paper->'sources')='array' AND w.paper->'sources'<>'[]'::jsonb,false) AS sourced,COALESCE(jsonb_typeof(w.paper->'blockers')='array' AND w.paper->'blockers'<>'[]'::jsonb,false) AS blocked FROM workpaper_review_state w WHERE w.close_id::text=$1 AND NOT EXISTS (SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)) current`, id).Scan(&approved, &ready, &unsourced, &attention, &drafts)
+		})
 		lines, needs, unchecked := []briefLine{}, []string{}, []string{}
 		add := func(area, state, text, tab string) {
 			lines = append(lines, briefLine{area, state, text, tab})
@@ -120,8 +159,8 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		var jobs [5]int
-		err := db.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE state='completed'),count(*) FILTER (WHERE state IN ('queued','interpreting','waiting_evidence')),count(*) FILTER (WHERE state='needs_confirmation'),count(*) FILTER (WHERE state='waiting_client'),count(*) FILTER (WHERE state='failed') FROM preparation_jobs WHERE close_id::text=$1 AND state<>'cancelled'`, id).Scan(&jobs[0], &jobs[1], &jobs[2], &jobs[3], &jobs[4])
+		counts.Wait()
+		err := jobsErr
 		switch total := jobs[0] + jobs[1] + jobs[2] + jobs[3] + jobs[4]; {
 		case err != nil:
 			add("preparation", "unknown", "Preparation progress could not be read.", "overview")
@@ -151,9 +190,7 @@ func closeBrief(mux *http.ServeMux, db *sql.DB) http.HandlerFunc {
 			}
 		}
 
-		var approved, ready, unsourced, attention, drafts int
-		err = db.QueryRowContext(r.Context(), `SELECT count(*) FILTER (WHERE review_state='approved'),count(*) FILTER (WHERE review_state='pending' AND sourced AND NOT blocked),count(*) FILTER (WHERE review_state='pending' AND NOT sourced AND NOT blocked),count(*) FILTER (WHERE review_state IN ('changes_requested','source_changed') OR blocked),count(*)
- FROM (SELECT w.review_state,COALESCE(jsonb_typeof(w.paper->'sources')='array' AND w.paper->'sources'<>'[]'::jsonb,false) AS sourced,COALESCE(jsonb_typeof(w.paper->'blockers')='array' AND w.paper->'blockers'<>'[]'::jsonb,false) AS blocked FROM workpaper_review_state w WHERE w.close_id::text=$1 AND NOT EXISTS (SELECT 1 FROM workpapers newer WHERE newer.close_id=w.close_id AND newer.paper->>'revises'=w.id::text)) current`, id).Scan(&approved, &ready, &unsourced, &attention, &drafts)
+		err = reviewErr
 		switch {
 		case err != nil:
 			add("review", "unknown", "Draft review state could not be read.", "workpapers")

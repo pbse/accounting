@@ -14,7 +14,9 @@
   "containers": [{
     "class_name": "CapabilityAPI",
     "image": "../../services/backend/Dockerfile",
-    "max_instances": 1
+    "max_instances": 1,
+    "instance_type": "standard-4",
+    "constraints": {"regions": ["ENAM"]}
   }],
   "durable_objects": {"bindings": [{"name": "API", "class_name": "CapabilityAPI"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["CapabilityAPI"]}],
@@ -30,7 +32,9 @@
       "containers": [{
         "class_name": "CapabilityAPI",
         "image": "../../services/backend/Dockerfile",
-        "max_instances": 1
+        "max_instances": 1,
+        "instance_type": "standard-4",
+        "constraints": {"regions": ["ENAM"]}
       }],
       "durable_objects": {"bindings": [{"name": "API", "class_name": "CapabilityAPI"}]}
     }

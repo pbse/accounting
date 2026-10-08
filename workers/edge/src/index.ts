@@ -49,7 +49,9 @@ export class CapabilityAPI extends Container<Env> {
     XERO_POSTING_KINDS: this.env.XERO_POSTING_KINDS ?? "",
     AUTH_SESSION: this.env.AUTH_SESSION ?? "",
   };
-  sleepAfter = "5m";
+  // A sleeping API wakes in seconds, so it stays up through a working day: pages load in under 400 ms only from a
+  // warm container with open database connections (docs/performance.md).
+  sleepAfter = "24h";
 }
 
 // Containers reach private Worker bindings through a fixed virtual host.

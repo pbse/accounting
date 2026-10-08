@@ -32,7 +32,12 @@ func health(w http.ResponseWriter, r *http.Request) {
 
 func API() http.Handler { return apiWithStore(nil, "") }
 
-func apiWithStore(db *sql.DB, token string) http.Handler {
+func apiWithStore(db *sql.DB, token string) http.Handler { return apiWithStores(db, db, token) }
+
+// apiWithStores serves the API from db; sessions, when it is another pool, reads sign-in sessions, which are not one
+// firm's rows. Keeping them apart leaves db's connections on the firm they last served, so a request does not switch a
+// connection to all firms for its session and back for its own reads, two database round trips each time.
+func apiWithStores(db, sessions *sql.DB, token string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/quickbooks/callback", system(func(w http.ResponseWriter, r *http.Request) { quickbooksReturn(w, r, db) }))
 	mux.HandleFunc("GET /v1/xero/callback", system(func(w http.ResponseWriter, r *http.Request) { xeroReturn(w, r, db) }))
@@ -204,11 +209,12 @@ func apiWithStore(db *sql.DB, token string) http.Handler {
 		mux.ServeHTTP(w, r)
 	})
 	// AUTH_SESSION=server adds backend-held sign-in; ConfiguredAPI has already refused an incomplete configuration.
+	sessionStore := sessions
 	if sessions, _ := serverSessions(); sessions != nil && db != nil {
 		sessions.register(mux, db, verifier)
-		handler = sessions.bearer(db, verifier, handler)
+		handler = sessions.bearer(sessionStore, verifier, handler)
 	}
-	return handler
+	return timed(handler)
 }
 
 func Worker() http.Handler {

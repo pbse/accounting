@@ -16,7 +16,7 @@ The recommended starting stack is Cloudflare Workers/Containers, WorkOS AuthKit,
 
 Use one public origin for SPA and API initially. Leave `VITE_API_BASE_URL` empty; the browser calls the same origin. If hosting the frontend separately, set it at build time to the API origin (no `/v1`) and configure exact `FRONTEND_ORIGIN`. Keep SPA fallback for deep links. All `VITE_*` values are public.
 
-The current Wrangler files configure one API container, one preparation worker and one on-demand scanner. A one-minute cron wakes the worker; PostgreSQL owns delivery and leases. There is **no deployed Cloudflare Queue, Workflow or R2 bucket** to provision for this path. Original documents occupy PostgreSQL storage.
+The current Wrangler files configure one API container, one preparation worker and one on-demand scanner. A one-minute cron wakes the worker; PostgreSQL owns delivery and leases. There is **no deployed Cloudflare Queue, Workflow or R2 bucket** to provision for this path. Original documents occupy PostgreSQL storage. Every container (API, preparation worker, context machine, scanner) is `standard-4` (4 vCPU, 12 GiB); the three that read the database are placed in eastern North America beside it, and the API stays awake 24 hours after its last request ([page speed](performance.md)). The API and the worker (woken every minute) are effectively always on: about $79 a month each in container memory at Cloudflare's list price, before CPU actually used. The context machine and scanner bill only while awake.
 
 ## Provider choice and cost boundary
 

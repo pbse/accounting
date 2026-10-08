@@ -18,24 +18,20 @@ func organization(r *http.Request) string {
 	return "local-development"
 }
 
+// organizationAccess reads the firm's switch and the person's membership in one round trip.
 func organizationAccess(db *sql.DB, r *http.Request) (bool, error) {
-	var enabled bool
-	err := db.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1`, organization(r)).Scan(&enabled)
+	var enabled, member bool
+	err := db.QueryRowContext(r.Context(), `SELECT enabled, $1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) FROM organizations WHERE id=$1`, organization(r), subject(r)).Scan(&enabled, &member)
 	if err == sql.ErrNoRows || !enabled && err == nil {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if organization(r) == "local-development" {
-		return true, nil
-	}
-	var member bool
-	err = db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, organization(r), subject(r)).Scan(&member)
-	if err == nil && !member {
+	if !member {
 		member = invitationEnrollment(r.Context(), db, organization(r), subject(r))
 	}
-	return member, err
+	return member, nil
 }
 
 // All saved-close routes pass this boundary, including downloads and future routes.

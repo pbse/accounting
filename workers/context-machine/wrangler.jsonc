@@ -5,13 +5,13 @@
   "compatibility_date": "2026-09-21",
   "workers_dev": false,
   "preview_urls": false,
-  "containers": [{"class_name": "ContextMachine", "image": "../../services/context-machine/Dockerfile", "image_build_context": "../..", "max_instances": 1, "instance_type": "standard-1"}],
+  "containers": [{"class_name": "ContextMachine", "image": "../../services/context-machine/Dockerfile", "image_build_context": "../..", "max_instances": 1, "instance_type": "standard-4", "constraints": {"regions": ["ENAM"]}}],
   "durable_objects": {"bindings": [{"name": "MACHINE", "class_name": "ContextMachine"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["ContextMachine"]}],
   "env": {
     "production": {
       "name": "close-context-machine-production",
-      "containers": [{"class_name": "ContextMachine", "image": "../../services/context-machine/Dockerfile", "image_build_context": "../..", "max_instances": 1, "instance_type": "standard-1"}],
+      "containers": [{"class_name": "ContextMachine", "image": "../../services/context-machine/Dockerfile", "image_build_context": "../..", "max_instances": 1, "instance_type": "standard-4", "constraints": {"regions": ["ENAM"]}}],
       "durable_objects": {"bindings": [{"name": "MACHINE", "class_name": "ContextMachine"}]}
     }
   }

@@ -41,6 +41,36 @@ func latestExportLabel(ctx context.Context, q querier, closeID string) (*exportL
 	return &l, json.Unmarshal(names, &l.Exports)
 }
 
+// latestExportLabels is latestExportLabel for several closes in one round trip, keyed by close ID; a close without a
+// label is absent.
+func latestExportLabels(ctx context.Context, q reader, closeIDs []string) (map[string]*exportLabel, error) {
+	labels := map[string]*exportLabel{}
+	if len(closeIDs) == 0 {
+		return labels, nil
+	}
+	rows, err := q.QueryContext(ctx, `SELECT DISTINCT ON (l.close_id) l.close_id::text,l.exported_on::text,l.complete,l.final_adjustments,l.note,l.actor,l.created_at,
+ COALESCE((SELECT jsonb_agg(e.name ORDER BY e.id) FROM evidence e WHERE e.id=ANY(l.evidence_ids)),'[]'),
+ NOT EXISTS(SELECT 1 FROM unnest(l.evidence_ids) x(id) WHERE NOT EXISTS(SELECT 1 FROM evidence e WHERE e.id=x.id AND e.close_id=l.close_id AND e.superseded_by IS NULL))
+ FROM close_export_labels l WHERE l.close_id::text=ANY($1) ORDER BY l.close_id, l.id DESC`, closeIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var names []byte
+		l := &exportLabel{}
+		if err := rows.Scan(&id, &l.ExportedOn, &l.Complete, &l.FinalAdjustments, &l.Note, &l.Actor, &l.CreatedAt, &names, &l.Current); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(names, &l.Exports); err != nil {
+			return nil, err
+		}
+		labels[id] = l
+	}
+	return labels, rows.Err()
+}
+
 // sentence says what the label reports, as reported rather than verified.
 func (l *exportLabel) sentence() string {
 	coverage, adjustments := "complete for the month", "do not include"

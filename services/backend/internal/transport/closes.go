@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"close.local/backend/internal/accruals"
@@ -705,9 +706,42 @@ func ConfiguredAPI() (http.Handler, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid database configuration")
 	}
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
-	return models.Bind(apiWithStore(db, os.Getenv("WORKSPACE_TOKEN"))), func() { db.Close() }, nil
+	sessions, err := OpenTenantDB(url, "")
+	if err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("invalid database configuration")
+	}
+	// A new connection to the database costs a TLS handshake and a password exchange, several round trips before the
+	// first query, so the API keeps every connection it opens and opens them before the first request needs one. A
+	// page asks for its data in parallel requests; each needs its own connection.
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(20)
+	db.SetConnMaxIdleTime(0)
+	db.SetConnMaxLifetime(time.Hour)
+	sessions.SetMaxOpenConns(3)
+	sessions.SetMaxIdleConns(3)
+	sessions.SetConnMaxIdleTime(0)
+	sessions.SetConnMaxLifetime(time.Hour)
+	go warm(db, 8)
+	go warm(sessions, 2)
+	return models.Bind(apiWithStores(db, sessions, os.Getenv("WORKSPACE_TOKEN"))), func() { db.Close(); sessions.Close() }, nil
+}
+
+// warm opens up to n connections at once, each returned to the pool idle as soon as it is ready, so a request arriving
+// during the warm-up can use the first one opened.
+func warm(db *sql.DB, n int) {
+	ctx, cancel := context.WithTimeout(systemContext(context.Background()), 30*time.Second)
+	defer cancel()
+	var opening sync.WaitGroup
+	for range n {
+		opening.Go(func() {
+			if conn, err := db.Conn(ctx); err == nil {
+				conn.PingContext(ctx)
+				conn.Close()
+			}
+		})
+	}
+	opening.Wait()
 }
 
 func workspaceVerifier() *auth.Verifier {
