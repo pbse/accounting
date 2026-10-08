@@ -184,7 +184,7 @@ func registerProcedures(mux *http.ServeMux, db *sql.DB) {
 			jsonReply(w, 200, map[string]any{"kind": kind, "client_entity": client, "previous_id": previous, "impact_digest": digest, "total_closes": total, "has_more": total > len(items), "closes": items})
 			return
 		}
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) ORDER BY procedure_versions.id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r))
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,client_entity,kind,method,instructions,expense_account,prepaid_account,enabled,reason,actor,created_at::text FROM procedure_versions WHERE organization_id=$1 AND ($2 OR client_entity='' OR EXISTS(SELECT 1 FROM current_client_access g WHERE g.organization_id=procedure_versions.organization_id AND g.subject=$3 AND lower(g.client_entity)=lower(procedure_versions.client_entity) AND g.granted)) AND ($4='' OR procedure_versions.client_entity='' OR lower(procedure_versions.client_entity)=lower($4)) ORDER BY procedure_versions.id DESC LIMIT 201`, organization(r), firmAccess(r), subject(r), strings.TrimSpace(r.URL.Query().Get("client")))
 		if err != nil {
 			problem(w, 503, "Firm procedures unavailable.")
 			return

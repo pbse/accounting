@@ -1343,13 +1343,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				relay(ran)
 				return
 			}
-			pending := 0
+			// The card records each close's outcome, so a skipped or failed close is never shown as started.
+			counts := map[string]int{}
 			for _, item := range op.Items {
-				if item.State == "pending" {
-					pending++
-				}
+				counts[item.State]++
 			}
-			record(map[string]any{"operation_id": op.ID, "action": op.Action, "closes": len(op.Items), "pending": pending}, "The goal started, but this card could not record it. Open Work to follow it.")
+			record(map[string]any{"operation_id": op.ID, "action": op.Action, "closes": len(op.Items), "done": counts["done"], "skipped": counts["skipped"], "failed": counts["failed"], "pending": counts["pending"]}, "The goal started, but this card could not record it. Open Work to follow it.")
 			return
 		}
 		if action == "request" {

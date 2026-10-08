@@ -21,13 +21,21 @@ export function ProposalCard({ kind, proposal, closeId = "", outcome, live, onCo
     </div>
   );
   if (outcome) {
-    if (kind === "portfolio")
+    if (kind === "portfolio") {
+      const n = (key: string) => Number(outcome[key] ?? 0);
+      const parts = [
+        n("done") ? `${n("done")} started` : "",
+        n("skipped") ? `${n("skipped")} skipped (nothing to do, or already handed over)` : "",
+        n("failed") ? `${n("failed")} failed` : "",
+        n("pending") ? `${n("pending")} still pending, continued from Work` : "",
+      ].filter(Boolean);
       return card(
         <p>
-          Started {String(outcome.action ?? "")} on {String(outcome.closes ?? "")} close{outcome.closes === 1 ? "" : "s"}
-          {Number(outcome.pending ?? 0) > 0 ? `; ${String(outcome.pending)} still pending` : ""} · confirmed {new Date(outcome.at).toLocaleString()}. <Link to="/dashboard">Work →</Link>
+          {String(outcome.action ?? "")} on {String(outcome.closes ?? "")} close{outcome.closes === 1 ? "" : "s"}: {parts.join(", ") || "no outcome recorded"} · confirmed {new Date(outcome.at).toLocaleString()}.{" "}
+          <Link to="/dashboard">Work →</Link>
         </p>,
       );
+    }
     return card(
       <p>
         Review requested for draft #{String(args.workpaper_id ?? "")} · confirmed {new Date(outcome.at).toLocaleString()}.{" "}
