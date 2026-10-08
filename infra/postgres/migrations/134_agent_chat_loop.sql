@@ -9,6 +9,9 @@ ALTER TABLE chat_messages ADD COLUMN proposal jsonb CHECK (jsonb_typeof(proposal
 ALTER TABLE chat_messages ADD COLUMN target_close_id bigint REFERENCES client_closes(id);
 ALTER TABLE chat_messages ADD COLUMN steps jsonb CHECK (jsonb_typeof(steps)='array');
 ALTER TABLE chat_messages ADD COLUMN closes bigint[] NOT NULL DEFAULT '{}';
+-- replayable: only a kept answer and its question go back to the model; a question whose answer was not kept stays on
+-- screen and nowhere else.
+ALTER TABLE chat_messages ADD COLUMN replayable boolean NOT NULL DEFAULT true;
 ALTER TABLE chat_messages DROP CONSTRAINT chat_action_in_close;
 -- An action is the agent's, on the conversation's close or a firm-wide card's target close; a portfolio card carries
 -- its goal and closes in the proposal instead. An outcome needs an action.

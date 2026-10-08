@@ -136,7 +136,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 		return out
 	}
 	// A hand-over proposed for Beta, after reading it: the card is bound to Beta and the pair records Beta.
-	firstRound = `{"status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"c1","name":"close_brief","arguments":"{\"close_id\":\"` + beta + `\"}"},{"type":"function_call","id":"fc_2","call_id":"c2","name":"select_closes","arguments":"{\"text\":\"prepare my clients due Friday\"}"},{"type":"function_call","id":"fc_3","call_id":"c3","name":"hand_over","arguments":"{\"close_id\":\"` + beta + `\",\"finish\":\"review\"}"}]}`
+	firstRound = `{"status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"c1","name":"close_brief","arguments":"{\"close_id\":\"` + beta + `\"}"},{"type":"function_call","id":"fc_2","call_id":"c2","name":"select_closes","arguments":"{\"text\":\"prepare my clients due Friday\"}"},{"type":"function_call","id":"fc_0","call_id":"c0","name":"hand_over","arguments":"{\"close_id\":\"999999999\",\"finish\":\"review\"}"},{"type":"function_call","id":"fc_3","call_id":"c3","name":"hand_over","arguments":"{\"close_id\":\"` + beta + `\",\"finish\":\"review\"}"}]}`
 	answer = func() string {
 		raw, _ := json.Marshal(map[string]any{"kind": "facts", "answer": "Beta is where it is.", "support": []map[string]any{{"step": "t1", "sentence": 0, "path": "/headline", "value": headline, "quote": ""}}})
 		return string(raw)
@@ -150,8 +150,8 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 	if slices_contains(toolsOffered, "search_close") || slices_contains(toolsOffered, "open_close") {
 		t.Fatalf("search_close and open_close are not offered firm-wide: %v", toolsOffered)
 	}
-	if len(outputsSeen) != 3 || !strings.HasPrefix(outputsSeen[0], "t1: ") || !strings.Contains(outputsSeen[1], "preview the goal") || !strings.Contains(outputsSeen[2], `"proposed"`) {
-		t.Fatalf("the read ran, the goal without a preview was refused, the hand-over was proposed: %v", outputsSeen)
+	if len(outputsSeen) != 4 || !strings.HasPrefix(outputsSeen[0], "t1: ") || !strings.Contains(outputsSeen[1], "preview the goal") || !strings.Contains(outputsSeen[2], "not a close you can open") || !strings.Contains(outputsSeen[3], `"proposed"`) {
+		t.Fatalf("the read ran, the goal without a preview and the card on a close the member cannot open were refused, the hand-over was proposed: %v", outputsSeen)
 	}
 	last := out.Messages[len(out.Messages)-1]
 	if last.Action != "delegate" || last.TargetClose != beta || !strings.HasPrefix(last.Body, "Beta is where it is.") {

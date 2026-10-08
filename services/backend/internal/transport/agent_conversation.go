@@ -23,10 +23,10 @@ func pruneConversation(ctx context.Context, db *sql.DB, org, author, closeID str
 }
 
 // agentHistory is the conversation the model sees: the last 20 turns as plain text, each member message redacted as
-// it is sent. A member message without a saved answer is never replayed, nor is a firm-wide pair whose reads touched
-// no close, since nothing verified its client scope; a close conversation is already bound to its close.
+// it is sent. Only a kept answer and its question are replayable; a firm-wide pair whose reads touched no close is
+// not, since nothing verified its client scope; a close conversation is already bound to its close.
 func agentHistory(ctx context.Context, db *sql.DB, org, author, closeID string) ([]llm.Message, error) {
-	rows, err := db.QueryContext(ctx, `SELECT role,body,array_to_json(closes)::text FROM chat_messages WHERE organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY id DESC LIMIT 40`, org, author, closeID)
+	rows, err := db.QueryContext(ctx, `SELECT role,body,array_to_json(closes)::text FROM chat_messages WHERE organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint AND replayable AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY id DESC LIMIT 40`, org, author, closeID)
 	if err != nil {
 		return nil, err
 	}

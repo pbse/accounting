@@ -1020,6 +1020,9 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			result = runAgent(loopCtx, db, org, closeID, in.WorkpaperID, in.Text, firmName, entity, period, today.Format("2006-01-02"), actorPermissions(r), level, earlier, func(method, path string, body any) (string, bool) {
 				rec := replay(r, method, path, body)
 				return rec.Body.String(), rec.Code == 200
+			}, func(id string) bool {
+				var ok bool
+				return db.QueryRowContext(r.Context(), closeAccess, id, org, firmAccess(r), author).Scan(&ok) == nil && ok
 			}, emit)
 			cancel()
 			if denied {
@@ -1128,11 +1131,14 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			raw, _ := json.Marshal(result.steps)
 			steps = string(raw)
 		}
+		// Only a kept answer and its question are replayed to the model; a question whose answer was not kept stays on
+		// screen but never reaches a later request.
+		replayable := !agent || result.outcome == "kept"
 		for _, m := range []struct {
 			role, body, citations, action, due, finish, proposal, target, steps string
 			monthly                                                             bool
 		}{{"user", in.Text, "[]", "", "", "", "", "", "", false}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish, proposal, target, steps, reply.monthly}} {
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[])`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes); err != nil {
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes,replayable) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[],$16)`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes, replayable); err != nil {
 				break
 			}
 		}

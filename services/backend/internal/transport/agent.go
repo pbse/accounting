@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/url"
 	"regexp"
 	"slices"
@@ -30,7 +29,6 @@ type agentStep struct {
 	ID        string        `json:"id"`
 	Tool      string        `json:"tool"`
 	Title     string        `json:"title"`
-	Args      string        `json:"args,omitempty"`
 	Status    string        `json:"status"`
 	Size      int           `json:"size,omitempty"`
 	Truncated bool          `json:"truncated,omitempty"`
@@ -226,6 +224,7 @@ const agentAnswerInstructions = `Write the answer to the member's last message f
 
 // A calendar day is matched before its digits could be taken for three numbers.
 var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|[(−-]?\$?\d[\d,]*(?:\.\d+)?%?\)?`)
+var agentURL = regexp.MustCompile(`(?i)\b(?:https?://|www\.)[^\s)]+`)
 var agentStateWords = []string{"ready", "blocked", "signed off", "signed-off", "waiting", "failed", "verified", "overdue", "approved", "rejected"}
 
 // agentFigures are the figures in a text, normalized: separators and currency marks dropped, parentheses or a
@@ -347,6 +346,16 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 		return nil, ""
 	}
+	// A link the answer carries must have come from a read; the model writes none of its own.
+	for _, link := range agentURL.FindAllString(text, -1) {
+		found := false
+		for _, read := range reads {
+			found = found || strings.Contains(read.text, link)
+		}
+		if !found {
+			return nil, "the answer carries a link no read supplied"
+		}
+	}
 	lines := sentences(text)
 	covered := make([]bool, len(lines))
 	bound := map[string]bool{}
@@ -425,7 +434,7 @@ type agentSupportEntry struct {
 
 // runAgent handles one message: tool rounds, the proposal if any, then the answer, all within the request's deadline.
 // read replays a route under the member; emit sends events; history is the conversation so far, already redacted.
-func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question string, firm, entity, period, today string, permissions []string, level string, history []llm.Message, read func(method, path string, body any) (string, bool), emit agentEvent) agentResult {
+func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question string, firm, entity, period, today string, permissions []string, level string, history []llm.Message, read func(method, path string, body any) (string, bool), canOpen func(closeID string) bool, emit agentEvent) agentResult {
 	var out agentResult
 	tools := agentTools(closeID != "", level)
 	byName := map[string]mcpTool{}
@@ -482,14 +491,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			if offered && json.Unmarshal([]byte(call.Arguments), &args) != nil {
 				output = "refused: arguments must be a JSON object"
 			}
-			summary := []string{}
-			for _, key := range slices.Sorted(maps.Keys(args)) {
-				if value, ok := args[key].(string); ok && key != "close_id" {
-					redacted, _ := documents.Redact(value)
-					summary = append(summary, redacted)
-				}
-			}
-			step.Args = strings.Join(summary, " ")
+			// The trace keeps what ran and how it went, never the arguments: a search phrase or a note is content.
 			if !emit("step", map[string]any{"id": step.ID, "tool": step.Tool, "title": step.Title, "state": "running"}) {
 				out.outcome, out.why = "failed", "The conversation was closed."
 				return out
@@ -513,6 +515,16 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				if _, err := strconv.ParseInt(target, 10, 64); err != nil && agentWrites[call.Name] != "portfolio" {
 					step.Status, output = "refused", "refused: close_id must be a close's number from list_closes"
 					break
+				}
+				// A firm-wide card acts on a close the member can open now, and that close joins the pair's lineage.
+				if closeID == "" && agentWrites[call.Name] != "portfolio" {
+					if !canOpen(target) {
+						step.Status, output = "refused", "refused: not a close you can open"
+						break
+					}
+					if !slices.Contains(closesSeen, target) {
+						closesSeen = append(closesSeen, target)
+					}
 				}
 				if closeID != "" {
 					args["close_id"] = closeID
