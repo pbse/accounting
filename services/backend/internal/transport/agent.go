@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"close.local/backend/internal/documents"
 	"close.local/backend/internal/llm"
@@ -228,7 +229,7 @@ const agentAnswerSchema = `{"type":"object","additionalProperties":false,"requir
 const agentAnswerInstructions = `Write the answer to the member's last message from the tool results in this conversation, in plain prose of at most 1,500 characters, no markdown headings. kind is facts when the answer states anything about the firm's work; help when it only says what you can do here; refusal when the request is outside what you do; card when you proposed an action and the answer only introduces it. For a facts answer, every sentence (numbered from 0) must carry at least one support entry, and every amount, count, percentage or date in the text must be the value of a support entry: step is the tool result's id (t1, t2, ...), path is a JSON pointer into that result (for example /rows/3/ledger_balance) and value is the exact value there; for a document's text, leave path empty and give a verbatim quote of at least 8 characters containing the figure. A help or refusal answer carries no figures, no client, account or document names and no state of a close or draft. Use the person's words for what they asked; cite nothing you did not read.`
 
 // A calendar day or a close month is matched before its digits could be taken for separate numbers.
-var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b|[(−-]?\$?\d[\d,]*(?:\.\d+)?%?\)?`)
+var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b|[(−-]?\$?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?\)?`)
 
 // agentObservation is a sentence that observes the books (a verb of seeing or being, then an accounting noun), which
 // a help, refusal or card answer may not do however it begins.
@@ -324,6 +325,49 @@ func valueAt(value any, pointer string) (string, bool) {
 	}
 	raw, err := json.Marshal(value)
 	return string(raw), err == nil
+}
+
+var agentStopWords = map[string]bool{"this": true, "that": true, "with": true, "from": true, "have": true, "been": true, "were": true, "will": true, "your": true, "their": true, "there": true, "which": true, "what": true, "when": true, "into": true, "than": true, "then": true, "them": true, "they": true, "about": true, "after": true, "before": true, "month": true, "close": true, "closes": true, "client": true}
+
+// substantiates says whether a cited value or quote bears on the sentence it supports: a figure of the sentence is in
+// it, the sentence holds the value's text, the two share a word of four letters or more that is not a filler word, or
+// the sentence names the field's own words (ledger_balance: ledger, balance).
+func substantiates(sentence, value, path string) bool {
+	lower := strings.ToLower(sentence)
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) >= 3 && strings.Contains(lower, value) {
+		return true
+	}
+	figures := map[string]bool{}
+	for _, f := range agentFigures(sentence) {
+		figures[f] = true
+	}
+	for _, f := range agentFigures(value) {
+		if figures[f] {
+			return true
+		}
+	}
+	words := func(text string) []string {
+		return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && r != '-' })
+	}
+	inSentence := map[string]bool{}
+	for _, w := range words(sentence) {
+		inSentence[strings.Trim(w, "-")] = true
+	}
+	for _, w := range words(value) {
+		w = strings.Trim(w, "-")
+		if len(w) >= 4 && !agentStopWords[w] && inSentence[w] {
+			return true
+		}
+	}
+	if last := path[strings.LastIndex(path, "/")+1:]; last != "" {
+		for _, w := range strings.FieldsFunc(strings.ToLower(last), func(r rune) bool { return r == '_' || r == '-' }) {
+			if len(w) >= 4 && inSentence[w] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // linkAt is the page of the row a pointer points into: the nearest enclosing object's href when it has one inside the
@@ -455,6 +499,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			for _, f := range agentFigures(got) {
 				bound[s.sentence][f] = true
 			}
+			// The cited field must substantiate its sentence: a figure of the sentence, the value's own words, or the
+			// field's name must appear in it, so an unrelated field never covers a claim.
+			if !substantiates(lines[s.sentence], got, s.path) {
+				return nil, "a cited field does not bear on its sentence"
+			}
 		case s.quote != "":
 			// A quote binds a document's text only; a JSON read is cited by the field that holds the value.
 			if !read.doc {
@@ -462,6 +511,9 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			}
 			if len(s.quote) < 8 || len(s.quote) > 500 || !strings.Contains(read.text, s.quote) {
 				return nil, "a quote is not in the read it cites"
+			}
+			if !substantiates(lines[s.sentence], s.quote, "") {
+				return nil, "a quote does not bear on its sentence"
 			}
 			for _, f := range agentFigures(s.quote) {
 				bound[s.sentence][f] = true

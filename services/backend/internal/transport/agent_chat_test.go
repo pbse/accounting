@@ -51,7 +51,7 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	if len(cited) != 2 || cited[0].Label != "Balance sheet tie-out › rows/0/ledger_balance" || cited[1].Href != "/dashboard/closes/7?tab=evidence" {
 		t.Fatalf("citations name the field and link the page: %v", cited)
 	}
-	ok("facts", "Two things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
+	ok("facts", "Two things need you: a snapshot and documents.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
 	ok("facts", "2 things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
 	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "1250", ""}}, "does not hold the cited value")
 	listing2 := `{"closes":[{"id":"9","entity":"Delta Co","period":"2026-09"}],"has_more":false}`
@@ -64,12 +64,17 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	if cited := ok("facts", "The invoice is named Zurich invoice.pdf.", []agentSupportEntry{{"t4", 0, "/results/0/title", "Zurich invoice.pdf", ""}}); len(cited) != 1 || cited[0].Href != "/dashboard/closes/7?tab=evidence#doc-4" {
 		t.Fatalf("a search hit links to the item that supplied the fact: %v", cited)
 	}
-	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}}, "bound to no read")
+	rejected("facts", "The cash ledger balance differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}}, "bound to no read")
 	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t9", 0, "/rows/1/ledger_balance", "8000", ""}}, "did not run")
 	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "bound to no read")
 	rejected("facts", "AR ties. Cash differs.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "sentence 1 has no support")
 	rejected("facts", "The premium is 1,200.00.", []agentSupportEntry{{"t3", 0, "", "", "premium"}}, "not in the read")
 	rejected("facts", "AR ties.", nil, "no support")
+	rejected("facts", "Payroll is approved.", []agentSupportEntry{{"t2", 0, "/rows/1/account", "AR", ""}}, "does not bear on its sentence")
+	ok("facts", "AR ties.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}})
+	if figures := agentFigures("Up .5% on the month."); len(figures) != 1 || figures[0] != "0.5%" {
+		t.Fatalf("a leading-decimal figure keeps its decimal: %v", figures)
+	}
 	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t2", 0, "", "", "\"ledger_balance\":\"8000.00\""}}, "not a document")
 	rejected("facts", "See https://example.com/report for AR.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "no read supplied")
 	ok("help", "I can read this close's status, tie-out and documents, or search it.", nil)
@@ -258,7 +263,7 @@ func TestAgentChatReadsProposesAndAnswersInAClose(t *testing.T) {
 	}
 	call("user_admin", []string{"org:manage"}, "/v1/closes/organization/policy", map[string]any{"agent_chat": "closes", "reason": "Pilot the agent"}, 200)
 	answer = func(headline string) string {
-		raw, _ := json.Marshal(map[string]any{"kind": "facts", "answer": "Here is where the close stands.", "support": []map[string]any{{"step": "t1", "sentence": 0, "path": "/headline", "value": headline, "quote": ""}}})
+		raw, _ := json.Marshal(map[string]any{"kind": "facts", "answer": "Where this close stands: " + headline, "support": []map[string]any{{"step": "t1", "sentence": 0, "path": "/headline", "value": headline, "quote": ""}}})
 		return string(raw)
 	}
 	calls, toolRounds = 0, 0
@@ -292,7 +297,7 @@ func TestAgentChatReadsProposesAndAnswersInAClose(t *testing.T) {
 	if last.Action != "prepare" || last.Proposal["action"] != "prepare" || last.TargetClose != "" || len(last.Steps) != 4 || last.Steps[0].Status != "ok" || last.Steps[0].Link.Label != "Where a close stands" || last.Steps[2].Status != "proposed" {
 		t.Fatalf("the answer carries the card, its proposal and the trace: %+v", last)
 	}
-	if !strings.HasPrefix(last.Body, "Here is where the close stands.") || len(last.Citations) != 1 || last.Citations[0]["label"] != "Where a close stands › headline" {
+	if !strings.HasPrefix(last.Body, "Where this close stands: 2 things") || len(last.Citations) != 1 || last.Citations[0]["label"] != "Where a close stands › headline" {
 		t.Fatalf("a kept answer cites the field it was bound to: %q %v", last.Body, last.Citations)
 	}
 	var runs int

@@ -142,7 +142,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 	// A hand-over proposed for Beta, after reading it: the card is bound to Beta and the pair records Beta.
 	firstRound = `{"status":"completed","output":[{"type":"function_call","id":"fc_9","call_id":"c9","name":"get_close","arguments":"{\"close_id\":\"999999999\"}"},{"type":"function_call","id":"fc_7","call_id":"c7","name":"select_closes_preview","arguments":"{\"text\":\"show my clients due Friday\"}"},{"type":"function_call","id":"fc_8","call_id":"c8","name":"select_closes","arguments":"{\"text\":\"show my clients due Friday\"}"},{"type":"function_call","id":"fc_1","call_id":"c1","name":"close_brief","arguments":"{\"close_id\":\"` + beta + `\"}"},{"type":"function_call","id":"fc_2","call_id":"c2","name":"select_closes","arguments":"{\"text\":\"prepare my clients due Friday\"}"},{"type":"function_call","id":"fc_5","call_id":"c5","name":"hand_over","arguments":"{\"close_id\":\"` + beta + `\"}"},{"type":"function_call","id":"fc_0","call_id":"c0","name":"hand_over","arguments":"{\"close_id\":\"999999999\",\"finish\":\"review\"}"},{"type":"function_call","id":"fc_3","call_id":"c3","name":"hand_over","arguments":"{\"close_id\":\"` + beta + `\",\"finish\":\"review\"}"}]}`
 	answer = func() string {
-		raw, _ := json.Marshal(map[string]any{"kind": "facts", "answer": "Beta is where it is.", "support": []map[string]any{{"step": "t4", "sentence": 0, "path": "/headline", "value": headline, "quote": ""}}})
+		raw, _ := json.Marshal(map[string]any{"kind": "facts", "answer": "Beta: " + headline, "support": []map[string]any{{"step": "t4", "sentence": 0, "path": "/headline", "value": headline, "quote": ""}}})
 		return string(raw)
 	}
 	out := ask("How is Beta doing? Hand it over.")
@@ -158,7 +158,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 		t.Fatalf("the read ran, the goal without a preview and the card on a close the member cannot open were refused, the hand-over was proposed: %v", outputsSeen)
 	}
 	last := out.Messages[len(out.Messages)-1]
-	if last.Action != "delegate" || last.TargetClose != beta || last.TargetLabel != "Beta · 2026-09" || !strings.HasPrefix(last.Body, "Beta is where it is.") {
+	if last.Action != "delegate" || last.TargetClose != beta || last.TargetLabel != "Beta · 2026-09" || !strings.HasPrefix(last.Body, "Beta: 2 things") {
 		t.Fatalf("the card names the close it acts on: %+v", last)
 	}
 	var closes string
@@ -198,7 +198,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 	var shown reply
 	must(json.Unmarshal(call("GET", "/v1/closes/chat", nil, 200), &shown))
 	for _, m := range shown.Messages {
-		if strings.Contains(m.Body, "Hand it over") || strings.Contains(m.Body, "Beta is where it is") {
+		if strings.Contains(m.Body, "Hand it over") || strings.Contains(m.Body, "Beta: 2 things") {
 			t.Fatalf("a pair that read a lost close is still shown: %+v", m)
 		}
 	}

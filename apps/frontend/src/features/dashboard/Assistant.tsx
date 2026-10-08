@@ -357,7 +357,7 @@ const stepWords: Record<string, string> = { running: "reading", ok: "read", prop
 function StepList({ steps, done }: { steps: Step[]; done: boolean }) {
   const items = steps.map((s) => (
     <li key={s.id} className={`step-${s.status}`}>
-      <span>{s.title || s.tool}</span>
+      <span>{done && s.link ? <Link to={s.link.href}>{s.title || s.tool}</Link> : s.title || s.tool}</span>
       <small>
         {stepWords[s.status] ?? s.status}
         {s.truncated ? " · cut to the first rows" : ""}
