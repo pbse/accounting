@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"close.local/backend/internal/accruals"
-	"close.local/backend/internal/documents"
 	"close.local/backend/internal/prepaids"
 	"close.local/backend/internal/reconciliation"
 )
@@ -444,21 +443,20 @@ func ProcessOne(ctx context.Context, db *sql.DB) (bool, error) {
 	}
 	return true, tx.Commit()
 }
+
+// Run reads intake and prepares queued work. PDFs are extracted in a loop of their own (documents.Run), so a slow page
+// reading never holds up this one.
 func Run(ctx context.Context, db *sql.DB) {
 	for ctx.Err() == nil {
-		extracted, extractErr := documents.ProcessOne(ctx, db)
 		intake, intakeErr := ProcessIntake(ctx, db)
 		worked, err := ProcessOne(ctx, db)
 		if intakeErr != nil && ctx.Err() == nil {
 			log.Print("Intake worker could not persist proposals; will retry")
 		}
-		if extractErr != nil && ctx.Err() == nil {
-			log.Print("Document worker could not persist extraction; will retry")
-		}
 		if err != nil && ctx.Err() == nil {
 			log.Print("Preparation worker could not process queued work; will retry")
 		}
-		if (worked || extracted || intake) && err == nil && extractErr == nil && intakeErr == nil {
+		if (worked || intake) && err == nil && intakeErr == nil {
 			continue
 		}
 		select {

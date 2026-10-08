@@ -57,6 +57,7 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 | Encrypted connectors/email | — | `SECRETS_KEY` (32 random bytes, 64 hex characters; same on API/worker, backed up separately) |
 | Welcome emails (optional) | `PLATFORM_EMAIL_FROM`, Krith's sender on a domain verified in Resend ([sign-in](sign-in.md#welcome-emails)) | Queue worker: `PLATFORM_EMAIL_KEY`, a send-only Resend key for that domain (set both or neither) |
 | OpenAI proposals | `OPENAI_MODEL` | `OPENAI_API_KEY` (configure both or neither; API and worker) |
+| Gemini PDF reading (optional) | `GEMINI_PAID_SERVICE=confirmed`, set only once you have checked that the key's Google project has billing enabled (the paid service); optional `GEMINI_OCR_MODEL` (default `gemini-3.8-flash`) | Queue worker only: `GEMINI_API_KEY`. On the free tier Google may use content to improve its products and have people review it, so without the confirmation no page is sent. With both, Gemini reads every PDF page ([PDF reading](recalculation-and-pdf.md)) |
 | Sandbox QuickBooks OAuth | `QBO_CLIENT_ID`, `QBO_REDIRECT_URI` | `QBO_CLIENT_SECRET`; optional `QBO_WEBHOOK_VERIFIER` |
 | Production QuickBooks OAuth | `QBO_PRODUCTION_CLIENT_ID`, `QBO_PRODUCTION_REDIRECT_URI` | `QBO_PRODUCTION_CLIENT_SECRET` |
 | Xero OAuth | `XERO_CLIENT_ID`, `XERO_REDIRECT_URI` | `XERO_CLIENT_SECRET`; optional `XERO_WEBHOOK_KEY` |
@@ -82,6 +83,7 @@ On a trusted operator computer, run `npm ci` and authenticate Wrangler for the t
 # The private file must be outside the repository, with mode 0600.
 node scripts/cloudflare-credentials.mjs CONTEXT_MACHINE_DATABASE_URL production < /path/to/private/reader-url
 node scripts/cloudflare-credentials.mjs OPENAI_API_KEY production < /path/to/private/openai-key
+node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production < /path/to/private/gemini-key
 # Use staging explicitly to target staging Workers.
 ```
 
@@ -90,7 +92,7 @@ The installer validates values, checks all destinations before writing, sends JS
 | Worker | Credential scope |
 | --- | --- |
 | API (`close-production`) | Runtime DB, scanner/email keys, encryption key, WorkOS API key, connector secrets, optional OpenAI key, shared context-machine token |
-| Queue (`close-queue-production`) | Runtime DB, scanner/encryption/WorkOS keys, connector secrets, optional OpenAI key, shared context-machine token, optional alert webhook credentials |
+| Queue (`close-queue-production`) | Runtime DB, scanner/encryption/WorkOS keys, connector secrets, optional OpenAI key, optional Gemini key, shared context-machine token, optional alert webhook credentials |
 | Scanner (`close-upload-scanner-production`) | `UPLOAD_SCAN_KEY` only |
 | Context machine (`close-context-machine-production`) | Read-only DB, shared token, OpenAI/Anthropic API keys, Codex managed login or account token, Claude OAuth token |
 

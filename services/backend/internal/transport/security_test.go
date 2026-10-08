@@ -97,9 +97,13 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	must(err)
 	_, err = db.Exec(`INSERT INTO production_postings(close_id,workpaper_id,source_key,grant_id,connection_id,realm,digest,journal,ledger_before,state,verified_at) SELECT $1,$2,'source-o',id,$3,'realm-o','d','{}','{}','verified',now() FROM production_posting_grants WHERE organization_id=$4`, otherClose, otherPaper, otherBooks, other)
 	must(err)
-	_, err = db.Exec(`INSERT INTO model_calls(organization_id,day,calls) VALUES($1,(now() AT TIME ZONE 'UTC')::date,3)`, org)
+	_, err = db.Exec(`INSERT INTO model_calls(organization_id,day,calls,gemini_calls) VALUES($1,(now() AT TIME ZONE 'UTC')::date,5,2)`, org)
 	must(err)
 
+	// The worker reports that Google Gemini reads the firm's PDFs.
+	_, err = db.Exec(`INSERT INTO worker_heartbeats(loop,detail) VALUES('worker','{"ocr":{"provider":"gemini","model":"gemini-3.8-flash"}}') ON CONFLICT (loop) DO UPDATE SET beat_at=now(),detail=EXCLUDED.detail`)
+	must(err)
+	t.Cleanup(func() { db.Exec(`DELETE FROM worker_heartbeats WHERE loop='worker'`) })
 	t.Setenv("PRODUCTION_POSTING_KINDS", "prepaid,accrual")
 	t.Setenv("XERO_POSTING_KINDS", "accrual")
 	t.Setenv("PUBLIC_APP_URL", "https://app.example.test")
@@ -174,8 +178,8 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 			Actor, Text string
 		}
 		Providers []struct {
-			Provider, Evidence string
-			InUse              bool `json:"in_use"`
+			Provider, Evidence, Receives string
+			InUse                        bool `json:"in_use"`
 		}
 		Clients    []string
 		Operations []struct {
@@ -292,8 +296,8 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	}
 	providers := map[string]bool{}
 	var model struct {
-		Provider, Evidence string
-		InUse              bool `json:"in_use"`
+		Provider, Evidence, Receives string
+		InUse                        bool `json:"in_use"`
 	}
 	for _, p := range got.Providers {
 		providers[p.Provider] = p.InUse
@@ -304,8 +308,13 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	if !strings.HasPrefix(model.Evidence, "3 model calls reserved") || !model.InUse || model.Provider != "Claude (Anthropic) through the private context machine" {
 		t.Fatalf("model use is shown as the reserved budget it is, under the configured provider: %+v", model)
 	}
-	if !providers["Resend"] || !providers["QuickBooks"] || providers["Xero"] || providers["Stripe"] {
+	if !providers["Resend"] || !providers["QuickBooks"] || providers["Xero"] || providers["Stripe"] || !providers["Google Gemini"] {
 		t.Fatalf("which outside services are in use: %+v", got.Providers)
+	}
+	for _, p := range got.Providers {
+		if p.Provider == "Google Gemini" && (p.Evidence != "Key set on the worker; model gemini-3.8-flash; 2 page readings reserved in the last 30 days" || !strings.Contains(p.Receives, "Each page of a PDF")) {
+			t.Fatalf("Gemini receives each PDF page, as the worker reports: %+v", p)
+		}
 	}
 	if got.OrganizationID != org || strings.Join(got.Clients, ",") != "Alpha,Beta" {
 		t.Fatalf("the firm and every client, for the controls: %s %v", got.OrganizationID, got.Clients)

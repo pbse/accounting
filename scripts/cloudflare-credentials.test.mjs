@@ -18,6 +18,12 @@ test('credential validation rejects unsafe URLs and compacts managed login', () 
  assert.throws(() => validateCredential('OPERATIONS_ALERT_WEBHOOK_URL','http://host'));
  assert.throws(() => validateCredential('OPERATIONS_ALERT_WEBHOOK_URL','https://user:pass@host'));
  assert.equal(validateCredential('OPERATIONS_ALERT_WEBHOOK_URL','https://host/path'),'https://host/path');
+ // The Gemini key goes to the worker that reads PDFs, and nowhere else.
+ assert.ok(credentials.queue.includes('GEMINI_API_KEY'));
+ assert.ok(!credentials.edge.includes('GEMINI_API_KEY') && !credentials.scanner.includes('GEMINI_API_KEY'));
+ assert.throws(() => validateCredential('GEMINI_API_KEY','two words inside a key value'));
+ assert.throws(() => validateCredential('GEMINI_API_KEY','short'));
+ assert.equal(validateCredential('GEMINI_API_KEY','AIzaSyExampleOnly-not-a-real-key_0000\n'),'AIzaSyExampleOnly-not-a-real-key_0000');
 });
 
 test('direct credential installer scopes stdin, excludes secret arguments, and redacts CLI failures', () => {

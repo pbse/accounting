@@ -53,6 +53,9 @@ func StraightThrough(p Proposal, invoice string, aliases []string, procedure Pro
 	if unread {
 		return Plan{}, "evidence in the close is not readable yet, or belongs to another job's request or answer"
 	}
+	if pages := documents.ImageDisputed(invoice); len(pages) > 0 {
+		return Plan{}, fmt.Sprintf("Gemini read page %d of the invoice differently from its PDF text; a person compares it with the original", pages[0])
+	}
 	if currency == "" {
 		return Plan{}, "the client's home currency is not detected from a connected ledger"
 	}

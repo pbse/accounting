@@ -50,7 +50,7 @@ func TestExtractMixedPDF(t *testing.T) {
 	objects[1] = "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>"
 	objects[4] = stream("BT /F1 24 Tf 50 700 Td (TEXT INVOICE 12000.00) Tj ET\n")
 	objects = append(objects, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /XObject << /Im0 8 0 R >> >> /Contents 7 0 R >>", stream("q 600 0 0 800 0 0 cm /Im0 Do Q\n"), fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 1200 /Height 1600 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n%s\nendstream", len(jpg), jpg))
-	text, err := Extract(context.Background(), pdf(objects))
+	text, err := Extract(context.Background(), pdf(objects), Reading{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestExtractMixedPDF(t *testing.T) {
 			t.Fatalf("Missing %q in %s", want, text)
 		}
 	}
-	if _, err = Extract(context.Background(), []byte("%PDF-1.4 invalid %%EOF")); err == nil {
+	if _, err = Extract(context.Background(), []byte("%PDF-1.4 invalid %%EOF"), Reading{}); err == nil {
 		t.Fatal("Malformed PDF accepted")
 	}
 }

@@ -38,6 +38,7 @@ result, err := llm.Generate(ctx, llm.Request{
 | --- | --- |
 | `LLM_PROVIDER` | `api` or `context_machine`; applies to all nine accounting purposes. |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Direct API credentials/model. Neither is needed in the main services when routing completions through the context machine. |
+| `GEMINI_API_KEY`, `GEMINI_OCR_MODEL` | Not a purpose route: Google's Gemini reads PDF page images for the worker's document extraction, through `llm.Gemini` (`llm/gemini.go`), since a page goes as an image. `GEMINI_PAID_SERVICE=confirmed` is also required. Its calls still count against the firm's daily model-call limit ([PDF reading](recalculation-and-pdf.md)). |
 | `LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS` | Explicit `true` acknowledgement required for Codex subscription completions; API-key and Claude modes retain token caps. |
 | `CONTEXT_MACHINE_PROFILES` | Authorized organization/subject/profile triples; every completion must match a trusted HTTP or job identity. A subject of `*` names every current member of the organization: the gateway sends the member's own subject under that profile, and the service checks that member's membership and client grants on every call. Wide profiles need API-key agents ([deployment](context-machine-deployment.md#organization-wide-profiles)). |
 | `LLM_MODELS` | Optional JSON object of purpose-specific model overrides, for example `{"preparation":"careful-model","work_command":"fast-model"}`. Overrides apply to the selected route; unknown purposes and empty models fail startup. |
