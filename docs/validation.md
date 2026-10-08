@@ -3802,7 +3802,7 @@ Not verified: live Gemini. No Gemini call was made and no key was installed. Rea
 
 ## 2026-10-07: agent chat groundwork (gateway profiles, chat purpose, read caps and lineage)
 
-PR 1 of the [agentic chat plan](agent-chat.md). Local run against a fresh migrated PostgreSQL (`close_agent_test`, migrations through 133):
+PR 1 of the [agentic chat plan](agent-chat.md). Local run against a fresh migrated PostgreSQL (`close_agent_test`, migrations through 131):
 
 - `go test ./internal/llm/...`: all pass, including the new `TestOrganizationWideProfileCompletesForEachMemberAsThemselves` (a `*` subject resolves to each member's own subject on the wire; the wildcard itself, an empty subject, another organization and a duplicate wide profile are refused; eligibility follows the wide profile, and `ViaWideProfile` traces a member's eligibility to the wide profile only when they have no profile of their own) and `TestServiceAcceptsMembersOfAnOrganizationWideProfile` (the service accepts a member under a wide profile, refuses the wildcard, an empty subject, another organization or access profile, and refuses to start with a wide profile under a personal login).
 - `go test ./internal/transport -run 'TestMCP|TestAssistant|TestReplay|TestModelReads|TestLineage'`: pass. `TestModelReadsAreCappedNotDropped` and `TestLineageComesFromTheReadNotTheModel` cover result caps and close lineage taken from the read's body, and that every firm-wide registry read declares its lineage.
@@ -3826,9 +3826,9 @@ Not verified: a hosted firm's migration from the three old settings; the backfil
 
 ## 2026-10-07: Your settings
 
-Branch `claude/user-settings`. A member's own settings page at `/dashboard/settings`, in vertical tabs: General (name through WorkOS, time zone kept in `member_settings`, migration 131), Connections (agent access, the member's own Google Drive grant, and where the firm's connections and posting authority live) and Notifications (the attention kinds, moved from the Attention page).
+Branch `claude/user-settings`. A member's own settings page at `/dashboard/settings`, opened from the account menu, in vertical tabs: General (name through WorkOS, time zone kept in `member_settings`, migration 134), Connections (agent access, the member's own Google Drive grant, and where the firm's connections and posting authority live) and Notifications (the attention kinds, moved from the Attention page).
 
-- `go test ./internal/transport/` against a fresh local database migrated through 131: the settings test proves a 403 without a subject, time zones accepted only as region/city or UTC, a refused change keeping nothing, each member reading only their own zone, the kinds saved on the attention route reading back, and a revoked membership removing the settings row.
+- `go test ./internal/transport/` against a fresh local database migrated through 134: the settings test proves a 403 without a subject, time zones accepted only as region/city or UTC, a refused change keeping nothing, each member reading only their own zone, the kinds saved on the attention route reading back, and a revoked membership removing the settings row.
 - The full Go suite passes except the two pre-existing tests that need Poppler and Tesseract on this machine.
 - `npm run check` for both apps and `npm test` (46 passing).
 - Headless Edge against the dev servers and the local workspace token, at 1280 and 390 wide: all three tabs render with a `PageHeader`, saving `Europe/Lisbon` shows "Saved.", and no page errors.

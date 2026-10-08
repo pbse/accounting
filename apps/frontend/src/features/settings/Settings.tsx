@@ -238,7 +238,8 @@ export default function Settings() {
   const refresh = () => setVersion((v) => v + 1);
   return (
     <>
-      <PageHeader icon="settings" title="Your settings">
+      {/* Keyed by section so each section counts as its own rendered page (scripts/layout-check.mjs). */}
+      <PageHeader key={tab} icon="settings" title="Your settings">
         Your name and time zone, what is connected for you alone, and what notifies you. The firm's policies and connections are in Firm settings.
       </PageHeader>
       <VerticalTabs label="Settings sections" items={[...tabs]} value={tab}>
