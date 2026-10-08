@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { forbidden } from "./requestError";
+import { Dialog, DialogActions } from "@close/ui/components/Dialog";
+import { EntityCell, RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { workspaceRequest } from "./workspace";
 
 // rev changes with every change, so a form keyed on it resets to the newest entry.
@@ -27,6 +30,9 @@ export function ClientRoster() {
   // changed resets to the newest entry, and this says why.
   const [notice, setNotice] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [editingTemplate, setEditingTemplate] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState("");
   const saved = () => (setNotice(""), setRefresh((n) => n + 1));
   const failed = (message: string) => (setNotice(message), setRefresh((n) => n + 1));
   useEffect(() => {
@@ -45,7 +51,18 @@ export function ClientRoster() {
   const t = roster.template;
   return (
     <section aria-label="Clients and monthly closes">
-      <h2>Clients and monthly closes</h2>
+      <SectionHeader title="Clients and monthly closes">
+        {roster.can_manage && (
+          <span className="setting-actions">
+            <button type="button" onClick={() => setAdding(true)}>
+              Add a client
+            </button>
+            <button type="button" onClick={() => setEditingTemplate(true)}>
+              Monthly template
+            </button>
+          </span>
+        )}
+      </SectionHeader>
       <p>
         Every active client owes a close each month. A month nobody has opened shows in Work until it is opened, and opening it gives the close{" "}
         {t ? (
@@ -60,36 +77,63 @@ export function ClientRoster() {
       {error && <p role="alert">{error} Showing the last roster read.</p>}
       {notice && <p role="alert">{notice}</p>}
       {roster.people_unavailable && <p role="alert">{roster.people_unavailable}</p>}
-      {roster.can_manage && <TemplateForm key={t?.rev ?? "none"} template={t} people={people.filter((p) => p.firm_wide)} onSaved={saved} onFailed={failed} />}
       {roster.clients.length === 0 ? (
         <p className="empty">No client is on the roster yet. A client joins when it is taken over, or when a firm administrator adds it.</p>
       ) : (
-        <ul>
+        <RowList>
           {roster.clients.map((c) => (
-            <li key={c.entity}>
-              <strong>{c.entity}</strong> · {c.active ? `owes a close each month from ${c.since}` : "inactive"}
-              {c.last_period && ` · latest close ${c.last_period}`}
-              {c.active && c.owed.length > 0 && <span className="status warn"> Not opened: {c.owed.join(", ")}</span>}
-              {(c.due_days !== null || c.owner !== null) && (
-                <small>
-                  {" "}
-                  · own terms: {c.due_days === null ? "the template's due date" : c.due_days === 0 ? "no due date" : `due ${c.due_days} days after month end`}, {c.owner === null ? "the template's owner" : c.owner ? name(c.owner) : "no owner"}
-                </small>
+            <div className="row" key={c.entity}>
+              <EntityCell
+                name={c.entity}
+                title={c.entity}
+                detail={
+                  <>
+                    {c.active ? `Owes a close each month from ${c.since}` : "Inactive"}
+                    {c.last_period && ` · latest close ${c.last_period}`}
+                  </>
+                }
+              />
+              <span>
+                {c.active && c.owed.length > 0 ? <span className="pill muted">Not opened: {c.owed.join(", ")}</span> : c.active ? <span className="pill">Up to date</span> : <span className="pill neutral">Inactive</span>}
+              </span>
+              <small>
+                {c.due_days === null ? "Template due date" : c.due_days === 0 ? "No due date" : `Due ${c.due_days} days after month end`} ·{" "}
+                {c.owner === null ? "template owner" : c.owner ? name(c.owner) : "no owner"}
+              </small>
+              {roster.can_manage ? (
+                <button type="button" onClick={() => setEditing(c.entity)}>
+                  Change
+                </button>
+              ) : (
+                <span />
               )}
-              <small> · {c.reason} ({c.actor}, {new Date(c.at).toLocaleDateString()})</small>
-              {roster.can_manage && <ClientForm key={`${c.entity}:${c.rev}`} client={c} people={people} onSaved={saved} onFailed={failed} />}
-            </li>
+            </div>
           ))}
-        </ul>
+        </RowList>
       )}
-      {roster.can_manage ? <ClientForm people={people} onSaved={saved} onFailed={failed} /> : <p className="note">A firm administrator with clients:all and members:manage changes the roster and the template.</p>}
+      {!roster.can_manage && <p className="note">A firm administrator with clients:all and members:manage changes the roster and the template.</p>}
+      {roster.can_manage && (
+        <>
+          <Dialog open={editingTemplate} onClose={() => setEditingTemplate(false)} title="The monthly template" description="The due date and owner every client's new month takes, unless the client's own entry says otherwise.">
+            <TemplateForm key={t?.rev ?? "none"} template={t} people={people.filter((p) => p.firm_wide)} onSaved={() => (setEditingTemplate(false), saved())} onFailed={(m) => (setEditingTemplate(false), failed(m))} onCancel={() => setEditingTemplate(false)} />
+          </Dialog>
+          <Dialog open={adding} onClose={() => setAdding(false)} title="Add a client" description="A client on the roster owes a close each month from its first month.">
+            <ClientForm key={roster.clients.length} people={people} onSaved={() => (setAdding(false), saved())} onFailed={(m) => (setAdding(false), failed(m))} onCancel={() => setAdding(false)} />
+          </Dialog>
+          {roster.clients.map((c) => (
+            <Dialog key={c.entity} open={editing === c.entity} onClose={() => setEditing("")} title={c.entity} description="Whether the client owes a close each month, from when, and its own due date and owner.">
+              <ClientForm key={`${c.entity}:${c.rev}`} client={c} people={people} onSaved={() => (setEditing(""), saved())} onFailed={(m) => (setEditing(""), failed(m))} onCancel={() => setEditing("")} />
+            </Dialog>
+          ))}
+        </>
+      )}
     </section>
   );
 }
 
-type Saved = { onSaved: () => void; onFailed: (message: string) => void };
+type Saved = { onSaved: () => void; onFailed: (message: string) => void; onCancel: () => void };
 
-function TemplateForm({ template, people, onSaved, onFailed }: { template: Template; people: Person[] } & Saved) {
+function TemplateForm({ template, people, onSaved, onFailed, onCancel }: { template: Template; people: Person[] } & Saved) {
   const [due, setDue] = useState(template?.due_days ? String(template.due_days) : "");
   const [owner, setOwner] = useState(template?.owner ?? "");
   const [reason, setReason] = useState("");
@@ -110,8 +154,8 @@ function TemplateForm({ template, people, onSaved, onFailed }: { template: Templ
     }
   }
   return (
-    <details>
-      <summary>Change the monthly template</summary>
+    <form onSubmit={(e) => (e.preventDefault(), void save())}>
+      <fieldset disabled={busy}>
       <label>
         Due
         <select value={due} onChange={(e) => setDue(e.target.value)}>
@@ -132,13 +176,17 @@ function TemplateForm({ template, people, onSaved, onFailed }: { template: Templ
         Reason for the change
         <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
       </label>
-      <button type="button" disabled={busy || !reason.trim() || ineligible} onClick={() => void save()}>Save template</button>
-    </details>
+      <DialogActions>
+        <button type="button" onClick={onCancel}>Cancel</button>
+        <button className="primary" disabled={busy || !reason.trim() || ineligible}>Save template</button>
+      </DialogActions>
+      </fieldset>
+    </form>
   );
 }
 
 // Adds a client (without one) or changes a client's entry: active or not, the first month it owes, and its own terms.
-function ClientForm({ client, people, onSaved, onFailed }: { client?: Client; people: Person[] } & Saved) {
+function ClientForm({ client, people, onSaved, onFailed, onCancel }: { client?: Client; people: Person[] } & Saved) {
   const [entity, setEntity] = useState(client?.entity ?? "");
   const [active, setActive] = useState(client?.active ?? true);
   const [since, setSince] = useState(client?.since ?? endedMonth());
@@ -174,15 +222,15 @@ function ClientForm({ client, people, onSaved, onFailed }: { client?: Client; pe
     }
   }
   return (
-    <details>
-      <summary>{client ? "Change" : "Add a client"}</summary>
+    <form onSubmit={(e) => (e.preventDefault(), void save())}>
+      <fieldset disabled={busy}>
       {!client && (
         <label>
           Client
           <input value={entity} maxLength={200} onChange={(e) => setEntity(e.target.value)} />
         </label>
       )}
-      <label>
+      <label className="checkbox-label">
         <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active: owes a close each month
       </label>
       <label>
@@ -211,9 +259,13 @@ function ClientForm({ client, people, onSaved, onFailed }: { client?: Client; pe
         Reason
         <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
       </label>
-      <button type="button" disabled={busy || !reason.trim() || !entity.trim() || !since || ineligible} onClick={() => void save()}>
-        {client ? "Save" : "Add client"}
-      </button>
-    </details>
+      <DialogActions>
+        <button type="button" onClick={onCancel}>Cancel</button>
+        <button className="primary" disabled={busy || !reason.trim() || !entity.trim() || !since || ineligible}>
+          {client ? "Save" : "Add client"}
+        </button>
+      </DialogActions>
+      </fieldset>
+    </form>
   );
 }

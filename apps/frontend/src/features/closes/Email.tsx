@@ -1,5 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../../lib/api";
+import { Dialog, DialogActions } from "@close/ui/components/Dialog";
+import { RowList } from "@close/ui/components/RowList";
+import { SectionHeader } from "@close/ui/components/SectionHeader";
 import { workspaceRequest } from "./workspace";
 
 type Sender = {
@@ -10,10 +13,12 @@ type Sender = {
   tracking_configured: boolean;
 };
 type Configuration = { connection: Sender | null; hosted: boolean };
+// The firm's verified sender: its state in view, and each change (connect or replace, tracking, disconnect) in a dialog.
 export function EmailSettings() {
   const [data, setData] = useState<Configuration>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [dialog, setDialog] = useState<"sender" | "tracking" | "disconnect" | null>(null);
   async function load() {
     setBusy(true);
     setError("");
@@ -25,6 +30,10 @@ export function EmailSettings() {
       setBusy(false);
     }
   }
+  useEffect(() => {
+    void load();
+  }, []);
+  const open = (which: typeof dialog) => (setError(""), setDialog(which));
   async function save(event: FormEvent<HTMLFormElement>, disable: boolean) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -41,129 +50,146 @@ export function EmailSettings() {
         disable,
       });
       form.reset();
+      setDialog(null);
       await load();
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? e.message
-          : "Sender change could not be confirmed.",
-      );
-    } finally {
+      setError(e instanceof Error ? e.message : "Sender change could not be confirmed.");
       setBusy(false);
     }
   }
   async function tracking(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const form=event.currentTarget; const values=new FormData(form);
-    setBusy(true); setError("");
-    try { await workspaceRequest("/email",{previous_id:data?.connection?.id,webhook_secret:values.get("secret"),confirmed:values.has("confirmed")}); form.reset(); await load(); }
-    catch(e) { setError(e instanceof Error ? e.message : "Tracking setup failed."); }
-    finally { setBusy(false); }
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    setBusy(true);
+    setError("");
+    try {
+      await workspaceRequest("/email", { previous_id: data?.connection?.id, webhook_secret: values.get("secret"), confirmed: values.has("confirmed") });
+      form.reset();
+      setDialog(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Tracking setup failed.");
+      setBusy(false);
+    }
   }
-  useEffect(() => {
-    void load();
-  }, []);
+  const connection = data?.connection;
   return (
     <section aria-label="Email sender">
-      <h2>Email sender</h2>
-      <p>
-        Client requests and reminders go out from the firm's own verified Resend domain. The API key is encrypted on the server and never returned to this page.
-        Connecting a sender does not authorize any email.
-      </p>
-      {error && (
-        <p role="alert">
-          {error}{" "}
-          {!data && (
+      <SectionHeader title="Email sender">
+        {data?.hosted && (
+          <button type="button" className="primary" onClick={() => open("sender")}>
+            {connection ? "Replace the sender" : "Connect the sender"}
+          </button>
+        )}
+      </SectionHeader>
+      <p>Client requests and reminders go out from the firm's own verified Resend domain. The API key is encrypted on the server and never returned to this page. Connecting a sender does not authorize any email.</p>
+      {!data ? (
+        error ? (
+          <p role="alert">
+            {error}{" "}
             <button type="button" disabled={busy} onClick={() => void load()}>
               Try again
             </button>
-          )}
-        </p>
-      )}
-      {data && (
-        <>
-          <p>
-            {data.connection
-              ? `Current sender: ${data.connection.sender}. Domain last checked ${new Date(data.connection.verified_at).toLocaleString()}.`
-              : "No email sender connected. Private links can still be shared manually."}
           </p>
-          {!data.hosted ? (
-            <p className="note">
-              Live sending needs the firm's hosted sign-in, which local development does not have. Share links by hand instead.
-            </p>
-          ) : (
-            <>
-              <details open={!data.connection}>
-              <summary>{data.connection ? "Replace the sender" : "Connect the sender"}</summary>
-              <form
-                key={data.connection?.id ?? "new"}
-                onSubmit={(e) => void save(e, false)}
-              >
-                <fieldset disabled={busy}>
-                  <label>
-                    Verified sender (email or Firm name &lt;email&gt;)
-                    <input
-                      name="from"
-                      required
-                      maxLength={320}
-                      defaultValue={data.connection?.sender ?? ""}
-                    />
-                  </label>
-                  <label>
-                    Resend domain ID
-                    <input
-                      name="domain_id"
-                      required
-                      maxLength={100}
-                      defaultValue={data.connection?.domain_id ?? ""}
-                    />
-                  </label>
-                  <label>
-                    Resend API key
-                    <input
-                      name="key"
-                      required
-                      type="password"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <p>
-                    The key needs sender-domain read and email-send access.
-                    Disable click tracking on the sending domain to keep private
-                    links direct. API and worker also need the same server-side
-                    SECRETS_KEY; the API needs PUBLIC_APP_URL.
-                  </p>
-                  <label className="checkbox-label">
-                    <input name="confirmed" type="checkbox" required />I am
-                    authorized to connect this firm’s Resend account and sender.
-                    Replacing a connection stops pending attempts using the
-                    previous connection.
-                  </label>
-                  <button>Verify domain and save connection</button>
-                </fieldset>
-              </form>
-              </details>
-              {data.connection && <details open={!data.connection.tracking_configured}><summary>Delivery tracking · {data.connection.tracking_configured ? "configured" : "setup required"}</summary><form onSubmit={e=>void tracking(e)}><fieldset disabled={busy}>
-                <p>In Resend, create a webhook for email.sent, email.delivered, email.delivery_delayed, email.bounced, email.complained, email.failed and email.suppressed at:</p>
-                <code>{apiBaseUrl || window.location.origin}/v1/webhooks/resend/{data.connection.id}</code>
-                <label>Webhook signing secret<input name="secret" type="password" autoComplete="off" required /></label>
-                <label className="checkbox-label"><input name="confirmed" type="checkbox" required /> This webhook belongs to this firm’s Resend account.</label>
-                <button>Save signing secret</button>
-              </fieldset></form></details>}
-              {data.connection && (
-                <details><summary>Disconnect the sender</summary>
-                <form onSubmit={(e) => void save(e, true)}>
-                  <label className="checkbox-label">
-                    <input type="checkbox" name="confirmed" required />
-                    Disconnect this sender. Already accepted or in-flight emails
-                    cannot be recalled.
-                  </label>
-                  <button disabled={busy}>Disconnect sender</button>
-                </form>
-                </details>
-              )}
-            </>
-          )}
-        </>
+        ) : (
+          <p role="status">Reading the sender…</p>
+        )
+      ) : !data.hosted ? (
+        <p className="note">Live sending needs the firm's hosted sign-in, which local development does not have. Share links by hand instead.</p>
+      ) : !connection ? (
+        <p className="empty">No email sender connected. Private links can still be shared by hand.</p>
+      ) : (
+        <RowList>
+          <div className="row">
+            <span>
+              <strong>{connection.sender}</strong>
+              <small>Domain last checked {new Date(connection.verified_at).toLocaleString()}</small>
+            </span>
+            <span className={`pill ${connection.tracking_configured ? "" : "muted"}`}>{connection.tracking_configured ? "Delivery tracked" : "Tracking not set up"}</span>
+            <span>
+              <button type="button" onClick={() => open("tracking")}>
+                {connection.tracking_configured ? "Change tracking" : "Set up tracking"}
+              </button>
+            </span>
+            <button type="button" onClick={() => open("disconnect")}>
+              Disconnect
+            </button>
+          </div>
+        </RowList>
+      )}
+      {error && data && !dialog && <p role="alert">{error}</p>}
+      <Dialog open={dialog === "sender"} onClose={() => setDialog(null)} title={connection ? "Replace the sender" : "Connect the sender"} description="The firm's verified Resend domain and the key that sends from it.">
+        <form key={connection?.id ?? "new"} onSubmit={(e) => void save(e, false)}>
+          <fieldset disabled={busy}>
+            <label>
+              Verified sender (email or Firm name &lt;email&gt;)
+              <input name="from" required maxLength={320} defaultValue={connection?.sender ?? ""} />
+            </label>
+            <label>
+              Resend domain ID
+              <input name="domain_id" required maxLength={100} defaultValue={connection?.domain_id ?? ""} />
+            </label>
+            <label>
+              Resend API key
+              <input name="key" required type="password" autoComplete="off" />
+            </label>
+            <p>The key needs sender-domain read and email-send access. Disable click tracking on the sending domain to keep private links direct.</p>
+            <label className="checkbox-label">
+              <input name="confirmed" type="checkbox" required />I am authorized to connect this firm’s Resend account and sender. Replacing a connection stops pending attempts using the previous connection.
+            </label>
+            {error && <p role="alert">{error}</p>}
+            <DialogActions>
+              <button type="button" onClick={() => setDialog(null)}>
+                Cancel
+              </button>
+              <button className="primary">Verify domain and save</button>
+            </DialogActions>
+          </fieldset>
+        </form>
+      </Dialog>
+      {connection && (
+        <Dialog open={dialog === "tracking"} onClose={() => setDialog(null)} title="Delivery tracking" description="Resend tells this server what became of each email through a signed webhook.">
+          <form onSubmit={(e) => void tracking(e)}>
+            <fieldset disabled={busy}>
+              <p>In Resend, create a webhook for email.sent, email.delivered, email.delivery_delayed, email.bounced, email.complained, email.failed and email.suppressed at:</p>
+              <code>{apiBaseUrl || window.location.origin}/v1/webhooks/resend/{connection.id}</code>
+              <label>
+                Webhook signing secret
+                <input name="secret" type="password" autoComplete="off" required />
+              </label>
+              <label className="checkbox-label">
+                <input name="confirmed" type="checkbox" required /> This webhook belongs to this firm’s Resend account.
+              </label>
+              {error && <p role="alert">{error}</p>}
+              <DialogActions>
+                <button type="button" onClick={() => setDialog(null)}>
+                  Cancel
+                </button>
+                <button className="primary">Save signing secret</button>
+              </DialogActions>
+            </fieldset>
+          </form>
+        </Dialog>
+      )}
+      {connection && (
+        <Dialog open={dialog === "disconnect"} onClose={() => setDialog(null)} title="Disconnect the sender" description="No email goes out until a sender is connected again. Already accepted or in-flight emails cannot be recalled.">
+          <form onSubmit={(e) => void save(e, true)}>
+            <fieldset disabled={busy}>
+              <label className="checkbox-label">
+                <input type="checkbox" name="confirmed" required />
+                Disconnect {connection.sender}.
+              </label>
+              {error && <p role="alert">{error}</p>}
+              <DialogActions>
+                <button type="button" onClick={() => setDialog(null)}>
+                  Cancel
+                </button>
+                <button className="primary">Disconnect sender</button>
+              </DialogActions>
+            </fieldset>
+          </form>
+        </Dialog>
       )}
     </section>
   );

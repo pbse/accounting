@@ -3864,3 +3864,13 @@ Branch `claude/settings-hub`. Firm settings, the Security center and Your settin
 - Screenshots at 1280px and 390px of all eight sections, with a policy row open: the strip of sections scrolls sideways on a phone, status pills stay short, and no section is wider than the screen.
 
 Not verified: the hosted People and Security sections with a real administrator (locally the member-management reads refuse, so those sections render only their refusal, and the Firm group shows Firm, Clients and Policies).
+
+## 2026-10-08: settings as cards, every change in a dialog
+
+Branch `claude/settings-dialogs`, after the user's review of #305: a setting that opened downward was hard to edit. Each firm policy is now a card (`SettingGrid`, `SettingCard`, `StatusChip`): its icon in a tinted circle, its state as a chip with a dot, its name, one line on where it stands, and an action at its foot (Edit, Turn on, Require, Allow). The action opens a `Dialog`, the browser's own modal: the explanation, the controls, the reason and Cancel/Save; a refusal shows inside it with the draft intact, and a success closes it and the card says so. The same dialog replaces every fold-out form on the page: a person's role change, an invitation, a client assignment, enrolling or revoking a member, the email sender's connection, tracking and disconnection, the roster's template and client entries, and the firm's suspension. Invitations, the sender and the roster are rows with state pills and their actions in the row.
+
+- `npm run check`, `npm run build` and the node tests pass; no backend change.
+- The layout check passes 89 page views across both apps at desktop and phone width.
+- Screenshots at 1280px and 390px: Policies as cards, the reminders and agent chat dialogs open, the roster rows, and the add-a-client dialog; a dialog on a phone fits the screen with its actions in view.
+
+Not verified: the hosted People, Firm and Security dialogs with a real administrator (locally those reads refuse or are not hosted).
