@@ -241,22 +241,35 @@ for (const app of apps) {
       });
       if (box.scrollWidth > width.viewport.width) fail(`the page is ${box.scrollWidth}px wide, wider than the ${width.viewport.width}px screen`);
       // The agent panel opens beside the page on a desktop and as a sheet on a phone, with its composer in view, and
-      // widens nothing; it is checked once per width, on the dashboard.
-      if (route === "/dashboard" && !app.standalone) {
+      // widens nothing: empty on the dashboard, and with a card (the close's prepare card, answered without a model)
+      // on a close. A running step list needs a model, so it is covered by the agent's event tests, not here.
+      const panelRoute = route === "/dashboard" ? "empty" : route === `/dashboard/closes/${close}` ? "card" : "";
+      if (panelRoute && !app.standalone) {
         try {
           await page.click(".assistant-toggle", { timeout: 5000 });
           await page.waitForSelector("aside.assistant", { timeout: 5000 });
           // The drawer slides in over 180ms; it is measured once it has settled.
           await page.waitForTimeout(400);
+          if (panelRoute === "card") {
+            await page.fill('textarea[aria-label="Message the agent"]', "/prepare");
+            await page.keyboard.press("Enter");
+            await page.waitForSelector("aside.assistant .assistant-card", { timeout: 15000 });
+            await page.waitForTimeout(400);
+          }
           const panel = await page.evaluate(() => {
             const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect().toJSON();
-            return { aside: rect("aside.assistant"), field: rect(".assistant-field"), scrollWidth: document.documentElement.scrollWidth };
+            const cards = [...document.querySelectorAll("aside.assistant .assistant-card")].map((c) => c.getBoundingClientRect().toJSON());
+            return { aside: rect("aside.assistant"), field: rect(".assistant-field"), cards, scrollWidth: document.documentElement.scrollWidth };
           });
           if (panel.scrollWidth > width.viewport.width) fail(`with the agent open the page is ${panel.scrollWidth}px wide`);
           if (!(panel.aside?.right <= width.viewport.width + 1 && panel.aside?.left >= 0)) fail("the agent panel runs off the screen");
           if (width.name === "phone" && panel.aside?.width !== width.viewport.width) fail(`the agent sheet is ${panel.aside?.width}px wide on a phone, not the screen`);
           if (width.name === "desktop" && !(panel.aside?.width >= 360 && panel.aside?.width <= 420)) fail(`the agent drawer is ${panel.aside?.width}px wide on a desktop`);
           if (!(panel.field?.bottom <= width.viewport.height && panel.field?.top >= 0)) fail("the agent's composer is not in view");
+          if (panelRoute === "card") {
+            if (panel.cards.length === 0) fail("the close's prepare card did not render in the agent panel");
+            for (const card of panel.cards) if (!(card.left >= panel.aside.left && card.right <= panel.aside.right + 1)) fail("a card runs outside the agent panel");
+          }
           await page.click('aside.assistant header button[aria-label="Close the agent"]:visible', { timeout: 5000 });
           await page.waitForSelector("aside.assistant", { state: "detached", timeout: 5000 });
         } catch (e) {

@@ -113,6 +113,8 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
   const [steps, setSteps] = useState<Step[]>([]);
   const [asking, setAsking] = useState("");
   const [slow, setSlow] = useState(false);
+  // Counts every step event, so the waiting timer restarts on a step's change of state, not only on a new step.
+  const [stepTick, setStepTick] = useState(0);
   const [menu, setMenu] = useState(false);
   const [about, setAbout] = useState(false);
   const [selected, setSelected] = useState(0);
@@ -130,7 +132,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
     look();
     const timer = setTimeout(look, 600);
     return () => clearTimeout(timer);
-  }, [location.pathname, loaded]);
+  }, [location.pathname, location.search, loaded]);
   const path = closeId ? `/${closeId}/chat` : "/chat";
   // A question from the palette is asked once the history has loaded, so its answer is the last thing shown.
   useEffect(() => {
@@ -165,7 +167,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
     setSlow(false);
     const timer = setTimeout(() => setSlow(true), 3000);
     return () => clearTimeout(timer);
-  }, [busy, steps.length, pending]);
+  }, [busy, stepTick, pending]);
   // The box grows with its text, to five lines.
   useEffect(() => {
     const box = input.current;
@@ -184,6 +186,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
     const onEvent = (event: AgentEvent) => {
       if (asked !== generation.current) return;
       if (event.type === "step") {
+        setStepTick((n) => n + 1);
         setSteps((current) => {
           const step: Step = { id: event.id, tool: event.tool, title: event.title, status: event.state, size: event.size, truncated: event.truncated };
           return current.some((s) => s.id === step.id) ? current.map((s) => (s.id === step.id ? step : s)) : [...current, step];
