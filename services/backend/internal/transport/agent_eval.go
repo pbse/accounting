@@ -74,7 +74,7 @@ func AddAgentEvalEvidence(ctx context.Context, db *sql.DB, firm AcceptanceFirm, 
 
 // RecordAgentEvalReads makes each of the question's expected reads as the firm's member, exactly as the loop would
 // make them, and returns what the routes answered. A card's tool is never run: a card proposes, it does not act.
-func RecordAgentEvalReads(ctx context.Context, db *sql.DB, firm AcceptanceFirm, closeID string, q agenteval.Question) ([]agenteval.Read, error) {
+func RecordAgentEvalReads(ctx context.Context, db *sql.DB, firm AcceptanceFirm, closeID, entity, today string, q agenteval.Question) ([]agenteval.Read, error) {
 	tools := agentTools(q.Scope == "close", "firm")
 	store := savedCloses(db, strings.Repeat("a", 32))
 	var reads []agenteval.Read
@@ -100,13 +100,13 @@ func RecordAgentEvalReads(ctx context.Context, db *sql.DB, firm AcceptanceFirm, 
 			}
 			args[key] = resolved
 		}
-		pinned := ""
+		pinned, client := "", ""
 		if q.Scope == "close" {
-			pinned = closeID
+			pinned, client = closeID, entity
 		} else if _, given := args["close_id"]; !given && strings.Contains(t.path, "{close_id}") {
 			args["close_id"] = closeID
 		}
-		path, body, err := agentPath(t, args, pinned)
+		path, body, err := agentRequest(t, args, pinned, client, today)
 		if err != nil {
 			return nil, fmt.Errorf("question %s: %s: %w", q.ID, name, err)
 		}
@@ -165,7 +165,7 @@ func RunAgentEvalQuestion(ctx context.Context, db *sql.DB, q agenteval.Question,
 		closeID, entity, period = record.CloseID, record.Entity, record.Period
 	}
 	read := func(ctx context.Context, method, path string, body any) (string, bool) {
-		output, ok, found := record.Lookup(method, path, body)
+		output, ok, found := record.Lookup(q.ID, method, path, body)
 		if !found {
 			return "", false
 		}

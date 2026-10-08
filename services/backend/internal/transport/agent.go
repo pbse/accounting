@@ -135,6 +135,21 @@ func agentDefinitions(tools []mcpTool, pinned bool) []llm.Tool {
 	return out
 }
 
+// agentRequest is the read the loop makes for a tool call, with what the conversation adds to the model's arguments:
+// inside a close, list_procedures asks the route for this client's versions before its view limit; a portfolio
+// preview carries the member's own date, so day names in a goal resolve as the chat request supplied them. The golden
+// set's recorder makes its reads through here too, so a replay matches them exactly.
+func agentRequest(t mcpTool, args map[string]any, closeID, entity, today string) (string, map[string]any, error) {
+	if t.name == "list_procedures" && closeID != "" {
+		args["client"] = entity
+	}
+	path, body, err := agentPath(t, args, closeID)
+	if err == nil && t.name == "select_closes_preview" {
+		body["today"] = today
+	}
+	return path, body, err
+}
+
 // agentPath is the request a read makes: the pinned close replaces any close_id the model sent, other arguments
 // fill the path and query, and a missing or malformed one is an error the model is told.
 func agentPath(t mcpTool, args map[string]any, pinned string) (string, map[string]any, error) {
@@ -910,10 +925,6 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			if json.Unmarshal([]byte(call.Arguments), &args) != nil || args == nil {
 				continue
 			}
-			if t.name == "list_procedures" && closeID != "" {
-				// Inside a close the route itself is asked for this client's versions, before its view limit.
-				args["client"] = entity
-			}
 			parsed[i] = args
 			p := &agentPending{t: t, args: args, began: time.Now(), stepID: ids[i]}
 			plans[i] = p
@@ -921,7 +932,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				p.refusal = "refused: the read budget of this message is spent"
 				continue
 			}
-			path, body, err := agentPath(t, args, closeID)
+			path, body, err := agentRequest(t, args, closeID, entity, today)
 			if err != nil {
 				p.refusal = "refused: " + err.Error()
 				continue
@@ -931,10 +942,6 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 			if named, isText := args["close_id"].(string); closeID == "" && isText && named != "" && !canOpen(named) {
 				p.refusal = "refused: not a close you can open"
 				continue
-			}
-			if t.name == "select_closes_preview" {
-				// Day names in a goal resolve against the member's own date, as the chat request supplied it.
-				body["today"] = today
 			}
 			p.path, p.body = path, body
 			out.calls++

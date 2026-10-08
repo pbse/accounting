@@ -109,7 +109,8 @@ func main() {
 }
 
 // recordReads prepares every case the set asks about in a firm of its own and records each question's expected
-// reads; a question that adds a document is recorded after the case's other questions, so their reads are unchanged.
+// reads; a question that adds a document is recorded after the case's other questions, so their reads are unchanged,
+// and its own reads are kept for it alone.
 func recordReads(ctx context.Context, db *sql.DB, golden agenteval.Set, corpus, only string) {
 	var closes int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM client_closes`).Scan(&closes); err != nil || closes > 0 {
@@ -151,11 +152,15 @@ func recordReads(ctx context.Context, db *sql.DB, golden agenteval.Set, corpus, 
 					log.Fatalf("question %s: %v", q.ID, err)
 				}
 			}
-			reads, err := transport.RecordAgentEvalReads(ctx, db, firm, closeID, q)
+			reads, err := transport.RecordAgentEvalReads(ctx, db, firm, closeID, c.Client, today, q)
 			if err != nil {
 				log.Fatal(err)
 			}
 			for _, read := range reads {
+				if q.Evidence != nil {
+					// The document changes what the close's reads answer; these reads are this question's own.
+					read.Question = q.ID
+				}
 				rec.Add(read)
 			}
 		}

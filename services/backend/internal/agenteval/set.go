@@ -45,14 +45,16 @@ type Set struct {
 	Dir       string     `json:"-"`
 }
 
-// Read is one recorded tool result: the request the loop makes for it and what the route answered.
+// Read is one recorded tool result: the request the loop makes for it and what the route answered. A read recorded
+// for one question (after that question added its document) names the question and is answered only for it.
 type Read struct {
-	Tool   string `json:"tool"`
-	Method string `json:"method"`
-	Path   string `json:"path"`
-	Body   any    `json:"body,omitempty"`
-	Output string `json:"output"`
-	OK     bool   `json:"ok"`
+	Question string `json:"question,omitempty"`
+	Tool     string `json:"tool"`
+	Method   string `json:"method"`
+	Path     string `json:"path"`
+	Body     any    `json:"body,omitempty"`
+	Output   string `json:"output"`
+	OK       bool   `json:"ok"`
 }
 
 // Record is what one case's firm answered, kept for replay: the firm and member it was recorded under, the case's
@@ -146,22 +148,28 @@ func Key(method, path string, body any) string {
 	return method + " " + path + " " + string(raw)
 }
 
-// Lookup answers a read from the record: the output and whether the route answered 200, and whether the read was
-// recorded at all.
-func (r Record) Lookup(method, path string, body any) (string, bool, bool) {
+// Lookup answers a read from the record for one question: a read recorded for that question first, then the case's
+// shared reads. It returns the output and whether the route answered 200, and whether the read was recorded at all.
+func (r Record) Lookup(question, method, path string, body any) (string, bool, bool) {
 	want := Key(method, path, body)
-	for _, read := range r.Reads {
-		if Key(read.Method, read.Path, read.Body) == want {
-			return read.Output, read.OK, true
+	for _, own := range []bool{true, false} {
+		for _, read := range r.Reads {
+			if (read.Question == question) == own && (own || read.Question == "") && Key(read.Method, read.Path, read.Body) == want {
+				return read.Output, read.OK, true
+			}
 		}
 	}
 	return "", false, false
 }
 
-// Add keeps a read once; a repeated request keeps its first answer, so a case's reads are stable across its questions.
+// Add keeps a read once per question (or once for the case, when it names none); a repeated request keeps its first
+// answer, so a case's shared reads are stable across its questions.
 func (r *Record) Add(read Read) {
-	if _, _, found := r.Lookup(read.Method, read.Path, read.Body); found {
-		return
+	want := Key(read.Method, read.Path, read.Body)
+	for _, kept := range r.Reads {
+		if kept.Question == read.Question && Key(kept.Method, kept.Path, kept.Body) == want {
+			return
+		}
 	}
 	r.Reads = append(r.Reads, read)
 }
@@ -169,7 +177,7 @@ func (r *Record) Add(read Read) {
 // Save writes the record under reads/<case>.json, reads sorted by their key so a re-recording diffs cleanly.
 func (r Record) Save(dir string) error {
 	sort.SliceStable(r.Reads, func(i, j int) bool {
-		return Key(r.Reads[i].Method, r.Reads[i].Path, r.Reads[i].Body) < Key(r.Reads[j].Method, r.Reads[j].Path, r.Reads[j].Body)
+		return r.Reads[i].Question+" "+Key(r.Reads[i].Method, r.Reads[i].Path, r.Reads[i].Body) < r.Reads[j].Question+" "+Key(r.Reads[j].Method, r.Reads[j].Path, r.Reads[j].Body)
 	})
 	raw, err := json.MarshalIndent(r, "", " ")
 	if err != nil {
