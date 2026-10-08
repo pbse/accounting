@@ -611,7 +611,7 @@ body {
   }
   .topbar-brand small,
   .topbar-tools > form,
-  .topbar-account > summary > span:not(.avatar) {
+  .topbar-account-name {
     display: none;
   }
   .topbar-account > summary {

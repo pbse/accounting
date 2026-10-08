@@ -85,7 +85,7 @@ function Layout() {
           <details className="topbar-account">
             <summary aria-label="Account">
               <Avatar label={me.data?.subject ?? "?"} />
-              <span>{me.data?.subject ?? "Account"}</span>
+              <span className="topbar-account-name">{me.data?.subject ?? "Account"}</span>
               <GrantCount />
             </summary>
             <div>

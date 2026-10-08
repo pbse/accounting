@@ -54,7 +54,7 @@ export function AccountMenu() {
     <details className="topbar-account">
       <summary aria-label="Account">
         <Avatar label={label} />
-        <span>{session?.user ? session.user.email.split("@")[0] : label}</span>
+        <span className="topbar-account-name">{session?.user ? session.user.email.split("@")[0] : label}</span>
       </summary>
       <div>
         {authKitClientId ? (
