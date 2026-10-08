@@ -300,7 +300,8 @@ func TestHandADocumentToATeammate(t *testing.T) {
 		t.Fatalf("nobody is followed up with within two days: %v %v %v", asked, plan, history)
 	}
 	age(50, "")
-	if got := handed("user_b", partner); len(got) != 2 || got[0] != lease+" lease.txt has been with you for at least 2 days, handed by user_a." {
+	// The reminder stands for the hand-off: one decision, new again, in its own words.
+	if got := handed("user_b", partner); len(got) != 1 || got[0] != lease+" lease.txt has been with you for at least 2 days, handed by user_a." {
 		t.Fatalf("after two days the teammate is followed up with, linked to the document: %v", got)
 	}
 	if asked, _, history := owner("user_a"); len(asked) != 0 || len(history) != 1 || history[0] != "I followed up with Bea Brown on lease.txt" {

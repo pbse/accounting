@@ -13,10 +13,10 @@ const OwnerPreparation = lazy(() => import("./features/owners/Prepare"));
 const PayrollPreparation = lazy(() => import("./features/payroll/Prepare"));
 const PrepaidPreparation = lazy(() => import("./features/prepaids/Prepare"));
 const ClosesList = lazy(() => import("./features/closes/ClosesList"));
+const Preparation = lazy(() => import("./features/closes/Work").then((m) => ({ default: m.Work })));
 const ClientClose = lazy(() => import("./features/closes/ClientClose"));
 const WorkpaperView = lazy(() => import("./features/closes/WorkpaperView"));
 const Measure = lazy(() => import("./features/closes/Measure"));
-const Attention = lazy(() => import("./features/closes/Attention"));
 const Settings = lazy(() => import("./features/settings/Settings"));
 const Executive = lazy(() => import("./features/executive/Executive"));
 
@@ -58,7 +58,8 @@ export function App() {
             <Route path="closes/:id" element={<Gated><ClientClose /></Gated>} />
             <Route path="closes/:id/workpapers/:paperId" element={<Gated><WorkpaperView /></Gated>} />
             <Route path="firm" element={<Navigate to="/dashboard/settings?tab=firm" replace />} />
-            <Route path="attention" element={<Gated><Attention /></Gated>} />
+            <Route path="attention" element={<Navigate to="/dashboard" replace />} />
+            <Route path="work" element={<Gated><Preparation /></Gated>} />
             <Route path="security" element={<Navigate to="/dashboard/settings?tab=security" replace />} />
             <Route path="settings" element={<Gated><Settings /></Gated>} />
             <Route path="measure" element={<Gated><Measure /></Gated>} />

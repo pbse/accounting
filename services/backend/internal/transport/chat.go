@@ -621,14 +621,15 @@ func portfolioListing(op portfolioOperation, work chatCitation) (string, []strin
 		lines = append(lines, item.Label+" · "+item.Result)
 		links = append(links, chatCitation{item.Label, "/dashboard/closes/" + item.CloseID})
 	}
-	return "Here are the closes this selects, shown once. Ask again, or open Work, for the current list.", lines, append(links, work)
+	return "Here are the closes this selects, shown once. Ask again, or open Home, for the current list.", lines, append(links, work)
 }
 
 // firmAnswer answers a firm-wide question. Only a generic reply is stored; the live lines are shown once, so history
 // never keeps client details a member may later lose access to.
 func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []string, []chatCitation) {
-	work := []chatCitation{{"Work", "/dashboard"}}
-	unread := chatReply{body: "I couldn't read that right now. Open Work for the current list.", citations: work}
+	// Work's firm-wide lists are Home's now; the blocked and review lists link to their own places below.
+	work := []chatCitation{{"Home", "/dashboard"}}
+	unread := chatReply{body: "I couldn't read that right now. Open Home for the current list.", citations: work}
 	label := func(entity, period string) string { return entity + " · " + period }
 	switch intent {
 	case "find":
@@ -658,7 +659,7 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 				lines = append(lines, label(c.Entity, c.Period))
 			}
 		}
-		return chatReply{body: "Here is what needs a person today. Open Work for the current list.", citations: work}, lines, nil
+		return chatReply{body: "Here is what needs a person today. Open Home for the current list.", citations: work}, lines, nil
 	case "review":
 		var q struct {
 			Count int `json:"count"`
@@ -678,7 +679,7 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 				lines = append(lines, fmt.Sprintf("%s: %s draft #%s", label(item.Entity, item.Period), item.Kind, item.WorkpaperID))
 			}
 		}
-		return chatReply{body: "Here is the review queue. Open Work to review the current drafts.", citations: work}, lines, nil
+		return chatReply{body: "Here is the review queue. Open Home to review the current drafts.", citations: []chatCitation{{"Home", "/dashboard#review-queue"}}}, lines, nil
 	case "delegated":
 		var g struct {
 			Goals []struct {
@@ -726,7 +727,7 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 			lines = append(lines, line+" · handed over by "+d.Author)
 			links = append(links, chatCitation{d.Entity + " · " + d.Period, "/dashboard/closes/" + d.CloseID})
 		}
-		return chatReply{body: "Here are the closes handed to the agent. Open Work for the current list.", citations: work}, lines, append(links, work...)
+		return chatReply{body: "Here are the closes handed to the agent. Open Home for the current list.", citations: work}, lines, append(links, work...)
 	case "blocked":
 		// Work lists at most 100 items; its counts hold the whole number.
 		var b struct {
@@ -748,7 +749,7 @@ func firmAnswer(read func(string, any) bool, intent, text string) (chatReply, []
 				lines = append(lines, label(item.Entity, item.Period)+": "+item.SourceName)
 			}
 		}
-		return chatReply{body: "Here is the blocked work. Open Work for the current list.", citations: work}, lines, nil
+		return chatReply{body: "Here is the blocked work. Open Preparation for the current list.", citations: []chatCitation{{"Preparation", "/dashboard/work?view=blocked"}}}, lines, nil
 	}
 	return chatReply{body: "Across the firm I can find documents, drafts, transactions, procedures and review decisions, and tell you what needs a person today, what is ready for review, what work is blocked, how the closes handed to me stand, and which closes a goal such as “show my clients due Friday” selects. Open a client close to ask about it, or name one to hand it to me (“Get Acme ready for review by Friday”)."}, nil, nil
 }
@@ -911,7 +912,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		if goal, err := parsePortfolioGoal(in.Text, today); agent {
 		} else if closeID == "" && err == nil {
-			work := chatCitation{"Open this goal in Work", "/dashboard?goal=" + url.QueryEscape(in.Text)}
+			work := chatCitation{"Open this goal on Home", "/dashboard?goal=" + url.QueryEscape(in.Text)}
 			reply = chatReply{body: "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts.", citations: []chatCitation{work}}
 			// A listing selects and changes nothing, so it is answered here, from Work's own selection for the member.
 			var op portfolioOperation
@@ -1102,7 +1103,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 						}
 					}
 					linked = reply.citations
-					reply = chatReply{body: "I answered from reads that cannot be tied to particular closes, so the answer was shown once and not kept; ask again to see it.", citations: []chatCitation{{"Work", "/dashboard"}}}
+					reply = chatReply{body: "I answered from reads that cannot be tied to particular closes, so the answer was shown once and not kept; ask again to see it.", citations: []chatCitation{{"Home", "/dashboard"}}}
 					// A card proposed in such a turn carries the model's words about those reads; it is not kept either.
 					if result.proposal != nil {
 						result.proposal = nil

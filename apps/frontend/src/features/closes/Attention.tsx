@@ -1,14 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import { workspaceRequest } from "./workspace";
-import { PageHeader } from "@close/ui/components/PageHeader";
-import { AskAgent } from "../dashboard/AskAgent";
-import { starters } from "../dashboard/assistantStore";
-import { Segmented } from "@close/ui/components/Segmented";
 
-type Event = { key: string; kind: string; text: string; at: string; workpaper_id?: string; job_id?: string; account_id?: string; read: boolean; snoozed_until?: string };
-type Group = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: Event[] };
-type Inbox = { groups: Group[]; unread: number; unread_keys: string[]; page: number; has_more: boolean; kinds: string[]; preferences: { kinds: string[]; browser: boolean } };
+export type AttentionEvent = { key: string; kind: string; yours: boolean; text: string; at: string; workpaper_id?: string; job_id?: string; account_id?: string; read: boolean; snoozed_until?: string };
+export type AttentionGroup = { close_id: string; entity: string; period: string; due_on: string; priority: string; owner: "mine" | "other" | "none"; events: AttentionEvent[] };
+export type AttentionInbox = { groups: AttentionGroup[]; unread: number; unread_keys: string[]; page: number; has_more: boolean; kinds: string[]; preferences: { kinds: string[]; browser: boolean } };
 
 export const kindLabels: Record<string, string> = {
   answered: "Client replies",
@@ -24,9 +20,9 @@ export const kindLabels: Record<string, string> = {
   goal: "Delegated closes that need you",
   handoff: "Work handed to you",
 };
-const views = { all: "All", mine: "Assigned to me", unread: "Unread", snoozed: "Snoozed" } as const;
 
-// The sidebar's unread count. With the member's consent, newly seen items also raise a browser notification that names no client.
+// The top bar's unread count on Home. With the member's consent, newly seen items also raise a browser notification
+// that names no client.
 export function AttentionBadge() {
   const [unread, setUnread] = useState(0);
   const seen = useRef<Set<string>>(undefined);
@@ -37,7 +33,7 @@ export function AttentionBadge() {
     let live = true;
     const poll = () =>
       workspaceRequest("/attention")
-        .then((inbox: Inbox) => {
+        .then((inbox: AttentionInbox) => {
           if (!live) return;
           setUnread(inbox.unread);
           const fresh = seen.current ? inbox.unread_keys.filter((k) => !seen.current!.has(k)) : [];
@@ -46,7 +42,7 @@ export function AttentionBadge() {
             const note = new Notification("Close", { body: `${fresh.length} new ${fresh.length === 1 ? "item needs" : "items need"} your attention` });
             note.onclick = () => {
               window.focus();
-              go.current("/dashboard/attention");
+              go.current("/dashboard");
             };
           }
         })
@@ -59,129 +55,4 @@ export function AttentionBadge() {
     };
   }, []);
   return unread > 0 ? <span className="pill" aria-label={`${unread} unread`}>{unread}</span> : null;
-}
-
-// One place for what needs a person, drawn from work, review and request states; each item links to where it is acted on.
-export default function Attention() {
-  const [view, setView] = useState<keyof typeof views>("all");
-  const [page, setPage] = useState(0);
-  const [inbox, setInbox] = useState<Inbox>();
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    workspaceRequest(`/attention?page=${page}&view=${view}`)
-      .then((d) => {
-        setInbox(d);
-        setPage(d.page);
-        setError("");
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "The attention inbox is unavailable."));
-  }, [view, page, version]);
-  async function act(path: string, body: unknown) {
-    setBusy(true);
-    setError("");
-    try {
-      await workspaceRequest(path, body);
-      setVersion((v) => v + 1);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "The change could not be saved.");
-    } finally {
-      setBusy(false);
-    }
-  }
-  const mark = (action: string, keys: string[], until?: string) => void act("/attention", { action, keys, until });
-  const later = (days: number) => new Date(Date.now() + days * 86400000).toISOString();
-  const groups = inbox?.groups ?? [];
-  return (
-    <section className="bare attention" aria-label="Attention">
-      <PageHeader icon="decision" title={<>Attention{inbox && inbox.unread > 0 ? ` · ${inbox.unread} unread` : ""}</>}>
-        What needs a person across your clients: replies, confirmations, failures, drafts to approve or fix, changed sources, files to release and requests not delivered. Running work is left out.
-      </PageHeader>
-      <AskAgent
-        description="Ask what needs you first, or about any client: the agent answers from your workspace and shows anything it would do for you to confirm."
-        placeholder="Ask about what needs you, such as “what is blocked?”"
-        suggestions={starters.firm}
-      />
-      <div className="toolbar">
-        <Segmented
-          label="Show"
-          items={(Object.keys(views) as (keyof typeof views)[]).map((key) => ({ key, label: views[key] }))}
-          value={view}
-          onChange={(key) => {
-            setView(key as keyof typeof views);
-            setPage(0);
-          }}
-        />
-      </div>
-      {error && <p role="alert">{error}</p>}
-      {inbox && groups.length === 0 && <p className="empty">Nothing needs you here.</p>}
-      {groups.map((g) => {
-        const keys = g.events.map((e) => e.key);
-        return (
-          <article key={g.close_id}>
-            <h2>
-              <Link to={`/dashboard/closes/${g.close_id}`}>
-                {g.entity} · {g.period}
-              </Link>
-            </h2>
-            <p>
-              {g.owner === "mine" ? "Assigned to you" : g.owner === "other" ? "Assigned to someone else" : "Unassigned"}
-              {g.due_on && ` · due ${g.due_on}`}
-              {g.priority !== "normal" && ` · ${g.priority} priority`}{" "}
-              {g.owner !== "other" && (
-                <button disabled={busy} onClick={() => void act(`/${g.close_id}/planning`, { due_on: g.due_on, priority: g.priority, assignment: g.owner === "mine" ? "release" : "take" })}>
-                  {g.owner === "mine" ? "Release" : "Take"}
-                </button>
-              )}
-            </p>
-            <ul>
-              {g.events.map((e) => (
-                <li key={e.key}>
-                  {!e.read && <span className="pill">New</span>}{" "}
-                  <Link to={e.workpaper_id ? `/dashboard/closes/${g.close_id}/workpapers/${e.workpaper_id}` : `/dashboard/closes/${g.close_id}${e.job_id ? `?job=${e.job_id}` : e.account_id || e.kind === "unanswered" ? "#coverage-work" : ""}`}>{e.text}</Link> · {new Date(e.at).toLocaleString()}
-                  {e.snoozed_until && ` · snoozed until ${new Date(e.snoozed_until).toLocaleString()}`}{" "}
-                  <button disabled={busy} onClick={() => mark(e.read ? "unread" : "read", [e.key])}>
-                    {e.read ? "Mark unread" : "Mark read"}
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <p>
-              <button disabled={busy} onClick={() => mark("read", keys)}>
-                Mark all read
-              </button>
-              {view === "snoozed" ? (
-                <button disabled={busy} onClick={() => mark("wake", keys)}>
-                  Wake
-                </button>
-              ) : (
-                <>
-                  <button disabled={busy} onClick={() => mark("snooze", keys, later(1))}>
-                    Snooze a day
-                  </button>
-                  <button disabled={busy} onClick={() => mark("snooze", keys, later(7))}>
-                    Snooze a week
-                  </button>
-                </>
-              )}
-            </p>
-          </article>
-        );
-      })}
-      {(page > 0 || inbox?.has_more) && (
-        <p>
-          <button disabled={page === 0} onClick={() => setPage(page - 1)}>
-            Newer items
-          </button>
-          <button disabled={!inbox?.has_more} onClick={() => setPage(page + 1)}>
-            Older items
-          </button>
-        </p>
-      )}
-      <p className="note">
-        Which kinds count in your unread badge, and browser notifications, are in <Link to="/dashboard/settings?tab=notifications">your settings</Link>.
-      </p>
-    </section>
-  );
 }

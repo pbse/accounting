@@ -220,7 +220,7 @@ func morning(db *sql.DB) http.HandlerFunc {
 			}
 			check = map[string]any{"model": model, "reasoning_effort": effort, "close_id": checkedClose, "kept": kept, "scored": scored, "checked_at": checked}
 		}
-		daily, err := dailyFindings(ctx, db, organization(r), firmAccess(r), subject(r))
+		daily, err := dailyFindings(ctx, db, organization(r), firmAccess(r), subject(r), "", nil)
 		if err != nil {
 			problem(w, 503, "Morning brief unavailable.")
 			return

@@ -1,4 +1,3 @@
-import { Work } from "../closes/Work";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { workspaceRequest } from "../closes/workspace";
@@ -6,6 +5,7 @@ import { RequestError } from "../closes/requestError";
 import type { ReferenceWorkpaper } from "../../../../../packages/contracts/reference";
 import { Review } from "../review/Review";
 import { PageHeader } from "@close/ui/components/PageHeader";
+import Home from "../home/Home";
 
 export default function Dashboard({
   view,
@@ -28,7 +28,7 @@ export default function Dashboard({
     };
   }, [attempt, view]);
 
-  if (view === "work") return <Work />;
+  if (view === "work") return <Home />;
   if (error === "none")
     return (
       <section>
