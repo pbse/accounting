@@ -82,5 +82,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const values = gemini ? {GEMINI_API_KEY:value, GEMINI_PAID_SERVICE:'confirmed'} : {[name]:value};
   for (const app of apps) secretNames(app, environment === 'production');
   for (const app of apps) install(app, values, environment === 'production');
+  // A running queue container keeps the environment it started with: Gemini starts reading on the next start.
+  if (gemini) console.log(`Gemini reads PDFs once the queue container starts again: run "Deploy ${environment}", then check that Firm settings name Google Gemini as how PDFs are read.`);
  } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

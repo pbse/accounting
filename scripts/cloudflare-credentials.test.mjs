@@ -54,6 +54,9 @@ test('direct credential installer scopes stdin, excludes secret arguments, and r
   const geminiCalls=readFileSync(log,'utf8').trim().split('\n').map(JSON.parse).filter(c=>c.input);
   assert.deepEqual(geminiCalls.map(c=>c.args[c.args.indexOf('-c')+1]),['workers/queue/wrangler.jsonc']);
   assert.deepEqual(JSON.parse(geminiCalls[0].input),{GEMINI_API_KEY:key,GEMINI_PAID_SERVICE:'confirmed'});
+  // Installing does not reach a running container: the installer says to redeploy and check Firm settings.
+  assert.match(result.stdout,/Deploy production.*Firm settings/);
+  assert.ok(!result.stdout.includes(key));
   // The confirmation is never installed apart from the key.
   result=spawnSync(process.execPath,['scripts/cloudflare-credentials.mjs','GEMINI_PAID_SERVICE','production'],{input:'confirmed',env,encoding:'utf8'});
   assert.equal(result.status,1);assert.match(result.stderr,/--paid-service/);

@@ -3845,6 +3845,7 @@ Request: turn Gemini on with a single Cloudflare step, not a separate GitHub var
   - The confirmation is never installed on its own.
   - The worker still requires both. A key that ever arrived without the confirmation stays held, and Firm settings say to reinstall it with `--paid-service`.
   - `GEMINI_OCR_MODEL` stays an optional GitHub variable, like the other model names.
+  - A running queue container keeps the environment it started with. After installing a Gemini key, the installer says to redeploy and check that Firm settings name Google Gemini. The deployment doc's staging table uses `staging` in its example.
 - **Tested.**
   - `scripts/cloudflare-credentials.test.mjs`: the Gemini key is refused without `--paid-service`, or with any other or extra argument. Another credential with the flag is refused. With the flag, one install to the queue worker carries the key and `GEMINI_PAID_SERVICE: confirmed`. The confirmation alone is refused, and any value but `confirmed` fails validation.
   - The configuration-only deploy tests now treat `GEMINI_PAID_SERVICE` as a credential, kept out of every configuration payload.

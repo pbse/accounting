@@ -57,7 +57,7 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 | Encrypted connectors/email | — | `SECRETS_KEY` (32 random bytes, 64 hex characters; same on API/worker, backed up separately) |
 | Welcome emails (optional) | `PLATFORM_EMAIL_FROM`, Krith's sender on a domain verified in Resend ([sign-in](sign-in.md#welcome-emails)) | Queue worker: `PLATFORM_EMAIL_KEY`, a send-only Resend key for that domain (set both or neither) |
 | OpenAI proposals | `OPENAI_MODEL` | `OPENAI_API_KEY` (configure both or neither; API and worker) |
-| Gemini PDF reading (optional) | Optional `GEMINI_OCR_MODEL` (default `gemini-3.8-flash`) | Queue worker only: `GEMINI_API_KEY` with `GEMINI_PAID_SERVICE=confirmed`. One command installs both: `node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production --paid-service < key-file`. Add `--paid-service` only once the key's Google project has billing enabled: on the free tier Google may use content to improve its products and have people review it. The script refuses the key without it, and never installs the confirmation on its own. A key without the confirmation is held, and Firm settings say so. With both, Gemini reads every PDF page ([PDF reading](recalculation-and-pdf.md)). |
+| Gemini PDF reading (optional) | Optional `GEMINI_OCR_MODEL` (default `gemini-3.8-flash`) | Queue worker only: `GEMINI_API_KEY` with `GEMINI_PAID_SERVICE=confirmed`. One command installs both: `node scripts/cloudflare-credentials.mjs GEMINI_API_KEY staging --paid-service < key-file` (`production` for production). Add `--paid-service` only once the key's Google project has billing enabled: on the free tier Google may use content to improve its products and have people review it. The script refuses the key without it, and never installs the confirmation on its own. A key without the confirmation is held, and Firm settings say so. A running queue container keeps the environment it started with, so redeploy (Deploy staging or Deploy production), then check that Firm settings name Google Gemini as how PDFs are read. With both, Gemini reads every PDF page ([PDF reading](recalculation-and-pdf.md)). |
 | Sandbox QuickBooks OAuth | `QBO_CLIENT_ID`, `QBO_REDIRECT_URI` | `QBO_CLIENT_SECRET`; optional `QBO_WEBHOOK_VERIFIER` |
 | Production QuickBooks OAuth | `QBO_PRODUCTION_CLIENT_ID`, `QBO_PRODUCTION_REDIRECT_URI` | `QBO_PRODUCTION_CLIENT_SECRET` |
 | Xero OAuth | `XERO_CLIENT_ID`, `XERO_REDIRECT_URI` | `XERO_CLIENT_SECRET`; optional `XERO_WEBHOOK_KEY` |
@@ -83,7 +83,8 @@ On a trusted operator computer, run `npm ci` and authenticate Wrangler for the t
 # The private file must be outside the repository, with mode 0600.
 node scripts/cloudflare-credentials.mjs CONTEXT_MACHINE_DATABASE_URL production < /path/to/private/reader-url
 node scripts/cloudflare-credentials.mjs OPENAI_API_KEY production < /path/to/private/openai-key
-# Only once the key's Google project has billing enabled; installs the key with GEMINI_PAID_SERVICE=confirmed.
+# Only once the key's Google project has billing enabled; installs the key with GEMINI_PAID_SERVICE=confirmed. Then
+# redeploy, since a running queue container keeps its environment, and check Firm settings name Google Gemini.
 node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production --paid-service < /path/to/private/gemini-key
 # Use staging explicitly to target staging Workers.
 ```
