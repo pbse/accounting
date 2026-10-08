@@ -122,7 +122,7 @@ func TestThePlannerDraftsAProposalWithTheFirmsModel(t *testing.T) {
 	token := strings.Repeat("q", 32)
 	firm := "org_Planner" + rand.Text()
 	var closeID string
-	if _, err := db.Exec(`INSERT INTO organizations(id,name,agent_chat) VALUES($1,'Planner firm','off')`, firm); err != nil {
+	if _, err := db.Exec(`INSERT INTO organizations(id,name,assistant_model_answers) VALUES($1,'Planner firm',false)`, firm); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.QueryRow(`INSERT INTO client_closes(organization_id,entity,period) VALUES($1,'Acme','2026-09') RETURNING id::text`, firm).Scan(&closeID); err != nil {
@@ -173,7 +173,7 @@ func TestThePlannerDraftsAProposalWithTheFirmsModel(t *testing.T) {
 	if len(asked) != 0 {
 		t.Fatal("the planner must not call the model for a firm that has not allowed it")
 	}
-	if _, err := db.Exec(`UPDATE organizations SET agent_chat='closes' WHERE id=$1`, firm); err != nil {
+	if _, err := db.Exec(`UPDATE organizations SET assistant_model_answers=true WHERE id=$1`, firm); err != nil {
 		t.Fatal(err)
 	}
 

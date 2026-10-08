@@ -76,16 +76,18 @@ func correctionIndependenceIssue(ctx context.Context, q querier, closeID, propos
 
 func registerIndependence(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("GET /v1/closes/organization/policy", func(w http.ResponseWriter, r *http.Request) {
-		var required, passcode, ledgerWrites bool
+		var required, passcode, ledgerWrites, stopped bool
 		var minimum, materiality, owner, level string
 		var after, most int
-		if err := db.QueryRowContext(r.Context(), `SELECT require_independent_review,require_link_passcode,COALESCE(independent_review_min_amount::text,''),COALESCE(materiality_amount::text,''),reminder_after_days,reminder_max,agent_chat,support_owner,allow_ledger_writes FROM organizations WHERE id=$1`, organization(r)).Scan(&required, &passcode, &minimum, &materiality, &after, &most, &level, &owner, &ledgerWrites); err != nil {
+		// stopped: the firm had written answers without investigations, which migration 133 set to off because the
+		// agent chooses its own reads; its administrator is told a new decision is needed.
+		if err := db.QueryRowContext(r.Context(), `SELECT require_independent_review,require_link_passcode,COALESCE(independent_review_min_amount::text,''),COALESCE(materiality_amount::text,''),reminder_after_days,reminder_max,agent_chat,support_owner,allow_ledger_writes,agent_chat='off' AND assistant_model_answers AND NOT assistant_investigations AND NOT EXISTS(SELECT 1 FROM organization_policy_changes WHERE organization_id=$1 AND agent_chat IS NOT NULL) FROM organizations WHERE id=$1`, organization(r)).Scan(&required, &passcode, &minimum, &materiality, &after, &most, &level, &owner, &ledgerWrites, &stopped); err != nil {
 			problem(w, 503, "Firm policy is unavailable.")
 			return
 		}
 		local := organization(r) == "local-development"
 		manage := slices.Contains(actorPermissions(r), "org:manage")
-		jsonReply(w, 200, map[string]any{"independent_review": required, "independent_review_min_amount": minimum, "materiality_amount": materiality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_provider": llm.ProviderLabel(r.Context(), "chat"), "ocr_provider": ocrLabel(workerOCR(r.Context(), db)), "agent_chat": level, "support_owner": owner, "ledger_writes": ledgerWrites, "hosted": !local, "can_manage": !local && manage, "can_manage_links": local || manage, "can_manage_agent_chat": local || manage, "can_manage_ledger_writes": local || manage})
+		jsonReply(w, 200, map[string]any{"independent_review": required, "independent_review_min_amount": minimum, "materiality_amount": materiality, "link_passcode": passcode, "reminder_after_days": after, "reminder_max": most, "model_provider": llm.ProviderLabel(r.Context(), "chat"), "ocr_provider": ocrLabel(workerOCR(r.Context(), db)), "agent_chat": level, "answers_stopped": stopped, "support_owner": owner, "ledger_writes": ledgerWrites, "hosted": !local, "can_manage": !local && manage, "can_manage_links": local || manage, "can_manage_agent_chat": local || manage, "can_manage_ledger_writes": local || manage})
 	})
 	// Each change names only the settings it changes and records the resulting state of both.
 	mux.HandleFunc("POST /v1/closes/organization/policy", func(w http.ResponseWriter, r *http.Request) {

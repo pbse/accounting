@@ -9,7 +9,7 @@ import { ClientRoster } from "./Roster";
 import { workspaceRequest } from "./workspace";
 
 type AgentChat = "off" | "closes" | "firm";
-type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; agent_chat: AgentChat; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_agent_chat: boolean; ledger_writes: boolean; can_manage_ledger_writes: boolean };
+type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; agent_chat: AgentChat; answers_stopped: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_agent_chat: boolean; ledger_writes: boolean; can_manage_ledger_writes: boolean };
 
 // Who on our team supports the firm, and the firm's own records to take away at exit.
 function SupportAndExit() {
@@ -299,8 +299,13 @@ function AgentChatSetting() {
       <h2>Agent chat</h2>
       <p>
         <strong>{current.label}.</strong> {current.detail}{" "}
-        When on, the question, the model's reads and the conversation's earlier turns go to {policy.model_provider}, with card, bank and sign-in details removed; the reads are made with the member's own permissions, listed under the answer and kept with the attempt's record without their content. An answer is kept only if every figure and claim in it is bound to a read that was sent; it links those reads and says it was written by the model. The model reads and proposes only: an action it proposes runs after the person confirms its card. Each read and each answer counts against the firm's daily model limit.
+        When on, the question and the reads go to {policy.model_provider}, with card, bank and sign-in details removed: the close's saved status, sign-off blockers, tie-out, changes and exceptions (and the open draft), plus up to six reads of that close the model chooses through the assistant's read-only tools (a document's text, a draft, the tie-out, changes, exceptions, a search), each made with the member's own permissions, listed under the answer and kept with the attempt's record without their content. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. The model reads and proposes only: an action it proposes runs after the person confirms its card. Each read and each answer counts against the firm's daily model limit.
       </p>
+      {policy.answers_stopped && (
+        <p role="alert">
+          Written answers stopped when this setting replaced them: this firm had turned on written answers without investigations, and the agent now chooses its own reads, which investigations consented to. Choose a level with a reason to turn the agent on again.
+        </p>
+      )}
       {policy.can_manage_agent_chat ? (
         <>
           <fieldset>
