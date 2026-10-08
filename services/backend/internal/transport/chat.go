@@ -1331,23 +1331,17 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 409, "The closes this goal selects changed as it was saved. Open Work to review the goal, or ask for it again.")
 				return
 			}
-			// Each run acts on at most ten closes; the card keeps running batches until none is pending.
-			pending := len(op.Items)
-			for batch := 0; batch < 10 && pending > 0; batch++ {
-				ran := replay(r, "POST", "/v1/closes/portfolio/run", map[string]any{"id": op.ID, "confirmed": true, "reason": in.Reason})
-				if ran.Code != 200 || json.Unmarshal(ran.Body.Bytes(), &op) != nil {
-					relay(ran)
-					return
-				}
-				before := pending
-				pending = 0
-				for _, item := range op.Items {
-					if item.State == "pending" {
-						pending++
-					}
-				}
-				if pending == before {
-					break
+			// One batch of at most ten closes runs inside this request's deadline; the card says how many are still
+			// pending, and the operation continues from Work.
+			ran := replay(r, "POST", "/v1/closes/portfolio/run", map[string]any{"id": op.ID, "confirmed": true, "reason": in.Reason})
+			if ran.Code != 200 || json.Unmarshal(ran.Body.Bytes(), &op) != nil {
+				relay(ran)
+				return
+			}
+			pending := 0
+			for _, item := range op.Items {
+				if item.State == "pending" {
+					pending++
 				}
 			}
 			record(map[string]any{"operation_id": op.ID, "action": op.Action, "closes": len(op.Items), "pending": pending}, "The goal started, but this card could not record it. Open Work to follow it.")

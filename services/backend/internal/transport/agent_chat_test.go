@@ -54,6 +54,11 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	ok("facts", "Two things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
 	ok("facts", "2 things need you.", []agentSupportEntry{{"t1", 0, "/headline", "2 things need you: capture a month-end snapshot, add client documents.", ""}})
 	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "1250", ""}}, "does not hold the cited value")
+	hits := `{"results":[{"kind":"document","title":"Zurich invoice.pdf","href":"/dashboard/closes/7?tab=evidence#doc-4","close":"Alpha · 2026-09"}]}`
+	reads["t4"] = agentRead{text: hits, value: decode(hits), link: chatCitation{"Search", "/dashboard"}, title: "Search across your closes"}
+	if cited := ok("facts", "The invoice is named Zurich invoice.pdf.", []agentSupportEntry{{"t4", 0, "/results/0/title", "Zurich invoice.pdf", ""}}); len(cited) != 1 || cited[0].Href != "/dashboard/closes/7?tab=evidence#doc-4" {
+		t.Fatalf("a search hit links to the item that supplied the fact: %v", cited)
+	}
 	rejected("facts", "Cash differs by 1,250.00.", []agentSupportEntry{{"t2", 0, "/rows/0/ledger_balance", "-1250", ""}}, "bound to no read")
 	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t9", 0, "/rows/1/ledger_balance", "8000", ""}}, "did not run")
 	rejected("facts", "AR ties at 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "bound to no read")

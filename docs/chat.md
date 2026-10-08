@@ -58,7 +58,7 @@ The agent sees the last 20 turns of the conversation as plain text (your message
 
 ## Action cards
 
-The agent proposes the same cards from its tools, with the arguments it chose kept on the message (`proposal`), and two more: **approval** (ask a person to review a draft, with the note the agent wrote; `POST …/workpapers/{id}/approval-request` on confirmation) and **portfolio** (run a goal on the closes `select_closes_preview` listed, each shown by client and month; confirmation previews the goal again, refuses a changed selection, saves the operation, checks the saved closes against the card once more, and runs it through `POST /v1/closes/portfolio/run` batch by batch of ten until none is pending or a batch makes no progress; the card says how many closes are still pending). A card proposed in a firm-wide conversation names the close it acts on (`target_close_id`), is confirmed through `POST /v1/closes/chat/confirm/{message}`, and checks your access to that close at confirmation.
+The agent proposes the same cards from its tools, with the arguments it chose kept on the message (`proposal`), and two more: **approval** (ask a person to review a draft, with the note the agent wrote; `POST …/workpapers/{id}/approval-request` on confirmation) and **portfolio** (run a goal on the closes `select_closes_preview` listed, each shown by client and month; confirmation previews the goal again, refuses a changed selection, saves the operation, checks the saved closes against the card once more, and runs its first batch of ten through `POST /v1/closes/portfolio/run` inside the request's deadline; the card says how many closes are still pending and links to Work, where the operation continues). A card proposed in a firm-wide conversation names the close it acts on (`target_close_id`), is confirmed through `POST /v1/closes/chat/confirm/{message}`, and checks your access to that close at confirmation.
 
 In a close conversation, a message that starts with **prepare**, **recheck** (or re-check) or **stop** and otherwise only names the close's work ("Prepare this close", "Recheck failed work", "Stop this close's unresolved work") answers with a card; "Prepare me for sign-off" or "Stop showing that" does not (migration 073). A firm-wide message that reads as a [portfolio goal](close-coordinator.md#portfolio-goals) ("prepare my clients due Friday", "hand over my clients due Friday") links to Work with the goal filled in, which previews the closes it selects.
 
@@ -92,7 +92,7 @@ Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type 
 | --- | --- |
 | `/ask <question>` | Asks the agent in the current context, as free text typed without a slash would |
 | `/status` | Where this close stands, or, outside a close, what needs you today |
-| `/queue`, `/blocked`, `/delegated` | Outside a close: the review queue, blocked work, the closes handed to the agent |
+| `/queue`, `/blocked`, `/delegated` | The review queue, blocked work, the closes handed to the agent, across your closes; typed in a close, the panel opens the firm conversation for them |
 | `/explain [account]` | Whether that account ties, or what blocks sign-off |
 | `/compare [account]` | What changed from last month, for that account or overall |
 | `/find <words>` | Searches, in this close or across your closes |

@@ -32,6 +32,8 @@ test("commands ask the assistant or open the screen that does the work", async (
   assert.equal((await run("/queue", "")).asked, "/queue");
   assert.equal((await run("/blocked", "")).asked, "/blocked");
   assert.equal((await run("/delegated", "")).asked, "/delegated");
+  // A firm-wide command typed in a close goes to the firm conversation.
+  assert.deepEqual(await run("/queue"), { message: "", navigated: "", asked: "/queue", askedClose: "" });
   assert.equal((await run("/explain Prepaid insurance")).asked, "/explain Prepaid insurance");
   assert.equal((await run("/explain")).asked, "/explain");
   assert.equal((await run("/compare Rent")).asked, "/compare Rent");

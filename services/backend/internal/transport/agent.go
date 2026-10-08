@@ -317,6 +317,37 @@ func valueAt(value any, pointer string) (string, bool) {
 	return string(raw), err == nil
 }
 
+// linkAt is the page of the row a pointer points into: the nearest enclosing object's href, when it has one and it is
+// a path inside the workspace; "" otherwise.
+func linkAt(value any, pointer string) string {
+	keys := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+	best := ""
+	for i := 0; i <= len(keys); i++ {
+		if object, ok := value.(map[string]any); ok {
+			if href, isText := object["href"].(string); isText && strings.HasPrefix(href, "/dashboard/") {
+				best = href
+			}
+		}
+		if i == len(keys) {
+			break
+		}
+		key := strings.ReplaceAll(strings.ReplaceAll(keys[i], "~1", "/"), "~0", "~")
+		switch t := value.(type) {
+		case map[string]any:
+			value = t[key]
+		case []any:
+			n, err := strconv.Atoi(key)
+			if err != nil || n < 0 || n >= len(t) {
+				return best
+			}
+			value = t[n]
+		default:
+			return best
+		}
+	}
+	return best
+}
+
 // sentences splits an answer the way the model was told to number it.
 func sentences(text string) []string {
 	parts := regexp.MustCompile(`(?:[.!?]\s+|\n+)`).Split(strings.TrimSpace(text), -1)
@@ -423,13 +454,18 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 		covered[s.sentence] = true
 		label := read.title
+		href := read.link.Href
 		if s.path != "" {
 			label += " › " + strings.TrimPrefix(s.path, "/")
+			// A row that carries its own page (a search hit, a queue item) links there, not to the read's page.
+			if own := linkAt(read.value, s.path); own != "" {
+				href = own
+			}
 		}
-		key := label + "|" + read.link.Href
+		key := label + "|" + href
 		if !seen[key] && len(cited) < 12 {
 			seen[key] = true
-			cited = append(cited, chatCitation{label, read.link.Href})
+			cited = append(cited, chatCitation{label, href})
 		}
 	}
 	for i, c := range covered {

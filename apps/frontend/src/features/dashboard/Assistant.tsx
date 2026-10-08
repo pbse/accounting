@@ -212,7 +212,20 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
       return;
     }
     setError("");
-    void runCommand(command, argument, { closeId, navigate, nextReview, ask: (what: Ask) => void send({ ...what, workpaper_id: paperId }) })
+    void runCommand(command, argument, {
+      closeId,
+      navigate,
+      nextReview,
+      ask: (what: Ask, close: string) => {
+        // A firm-wide command asked from a close opens the firm conversation on the dashboard.
+        if (close !== closeId) {
+          navigate("/dashboard");
+          askAssistant(what, "");
+          return;
+        }
+        void send({ ...what, workpaper_id: paperId });
+      },
+    })
       .then(setError)
       .catch((e) => setError(e instanceof Error ? e.message : "The command could not run."));
   }

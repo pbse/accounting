@@ -1,11 +1,12 @@
-export type Command = { name: string; description: string; close?: boolean; argument?: string };
+// close: the command needs a close. firm: it answers across closes, so from a close it goes to the firm conversation.
+export type Command = { name: string; description: string; close?: boolean; firm?: boolean; argument?: string };
 
 export const commands: Command[] = [
   { name: "ask", description: "Ask the assistant about this close or your work", argument: "question" },
   { name: "status", description: "Where a close stands, or what needs you today" },
-  { name: "queue", description: "Drafts ready for review, across your closes" },
-  { name: "blocked", description: "Blocked work, across your closes" },
-  { name: "delegated", description: "The closes handed to the agent and how they are doing" },
+  { name: "queue", description: "Drafts ready for review, across your closes", firm: true },
+  { name: "blocked", description: "Blocked work, across your closes", firm: true },
+  { name: "delegated", description: "The closes handed to the agent and how they are doing", firm: true },
   { name: "explain", description: "Explain a balance that doesn't tie, or what blocks sign-off", close: true, argument: "account" },
   { name: "compare", description: "Compare with last month, optionally for one account", close: true, argument: "account" },
   { name: "find", description: "Find documents, drafts, transactions, procedures or review decisions", argument: "words" },
@@ -47,10 +48,12 @@ export async function runCommand(command: Command, argument: string, ctx: Comman
       if (!argument) return "Type what to find after /find.";
       ctx.ask({ command: "find", argument }, close);
       return "";
-    case "status":
     case "queue":
     case "blocked":
     case "delegated":
+      ctx.ask({ command: command.name, argument }, "");
+      return "";
+    case "status":
     case "explain":
     case "compare":
     case "delegate":
