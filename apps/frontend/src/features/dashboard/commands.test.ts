@@ -7,7 +7,7 @@ function context(closeId: string) {
   const ctx: CommandContext = {
     closeId,
     navigate: (to) => void (seen.navigated = to),
-    ask: (question, close) => void ((seen.asked = question), (seen.askedClose = close)),
+    ask: (what, close) => void ((seen.asked = "text" in what ? what.text : `/${what.command}${what.argument ? " " + what.argument : ""}`), (seen.askedClose = close)),
     nextReview: async () => ({ close_id: "9", workpaper_id: "44" }),
   };
   return { seen, ctx };
@@ -26,18 +26,20 @@ test("commands ask the assistant or open the screen that does the work", async (
     const message = await runCommand(command!, argument, ctx);
     return { message, ...seen };
   };
-  assert.deepEqual(await run("/status"), { message: "", navigated: "", asked: "Where does this close stand?", askedClose: "7" });
-  assert.equal((await run("/status", "")).asked, "What needs me today?");
-  assert.equal((await run("/explain Prepaid insurance")).asked, "Does Prepaid insurance tie?");
-  assert.equal((await run("/explain")).asked, "What blocks sign-off?");
-  assert.equal((await run("/compare Rent")).asked, "What changed in Rent from last month?");
-  assert.equal((await run("/prepare")).asked, "Prepare this close");
-  assert.equal((await run("/delegate")).asked, "Get this close ready for review");
-  assert.equal((await run("/delegate Friday")).asked, "Get this close ready for review by Friday");
-  assert.equal((await run("/stop")).asked, "Stop this close's unresolved work");
-  assert.equal((await run("/request")).asked, "Draft a client request");
+  // A command is sent as itself: the server runs its fixed read or card without a model.
+  assert.deepEqual(await run("/status"), { message: "", navigated: "", asked: "/status", askedClose: "7" });
+  assert.equal((await run("/status", "")).asked, "/status");
+  assert.equal((await run("/explain Prepaid insurance")).asked, "/explain Prepaid insurance");
+  assert.equal((await run("/explain")).asked, "/explain");
+  assert.equal((await run("/compare Rent")).asked, "/compare Rent");
+  assert.equal((await run("/prepare")).asked, "/prepare");
+  assert.equal((await run("/delegate")).asked, "/delegate");
+  assert.equal((await run("/delegate Friday")).asked, "/delegate Friday");
+  assert.equal((await run("/stop")).asked, "/stop");
+  assert.equal((await run("/request")).asked, "/request");
   assert.equal((await run("/rehearse")).navigated, "/dashboard/closes/7?tab=signoff");
-  assert.equal((await run("/find Zurich invoice")).asked, "Find Zurich invoice");
+  assert.equal((await run("/find Zurich invoice")).asked, "/find Zurich invoice");
+  assert.equal((await run("/ask why is cash low")).asked, "why is cash low");
   assert.equal((await run("/find")).message, "Type what to find after /find.");
   assert.equal((await run("/review")).navigated, "/dashboard/closes/9/workpapers/44");
   assert.equal((await run("/prepare", "")).message, "Choose a client close first.");

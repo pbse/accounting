@@ -281,10 +281,11 @@ func readPortfolio(ctx context.Context, db *sql.DB, r *http.Request, id string) 
 func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /v1/closes/portfolio", func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Text   string `json:"text"`
-			View   string `json:"view"`
-			Client string `json:"client"`
-			Today  string `json:"today"`
+			Text    string `json:"text"`
+			View    string `json:"view"`
+			Client  string `json:"client"`
+			Today   string `json:"today"`
+			Preview bool   `json:"preview"`
 		}
 		if !decode(w, r, &in) {
 			return
@@ -342,7 +343,8 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 		}
 		more := len(closes) > 100
 		closes = closes[:min(len(closes), 100)]
-		if goal.action == "show" {
+		// A preview (the agent's select_closes_preview) lists what any goal selects without saving an operation.
+		if goal.action == "show" || in.Preview {
 			items := []portfolioItem{}
 			for _, c := range closes {
 				result := "no due date"
@@ -351,7 +353,7 @@ func registerPortfolio(mux *http.ServeMux, db *sql.DB) {
 				}
 				items = append(items, portfolioItem{CloseID: c.id, Label: c.label, State: "listed", Result: result, DueOn: c.due})
 			}
-			jsonReply(w, 200, portfolioOperation{Action: "show", Goal: in.Text, Scope: goal.describe(in.View, in.Client), HasMore: more, Items: items})
+			jsonReply(w, 200, portfolioOperation{Action: goal.action, Goal: in.Text, Scope: goal.describe(in.View, in.Client), HasMore: more, Items: items})
 			return
 		}
 		var opID string

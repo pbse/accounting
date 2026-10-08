@@ -2,17 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { authKitClientId, useSession } from "../auth/Auth";
 import { GoalCard, localDate } from "../closes/Goal";
-import { useUnlocked, workspaceRequest } from "../closes/workspace";
+import { useUnlocked, workspaceRequest, type AgentEvent } from "../closes/workspace";
 import { ActionCard, type CardAction, type Outcome } from "./ActionCard";
 import { RequestCard } from "./RequestCard";
-import { askAssistant, nextReview, starters, takePending, useOpenRequests, usePending } from "./assistantStore";
+import { ProposalCard } from "./ProposalCard";
+import { askAssistant, nextReview, starterCommands, starters, takePending, useOpenRequests, usePending } from "./assistantStore";
 import { CommandPalette, openPalette } from "./CommandPalette";
-import { commands, parseCommand, runCommand } from "./commands";
+import { commands, parseCommand, runCommand, type Ask } from "./commands";
 import { AgentMark } from "@close/ui/components/AgentMark";
 import { Icon } from "@close/ui/components/Icon";
 import { Suggestions } from "@close/ui/components/Suggestions";
 
-type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null };
+// A step the agent made for an answer: what ran, its outcome and where its detail lives; never its content.
+export type Step = { id: string; tool: string; title: string; status: string; size?: number; truncated?: boolean; link?: { label: string; href: string } };
+type Message = { id: string; role: "user" | "assistant"; body: string; workpaper_id?: string; citations: { label: string; href: string }[]; action?: CardAction | "delegate" | "request" | "approval" | "portfolio"; due_on?: string; finish?: string; every_month?: boolean; outcome?: Outcome | null; proposal?: Record<string, unknown>; target_close_id?: string; steps?: Step[] };
 
 function readOpen() {
   try {
@@ -102,6 +105,9 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [pending, setPending] = useState("");
+  // What the agent is doing for the message being answered: each step as it starts and ends.
+  const [steps, setSteps] = useState<Step[]>([]);
+  const [asking, setAsking] = useState("");
   const generation = useRef(0);
   const list = useRef<HTMLOListElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -111,8 +117,8 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
   // A question from the palette is asked once the history has loaded, so its answer is the last thing shown.
   useEffect(() => {
     if (!loaded || busy) return;
-    const question = takePending(closeId);
-    if (question) void send({ text: question, workpaper_id: paperId });
+    const what = takePending(closeId);
+    if (what) void send({ ...what, workpaper_id: paperId });
   }, [waiting, busy, loaded]);
   useEffect(() => {
     input.current?.focus();
@@ -128,7 +134,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
   }, []);
   useEffect(() => {
     list.current?.lastElementChild?.scrollIntoView({ block: "end" });
-  }, [messages, live]);
+  }, [messages, live, steps, pending]);
   useEffect(() => {
     if (focus) input.current?.focus();
   }, [focus]);
@@ -137,9 +143,20 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
     const asked = ++generation.current;
     setBusy(true);
     setError("");
+    setSteps([]);
+    setAsking("text" in body ? body.text : `/${body.command}${body.argument ? ` ${body.argument}` : ""}`);
+    const onEvent = (event: AgentEvent) => {
+      if (asked !== generation.current) return;
+      if (event.type === "step") {
+        setSteps((current) => {
+          const step: Step = { id: event.id, tool: event.tool, title: event.title, status: event.state, size: event.size, truncated: event.truncated };
+          return current.some((s) => s.id === step.id) ? current.map((s) => (s.id === step.id ? step : s)) : [...current, step];
+        });
+      } else if (event.type === "text") setPending(event.body);
+    };
     try {
-      // The member's own date resolves day names such as "by Friday"; a written answer streams in as it is written.
-      const data = await workspaceRequest(path, { ...body, today: localDate() }, false, (delta) => asked === generation.current && setPending((p) => p + delta));
+      // The member's own date resolves day names such as "by Friday"; the agent's steps and text arrive as events.
+      const data = await workspaceRequest(path, { ...body, today: localDate() }, false, onEvent);
       if (asked !== generation.current) return;
       setMessages(data.messages);
       setLive(data.live ?? []);
@@ -148,11 +165,16 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
     } catch (e) {
       if (asked === generation.current) {
         setError(e instanceof Error ? e.message : "The assistant is unavailable.");
-        // What was saved, if anything, replaces text that streamed before the answer broke off.
+        // Nothing from a failed attempt is saved; the member's text stays in the box to send again.
+        if ("text" in body) setText(body.text);
         workspaceRequest(path).then((data) => asked === generation.current && setMessages(data.messages), () => undefined);
       }
     } finally {
-      if (asked === generation.current) setPending("");
+      if (asked === generation.current) {
+        setPending("");
+        setSteps([]);
+        setAsking("");
+      }
       setBusy(false);
     }
   }
@@ -162,7 +184,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
     const asked = ++generation.current;
     setBusy(true);
     try {
-      const data = await workspaceRequest(`${path}/${id}/confirm`, body);
+      const data = await workspaceRequest(closeId ? `${path}/${id}/confirm` : `/chat/confirm/${id}`, body);
       if (asked === generation.current) setMessages(data.messages);
     } finally {
       setBusy(false);
@@ -190,7 +212,7 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
       return;
     }
     setError("");
-    void runCommand(command, argument, { closeId, navigate, nextReview, ask: (question) => void send({ text: question, workpaper_id: paperId }) })
+    void runCommand(command, argument, { closeId, navigate, nextReview, ask: (what: Ask) => void send({ ...what, workpaper_id: paperId }) })
       .then(setError)
       .catch((e) => setError(e instanceof Error ? e.message : "The command could not run."));
   }
@@ -214,21 +236,31 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
             {closeId
               ? "Say “Get this close ready for review by Friday” to hand it to the agent, or ask where it stands, what blocks sign-off, which balances don't tie, what changed from last month or what exceptions the ledger shows."
               : "Ask what needs you today, what is ready for review or what is blocked, or name a client to hand it to the agent (“Get Acme ready for review by Friday”)."}
-            <Suggestions label="Starter questions" items={closeId ? starters.close : starters.firm} disabled={busy || !loaded} onPick={(text) => void send({ text, workpaper_id: paperId })} />
+            <Suggestions label="Starter questions" items={closeId ? starters.close : starters.firm} disabled={busy || !loaded} onPick={(label) => void send({ ...(starterCommands[label] ?? { text: label }), workpaper_id: paperId })} />
           </li>
         )}
-        {messages.map((m, i) => (
+        {messages.map((m, i) => {
+          // A firm-wide card acts on the close it named; the card reads that close as a close conversation's would.
+          const cardClose = m.target_close_id || closeId;
+          return (
           <li key={m.id} className={m.role}>
             <p>{m.body}</p>
-            {m.action &&
-              closeId &&
+            {m.steps && m.steps.length > 0 && <StepList steps={m.steps} done />}
+            {m.action === "portfolio" ? (
+              <ProposalCard kind="portfolio" proposal={m.proposal ?? {}} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+            ) : m.action === "approval" ? (
+              cardClose && <ProposalCard kind="approval" proposal={m.proposal ?? {}} closeId={cardClose} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+            ) : (
+              m.action &&
+              cardClose &&
               (m.action === "delegate" ? (
-                <GoalCard closeId={closeId} dueOn={m.due_on ?? ""} finish={m.finish ?? ""} everyMonth={!!m.every_month} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+                <GoalCard closeId={cardClose} dueOn={m.due_on ?? ""} finish={m.finish ?? ""} everyMonth={!!m.every_month} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ) : m.action === "request" ? (
-                <RequestCard closeId={closeId} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+                <RequestCard closeId={cardClose} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
               ) : (
-                <ActionCard closeId={closeId} action={m.action} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
-              ))}
+                <ActionCard closeId={cardClose} action={m.action} outcome={m.outcome} live={i === newestCard} onConfirm={(body) => confirm(m.id, body)} />
+              ))
+            )}
             {m.role === "assistant" && i === messages.length - 1 && live.length > 0 && (
               <ul>
                 {live.map((line, n) => (
@@ -242,15 +274,21 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
               </Link>
             ))}
           </li>
-        ))}
+          );
+        })}
+        {busy && asking && (
+          <li className="user">
+            <p>{asking}</p>
+          </li>
+        )}
+        {busy && (steps.length > 0 || pending) && (
+          <li className="assistant">
+            {steps.length > 0 && <StepList steps={steps} done={false} />}
+            {pending ? <p>{pending}</p> : <p className="assistant-working" role="status">{steps.length ? "Working…" : "Thinking…"}</p>}
+          </li>
+        )}
       </ol>
       {error && <p role="alert">{error}</p>}
-      {pending && (
-        <div className="assistant-pending">
-          <strong>Being written by the model, not checked yet</strong>
-          <p>{pending}</p>
-        </div>
-      )}
       <form onSubmit={submit}>
         {slash.length > 0 && (
           <ul className="assistant-commands" aria-label="Command suggestions">
@@ -293,5 +331,30 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
         {" "}If your firm turns on Agent chat for client closes, a question in a client close that none of its fixed reads matches goes to the configured model provider with this close's saved status, sign-off blockers, tie-out, changes, exceptions and any open draft, plus the reads of this close the model chooses through the assistant's read-only tools, each made with your permissions and listed under the answer, which says it was written by the model. If the firm turns it on firm-wide, such a question asked outside a close goes with your lists of what needs a person today, the review queue and blocked work, and its answer is shown once and not kept.
       </p>
     </aside>
+  );
+}
+
+// StepList shows what the agent read for an answer: running steps with their state, finished ones collapsed to a line.
+const stepWords: Record<string, string> = { running: "reading", ok: "read", proposed: "proposed", refused: "refused", unavailable: "unavailable", omitted: "too large" };
+function StepList({ steps, done }: { steps: Step[]; done: boolean }) {
+  const items = steps.map((s) => (
+    <li key={s.id} className={`step-${s.status}`}>
+      <span>{s.title || s.tool}</span>
+      <small>
+        {stepWords[s.status] ?? s.status}
+        {s.truncated ? " · cut to the first rows" : ""}
+      </small>
+    </li>
+  ));
+  if (!done) return <ol className="assistant-steps" aria-label="What the agent is doing">{items}</ol>;
+  const read = steps.filter((s) => s.status === "ok").length;
+  return (
+    <details className="assistant-steps-done">
+      <summary>
+        {read === 1 ? "Read 1 thing" : `Read ${read} things`}
+        {steps.length > read ? ` · ${steps.length - read} other step${steps.length - read === 1 ? "" : "s"}` : ""}
+      </summary>
+      <ol className="assistant-steps">{items}</ol>
+    </details>
   );
 }

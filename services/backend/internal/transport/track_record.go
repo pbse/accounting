@@ -231,7 +231,13 @@ func trackRecord(db *sql.DB) http.HandlerFunc {
 			problem(w, 503, "Track record is unavailable.")
 			return
 		}
-		jsonReply(w, 200, map[string]any{"window_from": from, "clients": clients, "unlinked_human_drafts": unlinked, "window_to": to, "has_more": total > 200, "coverage": coverage, "assistant": map[string]any{"asked": asked, "kept": kept, "median_seconds": median}})
+		// Firm-wide attempts have no close; they hold no client details, so the firm's own count is shown to every member.
+		var firmAsked, firmKept int
+		if err = db.QueryRowContext(r.Context(), `SELECT count(*),count(*) FILTER (WHERE outcome='kept') FROM assistant_answers WHERE organization_id=$1 AND close_id IS NULL AND created_at>now()-interval '30 days'`, organization(r)).Scan(&firmAsked, &firmKept); err != nil {
+			problem(w, 503, "Track record is unavailable.")
+			return
+		}
+		jsonReply(w, 200, map[string]any{"window_from": from, "clients": clients, "unlinked_human_drafts": unlinked, "window_to": to, "has_more": total > 200, "coverage": coverage, "assistant": map[string]any{"asked": asked, "kept": kept, "median_seconds": median, "firm_asked": firmAsked, "firm_kept": firmKept}})
 	}
 }
 
