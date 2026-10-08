@@ -94,7 +94,8 @@ if (provider === "context_machine") {
 }
 if (personalSelected && (!Array.isArray(profiles) || profiles.length !== 1)) throw new Error("Personal subscriptions require exactly one owner access profile");
 // A subject of "*" serves every member of the organization, which only API-key agents may do; a personal login serves its owner.
-if (personalSelected && Array.isArray(profiles) && profiles.some(p => p && p.subject === "*")) throw new Error("An organization-wide access profile (subject \"*\") requires API-key agents, not a personal subscription");
+const personalAgent = personalSelected || codexMode === "subscription" || (codexMode === "auto" && !has("OPENAI_API_KEY") && has("CODEX_ACCESS_TOKEN") && process.env.CODEX_MODEL);
+if (personalAgent && Array.isArray(profiles) && profiles.some(p => p && p.subject === "*")) throw new Error("An organization-wide access profile (subject \"*\") requires API-key agents, not a personal subscription");
 if (!Array.isArray(profiles) || !profiles.length ||
     profiles.some(p => !p || ["organization", "subject", "access_profile"].some(k => typeof p[k] !== "string" || !p[k].trim())) ||
     new Set(profiles.map(p => p.access_profile)).size !== profiles.length)

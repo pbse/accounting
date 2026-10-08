@@ -51,6 +51,9 @@ func TestOrganizationWideProfileCompletesForEachMemberAsThemselves(t *testing.T)
 			t.Fatalf("%s completed: %v", name, err)
 		}
 	}
+	if !ViaWideProfile(WithIdentity(base, "firm", "member-b"), "firm") || ViaWideProfile(WithIdentity(base, "firm", "owner"), "firm") || ViaWideProfile(base, "firm") || ViaWideProfile(WithIdentity(base, "other", "member-b"), "other") {
+		t.Fatal("a member's eligibility is not traced to the wide profile")
+	}
 	if !Allows(WithIdentity(base, "firm", "member-b"), "firm") || Allows(WithIdentity(base, "other", "member-b"), "other") || !Allows(base, "firm") || Allows(base, "other") || Allows(WithIdentity(base, "firm", AnyMember), "firm") {
 		t.Fatal("eligibility does not follow the wide profile")
 	}

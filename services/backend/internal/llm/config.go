@@ -351,6 +351,22 @@ func Allows(ctx context.Context, organization string) bool {
 	return c.profile(organization, id.subject).AccessProfile != ""
 }
 
+// ViaWideProfile reports that the caller's eligibility rests on an organization-wide profile rather than their own:
+// membership alone put them there, so a background caller must also check the client grant the work needs.
+func ViaWideProfile(ctx context.Context, organization string) bool {
+	c, _ := ctx.Value(clientKey{}).(*Client)
+	id, has := ctx.Value(identityKey{}).(identity)
+	if c == nil || !has || c.routes["preparation"].Provider != ContextMachine || id.organization != organization {
+		return false
+	}
+	for _, p := range c.profiles {
+		if p.Organization == organization && p.Subject == id.subject {
+			return false
+		}
+	}
+	return c.profile(organization, id.subject).AccessProfile != ""
+}
+
 // profile finds the configured scope for a caller: the member's own profile first, then the organization-wide one,
 // which stands for the member themselves. Without a subject, any profile for the organization makes it eligible.
 func (c *Client) profile(organization, subject string) Scope {

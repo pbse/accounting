@@ -59,6 +59,15 @@ func runReplay(ctx context.Context, db *sql.DB, org, closeID string) ([]*replayI
 		}
 		if !llm.Allows(probe, org) {
 			it.Error = "The configured model route is not authorized for this reading's creator."
+		} else if llm.ViaWideProfile(probe, org) {
+			// Membership alone made the creator eligible; their reading is replayed only while they hold the client.
+			var granted bool
+			if err = db.QueryRowContext(ctx, `SELECT $2='local-development' OR EXISTS(SELECT 1 FROM current_client_access a JOIN client_closes c ON c.organization_id=a.organization_id AND lower(a.client_entity)=lower(c.entity) WHERE c.id::text=$1 AND a.organization_id=$2 AND a.subject=$3 AND a.granted)`, closeID, org, it.creator).Scan(&granted); err != nil {
+				break
+			}
+			if !granted {
+				it.Error = "This reading's creator no longer has access to the client, so it is not replayed."
+			}
 		}
 		it.Confirmed, it.Changed = it.plan.Kind, []string{}
 		items = append(items, &it)

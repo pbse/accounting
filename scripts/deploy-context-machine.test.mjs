@@ -184,6 +184,8 @@ test('an organization-wide profile needs API-key agents and the chat purpose is 
   const auth = JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'fake', refresh_token: 'fake', id_token: 'fake', account_id: 'owner' } });
   assert.notEqual(check({ OPENAI_API_KEY: '', CODEX_AUTH_JSON: auth, CODEX_AUTH_MODE: 'chatgpt', CONTEXT_MACHINE_PROFILES: wide }).status, 0);
   assert.notEqual(check({ CLAUDE_AUTH_MODE: 'subscription', CLAUDE_CODE_OAUTH_TOKEN: 'fake', CONTEXT_MACHINE_MODEL: 'claude', CLAUDE_MODEL: 'fixed', ANTHROPIC_API_KEY: '', CONTEXT_MACHINE_PROFILES: wide }).status, 0);
+  assert.notEqual(check({ CODEX_AUTH_MODE: 'subscription', CODEX_ACCESS_TOKEN: 'fake', OPENAI_API_KEY: '', LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS: 'true', CONTEXT_MACHINE_PROFILES: wide }).status, 0);
+  assert.notEqual(check({ CODEX_ACCESS_TOKEN: 'fake', OPENAI_API_KEY: '', LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS: 'true', CONTEXT_MACHINE_PROFILES: wide }).status, 0);
 });
 
 test('completion routing requires an enabled service and explicit subscription token-limit acknowledgement', () => {
