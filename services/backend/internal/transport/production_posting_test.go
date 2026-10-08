@@ -238,6 +238,13 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: make(http.Header)}, nil
 	})
 	path := "/v1/closes/" + closeID + "/workpapers/" + paperID + "/production-posting"
+	// Until the firm turns writing to clients' books on in Firm settings, nothing is posted, not even previewed.
+	if refused := call(path, map[string]string{"action": "preview"}, 409); !strings.Contains(string(refused), `"code":"LEDGER_WRITES_OFF"`) || writes != 0 {
+		t.Fatalf("a firm that has not turned writing on posts nothing: %s", refused)
+	}
+	if _, err = db.Exec(`UPDATE organizations SET allow_ledger_writes=true WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
 	if refused := call(path, map[string]string{"action": "preview"}, 409); !strings.Contains(string(refused), "kept in USD") {
 		t.Fatalf("a CAD draft cannot post to a company not yet known to keep CAD books: %s", refused)
 	}
@@ -342,9 +349,19 @@ func TestProductionPostingSingleDurableAttempt(t *testing.T) {
 	call(path, map[string]string{"action": "verify"}, 422)
 	failReadback = false
 	laterBalance = true
+	// Turning writing off later strands nothing: a write already made is still read back.
+	if _, err = db.Exec(`UPDATE organizations SET allow_ledger_writes=false WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
 	json.Unmarshal(call(path, map[string]string{"action": "verify"}, 200), &posted)
 	if posted.State != "verified" {
 		t.Fatal("verified receipt was not restored after a temporary readback failure")
+	}
+	if refused := call(path, map[string]string{"action": "execute", "digest": preview.Digest, "confirmation": "POST TO PRODUCTION"}, 409); !strings.Contains(string(refused), `"code":"LEDGER_WRITES_OFF"`) || writes != 1 {
+		t.Fatalf("no new write while writing is off: %s", refused)
+	}
+	if _, err = db.Exec(`UPDATE organizations SET allow_ledger_writes=true WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
 	}
 	laterBalance = false
 	actor.Permissions = []string{"clients:all", "posting:approve"}

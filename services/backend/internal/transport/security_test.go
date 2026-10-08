@@ -123,6 +123,27 @@ func TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly
 	call("user_a", nil, 403)
 	call("user_a", []string{"clients:all"}, 403)
 	call("user_a", []string{"members:manage"}, 403)
+	// Until the firm turns writing to clients' books on, no write is enabled for anyone, whatever the server and the
+	// grants allow; reads are unaffected.
+	off := call("user_admin", []string{"clients:all", "members:manage"}, 200)
+	var offOps struct {
+		Operations []struct {
+			Provider, Kind, Operation, Status string
+			Clients                           []string
+		}
+	}
+	must(json.Unmarshal([]byte(off), &offOps))
+	for _, o := range offOps.Operations {
+		if o.Kind != "read" && (o.Status == "enabled" || o.Status == "production approved" || len(o.Clients) > 0) {
+			t.Fatalf("a write is enabled while the firm's writing is off: %+v", o)
+		}
+		if o.Provider == "QuickBooks" && o.Operation == "Journal: accrual" && o.Status != "off in Firm settings" {
+			t.Fatalf("an allowed, granted write says the firm's writing is off: %+v", o)
+		}
+	}
+	if _, err := db.Exec(`UPDATE organizations SET allow_ledger_writes=true WHERE id=$1`, org); err != nil {
+		t.Fatal(err)
+	}
 	body := call("user_admin", []string{"clients:all", "members:manage"}, 200)
 	if strings.Contains(body, "SECRET") {
 		t.Fatalf("no credential, OAuth digest or webhook secret leaves the server: %s", body)

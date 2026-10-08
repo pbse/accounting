@@ -3715,3 +3715,28 @@ Request: make Xero management packs publishable. After the Xero sign-off change,
 - **Tested.** `TestManagementPackReadsTheCapturedReports` (extended): a total line after a blank line is refused naming its row in the file, 5; a statement whose ending cash is 1,600 against book cash of 1,500 is shown with a difference of 100.00; one that ties completes the pack and discloses its source; after sign-off it publishes; an import while signed off is refused and the pack is not open for one, and a later import reopens the sign-off. Observed failing without each part: the readiness binding, the credit-card exclusion, the bank marking, the signed-off refusal, loading the import, file row numbers and the open flag. The transport and Xero packages pass on a fresh local PostgreSQL; the frontend typechecks.
 
 Not verified: a real Xero organisation or a real statement exported from Xero.
+
+## Writing to clients' books is the firm's decision, off by default (2026-10-07)
+
+Request: "We should never be posting unless the User in his settings say so ... by default we can have it as NO." The user chose that the switch covers live books only.
+
+- **Setting.** Firm settings has **Writing to clients' books**, off for every firm (migration 131: `organizations.allow_ledger_writes`, recorded in `organization_policy_changes.ledger_writes`). A firm administrator (`org:manage`, or anyone in local development) changes it with a reason.
+- **Enforcement.** Every live write is refused with 409 `LEDGER_WRITES_OFF` while the setting is off (`refuseLedgerWrites`):
+  - QuickBooks production journals;
+  - Bill, Purchase and Deposit recodes;
+  - payment and credit applications;
+  - supplier credits;
+  - Xero manual journals and bill recodes.
+
+  It is checked when a write is previewed, approved or executed. It is checked again inside the approve and execute transaction under a share lock on the firm's row, which a change of the setting updates. Reading back (`verify`) is never refused. QuickBooks sandbox postings are outside it.
+- **Security center.** A write kind the server allows reads "off in Firm settings" and lists no clients while the setting is off.
+- **Tested.**
+  - `TestProductionPostingSingleDurableAttempt`: a firm with writing off is refused at preview with nothing written. After writing is turned off again, a posted write still verifies, and a new execution is refused.
+  - `TestApprovedDraftPostsOnceToXero`: the Xero preview is refused while writing is off.
+  - `TestIndependentReviewPolicyRefusesPreparersAndUnknownProvenance`: a firm starts off; turning writing on needs `org:manage`, is applied and recorded; turning it off is applied.
+  - `TestSecurityCenterShowsAccessServicesAgentsAndNoSecretsToAdministratorsOnly`: no write is enabled while writing is off, and an allowed, granted kind reads "off in Firm settings".
+  - The other posting and correction tests create their firms with writing on.
+  - Frontend check, build and tests: 46/46.
+
+Not verified: a live QuickBooks or Xero company.
+

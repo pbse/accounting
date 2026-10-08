@@ -708,6 +708,9 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 			problem(w, 409, "Production posting for "+kind+" drafts is not enabled yet. It turns on after QuickBooks balance behavior is checked in the sandbox.")
 			return
 		}
+		if in.Action != "verify" && refuseLedgerWrites(w, r.Context(), db, a.Organization) {
+			return
+		}
 		record, recordErr := readProductionPosting(r.Context(), db, r.PathValue("id"), r.PathValue("paper"))
 		savedGrant, decision := "", kind
 		if in.Action == "verify" {
@@ -854,6 +857,9 @@ func registerProductionPosting(mux *http.ServeMux, db *sql.DB) {
 		var activeMember bool
 		if err = tx.QueryRowContext(r.Context(), `SELECT enabled AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted) FROM organizations WHERE id=$1 FOR UPDATE`, a.Organization, a.Subject).Scan(&activeMember); err != nil || !activeMember {
 			problem(w, 403, "Firm or member access was revoked before this posting decision.")
+			return
+		}
+		if refuseLedgerWrites(w, r.Context(), tx, a.Organization) {
 			return
 		}
 		if status, message := draftApproved(r.Context(), tx, closeID, r.PathValue("paper"), a, in.Action == "approve"); status != 0 {

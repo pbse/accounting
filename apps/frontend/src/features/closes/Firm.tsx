@@ -8,7 +8,7 @@ import { FirmEnrollment } from "./Enterprise";
 import { ClientRoster } from "./Roster";
 import { workspaceRequest } from "./workspace";
 
-type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; investigations: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean };
+type Policy = { model_provider: string; independent_review: boolean; independent_review_min_amount: string; materiality_amount: string; link_passcode: boolean; reminder_after_days: number; reminder_max: number; model_answers: boolean; firm_answers: boolean; investigations: boolean; hosted: boolean; can_manage: boolean; can_manage_links: boolean; can_manage_model_answers: boolean; ledger_writes: boolean; can_manage_ledger_writes: boolean };
 
 // Who on our team supports the firm, and the firm's own records to take away at exit.
 function SupportAndExit() {
@@ -121,6 +121,64 @@ function IndependentReview() {
         </>
       ) : (
         <p className="note">A firm administrator with org:manage can change this policy.</p>
+      )}
+      {message && <p role="alert">{message}</p>}
+    </section>
+  );
+}
+
+// Writing approved entries to clients' live books is the firm's own decision: off until a firm administrator turns it
+// on, with a reason. QuickBooks sandbox companies are outside it.
+function LedgerWrites() {
+  const [policy, setPolicy] = useState<Policy>();
+  const [reason, setReason] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let live = true;
+    workspaceRequest("/organization/policy")
+      .then((data) => live && setPolicy(data))
+      .catch((e) => live && setMessage(e instanceof Error ? e.message : "Firm policy is unavailable."));
+    return () => {
+      live = false;
+    };
+  }, [refresh]);
+  if (!policy) return message ? <p role="alert">{message}</p> : null;
+  async function change() {
+    setBusy(true);
+    setMessage("");
+    try {
+      await workspaceRequest("/organization/policy", { ledger_writes: !policy!.ledger_writes, reason });
+      setReason("");
+      setRefresh((n) => n + 1);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Policy change failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-label="Writing to clients' books">
+      <h2>Writing to clients' books</h2>
+      <p>
+        {policy.ledger_writes
+          ? "On: an approved entry can be written to a client's live QuickBooks or Xero company by a member allowed to post, under that client's posting grant and only for the kinds this server allows."
+          : "Off: nothing is written to any client's live QuickBooks or Xero company. Approved entries are prepared for a person to book in the ledger."}{" "}
+        QuickBooks sandbox companies are not affected, and a write already made is still read back after writing is turned off.
+      </p>
+      {policy.can_manage_ledger_writes ? (
+        <>
+          <label>
+            Reason for the change
+            <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button type="button" disabled={busy || reason.trim().length < 5} onClick={() => void change()}>
+            {policy.ledger_writes ? "Turn writing off" : "Turn writing on"}
+          </button>
+        </>
+      ) : (
+        <p className="note">A firm administrator with org:manage can change this setting.</p>
       )}
       {message && <p role="alert">{message}</p>}
     </section>
@@ -413,6 +471,7 @@ export default function Firm() {
       {loaded && !error && (
         <div className="stack">
           <IndependentReview />
+          <LedgerWrites />
       <LinkPasscodes />
       <WrittenAnswers />
       <Materiality />

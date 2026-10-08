@@ -37,7 +37,7 @@ func TestProductionBillCorrectionStaysInsideItsGrant(t *testing.T) {
 	}
 	org := "org_Corrections" + rand.Text()
 	var closeID, connectionID, evidenceID string
-	_, err = db.Exec(`INSERT INTO organizations(id,name) VALUES($1,'Corrections fixture')`, org)
+	_, err = db.Exec(`INSERT INTO organizations(id,name,allow_ledger_writes) VALUES($1,'Corrections fixture',true)`, org)
 	must(err)
 	_, err = db.Exec(`INSERT INTO organization_member_access(organization_id,subject,granted,reason,actor) VALUES($1,'user_accountant',true,'Synthetic enrollment','fixture')`, org)
 	must(err)

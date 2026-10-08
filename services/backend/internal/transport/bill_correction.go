@@ -250,6 +250,9 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 				problem(w, 409, "Production "+label+" corrections are not enabled yet. They turn on after the QuickBooks behavior is checked in the sandbox.")
 				return
 			}
+			if in.Action != "verify" && refuseLedgerWrites(w, r.Context(), db, organization(r)) {
+				return
+			}
 			saved, kind := "", grantKind
 			if in.Action == "verify" {
 				prior, err := readBillCorrection(r.Context(), db, closeID, entity, txnID)
@@ -430,6 +433,9 @@ func registerRecode(mux *http.ServeMux, db *sql.DB, segment, entity, grantKind, 
 				return
 			}
 			if production {
+				if refuseLedgerWrites(w, r.Context(), tx, organization(r)) {
+					return
+				}
 				var current string
 				if tx.QueryRowContext(r.Context(), `SELECT id::text FROM production_posting_grants WHERE id=$1 AND revoked_at IS NULL AND expires_at>now() AND EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=production_posting_grants.organization_id AND subject=production_posting_grants.granted_by AND granted) FOR UPDATE`, item.GrantID).Scan(&current) != nil {
 					problem(w, 409, "Production grant expired or was revoked.")
