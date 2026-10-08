@@ -26,10 +26,12 @@ export class PreparationWorker extends Container<Env> {
     WORKOS_API_KEY: this.env.WORKOS_API_KEY ?? "",
     PLATFORM_EMAIL_KEY: this.env.PLATFORM_EMAIL_KEY ?? "",
     PLATFORM_EMAIL_FROM: this.env.PLATFORM_EMAIL_FROM ?? "",
-    // Google Gemini reads every PDF page when its key is installed; the credential script installs it only with the
-    // operator's confirmation that its Google project is on the paid service. Blank model: the default.
+    // Google Gemini reads every PDF page when its key is installed (scripts/cloudflare-credentials.mjs); blank model: the default.
     GEMINI_API_KEY: this.env.GEMINI_API_KEY ?? "",
     GEMINI_OCR_MODEL: this.env.GEMINI_OCR_MODEL ?? "",
+    // "confirmed", installed with the key by the credential script's --paid-service once the operator has checked the
+    // key's project is on Google's paid service; no page is sent before.
+    GEMINI_PAID_SERVICE: this.env.GEMINI_PAID_SERVICE ?? "",
   };
   defaultPort = 8080;
   sleepAfter = "5m";
@@ -79,6 +81,7 @@ interface Env {
   PLATFORM_EMAIL_FROM?: string;
   GEMINI_API_KEY?: string;
   GEMINI_OCR_MODEL?: string;
+  GEMINI_PAID_SERVICE?: string;
   WORKER: DurableObjectNamespace<PreparationWorker>;
 }
 

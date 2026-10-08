@@ -18,10 +18,11 @@ import (
 
 // Gemini reads a rendered PDF page through Google's Gemini API (generateContent), for the worker's document
 // extraction, which decides how its reading is used. It is not a purpose route: gateway requests are text, and a page
-// goes as an image. Configured on the worker: GEMINI_API_KEY, and optionally GEMINI_OCR_MODEL. Google may use content
-// sent with a free-tier key to improve its products and have people review it, against what Krith tells firms, and a
-// key's billing cannot be read through the API, so the credential script installs a key only with the operator's
-// confirmation that its project is on the paid service (--paid-service): an installed key is that confirmation. The key is sent only in the
+// goes as an image. Configured on the worker: GEMINI_API_KEY; GEMINI_PAID_SERVICE, which must be "confirmed"; and
+// optionally GEMINI_OCR_MODEL. Google may use content sent with a free-tier key to improve its products and have people
+// review it, against what Krith tells firms, and a key's billing cannot be read through the API, so the operator
+// confirms the key's project is on the paid service; without that no page is sent. Both are Cloudflare secrets of the
+// queue worker, installed together by one command of the credential script, whose --paid-service is the confirmation. The key is sent only in the
 // x-goog-api-key header, never in a URL, a log line or a subprocess's environment.
 type Gemini struct {
 	key, model, endpoint string
@@ -37,15 +38,18 @@ const geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/
 
 var geminiModelName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,63}$`)
 
-// GeminiFromEnv is the configured page reader, or nil without a key or with a malformed model name.
+// GeminiFromEnv is the configured page reader, or nil without a key, without the paid service confirmed, or with a
+// malformed model name.
 func GeminiFromEnv() *Gemini {
 	key := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 	model := cmp.Or(strings.TrimSpace(os.Getenv("GEMINI_OCR_MODEL")), defaultGeminiModel)
-	if key == "" || !geminiModelName.MatchString(model) {
+	if key == "" || !paidConfirmed() || !geminiModelName.MatchString(model) {
 		return nil
 	}
 	return newGemini(key, model, geminiEndpoint, nil)
 }
+
+func paidConfirmed() bool { return os.Getenv("GEMINI_PAID_SERVICE") == "confirmed" }
 
 // newGemini is a reader whose client never follows a redirect: one would carry the key and the page to wherever it
 // pointed. A redirect is answered as the failed reading it is.
@@ -62,14 +66,19 @@ func OCRSetting() map[string]string {
 	switch {
 	case strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) == "":
 		return map[string]string{"provider": "tesseract"}
+	case !paidConfirmed():
+		return map[string]string{"provider": "tesseract", "held": HeldUnpaid}
 	case !geminiModelName.MatchString(model):
 		return map[string]string{"provider": "tesseract", "held": HeldModel}
 	}
 	return map[string]string{"provider": "gemini", "model": model}
 }
 
-// HeldModel is why a worker holding a Gemini key reads locally instead.
-const HeldModel = "model name not valid"
+// Why a worker holding a Gemini key reads locally instead.
+const (
+	HeldUnpaid = "paid service not confirmed"
+	HeldModel  = "model name not valid"
+)
 
 // A page takes at most GeminiTimeout to read, and its image at most GeminiMaxImage bytes (under Gemini's 20 MB inline
 // request).

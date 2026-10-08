@@ -24,12 +24,15 @@ test('credential validation rejects unsafe URLs and compacts managed login', () 
  assert.throws(() => validateCredential('GEMINI_API_KEY','two words inside a key value'));
  assert.throws(() => validateCredential('GEMINI_API_KEY','short'));
  assert.equal(validateCredential('GEMINI_API_KEY','AIzaSyExampleOnly-not-a-real-key_0000\n'),'AIzaSyExampleOnly-not-a-real-key_0000');
+ assert.ok(credentials.queue.includes('GEMINI_PAID_SERVICE'));
+ assert.throws(() => validateCredential('GEMINI_PAID_SERVICE','yes'));
+ assert.equal(validateCredential('GEMINI_PAID_SERVICE','confirmed'),'confirmed');
 });
 
 test('direct credential installer scopes stdin, excludes secret arguments, and redacts CLI failures', () => {
  const dir=mkdtempSync(join(tmpdir(),'credential-test-'));
  const log=join(dir,'calls');
- writeFileSync(join(dir,'npx'),`#!/usr/bin/env node\nconst fs=require('fs'); const args=process.argv.slice(2); const input=fs.readFileSync(0,'utf8'); fs.appendFileSync(require('path').join(__dirname,'calls'),JSON.stringify({args,input})+'\\n'); if(fs.existsSync(require('path').join(__dirname,'fail'))){console.error(input);process.exit(1);} console.log(JSON.stringify([{name:'CONTEXT_MACHINE_TOKEN',type:'secret_text'},{name:'CODEX_AUTH_JSON',type:'secret_text'},{name:'GEMINI_API_KEY',type:'secret_text'}]));\n`,{mode:0o700});
+ writeFileSync(join(dir,'npx'),`#!/usr/bin/env node\nconst fs=require('fs'); const args=process.argv.slice(2); const input=fs.readFileSync(0,'utf8'); fs.appendFileSync(require('path').join(__dirname,'calls'),JSON.stringify({args,input})+'\\n'); if(fs.existsSync(require('path').join(__dirname,'fail'))){console.error(input);process.exit(1);} console.log(JSON.stringify([{name:'CONTEXT_MACHINE_TOKEN',type:'secret_text'},{name:'CODEX_AUTH_JSON',type:'secret_text'},{name:'GEMINI_API_KEY',type:'secret_text'},{name:'GEMINI_PAID_SERVICE',type:'secret_text'}]));\n`,{mode:0o700});
  const secret='secret-never-appears-in-arguments-0000000';
  const env={...process.env,PATH:`${dir}:${process.env.PATH}`,CALLS:log};
  try {
@@ -43,12 +46,17 @@ test('direct credential installer scopes stdin, excludes secret arguments, and r
   result=spawnSync(process.execPath,['scripts/cloudflare-credentials.mjs','CONTEXT_MACHINE_TOKEN','production'],{input:secret,env,encoding:'utf8'});
   assert.equal(result.status,1);
   rmSync(join(dir,'fail'));
-  // With the paid service confirmed, a Gemini key goes to the queue worker alone.
+  // With the paid service confirmed, a Gemini key goes to the queue worker alone, in one install with the confirmation.
   const key='AIzaSyExampleOnly-not-a-real-key_0000';
   writeFileSync(log,'');
   result=spawnSync(process.execPath,['scripts/cloudflare-credentials.mjs','GEMINI_API_KEY','production','--paid-service'],{input:key,env,encoding:'utf8'});
   assert.equal(result.status,0,result.stderr);
-  assert.deepEqual(readFileSync(log,'utf8').trim().split('\n').map(JSON.parse).filter(c=>c.input).map(c=>c.args[c.args.indexOf('-c')+1]),['workers/queue/wrangler.jsonc']);
+  const geminiCalls=readFileSync(log,'utf8').trim().split('\n').map(JSON.parse).filter(c=>c.input);
+  assert.deepEqual(geminiCalls.map(c=>c.args[c.args.indexOf('-c')+1]),['workers/queue/wrangler.jsonc']);
+  assert.deepEqual(JSON.parse(geminiCalls[0].input),{GEMINI_API_KEY:key,GEMINI_PAID_SERVICE:'confirmed'});
+  // The confirmation is never installed apart from the key.
+  result=spawnSync(process.execPath,['scripts/cloudflare-credentials.mjs','GEMINI_PAID_SERVICE','production'],{input:'confirmed',env,encoding:'utf8'});
+  assert.equal(result.status,1);assert.match(result.stderr,/--paid-service/);
   writeFileSync(join(dir,'fail'),'true');assert.ok(!`${result.stderr}${result.stdout}`.includes(secret));
   assert.throws(() => install('scanner',{CODEX_AUTH_JSON:'bad'},true),/outside/);
   for (const call of calls.filter(c=>c.input)) {assert.deepEqual(call.args.slice(0,4),['--no','wrangler','secret','bulk']);assert.deepEqual(JSON.parse(call.input),{CONTEXT_MACHINE_TOKEN:secret});}

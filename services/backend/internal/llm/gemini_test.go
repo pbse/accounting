@@ -88,17 +88,24 @@ func TestGeminiReadsAPageImageOverHTTPAndRefusesWhatItCannotTrust(t *testing.T) 
 	}
 }
 
-// The credential script installs a Gemini key only with the operator's --paid-service confirmation, so an installed
-// key is the confirmation.
-func TestGeminiIsConfiguredByItsKey(t *testing.T) {
+func TestGeminiIsConfiguredOnlyWithAKeyOnTheConfirmedPaidService(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GEMINI_OCR_MODEL", "")
+	t.Setenv("GEMINI_PAID_SERVICE", "confirmed")
 	if GeminiFromEnv() != nil || OCRSetting()["provider"] != "tesseract" || OCRSetting()["held"] != "" {
 		t.Fatal("no key, no Gemini")
 	}
+	// A key alone sends nothing: the operator must confirm its project is on Google's paid service.
 	t.Setenv("GEMINI_API_KEY", "test-key-not-real")
+	for _, unconfirmed := range []string{"", "yes", "Confirmed"} {
+		t.Setenv("GEMINI_PAID_SERVICE", unconfirmed)
+		if GeminiFromEnv() != nil || OCRSetting()["provider"] != "tesseract" || OCRSetting()["held"] != HeldUnpaid {
+			t.Fatalf("a key without the paid service confirmed (%q) sends no page: %+v", unconfirmed, OCRSetting())
+		}
+	}
+	t.Setenv("GEMINI_PAID_SERVICE", "confirmed")
 	if g := GeminiFromEnv(); g == nil || g.model != defaultGeminiModel || OCRSetting()["model"] != defaultGeminiModel || strings.Contains(g.endpoint, "key=") {
-		t.Fatalf("an installed key turns Gemini on with the default model: %+v", OCRSetting())
+		t.Fatalf("a key on the confirmed paid service turns Gemini on with the default model: %+v", OCRSetting())
 	}
 	t.Setenv("GEMINI_OCR_MODEL", "gemini-3.7-flash")
 	if OCRSetting()["model"] != "gemini-3.7-flash" {

@@ -107,6 +107,13 @@ func TestFirmSettingsShowHowTheWorkerReadsPDFs(t *testing.T) {
 	if got := read(); !strings.HasPrefix(got, "Local only:") {
 		t.Fatalf("without a key, PDFs are read locally: %q", got)
 	}
+	// A key whose paid service the operator has not confirmed sends nothing, and Firm settings say why.
+	if _, err = db.Exec(`UPDATE worker_heartbeats SET detail=detail||'{"ocr":{"provider":"tesseract","held":"paid service not confirmed"}}' WHERE loop='worker'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !strings.Contains(got, "paid-service confirmation") {
+		t.Fatalf("a held key is shown as held: %q", got)
+	}
 	if _, err = db.Exec(`UPDATE worker_heartbeats SET detail=detail||'{"ocr":{"provider":"tesseract","held":"model name not valid"}}' WHERE loop='worker'`); err != nil {
 		t.Fatal(err)
 	}

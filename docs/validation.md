@@ -3840,11 +3840,15 @@ Not verified: a hosted member's name read and saved through WorkOS, and the Driv
 
 Request: turn Gemini on with a single Cloudflare step, not a separate GitHub variable.
 
-- **Change.** `GEMINI_PAID_SERVICE` is gone from the deploy workflows, `scripts/deploy-service.mjs`, the queue worker and the server. The credential script now installs `GEMINI_API_KEY` only with `--paid-service`: `node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production --paid-service < key-file`. That flag is the operator's confirmation that the key's Google project has billing enabled; without it the script refuses and says why. The worker treats an installed key as that confirmation. `GEMINI_OCR_MODEL` stays optional.
+- **Change.** `GEMINI_PAID_SERVICE` is no longer a GitHub variable: it is gone from the deploy workflows and from `scripts/deploy-service.mjs`'s configuration names. It is now a Cloudflare secret of the queue worker. `node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production --paid-service < key-file` installs it, as `confirmed`, together with the key in one install.
+  - `--paid-service` is the operator's confirmation that the key's Google project has billing enabled. Without it the script refuses the key and says why.
+  - The confirmation is never installed on its own.
+  - The worker still requires both. A key that ever arrived without the confirmation stays held, and Firm settings say to reinstall it with `--paid-service`.
+  - `GEMINI_OCR_MODEL` stays an optional GitHub variable, like the other model names.
 - **Tested.**
-  - `scripts/cloudflare-credentials.test.mjs`: the Gemini key is refused without `--paid-service`, or with any other or extra argument. Another credential with the flag is refused. With the flag, the key goes to the queue worker alone.
-  - `TestGeminiIsConfiguredByItsKey` (llm): no key, no Gemini; an installed key turns it on with the default model; a malformed model is still held.
-  - Script and frontend tests: 47/47. The llm, transport and documents packages pass on a fresh database, except the two Poppler tests.
+  - `scripts/cloudflare-credentials.test.mjs`: the Gemini key is refused without `--paid-service`, or with any other or extra argument. Another credential with the flag is refused. With the flag, one install to the queue worker carries the key and `GEMINI_PAID_SERVICE: confirmed`. The confirmation alone is refused, and any value but `confirmed` fails validation.
+  - The configuration-only deploy tests now treat `GEMINI_PAID_SERVICE` as a credential, kept out of every configuration payload.
+  - `TestGeminiIsConfiguredOnlyWithAKeyOnTheConfirmedPaidService` (llm) and `TestFirmSettingsShowHowTheWorkerReadsPDFs` (transport) are unchanged apart from the held message.
+  - Script and frontend tests: 47/47.
 
 Not verified: live Gemini.
-

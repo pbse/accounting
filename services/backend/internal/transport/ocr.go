@@ -38,7 +38,7 @@ func heldBecause(reason string) string {
 	if reason == llm.HeldModel {
 		return "GEMINI_OCR_MODEL is not a valid model name"
 	}
-	return reason
+	return "it was not installed with the operator's paid-service confirmation (reinstall it with the credential script's --paid-service)"
 }
 
 // ocrLabel says, for Firm settings, how PDF pages are read.
