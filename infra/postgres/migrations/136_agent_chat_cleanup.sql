@@ -15,4 +15,5 @@ ALTER TABLE chat_messages ADD CONSTRAINT chat_action_scope CHECK (
 -- An answer names its question, so a card's confirmation reaches the question it was asked by and no other, however
 -- the author's requests interleaved; the question's deletion takes its answer.
 ALTER TABLE chat_messages ADD COLUMN question_id bigint REFERENCES chat_messages(id) ON DELETE CASCADE;
+CREATE INDEX chat_messages_question ON chat_messages (question_id) WHERE question_id IS NOT NULL;
 COMMIT;
