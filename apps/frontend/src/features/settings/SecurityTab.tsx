@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
+import { Dialog, DialogActions } from "@close/ui/components/Dialog";
 import { RowList } from "@close/ui/components/RowList";
 import { OperationsSnapshot } from "../closes/Enterprise";
 import { workspaceRequest } from "../closes/workspace";
@@ -113,18 +114,21 @@ function OperationRecord({ operation, stage, onSaved }: { operation: Operation; 
 }
 
 function SuspendFirm({ organizationId }: { organizationId: string }) {
+  const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function suspend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     setBusy(true);
-    setMessage("");
+    setError("");
     try {
       await workspaceRequest("/organization/revoke", { organization_id: data.get("organization_id"), reason: data.get("reason"), confirmed: data.get("confirmed") === "on" });
       setMessage("The firm is suspended. Every member and agent is refused from the next request.");
+      setOpen(false);
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "The suspension was not confirmed.");
+      setError(e instanceof Error ? e.message : "The suspension was not confirmed.");
     } finally {
       setBusy(false);
     }
@@ -132,23 +136,36 @@ function SuspendFirm({ organizationId }: { organizationId: string }) {
   return (
     <>
       <p>For a suspected compromise: every member, agent and client link of this firm is refused until an operator restores it. Requires org:manage.</p>
-      <form onSubmit={(e) => void suspend(e)}>
-        <fieldset disabled={busy}>
-          <label>
-            Type this firm's ID ({organizationId})
-            <input name="organization_id" required autoComplete="off" />
-          </label>
-          <label>
-            Reason
-            <textarea name="reason" required minLength={10} maxLength={2000} />
-          </label>
-          <label className="checkbox-label">
-            <input name="confirmed" type="checkbox" required /> I am suspending every member's and agent's access to this firm.
-          </label>
-          <button>Suspend the firm</button>
-        </fieldset>
-      </form>
+      <p className="setting-actions">
+        <button type="button" onClick={() => (setError(""), setOpen(true))}>
+          Suspend the firm…
+        </button>
+      </p>
       {message && <p role="status">{message}</p>}
+      <Dialog open={open} onClose={() => setOpen(false)} title="Suspend the whole firm" description="Every member, agent and client link of this firm is refused from the next request until an operator restores it.">
+        <form onSubmit={(e) => void suspend(e)}>
+          <fieldset disabled={busy}>
+            <label>
+              Type this firm's ID ({organizationId})
+              <input name="organization_id" required autoComplete="off" />
+            </label>
+            <label>
+              Reason
+              <textarea name="reason" required minLength={10} maxLength={2000} />
+            </label>
+            <label className="checkbox-label">
+              <input name="confirmed" type="checkbox" required /> I am suspending every member's and agent's access to this firm.
+            </label>
+            {error && <p role="alert">{error}</p>}
+            <DialogActions>
+              <button type="button" onClick={() => setOpen(false)}>
+                Cancel
+              </button>
+              <button className="primary">Suspend the firm</button>
+            </DialogActions>
+          </fieldset>
+        </form>
+      </Dialog>
     </>
   );
 }

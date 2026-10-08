@@ -1,0 +1,100 @@
+/* A modal window for one change: a white card over a dimmed page. */
+.app-shell .dialog {
+  width: min(560px, calc(100vw - 2 * var(--space-16)));
+  max-height: calc(100vh - 2 * var(--space-24));
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.app-shell .dialog::backdrop {
+  background: rgb(16 24 40 / 40%);
+}
+.dialog-frame {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 2 * var(--space-24));
+}
+.dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-16);
+  padding: var(--space-20) var(--space-20) var(--space-12);
+}
+.dialog-head h2 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 22px;
+}
+.dialog-head p {
+  margin: var(--space-4) 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 18px;
+}
+.app-shell .dialog-close {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+}
+.dialog-body {
+  padding: 0 var(--space-20) var(--space-20);
+  overflow-y: auto;
+  font-size: 14px;
+}
+.dialog-body > p:first-child {
+  margin-top: 0;
+}
+.dialog-body p {
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 19px;
+}
+.app-shell .dialog-body label {
+  margin: var(--space-12) 0;
+}
+.app-shell .dialog-body fieldset {
+  margin: var(--space-12) 0;
+}
+.app-shell .dialog-body legend {
+  margin-bottom: var(--space-4);
+  font-size: 13px;
+  font-weight: 500;
+}
+.app-shell .dialog-body .checkbox-label {
+  margin: var(--space-8) 0;
+}
+.app-shell .dialog-body input:not([type="checkbox"], [type="radio"]),
+.app-shell .dialog-body select,
+.app-shell .dialog-body textarea {
+  max-width: none;
+}
+.dialog-body [role="alert"] {
+  margin: var(--space-12) 0 0;
+  padding: var(--space-10) var(--space-12);
+  border-radius: var(--radius-sm);
+  background: var(--negative-tint);
+  color: var(--negative-text);
+}
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-8);
+  margin-top: var(--space-20);
+  padding-top: var(--space-16);
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 600px) {
+  .app-shell .dialog {
+    width: calc(100vw - 2 * var(--space-16));
+  }
+}
