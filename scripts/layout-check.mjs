@@ -251,9 +251,11 @@ for (const app of apps) {
           // The drawer slides in over 180ms; it is measured once it has settled.
           await page.waitForTimeout(400);
           if (panelRoute === "card") {
+            // The conversation may already hold a card from an earlier run; the new command must add one.
+            const before = await page.locator("aside.assistant .assistant-card").count();
             await page.fill('textarea[aria-label="Message the agent"]', "/prepare");
             await page.keyboard.press("Enter");
-            await page.waitForSelector("aside.assistant .assistant-card", { timeout: 15000 });
+            await page.waitForFunction((n) => document.querySelectorAll("aside.assistant .assistant-card").length > n, before, { timeout: 15000 });
             await page.waitForTimeout(400);
           }
           const panel = await page.evaluate(() => {

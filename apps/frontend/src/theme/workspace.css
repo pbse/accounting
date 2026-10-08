@@ -462,7 +462,8 @@ aside.assistant {
   white-space: pre-line;
   line-height: 20px;
 }
-.assistant-body ul {
+.assistant-body ul,
+.assistant-body ol {
   margin: 0;
   padding-left: 18px;
 }
@@ -475,9 +476,7 @@ aside.assistant {
 .app-shell .assistant-chips .chip {
   display: inline-block;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   padding: 2px var(--space-10);
   border-radius: var(--radius-full);
   background: var(--fill);
