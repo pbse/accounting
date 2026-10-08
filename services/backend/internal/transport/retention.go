@@ -235,7 +235,7 @@ func registerRetention(mux *http.ServeMux, db *sql.DB) {
 			`DELETE FROM sandbox_postings WHERE close_id=$1`,
 			`DELETE FROM procedure_example_approvals WHERE workpaper_id IN (SELECT id FROM workpapers WHERE close_id=$1)`,
 			`DELETE FROM approval_requests WHERE close_id=$1`,
-			`DELETE FROM chat_messages WHERE close_id=$1`,
+			`DELETE FROM chat_messages WHERE close_id=$1 OR target_close_id=$1 OR $1=ANY(closes)`,
 			`DELETE FROM portfolio_items WHERE close_id=$1`,
 			`DELETE FROM statement_extractions WHERE close_id=$1`,
 			`DELETE FROM workpapers WHERE close_id=$1`,

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { workspaceRequest } from "../closes/workspace";
 import { askAssistant, nextReview } from "./assistantStore";
-import { commands, parseCommand, runCommand, type Command } from "./commands";
+import { commands, parseCommand, runCommand, type Ask, type Command } from "./commands";
 
 type Close = { id: string; entity: string; period: string };
 type Option = { key: string; label: string; detail: string; run: () => void };
@@ -66,9 +66,9 @@ function Palette({ initial, account, onClose }: { initial: string; account: stri
       closeId,
       navigate,
       nextReview,
-      ask: (question: string, close: string) => {
+      ask: (what: Ask, close: string) => {
         if (close !== here) navigate(close ? `/dashboard/closes/${close}` : "/dashboard");
-        askAssistant(question, close);
+        askAssistant(what, close);
       },
     };
     void runCommand(cmd, arg, ctx)

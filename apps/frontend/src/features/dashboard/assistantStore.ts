@@ -1,27 +1,36 @@
 import { useSyncExternalStore } from "react";
 import { workspaceRequest } from "../closes/workspace";
+import type { Ask } from "./commands";
 
-// Read-only questions the panel's fixed reads answer; a click asks one. A close's page offers the same ones.
+// Starter questions: each is a command the panel's fixed reads answer without a model, shown by its question.
 export const starters = {
   firm: ["What needs me today?", "What is ready for review?", "What is blocked?"],
   close: ["Where does this close stand?", "What blocks sign-off?", "What changed from last month?"],
 };
+export const starterCommands: Record<string, Ask> = {
+  "What needs me today?": { command: "status", argument: "" },
+  "What is ready for review?": { command: "queue", argument: "" },
+  "What is blocked?": { command: "blocked", argument: "" },
+  "Where does this close stand?": { command: "status", argument: "" },
+  "What blocks sign-off?": { command: "explain", argument: "" },
+  "What changed from last month?": { command: "compare", argument: "" },
+};
 
 // A question asked from outside the panel (the command palette, a close's page) waits for the conversation of its close.
-let pending: { question: string; closeId: string } | null = null;
+let pending: { what: Ask; closeId: string } | null = null;
 const listeners = new Set<() => void>();
 
-export function askAssistant(question: string, closeId: string) {
-  pending = { question, closeId };
+export function askAssistant(what: Ask | string, closeId: string) {
+  pending = { what: typeof what === "string" ? { text: what } : what, closeId };
   listeners.forEach((l) => l());
 }
 
 // takePending hands the waiting question to the conversation of its close, once.
-export function takePending(closeId: string) {
-  if (pending?.closeId !== closeId) return "";
-  const question = pending.question;
+export function takePending(closeId: string): Ask | null {
+  if (pending?.closeId !== closeId) return null;
+  const what = pending.what;
   pending = null;
-  return question;
+  return what;
 }
 
 function subscribe(l: () => void) {

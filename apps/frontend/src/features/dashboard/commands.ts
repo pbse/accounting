@@ -1,8 +1,12 @@
-export type Command = { name: string; description: string; close?: boolean; argument?: string };
+// close: the command needs a close. firm: it answers across closes, so from a close it goes to the firm conversation.
+export type Command = { name: string; description: string; close?: boolean; firm?: boolean; argument?: string };
 
 export const commands: Command[] = [
   { name: "ask", description: "Ask the assistant about this close or your work", argument: "question" },
   { name: "status", description: "Where a close stands, or what needs you today" },
+  { name: "queue", description: "Drafts ready for review, across your closes", firm: true },
+  { name: "blocked", description: "Blocked work, across your closes", firm: true },
+  { name: "delegated", description: "The closes handed to the agent and how they are doing", firm: true },
   { name: "explain", description: "Explain a balance that doesn't tie, or what blocks sign-off", close: true, argument: "account" },
   { name: "compare", description: "Compare with last month, optionally for one account", close: true, argument: "account" },
   { name: "find", description: "Find documents, drafts, transactions, procedures or review decisions", argument: "words" },
@@ -20,10 +24,13 @@ export function parseCommand(line: string) {
   return { command: commands.find((c) => c.name === head.toLowerCase()), argument: rest.join(" ").trim() };
 }
 
+// A command the server runs without a model, as {command, argument}; /ask sends free text.
+export type Ask = { text: string } | { command: string; argument: string };
+
 export type CommandContext = {
   closeId: string;
   navigate: (to: string) => void;
-  ask: (question: string, closeId: string) => void;
+  ask: (what: Ask, closeId: string) => void;
   nextReview: () => Promise<{ close_id: string; workpaper_id: string } | undefined>;
 };
 
@@ -35,32 +42,25 @@ export async function runCommand(command: Command, argument: string, ctx: Comman
   switch (command.name) {
     case "ask":
       if (!argument) return "Type your question after /ask.";
-      ctx.ask(argument, close);
-      return "";
-    case "status":
-      ctx.ask(close ? "Where does this close stand?" : "What needs me today?", close);
-      return "";
-    case "explain":
-      ctx.ask(argument ? `Does ${argument} tie?` : "What blocks sign-off?", close);
-      return "";
-    case "compare":
-      ctx.ask(argument ? `What changed in ${argument} from last month?` : "What changed from last month?", close);
+      ctx.ask({ text: argument }, close);
       return "";
     case "find":
       if (!argument) return "Type what to find after /find.";
-      ctx.ask(`Find ${argument}`, close);
+      ctx.ask({ command: "find", argument }, close);
       return "";
+    case "queue":
+    case "blocked":
+    case "delegated":
+      ctx.ask({ command: command.name, argument }, "");
+      return "";
+    case "status":
+    case "explain":
+    case "compare":
     case "delegate":
-      ctx.ask(`Get this close ready for review${argument ? ` by ${argument}` : ""}`, close);
-      return "";
     case "prepare":
-      ctx.ask("Prepare this close", close);
-      return "";
     case "stop":
-      ctx.ask("Stop this close's unresolved work", close);
-      return "";
     case "request":
-      ctx.ask("Draft a client request", close);
+      ctx.ask({ command: command.name, argument }, close);
       return "";
     case "rehearse":
     case "export":

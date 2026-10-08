@@ -3874,3 +3874,13 @@ Branch `claude/settings-dialogs`, after the user's review of #305: a setting tha
 - Screenshots at 1280px and 390px: Policies as cards, the reminders and agent chat dialogs open, the roster rows, and the add-a-client dialog; a dialog on a phone fits the screen with its actions in view.
 
 Not verified: the hosted People, Firm and Security dialogs with a real administrator (locally those reads refuse or are not hosted).
+
+## 2026-10-08: the agent loop (migration 135)
+
+PR 2b of the [agentic chat plan](agent-chat.md): `transport/agent.go` answers free text at the firm's Agent chat level by choosing reads from the tool registry, proposing one card per message and writing the answer in a tool-free call bound to what it read; the panel shows each step and renders firm-wide cards against their target close. Local run against a fresh migrated PostgreSQL (migrations through 134):
+
+- `go test ./internal/transport -run 'TestAgentSupport|TestAgentChat'`: pass. `TestAgentSupportBindsEveryFigureAndSentence` covers the support gate (pointer and quote resolution, signed figures, every sentence of a facts answer, help answers with no figure, name or state). `TestAgentChatReadsProposesAndAnswersInAClose` shows, at `off`, free text answered by the fixed reads and never sent and a command running its read; at `closes`, two tool rounds then one tool-free answer call, the close pinned whatever close_id the model sent, an unoffered tool and a second proposal refused, the card and trace saved without running anything, the pair's lineage recorded, the earlier pair replayed redacted, an unsupported answer not kept, and every call stopping when the level is set back to off. `TestAgentChatFirmWideLineageAndCards` shows the firm-wide tools, a hand-over proposed for a named close and confirmed through the firm-wide route, a goal refused without its preview, a lineage-less answer shown once and not kept, the pair that read a lost close deleted with its question, and firm-wide attempts counted in the track record.
+- `go test ./...`: every package passes except the two Poppler-dependent PDF tests, as before.
+- Frontend `npm run check`, `vite build` and the command tests: pass; commands are sent as `{command, argument}`.
+
+Not verified: a live context-machine completion for the `chat` purpose (no provider call is made in tests); the panel's step list and firm-wide cards in a browser (PR 3 carries the layout check).

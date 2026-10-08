@@ -42,6 +42,16 @@ func TestModelReadsAreCappedNotDropped(t *testing.T) {
 	}
 }
 
+// Inside a close the procedures listing is cut to this client's versions and the firm-wide ones.
+func TestProceduresAreScopedToTheConversationsClient(t *testing.T) {
+	var value any
+	json.Unmarshal([]byte(`{"versions":[{"id":"1","client_entity":"Alpha","method":"a"},{"id":"2","client_entity":"","method":"b"},{"id":"3","client_entity":"Beta","method":"c"}]}`), &value)
+	out, _ := json.Marshal(scopeProcedures(value, "alpha "))
+	if strings.Contains(string(out), "Beta") || !strings.Contains(string(out), `"id":"1"`) || !strings.Contains(string(out), `"id":"2"`) {
+		t.Fatalf("another client's procedures reached the model: %s", out)
+	}
+}
+
 // The closes an answer touched come from the read's own body: a close-scoped read names the conversation's close
 // whatever the model sent; a firm-wide read names each close in its rows once; a read that counted or capped across
 // more closes than it lists, or that declared no lineage, has no known closes.
@@ -69,6 +79,15 @@ func TestLineageComesFromTheReadNotTheModel(t *testing.T) {
 	}
 	if _, _, _, closes, known := modelResult(flux, []byte(`{"state":"ready","last_close_id":40,"changes":[]}`), "41"); !known || !slices.Equal(closes, []string{"41", "40"}) {
 		t.Fatalf("changes from last month name the prior close too: %v %v", closes, known)
+	}
+	var budget mcpTool
+	for _, tool := range mcpTools {
+		if tool.name == "budget_comparison" {
+			budget = tool
+		}
+	}
+	if _, _, _, closes, known := modelResult(budget, []byte(`{"month":{}}`), "41"); known || !slices.Equal(closes, []string{"41"}) {
+		t.Fatalf("a budget comparison draws on months it cannot name, so its lineage is not known: %v %v", closes, known)
 	}
 	if _, _, _, closes, known := modelResult(pack, []byte(`{"state":"waiting"}`), "41"); !known || !slices.Equal(closes, []string{"41"}) {
 		t.Fatalf("a comparison read without a prior close names its own: %v %v", closes, known)

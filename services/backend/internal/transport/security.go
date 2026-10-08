@@ -121,10 +121,10 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 		set := func(key string) bool { return os.Getenv(key) != "" }
 		answers := "Agent chat is off: no assistant question reaches a model."
 		if level != "off" {
-			answers = "Agent chat is on for client closes, served by " + llm.ProviderLabel(r.Context(), "chat") + ": a close question none of the assistant's fixed reads matches is sent with that close's saved status, sign-off blockers, tie-out, changes and exceptions, and an open draft, and before writing the model may read that close's own records through the assistant's read-only tools (documents' text, drafts, tie-out, changes, exceptions, search), each read made with the member's permissions and listed under the answer."
+			answers = "Agent chat is on for client closes, served by " + llm.ProviderLabel(r.Context(), "chat") + ": every question a member types in a client close (not a / command, except /ask) is sent with the last turns of that conversation and the reads of that close the model chooses through the assistant's read-only tools (its status, sign-off blockers, tie-out, changes, exceptions, documents' text, drafts, the management pack, open items, cash plan, budget, procedures, a search), each read made with the member's permissions and listed under the answer; an action the model proposes runs only after the member confirms its card."
 		}
 		if level == "firm" {
-			answers += " Agent chat is also on firm-wide: a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue, blocked work and work handed to the agent, with client names, across the closes the member can open."
+			answers += " Agent chat is also on firm-wide: a question typed outside a close is sent the same way with the reads the model chooses across the closes the member can open (the list of closes, Work's lists, the review queue, the morning brief, the track record, closes handed to the agent, a search, and any close read by its id), with client names."
 		}
 		gemini := map[string]string{"gemini": "Key set on the worker; model " + ocrModel, "tesseract": "Key not set on the worker; PDFs are read locally", "held": "Key set on the worker, but " + heldBecause(ocrModel) + ", so PDFs are read locally", "": "The worker has not reported its PDF reading in the last five minutes"}[ocr]
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.

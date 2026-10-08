@@ -58,6 +58,11 @@ func capResult(raw []byte, c toolCap) ([]byte, bool, int) {
 // across more closes than it lists.
 func lineageOf(raw []byte, lineage, pinned string) ([]string, bool) {
 	if pinned != "" {
+		// A close-scoped read that draws on closes it cannot name (a budget comparison's prior months and year to date)
+		// is pinned but its lineage is not known, so its answer is shown once.
+		if lineage == lineageNone {
+			return []string{pinned}, false
+		}
 		closes := []string{pinned}
 		if extra, ok := strings.CutPrefix(lineage, "+"); ok {
 			if id := closeAt(raw, extra); id != "" && id != pinned {
@@ -133,6 +138,32 @@ func closeAt(raw []byte, path string) string {
 		return strconv.FormatInt(int64(number), 10)
 	}
 	return ""
+}
+
+// scopeProcedures keeps, of a procedures listing, the versions for one client and those for all clients: inside a
+// close the model is told this client's treatments, never another client's instructions or accounts.
+func scopeProcedures(value any, entity string) any {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	versions, ok := object["versions"].([]any)
+	if !ok {
+		return value
+	}
+	kept := []any{}
+	for _, v := range versions {
+		row, isRow := v.(map[string]any)
+		if !isRow {
+			continue
+		}
+		client, _ := row["client_entity"].(string)
+		if client == "" || strings.EqualFold(strings.TrimSpace(client), strings.TrimSpace(entity)) {
+			kept = append(kept, row)
+		}
+	}
+	object["versions"] = kept
+	return object
 }
 
 // modelResult prepares a read's body for the model: its rows capped, and the closes it names collected from the body

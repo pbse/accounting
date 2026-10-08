@@ -50,7 +50,67 @@ type chatMessage struct {
 	Finish      string          `json:"finish,omitempty"`
 	EveryMonth  bool            `json:"every_month,omitempty"`
 	Outcome     json.RawMessage `json:"outcome"`
+	Proposal    json.RawMessage `json:"proposal,omitempty"`
+	TargetClose string          `json:"target_close_id,omitempty"`
+	TargetLabel string          `json:"target_close,omitempty"`
+	Steps       json.RawMessage `json:"steps,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
+}
+
+// commandText is the question a slash command asks, exactly as the deterministic reads and cards expect it; "" when
+// the command is not one the server answers.
+func commandText(command, argument string, closeScoped bool) string {
+	argument = strings.TrimSpace(argument)
+	switch command {
+	case "ask":
+		return argument
+	case "status":
+		if closeScoped {
+			return "Where does this close stand?"
+		}
+		return "What needs me today?"
+	case "explain":
+		if argument != "" {
+			return "Does " + argument + " tie?"
+		}
+		return "What blocks sign-off?"
+	case "compare":
+		if argument != "" {
+			return "What changed in " + argument + " from last month?"
+		}
+		return "What changed from last month?"
+	case "find":
+		if argument == "" {
+			return ""
+		}
+		return "Find " + argument
+	case "queue":
+		return "What is ready for review?"
+	case "blocked":
+		return "What is blocked?"
+	case "delegated":
+		return "How are my delegated closes doing?"
+	case "delegate":
+		if argument != "" {
+			return "Get this close ready for review by " + argument
+		}
+		return "Get this close ready for review"
+	case "prepare":
+		return "Prepare this close"
+	case "stop":
+		return "Stop this close's unresolved work"
+	case "request":
+		return "Draft a client request"
+	}
+	return ""
+}
+
+// chatHelp names the commands the server answers without a model.
+func chatHelp(closeScoped bool) string {
+	if !closeScoped {
+		return "I answer /status, /queue, /blocked, /delegated and /find <words> here, and in a close /explain, /compare, /prepare, /stop, /request and /delegate."
+	}
+	return "I answer /status, /explain [account], /compare [account], /find <words>, /prepare, /stop, /request and /delegate [day] here."
 }
 
 var chatFollowUp = regexp.MustCompile(`(?i)\b(that|it|same|those|them)\b`)
@@ -713,7 +773,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 	// scope binds every query to the firm, the signed-in author and one conversation.
 	const scope = `organization_id=$1 AND author=$2 AND close_id IS NOT DISTINCT FROM NULLIF($3,'')::bigint`
 	history := func(w http.ResponseWriter, r *http.Request, extra map[string]any) {
-		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),every_month,COALESCE(outcome,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
+		// Pairs whose reads touched a close the member can no longer open, or that no longer exists, are deleted first.
+		if err := pruneConversation(r.Context(), db, organization(r), subject(r), r.PathValue("id"), firmAccess(r)); err != nil {
+			problem(w, 503, "Conversation unavailable.")
+			return
+		}
+		rows, err := db.QueryContext(r.Context(), `SELECT id::text,role,body,COALESCE(workpaper_id::text,''),citations,COALESCE(action,''),COALESCE(due_on::text,''),COALESCE(finish,''),every_month,COALESCE(outcome,'null'::jsonb),COALESCE(proposal,'null'::jsonb),COALESCE(target_close_id::text,''),COALESCE((SELECT t.entity||' · '||t.period FROM client_closes t WHERE t.id=chat_messages.target_close_id),''),COALESCE(steps,'null'::jsonb),created_at FROM chat_messages WHERE `+scope+` AND (close_id IS NOT NULL OR created_at>now()-interval '30 days') ORDER BY chat_messages.id DESC LIMIT 200`, organization(r), subject(r), r.PathValue("id"))
 		if err != nil {
 			problem(w, 503, "Conversation unavailable.")
 			return
@@ -722,9 +787,15 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		messages := []chatMessage{}
 		for rows.Next() {
 			var m chatMessage
-			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.DueOn, &m.Finish, &m.EveryMonth, &m.Outcome, &m.CreatedAt) != nil {
+			if rows.Scan(&m.ID, &m.Role, &m.Body, &m.WorkpaperID, &m.Citations, &m.Action, &m.DueOn, &m.Finish, &m.EveryMonth, &m.Outcome, &m.Proposal, &m.TargetClose, &m.TargetLabel, &m.Steps, &m.CreatedAt) != nil {
 				problem(w, 503, "Conversation unavailable.")
 				return
+			}
+			if string(m.Proposal) == "null" {
+				m.Proposal = nil
+			}
+			if string(m.Steps) == "null" {
+				m.Steps = nil
 			}
 			messages = append(messages, m)
 		}
@@ -755,10 +826,15 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		// A written answer streams; once its first line is out, the reply keeps its status and ends with the conversation.
 		var streamed *streamWriter
 		var attempted, trace string
+		// The answer's text goes to the panel only once it is saved.
+		var answerText map[string]any
+		var answerEmit agentEvent
 		var latency sql.NullInt64
 		var in struct {
 			Action      string `json:"action"`
 			Text        string `json:"text"`
+			Command     string `json:"command"`
+			Argument    string `json:"argument"`
 			WorkpaperID string `json:"workpaper_id"`
 			Today       string `json:"today"`
 		}
@@ -766,6 +842,25 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		org, author, closeID := organization(r), subject(r), r.PathValue("id")
+		// A command runs a fixed read or card without a model; free text goes to the agent when the firm allows it.
+		var level string
+		if err := db.QueryRowContext(r.Context(), `SELECT agent_chat FROM organizations WHERE id=$1`, org).Scan(&level); err != nil && in.Action != "clear" {
+			problem(w, 503, "Conversation unavailable.")
+			return
+		}
+		command := strings.ToLower(strings.TrimSpace(in.Command))
+		if command != "" {
+			in.Text = commandText(command, in.Argument, closeID != "")
+			if in.Text == "" {
+				problem(w, 422, chatHelp(closeID != ""))
+				return
+			}
+			// /ask is free text: it goes to the agent when the firm allows it, like a sentence typed without a slash.
+			if command == "ask" {
+				command = ""
+			}
+		}
+		agent := command == "" && (level == "firm" || level == "closes" && closeID != "")
 		if in.Action == "clear" {
 			if _, err := db.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scope, org, author, closeID); err != nil {
 				problem(w, 503, "Conversation could not be cleared.")
@@ -798,10 +893,12 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		var live []string
 		var linked []chatCitation
 		var targets []chatCitation
-		// ask is set when no fixed read matched, so a written answer may be tried.
-		ask := false
 		var extra []string
-		if closeID == "" {
+		var result agentResult
+		// With the agent on, the model chooses the reads for free text; otherwise the fixed reads and cards answer as
+		// they always have, from the words of a command or of the message, without a model.
+		if agent {
+		} else if closeID == "" {
 			var err error
 			if targets, extra, err = delegateTargets(r, db, in.Text, today); err != nil {
 				problem(w, 503, "Conversation unavailable.")
@@ -812,7 +909,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if closeID != "" && delegate {
 			extra = unknown
 		}
-		if goal, err := parsePortfolioGoal(in.Text, today); closeID == "" && err == nil {
+		if goal, err := parsePortfolioGoal(in.Text, today); agent {
+		} else if closeID == "" && err == nil {
 			work := chatCitation{"Open this goal in Work", "/dashboard?goal=" + url.QueryEscape(in.Text)}
 			reply = chatReply{body: "Goals across your closes run from Work, which previews exactly which closes a goal selects before anything starts.", citations: []chatCitation{work}}
 			// A listing selects and changes nothing, so it is answered here, from Work's own selection for the member.
@@ -838,7 +936,6 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		} else if closeID == "" {
 			intent := chatIntent(in.Text, false, false)
 			reply, live, linked = firmAnswer(func(path string, out any) bool { return read(r, "/v1/closes"+path, out) }, intent, in.Text)
-			ask = intent == ""
 		} else if delegate {
 			reply = chatReply{body: "I can take this close from here. Check my plan and hand it over.", action: "delegate", due: due, finish: finish, monthly: chatMonthly(in.Text, entity)}
 		} else if action := chatAction(in.Text); action != "" {
@@ -860,7 +957,6 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				intent = chatIntent(previous, true, in.WorkpaperID != "")
 			}
 			reply = closeAnswer(func(path string, out any) bool { return read(r, "/v1/closes/"+url.PathEscape(closeID)+path, out) }, closeID, in.WorkpaperID, intent, in.Text, previous)
-			ask = intent == ""
 		}
 		// still says whether the member may still see what a written answer was made from: the close, or across the firm
 		// the same clients as when the reads were made.
@@ -877,26 +973,18 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			now, err := clientsNow(q)
 			return now == clients, err
 		}
-		if ask {
+		if agent {
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(60 * time.Second))
-			prefix := "/v1/closes"
-			if closeID != "" {
-				prefix += "/" + url.PathEscape(closeID)
+			// The clients the member can open now are remembered for every agent turn: a read without lineage, firm-wide
+			// or a cross-client read inside a close, is covered by this set being unchanged before the answer goes out.
+			var err error
+			if clients, err = clientsNow(db); err != nil {
+				problem(w, 503, "Conversation unavailable.")
+				return
 			}
-			readRaw := func(path string) (string, bool) {
-				rec := replay(r, "GET", prefix+path, nil)
-				return rec.Body.String(), rec.Code == 200
-			}
-			if closeID == "" {
-				var err error
-				if clients, err = clientsNow(db); err != nil {
-					problem(w, 503, "Conversation unavailable.")
-					return
-				}
-			}
-			// The first streamed line waits until the member's firm membership and access are checked again.
+			// The first event waits until the member's firm membership and access are checked again.
 			denied := false
-			emit := func(delta string) bool {
+			emit := func(kind string, payload map[string]any) bool {
 				if streamed == nil {
 					allowed, err := still(db)
 					var member bool
@@ -913,41 +1001,119 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 					streamed = &streamWriter{w}
 					w = streamed
 				}
-				line, _ := json.Marshal(map[string]string{"delta": delta})
+				payload["type"] = kind
+				line, _ := json.Marshal(payload)
 				if _, err := streamed.ResponseWriter.Write(append(line, '\n')); err != nil {
 					return false
 				}
 				_ = http.NewResponseController(streamed.ResponseWriter).Flush()
 				return true
 			}
+			var firmName string
+			if err := db.QueryRowContext(r.Context(), `SELECT name FROM organizations WHERE id=$1`, org).Scan(&firmName); err != nil {
+				problem(w, 503, "Conversation unavailable.")
+				return
+			}
+			if err := pruneConversation(r.Context(), db, org, author, closeID, firmAccess(r)); err != nil {
+				problem(w, 503, "Conversation unavailable.")
+				return
+			}
+			earlier, err := agentHistory(r.Context(), db, org, author, closeID)
+			if err != nil {
+				problem(w, 503, "Conversation unavailable.")
+				return
+			}
 			began := time.Now()
-			written, why, outcome, investigated := writtenReply(r.Context(), db, org, readRaw, closeID, in.WorkpaperID, in.Text, emit)
-			trace = investigated
+			loopCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+			result = runAgent(loopCtx, db, org, closeID, in.WorkpaperID, in.Text, firmName, entity, period, today.Format("2006-01-02"), actorPermissions(r), level, earlier, func(ctx context.Context, method, path string, body any) (string, bool) {
+				// The read obeys the loop's deadline, not only the request's.
+				raw, _ := json.Marshal(body)
+				req := httptest.NewRequestWithContext(ctx, method, path, bytes.NewReader(raw))
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+				return rec.Body.String(), rec.Code == 200
+			}, func(id string) bool {
+				var ok bool
+				return db.QueryRowContext(r.Context(), closeAccess, id, org, firmAccess(r), author).Scan(&ok) == nil && ok
+			}, emit)
+			cancel()
 			if denied {
 				problem(w, 403, "Your access changed. Nothing was saved.")
 				return
 			}
-			switch {
-			case outcome == "kept" && closeID == "":
-				// Across the firm the answer is shown once, like the fixed reads, so history keeps no client details.
-				reply = chatReply{body: "I wrote an answer from your firm's work lists. It was shown once and not kept; ask again to see it."}
-				for _, line := range strings.Split(written.body, "\n") {
-					if line = strings.TrimSpace(line); line != "" {
-						live = append(live, line)
+			if result.outcome == "failed" {
+				// Nothing from the model is saved and the question is not kept, but the attempt itself is recorded: it
+				// spent model calls, and the firm's counts and failure telemetry must see it.
+				answerScope := "close"
+				if closeID == "" {
+					answerScope = "firm"
+				}
+				var trace any
+				if raw, err := json.Marshal(result.steps); err == nil && len(result.steps) > 0 {
+					trace = string(raw)
+				}
+				_, _ = db.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace,scope,rounds,tool_calls) VALUES($1,$2,NULLIF($3,'')::bigint,'failed',$4,$5::jsonb,$6,$7,$8)`, org, author, closeID, time.Since(began).Milliseconds(), trace, answerScope, result.rounds, result.calls)
+				// The panel keeps the member's text and offers to retry.
+				if streamed != nil {
+					emit("error", map[string]any{"message": result.why})
+					return
+				}
+				problem(w, 503, result.why)
+				return
+			}
+			// Before the text goes out, access to every close the reads touched is checked again; a read without lineage
+			// is covered by the member's openable closes being the set it was made with (still).
+			for _, id := range result.closes {
+				var ok bool
+				if err := db.QueryRowContext(r.Context(), closeAccess, id, org, firmAccess(r), author).Scan(&ok); err != nil || !ok {
+					denied = true
+				}
+			}
+			if allowed, err := still(db); err != nil || !allowed || denied {
+				problem(w, 403, "Your access changed. Nothing was saved.")
+				return
+			}
+			if !result.known {
+				if now, err := clientsNow(db); err != nil || now != clients {
+					problem(w, 403, "Your access changed. Nothing was saved.")
+					return
+				}
+			}
+			if raw, err := json.Marshal(result.steps); err == nil && len(result.steps) > 0 {
+				trace = string(raw)
+			}
+			attempted, latency = result.outcome, sql.NullInt64{Int64: time.Since(began).Milliseconds(), Valid: result.outcome != "limit"}
+			links := []chatCitation{}
+			for _, step := range result.steps {
+				if step.Link != nil && !slices.Contains(links, *step.Link) {
+					links = append(links, *step.Link)
+				}
+			}
+			switch result.outcome {
+			case "kept":
+				reply = result.reply
+				if !result.known {
+					// An answer built on a read without lineage (a firm-wide list, or a cross-client read inside a close) is
+					// shown once and not kept, as today's lists are: nothing verified which clients it drew on.
+					for _, line := range strings.Split(reply.body, "\n") {
+						if line = strings.TrimSpace(line); line != "" {
+							live = append(live, line)
+						}
+					}
+					linked = reply.citations
+					reply = chatReply{body: "I answered from reads that cannot be tied to particular closes, so the answer was shown once and not kept; ask again to see it.", citations: []chatCitation{{"Work", "/dashboard"}}}
+					// A card proposed in such a turn carries the model's words about those reads; it is not kept either.
+					if result.proposal != nil {
+						result.proposal = nil
+						reply.body += " The action it proposed was not kept; ask for it on its own."
 					}
 				}
-				live, linked = append(live, written.lines...), written.citations
-			case outcome == "kept":
-				reply = written
-			case streamed != nil && closeID == "":
-				reply.body = "The written answer could not be checked against your firm's work lists, so it was withdrawn. " + reply.body
-			case streamed != nil:
-				reply.body = "The written answer could not be checked against this close's saved work, so it was withdrawn. " + reply.body
-			case why != "":
-				reply.body += " " + why
-			}
-			if closeID != "" {
-				attempted, latency = outcome, sql.NullInt64{Int64: time.Since(began).Milliseconds(), Valid: outcome != "limit"}
+				answerText, answerEmit = map[string]any{"body": strings.Join(append([]string{result.reply.body}, result.reply.lines...), "\n"), "citations": result.reply.citations}, emit
+			case "limit":
+				reply = chatReply{body: result.why}
+			default:
+				reply = chatReply{body: "I couldn't support an answer from what I read, so none was kept. Rephrase the question, or open what I read.", citations: links}
 			}
 		}
 		body := strings.Join(append([]string{reply.body}, reply.lines...), "\n")
@@ -967,8 +1133,8 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		if err = tx.QueryRowContext(r.Context(), `SELECT enabled FROM organizations WHERE id=$1 FOR SHARE`, org).Scan(&enabled); err == nil && enabled {
 			err = tx.QueryRowContext(r.Context(), `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_organization_members WHERE organization_id=$1 AND subject=$2 AND granted)`, org, author).Scan(&member)
 		}
-		// Access is read again too, since a written answer can take seconds.
-		if err == nil && member && (closeID != "" || ask) {
+		// Access is read again too, since an agent answer can take seconds.
+		if err == nil && member && (closeID != "" || agent) {
 			member, err = still(tx)
 		}
 		if err != nil || !member {
@@ -976,13 +1142,57 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		if attempted != "" {
-			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,NULLIF($6,'')::jsonb)`, org, author, closeID, attempted, latency, trace)
+			answerScope := "close"
+			if closeID == "" {
+				answerScope = "firm"
+			}
+			_, err = tx.ExecContext(r.Context(), `INSERT INTO assistant_answers(organization_id,author,close_id,outcome,latency_ms,trace,scope,rounds,tool_calls) VALUES($1,$2,NULLIF($3,'')::bigint,$4,$5,NULLIF($6,'')::jsonb,$7,$8,$9)`, org, author, closeID, attempted, latency, trace, answerScope, result.rounds, result.calls)
 		}
+		// A question whose answer was not kept, or was shown once, leaves the conversation when it next advances.
+		if _, err = tx.ExecContext(r.Context(), `DELETE FROM chat_messages WHERE `+scope+` AND NOT replayable AND outcome IS NULL`, org, author, closeID); err != nil {
+			problem(w, 503, "The message could not be saved.")
+			return
+		}
+		// Both messages of the pair carry the closes the reads touched; a proposal and its target close sit on the answer.
+		// A lineage-less firm-wide turn records no read's closes, but a card's target close is always recorded, so losing
+		// that close removes the card and its question together.
+		// Every close a read with known lineage named is recorded, whether or not another read left the answer
+		// shown-once, and so is a card's target close or a goal's selection: losing any of them removes the pair.
+		closes := closesLiteral(nil)
+		if agent {
+			targets := slices.Clone(result.closes)
+			if result.proposal != nil {
+				if result.proposal.TargetClose != "" && !slices.Contains(targets, result.proposal.TargetClose) {
+					targets = append(targets, result.proposal.TargetClose)
+				}
+				if selected, ok := result.proposal.Args["closes"].([]string); ok {
+					for _, id := range selected {
+						if !slices.Contains(targets, id) {
+							targets = append(targets, id)
+						}
+					}
+				}
+			}
+			closes = closesLiteral(targets)
+		}
+		proposal, target := "", ""
+		if result.proposal != nil && agent && reply.action != "" {
+			raw, _ := json.Marshal(result.proposal)
+			proposal, target = string(raw), result.proposal.TargetClose
+		}
+		steps := ""
+		if agent && len(result.steps) > 0 {
+			raw, _ := json.Marshal(result.steps)
+			steps = string(raw)
+		}
+		// Only a kept answer and its question are replayed to the model; a question whose answer was not kept stays on
+		// screen but never reaches a later request.
+		replayable := !agent || result.outcome == "kept" && result.known
 		for _, m := range []struct {
-			role, body, citations, action, due, finish string
-			monthly                                    bool
-		}{{"user", in.Text, "[]", "", "", "", false}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish, reply.monthly}} {
-			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11)`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly); err != nil {
+			role, body, citations, action, due, finish, proposal, target, steps string
+			monthly                                                             bool
+		}{{"user", in.Text, "[]", "", "", "", "", "", "", false}, {"assistant", body, string(citations), reply.action, reply.due, reply.finish, proposal, target, steps, reply.monthly}} {
+			if _, err = tx.ExecContext(r.Context(), `INSERT INTO chat_messages(organization_id,author,close_id,workpaper_id,role,body,citations,action,due_on,finish,every_month,proposal,target_close_id,steps,closes,replayable) VALUES($1,$2,NULLIF($3,'')::bigint,NULLIF($4,'')::bigint,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::date,NULLIF($10,''),$11,NULLIF($12,'')::jsonb,NULLIF($13,'')::bigint,NULLIF($14,'')::jsonb,$15::bigint[],$16)`, org, author, closeID, in.WorkpaperID, m.role, m.body, m.citations, m.action, m.due, m.finish, m.monthly, m.proposal, m.target, m.steps, closes, replayable); err != nil {
 				break
 			}
 		}
@@ -992,6 +1202,10 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		}
 		if err != nil || tx.Commit() != nil {
 			problem(w, 503, "The message could not be saved.")
+			return
+		}
+		if answerText != nil && !answerEmit("text", answerText) {
+			problem(w, 403, "Your access changed. The answer was saved; open the conversation to see it.")
 			return
 		}
 		history(w, r, map[string]any{"live": live, "live_citations": append([]chatCitation{}, linked...)})
@@ -1016,16 +1230,29 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			return
 		}
 		defer tx.Rollback()
-		var action string
-		if err = tx.QueryRowContext(r.Context(), `SELECT action FROM chat_messages WHERE `+scope+` AND id::text=$4 AND action IS NOT NULL AND outcome IS NULL FOR UPDATE`, org, author, closeID, r.PathValue("message")).Scan(&action); err != nil {
+		var action, target, proposalRaw string
+		if err = tx.QueryRowContext(r.Context(), `SELECT action,COALESCE(target_close_id::text,''),COALESCE(proposal::text,'{}') FROM chat_messages WHERE `+scope+` AND id::text=$4 AND action IS NOT NULL AND outcome IS NULL FOR UPDATE`, org, author, closeID, r.PathValue("message")).Scan(&action, &target, &proposalRaw); err != nil {
 			problem(w, 409, "This card was already confirmed or is no longer in your conversation.")
 			return
+		}
+		var proposal agentProposal
+		json.Unmarshal([]byte(proposalRaw), &proposal)
+		// A firm-wide card acts on the close it named; access to it is checked now, as a close conversation's is on
+		// every read.
+		acting := closeID
+		if acting == "" {
+			acting = target
+			var ok bool
+			if action != "portfolio" && (acting == "" || tx.QueryRowContext(r.Context(), closeAccess, acting, org, firmAccess(r), author).Scan(&ok) != nil || !ok) {
+				problem(w, 403, "You can no longer open the close this card acts on.")
+				return
+			}
 		}
 		type job struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
 		}
-		base := "/v1/closes/" + url.PathEscape(closeID)
+		base := "/v1/closes/" + url.PathEscape(acting)
 		relay := func(rec *httptest.ResponseRecorder) {
 			for k, v := range rec.Header() {
 				w.Header()[k] = v
@@ -1054,6 +1281,78 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 			}
 			json.Unmarshal(rec.Body.Bytes(), &goal)
 			record(map[string]any{"goal_id": goal.ID}, "The agent has the close, but this card could not record it. Open the close to see its progress.")
+			return
+		}
+		if action == "approval" {
+			// Asking a person to review a draft: the note the model proposed, through the route's own checks.
+			paper, _ := proposal.Args["workpaper_id"].(string)
+			note, _ := proposal.Args["note"].(string)
+			rec := replay(r, "POST", base+"/workpapers/"+url.PathEscape(paper)+"/approval-request", map[string]any{"note": note})
+			if rec.Code != 200 {
+				relay(rec)
+				return
+			}
+			record(map[string]any{"workpaper_id": paper}, "The review was requested, but this card could not record it.")
+			return
+		}
+		if action == "portfolio" {
+			// The goal is previewed again; a selection that no longer matches the closes the card showed is refused, so
+			// a close never shown is never acted on. The verb is the goal's own. One batch runs now; the card follows the
+			// rest.
+			goal, _ := proposal.Args["text"].(string)
+			goalDay, _ := proposal.Args["today"].(string)
+			var shown []string
+			if raw, ok := proposal.Args["closes"].([]any); ok {
+				for _, id := range raw {
+					if s, isText := id.(string); isText {
+						shown = append(shown, s)
+					}
+				}
+			}
+			var op portfolioOperation
+			if rec := replay(r, "POST", "/v1/closes/portfolio", map[string]any{"text": goal, "preview": true, "today": goalDay}); rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &op) != nil {
+				problem(w, 409, "This goal can no longer be previewed. Ask for it again.")
+				return
+			}
+			now := []string{}
+			for _, item := range op.Items {
+				now = append(now, item.CloseID)
+			}
+			slices.Sort(now)
+			slices.Sort(shown)
+			if op.HasMore || !slices.Equal(now, shown) || len(now) == 0 {
+				problem(w, 409, "The closes this goal selects changed since the card showed them. Ask for it again and check the new list.")
+				return
+			}
+			rec := replay(r, "POST", "/v1/closes/portfolio", map[string]any{"text": goal, "today": goalDay})
+			if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &op) != nil {
+				relay(rec)
+				return
+			}
+			// The saved operation is checked against the card once more: a close that started matching between the two
+			// previews is never acted on from here (the operation stays in Work, unrun).
+			saved := []string{}
+			for _, item := range op.Items {
+				saved = append(saved, item.CloseID)
+			}
+			slices.Sort(saved)
+			if !slices.Equal(saved, shown) {
+				problem(w, 409, "The closes this goal selects changed as it was saved. Open Work to review the goal, or ask for it again.")
+				return
+			}
+			// One batch of at most ten closes runs inside this request's deadline; the card says how many are still
+			// pending, and the operation continues from Work.
+			ran := replay(r, "POST", "/v1/closes/portfolio/run", map[string]any{"id": op.ID, "confirmed": true, "reason": in.Reason})
+			if ran.Code != 200 || json.Unmarshal(ran.Body.Bytes(), &op) != nil {
+				relay(ran)
+				return
+			}
+			// The card records each close's outcome, so a skipped or failed close is never shown as started.
+			counts := map[string]int{}
+			for _, item := range op.Items {
+				counts[item.State]++
+			}
+			record(map[string]any{"operation_id": op.ID, "action": op.Action, "closes": len(op.Items), "done": counts["done"], "skipped": counts["skipped"], "failed": counts["failed"], "pending": counts["pending"]}, "The goal started, but this card could not record it. Open Work to follow it.")
 			return
 		}
 		if action == "request" {
@@ -1145,6 +1444,7 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		record(map[string]any{"run_id": started.ID, "jobs": jobs}, "The work started, but this card could not record it. Open the close to see its status.")
 	}
 	mux.HandleFunc("POST /v1/closes/{id}/chat/{message}/confirm", confirm)
+	mux.HandleFunc("POST /v1/closes/chat/confirm/{message}", confirm)
 	mux.HandleFunc("GET /v1/closes/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, nil) })
 	mux.HandleFunc("POST /v1/closes/chat", post)
 	mux.HandleFunc("GET /v1/closes/{id}/chat", func(w http.ResponseWriter, r *http.Request) { history(w, r, nil) })
