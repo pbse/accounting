@@ -11,13 +11,13 @@ import { useShellThemeColor } from "@close/ui/theme/useShellThemeColor";
 
 type NavItem = { to: string; label: string; icon: IconName; end?: boolean };
 
-// The firm's pages. Security and Measure open from Firm and the preparation forms from a close; neither needs a place
-// in the bar. Only Krith's own firm has the worked example (see examples.go), and sees it here.
+// The firm's pages. Settings holds the person's and the firm's settings; Measure opens from Settings and the
+// preparation forms from a close, so neither needs a place in the bar. Only Krith's own firm has the worked example (see examples.go), and sees it here.
 const firmNav: NavItem[] = [
   { to: "/dashboard", label: "Work", icon: "work", end: true },
   { to: "/dashboard/attention", label: "Attention", icon: "decision" },
   { to: "/dashboard/closes", label: "Clients", icon: "clients" },
-  { to: "/dashboard/firm", label: "Firm", icon: "firm" },
+  { to: "/dashboard/settings", label: "Settings", icon: "settings" },
 ];
 const exampleNav: NavItem = { to: "/dashboard/close", label: "Example", icon: "book" };
 
@@ -109,12 +109,8 @@ export default function WorkspaceLayout() {
         Skip to content
       </a>
       <header className="topbar">
-        <Link className="topbar-brand" to="/dashboard">
-          <span className="logo" aria-hidden="true">c</span>
-          <span>
-            <strong>Close</strong>
-            <small>Preparation workspace</small>
-          </span>
+        <Link className="topbar-brand" to="/dashboard" aria-label="Krith, home">
+          <span className="wordmark">krith</span>
         </Link>
         <nav aria-label="Workspace">
           <div className="topbar-nav">
@@ -152,13 +148,33 @@ export default function WorkspaceLayout() {
           <AccountMenu />
         </div>
       </header>
-      <main id="main" className="app-main">
-        <div className="page">
-          <Suspense fallback={<p role="status">Opening…</p>}>
-            {known ? <Outlet /> : <p role="status">Opening…</p>}
-          </Suspense>
-        </div>
-      </main>
+      <div className="app-body">
+        {known && (
+          <nav className="rail" aria-label="Workspace places">
+            <div className="rail-group">
+              {items.map((item) => (
+                <NavLink className="rail-item" end={item.end} to={item.to} key={item.to} title={item.label} aria-label={item.label}>
+                  <Icon name={item.icon} size={18} />
+                </NavLink>
+              ))}
+            </div>
+            {!executive && signedIn && (
+              <div className="rail-group end">
+                <button type="button" className="rail-item" title="Ask the agent" aria-label="Ask the agent" onClick={openAssistant}>
+                  <Icon name="agent" size={18} />
+                </button>
+              </div>
+            )}
+          </nav>
+        )}
+        <main id="main" className="app-main">
+          <div className="page">
+            <Suspense fallback={<p role="status">Opening…</p>}>
+              {known ? <Outlet /> : <p role="status">Opening…</p>}
+            </Suspense>
+          </div>
+        </main>
+      </div>
       {executive === false && <Assistant />}
     </div>
   );

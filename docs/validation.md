@@ -3823,7 +3823,49 @@ PR 2a of the [agentic chat plan](agent-chat.md): `organizations.agent_chat` (off
 
 Not verified: a hosted firm's migration from the three old settings; the backfill rule is in the migration and in [chat.md](chat.md#written-answers).
 
-## 2026-10-08: the agent loop (migration 134)
+
+## 2026-10-07: Your settings
+
+Branch `claude/user-settings`. A member's own settings page at `/dashboard/settings`, opened from the account menu, in vertical tabs: General (name through WorkOS, time zone kept in `member_settings`, migration 134), Connections (agent access, the member's own Google Drive grant, and where the firm's connections and posting authority live) and Notifications (the attention kinds, moved from the Attention page).
+
+- `go test ./internal/transport/` against a fresh local database migrated through 134: the settings test proves a 403 without a subject, time zones accepted only as region/city or UTC, a refused change keeping nothing, each member reading only their own zone, the kinds saved on the attention route reading back, and a revoked membership removing the settings row.
+- The full Go suite passes except the two pre-existing tests that need Poppler and Tesseract on this machine.
+- `npm run check` for both apps and `npm test` (46 passing).
+- Headless Edge against the dev servers and the local workspace token, at 1280 and 390 wide: all three tabs render with a `PageHeader`, saving `Europe/Lisbon` shows "Saved.", and no page errors.
+- `/readyz` answers 503 with `member_settings` renamed away and 200 with it back.
+
+Not verified: a hosted member's name read and saved through WorkOS, and the Drive connection returning to the settings page; both take the same calls as the people roster and a close's evidence pane.
+
+## Gemini is turned on in one step (2026-10-07)
+
+Request: turn Gemini on with a single Cloudflare step, not a separate GitHub variable.
+
+- **Change.** `GEMINI_PAID_SERVICE` is no longer a GitHub variable: it is gone from the deploy workflows and from `scripts/deploy-service.mjs`'s configuration names. It is now a Cloudflare secret of the queue worker. `node scripts/cloudflare-credentials.mjs GEMINI_API_KEY production --paid-service < key-file` installs it, as `confirmed`, together with the key in one install.
+  - `--paid-service` is the operator's confirmation that the key's Google project has billing enabled. Without it the script refuses the key and says why.
+  - The confirmation is never installed on its own.
+  - The worker still requires both. A key that ever arrived without the confirmation stays held, and Firm settings say to reinstall it with `--paid-service`.
+  - `GEMINI_OCR_MODEL` stays an optional GitHub variable, like the other model names.
+  - A running queue container keeps the environment it started with. After installing a Gemini key, the installer says to redeploy and check that Firm settings name Google Gemini. The deployment doc's staging table uses `staging` in its example.
+- **Tested.**
+  - `scripts/cloudflare-credentials.test.mjs`: the Gemini key is refused without `--paid-service`, or with any other or extra argument. Another credential with the flag is refused. With the flag, one install to the queue worker carries the key and `GEMINI_PAID_SERVICE: confirmed`. The confirmation alone is refused, and any value but `confirmed` fails validation.
+  - The configuration-only deploy tests now treat `GEMINI_PAID_SERVICE` as a credential, kept out of every configuration payload.
+  - `TestGeminiIsConfiguredOnlyWithAKeyOnTheConfirmedPaidService` (llm) and `TestFirmSettingsShowHowTheWorkerReadsPDFs` (transport) are unchanged apart from the held message.
+  - Script and frontend tests: 47/47.
+
+Not verified: live Gemini.
+
+
+## 2026-10-08: one Settings page for the person and the firm
+
+Branch `claude/settings-hub`. Firm settings, the Security center and Your settings become one page at `/dashboard/settings`, named Settings in the top bar, in vertical tabs under two group names: **You** (Profile, Notifications, Connections) and **Firm** (Firm, People, Clients, Policies, Security). The old routes redirect to their sections. Each firm policy is one row (`SettingList`, `Setting`): its state as a pill and a one-line summary, opening to what it means and, for an administrator, the way to change it with a reason; the agent chat's consent text and the stopped-answers notice are kept whole. The Firm section links to Human effort, which left the top bar with the shell. People holds the roster of people and roles, invitations, client assignments and enrolment decisions; Security holds connected services, posting authority in force, people's agents and recent changes, with the connector operations, what outside services receive, usage and the firm suspension under Advanced. The policy read gains `can_manage_members` (clients:all and members:manage) and `can_read_roster` (clients:all, or the local workspace), which decide whether People, Security and Clients show.
+
+- `npm run check`, `npm run build` and `go vet` pass. `go test ./internal/transport/` against a fresh local database migrated through 134 passes except the pre-existing Poppler-dependent test: the export test proves the local workspace reads the roster and manages no members, and the OCR test that clients:all alone opens the roster and nothing more; the security and setup tests take the renamed messages and links.
+- The layout check passes 89 page views across both apps at desktop and phone width, with every settings section a route.
+- Screenshots at 1280px and 390px of all eight sections, with a policy row open: the strip of sections scrolls sideways on a phone, status pills stay short, and no section is wider than the screen.
+
+Not verified: the hosted People and Security sections with a real administrator (locally the member-management reads refuse, so those sections render only their refusal, and the Firm group shows Firm, Clients and Policies).
+
+## 2026-10-08: the agent loop (migration 135)
 
 PR 2b of the [agentic chat plan](agent-chat.md): `transport/agent.go` answers free text at the firm's Agent chat level by choosing reads from the tool registry, proposing one card per message and writing the answer in a tool-free call bound to what it read; the panel shows each step and renders firm-wide cards against their target close. Local run against a fresh migrated PostgreSQL (migrations through 134):
 

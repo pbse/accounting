@@ -13,7 +13,7 @@ An internal console for **platform staff** (our employees, not firm members) to 
 - health of connections and the existing background jobs;
 - an audit trail of everything staff do.
 
-The firm-facing **Security center** stays as it is. It is a firm administrator's view of their own firm; this console is ours, across all firms.
+The firm-facing **Security** section of Settings stays as it is. It is a firm administrator's view of their own firm; this console is ours, across all firms.
 
 ## Principles
 

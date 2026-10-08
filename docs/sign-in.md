@@ -50,7 +50,7 @@ Every firm session starts from a token issued after the firm is settled, so it c
 
 ## Roles
 
-The firm's administrator manages roles in the workspace under **Security center → Firm operations and membership → People and roles**. It lists the firm's people, fifty at a time (**Show more people**), with their role and firm access. **Change role** gives a person a role, with a reason and confirmation:
+The firm's administrator manages roles in the workspace under **Settings → People**. It lists the firm's people, fifty at a time (**Show more people**), with their role and firm access. **Change role** gives a person a role, with a reason and confirmation:
 
 - Only a role whose permissions the administrator holds can be given, never one's own role.
 - Only someone with current firm access can be given a role; a removed person is enrolled again first.

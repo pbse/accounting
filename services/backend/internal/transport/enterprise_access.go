@@ -143,7 +143,7 @@ var errMemberChanged = errors.New("the member's access changed since it was read
 
 // decideMemberAccess records a grant or revocation of a person's membership in the firm, if their current decision is still
 // previousID (empty: none). The caller holds the firm's row lock. A removed member's assistant history, portfolio goals and
-// attention marks and preferences go with their membership.
+// attention marks, preferences and settings go with their membership.
 func decideMemberAccess(ctx context.Context, tx *sql.Tx, org, member string, granted bool, previousID, reason, actor string) (string, error) {
 	var prior, id string
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT id::text FROM current_organization_members WHERE organization_id=$1 AND subject=$2),'')`, org, member).Scan(&prior); err != nil {
@@ -158,7 +158,7 @@ func decideMemberAccess(ctx context.Context, tx *sql.Tx, org, member string, gra
 	}
 	for _, q := range []string{`DELETE FROM chat_messages WHERE organization_id=$1 AND author=$2`, `DELETE FROM assistant_answers WHERE organization_id=$1 AND author=$2`,
 		`DELETE FROM portfolio_operations WHERE organization_id=$1 AND author=$2`, `DELETE FROM attention_marks WHERE organization_id=$1 AND subject=$2`,
-		`DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2`} {
+		`DELETE FROM attention_preferences WHERE organization_id=$1 AND subject=$2`, `DELETE FROM member_settings WHERE organization_id=$1 AND subject=$2`} {
 		if _, err = tx.ExecContext(ctx, q, org, member); err != nil {
 			return "", err
 		}

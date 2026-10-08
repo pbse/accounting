@@ -68,8 +68,8 @@ const apps = [
     // Matched against the end of Vite's data-vite-dev-id, which is the stylesheet's absolute file path.
     stylesheet: "/apps/frontend/src/styles.css",
     routes: [
-      "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, `/dashboard/closes/${close}?tab=reports`, "/dashboard/firm", `/dashboard/closes/${close}?tab=cash`,
-      "/dashboard/measure", "/dashboard/executive", "/dashboard/security", "/dashboard/close", "/dashboard/review",
+      "/dashboard", "/dashboard/attention", "/dashboard/closes", `/dashboard/closes/${close}`, `/dashboard/closes/${close}/workpapers/${paper}`, `/dashboard/closes/${close}?tab=reports`, "/dashboard/measure", `/dashboard/closes/${close}?tab=cash`,
+      "/dashboard/executive", "/dashboard/settings", "/dashboard/settings?tab=notifications", "/dashboard/settings?tab=connections", "/dashboard/settings?tab=firm", "/dashboard/settings?tab=people", "/dashboard/settings?tab=clients", "/dashboard/settings?tab=policies", "/dashboard/settings?tab=security", "/dashboard/close", "/dashboard/review",
       ...["prepaids", "settlements", "reconciliations", "accruals", "loans", "owners"].map((kind) => `/dashboard/${kind}/new?close=${close}`),
     ],
   },
@@ -237,7 +237,7 @@ for (const app of apps) {
       await page.mouse.move(0, width.viewport.height - 1);
       const box = await page.evaluate(() => {
         const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect().toJSON();
-        return { topbar: rect(".topbar"), main: rect(".app-main"), scrollWidth: document.documentElement.scrollWidth };
+        return { topbar: rect(".topbar"), rail: rect(".rail"), main: rect(".app-main"), scrollWidth: document.documentElement.scrollWidth };
       });
       if (box.scrollWidth > width.viewport.width) fail(`the page is ${box.scrollWidth}px wide, wider than the ${width.viewport.width}px screen`);
       if (app.standalone) {
@@ -248,6 +248,11 @@ for (const app of apps) {
         if (!(box.topbar?.height <= 72 * rows)) fail(`the top bar is ${box.topbar?.height}px tall, more than ${rows === 1 ? "one row" : "two rows"}`);
         if (box.topbar?.width !== width.viewport.width) fail(`the top bar is ${box.topbar?.width}px wide, not the ${width.viewport.width}px screen`);
         if (!(box.main?.top >= box.topbar?.bottom)) fail("the page column does not start below the top bar");
+        // The rail stands at the left of the page column on a desktop and gives way on a phone.
+        if (width.name === "desktop") {
+          if (!(box.rail?.width >= 48 && box.rail?.width <= 72)) fail(`the rail is ${box.rail?.width}px wide, not a narrow pill`);
+          if (!(box.main?.left >= box.rail?.right)) fail("the page column does not start after the rail");
+        } else if (box.rail?.width) fail(`the rail shows on a phone, ${box.rail.width}px wide`);
       }
       // The shell stands alone: emptying the public site's stylesheet changes nothing inside it. Styles are read with
       // the sheet, without it and with it again; only what both readings with it agree on counts, so a page still

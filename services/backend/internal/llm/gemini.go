@@ -21,7 +21,8 @@ import (
 // goes as an image. Configured on the worker: GEMINI_API_KEY; GEMINI_PAID_SERVICE, which must be "confirmed"; and
 // optionally GEMINI_OCR_MODEL. Google may use content sent with a free-tier key to improve its products and have people
 // review it, against what Krith tells firms, and a key's billing cannot be read through the API, so the operator
-// confirms the key's project is on the paid service; without that no page is sent. The key is sent only in the
+// confirms the key's project is on the paid service; without that no page is sent. Both are Cloudflare secrets of the
+// queue worker, installed together by one command of the credential script, whose --paid-service is the confirmation. The key is sent only in the
 // x-goog-api-key header, never in a URL, a log line or a subprocess's environment.
 type Gemini struct {
 	key, model, endpoint string

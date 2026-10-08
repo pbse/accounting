@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { apiBaseUrl } from "../../lib/api";
 import { workspaceRequest } from "./workspace";
 
@@ -59,22 +59,26 @@ export function EmailSettings() {
     catch(e) { setError(e instanceof Error ? e.message : "Tracking setup failed."); }
     finally { setBusy(false); }
   }
+  useEffect(() => {
+    void load();
+  }, []);
   return (
-    <details
-      onToggle={(e) => {
-        if (e.currentTarget.open && !data && !busy) void load();
-      }}
-    >
-      <summary>Verified firm email sender</summary>
+    <section aria-label="Email sender">
+      <h2>Email sender</h2>
       <p>
-        Connect the firm’s verified Resend domain. The API key is encrypted on
-        the server and never returned to this page. Connecting a sender does not
-        authorize any email.
+        Client requests and reminders go out from the firm's own verified Resend domain. The API key is encrypted on the server and never returned to this page.
+        Connecting a sender does not authorize any email.
       </p>
-      {error && <p role="alert">{error}</p>}
-      <button disabled={busy} onClick={() => void load()}>
-        Refresh sender
-      </button>
+      {error && (
+        <p role="alert">
+          {error}{" "}
+          {!data && (
+            <button type="button" disabled={busy} onClick={() => void load()}>
+              Try again
+            </button>
+          )}
+        </p>
+      )}
       {data && (
         <>
           <p>
@@ -83,19 +87,18 @@ export function EmailSettings() {
               : "No email sender connected. Private links can still be shared manually."}
           </p>
           {!data.hosted ? (
-            <p>
-              Live sending requires a WorkOS organization session. Use manual
-              links for local development; provider behavior is covered by
-              synthetic checks.
+            <p className="note">
+              Live sending needs the firm's hosted sign-in, which local development does not have. Share links by hand instead.
             </p>
           ) : (
             <>
+              <details open={!data.connection}>
+              <summary>{data.connection ? "Replace the sender" : "Connect the sender"}</summary>
               <form
                 key={data.connection?.id ?? "new"}
                 onSubmit={(e) => void save(e, false)}
               >
                 <fieldset disabled={busy}>
-                  <legend>Connect or replace the sender</legend>
                   <label>
                     Verified sender (email or Firm name &lt;email&gt;)
                     <input
@@ -129,7 +132,7 @@ export function EmailSettings() {
                     links direct. API and worker also need the same server-side
                     SECRETS_KEY; the API needs PUBLIC_APP_URL.
                   </p>
-                  <label>
+                  <label className="checkbox-label">
                     <input name="confirmed" type="checkbox" required />I am
                     authorized to connect this firm’s Resend account and sender.
                     Replacing a connection stops pending attempts using the
@@ -138,29 +141,31 @@ export function EmailSettings() {
                   <button>Verify domain and save connection</button>
                 </fieldset>
               </form>
-              {data.connection && <form onSubmit={e=>void tracking(e)}><fieldset disabled={busy}>
-                <legend>Delivery tracking · {data.connection.tracking_configured ? "configured" : "setup required"}</legend>
+              </details>
+              {data.connection && <details open={!data.connection.tracking_configured}><summary>Delivery tracking · {data.connection.tracking_configured ? "configured" : "setup required"}</summary><form onSubmit={e=>void tracking(e)}><fieldset disabled={busy}>
                 <p>In Resend, create a webhook for email.sent, email.delivered, email.delivery_delayed, email.bounced, email.complained, email.failed and email.suppressed at:</p>
                 <code>{apiBaseUrl || window.location.origin}/v1/webhooks/resend/{data.connection.id}</code>
                 <label>Webhook signing secret<input name="secret" type="password" autoComplete="off" required /></label>
-                <label><input name="confirmed" type="checkbox" required /> This webhook belongs to this firm’s Resend account.</label>
+                <label className="checkbox-label"><input name="confirmed" type="checkbox" required /> This webhook belongs to this firm’s Resend account.</label>
                 <button>Save signing secret</button>
-              </fieldset></form>}
+              </fieldset></form></details>}
               {data.connection && (
+                <details><summary>Disconnect the sender</summary>
                 <form onSubmit={(e) => void save(e, true)}>
-                  <label>
+                  <label className="checkbox-label">
                     <input type="checkbox" name="confirmed" required />
                     Disconnect this sender. Already accepted or in-flight emails
                     cannot be recalled.
                   </label>
                   <button disabled={busy}>Disconnect sender</button>
                 </form>
+                </details>
               )}
             </>
           )}
         </>
       )}
-    </details>
+    </section>
   );
 }
 

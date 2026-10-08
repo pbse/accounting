@@ -60,12 +60,9 @@ function Layout() {
     <div className="app-shell">
       <a className="skip" href="#main">Skip to content</a>
       <header className="topbar">
-        <Link className="topbar-brand" to="/">
-          <span className="logo" aria-hidden="true">c</span>
-          <span>
-            <strong>Close</strong>
-            <small>Platform staff</small>
-          </span>
+        <Link className="topbar-brand" to="/" aria-label="Krith staff console, overview">
+          <span className="wordmark">krith</span>
+          <small>Platform staff</small>
         </Link>
         <nav aria-label="Staff console">
           <div className="topbar-nav">
@@ -106,11 +103,31 @@ function Layout() {
           </details>
         </div>
       </header>
-      <main id="main" className="app-main">
-        <div className="page">
-          <Outlet context={me.data?.permissions ?? []} />
-        </div>
-      </main>
+      <div className="app-body">
+        <nav className="rail" aria-label="Console places">
+          <div className="rail-group">
+            <NavLink className="rail-item" end to="/" title="Overview" aria-label="Overview"><Icon name="work" size={18} /></NavLink>
+            <NavLink className="rail-item" to="/firms" title="Firms" aria-label="Firms"><Icon name="firm" size={18} /></NavLink>
+            <NavLink className="rail-item" to="/people" title="People" aria-label="People"><Icon name="clients" size={18} /></NavLink>
+            <NavLink className="rail-item" to="/audit" title="Staff audit" aria-label="Staff audit"><Icon name="shield" size={18} /></NavLink>
+            <NavLink className="rail-item" to="/contact-notes" title="Contact notes" aria-label="Contact notes"><Icon name="file" size={18} /></NavLink>
+          </div>
+          <div className="rail-group">
+            <NavLink className="rail-item" to="/workflows" title="Catalog" aria-label="Catalog"><Icon name="book" size={18} /></NavLink>
+            <NavLink className="rail-item" end to="/runs" title="Runs" aria-label="Runs"><Icon name="run" size={18} /></NavLink>
+            {me.data?.permissions.includes("platform:plans") && <NavLink className="rail-item" to="/plans" title="Plans" aria-label="Plans"><Icon name="file" size={18} /></NavLink>}
+          </div>
+          <div className="rail-group">
+            <NavLink className="rail-item" to="/jobs" title="Stuck work" aria-label="Stuck work"><Icon name="blocked" size={18} /></NavLink>
+            <NavLink className="rail-item" to="/connections" title="Connections" aria-label="Connections"><Icon name="link" size={18} /></NavLink>
+          </div>
+        </nav>
+        <main id="main" className="app-main">
+          <div className="page">
+            <Outlet context={me.data?.permissions ?? []} />
+          </div>
+        </main>
+      </div>
     </div>
     </GrantsProvider>
   );

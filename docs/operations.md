@@ -101,7 +101,7 @@ PGHOST=127.0.0.1 PGPORT=15432 PGUSER=close infra/postgres/check-restore.sh
 
 Use your own local port/user. The script rejects non-loopback hosts, creates two uniquely named temporary databases, applies all migrations, inserts two synthetic firms with same-named clients, dumps/restores, verifies source hashes and durable jobs/scopes, and removes only its own databases and dump. No API, worker or provider is started. The rehearsal proves schema/data recovery for those fixtures, not live credentials, backup scheduling or hosted recovery objectives.
 
-## Security center
+## Security (Settings → Security)
 
 **Security** in the sidebar (`GET /v1/closes/security`) is one page for firm administrators (`clients:all` and `members:manage`; anyone else is refused):
 
@@ -117,7 +117,7 @@ No credential, OAuth digest, token, webhook secret or value derived from one (su
 
 ## Access and incidents
 
-- Suspected firm exposure: stop provider activity and suspend the exact registered organization from the Security center (`org:manage`, typing the firm's ID and a reason) or through an authorized database change; preserve evidence. Application checks reject subsequent requests/claims. Already-running work and already-downloaded data cannot be recalled.
+- Suspected firm exposure: stop provider activity and suspend the exact registered organization from Settings → Security → Advanced (`org:manage`, typing the firm's ID and a reason) or through an authorized database change; preserve evidence. Application checks reject subsequent requests/claims. Already-running work and already-downloaded data cannot be recalled.
 - Individual access: revoke app firm membership and client assignments, then revoke WorkOS membership/roles/sessions. A previously issued token is denied by the app's current membership check on subsequent requests.
 - If every firm administrator is revoked, app enrollment will not silently reclaim the firm. Platform staff verify the exact person in WorkOS, then **Restore** them on the firm's People tab in the staff console (`platform:operate`, a reason saying how they were verified; audited as `member.restore`). Only someone the firm revoked can be restored, and their WorkOS roles are restored in WorkOS.
 - Unknown external result: preserve the attempt and inspect provider canonical records. Never reset state to `queued` simply to make the dashboard green.

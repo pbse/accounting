@@ -29,7 +29,8 @@ export class PreparationWorker extends Container<Env> {
     // Google Gemini reads every PDF page when its key is installed (scripts/cloudflare-credentials.mjs); blank model: the default.
     GEMINI_API_KEY: this.env.GEMINI_API_KEY ?? "",
     GEMINI_OCR_MODEL: this.env.GEMINI_OCR_MODEL ?? "",
-    // "confirmed" once the operator has checked the key's project is on Google's paid service; no page is sent before.
+    // "confirmed", installed with the key by the credential script's --paid-service once the operator has checked the
+    // key's project is on Google's paid service; no page is sent before.
     GEMINI_PAID_SERVICE: this.env.GEMINI_PAID_SERVICE ?? "",
   };
   defaultPort = 8080;

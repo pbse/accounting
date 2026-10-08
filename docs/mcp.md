@@ -22,11 +22,11 @@ Browser-based clients must also run on an origin listed in `MCP_ALLOWED_ORIGINS`
 
 ### Agent access per member
 
-AuthKit's OAuth tokens say who the person is but carry no app permissions, so the firm approves each member's agent access in **Agent access (MCP)**, which members use from **Firm settings** and administrators from the **Security center**:
+AuthKit's OAuth tokens say who the person is but carry no app permissions, so the firm approves each member's agent access in **Agent access (MCP)**, which members use from **Settings → Connections** (Connections) and administrators from the **Security center**:
 
 1. **The member asks** from their own signed-in session: read only, or read and prepare.
 2. **An administrator approves** (needs clients:all and members:manage). The approval can narrow the request but never widen it. The administrator can also decline or revoke, and the member can revoke their own access. Every decision is recorded with a reason.
-3. **Agents see only the member's assigned clients** (Security center → Client access). Firm-wide access isn't extended to agents, because an OAuth token can't show that the member still has it.
+3. **Agents see only the member's assigned clients** (Settings → People → Client assignments). Firm-wide access isn't extended to agents, because an OAuth token can't show that the member still has it.
 4. **Access is bound to the member's current membership.** If the member is removed and later re-added, they must ask again. A pending or declined request never changes access already approved.
 
 Read-only access lists only the read tools, including `export_close_package`. Read-and-prepare adds the prepare, recheck, draft and request-approval tools; nothing beyond the tool table is reachable.
