@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -70,8 +71,8 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	rejected("facts", "AR ties at 8,000.00. Cash differs by 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/ledger_balance", "8000", ""}, {"t2", 1, "/rows/0/status", "differs", ""}}, "no read in its sentence")
 	rejected("help", "I can look at Alpha for you.", nil, "named a client")
 	var listing any
-	json.Unmarshal([]byte(`{"closes":[{"id":"1","entity":"Gamma Ltd","period":"2026-09","owner":{"name":"Pat"}}],"has_more":false}`), &listing)
-	if names := collectNames(listing, 0); len(names) != 2 || names[0] != "Gamma Ltd" && names[1] != "Gamma Ltd" {
+	json.Unmarshal([]byte(`{"closes":[{"id":"1","entity":"Gamma Ltd","period":"2026-09","owner":{"name":"Pat"}}],"results":[{"kind":"document","title":"Zurich invoice.pdf","close":"Gamma Ltd · 2026-09"}],"has_more":false}`), &listing)
+	if names := collectNames(listing, 0); len(names) != 4 || !slices.Contains(names, "Zurich invoice.pdf") || !slices.Contains(names, "Gamma Ltd") {
 		t.Fatalf("names are collected from nested rows: %v", names)
 	}
 	rejected("refusal", "I don't give tax advice; the balance is 1,250.00 anyway.", nil, "held a figure")

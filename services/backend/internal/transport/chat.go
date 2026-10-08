@@ -852,6 +852,10 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 				problem(w, 422, chatHelp(closeID != ""))
 				return
 			}
+			// /ask is free text: it goes to the agent when the firm allows it, like a sentence typed without a slash.
+			if command == "ask" {
+				command = ""
+			}
 		}
 		agent := command == "" && (level == "firm" || level == "closes" && closeID != "")
 		if in.Action == "clear" {

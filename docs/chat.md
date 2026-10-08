@@ -90,7 +90,7 @@ Press **Cmd/Ctrl+K** anywhere in the workspace for the command palette, or type 
 
 | Command | Does |
 | --- | --- |
-| `/ask <question>` | Asks the assistant in the current context |
+| `/ask <question>` | Asks the agent in the current context, as free text typed without a slash would |
 | `/status` | Where this close stands, or, outside a close, what needs you today |
 | `/queue`, `/blocked`, `/delegated` | Outside a close: the review queue, blocked work, the closes handed to the agent |
 | `/explain [account]` | Whether that account ties, or what blocks sign-off |

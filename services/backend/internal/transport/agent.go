@@ -460,7 +460,7 @@ func collectNames(value any, depth int) []string {
 	switch t := value.(type) {
 	case map[string]any:
 		for key, v := range t {
-			if s, isText := v.(string); isText && slices.Contains([]string{"entity", "client_entity", "name", "account", "payee", "vendor", "customer", "label"}, key) && len(strings.TrimSpace(s)) > 2 {
+			if s, isText := v.(string); isText && slices.Contains([]string{"entity", "client_entity", "name", "account", "payee", "vendor", "customer", "label", "title", "close"}, key) && len(strings.TrimSpace(s)) > 2 {
 				names = append(names, s)
 			} else if !isText {
 				names = append(names, collectNames(v, depth+1)...)
