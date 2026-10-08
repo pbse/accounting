@@ -62,7 +62,8 @@ func agentHistory(ctx context.Context, db *sql.DB, org, author, closeID string) 
 		if closeID == "" && len(answer.closes) == 0 {
 			continue
 		}
-		body := answer.body
+		// A saved reply, including one a fixed read wrote before the agent was on, is redacted as it is replayed.
+		body := asked(answer.body)
 		if cut := strings.Index(body, "\n"+agentNote); cut > 0 {
 			body = body[:cut]
 		}
