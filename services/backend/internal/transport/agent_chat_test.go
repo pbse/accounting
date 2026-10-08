@@ -60,7 +60,12 @@ func TestAgentSupportBindsEveryFigureAndSentence(t *testing.T) {
 	rejected("facts", "AR ties.", nil, "no support")
 	rejected("facts", "See https://example.com/report for AR.", []agentSupportEntry{{"t2", 0, "/rows/1/status", "ties", ""}}, "no read supplied")
 	ok("help", "I can read this close's status, tie-out and documents, or search it.", nil)
-	rejected("help", "This close is ready for sign-off.", nil, "stated a close's state")
+	rejected("help", "I can see this close is ready for sign-off.", nil, "stated a close's state")
+	rejected("help", "This close is ready for sign-off.", nil, "stated something about the work")
+	rejected("help", "The cash balance ties.", nil, "stated something about the work")
+	rejected("card", "See https://example.com for the card.", nil, "no read supplied")
+	ok("card", "Here is what preparing this close would coordinate. Confirm the card to start.", nil)
+	rejected("facts", "AR ties at 8,000.00. Cash differs by 8,000.00.", []agentSupportEntry{{"t2", 0, "/rows/1/ledger_balance", "8000", ""}, {"t2", 1, "/rows/0/status", "differs", ""}}, "no read in its sentence")
 	rejected("help", "I can look at Alpha for you.", nil, "named a client")
 	var listing any
 	json.Unmarshal([]byte(`{"closes":[{"id":"1","entity":"Gamma Ltd","period":"2026-09","owner":{"name":"Pat"}}],"has_more":false}`), &listing)

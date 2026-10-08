@@ -150,7 +150,7 @@ func TestAgentChatFirmWideLineageAndCards(t *testing.T) {
 	if slices_contains(toolsOffered, "search_close") || slices_contains(toolsOffered, "open_close") {
 		t.Fatalf("search_close and open_close are not offered firm-wide: %v", toolsOffered)
 	}
-	if len(outputsSeen) != 4 || !strings.HasPrefix(outputsSeen[0], "t1: ") || !strings.Contains(outputsSeen[1], "preview the goal") || !strings.Contains(outputsSeen[2], "not a close you can open") || !strings.Contains(outputsSeen[3], `"proposed"`) {
+	if len(outputsSeen) != 4 || !strings.HasPrefix(outputsSeen[0], "t1: ") || !strings.Contains(outputsSeen[1], "preview this exact goal") || !strings.Contains(outputsSeen[2], "not a close you can open") || !strings.Contains(outputsSeen[3], `"proposed"`) {
 		t.Fatalf("the read ran, the goal without a preview and the card on a close the member cannot open were refused, the hand-over was proposed: %v", outputsSeen)
 	}
 	last := out.Messages[len(out.Messages)-1]

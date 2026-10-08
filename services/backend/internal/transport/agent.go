@@ -224,6 +224,9 @@ const agentAnswerInstructions = `Write the answer to the member's last message f
 
 // A calendar day or a close month is matched before its digits could be taken for separate numbers.
 var agentFigure = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}\b|\b\d{4}-\d{2}\b|[(−-]?\$?\d[\d,]*(?:\.\d+)?%?\)?`)
+
+// agentCapabilityStart is how a help, refusal or card sentence may begin: speaking for the agent or to the person.
+var agentCapabilityStart = regexp.MustCompile(`(?i)^(?:i |i'|i’|ask |say |open |you |to |here |this card|the card|confirm|check |choose |type |use |try |tell |nothing |no, |yes, |sorry|that |that's|that’s|it's|it’s)`)
 var agentURL = regexp.MustCompile(`(?i)\b(?:https?://|www\.)[^\s)]+`)
 var agentStateWords = []string{"ready", "blocked", "signed off", "signed-off", "waiting", "failed", "verified", "overdue", "approved", "rejected"}
 
@@ -341,9 +344,26 @@ type agentRead struct {
 func agentSupport(kind, text string, support []agentSupportEntry, reads map[string]agentRead, names []string) ([]chatCitation, string) {
 	figures := agentFigures(text)
 	lower := strings.ToLower(text)
+	// A link the answer carries must have come from a read; the model writes none of its own.
+	for _, link := range agentURL.FindAllString(text, -1) {
+		found := false
+		for _, read := range reads {
+			found = found || strings.Contains(read.text, link)
+		}
+		if !found {
+			return nil, "the answer carries a link no read supplied"
+		}
+	}
 	if kind != "facts" {
 		if len(figures) > 0 {
 			return nil, "a " + kind + " answer held a figure"
+		}
+		// Such an answer says what the agent can do or introduces its card: every sentence speaks for the agent or to
+		// the person, never about the books.
+		for _, line := range sentences(text) {
+			if !agentCapabilityStart.MatchString(line) {
+				return nil, "a " + kind + " answer stated something about the work: " + line
+			}
 		}
 		for _, name := range names {
 			if name != "" && strings.Contains(lower, strings.ToLower(name)) {
@@ -357,19 +377,13 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 		}
 		return nil, ""
 	}
-	// A link the answer carries must have come from a read; the model writes none of its own.
-	for _, link := range agentURL.FindAllString(text, -1) {
-		found := false
-		for _, read := range reads {
-			found = found || strings.Contains(read.text, link)
-		}
-		if !found {
-			return nil, "the answer carries a link no read supplied"
-		}
-	}
 	lines := sentences(text)
 	covered := make([]bool, len(lines))
-	bound := map[string]bool{}
+	// A figure is bound by a support entry of its own sentence, never by one elsewhere in the answer.
+	bound := make([]map[string]bool, len(lines))
+	for i := range bound {
+		bound[i] = map[string]bool{}
+	}
 	cited := []chatCitation{}
 	seen := map[string]bool{}
 	for _, s := range support {
@@ -387,14 +401,14 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 				return nil, "a cited field does not hold the cited value"
 			}
 			if n := normalizeFigure(s.value); n != "" {
-				bound[n] = true
+				bound[s.sentence][n] = true
 			}
 		case s.quote != "":
 			if len(s.quote) < 8 || len(s.quote) > 500 || !strings.Contains(read.text, s.quote) {
 				return nil, "a quote is not in the read it cites"
 			}
 			for _, f := range agentFigures(s.quote) {
-				bound[f] = true
+				bound[s.sentence][f] = true
 			}
 		default:
 			return nil, "a support entry cites neither a field nor a quote"
@@ -415,9 +429,11 @@ func agentSupport(kind, text string, support []agentSupportEntry, reads map[stri
 			return nil, fmt.Sprintf("sentence %d has no support", i)
 		}
 	}
-	for _, f := range figures {
-		if !bound[f] {
-			return nil, "the figure " + f + " is bound to no read"
+	for i, line := range lines {
+		for _, f := range agentFigures(line) {
+			if !bound[i][f] {
+				return nil, "the figure " + f + " is bound to no read in its sentence"
+			}
 		}
 	}
 	if len(cited) == 0 {
@@ -491,6 +507,7 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 	}
 	closesSeen := []string{}
 	var previewed []string
+	previewedGoal := ""
 	previewedMore := false
 	known := true
 	limitReached := false
@@ -569,8 +586,9 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				}
 				if agentWrites[call.Name] == "portfolio" {
 					// The card lists exactly the closes the preview showed; confirmation refuses a changed selection.
-					if previewed == nil || previewedMore {
-						step.Status, output = "refused", "refused: preview the goal with select_closes_preview first, and only a selection it lists in full can be proposed"
+					goal, _ := args["text"].(string)
+					if previewed == nil || previewedMore || !strings.EqualFold(strings.TrimSpace(goal), previewedGoal) {
+						step.Status, output = "refused", "refused: preview this exact goal with select_closes_preview first; only a selection it lists in full can be proposed, with the goal's own words"
 						break
 					}
 					args["closes"] = previewed
@@ -629,6 +647,8 @@ func runAgent(ctx context.Context, db *sql.DB, org, closeID, paperID, question s
 				}
 				capped, truncated, _, closes, lineageKnown := modelResult(t, redacted, pinned)
 				if t.name == "select_closes_preview" {
+					previewedGoal, _ = args["text"].(string)
+					previewedGoal = strings.TrimSpace(previewedGoal)
 					previewed, previewedMore = closes, !lineageKnown
 					if previewed == nil {
 						previewed = []string{}

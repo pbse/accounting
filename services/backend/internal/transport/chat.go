@@ -1122,8 +1122,16 @@ func registerChat(mux *http.ServeMux, db *sql.DB) {
 		closes := closesLiteral(nil)
 		if agent && (closeID != "" || result.known) {
 			closes = closesLiteral(result.closes)
-		} else if agent && result.proposal != nil && result.proposal.TargetClose != "" {
-			closes = closesLiteral([]string{result.proposal.TargetClose})
+		} else if agent && result.proposal != nil {
+			// A card's closes are recorded even when no read's lineage is known: the target close, or a goal's selection.
+			targets := []string{}
+			if result.proposal.TargetClose != "" {
+				targets = append(targets, result.proposal.TargetClose)
+			}
+			if selected, ok := result.proposal.Args["closes"].([]string); ok {
+				targets = append(targets, selected...)
+			}
+			closes = closesLiteral(targets)
 		}
 		proposal, target := "", ""
 		if result.proposal != nil && agent && reply.action != "" {
