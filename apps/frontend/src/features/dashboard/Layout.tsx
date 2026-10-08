@@ -141,8 +141,8 @@ export default function WorkspaceLayout() {
             </form>
           )}
           {known && !executive && signedIn && (
-            <button type="button" className="button primary" aria-label="Ask the agent" onClick={openAssistant}>
-              <Icon name="agent" /> <span>Ask the agent</span>
+            <button type="button" className="button primary" aria-label="Open the agent" onClick={openAssistant}>
+              <Icon name="agent" /> <span>Agent</span>
             </button>
           )}
           <AccountMenu />
@@ -160,7 +160,7 @@ export default function WorkspaceLayout() {
             </div>
             {!executive && signedIn && (
               <div className="rail-group end">
-                <button type="button" className="rail-item" title="Ask the agent" aria-label="Ask the agent" onClick={openAssistant}>
+                <button type="button" className="rail-item" title="Agent" aria-label="Open the agent" onClick={openAssistant}>
                   <Icon name="agent" size={18} />
                 </button>
               </div>

@@ -2,7 +2,7 @@
 
 > This describes the assistant as built. Its rebuild into an agent that chooses its own reads and proposes actions as cards is designed in [agent-chat.md](agent-chat.md); as each part of that plan ships, the behavior here is replaced.
 
-The **Assistant** button (bottom right of every signed-in workspace page) opens a panel that answers questions from the saved work you can already see (migration 072). It shows only in a signed-in or unlocked workspace, and it remembers whether it was open in this browser; nothing else is kept in the browser.
+The **Agent** button (bottom right of every signed-in workspace page, and in the top bar and rail) opens a panel that answers questions from the saved work you can already see (migration 072). It shows only in a signed-in or unlocked workspace, and it remembers whether it was open in this browser; nothing else is kept in the browser.
 
 ## Context and history
 
@@ -14,7 +14,7 @@ The **Assistant** button (bottom right of every signed-in workspace page) opens 
 
 ## What it answers
 
-With **Agent chat** on (Settings → Policies: for client closes, or firm-wide; migration 133), a free-text message goes to the agent: the model chooses what to read from the registry of tools below, each read runs through the close routes under your own permissions, and the answer is written in a separate step that must bind every figure and sentence to a read that was sent. The panel shows each step as it runs (what was read, refused, unavailable or proposed), then the answer with chips linking the fields it was bound to. An action the agent proposes is a card you confirm; nothing runs before that. A round's reads run together under the loop's deadline. The first round reserves its own model call and the answer's, so a round never spends the last call the answer needs. Each attempt counts its model calls against the firm's daily limit and records only its outcome, rounds, tool calls and a trace without content (migration 135).
+With **Agent chat** on (Settings → Policies: for client closes, or firm-wide; migration 133), a free-text message goes to the agent: the model chooses what to read from the registry of tools below, each read runs through the close routes under your own permissions, and the answer is written in a separate step that must bind every figure and sentence to a read that was sent. The panel shows each step as it runs (what was read, refused, unavailable or proposed), then the answer with chips linking the fields it was bound to; the panel's look (composer, bubbles, steps, cards, phone sheet, motion) is set out in the [design system](design-system.md#the-agent-comes-first). An action the agent proposes is a card you confirm; nothing runs before that. A round's reads run together under the loop's deadline. The first round reserves its own model call and the answer's, so a round never spends the last call the answer needs. Each attempt counts its model calls against the firm's daily limit and records only its outcome, rounds, tool calls and a trace without content (migration 135).
 
 With the agent off, or outside a close while the firm allows it only for closes, a message is answered as before: matched to one of the fixed reads below by its words, without a model, and anything else gets a short list of what the panel can answer. A [command](#commands) runs its fixed read or card at every level.
 
