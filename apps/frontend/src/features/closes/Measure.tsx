@@ -209,7 +209,7 @@ function TrackRecord() {
           ]}
         />
       )}
-      {items + work.failed_jobs + work.unsupported_intakes === 0 && <p className="empty">No work in closes from {data.window_from} to {data.window_to} yet.</p>}
+      {items + work.failed_jobs + work.unsupported_intakes === 0 && <p className="empty">No preparation work in closes from {data.window_from} to {data.window_to} yet.</p>}
       {items + work.failed_jobs + work.unsupported_intakes > 0 && (
       <p>
         {items} work items: {work.straight_through} straight through, {work.person_confirmed} after a person confirmed the facts, {work.carried} carried or

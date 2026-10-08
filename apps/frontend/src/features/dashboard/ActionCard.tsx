@@ -139,7 +139,7 @@ export function ActionCard({ closeId, action, outcome, live, proposedReason = ""
           <label>
             <input type="checkbox" checked={confirmed === scope.digest} onChange={(e) => setConfirmed(e.target.checked ? scope.digest : "")} /> {agree[action]}
           </label>
-          <p className="assistant-note">Confirming needs the workpapers:review permission and runs the close page's own checks.</p>
+          <p className="assistant-note">Confirming needs the reviewer role and runs the close page's own checks.</p>
           <button type="button" className="primary" disabled={busy || confirmed !== scope.digest || (action === "stop" && !reason.trim())} onClick={() => void submit()}>
             {busy ? "Confirming…" : titles[action]}
           </button>

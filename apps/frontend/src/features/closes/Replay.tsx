@@ -35,7 +35,7 @@ export function Replay({ closeId }: { closeId: string }) {
       <p className="note">
         Reads up to 3 of this close's most recently confirmed documents again with the current model (up to 3 model calls), on the evidence the
         agent originally selected, and compares each reading with what was confirmed. Only the comparison is saved; no reading or workpaper changes.
-        The worker runs the same check once for each new model and reasoning effort.
+        The check runs again once for each new model setting.
       </p>
       {error && <p role="alert">{error}</p>}
       {result?.created_at && (
@@ -47,7 +47,7 @@ export function Replay({ closeId }: { closeId: string }) {
         <RowList
           columns={[
             "Document",
-            <>Agent ({result.model}; {result.reasoning_effort == null ? "reasoning effort not recorded" : `${result.reasoning_effort || "provider default"} reasoning effort`})</>,
+            <>Agent ({result.model}{result.reasoning_effort ? `, ${result.reasoning_effort}` : ""})</>,
             "",
             "",
           ]}

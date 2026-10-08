@@ -383,7 +383,7 @@ function Progress({ closeId, status, refresh }: { closeId: string; status: Statu
                 )}
                 {!needs && signoff.state === "open" && progress.ready && (
                   <li>
-                    <Link to={signoffTab}>Sign off the close →</Link> (needs close:signoff)
+                    <Link to={signoffTab}>Sign off the close →</Link> (needs a role that can both review and sign off)
                   </li>
                 )}
                 {signoff.next_close && (
@@ -505,7 +505,7 @@ function Proposal({ status, dueOn, proposed, everyMonth, onConfirm }: { status: 
       <button type="button" className="primary" disabled={busy || !agreed || (monthly && monthlyDays > 60)} onClick={() => void confirm()}>
         {busy ? "Handing over…" : "Hand it over"}
       </button>
-      <p className="assistant-note">Handing over needs the workpapers:review permission.</p>
+      <p className="assistant-note">Handing over needs the reviewer role.</p>
       {error && <p role="alert">{error}</p>}
     </>
   );
