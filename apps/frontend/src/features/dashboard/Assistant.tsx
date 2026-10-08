@@ -123,7 +123,6 @@ function Conversation({ closeId, paperId, focus, onClose }: { closeId: string; p
   const input = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   const waiting = usePending();
-  const location = useLocation();
   // A page that leads with its own "Ask the agent" composer (Work, Attention, a close's Overview) already offers the
   // starter questions, so the panel shows no chips of its own beside it.
   const [pageComposer, setPageComposer] = useState(false);
