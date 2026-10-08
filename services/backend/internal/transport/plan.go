@@ -225,7 +225,7 @@ func goalPlan(p goalProgress, b booksRead, closeID, entity, period, finish strin
 			review.Title = "Approve every draft"
 		}
 	}
-	plan := []planStep{booksStep(b, closeID, entity, period), docs, accounts, {Key: "verify", Title: "Reconcile and verify", State: "unknown", Text: "Checking…", Link: base}, review}
+	plan := []planStep{booksStep(b, closeID, entity, period), docs, accounts, {Key: "verify", Title: "Reconcile and verify", State: "unknown", Text: "Checking…", Link: base + "?tab=books"}, review}
 	if finish != "signoff" {
 		return plan
 	}
@@ -254,7 +254,7 @@ func goalPlan(p goalProgress, b booksRead, closeID, entity, period, finish strin
 // verifyStep is what the close's brief found when it tied the balance sheet and scanned the ledger, in its own words, and,
 // once the books are read, whether QuickBooks' two reads agree; the books step says what is missing before that.
 func verifyStep(lines []briefLine, base string, books bool) planStep {
-	s := planStep{Key: "verify", Title: "Reconcile and verify", State: "done", Text: "The balance sheet ties and the ledger raises no questions.", Link: base, Lines: []string{}}
+	s := planStep{Key: "verify", Title: "Reconcile and verify", State: "done", Text: "The balance sheet ties and the ledger raises no questions.", Link: base + "?tab=books", Lines: []string{}}
 	rank := map[string]int{"done": 0, "info": 0, "waiting": 1, "unknown": 2, "attention": 3}
 	worst := 0
 	for _, l := range lines {
@@ -281,7 +281,7 @@ func verified(mux *http.ServeMux, r *http.Request, closeID string, plan []planSt
 		Lines []briefLine `json:"lines"`
 	}
 	base := "/dashboard/closes/" + closeID
-	step := planStep{Key: "verify", Title: "Reconcile and verify", State: "unknown", Text: "The checks could not be read right now.", Link: base}
+	step := planStep{Key: "verify", Title: "Reconcile and verify", State: "unknown", Text: "The checks could not be read right now.", Link: base + "?tab=books"}
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequestWithContext(r.Context(), "GET", "/v1/closes/"+url.PathEscape(closeID)+"/brief", nil))
 	if rec.Code == 200 && json.Unmarshal(rec.Body.Bytes(), &b) == nil {

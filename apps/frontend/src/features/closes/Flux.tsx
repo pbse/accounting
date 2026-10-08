@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { type FormEvent, useEffect, useState } from "react";
 import { clientAsk, type CoverageStatus } from "./ask";
 import { PasscodeNotice, SendRequestEmail } from "./Email";
@@ -144,7 +145,7 @@ export function Flux({ closeId }: { closeId: string }) {
                   {ask.asked[c.account_id] && (
                     <p>
                       <small>
-                        Already in request #{ask.asked[c.account_id]}. Send it or follow it up in <a href="#coverage-work">Coverage</a>.
+                        Already in request #{ask.asked[c.account_id]}. Send it or follow it up in <Link to="?tab=overview#coverage-work">Coverage</Link>.
                       </small>
                     </p>
                   )}
@@ -152,7 +153,7 @@ export function Flux({ closeId }: { closeId: string }) {
                     <p>
                       <small>
                         Request #{ask.withdraw[c.account_id]} was made on an earlier capture, so the client can no longer answer it. Withdraw it in{" "}
-                        <a href="#coverage-work">Coverage</a> to ask again.
+                        <Link to="?tab=overview#coverage-work">Coverage</Link> to ask again.
                       </small>
                     </p>
                   )}

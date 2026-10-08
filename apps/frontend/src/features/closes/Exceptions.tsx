@@ -60,12 +60,13 @@ export function Exceptions({ closeId }: { closeId: string }) {
   const correction = (item: Found): [string, string] | undefined => {
     // The agent suggests applying an unapplied payment or a supplier credit when the open items support one pairing.
     const apply = ({ unapplied_payment: "apply-payment", open_supplier_credit: "apply-vendor_credit" } as Record<string, string>)[item.type];
-    if (apply) return scan.capture?.source === "quickbooks" ? ["workpapers", apply] : undefined;
+    // Corrections and applications sit on the Books tab, beside the exceptions that suggest them.
+    if (apply) return scan.capture?.source === "quickbooks" ? ["books", apply] : undefined;
     return item.type !== "uncategorized" && item.type !== "inconsistent_coding"
       ? undefined
       : scan.capture?.source === "xero"
         ? item.kind === "Bill" ? ["evidence", "correct-xero"] : undefined
-        : ({ Bill: ["workpapers", "correct-bills"], Purchase: ["workpapers", "correct-purchases"], Deposit: ["workpapers", "correct-deposits"] } as Record<string, [string, string]>)[item.kind];
+        : ({ Bill: ["books", "correct-bills"], Purchase: ["books", "correct-purchases"], Deposit: ["books", "correct-deposits"] } as Record<string, [string, string]>)[item.kind];
   };
   async function copy(items: string[]) {
     try {
