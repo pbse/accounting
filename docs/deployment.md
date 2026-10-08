@@ -57,7 +57,7 @@ Names below match `.github/workflows/deploy.yml`. Never put secrets in `VITE_*`,
 | Encrypted connectors/email | — | `SECRETS_KEY` (32 random bytes, 64 hex characters; same on API/worker, backed up separately) |
 | Welcome emails (optional) | `PLATFORM_EMAIL_FROM`, Krith's sender on a domain verified in Resend ([sign-in](sign-in.md#welcome-emails)) | Queue worker: `PLATFORM_EMAIL_KEY`, a send-only Resend key for that domain (set both or neither) |
 | OpenAI proposals | `OPENAI_MODEL` | `OPENAI_API_KEY` (configure both or neither; API and worker) |
-| Gemini PDF reading (optional) | Optional `GEMINI_OCR_MODEL` (default `gemini-3.8-flash`) | Queue worker only: `GEMINI_API_KEY`, from a **paid** (billing-enabled) Google project. On the free tier Google may use content to improve its products and have people review it. With the key, Gemini reads every PDF page ([PDF reading](recalculation-and-pdf.md)) |
+| Gemini PDF reading (optional) | `GEMINI_PAID_SERVICE=confirmed`, set only once you have checked that the key's Google project has billing enabled (the paid service); optional `GEMINI_OCR_MODEL` (default `gemini-3.8-flash`) | Queue worker only: `GEMINI_API_KEY`. On the free tier Google may use content to improve its products and have people review it, so without the confirmation no page is sent. With both, Gemini reads every PDF page ([PDF reading](recalculation-and-pdf.md)) |
 | Sandbox QuickBooks OAuth | `QBO_CLIENT_ID`, `QBO_REDIRECT_URI` | `QBO_CLIENT_SECRET`; optional `QBO_WEBHOOK_VERIFIER` |
 | Production QuickBooks OAuth | `QBO_PRODUCTION_CLIENT_ID`, `QBO_PRODUCTION_REDIRECT_URI` | `QBO_PRODUCTION_CLIENT_SECRET` |
 | Xero OAuth | `XERO_CLIENT_ID`, `XERO_REDIRECT_URI` | `XERO_CLIENT_SECRET`; optional `XERO_WEBHOOK_KEY` |

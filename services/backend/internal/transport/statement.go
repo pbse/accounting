@@ -306,7 +306,7 @@ func registerStatements(mux *http.ServeMux, db *sql.DB) {
 			reject("Confirm the reviewed rows.")
 			return
 		case len(check.PageProblems) > 0 || !pagesOK(content):
-			reject("Pages are missing or out of order: " + strings.Join(check.PageProblems, " ") + " Upload the complete statement.")
+			reject("The statement's pages need attention: " + strings.Join(check.PageProblems, " ") + " Upload the complete statement, or compare it with the original.")
 			return
 		case !slices.Equal(sortedUnique(in.PagesChecked), pageRange(check.Pages)):
 			reject(fmt.Sprintf("Check each of the statement's %d pages against the original before confirming.", check.Pages))

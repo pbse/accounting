@@ -183,12 +183,21 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 func TestGeminiIsConfiguredOnlyWithAKey(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GEMINI_OCR_MODEL", "")
-	if GeminiFromEnv() != nil || OCRSetting()["provider"] != "tesseract" {
+	t.Setenv("GEMINI_PAID_SERVICE", "confirmed")
+	if GeminiFromEnv() != nil || OCRSetting()["provider"] != "tesseract" || OCRSetting()["held"] != "" {
 		t.Fatal("no key, no Gemini")
 	}
+	// A key alone sends nothing: the operator must confirm its project is on Google's paid service.
 	t.Setenv("GEMINI_API_KEY", "test-key-not-real")
+	for _, unconfirmed := range []string{"", "yes", "Confirmed"} {
+		t.Setenv("GEMINI_PAID_SERVICE", unconfirmed)
+		if GeminiFromEnv() != nil || OCRSetting()["provider"] != "tesseract" || OCRSetting()["held"] != "paid service not confirmed" {
+			t.Fatalf("a key without the paid service confirmed (%q) sends no page: %+v", unconfirmed, OCRSetting())
+		}
+	}
+	t.Setenv("GEMINI_PAID_SERVICE", "confirmed")
 	if g := GeminiFromEnv(); g == nil || g.model != defaultGeminiModel || OCRSetting()["model"] != defaultGeminiModel || strings.Contains(g.endpoint, "key=") {
-		t.Fatalf("a key turns Gemini on with the default model: %+v", OCRSetting())
+		t.Fatalf("a key on the confirmed paid service turns Gemini on with the default model: %+v", OCRSetting())
 	}
 	t.Setenv("GEMINI_OCR_MODEL", "gemini-3.7-flash")
 	if OCRSetting()["model"] != "gemini-3.7-flash" {
@@ -231,5 +240,20 @@ func TestSameReadingSetsOnlyLayoutAside(t *testing.T) {
 		if sameReading(pair[0], pair[1]) {
 			t.Fatalf("%q and %q are different readings", pair[0], pair[1])
 		}
+	}
+}
+
+func TestAPageGeminiReadDifferentlyHoldsTheDocumentsFacts(t *testing.T) {
+	flagged := "--- Page 1 · PDF text; Gemini gemini-3.8-flash-001" + imageDiffers + " ---\nStatement\nPage 1 of 2\n--- Page 2 · PDF text; Gemini gemini-3.8-flash-001 read the same text ---\nPage 2 of 2\n"
+	check := Check("statement.pdf", flagged)
+	if len(check.Questions) != 1 || !strings.Contains(check.Questions[0], "PDF page 1: Gemini's reading of the page image differs from its PDF text") {
+		t.Fatalf("a page Gemini read differently is a question that holds the facts: %+v", check)
+	}
+	if agreed := Check("statement.pdf", strings.Replace(flagged, imageDiffers, " read the same text", 1)); len(agreed.Questions) != 0 {
+		t.Fatalf("pages Gemini read the same raise nothing: %+v", agreed)
+	}
+	// Only the extractor's own marker counts: the same words inside a page's text do not.
+	if inText := Check("statement.pdf", "--- Page 1 · PDF text ---\nGemini"+imageDiffers+" ---\nPage 1 of 1\n"); len(inText.Questions) != 0 {
+		t.Fatalf("a page's text cannot raise the question: %+v", inText)
 	}
 }

@@ -129,7 +129,7 @@ func registerSecurity(mux *http.ServeMux, db *sql.DB) {
 			answers += " Firm-wide written answers are on: a firm-wide question none of the fixed reads matches is sent with the member's lists of what needs a person today, the review queue, blocked work and work handed to the agent, with client names, across the closes the member can open."
 		}
 		ocr, ocrModel := workerOCR(r.Context(), db)
-		gemini := map[string]string{"gemini": "Key set on the worker; model " + ocrModel, "tesseract": "Key not set on the worker; PDFs are read locally", "": "The worker has not reported its PDF reading in the last five minutes"}[ocr]
+		gemini := map[string]string{"gemini": "Key set on the worker; model " + ocrModel, "tesseract": "Key not set on the worker; PDFs are read locally", "held": "Key set on the worker, but its paid service is not confirmed, so PDFs are read locally", "": "The worker has not reported its PDF reading in the last five minutes"}[ocr]
 		// What each outside service receives, from the code that calls it, and what shows it is in use here.
 		out["providers"] = []map[string]any{
 			{"provider": "Google Gemini", "receives": "Each page of a PDF the firm adds (uploaded, imported, forwarded or sent by a client), as an image, to read its text. A page's own PDF text is always kept; there Gemini's reading only checks it.", "evidence": gemini, "in_use": ocr == "gemini"},

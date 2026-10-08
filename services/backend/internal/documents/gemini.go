@@ -18,9 +18,11 @@ import (
 )
 
 // Gemini reads a rendered PDF page through Google's Gemini API (generateContent), for every page of a PDF; Extract
-// decides whether its reading is used. Configured on the worker: GEMINI_API_KEY, which must belong to a paid
-// (billing-enabled) project, since Google may use free-tier content to improve its products, and GEMINI_OCR_MODEL. The key
-// is sent only in the x-goog-api-key header, never in a URL, a log line or a subprocess's environment.
+// decides how its reading is used. Configured on the worker: GEMINI_API_KEY; GEMINI_PAID_SERVICE, which must be
+// "confirmed"; and optionally GEMINI_OCR_MODEL. Google may use content sent with a free-tier key to improve its products
+// and have people review it, against what Krith tells firms, and a key's billing cannot be read through the API, so
+// the operator confirms the key's project is on the paid service; without that no page is sent. The key is sent only
+// in the x-goog-api-key header, never in a URL, a log line or a subprocess's environment.
 type Gemini struct {
 	key, model, endpoint string
 	client               *http.Client
@@ -35,15 +37,18 @@ var geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/"
 
 var geminiModelName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,63}$`)
 
-// GeminiFromEnv is the configured reader, or nil without a key (or with a malformed model name).
+// GeminiFromEnv is the configured reader, or nil without a key, without the paid service confirmed, or with a
+// malformed model name.
 func GeminiFromEnv() *Gemini {
 	key := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 	model := cmp.Or(strings.TrimSpace(os.Getenv("GEMINI_OCR_MODEL")), defaultGeminiModel)
-	if key == "" || !geminiModelName.MatchString(model) {
+	if key == "" || !paidConfirmed() || !geminiModelName.MatchString(model) {
 		return nil
 	}
 	return newGemini(key, model, geminiEndpoint, nil)
 }
+
+func paidConfirmed() bool { return os.Getenv("GEMINI_PAID_SERVICE") == "confirmed" }
 
 // newGemini is a reader whose client never follows a redirect: one would carry the key and the page to wherever it
 // pointed. A redirect is answered as the failed reading it is.
@@ -56,6 +61,9 @@ func newGemini(key, model, endpoint string, transport http.RoundTripper) *Gemini
 func OCRSetting() map[string]string {
 	if g := GeminiFromEnv(); g != nil {
 		return map[string]string{"provider": "gemini", "model": g.model}
+	}
+	if strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != "" && !paidConfirmed() {
+		return map[string]string{"provider": "tesseract", "held": "paid service not confirmed"}
 	}
 	return map[string]string{"provider": "tesseract"}
 }

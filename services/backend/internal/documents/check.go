@@ -117,6 +117,12 @@ func Check(name, content string) CheckResult {
 				if i+1 < len(pages) {
 					end = pages[i+1][0]
 				}
+				// A page whose image Gemini read differently from its text layer holds its facts until someone compares
+				// the original: the text kept may lack, or contradict, what the page shows.
+				marker, _, _ := strings.Cut(content[page[0]:end], "\n")
+				if strings.HasSuffix(marker, imageDiffers+" ---") {
+					result.Questions = append(result.Questions, fmt.Sprintf("PDF page %d: Gemini's reading of the page image differs from its PDF text; compare the original before using its facts.", i+1))
+				}
 				labels := printedPage.FindAllStringSubmatch(content[page[1]:end], -1)
 				if len(labels) > 0 {
 					pagesWithPrinted++

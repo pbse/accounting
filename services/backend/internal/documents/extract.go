@@ -107,7 +107,7 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 				case sameReading(text, layer):
 					return layer, "PDF text; Gemini " + model + " read the same text", nil
 				default:
-					return layer, "PDF text; Gemini " + model + " read it differently, so check the original", nil
+					return layer, "PDF text; Gemini " + model + imageDiffers, nil
 				}
 			}
 		}
@@ -127,6 +127,10 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 }
 
 var errRender, errOCR = errors.New("render"), errors.New("ocr")
+
+// imageDiffers ends the label of a page whose image Gemini read differently from its text layer; Check turns it into
+// a question that holds the document's facts until a person compares the original.
+const imageDiffers = " read it differently, so check the original"
 
 // Extract retains page numbers and labels machine readings separately from the PDF text layer.
 // ponytail: English OCR, 20 pages, 5 MiB originals; larger documents need a separate intake budget.
