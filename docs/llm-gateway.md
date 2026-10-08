@@ -1,6 +1,6 @@
 # LLM gateway and context machine
 
-All eight existing model request paths now go through `services/backend/internal/llm`: evidence selection, preparation, procedure drafting, statement extraction, work commands, workflow planning, written answers and investigation rounds. Feature code builds a request and validates the result. The library owns HTTP, credentials on the wire, provider response parsing, streaming, refusals, timeouts and response limits.
+All nine model request paths go through `services/backend/internal/llm`: evidence selection, preparation, procedure drafting, statement extraction, work commands, workflow planning, written answers, investigation rounds and the agent chat loop (`chat`, reserved by the [agentic chat plan](agent-chat.md) and routed like the others before its loop exists). Feature code builds a request and validates the result. The library owns HTTP, credentials on the wire, provider response parsing, streaming, refusals, timeouts and response limits.
 
 The library includes an OpenAI adapter and a context-machine client. The hosted runtime installs Codex and Claude Code in a private Cloudflare Container. See [deployment instructions](context-machine-deployment.md) for required secrets, database grants, CI and rollout. All accounting purposes can select direct API or context-machine completion by configuration; research is available to authorized server workflows through the library, with no new public research endpoint.
 
@@ -10,7 +10,7 @@ Features call only `llm.Generate(ctx, request)`. They do not read provider envir
 
 A request declares its purpose, instructions/data, output schema or typed conversation/tool messages, and execution limits. The gateway maps its purpose to the configured model and adapter. Unknown or disabled purposes return `ErrUnavailable`; there is no fallback that could send a new workflow's data to an unintended provider. Callers may use `llm.Model(ctx, purpose)` for availability checks and configured-model provenance. Responses also include the actual reported model, provider, run ID and usage.
 
-`LLM_PROVIDER=api` (the compatibility default) routes all eight accounting purposes to the direct OpenAI adapter. `LLM_PROVIDER=context_machine` routes all eight to private `/v1/complete`, using the CLI selected by `CONTEXT_MACHINE_MODEL`. No feature changes are required to switch. Research always uses `/v1/run`. Selection is fixed at startup; failures never cause fallback. Model proposals persist `engine: context_machine` on that route and retain every confirmation, source freshness, straight-through eligibility and replay check used for API proposals. Historical `openai` proposals keep those checks too. Replay model identity includes the context-machine agent/transport so switching routes triggers a fresh evaluation.
+`LLM_PROVIDER=api` (the compatibility default) routes all nine accounting purposes to the direct OpenAI adapter. `LLM_PROVIDER=context_machine` routes all nine to private `/v1/complete`, using the CLI selected by `CONTEXT_MACHINE_MODEL`. No feature changes are required to switch. Research always uses `/v1/run`. Selection is fixed at startup; failures never cause fallback. Model proposals persist `engine: context_machine` on that route and retain every confirmation, source freshness, straight-through eligibility and replay check used for API proposals. Historical `openai` proposals keep those checks too. Replay model identity includes the context-machine agent/transport so switching routes triggers a fresh evaluation.
 
 ```go
 // Inside an authorized workflow, with the startup dependency already attached.
@@ -36,11 +36,11 @@ result, err := llm.Generate(ctx, llm.Request{
 
 | Setting | Meaning |
 | --- | --- |
-| `LLM_PROVIDER` | `api` or `context_machine`; applies to all eight accounting purposes. |
+| `LLM_PROVIDER` | `api` or `context_machine`; applies to all nine accounting purposes. |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Direct API credentials/model. Neither is needed in the main services when routing completions through the context machine. |
 | `GEMINI_API_KEY`, `GEMINI_OCR_MODEL` | Not a purpose route: Google's Gemini reads PDF page images for the worker's document extraction, through `llm.Gemini` (`llm/gemini.go`), since a page goes as an image. `GEMINI_PAID_SERVICE=confirmed` is also required. Its calls still count against the firm's daily model-call limit ([PDF reading](recalculation-and-pdf.md)). |
 | `LLM_ALLOW_UNCAPPED_OUTPUT_TOKENS` | Explicit `true` acknowledgement required for Codex subscription completions; API-key and Claude modes retain token caps. |
-| `CONTEXT_MACHINE_PROFILES` | Exact authorized organization/subject/profile triples; every completion must match a trusted HTTP or job identity. |
+| `CONTEXT_MACHINE_PROFILES` | Authorized organization/subject/profile triples; every completion must match a trusted HTTP or job identity. A subject of `*` names every current member of the organization: the gateway sends the member's own subject under that profile, and the service checks that member's membership and client grants on every call. Wide profiles need API-key agents ([deployment](context-machine-deployment.md#organization-wide-profiles)). |
 | `LLM_MODELS` | Optional JSON object of purpose-specific model overrides, for example `{"preparation":"careful-model","work_command":"fast-model"}`. Overrides apply to the selected route; unknown purposes and empty models fail startup. |
 | `CONTEXT_MACHINE_TOKEN`, `CONTEXT_MACHINE_MODEL` | Enable the research route; both or neither must be set. The value is `codex` or `claude`; the service selects the actual model. |
 | `CONTEXT_MACHINE_ENDPOINT` | Optional local/private infrastructure override. Cloudflare sets the fixed bridge `http://context-machine.internal/v1/run`; callers never provide a URL. |

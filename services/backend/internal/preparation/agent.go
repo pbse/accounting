@@ -734,6 +734,20 @@ func ProcessAgent(ctx context.Context, db *sql.DB) (bool, error) {
 		}
 		return true, tx.Commit()
 	}
+	// Under an organization-wide model profile, membership alone made the creator eligible; the client's evidence still
+	// goes to the model only while the creator holds this client.
+	if calls > 0 && llm.ViaWideProfile(ctx, org) {
+		var granted bool
+		if err = tx.QueryRowContext(ctx, `SELECT $1='local-development' OR EXISTS(SELECT 1 FROM current_client_access WHERE organization_id=$1 AND subject=$2 AND lower(client_entity)=lower($3) AND granted)`, org, actor, entity).Scan(&granted); err != nil {
+			return false, err
+		}
+		if !granted {
+			if _, err = tx.ExecContext(ctx, `UPDATE preparation_jobs SET state='failed',error='The job creator no longer has access to this client, so the agent cannot read its documents.' WHERE id=$1`, id); err != nil {
+				return false, err
+			}
+			return true, tx.Commit()
+		}
+	}
 	if calls > 0 {
 		if err = ReserveModelCalls(ctx, tx, org, calls); errors.Is(err, ErrModelLimit) {
 			if _, err = tx.ExecContext(ctx, `UPDATE preparation_intakes SET agent_claim=NULL,agent_retry_at=now()+interval '15 minutes' WHERE job_id=$1`, id); err != nil {

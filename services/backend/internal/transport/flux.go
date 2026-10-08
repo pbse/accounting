@@ -270,6 +270,6 @@ func flux(db *sql.DB) http.HandlerFunc {
 			item["questions"] = questions
 			out = append(out, item)
 		}
-		jsonReply(w, 200, map[string]any{"state": "ready", "currency": currency, "this": this, "last": last, "changes": out, "note": "Figures are as captured in each month's snapshot; later postings are not included."})
+		jsonReply(w, 200, map[string]any{"state": "ready", "currency": currency, "this": this, "last": last, "last_close_id": priorClose, "changes": out, "note": "Figures are as captured in each month's snapshot; later postings are not included."})
 	}
 }

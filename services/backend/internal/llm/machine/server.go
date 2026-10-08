@@ -81,14 +81,22 @@ func New(cfg Config) (http.Handler, error) {
 		return nil, errors.New("default context-machine agent is not configured")
 	}
 	seen := map[string]bool{}
+	wide := false
 	for _, p := range cfg.Profiles {
 		if p.AccessProfile == "" || p.Organization == "" || p.Subject == "" || seen[p.AccessProfile] {
 			return nil, errors.New("invalid or duplicate access profile")
 		}
 		seen[p.AccessProfile] = true
+		wide = wide || p.Subject == llm.AnyMember
 	}
-	if (agents["codex"].mode == "chatgpt" || agents["claude"].mode == "subscription") && len(cfg.Profiles) != 1 {
+	personal := agents["codex"].mode == "chatgpt" || agents["codex"].mode == "subscription" || agents["claude"].mode == "subscription"
+	if personal && len(cfg.Profiles) != 1 {
 		return nil, errors.New("personal subscriptions require exactly one owner access profile")
+	}
+	// An organization-wide profile serves every member of the firm, so it needs a provider arrangement that may serve
+	// them all: API keys, never a personal login.
+	if wide && personal {
+		return nil, errors.New("an organization-wide access profile requires API-key agents")
 	}
 	if a := agents["codex"]; a.mode == "chatgpt" {
 		if len(cfg.Profiles) != 1 {

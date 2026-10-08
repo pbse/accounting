@@ -31,7 +31,11 @@ type Config struct {
 	HTTP                                               *http.Client
 }
 
-var purposes = []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation"}
+var purposes = []string{"evidence_selection", "preparation", "procedure_draft", "statement", "work_command", "plan", "written_answer", "investigation", "chat"}
+
+// AnyMember is the subject of an organization-wide caller profile: every current member of the organization may
+// complete through it, and the context machine checks that member's own access on every call.
+const AnyMember = "*"
 
 // New freezes routing configuration. Unknown purposes fail closed rather than
 // silently sending a new workflow's data to a default provider.
@@ -307,6 +311,12 @@ func WithIdentity(ctx context.Context, organization, subject string) context.Con
 }
 
 func HasIdentity(ctx context.Context) bool { _, ok := ctx.Value(identityKey{}).(identity); return ok }
+
+// Subject is the caller the HTTP or job boundary established, or empty without one.
+func Subject(ctx context.Context) string {
+	id, _ := ctx.Value(identityKey{}).(identity)
+	return id.subject
+}
 func ProviderLabel(ctx context.Context, purpose string) string {
 	c, _ := ctx.Value(clientKey{}).(*Client)
 	if c == nil {
@@ -341,10 +351,45 @@ func Allows(ctx context.Context, organization string) bool {
 		return true
 	}
 	id, has := ctx.Value(identityKey{}).(identity)
+	if has && (id.organization != organization || id.subject == "" || id.subject == AnyMember) {
+		return false
+	}
+	return c.profile(organization, id.subject).AccessProfile != ""
+}
+
+// ViaWideProfile reports that the caller's eligibility rests on an organization-wide profile rather than their own:
+// membership alone put them there, so a background caller must also check the client grant the work needs.
+func ViaWideProfile(ctx context.Context, organization string) bool {
+	c, _ := ctx.Value(clientKey{}).(*Client)
+	id, has := ctx.Value(identityKey{}).(identity)
+	if c == nil || !has || c.routes["preparation"].Provider != ContextMachine || id.organization != organization {
+		return false
+	}
 	for _, p := range c.profiles {
-		if p.Organization == organization && (!has || id.organization == organization && id.subject == p.Subject) {
-			return true
+		if p.Organization == organization && p.Subject == id.subject {
+			return false
 		}
 	}
-	return false
+	return c.profile(organization, id.subject).AccessProfile != ""
+}
+
+// profile finds the configured scope for a caller: the member's own profile first, then the organization-wide one,
+// which stands for the member themselves. Without a subject, any profile for the organization makes it eligible.
+func (c *Client) profile(organization, subject string) Scope {
+	var wide Scope
+	for _, p := range c.profiles {
+		if p.Organization != organization {
+			continue
+		}
+		if subject == "" || p.Subject == subject {
+			return p
+		}
+		if p.Subject == AnyMember {
+			wide = p
+		}
+	}
+	if wide.AccessProfile == "" {
+		return Scope{}
+	}
+	return Scope{Organization: organization, Subject: subject, AccessProfile: wide.AccessProfile}
 }

@@ -3798,3 +3798,16 @@ Request: the user's decision of 2026-10-07. Gemini reads every PDF page, Tessera
 
 Not verified: live Gemini. No Gemini call was made and no key was installed. Reading quality on real scans and tables, latency per page, and the 150-second document limit under real load are untested.
 
+
+
+## 2026-10-07: agent chat groundwork (gateway profiles, chat purpose, read caps and lineage)
+
+PR 1 of the [agentic chat plan](agent-chat.md). Local run against a fresh migrated PostgreSQL (`close_agent_test`, migrations through 131):
+
+- `go test ./internal/llm/...`: all pass, including the new `TestOrganizationWideProfileCompletesForEachMemberAsThemselves` (a `*` subject resolves to each member's own subject on the wire; the wildcard itself, an empty subject, another organization and a duplicate wide profile are refused; eligibility follows the wide profile, and `ViaWideProfile` traces a member's eligibility to the wide profile only when they have no profile of their own) and `TestServiceAcceptsMembersOfAnOrganizationWideProfile` (the service accepts a member under a wide profile, refuses the wildcard, an empty subject, another organization or access profile, and refuses to start with a wide profile under a personal login).
+- `go test ./internal/transport -run 'TestMCP|TestAssistant|TestReplay|TestModelReads|TestLineage'`: pass. `TestModelReadsAreCappedNotDropped` and `TestLineageComesFromTheReadNotTheModel` cover result caps and close lineage taken from the read's body, and that every firm-wide registry read declares its lineage.
+- `go test ./...`: every package passes except two tests in `internal/transport` that need Poppler (`TestExtractMixedPDF`, `TestPackagePreservesBothWorkpapersAndEscapesSources`), which is not installed on this machine; unrelated to this change.
+- `node --test scripts/deploy-context-machine.test.mjs`: 12/12, including the new preflight case that a wide profile needs API-key agents (refused under personal Codex login, explicit or automatic Codex subscription, and Claude subscription) and that `chat` is a known `LLM_MODELS` purpose.
+- Not covered by a test: the client-grant check a preparation job and a replay make when their creator is eligible only through a wide profile (`ProcessAgent`, `runReplay`); it is read in review.
+
+Not verified: a live context-machine deployment with a wide profile; no production firm has one yet.
