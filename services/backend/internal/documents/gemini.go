@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Gemini reads a rendered PDF page through Google's Gemini API (generateContent), for every page of a PDF; Extract
@@ -131,59 +132,18 @@ func (g *Gemini) Read(ctx context.Context, png []byte) (string, string, error) {
 	return text.String(), cmp.Or(reply.ModelVersion, g.model), nil
 }
 
-var (
-	figure = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?`)
-	// What may stand between a figure and its sign: spaces and currency symbols.
-	figureGap = " \t$€£¥"
-)
-
-// figures counts the numbers in a page's text, each with its commas dropped and its whole part's leading zeros trimmed,
-// so "1,200.00" and "1200.00" are one figure and "09" and "9" another. A figure keeps the marks that can make it
-// negative, read as they are written rather than interpreted: a minus or opening parenthesis before it, a closing
-// parenthesis or minus after it, or CR or DR after it. So "-100.00", "(100.00)", "100.00-" and "100.00 CR" are four
-// figures, none of them 100.00; a reading that drops or moves such a mark is not the same reading.
-func figures(s string) map[string]int {
-	out := map[string]int{}
-	for _, at := range figure.FindAllStringIndex(s, -1) {
-		f := strings.ReplaceAll(s[at[0]:at[1]], ",", "")
-		whole, fraction, decimal := strings.Cut(f, ".")
-		key := cmp.Or(strings.TrimLeft(whole, "0"), "0")
-		if decimal {
-			key += "." + fraction
+// squash is a page's text without its layout: every whitespace character dropped and nothing else changed, so case,
+// punctuation, commas, signs, decimal points, words and their order all still count.
+func squash(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
 		}
-		before := strings.TrimRight(s[:at[0]], figureGap)
-		for _, mark := range []string{"-", "−", "("} {
-			if strings.HasSuffix(before, mark) {
-				key = mark + key
-			}
-		}
-		after := strings.TrimLeft(s[at[1]:], figureGap)
-		for _, mark := range []string{")", "-", "−"} {
-			if strings.HasPrefix(after, mark) {
-				key += mark
-			}
-		}
-		if len(after) >= 2 && (strings.EqualFold(after[:2], "CR") || strings.EqualFold(after[:2], "DR")) && (len(after) == 2 || !isLetter(after[2])) {
-			key += " " + strings.ToUpper(after[:2])
-		}
-		out[key]++
-	}
-	return out
+		return r
+	}, s)
 }
 
-func isLetter(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' }
-
-// sameFigures says whether two readings of a page hold exactly the same figures, each as many times: Gemini's reading
-// of a page with a text layer is used only then, so it can neither add, change nor drop a figure the layer has.
-func sameFigures(a, b string) bool {
-	fa, fb := figures(a), figures(b)
-	if len(fa) != len(fb) {
-		return false
-	}
-	for f, n := range fa {
-		if fb[f] != n {
-			return false
-		}
-	}
-	return true
-}
+// sameReading says whether two readings of a page say exactly the same thing, laid out differently. Gemini's reading
+// of a page with a text layer is used only then: a swapped, changed, added, dropped or re-signed amount, a moved
+// comma or decimal point, a moved label or a different word keeps the layer's exact text.
+func sameReading(a, b string) bool { return squash(a) == squash(b) }

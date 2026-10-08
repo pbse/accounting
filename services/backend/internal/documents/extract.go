@@ -66,9 +66,9 @@ type Reading struct {
 // geminiReserve is the time a document keeps back from Gemini, so its remaining pages can still be read locally.
 const geminiReserve = 40 * time.Second
 
-// page reads one page. Its text layer, when it has one, is exact: Gemini's reading replaces it only when the two hold
-// the same figures, so a misread figure is never taken. A page without one takes Gemini's reading, or else Tesseract's.
-// render draws the page as a PNG; tesseract reads one.
+// page reads one page. Its text layer, when it has one, is exact: Gemini's reading replaces it only when the two say
+// exactly the same thing apart from layout, so a misread figure or word is never taken. A page without one takes
+// Gemini's reading, or else Tesseract's. render draws the page as a PNG; tesseract reads one.
 func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte, error), tesseract func([]byte) (string, error)) (string, string, error) {
 	var image []byte
 	var renderErr error
@@ -97,10 +97,10 @@ func (r *Reading) page(ctx context.Context, layer string, render func() ([]byte,
 				case strings.TrimSpace(text) == "":
 				case !hasLayer:
 					return text, "Gemini " + model + " (verify against original)", nil
-				case sameFigures(text, layer):
-					return text, "Gemini " + model + "; figures match the PDF text", nil
+				case sameReading(text, layer):
+					return text, "Gemini " + model + "; the same text as the PDF text layer", nil
 				default:
-					return layer, "PDF text; Gemini's reading had other figures", nil
+					return layer, "PDF text; Gemini's reading differed", nil
 				}
 			}
 		}

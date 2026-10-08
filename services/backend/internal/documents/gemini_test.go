@@ -67,22 +67,25 @@ func TestGeminiReadsEveryPageAndNeverTakesAFigureTheTextLayerLacks(t *testing.T)
 		t.Fatalf("the page goes as its PNG, read at temperature 0: %v", (*seen)[0])
 	}
 
-	// A page with its own text takes Gemini's reading only when it holds exactly the layer's figures.
-	layer := "TEXT INVOICE      12000.00\nPage 1 of 2\n"
-	g, _ = fakeGemini(t, 200, answer("TEXT INVOICE  12,000.00\nPage 1 of 2"))
+	// A page with its own text takes Gemini's reading only when it says exactly what the layer says, laid out differently.
+	layer := "TEXT INVOICE      12000.00\nWidgets  100.00\nGadgets  200.00\nPage 1 of 2\n"
+	laidOut := "TEXT INVOICE  12000.00\n\nWidgets 100.00\nGadgets 200.00\nPage 1 of 2"
+	g, _ = fakeGemini(t, 200, answer(laidOut))
 	reading = Reading{Gemini: g}
-	if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != "TEXT INVOICE  12,000.00\nPage 1 of 2" || method != "Gemini gemini-3.8-flash-001; figures match the PDF text" {
-		t.Fatalf("the same figures, laid out by Gemini: %q %q", text, method)
+	if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != laidOut || method != "Gemini gemini-3.8-flash-001; the same text as the PDF text layer" {
+		t.Fatalf("the same text, laid out by Gemini: %q %q", text, method)
 	}
 	for _, misread := range []string{
-		"TEXT INVOICE  12,000.00\nPage 1 of 2\nTax 960.00", // a figure the page lacks
-		"TEXT INVOICE  12,800.00\nPage 1 of 2",             // a changed figure
-		"TEXT INVOICE\nPage 1 of 2",                        // a dropped figure
-		"TEXT INVOICE  12,000.00 12,000.00\nPage 1 of 2",   // a figure twice
+		"TEXT INVOICE  12000.00\nWidgets 100.00\nGadgets 200.00\nPage 1 of 2\nTax 960.00", // a figure the page lacks
+		"TEXT INVOICE  12800.00\nWidgets 100.00\nGadgets 200.00\nPage 1 of 2",             // a changed figure
+		"TEXT INVOICE\nWidgets 100.00\nGadgets 200.00\nPage 1 of 2",                       // a dropped figure
+		"TEXT INVOICE  12000.00\nWidgets 200.00\nGadgets 100.00\nPage 1 of 2",             // amounts swapped between rows
+		"TEXT INVOICE  12000.00\nWidgets (100.00)\nGadgets 200.00\nPage 1 of 2",           // a re-signed amount
+		"TEXT INVOICE  12000.00\nWidgets 100.00\nGizmos 200.00\nPage 1 of 2",              // a changed word
 	} {
 		g, _ = fakeGemini(t, 200, answer(misread))
 		reading = Reading{Gemini: g}
-		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Gemini's reading had other figures" {
+		if text, method, _ = reading.page(ctx, layer, render, noTesseract); text != layer || method != "PDF text; Gemini's reading differed" {
 			t.Fatalf("Gemini's reading %q is not taken over the text layer: %q %q", misread, text, method)
 		}
 	}
@@ -176,35 +179,34 @@ func TestGeminiIsConfiguredOnlyWithAKey(t *testing.T) {
 	}
 }
 
-func TestFiguresSetFormattingAside(t *testing.T) {
-	if !sameFigures("Total 1,200.00 on 09/30/2026", "Total   1200.00 on 9/30/2026") {
-		t.Fatal("commas and leading zeros are formatting")
-	}
-	if sameFigures("Total 1,200.00", "Total 1,200") || sameFigures("Amount 12", "Amount 12 12") || sameFigures("Net 100", "Net 1000") {
-		t.Fatal("a different figure, or one more often, is not the same reading")
-	}
-	// A mark that can make a figure negative is part of it: dropping, adding or moving one is a different reading.
+func TestSameReadingSetsOnlyLayoutAside(t *testing.T) {
+	// Whitespace and line breaks are layout.
 	for _, pair := range [][2]string{
-		{"Refund -100.00", "Refund 100.00"},
-		{"Refund (100.00)", "Refund 100.00"},
-		{"Refund 100.00-", "Refund 100.00"},
-		{"Balance 100.00 CR", "Balance 100.00"},
-		{"Balance 100.00 DR", "Balance 100.00 CR"},
-		{"Refund −100.00", "Refund 100.00"},
-		{"Refund (100.00)", "Refund -100.00"},
+		{"Total      1,200.00\nDue 2026-09-30", "Total 1,200.00 Due 2026-09-30"},
+		{"Refund (1,200.00)", "Refund ( 1,200.00 )"},
+		{"Net 100.00\t\r\n", "Net 100.00"},
 	} {
-		if sameFigures(pair[0], pair[1]) || sameFigures(pair[1], pair[0]) {
-			t.Fatalf("%q and %q differ in a figure's sign", pair[0], pair[1])
+		if !sameReading(pair[0], pair[1]) {
+			t.Fatalf("%q and %q say the same, laid out differently", pair[0], pair[1])
 		}
 	}
+	// Anything else is a different reading: a figure, its sign, comma or decimal point, a word, case or order.
 	for _, pair := range [][2]string{
-		{"Refund (1,200.00)", "Refund ( 1200.00 )"},
-		{"Refund $-100", "Refund -$100"},
-		{"Balance 100.00 CR", "Balance 100.00cr"},
-		{"Credit 50 CREDIT", "Credit 50 CREDIT"},
+		{"A 100\nB 200", "A 200\nB 100"},
+		{"Fee .50", "Fee 50"},
+		{"Fee 1,50", "Fee 150"},
+		{"Total 12,000.00", "Total 12000.00"},
+		{"Refund -100.00", "Refund 100.00"},
+		{"Refund (100.00)", "Refund 100.00"},
+		{"Refund −100.00", "Refund -100.00"},
+		{"Balance 100.00 CR", "Balance 100.00"},
+		{"Due 09/30/2026", "Due 9/30/2026"},
+		{"Amount 12", "Amount 12 12"},
+		{"Paid by Acme", "Paid by ACME"},
+		{"Rent 900 Water 40", "Water 40 Rent 900"},
 	} {
-		if !sameFigures(pair[0], pair[1]) {
-			t.Fatalf("%q and %q hold the same figures, laid out differently", pair[0], pair[1])
+		if sameReading(pair[0], pair[1]) {
+			t.Fatalf("%q and %q are different readings", pair[0], pair[1])
 		}
 	}
 }
