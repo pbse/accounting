@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import "./Dialog.css";
 
 // A focused window over the page for one change: a title, one line on what it does, the form, and its actions at
@@ -6,6 +6,7 @@ import "./Dialog.css";
 // page behind keeps its place. Its body is mounted only while it is open, so each opening starts afresh.
 export function Dialog({ open, onClose, title, description, children }: { open: boolean; onClose: () => void; title: ReactNode; description?: ReactNode; children: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const id = useId();
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
@@ -13,13 +14,13 @@ export function Dialog({ open, onClose, title, description, children }: { open: 
     else if (!open && dialog.open) dialog.close();
   }, [open]);
   return (
-    <dialog ref={ref} className="dialog" onClose={onClose} onClick={(event) => event.target === event.currentTarget && onClose()}>
+    <dialog ref={ref} className="dialog" aria-labelledby={`${id}-title`} aria-describedby={description ? `${id}-description` : undefined} onClose={onClose} onClick={(event) => event.target === event.currentTarget && onClose()}>
       {open && (
         <div className="dialog-frame">
           <div className="dialog-head">
             <div>
-              <h2>{title}</h2>
-              {description && <p>{description}</p>}
+              <h2 id={`${id}-title`}>{title}</h2>
+              {description && <p id={`${id}-description`}>{description}</p>}
             </div>
             <button type="button" className="dialog-close" aria-label="Close" onClick={onClose}>
               <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none">

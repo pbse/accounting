@@ -52,28 +52,36 @@ type Change = { body: Record<string, unknown>; reason: string };
 function Edit({
   title,
   description,
+  explanation,
   open,
   onClose,
   onSave,
+  onReset,
   ready,
+  readOnly = false,
   saveLabel = "Save",
   children,
 }: {
   title: string;
   description?: ReactNode;
+  explanation: ReactNode;
   open: boolean;
   onClose: () => void;
-  onSave: (reason: string) => Promise<void>;
-  ready: boolean;
+  onSave?: (reason: string) => Promise<void>;
+  onReset?: () => void;
+  ready?: boolean;
+  readOnly?: boolean;
   saveLabel?: string;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  // Leaving without saving discards the draft: the next opening starts from the rule as it stands.
   const close = () => {
     setReason("");
     setMessage("");
+    onReset?.();
     onClose();
   };
   async function submit(event: FormEvent) {
@@ -81,7 +89,7 @@ function Edit({
     setBusy(true);
     setMessage("");
     try {
-      await onSave(reason.trim());
+      await onSave?.(reason.trim());
       setReason("");
       onClose();
     } catch (e) {
@@ -90,11 +98,23 @@ function Edit({
       setBusy(false);
     }
   }
+  if (readOnly)
+    return (
+      <Dialog open={open} onClose={close} title={title} description={description}>
+        {explanation}
+        <DialogActions>
+          <button type="button" onClick={close}>
+            Close
+          </button>
+        </DialogActions>
+      </Dialog>
+    );
   return (
     <Dialog open={open} onClose={close} title={title} description={description}>
       <form onSubmit={(e) => void submit(e)}>
         <fieldset disabled={busy}>
           {children}
+          {explanation}
           <label>
             Reason for the change
             <input value={reason} maxLength={500} placeholder="Kept with the policy's history" onChange={(e) => setReason(e.target.value)} />
@@ -127,6 +147,8 @@ const editButton = (label: string, onClick: () => void) => (
     {label}
   </button>
 );
+// Those who cannot change a rule still open what it means, one interaction away.
+const action = (allowed: boolean, label: string, onClick: () => void) => editButton(allowed ? label : "Details", onClick);
 
 function IndependentReview({ policy, refresh }: { policy: Policy; refresh: () => void }) {
   const [open, setOpen] = useState(false);
@@ -155,14 +177,22 @@ function IndependentReview({ policy, refresh }: { policy: Policy; refresh: () =>
             ? `Drafts whose entries total at least ${policy.independent_review_min_amount} need a reviewer who did not prepare them.`
             : "Any reviewer may approve a draft, including one they prepared."
       }
-      action={policy.hosted && policy.can_manage ? editButton("Edit", () => setOpen(true)) : undefined}
+      action={action(policy.hosted && policy.can_manage, "Edit", () => setOpen(true))}
     >
       {note ?? (!policy.hosted && <p>Hosted firms only.</p>)}
       <Edit
         title="Independent review"
         description="Who may approve a draft, and whether that depends on its size."
+        explanation={
+          <p>
+            With independent review on, nobody may approve a draft they prepared or confirmed, a draft without a recorded preparer cannot be approved, and posting to a
+            client's live books needs an approval that meets this rule. The threshold compares a draft's proposed entries in the draft's own currency.
+          </p>
+        }
         open={open}
         onClose={() => setOpen(false)}
+        onReset={() => (setChoice(current), setAmount(policy.independent_review_min_amount))}
+        readOnly={!(policy.hosted && policy.can_manage)}
         ready={changed && (choice !== "large" || !!amount.trim())}
         onSave={async (reason) => {
           await change(body, reason);
@@ -170,10 +200,6 @@ function IndependentReview({ policy, refresh }: { policy: Policy; refresh: () =>
           refresh();
         }}
       >
-        <p>
-          With independent review on, nobody may approve a draft they prepared or confirmed, a draft without a recorded preparer cannot be approved, and posting to a client's
-          live books needs an approval that meets this rule. The threshold compares a draft's proposed entries in the draft's own currency.
-        </p>
         <fieldset>
           <legend>Require it</legend>
           <label className="checkbox-label">
@@ -210,14 +236,21 @@ function LedgerWrites({ policy, refresh }: { policy: Policy; refresh: () => void
       status={policy.ledger_writes ? "On" : "Off"}
       statusTone={policy.ledger_writes ? "on" : "off"}
       summary={policy.ledger_writes ? "Approved entries can be written to a client's live QuickBooks or Xero company." : "Nothing is written to any client's live books; approved entries are prepared for a person to book."}
-      action={policy.can_manage_ledger_writes ? editButton(policy.ledger_writes ? "Turn off" : "Turn on", () => setOpen(true)) : undefined}
+      action={action(policy.can_manage_ledger_writes, policy.ledger_writes ? "Turn off" : "Turn on", () => setOpen(true))}
     >
       {note}
       <Edit
         title={policy.ledger_writes ? "Turn writing off" : "Turn writing on"}
         description="Whether approved entries may be written to clients' live books."
+        explanation={
+          <p>
+            When on, an approved entry can be written to a client's live QuickBooks or Xero company by a member allowed to post, under that client's posting grant and only
+            for the kinds this server allows. QuickBooks sandbox companies are not affected, and a write already made is still read back after writing is turned off.
+          </p>
+        }
         open={open}
         onClose={() => setOpen(false)}
+        readOnly={!policy.can_manage_ledger_writes}
         ready
         saveLabel={policy.ledger_writes ? "Turn writing off" : "Turn writing on"}
         onSave={async (reason) => {
@@ -231,12 +264,7 @@ function LedgerWrites({ policy, refresh }: { policy: Policy; refresh: () => void
           );
           refresh();
         }}
-      >
-        <p>
-          When on, an approved entry can be written to a client's live QuickBooks or Xero company by a member allowed to post, under that client's posting grant and only for
-          the kinds this server allows. QuickBooks sandbox companies are not affected, and a write already made is still read back after writing is turned off.
-        </p>
-      </Edit>
+      />
     </SettingCard>
   );
 }
@@ -254,14 +282,17 @@ function Materiality({ policy, refresh }: { policy: Policy; refresh: () => void 
       status={policy.materiality_amount || "Not set"}
       statusTone={policy.materiality_amount ? "info" : "off"}
       summary={policy.materiality_amount ? `A balance-sheet account whose Trial Balance differs from its support by less than ${policy.materiality_amount} is shown as within materiality.` : "Every Trial Balance difference is shown as a difference to explain."}
-      action={policy.can_manage_links ? editButton("Edit", () => (setAmount(""), setClear(false), setOpen(true))) : undefined}
+      action={action(policy.can_manage_links, "Edit", () => (setAmount(""), setClear(false), setOpen(true)))}
     >
       {note}
       <Edit
         title="Materiality"
         description="The difference per account, in the client's currency, below which a balance-sheet account is shown as within materiality."
+        explanation={<p>The comparison is per account, only while no proposed entry is pending for the account. It does not approve a draft or waive an entry.</p>}
         open={open}
         onClose={() => setOpen(false)}
+        onReset={() => (setAmount(""), setClear(false))}
+        readOnly={!policy.can_manage_links}
         ready={clear ? !!policy.materiality_amount : !!amount.trim()}
         onSave={async (reason) => {
           await change({ materiality_amount: clear ? "" : amount.trim() }, reason);
@@ -269,7 +300,6 @@ function Materiality({ policy, refresh }: { policy: Policy; refresh: () => void 
           refresh();
         }}
       >
-        <p>The comparison is per account, only while no proposed entry is pending for the account. It does not approve a draft or waive an entry.</p>
         <label>
           Materiality amount
           <input value={amount} inputMode="decimal" disabled={clear} placeholder={policy.materiality_amount || "500.00"} onChange={(e) => setAmount(e.target.value)} />
@@ -295,14 +325,21 @@ function LinkPasscodes({ policy, refresh }: { policy: Policy; refresh: () => voi
       status={policy.link_passcode ? "Required" : "Off"}
       statusTone={policy.link_passcode ? "on" : "off"}
       summary={policy.link_passcode ? "Each new client request link also needs an 8-digit passcode." : "Anyone holding a client request link can read the request and reply."}
-      action={policy.can_manage_links ? editButton(policy.link_passcode ? "Stop requiring" : "Require", () => setOpen(true)) : undefined}
+      action={action(policy.can_manage_links, policy.link_passcode ? "Stop requiring" : "Require", () => setOpen(true))}
     >
       {note}
       <Edit
         title={policy.link_passcode ? "Stop requiring passcodes" : "Require passcodes on new links"}
         description="Whether a client needs a passcode as well as the link."
+        explanation={
+          <p>
+            With passcodes on, the person who issues a link sees its passcode once and tells the client by phone or in person; five wrong tries close the link. Links issued
+            earlier keep working as they were issued.
+          </p>
+        }
         open={open}
         onClose={() => setOpen(false)}
+        readOnly={!policy.can_manage_links}
         ready
         saveLabel={policy.link_passcode ? "Stop requiring passcodes" : "Require passcodes"}
         onSave={async (reason) => {
@@ -310,12 +347,7 @@ function LinkPasscodes({ policy, refresh }: { policy: Policy; refresh: () => voi
           setSaved("Saved.");
           refresh();
         }}
-      >
-        <p>
-          With passcodes on, the person who issues a link sees its passcode once and tells the client by phone or in person; five wrong tries close the link. Links issued
-          earlier keep working as they were issued.
-        </p>
-      </Edit>
+      />
     </SettingCard>
   );
 }
@@ -339,14 +371,17 @@ function ReminderRule({ policy, refresh }: { policy: Policy; refresh: () => void
       status={`${policy.reminder_max} ${policy.reminder_max === 1 ? "reminder" : "reminders"}`}
       statusTone="info"
       summary={`A reminder is due ${days(policy.reminder_after_days)}; a request can have ${policy.reminder_max}.`}
-      action={policy.can_manage_links ? editButton("Edit", () => setOpen(true)) : undefined}
+      action={action(policy.can_manage_links, "Edit", () => setOpen(true))}
     >
       {note}
       <Edit
         title="Reminders to clients"
         description="When a reminder is due and how many a request can have. Each still needs a person's approval."
+        explanation={<p>After the last reminder, or once the private link expires, contact the client another way.</p>}
         open={open}
         onClose={() => setOpen(false)}
+        onReset={() => (setAfter(policy.reminder_after_days), setMost(policy.reminder_max))}
+        readOnly={!policy.can_manage_links}
         ready={after !== policy.reminder_after_days || most !== policy.reminder_max}
         onSave={async (reason) => {
           await change({ reminder_after_days: after, reminder_max: most }, reason);
@@ -376,7 +411,6 @@ function ReminderRule({ policy, refresh }: { policy: Policy; refresh: () => void
             </select>
           </label>
         </div>
-        <p>After the last reminder, or once the private link expires, contact the client another way.</p>
       </Edit>
     </SettingCard>
   );
@@ -404,14 +438,37 @@ function AgentChatSetting({ policy, refresh }: { policy: Policy; refresh: () => 
       status={policy.answers_stopped ? "Decision needed" : current.label}
       statusTone={policy.answers_stopped ? "warn" : policy.agent_chat === "off" ? "off" : "on"}
       summary={policy.answers_stopped ? "Written answers stopped when this setting replaced them. Choose a level, or Off, with a reason." : current.detail}
-      action={policy.can_manage_agent_chat ? editButton("Edit", () => setOpen(true)) : undefined}
+      action={action(policy.can_manage_agent_chat, "Edit", () => setOpen(true))}
     >
       {note}
       <Edit
         title="Agent chat"
         description={`Whether a member's question, and the reads the model chooses, may go to ${policy.model_provider}.`}
+        explanation={
+          <>
+            {policy.can_manage_agent_chat || (
+              <ul>
+                {agentLevels.map((level) => (
+                  <li key={level.value}>
+                    <strong>{level.label}.</strong> {level.detail}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p>
+              When on, the question and the reads go to {policy.model_provider}, with card, bank and sign-in details removed: the close's saved status, sign-off blockers,
+              tie-out, changes and exceptions (and the open draft), plus up to six reads of that close the model chooses through the assistant's read-only tools (a document's
+              text, a draft, the tie-out, changes, exceptions, a search), each made with the member's own permissions, listed under the answer and kept with the attempt's
+              record without their content. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was
+              written by the model. The model reads and proposes only: an action it proposes runs after the person confirms its card. Each read and each answer counts against
+              the firm's daily model limit.
+            </p>
+          </>
+        }
         open={open}
         onClose={() => setOpen(false)}
+        onReset={() => setChoice(policy.agent_chat)}
+        readOnly={!policy.can_manage_agent_chat}
         ready={choice !== policy.agent_chat || policy.answers_stopped}
         saveLabel="Apply"
         onSave={async (reason) => {
@@ -437,13 +494,6 @@ function AgentChatSetting({ policy, refresh }: { policy: Policy; refresh: () => 
             </label>
           ))}
         </fieldset>
-        <p>
-          When on, the question and the reads go to {policy.model_provider}, with card, bank and sign-in details removed: the close's saved status, sign-off blockers, tie-out,
-          changes and exceptions (and the open draft), plus up to six reads of that close the model chooses through the assistant's read-only tools (a document's text, a draft,
-          the tie-out, changes, exceptions, a search), each made with the member's own permissions, listed under the answer and kept with the attempt's record without their
-          content. An answer is kept only if each read it cites was sent whole and holds the words it quotes; it links those reads and says it was written by the model. The
-          model reads and proposes only: an action it proposes runs after the person confirms its card. Each read and each answer counts against the firm's daily model limit.
-        </p>
       </Edit>
     </SettingCard>
   );
@@ -460,14 +510,21 @@ function StaffPlanning({ policy, refresh }: { policy: Policy; refresh: () => voi
       status={policy.staff_planning ? "Allowed" : "Not allowed"}
       statusTone={policy.staff_planning ? "on" : "off"}
       summary={policy.staff_planning ? "Platform staff may ask the model to draft a workflow plan for one of this firm's closes." : "Platform staff draft workflow plans for this firm's closes by hand."}
-      action={policy.can_manage_agent_chat ? editButton(policy.staff_planning ? "Stop" : "Allow", () => setOpen(true)) : undefined}
+      action={action(policy.can_manage_agent_chat, policy.staff_planning ? "Stop" : "Allow", () => setOpen(true))}
     >
       {note}
       <Edit
         title={policy.staff_planning ? "Stop staff plan drafts" : "Allow staff plan drafts"}
         description="Whether platform staff may ask the model to draft a workflow plan for one of this firm's closes."
+        explanation={
+          <p>
+            Separately from the chat, platform staff may ask the model to draft a workflow plan for one of this firm's closes, sending their instruction with the close's
+            client, month, sign-off state and counts of its preparation work; nothing runs before staff approve the plan.
+          </p>
+        }
         open={open}
         onClose={() => setOpen(false)}
+        readOnly={!policy.can_manage_agent_chat}
         ready
         saveLabel={policy.staff_planning ? "Stop staff plan drafts" : "Allow staff plan drafts"}
         onSave={async (reason) => {
@@ -475,12 +532,7 @@ function StaffPlanning({ policy, refresh }: { policy: Policy; refresh: () => voi
           setSaved("Saved.");
           refresh();
         }}
-      >
-        <p>
-          Separately from the chat, platform staff may ask the model to draft a workflow plan for one of this firm's closes, sending their instruction with the close's client,
-          month, sign-off state and counts of its preparation work; nothing runs before staff approve the plan.
-        </p>
-      </Edit>
+      />
     </SettingCard>
   );
 }
@@ -490,7 +542,7 @@ export function Policies({ policy, refresh }: { policy: Policy; refresh: () => v
   const manages = policy.can_manage || policy.can_manage_links || policy.can_manage_agent_chat || policy.can_manage_ledger_writes;
   return (
     <>
-      {!manages && <p className="note">A firm administrator changes these rules; every change is kept with its reason.</p>}
+      {!manages && <p className="note">A firm administrator changes these rules; every change is kept with its reason. Details opens what each rule means.</p>}
       <SectionHeader title="Review and posting" />
       <SettingGrid>
         <IndependentReview policy={policy} refresh={refresh} />

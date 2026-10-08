@@ -193,19 +193,22 @@ export function Invitations() {
     }
   }
   useEffect(() => void load(), []);
+  // Leaving the dialog discards the draft, so a later invitation is verified afresh.
+  const dismiss = () => {
+    setEmail("");
+    setRole("");
+    setReason("");
+    setConfirmed(false);
+    setError("");
+    setOpen(false);
+  };
   async function act(body: Record<string, unknown>) {
     setBusy(true);
     setError("");
     try {
       const result = await workspaceRequest("/members/invitations", body);
       setMessage(result.message);
-      if (body.action === "send") {
-        setEmail("");
-        setRole("");
-        setReason("");
-        setConfirmed(false);
-        setOpen(false);
-      }
+      if (body.action === "send") dismiss();
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "The invitation could not be sent.");
@@ -259,7 +262,7 @@ export function Invitations() {
       )}
       {message && <p role="status">{message}</p>}
       {error && !open && <p role="alert">{error}</p>}
-      <Dialog open={open} onClose={() => setOpen(false)} title="Invite by email" description="WorkOS emails the invitation; they join the firm once they accept it and sign in.">
+      <Dialog open={open} onClose={dismiss} title="Invite by email" description="WorkOS emails the invitation; they join the firm once they accept it and sign in.">
         <form onSubmit={(event) => { event.preventDefault(); void act({ action: "send", email, role, reason, confirmed }); }}>
           <fieldset disabled={busy}>
             <label>Email<input type="email" required maxLength={254} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
@@ -270,7 +273,7 @@ export function Invitations() {
             <label className="checkbox-label"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /> I verified the address and the role.</label>
             {error && <p role="alert">{error}</p>}
             <DialogActions>
-              <button type="button" onClick={() => setOpen(false)}>Cancel</button>
+              <button type="button" onClick={dismiss}>Cancel</button>
               <button className="primary" disabled={!confirmed || !role}>Send invitation</button>
             </DialogActions>
           </fieldset>

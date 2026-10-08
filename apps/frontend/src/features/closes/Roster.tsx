@@ -34,7 +34,8 @@ export function ClientRoster() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState("");
   const saved = () => (setNotice(""), setRefresh((n) => n + 1));
-  const failed = (message: string) => (setNotice(message), setRefresh((n) => n + 1));
+  // A dialog left, with or without a refused save, reads the roster again, so the next attempt starts from the newest entry.
+  const left = (message = "") => (setNotice(message), setAdding(false), setEditing(""), setEditingTemplate(false), setRefresh((n) => n + 1));
   useEffect(() => {
     let live = true;
     workspaceRequest("/roster")
@@ -99,6 +100,8 @@ export function ClientRoster() {
               <small>
                 {c.due_days === null ? "Template due date" : c.due_days === 0 ? "No due date" : `Due ${c.due_days} days after month end`} ·{" "}
                 {c.owner === null ? "template owner" : c.owner ? name(c.owner) : "no owner"}
+                <br />
+                {c.reason} ({name(c.actor)}, {new Date(c.at).toLocaleDateString()})
               </small>
               {roster.can_manage ? (
                 <button type="button" onClick={() => setEditing(c.entity)}>
@@ -114,15 +117,16 @@ export function ClientRoster() {
       {!roster.can_manage && <p className="note">A firm administrator with clients:all and members:manage changes the roster and the template.</p>}
       {roster.can_manage && (
         <>
-          <Dialog open={editingTemplate} onClose={() => setEditingTemplate(false)} title="The monthly template" description="The due date and owner every client's new month takes, unless the client's own entry says otherwise.">
-            <TemplateForm key={t?.rev ?? "none"} template={t} people={people.filter((p) => p.firm_wide)} onSaved={() => (setEditingTemplate(false), saved())} onFailed={(m) => (setEditingTemplate(false), failed(m))} onCancel={() => setEditingTemplate(false)} />
+          <Dialog open={editingTemplate} onClose={() => left()} title="The monthly template" description="The due date and owner every client's new month takes, unless the client's own entry says otherwise.">
+            {t && <p className="note">Set by {name(t.actor)} on {new Date(t.at).toLocaleDateString()}: {t.reason}</p>}
+            <TemplateForm key={t?.rev ?? "none"} template={t} people={people.filter((p) => p.firm_wide)} onSaved={() => (setEditingTemplate(false), saved())} onCancel={left} />
           </Dialog>
-          <Dialog open={adding} onClose={() => setAdding(false)} title="Add a client" description="A client on the roster owes a close each month from its first month.">
-            <ClientForm key={roster.clients.length} people={people} onSaved={() => (setAdding(false), saved())} onFailed={(m) => (setAdding(false), failed(m))} onCancel={() => setAdding(false)} />
+          <Dialog open={adding} onClose={() => left()} title="Add a client" description="A client on the roster owes a close each month from its first month.">
+            <ClientForm key={roster.clients.length} people={people} onSaved={() => (setAdding(false), saved())} onCancel={left} />
           </Dialog>
           {roster.clients.map((c) => (
-            <Dialog key={c.entity} open={editing === c.entity} onClose={() => setEditing("")} title={c.entity} description="Whether the client owes a close each month, from when, and its own due date and owner.">
-              <ClientForm key={`${c.entity}:${c.rev}`} client={c} people={people} onSaved={() => (setEditing(""), saved())} onFailed={(m) => (setEditing(""), failed(m))} onCancel={() => setEditing("")} />
+            <Dialog key={c.entity} open={editing === c.entity} onClose={() => left()} title={c.entity} description="Whether the client owes a close each month, from when, and its own due date and owner.">
+              <ClientForm key={`${c.entity}:${c.rev}`} client={c} people={people} onSaved={() => (setEditing(""), saved())} onCancel={left} />
             </Dialog>
           ))}
         </>
@@ -131,13 +135,15 @@ export function ClientRoster() {
   );
 }
 
-type Saved = { onSaved: () => void; onFailed: (message: string) => void; onCancel: () => void };
+// onCancel carries the last refusal, if any, so the roster can read itself again.
+type Saved = { onSaved: () => void; onCancel: (failed: string) => void };
 
-function TemplateForm({ template, people, onSaved, onFailed, onCancel }: { template: Template; people: Person[] } & Saved) {
+function TemplateForm({ template, people, onSaved, onCancel }: { template: Template; people: Person[] } & Saved) {
   const [due, setDue] = useState(template?.due_days ? String(template.due_days) : "");
   const [owner, setOwner] = useState(template?.owner ?? "");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   // An owner who has since lost the membership or role to hold every client's closes is shown as such, and must be
   // replaced before the template is saved.
   const ineligible = owner !== "" && !people.some((p) => p.subject === owner);
@@ -148,7 +154,7 @@ function TemplateForm({ template, people, onSaved, onFailed, onCancel }: { templ
       setReason("");
       onSaved();
     } catch (e) {
-      onFailed(e instanceof Error ? e.message : "The template could not be saved.");
+      setError(e instanceof Error ? e.message : "The template could not be saved.");
     } finally {
       setBusy(false);
     }
@@ -176,8 +182,9 @@ function TemplateForm({ template, people, onSaved, onFailed, onCancel }: { templ
         Reason for the change
         <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
       </label>
+      {error && <p role="alert">{error}</p>}
       <DialogActions>
-        <button type="button" onClick={onCancel}>Cancel</button>
+        <button type="button" onClick={() => onCancel(error)}>Cancel</button>
         <button className="primary" disabled={busy || !reason.trim() || ineligible}>Save template</button>
       </DialogActions>
       </fieldset>
@@ -186,7 +193,7 @@ function TemplateForm({ template, people, onSaved, onFailed, onCancel }: { templ
 }
 
 // Adds a client (without one) or changes a client's entry: active or not, the first month it owes, and its own terms.
-function ClientForm({ client, people, onSaved, onFailed, onCancel }: { client?: Client; people: Person[] } & Saved) {
+function ClientForm({ client, people, onSaved, onCancel }: { client?: Client; people: Person[] } & Saved) {
   const [entity, setEntity] = useState(client?.entity ?? "");
   const [active, setActive] = useState(client?.active ?? true);
   const [since, setSince] = useState(client?.since ?? endedMonth());
@@ -194,6 +201,7 @@ function ClientForm({ client, people, onSaved, onFailed, onCancel }: { client?: 
   const [owner, setOwner] = useState(client?.owner === null || client?.owner === undefined ? "template" : client.owner);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   // Owners who can do this client's work: a role reviewing every client, or a reviewer assigned to it.
   const named = entity.trim().toLowerCase();
   const owners = people.filter((p) => p.firm_wide || (named !== "" && p.clients.includes(named)));
@@ -216,7 +224,7 @@ function ClientForm({ client, people, onSaved, onFailed, onCancel }: { client?: 
       if (!client) setEntity("");
       onSaved();
     } catch (e) {
-      onFailed(e instanceof Error ? e.message : "The roster could not be saved.");
+      setError(e instanceof Error ? e.message : "The roster could not be saved.");
     } finally {
       setBusy(false);
     }
@@ -259,8 +267,9 @@ function ClientForm({ client, people, onSaved, onFailed, onCancel }: { client?: 
         Reason
         <input value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
       </label>
+      {error && <p role="alert">{error}</p>}
       <DialogActions>
-        <button type="button" onClick={onCancel}>Cancel</button>
+        <button type="button" onClick={() => onCancel(error)}>Cancel</button>
         <button className="primary" disabled={busy || !reason.trim() || !entity.trim() || !since || ineligible}>
           {client ? "Save" : "Add client"}
         </button>
