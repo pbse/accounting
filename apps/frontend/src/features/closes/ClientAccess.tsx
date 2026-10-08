@@ -76,7 +76,16 @@ export function ClientAccess({ entities }: { entities: string[] }) {
         Invite the person first and give them only the roles their work needs, without clients:all. Then assign their exact WorkOS user ID to a client here. Firm-wide roles
         override client assignments and must be removed separately. Local development decisions do not identify a real person.
       </p>
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <p role="alert">
+          {error}{" "}
+          {!loaded && (
+            <button type="button" disabled={busy} onClick={() => void load()}>
+              Try again
+            </button>
+          )}
+        </p>
+      )}
       {message && <p role="status">{message}</p>}
       {loaded && (
         <>

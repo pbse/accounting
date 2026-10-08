@@ -69,7 +69,16 @@ export function EmailSettings() {
         Client requests and reminders go out from the firm's own verified Resend domain. The API key is encrypted on the server and never returned to this page.
         Connecting a sender does not authorize any email.
       </p>
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <p role="alert">
+          {error}{" "}
+          {!data && (
+            <button type="button" disabled={busy} onClick={() => void load()}>
+              Try again
+            </button>
+          )}
+        </p>
+      )}
       {data && (
         <>
           <p>

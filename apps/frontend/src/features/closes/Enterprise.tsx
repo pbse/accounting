@@ -235,7 +235,17 @@ export function OperationsSnapshot() {
   useEffect(() => {
     void load();
   }, []);
-  if (!snapshot) return message ? <p role="alert">{message}</p> : <p role="status">Reading usage…</p>;
+  if (!snapshot)
+    return message ? (
+      <p role="alert">
+        {message}{" "}
+        <button type="button" disabled={busy} onClick={() => void load()}>
+          Try again
+        </button>
+      </p>
+    ) : (
+      <p role="status">Reading usage…</p>
+    );
   return (
     <>
       <p>

@@ -6,18 +6,20 @@ import { workspaceRequest } from "../closes/workspace";
 // The firm's people: who they are and their roles, who is invited, which clients each is assigned, and the enrolment
 // decisions behind their access.
 export function People() {
-  // The client names an assignment can name come from the roster the firm keeps; without it, no assignment can be made.
+  // An assignment names a client with a saved close, as the access route requires; the security read lists exactly those.
   const [clients, setClients] = useState<string[]>();
-  const [rosterError, setRosterError] = useState("");
+  const [clientsError, setClientsError] = useState("");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    workspaceRequest("/roster")
-      .then((data: { clients: { entity: string }[] }) => live && setClients(data.clients.map((c) => c.entity)))
-      .catch((e) => live && setRosterError(e instanceof Error ? e.message : "The client roster could not be read."));
+    setClientsError("");
+    workspaceRequest("/security")
+      .then((data: { clients: string[] }) => live && setClients(data.clients))
+      .catch((e) => live && setClientsError(e instanceof Error ? e.message : "The firm's clients could not be read."));
     return () => {
       live = false;
     };
-  }, []);
+  }, [attempt]);
   return (
     <>
       <FirmPeople />
@@ -25,7 +27,20 @@ export function People() {
       <section aria-label="Client assignments">
         <h2>Client assignments</h2>
         <p>A person whose role does not see every client works only on the clients assigned to them here. Assignments cover every month of that client.</p>
-        {rosterError ? <p role="alert">{rosterError} Assignments need the roster's client names; reload to try again.</p> : clients && <ClientAccess entities={clients} />}
+        {clientsError ? (
+          <p role="alert">
+            {clientsError}{" "}
+            <button type="button" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </button>
+          </p>
+        ) : !clients ? (
+          <p role="status">Reading the firm's clients…</p>
+        ) : clients.length === 0 ? (
+          <p className="empty">No client has a saved close yet; an assignment names a client with one.</p>
+        ) : (
+          <ClientAccess entities={clients} />
+        )}
       </section>
       <section aria-label="Enrolment">
         <h2>Enrolment</h2>
