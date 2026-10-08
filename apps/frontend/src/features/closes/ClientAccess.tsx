@@ -141,6 +141,11 @@ export function ClientAccess({ entities }: { entities: string[] }) {
             </fieldset>
           </form>
           </details>
+          <p className="setting-actions">
+            <button type="button" disabled={busy} onClick={() => void load()}>
+              Refresh assignments
+            </button>
+          </p>
           {history.length > 0 && <details>
             <summary>Grant and revocation history ({history.length})</summary>
             <ol>

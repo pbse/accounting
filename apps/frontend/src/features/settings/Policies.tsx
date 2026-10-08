@@ -145,6 +145,7 @@ function LedgerWrites({ policy, refresh }: { policy: Policy; refresh: () => void
   const change = useChange((result) => {
     const inFlight = Number(result.writes_in_flight ?? 0);
     // Turning writing off withdraws approvals not yet acted on; writes already under way finish and are read back.
+    setDone("");
     if (result.ledger_writes === false)
       setDone(`Writing is off. Live writes approved and not started need a fresh approval once it is back on.${inFlight ? ` ${inFlight} ${inFlight === 1 ? "write was" : "writes were"} already under way; ${inFlight === 1 ? "it finishes and is" : "they finish and are"} read back.` : ""}`);
     refresh();
@@ -164,7 +165,7 @@ function LedgerWrites({ policy, refresh }: { policy: Policy; refresh: () => void
         <div className="setting-change">
           {change.field}
           <div className="setting-actions">
-            <button type="button" className="primary" disabled={change.busy || !change.ready} onClick={() => void change.run({ ledger_writes: !policy.ledger_writes })}>
+            <button type="button" className="primary" disabled={change.busy || !change.ready} onClick={() => (setDone(""), void change.run({ ledger_writes: !policy.ledger_writes }))}>
               {policy.ledger_writes ? "Turn writing off" : "Turn writing on"}
             </button>
           </div>

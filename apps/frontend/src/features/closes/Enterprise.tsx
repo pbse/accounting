@@ -313,6 +313,7 @@ export function MemberDecision() {
         <label className="checkbox-label"><input name="confirmed" type="checkbox" required />I verified the exact user and access decision.</label>
         <button>Save member decision</button>
       </fieldset></form>
+      <p className="setting-actions"><button type="button" disabled={busy} onClick={() => void load()}>Refresh membership</button></p>
       {members.length > 0 && <details><summary>Membership history ({members.length})</summary><ol>{members.map((member) => <li key={member.id}>{member.granted ? "Enrolled" : "Revoked"} · {member.subject} · {member.reason} · {member.actor} · {new Date(member.created_at).toLocaleString()}</li>)}</ol></details>}
       {message && <p role="status">{message}</p>}
     </>
