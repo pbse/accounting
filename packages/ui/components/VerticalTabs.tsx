@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Link } from "react-router";
 import { Icon, type IconName } from "./Icon";
 import "./VerticalTabs.css";
@@ -9,9 +9,14 @@ export type VerticalTab = { key: string; label: string; to: string; icon?: IconN
 // selected section's cards (the children) beside it. On a phone the column becomes a strip above the cards that
 // scrolls sideways.
 export function VerticalTabs({ label, items, value, children }: { label: string; items: VerticalTab[]; value: string; children: ReactNode }) {
+  // On a phone the strip scrolls sideways, so the selected section is brought into view.
+  const nav = useRef<HTMLElement>(null);
+  useEffect(() => {
+    nav.current?.querySelector('a[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [value]);
   return (
     <div className="vertical-tabs-layout">
-      <nav className="vertical-tabs" aria-label={label}>
+      <nav ref={nav} className="vertical-tabs" aria-label={label}>
         {items.map((item, index) => (
           <span key={item.key} className="vertical-tabs-item">
             {item.group && item.group !== items[index - 1]?.group && <span className="vertical-tabs-group">{item.group}</span>}
