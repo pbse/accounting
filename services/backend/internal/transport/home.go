@@ -150,15 +150,22 @@ func registerHome(mux *http.ServeMux, db *sql.DB) {
 		// label historical exports): each is listed by itself, as the morning brief listed it, under the books strip.
 		// Current, complete historical exports a person labeled are the other way to give a close its books.
 		uncaptured, exported := []member{}, 0
+		ended := []string{}
+		for _, m := range owed {
+			if m.State != "signed_off" && !m.booksUsable && m.Period < now.Format("2006-01") {
+				ended = append(ended, m.CloseID)
+			}
+		}
+		labels, labelErr := latestExportLabels(ctx, tx, ended)
+		if labelErr != nil {
+			problem(w, 503, "Home is unavailable.")
+			return
+		}
 		for _, m := range owed {
 			if m.State == "signed_off" || m.booksUsable || m.Period >= now.Format("2006-01") {
 				continue
 			}
-			label, labelErr := latestExportLabel(ctx, tx, m.CloseID)
-			if labelErr != nil {
-				problem(w, 503, "Home is unavailable.")
-				return
-			}
+			label := labels[m.CloseID]
 			// Only a complete set does; a partial one still leaves the month's books to capture.
 			if label != nil && label.Current && label.Complete {
 				exported++

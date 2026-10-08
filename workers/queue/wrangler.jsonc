@@ -9,7 +9,9 @@
   "containers": [{
     "class_name": "PreparationWorker",
     "image": "../../services/backend/Dockerfile",
-    "max_instances": 1
+    "max_instances": 1,
+    "instance_type": "standard-4",
+    "constraints": {"regions": ["ENAM"]}
   }],
   "durable_objects": {"bindings": [{"name": "WORKER", "class_name": "PreparationWorker"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["PreparationWorker"]}],
@@ -22,7 +24,9 @@
       "containers": [{
         "class_name": "PreparationWorker",
         "image": "../../services/backend/Dockerfile",
-        "max_instances": 1
+        "max_instances": 1,
+        "instance_type": "standard-4",
+        "constraints": {"regions": ["ENAM"]}
       }],
       "durable_objects": {"bindings": [{"name": "WORKER", "class_name": "PreparationWorker"}]}
     }
